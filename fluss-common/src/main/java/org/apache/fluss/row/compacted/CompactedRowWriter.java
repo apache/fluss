@@ -24,24 +24,16 @@ import org.apache.fluss.memory.OutputView;
 import org.apache.fluss.row.BinaryArray;
 import org.apache.fluss.row.BinarySegmentUtils;
 import org.apache.fluss.row.BinaryString;
-import org.apache.fluss.row.BinaryWriter;
 import org.apache.fluss.row.Decimal;
 import org.apache.fluss.row.InternalArray;
+import org.apache.fluss.row.SequentialBinaryWriter;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
-import org.apache.fluss.row.serializer.InternalArraySerializer;
-import org.apache.fluss.row.serializer.InternalSerializers;
-import org.apache.fluss.row.serializer.Serializer;
-import org.apache.fluss.types.DataType;
-import org.apache.fluss.types.RowType;
+import org.apache.fluss.row.serializer.ArraySerializer;
 import org.apache.fluss.utils.UnsafeUtils;
 
 import java.io.IOException;
-import java.io.Serializable;
 import java.util.Arrays;
-
-import static org.apache.fluss.row.BinaryRow.calculateBitSetWidthInBytes;
-import static org.apache.fluss.types.DataTypeChecks.getPrecision;
 
 /**
  * Writer for {@link CompactedRow}.
@@ -73,7 +65,7 @@ import static org.apache.fluss.types.DataTypeChecks.getPrecision;
  * the positive integer is doubled. We assume that the probability of general integers being
  * positive is higher, so sacrifice the negative number to promote the positive number.
  */
-public class CompactedRowWriter implements BinaryWriter {
+public class CompactedRowWriter implements SequentialBinaryWriter {
 
     private final int headerSizeInBytes;
 
@@ -83,22 +75,15 @@ public class CompactedRowWriter implements BinaryWriter {
     private int position;
     private MemorySegment segment;
 
-    public CompactedRowWriter(RowType rowType) {
-        this(rowType.getChildren().toArray(new DataType[0]));
-    }
-
-    public CompactedRowWriter(DataType[] types) {
-        this(types.length);
-    }
-
     public CompactedRowWriter(int fieldCount) {
-        this.headerSizeInBytes = calculateBitSetWidthInBytes(fieldCount);
+        this.headerSizeInBytes = CompactedRow.calculateBitSetWidthInBytes(fieldCount);
         this.position = headerSizeInBytes;
         setBuffer(new byte[Math.max(64, headerSizeInBytes)]);
     }
 
     // ----------------------- internal methods -------------------------------
 
+    @Override
     public void reset() {
         this.position = headerSizeInBytes;
         for (int i = 0; i < headerSizeInBytes; i++) {
@@ -138,21 +123,25 @@ public class CompactedRowWriter implements BinaryWriter {
         position += len;
     }
 
+    @Override
     public void setNullAt(int pos) {
         UnsafeUtils.bitSet(buffer, 0, pos);
     }
 
+    @Override
     public void writeByte(byte value) {
         ensureCapacity(1);
         UnsafeUtils.putByte(buffer, position++, value);
     }
 
+    @Override
     public void writeChar(BinaryString value, int length) {
-        byte[] bytes = new byte[length];
-        BinaryString.encodeUTF8(value.toString(), bytes);
-        write(bytes, 0, length);
+        // TODO: currently, we encoding CHAR(length) as the same with STRING, the length info can be
+        //  omitted and the bytes length should be enforced in the future.
+        writeString(value);
     }
 
+    @Override
     public void writeString(BinaryString value) {
         if (value.getSegments() == null) {
             writeString(value.toString());
@@ -206,25 +195,26 @@ public class CompactedRowWriter implements BinaryWriter {
         writeBytes(bytes);
     }
 
+    @Override
     public void writeBoolean(boolean value) {
         ensureCapacity(1);
         UnsafeUtils.putBoolean(buffer, position++, value);
     }
 
+    @Override
     public void writeBinary(byte[] value, int length) {
-        if (value.length > length) {
-            throw new IllegalArgumentException();
-        }
-        byte[] newByte = new byte[length];
-        System.arraycopy(value, 0, newByte, 0, value.length);
-        write(newByte, 0, length);
+        // TODO: currently, we encoding BINARY(length) as the same with BYTES, the length info can
+        //  be omitted and the bytes length should be enforced in the future.
+        writeBytes(value);
     }
 
+    @Override
     public void writeBytes(byte[] value) {
         writeInt(value.length);
         write(value, 0, value.length);
     }
 
+    @Override
     public void writeDecimal(Decimal value, int precision) {
         if (Decimal.isCompact(precision)) {
             writeLong(value.toUnscaledLong());
@@ -233,12 +223,14 @@ public class CompactedRowWriter implements BinaryWriter {
         }
     }
 
+    @Override
     public void writeShort(short value) {
         ensureCapacity(2);
         UnsafeUtils.putShort(buffer, position, value);
         position += 2;
     }
 
+    @Override
     public void writeInt(int value) {
         ensureCapacity(MAX_INT_SIZE);
         // UNSAFE + Loop unrolling faster.
@@ -269,6 +261,7 @@ public class CompactedRowWriter implements BinaryWriter {
         UnsafeUtils.putByte(buffer, position++, (byte) value);
     }
 
+    @Override
     public void writeLong(long value) {
         ensureCapacity(MAX_LONG_SIZE);
         while (true) {
@@ -282,18 +275,21 @@ public class CompactedRowWriter implements BinaryWriter {
         }
     }
 
+    @Override
     public void writeFloat(float value) {
         ensureCapacity(4);
         UnsafeUtils.putFloat(buffer, position, value);
         position += 4;
     }
 
+    @Override
     public void writeDouble(double value) {
         ensureCapacity(8);
         UnsafeUtils.putDouble(buffer, position, value);
         position += 8;
     }
 
+    @Override
     public void writeTimestampNtz(TimestampNtz value, int precision) {
         if (TimestampNtz.isCompact(precision)) {
             writeLong(value.getMillisecond());
@@ -303,6 +299,7 @@ public class CompactedRowWriter implements BinaryWriter {
         }
     }
 
+    @Override
     public void writeTimestampLtz(TimestampLtz value, int precision) {
         if (TimestampLtz.isCompact(precision)) {
             writeLong(value.getEpochMillisecond());
@@ -312,7 +309,8 @@ public class CompactedRowWriter implements BinaryWriter {
         }
     }
 
-    public void writeArray(InternalArray value, InternalArraySerializer serializer) {
+    @Override
+    public void writeArray(InternalArray value, ArraySerializer serializer) {
         BinaryArray binary = serializer.toBinaryArray(value);
         MemorySegment[] segments = binary.getSegments();
         int offset = binary.getOffset();
@@ -372,105 +370,5 @@ public class CompactedRowWriter implements BinaryWriter {
             row.getSegment().get(row.getOffset(), bytes, 0, sizeInBytes);
             target.write(bytes, 0, sizeInBytes);
         }
-    }
-
-    /**
-     * Creates an accessor for writing the elements of an indexed row writer during runtime.
-     *
-     * @param fieldType the field type of the indexed row
-     */
-    public static FieldWriter createFieldWriter(DataType fieldType) {
-        final FieldWriter fieldWriter;
-        switch (fieldType.getTypeRoot()) {
-            case CHAR:
-            case STRING:
-                fieldWriter = (writer, pos, value) -> writer.writeString((BinaryString) value);
-                break;
-            case BOOLEAN:
-                fieldWriter = (writer, pos, value) -> writer.writeBoolean((boolean) value);
-                break;
-            case BINARY:
-            case BYTES:
-                fieldWriter = (writer, pos, value) -> writer.writeBytes((byte[]) value);
-                break;
-            case DECIMAL:
-                final int decimalPrecision = getPrecision(fieldType);
-                fieldWriter =
-                        (writer, pos, value) ->
-                                writer.writeDecimal((Decimal) value, decimalPrecision);
-                break;
-            case TINYINT:
-                fieldWriter = (writer, pos, value) -> writer.writeByte((byte) value);
-                break;
-            case SMALLINT:
-                fieldWriter = (writer, pos, value) -> writer.writeShort((short) value);
-                break;
-            case INTEGER:
-            case DATE:
-            case TIME_WITHOUT_TIME_ZONE:
-                fieldWriter = (writer, pos, value) -> writer.writeInt((int) value);
-                break;
-            case BIGINT:
-                fieldWriter = (writer, pos, value) -> writer.writeLong((long) value);
-                break;
-            case FLOAT:
-                fieldWriter = (writer, pos, value) -> writer.writeFloat((float) value);
-                break;
-            case DOUBLE:
-                fieldWriter = (writer, pos, value) -> writer.writeDouble((double) value);
-                break;
-            case TIMESTAMP_WITHOUT_TIME_ZONE:
-                final int timestampNtzPrecision = getPrecision(fieldType);
-                fieldWriter =
-                        (writer, pos, value) ->
-                                writer.writeTimestampNtz(
-                                        (TimestampNtz) value, timestampNtzPrecision);
-                break;
-            case TIMESTAMP_WITH_LOCAL_TIME_ZONE:
-                final int timestampLtzPrecision = getPrecision(fieldType);
-                fieldWriter =
-                        (writer, pos, value) ->
-                                writer.writeTimestampLtz(
-                                        (TimestampLtz) value, timestampLtzPrecision);
-                break;
-            case ARRAY:
-                final Serializer<InternalArray> arraySerializer =
-                        InternalSerializers.create(fieldType);
-                fieldWriter =
-                        (writer, pos, value) ->
-                                writer.writeArray(
-                                        (InternalArray) value,
-                                        (InternalArraySerializer) arraySerializer);
-                break;
-
-            case MAP:
-                // TODO: Map type support will be added in Issue #1973
-                throw new UnsupportedOperationException(
-                        "Map type in KV table is not supported yet. Will be added in Issue #1976.");
-            case ROW:
-                // TODO: Row type support will be added in Issue #1974
-                throw new UnsupportedOperationException(
-                        "Row type in KV table is not supported yet. Will be added in Issue #1977.");
-            default:
-                throw new IllegalArgumentException("Unsupported type for IndexedRow: " + fieldType);
-        }
-        if (!fieldType.isNullable()) {
-            return fieldWriter;
-        }
-        return (writer, pos, value) -> {
-            if (value == null) {
-                writer.setNullAt(pos);
-            } else {
-                fieldWriter.writeField(writer, pos, value);
-            }
-        };
-    }
-
-    @Override
-    public void close() throws IOException {}
-
-    /** Accessor for writing the elements of an compacted row writer during runtime. */
-    public interface FieldWriter extends Serializable {
-        void writeField(CompactedRowWriter writer, int pos, Object value);
     }
 }

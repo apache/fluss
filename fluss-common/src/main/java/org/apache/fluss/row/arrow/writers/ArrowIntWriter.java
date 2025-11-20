@@ -23,30 +23,20 @@ import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.IntVector;
 
 /** {@link ArrowFieldWriter} for Int. */
 @Internal
-public class ArrowIntWriter extends ArrowFieldWriter<DataGetters> {
+public class ArrowIntWriter extends ArrowFieldWriter {
 
-    public static ArrowIntWriter forField(IntVector intVector) {
-        return new ArrowIntWriter(intVector);
-    }
-
-    private ArrowIntWriter(IntVector intVector) {
+    public ArrowIntWriter(IntVector intVector) {
         super(intVector);
     }
 
     @Override
     public void doWrite(int rowIndex, DataGetters row, int ordinal, boolean handleSafe) {
-        IntVector vector = (IntVector) getValueVector();
-        if (isNullAt(row, ordinal)) {
-            vector.setNull(getCount());
-        } else if (handleSafe) {
-            vector.setSafe(getCount(), readInt(row, ordinal));
+        IntVector vector = (IntVector) fieldVector;
+        if (handleSafe) {
+            vector.setSafe(rowIndex, readInt(row, ordinal));
         } else {
-            vector.set(getCount(), readInt(row, ordinal));
+            vector.set(rowIndex, readInt(row, ordinal));
         }
-    }
-
-    private boolean isNullAt(DataGetters row, int ordinal) {
-        return row.isNullAt(ordinal);
     }
 
     int readInt(DataGetters row, int ordinal) {

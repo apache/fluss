@@ -437,7 +437,7 @@ public class BinarySegmentUtilsTest {
         long offsetAndSize = ((long) 4 << 32) | decimalBytes.length;
 
         Decimal readDecimal =
-                BinarySegmentUtils.readDecimalData(decimalSegments, 0, offsetAndSize, 5, 2);
+                BinarySegmentUtils.readDecimal(decimalSegments, 0, offsetAndSize, 5, 2);
         assertThat(readDecimal).isEqualTo(originalDecimal);
 
         // Test readTimestampLtzData
@@ -456,14 +456,14 @@ public class BinarySegmentUtilsTest {
         long offsetAndNanos = ((long) 8 << 32) | nanoOfMillisecond;
 
         TimestampLtz readTimestampLtz =
-                BinarySegmentUtils.readTimestampLtzData(timestampSegments, 0, offsetAndNanos);
+                BinarySegmentUtils.readTimestampLtz(timestampSegments, 0, offsetAndNanos);
         assertThat(readTimestampLtz).isEqualTo(originalTimestampLtz);
 
         // Test readTimestampNtzData
         TimestampNtz originalTimestampNtz = TimestampNtz.fromMillis(testMillis, nanoOfMillisecond);
 
         TimestampNtz readTimestampNtz =
-                BinarySegmentUtils.readTimestampNtzData(timestampSegments, 0, offsetAndNanos);
+                BinarySegmentUtils.readTimestampNtz(timestampSegments, 0, offsetAndNanos);
         assertThat(readTimestampNtz).isEqualTo(originalTimestampNtz);
     }
 
@@ -474,7 +474,7 @@ public class BinarySegmentUtilsTest {
         byte[] smallBinary = {1, 2, 3, 4};
         AlignedRow smallRow = new AlignedRow(1);
         AlignedRowWriter smallWriter = new AlignedRowWriter(smallRow);
-        smallWriter.writeBinary(0, smallBinary);
+        smallWriter.writeBytes(0, smallBinary);
         smallWriter.complete();
 
         // Calculate field offset based on AlignedRow structure
@@ -500,7 +500,7 @@ public class BinarySegmentUtilsTest {
         byte[] largeBinary = {10, 20, 30, 40, 50, 60, 70, 80, 90, 100};
         AlignedRow largeRow = new AlignedRow(1);
         AlignedRowWriter largeWriter = new AlignedRowWriter(largeRow);
-        largeWriter.writeBinary(0, largeBinary);
+        largeWriter.writeBytes(0, largeBinary);
         largeWriter.complete();
 
         // Calculate field offset for the large row
@@ -744,7 +744,7 @@ public class BinarySegmentUtilsTest {
     }
 
     @Test
-    public void testReadDecimalData() {
+    public void testReadDecimal() {
         // Test readDecimalData method
         BigDecimal testDecimal = new BigDecimal("123.456");
         byte[] decimalBytes = testDecimal.unscaledValue().toByteArray();
@@ -759,7 +759,7 @@ public class BinarySegmentUtilsTest {
         // Create offsetAndSize (high 32 bits = offset, low 32 bits = size)
         long offsetAndSize = ((long) 0 << 32) | decimalBytes.length;
 
-        Decimal result = BinarySegmentUtils.readDecimalData(segments, 4, offsetAndSize, 6, 3);
+        Decimal result = BinarySegmentUtils.readDecimal(segments, 4, offsetAndSize, 6, 3);
         assertThat(result.toBigDecimal()).isEqualTo(testDecimal);
 
         // Test with negative decimal
@@ -769,7 +769,7 @@ public class BinarySegmentUtilsTest {
 
         long negativeOffsetAndSize = ((long) 0 << 32) | negativeBytes.length;
         Decimal negativeResult =
-                BinarySegmentUtils.readDecimalData(segments, 10, negativeOffsetAndSize, 6, 3);
+                BinarySegmentUtils.readDecimal(segments, 10, negativeOffsetAndSize, 6, 3);
         assertThat(negativeResult.toBigDecimal()).isEqualTo(negativeDecimal);
     }
 
@@ -839,7 +839,7 @@ public class BinarySegmentUtilsTest {
     }
 
     @Test
-    public void testReadTimestampLtzData() {
+    public void testReadTimestampLtz() {
         // Test readTimestampLtzData method
         long epochMillis = 1609459200000L; // 2021-01-01 00:00:00 UTC
         int nanoOfMillisecond = 123456;
@@ -853,7 +853,7 @@ public class BinarySegmentUtilsTest {
         // Create offsetAndNanos (high 32 bits = offset, low 32 bits = nanos)
         long offsetAndNanos = ((long) 0 << 32) | nanoOfMillisecond;
 
-        TimestampLtz result = BinarySegmentUtils.readTimestampLtzData(segments, 0, offsetAndNanos);
+        TimestampLtz result = BinarySegmentUtils.readTimestampLtz(segments, 0, offsetAndNanos);
         assertThat(result.getEpochMillisecond()).isEqualTo(epochMillis);
         assertThat(result.getNanoOfMillisecond()).isEqualTo(nanoOfMillisecond);
 
@@ -861,14 +861,13 @@ public class BinarySegmentUtilsTest {
         segment.putLong(8, epochMillis);
         long offsetAndNanos2 = ((long) 8 << 32) | nanoOfMillisecond;
 
-        TimestampLtz result2 =
-                BinarySegmentUtils.readTimestampLtzData(segments, 0, offsetAndNanos2);
+        TimestampLtz result2 = BinarySegmentUtils.readTimestampLtz(segments, 0, offsetAndNanos2);
         assertThat(result2.getEpochMillisecond()).isEqualTo(epochMillis);
         assertThat(result2.getNanoOfMillisecond()).isEqualTo(nanoOfMillisecond);
     }
 
     @Test
-    public void testReadTimestampNtzData() {
+    public void testReadTimestampNtz() {
         // Test readTimestampNtzData method
         long epochMillis = 1609459200000L; // 2021-01-01 00:00:00
         int nanoOfMillisecond = 789012;
@@ -882,7 +881,7 @@ public class BinarySegmentUtilsTest {
         // Create offsetAndNanos
         long offsetAndNanos = ((long) 0 << 32) | nanoOfMillisecond;
 
-        TimestampNtz result = BinarySegmentUtils.readTimestampNtzData(segments, 0, offsetAndNanos);
+        TimestampNtz result = BinarySegmentUtils.readTimestampNtz(segments, 0, offsetAndNanos);
         assertThat(result.getMillisecond()).isEqualTo(epochMillis);
         assertThat(result.getNanoOfMillisecond()).isEqualTo(nanoOfMillisecond);
 
@@ -892,7 +891,7 @@ public class BinarySegmentUtilsTest {
 
         long negativeOffsetAndNanos = ((long) 8 << 32) | nanoOfMillisecond;
         TimestampNtz negativeResult =
-                BinarySegmentUtils.readTimestampNtzData(segments, 0, negativeOffsetAndNanos);
+                BinarySegmentUtils.readTimestampNtz(segments, 0, negativeOffsetAndNanos);
         assertThat(negativeResult.getMillisecond()).isEqualTo(negativeMillis);
         assertThat(negativeResult.getNanoOfMillisecond()).isEqualTo(nanoOfMillisecond);
     }
@@ -977,7 +976,7 @@ public class BinarySegmentUtilsTest {
     }
 
     @Test
-    public void testReadDecimalDataMultiSegments() {
+    public void testReadDecimalMultiSegments() {
         // Test readDecimalData with data spanning multiple segments
         BigDecimal testDecimal = new BigDecimal("999999999.123456789");
         byte[] decimalBytes = testDecimal.unscaledValue().toByteArray();
@@ -992,7 +991,7 @@ public class BinarySegmentUtilsTest {
         // Create offsetAndSize
         long offsetAndSize = ((long) 6 << 32) | decimalBytes.length;
 
-        Decimal result = BinarySegmentUtils.readDecimalData(segments, 0, offsetAndSize, 18, 9);
+        Decimal result = BinarySegmentUtils.readDecimal(segments, 0, offsetAndSize, 18, 9);
         assertThat(result.toBigDecimal()).isEqualTo(testDecimal);
     }
 
@@ -1053,13 +1052,11 @@ public class BinarySegmentUtilsTest {
         segment.putLong(0, 0L);
         long zeroOffsetAndNanos = ((long) 0 << 32) | 0;
 
-        TimestampLtz zeroLtz =
-                BinarySegmentUtils.readTimestampLtzData(segments, 0, zeroOffsetAndNanos);
+        TimestampLtz zeroLtz = BinarySegmentUtils.readTimestampLtz(segments, 0, zeroOffsetAndNanos);
         assertThat(zeroLtz.getEpochMillisecond()).isEqualTo(0L);
         assertThat(zeroLtz.getNanoOfMillisecond()).isEqualTo(0);
 
-        TimestampNtz zeroNtz =
-                BinarySegmentUtils.readTimestampNtzData(segments, 0, zeroOffsetAndNanos);
+        TimestampNtz zeroNtz = BinarySegmentUtils.readTimestampNtz(segments, 0, zeroOffsetAndNanos);
         assertThat(zeroNtz.getMillisecond()).isEqualTo(0L);
         assertThat(zeroNtz.getNanoOfMillisecond()).isEqualTo(0);
 
@@ -1067,12 +1064,10 @@ public class BinarySegmentUtilsTest {
         long maxNanos = 999999;
         long maxNanosOffset = ((long) 0 << 32) | maxNanos;
 
-        TimestampLtz maxNanoLtz =
-                BinarySegmentUtils.readTimestampLtzData(segments, 0, maxNanosOffset);
+        TimestampLtz maxNanoLtz = BinarySegmentUtils.readTimestampLtz(segments, 0, maxNanosOffset);
         assertThat(maxNanoLtz.getNanoOfMillisecond()).isEqualTo(maxNanos);
 
-        TimestampNtz maxNanoNtz =
-                BinarySegmentUtils.readTimestampNtzData(segments, 0, maxNanosOffset);
+        TimestampNtz maxNanoNtz = BinarySegmentUtils.readTimestampNtz(segments, 0, maxNanosOffset);
         assertThat(maxNanoNtz.getNanoOfMillisecond()).isEqualTo(maxNanos);
     }
 

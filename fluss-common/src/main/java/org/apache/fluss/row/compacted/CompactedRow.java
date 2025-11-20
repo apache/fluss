@@ -30,8 +30,9 @@ import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
 import org.apache.fluss.row.indexed.IndexedRow;
 import org.apache.fluss.types.DataType;
-import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.MurmurHashUtils;
+
+import static org.apache.fluss.utils.Preconditions.checkArgument;
 
 /**
  * An implementation of {@link InternalRow} which is backed by {@link MemorySegment} instead of
@@ -68,10 +69,6 @@ public class CompactedRow implements BinaryRow {
     private GenericRow decodedRow;
     private CompactedRowReader reader;
     private final CompactedRowDeserializer deserializer;
-
-    public CompactedRow(RowType rowType) {
-        this(rowType.getChildren().toArray(new DataType[0]));
-    }
 
     public CompactedRow(DataType[] types) {
         this(types.length, new CompactedRowDeserializer(types));
@@ -115,6 +112,7 @@ public class CompactedRow implements BinaryRow {
         return from;
     }
 
+    @Override
     public void pointTo(MemorySegment segment, int offset, int sizeInBytes) {
         this.segment = segment;
         this.segments = new MemorySegment[] {segment};
@@ -123,7 +121,9 @@ public class CompactedRow implements BinaryRow {
         this.decoded = false;
     }
 
+    @Override
     public void pointTo(MemorySegment[] segments, int offset, int sizeInBytes) {
+        checkArgument(segments.length == 1, "IndexedRow only supports single segment now.");
         this.segment = segments[0];
         this.segments = segments;
         this.offset = offset;
@@ -156,24 +156,18 @@ public class CompactedRow implements BinaryRow {
     }
 
     @VisibleForTesting
-    public InternalRow decodedRow(int pos) {
+    public InternalRow decodedRow() {
         if (!decoded) {
-            deserialize(pos);
+            deserialize();
         }
         return decodedRow;
     }
 
-    private void ensureReaderInitialized(int pos) {
-        if (reader == null) {
-            reader = new CompactedRowReader(deserializer.getTypes());
-        }
-    }
-
-    private void deserialize(int pos) {
+    private void deserialize() {
         if (decodedRow == null) {
             decodedRow = new GenericRow(arity);
+            reader = new CompactedRowReader(arity);
         }
-        ensureReaderInitialized(pos);
         reader.pointTo(segment, offset, sizeInBytes);
         deserializer.deserialize(reader, decodedRow);
         decoded = true;
@@ -188,77 +182,77 @@ public class CompactedRow implements BinaryRow {
 
     @Override
     public boolean getBoolean(int pos) {
-        return decodedRow(pos).getBoolean(pos);
+        return decodedRow().getBoolean(pos);
     }
 
     @Override
     public byte getByte(int pos) {
-        return decodedRow(pos).getByte(pos);
+        return decodedRow().getByte(pos);
     }
 
     @Override
     public short getShort(int pos) {
-        return decodedRow(pos).getShort(pos);
+        return decodedRow().getShort(pos);
     }
 
     @Override
     public int getInt(int pos) {
-        return decodedRow(pos).getInt(pos);
+        return decodedRow().getInt(pos);
     }
 
     @Override
     public long getLong(int pos) {
-        return decodedRow(pos).getLong(pos);
+        return decodedRow().getLong(pos);
     }
 
     @Override
     public float getFloat(int pos) {
-        return decodedRow(pos).getFloat(pos);
+        return decodedRow().getFloat(pos);
     }
 
     @Override
     public double getDouble(int pos) {
-        return decodedRow(pos).getDouble(pos);
+        return decodedRow().getDouble(pos);
     }
 
     @Override
     public BinaryString getChar(int pos, int length) {
-        return decodedRow(pos).getChar(pos, length);
+        return decodedRow().getChar(pos, length);
     }
 
     @Override
     public BinaryString getString(int pos) {
-        return decodedRow(pos).getString(pos);
+        return decodedRow().getString(pos);
     }
 
     @Override
     public Decimal getDecimal(int pos, int precision, int scale) {
-        return decodedRow(pos).getDecimal(pos, precision, scale);
+        return decodedRow().getDecimal(pos, precision, scale);
     }
 
     @Override
     public TimestampNtz getTimestampNtz(int pos, int precision) {
-        return decodedRow(pos).getTimestampNtz(pos, precision);
+        return decodedRow().getTimestampNtz(pos, precision);
     }
 
     @Override
     public TimestampLtz getTimestampLtz(int pos, int precision) {
-        return decodedRow(pos).getTimestampLtz(pos, precision);
+        return decodedRow().getTimestampLtz(pos, precision);
     }
 
     @Override
     public byte[] getBinary(int pos, int length) {
-        return decodedRow(pos).getBinary(pos, length);
+        return decodedRow().getBinary(pos, length);
     }
 
     @Override
     public byte[] getBytes(int pos) {
-        return decodedRow(pos).getBytes(pos);
+        return decodedRow().getBytes(pos);
     }
 
     @Override
     public InternalArray getArray(int pos) {
-        return decodedRow(pos).getArray(pos);
+        return decodedRow().getArray(pos);
     }
 
     // TODO: getMap() will be added in Issue #1973
@@ -280,5 +274,10 @@ public class CompactedRow implements BinaryRow {
     @Override
     public int hashCode() {
         return MurmurHashUtils.hashBytes(segment, offset, sizeInBytes);
+    }
+
+    public static int calculateBitSetWidthInBytes(int arity) {
+        // need arity bits to store null bits, round up to the nearest byte size
+        return (arity + 7) / 8;
     }
 }

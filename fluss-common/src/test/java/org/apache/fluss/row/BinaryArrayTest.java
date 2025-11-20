@@ -6,7 +6,7 @@
  * (the "License"); you may not use this file except in compliance with
  * the License.  You may obtain a copy of the License at
  *
- *    http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -659,25 +659,6 @@ public class BinaryArrayTest {
         assertThat(binaryArray.getLong(0)).isEqualTo(111L);
         assertThat(binaryArray.getLong(1)).isEqualTo(222L);
         assertThat(binaryArray.getLong(2)).isEqualTo(333L);
-    }
-
-    @Test
-    public void testGetBinaryWithoutLength() {
-        BinaryArray array = new BinaryArray();
-        BinaryArrayWriter writer = new BinaryArrayWriter(array, 2, 8);
-
-        byte[] binary1 = {1, 2, 3, 4, 5};
-        byte[] binary2 = {10, 20, 30};
-
-        writer.writeBinary(0, binary1, 10);
-        writer.writeBinary(1, binary2, 10);
-        writer.complete();
-
-        byte[] retrieved1 = array.getBinary(0);
-        byte[] retrieved2 = array.getBinary(1);
-
-        assertThat(retrieved1).isNotNull();
-        assertThat(retrieved2).isNotNull();
     }
 
     @Test

@@ -22,7 +22,6 @@ import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.compression.ArrowCompressionInfo;
 import org.apache.fluss.compression.ArrowCompressionRatioEstimator;
 import org.apache.fluss.memory.AbstractPagedOutputView;
-import org.apache.fluss.row.DataGetters;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.arrow.writers.ArrowFieldWriter;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
@@ -77,7 +76,7 @@ public class ArrowWriter implements AutoCloseable {
     /**
      * An array of writers which are responsible for the serialization of each column of the rows.
      */
-    private final ArrowFieldWriter<DataGetters>[] fieldWriters;
+    private final ArrowFieldWriter[] fieldWriters;
 
     /** The provider which manages the {@link ArrowWriter} instances. */
     private final ArrowWriterProvider provider;
@@ -127,7 +126,6 @@ public class ArrowWriter implements AutoCloseable {
         this.estimatedMaxRecordsCount = -1;
         this.recordsCount = 0;
         this.epoch = 0;
-        //noinspection unchecked
         this.fieldWriters = new ArrowFieldWriter[schema.getFieldCount()];
         for (int i = 0; i < fieldWriters.length; i++) {
             FieldVector fieldVector = root.getVector(i);

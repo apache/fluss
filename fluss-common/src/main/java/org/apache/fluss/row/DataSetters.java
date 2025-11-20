@@ -18,10 +18,15 @@
 
 package org.apache.fluss.row;
 
+import org.apache.fluss.annotation.PublicEvolving;
+
 /**
  * Provide type specialized setters to reduce if/else and eliminate box and unbox. This is mainly
  * used on the binary format such as {@link BinaryRow}.
+ *
+ * @since 0.9
  */
+@PublicEvolving
 public interface DataSetters {
 
     void setNullAt(int pos);
@@ -50,20 +55,20 @@ public interface DataSetters {
     void setDecimal(int pos, Decimal value, int precision);
 
     /**
-     * Set TimestampNtz value.
-     *
-     * <p>Note: If precision is compact: can call {@link #setNullAt} when TimestampData value is
-     * null. Otherwise: can not call {@link #setNullAt} when TimestampData value is null, must call
-     * {@code setTimestamp(pos, null, precision)} because we need to update var-length-part.
-     */
-    void setTimestampNtz(int pos, TimestampNtz value, int precision);
-
-    /**
      * Set TimestampLtz value.
      *
-     * <p>Note: If precision is compact: can call {@link #setNullAt} when TimestampData value is
-     * null. Otherwise: can not call {@link #setNullAt} when TimestampData value is null, must call
-     * {@code setTimestamp(pos, null, precision)} because we need to update var-length-part.
+     * <p>Note: If precision is compact: can call {@link #setNullAt} when TimestampLtz value is
+     * null. Otherwise: can not call {@link #setNullAt} when TimestampLtz value is null, must call
+     * {@code setTimestampLtz(pos, null, precision)} because we need to update var-length-part.
      */
     void setTimestampLtz(int pos, TimestampLtz value, int precision);
+
+    /**
+     * Set TimestampNtz value.
+     *
+     * <p>Note: If precision is compact: can call {@link #setNullAt} when TimestampNtz value is
+     * null. Otherwise: can not call {@link #setNullAt} when TimestampNtz value is null, must call
+     * {@code setTimestampNtz(pos, null, precision)} because we need to update var-length-part.
+     */
+    void setTimestampNtz(int pos, TimestampNtz value, int precision);
 }

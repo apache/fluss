@@ -37,7 +37,7 @@ import static org.apache.fluss.types.DataTypeChecks.getScale;
  * same type. See {@link InternalRow} for more information about internal data structures.
  *
  * @see GenericArray
- * @since 0.6
+ * @since 0.9
  */
 @PublicEvolving
 public interface InternalArray extends DataGetters {
@@ -47,8 +47,6 @@ public interface InternalArray extends DataGetters {
     // ------------------------------------------------------------------------------------------
     // Conversion Utilities
     // ------------------------------------------------------------------------------------------
-
-    byte[] getBinary(int pos);
 
     boolean[] toBooleanArray();
 
@@ -74,59 +72,63 @@ public interface InternalArray extends DataGetters {
      *
      * @param fieldType the element type of the array
      */
-    static ElementGetter createElementGetter(DataType fieldType, int fieldPos) {
+    static ElementGetter createElementGetter(DataType fieldType) {
         final ElementGetter elementGetter;
         // ordered by type root definition
         switch (fieldType.getTypeRoot()) {
             case CHAR:
                 final int bytesLength = getLength(fieldType);
-                elementGetter = row -> row.getChar(fieldPos, bytesLength);
+                elementGetter = (array, pos) -> array.getChar(pos, bytesLength);
                 break;
             case STRING:
-                elementGetter = row -> row.getString(fieldPos);
+                elementGetter = InternalArray::getString;
                 break;
             case BOOLEAN:
-                elementGetter = row -> row.getBoolean(fieldPos);
+                elementGetter = InternalArray::getBoolean;
                 break;
             case BINARY:
                 final int binaryLength = getLength(fieldType);
-                elementGetter = row -> row.getBinary(fieldPos, binaryLength);
+                elementGetter = (array, pos) -> array.getBinary(pos, binaryLength);
+                break;
+            case BYTES:
+                elementGetter = InternalArray::getBytes;
                 break;
             case DECIMAL:
                 final int decimalPrecision = getPrecision(fieldType);
                 final int decimalScale = getScale(fieldType);
-                elementGetter = row -> row.getDecimal(fieldPos, decimalPrecision, decimalScale);
+                elementGetter =
+                        (array, pos) -> array.getDecimal(pos, decimalPrecision, decimalScale);
                 break;
             case TINYINT:
-                elementGetter = row -> row.getByte(fieldPos);
+                elementGetter = InternalArray::getByte;
                 break;
             case SMALLINT:
-                elementGetter = row -> row.getShort(fieldPos);
+                elementGetter = InternalArray::getShort;
                 break;
             case INTEGER:
             case DATE:
             case TIME_WITHOUT_TIME_ZONE:
-                elementGetter = row -> row.getInt(fieldPos);
+                elementGetter = InternalArray::getInt;
                 break;
             case BIGINT:
-                elementGetter = row -> row.getLong(fieldPos);
+                elementGetter = InternalArray::getLong;
                 break;
             case FLOAT:
-                elementGetter = row -> row.getFloat(fieldPos);
+                elementGetter = InternalArray::getFloat;
                 break;
             case DOUBLE:
-                elementGetter = row -> row.getDouble(fieldPos);
+                elementGetter = InternalArray::getDouble;
                 break;
             case TIMESTAMP_WITHOUT_TIME_ZONE:
                 final int timestampNtzPrecision = getPrecision(fieldType);
-                elementGetter = row -> row.getTimestampNtz(fieldPos, timestampNtzPrecision);
+                elementGetter = (array, pos) -> array.getTimestampNtz(pos, timestampNtzPrecision);
                 break;
             case TIMESTAMP_WITH_LOCAL_TIME_ZONE:
                 final int timestampLtzPrecision = getPrecision(fieldType);
-                elementGetter = row -> row.getTimestampLtz(fieldPos, timestampLtzPrecision);
+                elementGetter = (array, pos) -> array.getTimestampLtz(pos, timestampLtzPrecision);
                 break;
             case ARRAY:
-                elementGetter = row -> row.getArray(fieldPos);
+                elementGetter = InternalArray::getArray;
                 break;
                 // TODO: MAP support will be added in Issue #1973
                 // TODO: ROW support will be added in Issue #1974
@@ -142,17 +144,17 @@ public interface InternalArray extends DataGetters {
         if (!fieldType.isNullable()) {
             return elementGetter;
         }
-        return (row) -> {
-            if (row.isNullAt(fieldPos)) {
+        return (array, pos) -> {
+            if (array.isNullAt(pos)) {
                 return null;
             }
-            return elementGetter.getElementOrNull(row);
+            return elementGetter.getElementOrNull(array, pos);
         };
     }
 
     /** Accessor for getting the elements of an array during runtime. */
     interface ElementGetter extends Serializable {
         @Nullable
-        Object getElementOrNull(InternalArray array);
+        Object getElementOrNull(InternalArray array, int pos);
     }
 }

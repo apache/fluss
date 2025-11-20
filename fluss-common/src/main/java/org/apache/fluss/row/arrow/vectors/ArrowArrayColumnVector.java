@@ -22,48 +22,31 @@ import org.apache.fluss.row.InternalArray;
 import org.apache.fluss.row.columnar.ArrayColumnVector;
 import org.apache.fluss.row.columnar.ColumnVector;
 import org.apache.fluss.row.columnar.ColumnarArray;
-import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.FieldVector;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.complex.ListVector;
-import org.apache.fluss.types.DataType;
-import org.apache.fluss.utils.ArrowUtils;
+
+import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /** ArrowArrayColumnVector is a wrapper class for Arrow ListVector. */
 public class ArrowArrayColumnVector implements ArrayColumnVector {
-    private boolean inited = false;
-    private FieldVector vector;
-    private final DataType elementType;
-    private ColumnVector columnVector;
+    /** Container which is used to store the sequence of array values of a column to read. */
+    private final ListVector listVector;
 
-    public ArrowArrayColumnVector(FieldVector vector, DataType elementType) {
-        this.vector = vector;
-        this.elementType = elementType;
-    }
+    private final ColumnVector elementVector;
 
-    private void init() {
-        if (!inited) {
-            FieldVector child = ((ListVector) vector).getDataVector();
-            this.columnVector = ArrowUtils.createArrowColumnVector(child, elementType);
-            inited = true;
-        }
+    public ArrowArrayColumnVector(ListVector listVector, ColumnVector elementVector) {
+        this.listVector = checkNotNull(listVector);
+        this.elementVector = checkNotNull(elementVector);
     }
 
     @Override
     public InternalArray getArray(int index) {
-        init();
-        ListVector listVector = (ListVector) vector;
         int start = listVector.getElementStartIndex(index);
         int end = listVector.getElementEndIndex(index);
-        return new ColumnarArray(columnVector, start, end - start);
+        return new ColumnarArray(elementVector, start, end - start);
     }
 
     @Override
-    public ColumnVector getColumnVector() {
-        init();
-        return columnVector;
-    }
-
-    @Override
-    public boolean isNullAt(int index) {
-        return vector.isNull(index);
+    public boolean isNullAt(int i) {
+        return listVector.isNull(i);
     }
 }

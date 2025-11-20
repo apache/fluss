@@ -21,7 +21,6 @@ import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.compression.ArrowCompressionFactory;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.memory.MemorySegment;
-import org.apache.fluss.row.DataGetters;
 import org.apache.fluss.row.arrow.ArrowReader;
 import org.apache.fluss.row.arrow.vectors.ArrowArrayColumnVector;
 import org.apache.fluss.row.arrow.vectors.ArrowBigIntColumnVector;
@@ -85,7 +84,6 @@ import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.VarCharVector;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.VectorLoader;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.VectorSchemaRoot;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.complex.ListVector;
-import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.complex.MapVector;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.compression.NoCompressionCodec;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.ipc.ReadChannel;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.ipc.WriteChannel;
@@ -145,13 +143,11 @@ import static org.apache.fluss.utils.Preconditions.checkArgument;
 @Internal
 public class ArrowUtils {
 
-    static final String PARQUET_FIELD_NAME = "PARQUET:field_name";
-
     /** Returns the Arrow schema of the specified type. */
     public static Schema toArrowSchema(RowType rowType) {
         List<Field> fields =
                 rowType.getFields().stream()
-                        .map(f -> toArrowField(f.getName(), f.getType(), 0))
+                        .map(f -> toArrowField(f.getName(), f.getType()))
                         .collect(Collectors.toList());
         return new Schema(fields);
     }
@@ -292,52 +288,53 @@ public class ArrowUtils {
         return buffers;
     }
 
-    public static ArrowFieldWriter<DataGetters> createArrowFieldWriter(
-            ValueVector vector, DataType dataType) {
+    public static ArrowFieldWriter createArrowFieldWriter(FieldVector vector, DataType dataType) {
         if (vector instanceof TinyIntVector) {
-            return ArrowTinyIntWriter.forField((TinyIntVector) vector);
+            return new ArrowTinyIntWriter((TinyIntVector) vector);
         } else if (vector instanceof SmallIntVector) {
-            return ArrowSmallIntWriter.forField((SmallIntVector) vector);
+            return new ArrowSmallIntWriter((SmallIntVector) vector);
         } else if (vector instanceof IntVector) {
-            return ArrowIntWriter.forField((IntVector) vector);
+            return new ArrowIntWriter((IntVector) vector);
         } else if (vector instanceof BigIntVector) {
-            return ArrowBigIntWriter.forField((BigIntVector) vector);
+            return new ArrowBigIntWriter((BigIntVector) vector);
         } else if (vector instanceof BitVector) {
-            return ArrowBooleanWriter.forField((BitVector) vector);
+            return new ArrowBooleanWriter((BitVector) vector);
         } else if (vector instanceof Float4Vector) {
-            return ArrowFloatWriter.forField((Float4Vector) vector);
+            return new ArrowFloatWriter((Float4Vector) vector);
         } else if (vector instanceof Float8Vector) {
-            return ArrowDoubleWriter.forField((Float8Vector) vector);
+            return new ArrowDoubleWriter((Float8Vector) vector);
         } else if (vector instanceof VarCharVector) {
-            return ArrowVarCharWriter.forField((VarCharVector) vector);
+            return new ArrowVarCharWriter((VarCharVector) vector);
         } else if (vector instanceof FixedSizeBinaryVector) {
-            return ArrowBinaryWriter.forField((FixedSizeBinaryVector) vector);
+            return new ArrowBinaryWriter((FixedSizeBinaryVector) vector);
         } else if (vector instanceof VarBinaryVector) {
-            return ArrowVarBinaryWriter.forField((VarBinaryVector) vector);
+            return new ArrowVarBinaryWriter((VarBinaryVector) vector);
         } else if (vector instanceof DecimalVector) {
             DecimalVector decimalVector = (DecimalVector) vector;
-            return ArrowDecimalWriter.forField(
+            return new ArrowDecimalWriter(
                     decimalVector, getPrecision(decimalVector), decimalVector.getScale());
         } else if (vector instanceof DateDayVector) {
-            return ArrowDateWriter.forField((DateDayVector) vector);
+            return new ArrowDateWriter((DateDayVector) vector);
         } else if (vector instanceof TimeSecVector
                 || vector instanceof TimeMilliVector
                 || vector instanceof TimeMicroVector
                 || vector instanceof TimeNanoVector) {
-            return ArrowTimeWriter.forField(vector);
+            return new ArrowTimeWriter(vector);
         } else if (vector instanceof TimeStampVector
                 && ((ArrowType.Timestamp) vector.getField().getType()).getTimezone() == null) {
             int precision;
             if (dataType instanceof LocalZonedTimestampType) {
                 precision = ((LocalZonedTimestampType) dataType).getPrecision();
-                return ArrowTimestampLtzWriter.forField(vector, precision);
+                return new ArrowTimestampLtzWriter(vector, precision);
             } else {
                 precision = ((TimestampType) dataType).getPrecision();
-                return ArrowTimestampNtzWriter.forField(vector, precision);
+                return new ArrowTimestampNtzWriter(vector, precision);
             }
         } else if (vector instanceof ListVector && dataType instanceof ArrayType) {
             DataType elementType = ((ArrayType) dataType).getElementType();
-            return ArrowArrayWriter.forField(vector, elementType);
+            FieldVector elementFieldVector = ((ListVector) vector).getDataVector();
+            return new ArrowArrayWriter(
+                    vector, ArrowUtils.createArrowFieldWriter(elementFieldVector, elementType));
         } else {
             throw new UnsupportedOperationException(
                     String.format(
@@ -346,7 +343,7 @@ public class ArrowUtils {
         }
     }
 
-    public static ColumnVector createArrowColumnVector(ValueVector vector, DataType dataType) {
+    private static ColumnVector createArrowColumnVector(ValueVector vector, DataType dataType) {
         if (vector instanceof TinyIntVector) {
             return new ArrowTinyIntColumnVector((TinyIntVector) vector);
         } else if (vector instanceof SmallIntVector) {
@@ -385,7 +382,10 @@ public class ArrowUtils {
             }
         } else if (vector instanceof ListVector && dataType instanceof ArrayType) {
             DataType elementType = ((ArrayType) dataType).getElementType();
-            return new ArrowArrayColumnVector((ListVector) vector, elementType);
+            ListVector listVector = (ListVector) vector;
+            return new ArrowArrayColumnVector(
+                    listVector,
+                    ArrowUtils.createArrowColumnVector(listVector.getDataVector(), elementType));
         } else {
             throw new UnsupportedOperationException(
                     String.format(
@@ -394,87 +394,36 @@ public class ArrowUtils {
         }
     }
 
-    public static Field toArrowField(String fieldName, DataType dataType, int depth) {
+    private static Field toArrowField(String fieldName, DataType logicalType) {
         FieldType fieldType =
-                FieldType.nullable(dataType.accept(DataTypeToArrowTypeConverter.INSTANCE));
-        fieldType =
                 new FieldType(
-                        fieldType.isNullable(),
-                        fieldType.getType(),
-                        fieldType.getDictionary(),
-                        Collections.singletonMap(PARQUET_FIELD_NAME, fieldName));
-
+                        logicalType.isNullable(),
+                        logicalType.accept(DataTypeToArrowTypeConverter.INSTANCE),
+                        null);
         List<Field> children = null;
-        if (dataType instanceof ArrayType) {
-            Field elementField =
-                    toArrowField(
-                            ListVector.DATA_VECTOR_NAME,
-                            ((ArrayType) dataType).getElementType(),
-                            depth + 1);
-            FieldType elementType = elementField.getFieldType();
-
-            elementField =
-                    new Field(
-                            elementField.getName(),
-                            new FieldType(
-                                    elementType.isNullable(),
-                                    elementType.getType(),
-                                    elementType.getDictionary(),
-                                    Collections.singletonMap(
-                                            PARQUET_FIELD_NAME, fieldName + "_element")),
-                            elementField.getChildren());
-            children = Collections.singletonList(elementField);
-        } else if (dataType instanceof MapType) {
-            MapType mapType = (MapType) dataType;
-            Field keyField = toArrowField(MapVector.KEY_NAME, mapType.getKeyType(), depth + 1);
-            FieldType keyType = keyField.getFieldType();
-            keyField =
-                    new Field(
-                            keyField.getName(),
-                            new FieldType(
-                                    false,
-                                    keyType.getType(),
-                                    keyType.getDictionary(),
-                                    Collections.singletonMap(
-                                            PARQUET_FIELD_NAME, fieldName + "_key")),
-                            keyField.getChildren());
-
-            Field valueField =
-                    toArrowField(MapVector.VALUE_NAME, mapType.getValueType(), depth + 1);
-            FieldType valueType = valueField.getFieldType();
-            valueField =
-                    new Field(
-                            valueField.getName(),
-                            new FieldType(
-                                    valueType.isNullable(),
-                                    valueType.getType(),
-                                    valueType.getDictionary(),
-                                    Collections.singletonMap(
-                                            PARQUET_FIELD_NAME, fieldName + "_value")),
-                            valueField.getChildren());
-
-            FieldType structType =
-                    new FieldType(
-                            false,
-                            Types.MinorType.STRUCT.getType(),
-                            null,
-                            Collections.singletonMap(PARQUET_FIELD_NAME, fieldName));
-            Field mapField =
-                    new Field(
-                            MapVector.DATA_VECTOR_NAME,
-                            // data vector, key vector and value vector CANNOT be null
-                            structType,
-                            Arrays.asList(keyField, valueField));
-
-            children = Collections.singletonList(mapField);
-        } else if (dataType instanceof RowType) {
-            RowType rowType = (RowType) dataType;
-            children = new ArrayList<>();
+        if (logicalType instanceof ArrayType) {
+            children =
+                    Collections.singletonList(
+                            toArrowField("element", ((ArrayType) logicalType).getElementType()));
+        } else if (logicalType instanceof RowType) {
+            RowType rowType = (RowType) logicalType;
+            children = new ArrayList<>(rowType.getFieldCount());
             for (DataField field : rowType.getFields()) {
-                children.add(toArrowField(field.getName(), field.getType(), 0));
+                children.add(toArrowField(field.getName(), field.getType()));
             }
+        } else if (logicalType instanceof MapType) {
+            MapType mapType = (MapType) logicalType;
+            Preconditions.checkArgument(
+                    !mapType.getKeyType().isNullable(), "Map key type should be non-nullable");
+            children =
+                    Collections.singletonList(
+                            new Field(
+                                    "items",
+                                    new FieldType(false, ArrowType.Struct.INSTANCE, null),
+                                    Arrays.asList(
+                                            toArrowField("key", mapType.getKeyType()),
+                                            toArrowField("value", mapType.getValueType()))));
         }
-
         return new Field(fieldName, fieldType, children);
     }
 

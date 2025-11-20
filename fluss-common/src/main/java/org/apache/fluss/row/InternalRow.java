@@ -68,6 +68,8 @@ import static org.apache.fluss.types.DataTypeChecks.getScale;
  * +--------------------------------+-----------------------------------------+
  * | TIMESTAMP WITH LOCAL TIME ZONE | {@link TimestampLtz}                    |
  * +--------------------------------+-----------------------------------------+
+ * | ARRAY                          | {@link InternalArray}                   |
+ * +--------------------------------+-----------------------------------------+
  * </pre>
  *
  * <p>Nullability is always handled by the container data structure.

@@ -19,70 +19,58 @@ package org.apache.fluss.row.arrow.writers;
 
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.row.DataGetters;
-import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.BaseFixedWidthVector;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.FieldVector;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.TimeMicroVector;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.TimeMilliVector;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.TimeNanoVector;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.TimeSecVector;
-import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.ValueVector;
 
 import static org.apache.fluss.utils.Preconditions.checkState;
 
 /** {@link ArrowFieldWriter} for Time. */
 @Internal
-public class ArrowTimeWriter extends ArrowFieldWriter<DataGetters> {
+public class ArrowTimeWriter extends ArrowFieldWriter {
 
-    public static ArrowTimeWriter forField(ValueVector valueVector) {
-        return new ArrowTimeWriter(valueVector);
-    }
-
-    private ArrowTimeWriter(ValueVector valueVector) {
-        super(valueVector);
+    public ArrowTimeWriter(FieldVector fieldVector) {
+        super(fieldVector);
         checkState(
-                valueVector instanceof TimeSecVector
-                        || valueVector instanceof TimeMilliVector
-                        || valueVector instanceof TimeMicroVector
-                        || valueVector instanceof TimeNanoVector);
+                fieldVector instanceof TimeSecVector
+                        || fieldVector instanceof TimeMilliVector
+                        || fieldVector instanceof TimeMicroVector
+                        || fieldVector instanceof TimeNanoVector);
     }
 
     @Override
     public void doWrite(int rowIndex, DataGetters row, int ordinal, boolean handleSafe) {
-        ValueVector valueVector = getValueVector();
-        if (isNullAt(row, ordinal)) {
-            ((BaseFixedWidthVector) valueVector).setNull(getCount());
-        } else if (valueVector instanceof TimeSecVector) {
+        if (fieldVector instanceof TimeSecVector) {
             int sec = readTime(row, ordinal) / 1000;
             if (handleSafe) {
-                ((TimeSecVector) valueVector).setSafe(getCount(), sec);
+                ((TimeSecVector) fieldVector).setSafe(rowIndex, sec);
             } else {
-                ((TimeSecVector) valueVector).set(getCount(), sec);
+                ((TimeSecVector) fieldVector).set(rowIndex, sec);
             }
-        } else if (valueVector instanceof TimeMilliVector) {
+        } else if (fieldVector instanceof TimeMilliVector) {
             int ms = readTime(row, ordinal);
             if (handleSafe) {
-                ((TimeMilliVector) valueVector).setSafe(getCount(), ms);
+                ((TimeMilliVector) fieldVector).setSafe(rowIndex, ms);
             } else {
-                ((TimeMilliVector) valueVector).set(getCount(), ms);
+                ((TimeMilliVector) fieldVector).set(rowIndex, ms);
             }
-        } else if (valueVector instanceof TimeMicroVector) {
+        } else if (fieldVector instanceof TimeMicroVector) {
             long microSec = readTime(row, ordinal) * 1000L;
             if (handleSafe) {
-                ((TimeMicroVector) valueVector).setSafe(getCount(), microSec);
+                ((TimeMicroVector) fieldVector).setSafe(rowIndex, microSec);
             } else {
-                ((TimeMicroVector) valueVector).set(getCount(), microSec);
+                ((TimeMicroVector) fieldVector).set(rowIndex, microSec);
             }
         } else {
             long nanoSec = readTime(row, ordinal) * 1000000L;
             if (handleSafe) {
-                ((TimeNanoVector) valueVector).setSafe(getCount(), nanoSec);
+                ((TimeNanoVector) fieldVector).setSafe(rowIndex, nanoSec);
             } else {
-                ((TimeNanoVector) valueVector).set(getCount(), nanoSec);
+                ((TimeNanoVector) fieldVector).set(rowIndex, nanoSec);
             }
         }
-    }
-
-    private boolean isNullAt(DataGetters row, int ordinal) {
-        return row.isNullAt(ordinal);
     }
 
     private int readTime(DataGetters row, int ordinal) {

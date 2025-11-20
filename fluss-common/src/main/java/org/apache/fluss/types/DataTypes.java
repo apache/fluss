@@ -301,15 +301,6 @@ public class DataTypes {
         return new MapType(keyType, valueType);
     }
 
-    /**
-     * Data type of a sequence of elements with same subtype.
-     *
-     * <p>Compared to the SQL standard, the maximum cardinality of an array cannot be specified but
-     * is fixed at {@link Integer#MAX_VALUE}. Also, any valid type is supported as a subtype.
-     *
-     * <p>Note: Fluss currently doesn't support defining nested array in columns.
-     */
-
     /** Field definition with field name and data type. */
     public static DataField FIELD(String name, DataType type) {
         return new DataField(name, type);

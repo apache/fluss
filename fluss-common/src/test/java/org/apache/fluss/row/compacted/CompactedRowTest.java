@@ -24,7 +24,6 @@ import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypes;
-import org.apache.fluss.types.RowType;
 
 import org.junit.jupiter.api.Test;
 
@@ -180,10 +179,8 @@ public class CompactedRowTest {
 
         BinaryString str = BinaryString.fromString("Hello");
         writer.writeString(str);
-
         row.pointTo(writer.segment(), 0, writer.position());
-
-        assertThat(row.getChar(0, 5)).isEqualTo(str);
+        assertThat(row.getChar(0, 10)).isEqualTo(str);
     }
 
     @Test
@@ -362,17 +359,6 @@ public class CompactedRowTest {
 
         assertThat(row.isNullAt(0)).isTrue();
         assertThat(row.getString(1)).isEqualTo(BinaryString.fromString("test"));
-    }
-
-    @Test
-    public void testRowTypeConstructor() {
-        RowType rowType =
-                RowType.of(
-                        new DataType[] {DataTypes.INT(), DataTypes.STRING()},
-                        new String[] {" f1", "f2"});
-
-        CompactedRow row = new CompactedRow(rowType);
-        assertThat(row.getFieldCount()).isEqualTo(2);
     }
 
     @Test

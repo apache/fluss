@@ -21,34 +21,23 @@ package org.apache.fluss.row.arrow.writers;
 import org.apache.fluss.row.DataGetters;
 import org.apache.fluss.row.InternalArray;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.FieldVector;
-import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.ValueVector;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.complex.ListVector;
-import org.apache.fluss.types.DataType;
-import org.apache.fluss.utils.ArrowUtils;
 
-/** ArrowArrayWriter. */
-public class ArrowArrayWriter extends ArrowFieldWriter<DataGetters> {
+/** {@link ArrowFieldWriter} for Array. */
+public class ArrowArrayWriter extends ArrowFieldWriter {
 
-    private final ArrowFieldWriter<DataGetters> elementWriter;
+    private final ArrowFieldWriter elementWriter;
     private int offset;
 
-    public ArrowArrayWriter(ValueVector valueVector, ArrowFieldWriter<DataGetters> elementWriter) {
-        super(valueVector);
+    public ArrowArrayWriter(FieldVector fieldVector, ArrowFieldWriter elementWriter) {
+        super(fieldVector);
         this.elementWriter = elementWriter;
-    }
-
-    public static ArrowFieldWriter<DataGetters> forField(
-            ValueVector valueVector, DataType elementType) {
-        FieldVector elementFieldVector = ((ListVector) valueVector).getDataVector();
-        ArrowFieldWriter<DataGetters> elementWriter =
-                ArrowUtils.createArrowFieldWriter(elementFieldVector, elementType);
-        return new ArrowArrayWriter(valueVector, elementWriter);
     }
 
     @Override
     public void doWrite(int rowIndex, DataGetters row, int ordinal, boolean handleSafe) {
         InternalArray array = row.getArray(ordinal);
-        ListVector listVector = (ListVector) getValueVector();
+        ListVector listVector = (ListVector) fieldVector;
         listVector.startNewValue(rowIndex);
         for (int arrIndex = 0; arrIndex < array.size(); arrIndex++) {
             int fieldIndex = offset + arrIndex;

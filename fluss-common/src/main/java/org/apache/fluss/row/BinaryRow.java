@@ -19,13 +19,11 @@ package org.apache.fluss.row;
 
 import org.apache.fluss.memory.MemorySegment;
 
-import java.io.Serializable;
-
 /**
  * A binary format {@link InternalRow} that is backed on {@link MemorySegment} and supports all
  * interfaces provided by {@link MemoryAwareGetters}.
  */
-public interface BinaryRow extends InternalRow, MemoryAwareGetters, Serializable {
+public interface BinaryRow extends InternalRow, MemoryAwareGetters {
 
     /**
      * Copies the bytes of the row to the destination memory, beginning at the given offset.
@@ -59,15 +57,4 @@ public interface BinaryRow extends InternalRow, MemoryAwareGetters, Serializable
      * @param sizeInBytes The size of the row.
      */
     void pointTo(MemorySegment[] segments, int offset, int sizeInBytes);
-
-    /**
-     * Calculate the width of the bit set.
-     *
-     * @param arity the number of fields.
-     * @return the width of the bit set.
-     */
-    static int calculateBitSetWidthInBytes(int arity) {
-        // need arity bits to store null bits, round up to the nearest byte size
-        return (arity + 7) / 8;
-    }
 }

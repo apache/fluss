@@ -35,7 +35,7 @@ import java.util.Objects;
  * <p>{@link GenericArray} is a generic implementation of {@link InternalArray} which wraps regular
  * Java arrays.
  *
- * @since 0.6
+ * @since 0.9
  */
 @PublicEvolving
 public final class GenericArray implements InternalArray, Serializable {
@@ -197,11 +197,6 @@ public final class GenericArray implements InternalArray, Serializable {
     @Override
     public double getDouble(int pos) {
         return isPrimitiveArray ? ((double[]) array)[pos] : (double) getObject(pos);
-    }
-
-    @Override
-    public byte[] getBinary(int pos) {
-        return (byte[]) getObject(pos);
     }
 
     @Override

@@ -6,7 +6,7 @@
  * (the "License"); you may not use this file except in compliance with
  * the License.  You may obtain a copy of the License at
  *
- *    http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -104,26 +104,6 @@ public class BinaryArrayWriterTest {
         assertThat(array.getLong(4)).isEqualTo(0L);
         assertThat(array.getFloat(5)).isEqualTo(0.0f);
         assertThat(array.getDouble(6)).isEqualTo(0.0);
-    }
-
-    @Test
-    public void testSetNullAtWithType() {
-        BinaryArray array = new BinaryArray();
-        BinaryArrayWriter writer = new BinaryArrayWriter(array, 8, 8);
-
-        writer.setNullAt(0, DataTypes.BOOLEAN());
-        writer.setNullAt(1, DataTypes.TINYINT());
-        writer.setNullAt(2, DataTypes.SMALLINT());
-        writer.setNullAt(3, DataTypes.INT());
-        writer.setNullAt(4, DataTypes.BIGINT());
-        writer.setNullAt(5, DataTypes.FLOAT());
-        writer.setNullAt(6, DataTypes.DOUBLE());
-        writer.setNullAt(7, DataTypes.STRING());
-        writer.complete();
-
-        for (int i = 0; i < 8; i++) {
-            assertThat(array.isNullAt(i)).isTrue();
-        }
     }
 
     @Test

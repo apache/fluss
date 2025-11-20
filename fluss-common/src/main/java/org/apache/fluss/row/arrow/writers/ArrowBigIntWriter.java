@@ -23,33 +23,19 @@ import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.BigIntVector;
 
 /** {@link ArrowFieldWriter} for BigInt. */
 @Internal
-public class ArrowBigIntWriter extends ArrowFieldWriter<DataGetters> {
+public class ArrowBigIntWriter extends ArrowFieldWriter {
 
-    public static ArrowBigIntWriter forField(BigIntVector bigIntVector) {
-        return new ArrowBigIntWriter(bigIntVector);
-    }
-
-    private ArrowBigIntWriter(BigIntVector bigIntVector) {
+    public ArrowBigIntWriter(BigIntVector bigIntVector) {
         super(bigIntVector);
     }
 
     @Override
     public void doWrite(int rowIndex, DataGetters row, int ordinal, boolean handleSafe) {
-        BigIntVector vector = (BigIntVector) getValueVector();
-        if (isNullAt(row, ordinal)) {
-            vector.setNull(getCount());
-        } else if (handleSafe) {
-            vector.setSafe(getCount(), readLong(row, ordinal));
+        BigIntVector vector = (BigIntVector) fieldVector;
+        if (handleSafe) {
+            vector.setSafe(rowIndex, row.getLong(ordinal));
         } else {
-            vector.set(getCount(), readLong(row, ordinal));
+            vector.set(rowIndex, row.getLong(ordinal));
         }
-    }
-
-    private boolean isNullAt(DataGetters row, int ordinal) {
-        return row.isNullAt(ordinal);
-    }
-
-    private long readLong(DataGetters row, int ordinal) {
-        return row.getLong(ordinal);
     }
 }

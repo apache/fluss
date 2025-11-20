@@ -234,7 +234,6 @@ public class GenericArrayTest {
 
         assertThat(array.size()).isEqualTo(3);
         assertThat(array.getBytes(0)).isEqualTo(new byte[] {1, 2});
-        assertThat(array.getBinary(1)).isEqualTo(new byte[] {3, 4});
         assertThat(array.getBinary(1, 2)).isEqualTo(new byte[] {3, 4});
         assertThat(array.isNullAt(2)).isTrue();
     }

@@ -42,26 +42,31 @@ public class TestInternalRowGenerator {
 
     public static RowType createAllRowType() {
         return DataTypes.ROW(
-                new DataField("a", DataTypes.BOOLEAN()),
-                new DataField("b", DataTypes.TINYINT()),
-                new DataField("c", DataTypes.SMALLINT()),
-                new DataField("d", DataTypes.INT()),
-                new DataField("e", DataTypes.BIGINT()),
-                new DataField("f", DataTypes.FLOAT()),
-                new DataField("g", DataTypes.DOUBLE()),
-                new DataField("h", DataTypes.DATE()),
-                new DataField("i", DataTypes.TIME()),
-                new DataField("j", DataTypes.BINARY(20)),
-                new DataField("k", DataTypes.BYTES()),
-                new DataField("l", DataTypes.CHAR(2)),
-                new DataField("m", DataTypes.STRING()),
-                new DataField("n", DataTypes.DECIMAL(5, 2)),
-                new DataField("o", DataTypes.DECIMAL(20, 0)),
-                new DataField("p", DataTypes.TIMESTAMP(1)),
-                new DataField("q", DataTypes.TIMESTAMP(5)),
-                new DataField("r", DataTypes.TIMESTAMP_LTZ(1)),
-                new DataField("s", DataTypes.TIMESTAMP_LTZ(5)),
-                new DataField("t", DataTypes.ARRAY(DataTypes.INT()))
+                new DataField("f0", DataTypes.BOOLEAN()),
+                new DataField("f1", DataTypes.TINYINT()),
+                new DataField("f2", DataTypes.SMALLINT()),
+                new DataField("f3", DataTypes.INT()),
+                new DataField("f4", DataTypes.BIGINT()),
+                new DataField("f5", DataTypes.FLOAT()),
+                new DataField("f6", DataTypes.DOUBLE()),
+                new DataField("f7", DataTypes.DATE()),
+                new DataField("f8", DataTypes.TIME()),
+                new DataField("f9", DataTypes.BINARY(20)),
+                new DataField("f10", DataTypes.BYTES()),
+                new DataField("f11", DataTypes.CHAR(2)),
+                new DataField("f12", DataTypes.STRING()),
+                new DataField("f13", DataTypes.DECIMAL(5, 2)),
+                new DataField("f14", DataTypes.DECIMAL(20, 0)),
+                new DataField("f15", DataTypes.TIMESTAMP(1)),
+                new DataField("f16", DataTypes.TIMESTAMP(5)),
+                new DataField("f17", DataTypes.TIMESTAMP_LTZ(1)),
+                new DataField("f18", DataTypes.TIMESTAMP_LTZ(5)),
+                new DataField("f19", DataTypes.ARRAY(DataTypes.INT())),
+                new DataField(
+                        "f20",
+                        DataTypes.ARRAY(DataTypes.FLOAT().copy(false))), // vector embedding type
+                new DataField(
+                        "f21", DataTypes.ARRAY(DataTypes.ARRAY(DataTypes.STRING()))) // nested array
                 // TODO: Add Map and Row fields in Issue #1973 and #1974
                 // new DataField("u", DataTypes.MAP(DataTypes.INT(), DataTypes.STRING())),
                 // new DataField(
@@ -77,9 +82,9 @@ public class TestInternalRowGenerator {
         DataType[] dataTypes = createAllTypes();
         IndexedRowWriter writer = new IndexedRowWriter(dataTypes);
 
-        IndexedRowWriter.FieldWriter[] writers = new IndexedRowWriter.FieldWriter[dataTypes.length];
+        BinaryWriter.ValueWriter[] writers = new BinaryWriter.ValueWriter[dataTypes.length];
         for (int i = 0; i < dataTypes.length; i++) {
-            writers[i] = IndexedRowWriter.createFieldWriter(dataTypes[i]);
+            writers[i] = BinaryWriter.createValueWriter(dataTypes[i]);
         }
 
         Random rnd = new Random();
@@ -120,8 +125,19 @@ public class TestInternalRowGenerator {
                 rnd,
                 TimestampLtz.fromEpochMillis(System.currentTimeMillis()));
 
-        GenericArray array = new GenericArray(new int[] {1, 2, 3});
-        setRandomNull(writers[19], writer, 19, rnd, array);
+        GenericArray array1 = GenericArray.of(1, 2, 3, 4, 5, -11, null, 444, 102234);
+        setRandomNull(writers[19], writer, 19, rnd, array1);
+
+        GenericArray array2 =
+                GenericArray.of(0.1f, 1.1f, -0.5f, 6.6f, Float.MAX_VALUE, Float.MIN_VALUE);
+        setRandomNull(writers[20], writer, 20, rnd, array2);
+
+        GenericArray array3 =
+                GenericArray.of(
+                        GenericArray.of(fromString("a"), null, fromString("c")),
+                        null,
+                        GenericArray.of(fromString("hello"), fromString("world")));
+        setRandomNull(writers[21], writer, 21, rnd, array3);
 
         // TODO: Map type support will be added in Issue #1973
         // Map<Object, Object> javaMap = new HashMap<>();
@@ -159,12 +175,12 @@ public class TestInternalRowGenerator {
     }
 
     private static void setRandomNull(
-            IndexedRowWriter.FieldWriter fieldWriter,
+            BinaryWriter.ValueWriter fieldWriter,
             IndexedRowWriter writer,
             int pos,
             Random rnd,
             Object value) {
-        fieldWriter.writeField(writer, pos, rnd.nextBoolean() ? null : value);
+        fieldWriter.writeValue(writer, pos, rnd.nextBoolean() ? null : value);
     }
 
     private static int generateRandomDate(Random rnd) {

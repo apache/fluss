@@ -23,33 +23,23 @@ import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.BitVector;
 
 /** {@link ArrowFieldWriter} for Boolean. */
 @Internal
-public class ArrowBooleanWriter extends ArrowFieldWriter<DataGetters> {
+public class ArrowBooleanWriter extends ArrowFieldWriter {
 
-    public static ArrowBooleanWriter forField(BitVector booleanVector) {
-        return new ArrowBooleanWriter(booleanVector);
-    }
-
-    private ArrowBooleanWriter(BitVector bitVector) {
+    public ArrowBooleanWriter(BitVector bitVector) {
         super(bitVector);
     }
 
     @Override
     public void doWrite(int rowIndex, DataGetters row, int ordinal, boolean handleSafe) {
-        BitVector vector = (BitVector) getValueVector();
-        if (isNullAt(row, ordinal)) {
-            vector.setNull(getCount());
-        } else if (handleSafe) {
-            vector.setSafe(getCount(), readBoolean(row, ordinal) ? 1 : 0);
+        BitVector vector = (BitVector) fieldVector;
+        if (handleSafe) {
+            vector.setSafe(rowIndex, readBoolean(row, ordinal));
         } else {
-            vector.set(getCount(), readBoolean(row, ordinal) ? 1 : 0);
+            vector.set(rowIndex, readBoolean(row, ordinal));
         }
     }
 
-    private boolean isNullAt(DataGetters row, int ordinal) {
-        return row.isNullAt(ordinal);
-    }
-
-    private boolean readBoolean(DataGetters row, int ordinal) {
-        return row.getBoolean(ordinal);
+    private int readBoolean(DataGetters row, int ordinal) {
+        return row.getBoolean(ordinal) ? 1 : 0;
     }
 }

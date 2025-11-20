@@ -136,8 +136,7 @@ public class FlinkAsFlussRow implements InternalRow {
 
     @Override
     public InternalArray getArray(int pos) {
-        // TODO: Support Array type conversion from Flink to Fluss
-        return null;
+        return new FlinkAsFlussArray(flinkRow.getArray(pos));
     }
 
     // TODO: Support Map type conversion from Flink to Fluss

@@ -23,7 +23,7 @@ import org.apache.fluss.annotation.PublicEvolving;
 /**
  * Getters to get data.
  *
- * @since 0.6
+ * @since 0.9
  */
 @PublicEvolving
 public interface DataGetters {

@@ -21,6 +21,7 @@ import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
 import org.apache.fluss.row.indexed.IndexedRow;
 import org.apache.fluss.row.indexed.IndexedRowWriter;
+import org.apache.fluss.types.DataField;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
@@ -37,7 +38,6 @@ import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.util.List;
 
-import static org.apache.fluss.row.TestInternalRowGenerator.createAllRowType;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** UT for {@link PaimonKeyEncoder} to verify the encoding result is same to Paimon's. */
@@ -46,20 +46,17 @@ class PaimonKeyEncoderTest {
     @Test
     void testEncodeKey() {
         // create a row with all types
-        RowType allRowType = createAllRowType();
-        DataType[] allDataTypes = allRowType.getChildren().toArray(new DataType[0]);
-
+        RowType keyRowType = createKeyRowType();
+        DataType[] allDataTypes = keyRowType.getChildren().toArray(new DataType[0]);
         IndexedRow indexedRow = genFlussRowForAllTypes(allDataTypes);
-        // exclude the last field (array type) as Paimon doesn't support array type in key
-        List<String> encodedKeys =
-                allRowType.getFieldNames().subList(0, allRowType.getFieldCount() - 1);
-        PaimonKeyEncoder paimonKeyEncoder = new PaimonKeyEncoder(allRowType, encodedKeys);
+        List<String> encodedKeys = keyRowType.getFieldNames();
+        PaimonKeyEncoder paimonKeyEncoder = new PaimonKeyEncoder(keyRowType, encodedKeys);
 
         // encode with Fluss own implementation for Paimon
         byte[] encodedKey = paimonKeyEncoder.encodeKey(indexedRow);
 
         // encode with Paimon implementation
-        byte[] paimonEncodedKey = genPaimonRowForAllTypes(allRowType.getFieldCount() - 1).toBytes();
+        byte[] paimonEncodedKey = genPaimonRowForAllTypes(keyRowType.getFieldCount()).toBytes();
 
         // verify both the result should be same
         assertThat(encodedKey).isEqualTo(paimonEncodedKey);
@@ -124,5 +121,28 @@ class PaimonKeyEncoderTest {
         binaryRowWriter.setNullAt(18);
         binaryRowWriter.complete();
         return binaryRow;
+    }
+
+    public static RowType createKeyRowType() {
+        return DataTypes.ROW(
+                new DataField("a", DataTypes.BOOLEAN()),
+                new DataField("b", DataTypes.TINYINT()),
+                new DataField("c", DataTypes.SMALLINT()),
+                new DataField("d", DataTypes.INT()),
+                new DataField("e", DataTypes.BIGINT()),
+                new DataField("f", DataTypes.FLOAT()),
+                new DataField("g", DataTypes.DOUBLE()),
+                new DataField("h", DataTypes.DATE()),
+                new DataField("i", DataTypes.TIME()),
+                new DataField("j", DataTypes.BINARY(20)),
+                new DataField("k", DataTypes.BYTES()),
+                new DataField("l", DataTypes.CHAR(2)),
+                new DataField("m", DataTypes.STRING()),
+                new DataField("n", DataTypes.DECIMAL(5, 2)),
+                new DataField("o", DataTypes.DECIMAL(20, 0)),
+                new DataField("p", DataTypes.TIMESTAMP(1)),
+                new DataField("q", DataTypes.TIMESTAMP(5)),
+                new DataField("r", DataTypes.TIMESTAMP_LTZ(1)),
+                new DataField("s", DataTypes.TIMESTAMP_LTZ(5)));
     }
 }

@@ -17,6 +17,7 @@
 
 package org.apache.fluss.row.encode;
 
+import org.apache.fluss.row.BinaryWriter;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.compacted.CompactedKeyWriter;
 import org.apache.fluss.types.DataType;
@@ -30,7 +31,7 @@ public class CompactedKeyEncoder implements KeyEncoder {
 
     private final InternalRow.FieldGetter[] fieldGetters;
 
-    private final CompactedKeyWriter.FieldWriter[] fieldEncoders;
+    private final BinaryWriter.ValueWriter[] fieldEncoders;
 
     private final CompactedKeyWriter compactedEncoder;
 
@@ -65,11 +66,11 @@ public class CompactedKeyEncoder implements KeyEncoder {
         // for get fields from internal row
         fieldGetters = new InternalRow.FieldGetter[encodeFieldPos.length];
         // for encode fields
-        fieldEncoders = new CompactedKeyWriter.FieldWriter[encodeFieldPos.length];
+        fieldEncoders = new BinaryWriter.ValueWriter[encodeFieldPos.length];
         for (int i = 0; i < encodeFieldPos.length; i++) {
             DataType fieldDataType = encodeDataTypes[i];
             fieldGetters[i] = InternalRow.createFieldGetter(fieldDataType, encodeFieldPos[i]);
-            fieldEncoders[i] = CompactedKeyWriter.createFieldWriter(fieldDataType);
+            fieldEncoders[i] = CompactedKeyWriter.createValueWriter(fieldDataType);
         }
         compactedEncoder = new CompactedKeyWriter();
     }
@@ -79,7 +80,7 @@ public class CompactedKeyEncoder implements KeyEncoder {
         compactedEncoder.reset();
         // iterate all the fields of the row, and encode each field
         for (int i = 0; i < fieldGetters.length; i++) {
-            fieldEncoders[i].writeField(compactedEncoder, i, fieldGetters[i].getFieldOrNull(row));
+            fieldEncoders[i].writeValue(compactedEncoder, i, fieldGetters[i].getFieldOrNull(row));
         }
         return compactedEncoder.toBytes();
     }

@@ -23,17 +23,13 @@ import org.apache.fluss.row.BinarySegmentUtils;
 import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.Decimal;
 import org.apache.fluss.row.InternalArray;
-import org.apache.fluss.row.InternalMap;
-import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
 import org.apache.fluss.types.DataType;
-import org.apache.fluss.types.RowType;
 
 import java.io.Serializable;
 import java.util.Arrays;
 
-import static org.apache.fluss.row.BinaryRow.calculateBitSetWidthInBytes;
 import static org.apache.fluss.types.DataTypeChecks.getLength;
 import static org.apache.fluss.types.DataTypeChecks.getPrecision;
 import static org.apache.fluss.types.DataTypeChecks.getScale;
@@ -48,12 +44,10 @@ import static org.apache.fluss.types.DataTypeChecks.getScale;
 @Internal
 public class IndexedRowReader {
 
-    private final int fieldCount;
     private final int nullBitsSizeInBytes;
     private final int variableColumnLengthListInBytes;
     // nullBitSet size + variable column length list size.
     private final int headerSizeInBytes;
-    private final DataType[] types;
 
     private MemorySegment segment;
     private int offset;
@@ -61,9 +55,7 @@ public class IndexedRowReader {
     private int variableLengthPosition;
 
     public IndexedRowReader(DataType[] types) {
-        this.types = types;
-        this.fieldCount = types.length;
-        this.nullBitsSizeInBytes = calculateBitSetWidthInBytes(fieldCount);
+        this.nullBitsSizeInBytes = IndexedRow.calculateBitSetWidthInBytes(types.length);
         this.variableColumnLengthListInBytes =
                 IndexedRow.calculateVariableColumnLengthListSize(types);
         this.headerSizeInBytes = nullBitsSizeInBytes + variableColumnLengthListInBytes;
@@ -211,35 +203,9 @@ public class IndexedRowReader {
     public InternalArray readArray() {
         int length = readVarLengthFromVarLengthList();
         MemorySegment[] segments = new MemorySegment[] {segment};
-        InternalArray array = BinarySegmentUtils.readArrayData(segments, position, length);
+        InternalArray array = BinarySegmentUtils.readBinaryArray(segments, position, length);
         position += length;
         return array;
-    }
-
-    public InternalMap readMap() {
-        int length = readVarLengthFromVarLengthList();
-        MemorySegment[] segments = new MemorySegment[] {segment};
-        InternalMap map = BinarySegmentUtils.readMapData(segments, position, length);
-        position += length;
-        return map;
-    }
-
-    public InternalRow readRow() {
-        return readRow(types);
-    }
-
-    public InternalRow readRow(RowType rowType) {
-        return readRow(rowType.getChildren().toArray(new DataType[0]));
-    }
-
-    public InternalRow readRow(DataType[] types) {
-        int length = readVarLengthFromVarLengthList();
-        MemorySegment[] segments = new MemorySegment[] {segment};
-        InternalRow row =
-                BinarySegmentUtils.readIndexedRowData(
-                        segments, fieldCount, position, length, types);
-        position += length;
-        return row;
     }
 
     /**
@@ -307,11 +273,11 @@ public class IndexedRowReader {
             case MAP:
                 // TODO: Map type support will be added in Issue #1973
                 throw new UnsupportedOperationException(
-                        "Map type in KV table is not supported yet. Will be added in Issue #1976.");
+                        "Map type for Indexed row format is not supported yet.");
             case ROW:
                 // TODO: Row type support will be added in Issue #1974
                 throw new UnsupportedOperationException(
-                        "Row type in KV table is not supported yet. Will be added in Issue #1977.");
+                        "Row type for Indexed row format is not supported yet.");
             default:
                 throw new IllegalArgumentException("Unsupported type for IndexedRow: " + fieldType);
         }

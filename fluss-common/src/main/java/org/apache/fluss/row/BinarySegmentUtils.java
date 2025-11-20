@@ -594,20 +594,6 @@ public final class BinarySegmentUtils {
         }
     }
 
-    /** Gets an instance of {@link Decimal} from underlying {@link MemorySegment}. */
-    public static Decimal readDecimalData(
-            MemorySegment[] segments,
-            int baseOffset,
-            long offsetAndSize,
-            int precision,
-            int scale) {
-        final int size = ((int) offsetAndSize);
-        int subOffset = (int) (offsetAndSize >> 32);
-        byte[] bytes = new byte[size];
-        copyToBytes(segments, baseOffset + subOffset, bytes, 0, size);
-        return Decimal.fromUnscaledBytes(bytes, precision, scale);
-    }
-
     /**
      * Get binary, if len less than 8, will be include in variablePartOffsetAndLen.
      *
@@ -697,7 +683,7 @@ public final class BinarySegmentUtils {
      * @param offsetAndNanos the offset of milli-seconds part and nanoseconds
      * @return an instance of {@link TimestampLtz}
      */
-    public static TimestampLtz readTimestampLtzData(
+    public static TimestampLtz readTimestampLtz(
             MemorySegment[] segments, int baseOffset, long offsetAndNanos) {
         final int nanoOfMillisecond = (int) offsetAndNanos;
         final int subOffset = (int) (offsetAndNanos >> 32);
@@ -713,7 +699,7 @@ public final class BinarySegmentUtils {
      * @param offsetAndNanos the offset of milli-seconds part and nanoseconds
      * @return an instance of {@link TimestampNtz}
      */
-    public static TimestampNtz readTimestampNtzData(
+    public static TimestampNtz readTimestampNtz(
             MemorySegment[] segments, int baseOffset, long offsetAndNanos) {
         final int nanoOfMillisecond = (int) offsetAndNanos;
         final int subOffset = (int) (offsetAndNanos >> 32);
@@ -1003,42 +989,32 @@ public final class BinarySegmentUtils {
         return Decimal.fromUnscaledBytes(bytes, precision, scale);
     }
 
-    /** Read array data from segments. */
-    public static InternalArray readArrayData(MemorySegment[] segments, int offset, int numBytes) {
+    /** Gets an instance of {@link InternalArray} from underlying {@link MemorySegment}. */
+    public static BinaryArray readBinaryArray(
+            MemorySegment[] segments, int baseOffset, long offsetAndSize) {
+        final int size = ((int) offsetAndSize);
+        int offset = (int) (offsetAndSize >> 32);
         BinaryArray array = new BinaryArray();
-        array.pointTo(segments, offset, numBytes);
+        array.pointTo(segments, offset + baseOffset, size);
         return array;
     }
 
-    /** Read array data from segments with long offset. */
-    public static InternalArray readArrayData(MemorySegment[] segments, int offset, long numBytes) {
-        return readArrayData(segments, offset, (int) numBytes);
-    }
-
     /** Read map data from segments. */
-    public static InternalMap readMapData(MemorySegment[] segments, int offset, int numBytes) {
+    public static InternalMap readMap(MemorySegment[] segments, int offset, int numBytes) {
         // TODO: Map type support will be added in Issue #1973
         throw new UnsupportedOperationException(
                 "Map type is not supported yet. Will be added in Issue #1973.");
     }
 
     /** Read map data from segments with long offset. */
-    public static InternalMap readMapData(MemorySegment[] segments, int offset, long numBytes) {
+    public static InternalMap readMap(MemorySegment[] segments, int offset, long numBytes) {
         // TODO: Map type support will be added in Issue #1973
         throw new UnsupportedOperationException(
                 "Map type is not supported yet. Will be added in Issue #1973.");
     }
 
-    /** Read row data from segments. */
-    public static InternalRow readRowData(
-            MemorySegment[] segments, int offset, int numBytes, long numFields) {
-        IndexedRow row = new IndexedRow(new DataType[(int) numFields]);
-        row.pointTo(segments, offset, numBytes);
-        return row;
-    }
-
     /** Read indexed row data from segments. */
-    public static InternalRow readIndexedRowData(
+    public static InternalRow readIndexedRow(
             MemorySegment[] segments,
             int offset,
             int numBytes,
@@ -1050,7 +1026,7 @@ public final class BinarySegmentUtils {
     }
 
     /** Read compacted row data from segments. */
-    public static InternalRow readCompactedRowData(
+    public static InternalRow readCompactedRow(
             MemorySegment[] segments,
             int offset,
             int numBytes,

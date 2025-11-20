@@ -26,7 +26,6 @@ import org.apache.fluss.row.TimestampNtz;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link ColumnarArray}. */
 public class ColumnarArrayTest {
@@ -148,7 +147,7 @@ public class ColumnarArrayTest {
         TestBytesColumnVector columnVector = new TestBytesColumnVector(values);
         ColumnarArray columnarArray = new ColumnarArray(columnVector, 0, 2);
 
-        assertThat(columnarArray.getBinary(0)).isEqualTo(new byte[] {1, 2, 3, 4, 5});
+        assertThat(columnarArray.getBinary(0, 5)).isEqualTo(new byte[] {1, 2, 3, 4, 5});
         assertThat(columnarArray.getBinary(1, 3)).isEqualTo(new byte[] {6, 7, 8});
     }
 
@@ -304,123 +303,6 @@ public class ColumnarArrayTest {
 
         double[] result = columnarArray.toDoubleArray();
         assertThat(result).isEqualTo(values);
-    }
-
-    @Test
-    public void testSetNullAtThrowsException() {
-        int[] values = {1, 2, 3};
-        TestIntColumnVector columnVector = new TestIntColumnVector(values);
-        ColumnarArray columnarArray = new ColumnarArray(columnVector, 0, 3);
-
-        assertThatThrownBy(() -> columnarArray.setNullAt(0))
-                .isInstanceOf(UnsupportedOperationException.class)
-                .hasMessageContaining("Not support the operation!");
-    }
-
-    @Test
-    public void testSetBooleanThrowsException() {
-        boolean[] values = {true, false};
-        TestBooleanColumnVector columnVector = new TestBooleanColumnVector(values);
-        ColumnarArray columnarArray = new ColumnarArray(columnVector, 0, 2);
-
-        assertThatThrownBy(() -> columnarArray.setBoolean(0, true))
-                .isInstanceOf(UnsupportedOperationException.class)
-                .hasMessageContaining("Not support the operation!");
-    }
-
-    @Test
-    public void testSetByteThrowsException() {
-        byte[] values = {1, 2};
-        TestByteColumnVector columnVector = new TestByteColumnVector(values);
-        ColumnarArray columnarArray = new ColumnarArray(columnVector, 0, 2);
-
-        assertThatThrownBy(() -> columnarArray.setByte(0, (byte) 1))
-                .isInstanceOf(UnsupportedOperationException.class);
-    }
-
-    @Test
-    public void testSetShortThrowsException() {
-        short[] values = {1, 2};
-        TestShortColumnVector columnVector = new TestShortColumnVector(values);
-        ColumnarArray columnarArray = new ColumnarArray(columnVector, 0, 2);
-
-        assertThatThrownBy(() -> columnarArray.setShort(0, (short) 1))
-                .isInstanceOf(UnsupportedOperationException.class);
-    }
-
-    @Test
-    public void testSetIntThrowsException() {
-        int[] values = {1, 2};
-        TestIntColumnVector columnVector = new TestIntColumnVector(values);
-        ColumnarArray columnarArray = new ColumnarArray(columnVector, 0, 2);
-
-        assertThatThrownBy(() -> columnarArray.setInt(0, 1))
-                .isInstanceOf(UnsupportedOperationException.class);
-    }
-
-    @Test
-    public void testSetLongThrowsException() {
-        long[] values = {1L, 2L};
-        TestLongColumnVector columnVector = new TestLongColumnVector(values);
-        ColumnarArray columnarArray = new ColumnarArray(columnVector, 0, 2);
-
-        assertThatThrownBy(() -> columnarArray.setLong(0, 1L))
-                .isInstanceOf(UnsupportedOperationException.class);
-    }
-
-    @Test
-    public void testSetFloatThrowsException() {
-        float[] values = {1.0f, 2.0f};
-        TestFloatColumnVector columnVector = new TestFloatColumnVector(values);
-        ColumnarArray columnarArray = new ColumnarArray(columnVector, 0, 2);
-
-        assertThatThrownBy(() -> columnarArray.setFloat(0, 1.0f))
-                .isInstanceOf(UnsupportedOperationException.class);
-    }
-
-    @Test
-    public void testSetDoubleThrowsException() {
-        double[] values = {1.0, 2.0};
-        TestDoubleColumnVector columnVector = new TestDoubleColumnVector(values);
-        ColumnarArray columnarArray = new ColumnarArray(columnVector, 0, 2);
-
-        assertThatThrownBy(() -> columnarArray.setDouble(0, 1.0))
-                .isInstanceOf(UnsupportedOperationException.class);
-    }
-
-    @Test
-    public void testSetDecimalThrowsException() {
-        Decimal[] values = {Decimal.fromUnscaledLong(123, 5, 2)};
-        TestDecimalColumnVector columnVector = new TestDecimalColumnVector(values);
-        ColumnarArray columnarArray = new ColumnarArray(columnVector, 0, 1);
-
-        assertThatThrownBy(
-                        () -> columnarArray.setDecimal(0, Decimal.fromUnscaledLong(456, 5, 2), 5))
-                .isInstanceOf(UnsupportedOperationException.class);
-    }
-
-    @Test
-    public void testSetTimestampNtzThrowsException() {
-        TimestampNtz[] values = {TimestampNtz.fromMillis(1000L)};
-        TestTimestampNtzColumnVector columnVector = new TestTimestampNtzColumnVector(values);
-        ColumnarArray columnarArray = new ColumnarArray(columnVector, 0, 1);
-
-        assertThatThrownBy(
-                        () -> columnarArray.setTimestampNtz(0, TimestampNtz.fromMillis(2000L), 3))
-                .isInstanceOf(UnsupportedOperationException.class);
-    }
-
-    @Test
-    public void testSetTimestampLtzThrowsException() {
-        TimestampLtz[] values = {TimestampLtz.fromEpochMillis(1000L)};
-        TestTimestampLtzColumnVector columnVector = new TestTimestampLtzColumnVector(values);
-        ColumnarArray columnarArray = new ColumnarArray(columnVector, 0, 1);
-
-        assertThatThrownBy(
-                        () ->
-                                columnarArray.setTimestampLtz(
-                                        0, TimestampLtz.fromEpochMillis(2000L), 3))
-                .isInstanceOf(UnsupportedOperationException.class);
     }
 
     @Test
@@ -724,11 +606,6 @@ public class ColumnarArrayTest {
         public InternalArray getArray(int i) {
             // Return a simple test array
             return new ColumnarArray(new TestIntColumnVector(new int[] {1, 2, 3}), 0, 3);
-        }
-
-        @Override
-        public ColumnVector getColumnVector() {
-            return new TestIntColumnVector(new int[] {1, 2, 3});
         }
 
         @Override

@@ -23,13 +23,13 @@ import org.apache.fluss.row.BinaryRow;
 import org.apache.fluss.row.BinarySection;
 import org.apache.fluss.row.BinarySegmentUtils;
 import org.apache.fluss.row.BinaryString;
+import org.apache.fluss.row.DataSetters;
 import org.apache.fluss.row.Decimal;
 import org.apache.fluss.row.InternalArray;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.NullAwareGetters;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
-import org.apache.fluss.row.TypedSetters;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DecimalType;
 import org.apache.fluss.types.LocalZonedTimestampType;
@@ -67,7 +67,7 @@ import static org.apache.fluss.utils.Preconditions.checkArgument;
  */
 @Internal
 public final class AlignedRow extends BinarySection
-        implements BinaryRow, NullAwareGetters, TypedSetters {
+        implements BinaryRow, NullAwareGetters, DataSetters {
 
     private static final long serialVersionUID = 1L;
 
@@ -344,8 +344,7 @@ public final class AlignedRow extends BinarySection
 
         int fieldOffset = getFieldOffset(pos);
         final long offsetAndSize = segments[0].getLong(fieldOffset);
-        return BinarySegmentUtils.readDecimalData(
-                segments, offset, offsetAndSize, precision, scale);
+        return BinarySegmentUtils.readDecimal(segments, offset, offsetAndSize, precision, scale);
     }
 
     @Override
@@ -356,7 +355,7 @@ public final class AlignedRow extends BinarySection
             return TimestampLtz.fromEpochMillis(segments[0].getLong(getFieldOffset(pos)));
         }
         final long offsetAndNanoOfMilli = segments[0].getLong(fieldOffset);
-        return BinarySegmentUtils.readTimestampLtzData(segments, offset, offsetAndNanoOfMilli);
+        return BinarySegmentUtils.readTimestampLtz(segments, offset, offsetAndNanoOfMilli);
     }
 
     @Override
@@ -367,7 +366,7 @@ public final class AlignedRow extends BinarySection
             return TimestampNtz.fromMillis(segments[0].getLong(fieldOffset));
         }
         final long offsetAndNanoOfMilli = segments[0].getLong(fieldOffset);
-        return BinarySegmentUtils.readTimestampNtzData(segments, offset, offsetAndNanoOfMilli);
+        return BinarySegmentUtils.readTimestampNtz(segments, offset, offsetAndNanoOfMilli);
     }
 
     @Override
@@ -388,8 +387,10 @@ public final class AlignedRow extends BinarySection
 
     @Override
     public InternalArray getArray(int pos) {
-        // TODO: Array type support will be fully implemented in Issue #1972
-        return null;
+        assertIndexIsValid(pos);
+        int fieldOffset = getFieldOffset(pos);
+        final long offsetAndSize = segments[0].getLong(fieldOffset);
+        return BinarySegmentUtils.readBinaryArray(segments, offset, offsetAndSize);
     }
 
     // TODO: getMap() will be added in Issue #1973

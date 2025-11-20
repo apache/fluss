@@ -18,13 +18,14 @@
 package org.apache.fluss.row.compacted;
 
 import org.apache.fluss.row.BinaryArray;
+import org.apache.fluss.row.BinaryArrayWriter;
 import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.Decimal;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalArray;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
-import org.apache.fluss.row.serializer.InternalArraySerializer;
+import org.apache.fluss.row.serializer.ArraySerializer;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
@@ -54,7 +55,7 @@ public class CompactedRowDeserializerTest {
         writer.writeBoolean(true);
 
         // Deserialize
-        CompactedRowReader reader = new CompactedRowReader(types);
+        CompactedRowReader reader = new CompactedRowReader(types.length);
         reader.pointTo(writer.segment(), 0, writer.position());
 
         GenericRow output = new GenericRow(types.length);
@@ -79,7 +80,7 @@ public class CompactedRowDeserializerTest {
         writer.writeDouble(3.14);
 
         // Deserialize
-        CompactedRowReader reader = new CompactedRowReader(types);
+        CompactedRowReader reader = new CompactedRowReader(types.length);
         reader.pointTo(writer.segment(), 0, writer.position());
 
         GenericRow output = new GenericRow(types.length);
@@ -113,7 +114,7 @@ public class CompactedRowDeserializerTest {
         writer.writeFloat(1.5f);
         writer.writeDouble(2.5);
 
-        CompactedRowReader reader = new CompactedRowReader(types);
+        CompactedRowReader reader = new CompactedRowReader(types.length);
         reader.pointTo(writer.segment(), 0, writer.position());
 
         GenericRow output = new GenericRow(types.length);
@@ -143,7 +144,7 @@ public class CompactedRowDeserializerTest {
         writer.writeString(str2);
         writer.writeBytes(bytes);
 
-        CompactedRowReader reader = new CompactedRowReader(types);
+        CompactedRowReader reader = new CompactedRowReader(types.length);
         reader.pointTo(writer.segment(), 0, writer.position());
 
         GenericRow output = new GenericRow(types.length);
@@ -167,7 +168,7 @@ public class CompactedRowDeserializerTest {
         writer.writeDecimal(decimal1, 10);
         writer.writeDecimal(decimal2, 20);
 
-        CompactedRowReader reader = new CompactedRowReader(types);
+        CompactedRowReader reader = new CompactedRowReader(types.length);
         reader.pointTo(writer.segment(), 0, writer.position());
 
         GenericRow output = new GenericRow(types.length);
@@ -199,7 +200,7 @@ public class CompactedRowDeserializerTest {
         writer.writeTimestampNtz(tsNtz2, 9);
         writer.writeTimestampLtz(tsLtz2, 9);
 
-        CompactedRowReader reader = new CompactedRowReader(types);
+        CompactedRowReader reader = new CompactedRowReader(types.length);
         reader.pointTo(writer.segment(), 0, writer.position());
 
         GenericRow output = new GenericRow(types.length);
@@ -221,7 +222,7 @@ public class CompactedRowDeserializerTest {
         writer.writeInt(18628); // Date: 2021-01-01
         writer.writeInt(43200000); // Time: 12:00:00
 
-        CompactedRowReader reader = new CompactedRowReader(types);
+        CompactedRowReader reader = new CompactedRowReader(types.length);
         reader.pointTo(writer.segment(), 0, writer.position());
 
         GenericRow output = new GenericRow(types.length);
@@ -229,15 +230,6 @@ public class CompactedRowDeserializerTest {
 
         assertThat(output.getField(0)).isEqualTo(18628);
         assertThat(output.getField(1)).isEqualTo(43200000);
-    }
-
-    @Test
-    public void testGetTypes() {
-        DataType[] types = {DataTypes.INT(), DataTypes.STRING(), DataTypes.DOUBLE()};
-
-        CompactedRowDeserializer deserializer = new CompactedRowDeserializer(types);
-
-        assertThat(deserializer.getTypes()).isEqualTo(types);
     }
 
     @Test
@@ -250,7 +242,7 @@ public class CompactedRowDeserializerTest {
         writer.writeInt(42);
         writer.writeString(BinaryString.fromString("test"));
 
-        CompactedRowReader reader = new CompactedRowReader(types);
+        CompactedRowReader reader = new CompactedRowReader(types.length);
         reader.pointTo(writer.segment(), 0, writer.position());
 
         // Deserialize first time
@@ -284,7 +276,7 @@ public class CompactedRowDeserializerTest {
             writer.writeInt(i * 10);
         }
 
-        CompactedRowReader reader = new CompactedRowReader(types);
+        CompactedRowReader reader = new CompactedRowReader(types.length);
         reader.pointTo(writer.segment(), 0, writer.position());
 
         GenericRow output = new GenericRow(numFields);
@@ -308,7 +300,7 @@ public class CompactedRowDeserializerTest {
         writer.writeString(BinaryString.fromString("test"));
         writer.setNullAt(2);
 
-        CompactedRowReader reader = new CompactedRowReader(types);
+        CompactedRowReader reader = new CompactedRowReader(types.length);
         reader.pointTo(writer.segment(), 0, writer.position());
 
         GenericRow output = new GenericRow(types.length);
@@ -340,7 +332,7 @@ public class CompactedRowDeserializerTest {
         writer.writeTimestampNtz(TimestampNtz.fromMillis(1000L), 3);
         writer.writeBytes(new byte[] {1, 2, 3});
 
-        CompactedRowReader reader = new CompactedRowReader(types);
+        CompactedRowReader reader = new CompactedRowReader(types.length);
         reader.pointTo(writer.segment(), 0, writer.position());
 
         GenericRow output = new GenericRow(types.length);
@@ -361,7 +353,7 @@ public class CompactedRowDeserializerTest {
         CompactedRowDeserializer deserializer = new CompactedRowDeserializer(types);
 
         CompactedRowWriter writer = new CompactedRowWriter(0);
-        CompactedRowReader reader = new CompactedRowReader(types);
+        CompactedRowReader reader = new CompactedRowReader(types.length);
         reader.pointTo(writer.segment(), 0, writer.position());
 
         GenericRow output = new GenericRow(0);
@@ -385,7 +377,7 @@ public class CompactedRowDeserializerTest {
         writer.writeString(BinaryString.fromString("rowtype"));
         writer.writeDouble(4.56);
 
-        CompactedRowReader reader = new CompactedRowReader(types);
+        CompactedRowReader reader = new CompactedRowReader(types.length);
         reader.pointTo(writer.segment(), 0, writer.position());
 
         GenericRow output = new GenericRow(types.length);
@@ -406,7 +398,7 @@ public class CompactedRowDeserializerTest {
         writer.setNullAt(1);
         writer.setNullAt(2);
 
-        CompactedRowReader reader = new CompactedRowReader(types);
+        CompactedRowReader reader = new CompactedRowReader(types.length);
         reader.pointTo(writer.segment(), 0, writer.position());
 
         GenericRow output = new GenericRow(types.length);
@@ -436,7 +428,7 @@ public class CompactedRowDeserializerTest {
         writer.writeBytes(new byte[] {1, 2, 3, 4, 5});
         writer.writeBoolean(true);
 
-        CompactedRowReader reader = new CompactedRowReader(types);
+        CompactedRowReader reader = new CompactedRowReader(types.length);
         reader.pointTo(writer.segment(), 0, writer.position());
 
         GenericRow output = new GenericRow(types.length);
@@ -459,7 +451,7 @@ public class CompactedRowDeserializerTest {
                 Decimal.fromBigDecimal(new BigDecimal("12345678901234567890.1234567890"), 38, 10);
         writer.writeDecimal(largeDecimal, 38);
 
-        CompactedRowReader reader = new CompactedRowReader(types);
+        CompactedRowReader reader = new CompactedRowReader(types.length);
         reader.pointTo(writer.segment(), 0, writer.position());
 
         GenericRow output = new GenericRow(types.length);
@@ -480,7 +472,7 @@ public class CompactedRowDeserializerTest {
         writer.writeTimestampNtz(tsNtz, 9);
         writer.writeTimestampLtz(tsLtz, 9);
 
-        CompactedRowReader reader = new CompactedRowReader(types);
+        CompactedRowReader reader = new CompactedRowReader(types.length);
         reader.pointTo(writer.segment(), 0, writer.position());
 
         GenericRow output = new GenericRow(types.length);
@@ -499,7 +491,7 @@ public class CompactedRowDeserializerTest {
         writer.writeBoolean(true);
         writer.writeBoolean(false);
 
-        CompactedRowReader reader = new CompactedRowReader(types);
+        CompactedRowReader reader = new CompactedRowReader(types.length);
         reader.pointTo(writer.segment(), 0, writer.position());
 
         GenericRow output = new GenericRow(types.length);
@@ -518,7 +510,7 @@ public class CompactedRowDeserializerTest {
         writer.writeByte((byte) 127);
         writer.writeByte((byte) -128);
 
-        CompactedRowReader reader = new CompactedRowReader(types);
+        CompactedRowReader reader = new CompactedRowReader(types.length);
         reader.pointTo(writer.segment(), 0, writer.position());
 
         GenericRow output = new GenericRow(types.length);
@@ -537,7 +529,7 @@ public class CompactedRowDeserializerTest {
         writer.writeShort((short) 32767);
         writer.writeShort((short) -32768);
 
-        CompactedRowReader reader = new CompactedRowReader(types);
+        CompactedRowReader reader = new CompactedRowReader(types.length);
         reader.pointTo(writer.segment(), 0, writer.position());
 
         GenericRow output = new GenericRow(types.length);
@@ -559,7 +551,7 @@ public class CompactedRowDeserializerTest {
         writer.writeBytes(binary1);
         writer.writeBytes(binary2);
 
-        CompactedRowReader reader = new CompactedRowReader(types);
+        CompactedRowReader reader = new CompactedRowReader(types.length);
         reader.pointTo(writer.segment(), 0, writer.position());
 
         GenericRow output = new GenericRow(types.length);
@@ -578,7 +570,7 @@ public class CompactedRowDeserializerTest {
         writer.writeFloat(3.14f);
         writer.writeFloat(-2.718f);
 
-        CompactedRowReader reader = new CompactedRowReader(types);
+        CompactedRowReader reader = new CompactedRowReader(types.length);
         reader.pointTo(writer.segment(), 0, writer.position());
 
         GenericRow output = new GenericRow(types.length);
@@ -597,7 +589,7 @@ public class CompactedRowDeserializerTest {
         writer.writeLong(9223372036854775807L);
         writer.writeLong(-9223372036854775808L);
 
-        CompactedRowReader reader = new CompactedRowReader(types);
+        CompactedRowReader reader = new CompactedRowReader(types.length);
         reader.pointTo(writer.segment(), 0, writer.position());
 
         GenericRow output = new GenericRow(types.length);
@@ -617,7 +609,7 @@ public class CompactedRowDeserializerTest {
         writer.setNullAt(1);
         writer.writeDouble(3.14);
 
-        CompactedRowReader reader = new CompactedRowReader(types);
+        CompactedRowReader reader = new CompactedRowReader(types.length);
         reader.pointTo(writer.segment(), 0, writer.position());
 
         GenericRow output = new GenericRow(types.length);
@@ -637,7 +629,7 @@ public class CompactedRowDeserializerTest {
         writer.writeString(BinaryString.fromString("hello"));
         writer.writeString(BinaryString.fromString("world"));
 
-        CompactedRowReader reader = new CompactedRowReader(types);
+        CompactedRowReader reader = new CompactedRowReader(types.length);
         reader.pointTo(writer.segment(), 0, writer.position());
 
         GenericRow output = new GenericRow(types.length);
@@ -658,7 +650,7 @@ public class CompactedRowDeserializerTest {
         writer.writeDecimal(d1, 10);
         writer.writeDecimal(d2, 5);
 
-        CompactedRowReader reader = new CompactedRowReader(types);
+        CompactedRowReader reader = new CompactedRowReader(types.length);
         reader.pointTo(writer.segment(), 0, writer.position());
 
         GenericRow output = new GenericRow(types.length);
@@ -679,7 +671,7 @@ public class CompactedRowDeserializerTest {
         writer.writeTimestampNtz(tsNtz, 3);
         writer.writeTimestampLtz(tsLtz, 3);
 
-        CompactedRowReader reader = new CompactedRowReader(types);
+        CompactedRowReader reader = new CompactedRowReader(types.length);
         reader.pointTo(writer.segment(), 0, writer.position());
 
         GenericRow output = new GenericRow(types.length);
@@ -711,7 +703,7 @@ public class CompactedRowDeserializerTest {
         writer.setNullAt(5);
         writer.setNullAt(6);
 
-        CompactedRowReader reader = new CompactedRowReader(types);
+        CompactedRowReader reader = new CompactedRowReader(types.length);
         reader.pointTo(writer.segment(), 0, writer.position());
 
         GenericRow output = new GenericRow(types.length);
@@ -731,7 +723,7 @@ public class CompactedRowDeserializerTest {
         writer.writeInt(12345);
         writer.writeString(BinaryString.fromString("test_string"));
 
-        CompactedRowReader reader = new CompactedRowReader(types);
+        CompactedRowReader reader = new CompactedRowReader(types.length);
         reader.pointTo(writer.segment(), 0, writer.position());
 
         GenericRow output = new GenericRow(types.length);
@@ -750,7 +742,7 @@ public class CompactedRowDeserializerTest {
         writer.writeDouble(Double.MAX_VALUE);
         writer.writeDouble(Double.MIN_VALUE);
 
-        CompactedRowReader reader = new CompactedRowReader(types);
+        CompactedRowReader reader = new CompactedRowReader(types.length);
         reader.pointTo(writer.segment(), 0, writer.position());
 
         GenericRow output = new GenericRow(types.length);
@@ -768,7 +760,7 @@ public class CompactedRowDeserializerTest {
         CompactedRowWriter writer = new CompactedRowWriter(types.length);
         writer.writeInt(18628);
 
-        CompactedRowReader reader = new CompactedRowReader(types);
+        CompactedRowReader reader = new CompactedRowReader(types.length);
         reader.pointTo(writer.segment(), 0, writer.position());
 
         GenericRow output = new GenericRow(types.length);
@@ -785,7 +777,7 @@ public class CompactedRowDeserializerTest {
         CompactedRowWriter writer = new CompactedRowWriter(types.length);
         writer.writeInt(43200);
 
-        CompactedRowReader reader = new CompactedRowReader(types);
+        CompactedRowReader reader = new CompactedRowReader(types.length);
         reader.pointTo(writer.segment(), 0, writer.position());
 
         GenericRow output = new GenericRow(types.length);
@@ -816,7 +808,7 @@ public class CompactedRowDeserializerTest {
         writer.writeFloat(3.14159f);
         writer.writeDouble(2.71828);
 
-        CompactedRowReader reader = new CompactedRowReader(types);
+        CompactedRowReader reader = new CompactedRowReader(types.length);
         reader.pointTo(writer.segment(), 0, writer.position());
 
         GenericRow output = new GenericRow(types.length);
@@ -839,7 +831,7 @@ public class CompactedRowDeserializerTest {
         CompactedRowWriter writer = new CompactedRowWriter(types.length);
         writer.writeInt(42);
 
-        CompactedRowReader reader = new CompactedRowReader(types);
+        CompactedRowReader reader = new CompactedRowReader(types.length);
         reader.pointTo(writer.segment(), 0, writer.position());
 
         GenericRow output = new GenericRow(types.length);
@@ -866,7 +858,7 @@ public class CompactedRowDeserializerTest {
         writer.writeString(BinaryString.fromString("test"));
         writer.setNullAt(4);
 
-        CompactedRowReader reader = new CompactedRowReader(types);
+        CompactedRowReader reader = new CompactedRowReader(types.length);
         reader.pointTo(writer.segment(), 0, writer.position());
 
         GenericRow output = new GenericRow(types.length);
@@ -889,7 +881,7 @@ public class CompactedRowDeserializerTest {
         writer.setNullAt(1);
         writer.setNullAt(2);
 
-        CompactedRowReader reader = new CompactedRowReader(types);
+        CompactedRowReader reader = new CompactedRowReader(types.length);
         reader.pointTo(writer.segment(), 0, writer.position());
 
         GenericRow output = new GenericRow(types.length);
@@ -913,7 +905,7 @@ public class CompactedRowDeserializerTest {
         writer.writeString(BinaryString.fromString("third"));
         writer.writeString(BinaryString.fromString("fourth"));
 
-        CompactedRowReader reader = new CompactedRowReader(types);
+        CompactedRowReader reader = new CompactedRowReader(types.length);
         reader.pointTo(writer.segment(), 0, writer.position());
 
         GenericRow output = new GenericRow(types.length);
@@ -931,13 +923,13 @@ public class CompactedRowDeserializerTest {
         CompactedRowDeserializer deserializer = new CompactedRowDeserializer(types);
 
         BinaryArray intArray = BinaryArray.fromPrimitiveArray(new int[] {1, 2, 3, 4, 5});
-        InternalArraySerializer arraySerializer = new InternalArraySerializer(DataTypes.INT());
+        ArraySerializer arraySerializer = new ArraySerializer(DataTypes.INT());
 
         CompactedRowWriter writer = new CompactedRowWriter(types.length);
         writer.writeInt(100);
         writer.writeArray(intArray, arraySerializer);
 
-        CompactedRowReader reader = new CompactedRowReader(types);
+        CompactedRowReader reader = new CompactedRowReader(types.length);
         reader.pointTo(writer.segment(), 0, writer.position());
 
         GenericRow output = new GenericRow(types.length);
@@ -957,19 +949,18 @@ public class CompactedRowDeserializerTest {
         CompactedRowDeserializer deserializer = new CompactedRowDeserializer(types);
 
         BinaryArray strArray = new BinaryArray();
-        org.apache.fluss.row.BinaryArrayWriter strArrayWriter =
-                new org.apache.fluss.row.BinaryArrayWriter(strArray, 3, 8);
+        BinaryArrayWriter strArrayWriter = new BinaryArrayWriter(strArray, 3, 8);
         strArrayWriter.writeString(0, BinaryString.fromString("hello"));
         strArrayWriter.writeString(1, BinaryString.fromString("world"));
         strArrayWriter.writeString(2, BinaryString.fromString("test"));
         strArrayWriter.complete();
 
-        InternalArraySerializer arraySerializer = new InternalArraySerializer(DataTypes.STRING());
+        ArraySerializer arraySerializer = new ArraySerializer(DataTypes.STRING());
 
         CompactedRowWriter writer = new CompactedRowWriter(types.length);
         writer.writeArray(strArray, arraySerializer);
 
-        CompactedRowReader reader = new CompactedRowReader(types);
+        CompactedRowReader reader = new CompactedRowReader(types.length);
         reader.pointTo(writer.segment(), 0, writer.position());
 
         GenericRow output = new GenericRow(types.length);
@@ -992,7 +983,7 @@ public class CompactedRowDeserializerTest {
         writer.writeInt(100);
         writer.setNullAt(1);
 
-        CompactedRowReader reader = new CompactedRowReader(types);
+        CompactedRowReader reader = new CompactedRowReader(types.length);
         reader.pointTo(writer.segment(), 0, writer.position());
 
         GenericRow output = new GenericRow(types.length);

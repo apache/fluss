@@ -1,13 +1,12 @@
 /*
- * Licensed to the Apache Software Foundation (ASF) under one
- * or more contributor license agreements.  See the NOTICE file
- * distributed with this work for additional information
- * regarding copyright ownership.  The ASF licenses this file
- * to you under the Apache License, Version 2.0 (the
- * "License"); you may not use this file except in compliance
- * with the License.  You may obtain a copy of the License at
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -24,7 +23,7 @@ import org.apache.fluss.types.DataType;
 import java.io.Serializable;
 
 /** Writer for binary array. See {@link BinaryArray}. */
-public final class BinaryArrayWriter extends AbstractArrayWriter {
+public final class BinaryArrayWriter extends AbstractBinaryWriter {
 
     private final int nullBitsSizeInBytes;
     private final BinaryArray array;
@@ -35,7 +34,7 @@ public final class BinaryArrayWriter extends AbstractArrayWriter {
         this.nullBitsSizeInBytes = BinaryArray.calculateHeaderInBytes(numElements);
         this.fixedSize =
                 roundNumberOfBytesToNearestWord(nullBitsSizeInBytes + elementSize * numElements);
-        this.position = fixedSize;
+        this.cursor = fixedSize;
         this.numElements = numElements;
 
         this.segment = MemorySegment.wrap(new byte[fixedSize]);
@@ -45,7 +44,7 @@ public final class BinaryArrayWriter extends AbstractArrayWriter {
 
     /** First, reset. */
     public void reset() {
-        this.position = fixedSize;
+        this.cursor = fixedSize;
         for (int i = 0; i < nullBitsSizeInBytes; i += 8) {
             segment.putLong(i, 0L);
         }
@@ -99,7 +98,7 @@ public final class BinaryArrayWriter extends AbstractArrayWriter {
     }
 
     public void setNullAt(int ordinal) {
-        setNullLong(ordinal);
+        setNullBit(ordinal);
     }
 
     /**
@@ -192,7 +191,7 @@ public final class BinaryArrayWriter extends AbstractArrayWriter {
 
     /** Finally, complete write to set real size to row. */
     public void complete() {
-        array.pointTo(segment, 0, position);
+        array.pointTo(segment, 0, cursor);
     }
 
     public int getNumElements() {
@@ -211,15 +210,14 @@ public final class BinaryArrayWriter extends AbstractArrayWriter {
         // ordered by type root definition
         switch (elementType.getTypeRoot()) {
             case CHAR:
-
+            case STRING:
             case BINARY:
-
+            case BYTES:
             case DECIMAL:
             case BIGINT:
             case TIMESTAMP_WITHOUT_TIME_ZONE:
             case TIMESTAMP_WITH_LOCAL_TIME_ZONE:
             case ARRAY:
-
             case MAP:
             case ROW:
                 return BinaryArrayWriter::setNullLong;

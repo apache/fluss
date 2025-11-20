@@ -23,33 +23,23 @@ import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.FixedSizeBinaryVect
 
 /** {@link ArrowFieldWriter} for Binary. */
 @Internal
-public class ArrowBinaryWriter extends ArrowFieldWriter<DataGetters> {
-
-    public static ArrowBinaryWriter forField(FixedSizeBinaryVector binaryVector) {
-        return new ArrowBinaryWriter(binaryVector);
-    }
+public class ArrowBinaryWriter extends ArrowFieldWriter {
 
     private final int byteWidth;
 
-    private ArrowBinaryWriter(FixedSizeBinaryVector binaryVector) {
+    public ArrowBinaryWriter(FixedSizeBinaryVector binaryVector) {
         super(binaryVector);
         this.byteWidth = binaryVector.getByteWidth();
     }
 
     @Override
     public void doWrite(int rowIndex, DataGetters row, int ordinal, boolean handleSafe) {
-        FixedSizeBinaryVector vector = (FixedSizeBinaryVector) getValueVector();
-        if (isNullAt(row, ordinal)) {
-            vector.setNull(getCount());
-        } else if (handleSafe) {
-            vector.setSafe(getCount(), readBinary(row, ordinal));
+        FixedSizeBinaryVector vector = (FixedSizeBinaryVector) fieldVector;
+        if (handleSafe) {
+            vector.setSafe(rowIndex, readBinary(row, ordinal));
         } else {
-            vector.set(getCount(), readBinary(row, ordinal));
+            vector.set(rowIndex, readBinary(row, ordinal));
         }
-    }
-
-    private boolean isNullAt(DataGetters row, int ordinal) {
-        return row.isNullAt(ordinal);
     }
 
     private byte[] readBinary(DataGetters row, int ordinal) {

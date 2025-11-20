@@ -20,13 +20,16 @@ package org.apache.fluss.flink.utils;
 import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.Decimal;
+import org.apache.fluss.row.InternalArray;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
+import org.apache.fluss.types.ArrayType;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.RowType;
 
 import org.apache.flink.table.data.DecimalData;
+import org.apache.flink.table.data.GenericArrayData;
 import org.apache.flink.table.data.GenericRowData;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.data.StringData;
@@ -37,12 +40,7 @@ import java.io.Serializable;
 
 import static org.apache.fluss.flink.utils.FlinkConversions.toFlinkRowKind;
 
-/**
- * A converter to convert Fluss's {@link InternalRow} to Flink's {@link RowData}.
- *
- * <p>Note: fluss-datalake-tiering also contains the same class, we need to keep them in sync if we
- * modify this class.
- */
+/** A converter to convert Fluss's {@link InternalRow} to Flink's {@link RowData}. */
 public class FlussRowToFlinkRowConverter {
     private final FlussDeserializationConverter[] toFlinkFieldConverters;
     private final InternalRow.FieldGetter[] flussFieldGetters;
@@ -148,8 +146,21 @@ public class FlussRowToFlinkRowConverter {
                             timestampLtz.getNanoOfMillisecond());
                 };
             case ARRAY:
-                // TODO: Add ARRAY type support for Flink connector in a future PR
-                throw new UnsupportedOperationException("Unsupported data type: " + flussDataType);
+                ArrayType arrayType = (ArrayType) flussDataType;
+                InternalArray.ElementGetter elementGetter =
+                        InternalArray.createElementGetter(arrayType.getElementType());
+                FlussDeserializationConverter elementConverter =
+                        createNullableInternalConverter(arrayType.getElementType());
+                return (flussField) -> {
+                    InternalArray flussArray = (InternalArray) flussField;
+                    int size = flussArray.size();
+                    Object[] flinkArray = new Object[size];
+                    for (int i = 0; i < size; i++) {
+                        Object flussElement = elementGetter.getElementOrNull(flussArray, i);
+                        flinkArray[i] = elementConverter.deserialize(flussElement);
+                    }
+                    return new GenericArrayData(flinkArray);
+                };
             default:
                 throw new UnsupportedOperationException("Unsupported data type: " + flussDataType);
         }

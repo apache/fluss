@@ -18,17 +18,15 @@
 package org.apache.fluss.flink.utils;
 
 import org.apache.fluss.client.table.scanner.ScanRecord;
+import org.apache.fluss.flink.row.FlinkAsFlussArray;
 import org.apache.fluss.record.ChangeType;
-import org.apache.fluss.row.Decimal;
-import org.apache.fluss.row.TimestampLtz;
-import org.apache.fluss.row.TimestampNtz;
+import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.indexed.IndexedRow;
 import org.apache.fluss.row.indexed.IndexedRowWriter;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.DateTimeUtils;
-import org.apache.fluss.utils.TypeUtils;
 
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.types.RowKind;
@@ -41,6 +39,8 @@ import java.time.LocalTime;
 
 import static org.apache.fluss.row.BinaryString.fromString;
 import static org.apache.fluss.row.TestInternalRowGenerator.createAllRowType;
+import static org.apache.fluss.row.TestInternalRowGenerator.createAllTypes;
+import static org.apache.fluss.row.indexed.IndexedRowTest.genRecordForAllTypes;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Unit test for {@link org.apache.fluss.flink.utils.FlussRowToFlinkRowConverter}. */
@@ -48,18 +48,12 @@ class FlussRowToFlinkRowConverterTest {
 
     @Test
     void testConverter() throws Exception {
-        // TODO: Exclude ARRAY type for now, will be supported in a future PR
-        RowType allRowType = createAllRowType();
-        // Exclude the last field (array type) as it's not yet supported in Flink connector
-        RowType rowType =
-                new RowType(allRowType.getFields().subList(0, allRowType.getFieldCount() - 1));
+        RowType rowType = createAllRowType();
         FlussRowToFlinkRowConverter flussRowToFlinkRowConverter =
                 new FlussRowToFlinkRowConverter(rowType);
 
-        DataType[] dataTypes = rowType.getChildren().toArray(new DataType[0]);
-        IndexedRow row = new IndexedRow(dataTypes);
-        // Generate data for 19 fields (exclude array type at the end)
-        try (IndexedRowWriter writer = genRecordForAllTypesExceptArray(dataTypes)) {
+        IndexedRow row = new IndexedRow(rowType.getChildren().toArray(new DataType[0]));
+        try (IndexedRowWriter writer = genRecordForAllTypes(createAllTypes())) {
             row.pointTo(writer.segment(), 0, writer.position());
 
             ScanRecord scanRecord = new ScanRecord(0, 1L, ChangeType.UPDATE_BEFORE, row);
@@ -100,33 +94,36 @@ class FlussRowToFlinkRowConverterTest {
 
             assertThat(flinkRow.getTimestamp(17, 1).toString())
                     .isEqualTo("2023-10-25T12:01:13.182");
-            assertThat(flinkRow.isNullAt(18)).isTrue();
-        }
-    }
+            assertThat(flinkRow.getTimestamp(18, 5).toString())
+                    .isEqualTo("2023-10-25T12:01:13.182");
 
-    // Helper method to generate test data for all types except array
-    private static IndexedRowWriter genRecordForAllTypesExceptArray(DataType[] dataTypes) {
-        IndexedRowWriter writer = new IndexedRowWriter(dataTypes);
-        writer.writeBoolean(true);
-        writer.writeByte((byte) 2);
-        writer.writeShort(Short.parseShort("10"));
-        writer.writeInt(100);
-        writer.writeLong(new BigInteger("12345678901234567890").longValue());
-        writer.writeFloat(Float.parseFloat("13.2"));
-        writer.writeDouble(Double.parseDouble("15.21"));
-        writer.writeInt((int) TypeUtils.castFromString("2023-10-25", DataTypes.DATE()));
-        writer.writeInt((int) TypeUtils.castFromString("09:30:00.0", DataTypes.TIME()));
-        writer.writeBinary("1234567890".getBytes(), 20);
-        writer.writeBytes("20".getBytes());
-        writer.writeChar(fromString("1"), 2);
-        writer.writeString(fromString("hello"));
-        writer.writeDecimal(Decimal.fromUnscaledLong(9, 5, 2), 5);
-        writer.writeDecimal(Decimal.fromBigDecimal(new BigDecimal(10), 20, 0), 20);
-        writer.writeTimestampNtz(TimestampNtz.fromMillis(1698235273182L), 1);
-        writer.writeTimestampNtz(TimestampNtz.fromMillis(1698235273182L), 5);
-        writer.writeTimestampLtz(TimestampLtz.fromEpochMillis(1698235273182L), 1);
-        writer.writeTimestampLtz(TimestampLtz.fromEpochMillis(1698235273182L), 5);
-        writer.setNullAt(18); // Last field (index 18) is null
-        return writer;
+            // array of int
+            Integer[] array1 =
+                    new FlinkAsFlussArray(flinkRow.getArray(19)).toObjectArray(DataTypes.INT());
+            assertThat(array1).isEqualTo(new Integer[] {1, 2, 3, 4, 5, -11, null, 444, 102234});
+
+            // array of float
+            Float[] array2 =
+                    new FlinkAsFlussArray(flinkRow.getArray(20)).toObjectArray(DataTypes.FLOAT());
+            assertThat(array2)
+                    .isEqualTo(
+                            new Float[] {
+                                0.1f, 1.1f, -0.5f, 6.6f, Float.MAX_VALUE, Float.MIN_VALUE
+                            });
+
+            // array of string
+            assertThat(flinkRow.getArray(21).size()).isEqualTo(3);
+            BinaryString[] stringArray1 =
+                    new FlinkAsFlussArray(flinkRow.getArray(21).getArray(0))
+                            .toObjectArray(DataTypes.STRING());
+            assertThat(stringArray1)
+                    .isEqualTo(new BinaryString[] {fromString("a"), null, fromString("c")});
+            assertThat(flinkRow.getArray(21).isNullAt(1)).isTrue();
+            BinaryString[] stringArray2 =
+                    new FlinkAsFlussArray(flinkRow.getArray(21).getArray(2))
+                            .toObjectArray(DataTypes.STRING());
+            assertThat(stringArray2)
+                    .isEqualTo(new BinaryString[] {fromString("hello"), fromString("world")});
+        }
     }
 }

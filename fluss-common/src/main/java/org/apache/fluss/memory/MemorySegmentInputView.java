@@ -19,7 +19,6 @@ package org.apache.fluss.memory;
 
 import java.io.EOFException;
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 
@@ -65,17 +64,6 @@ public class MemorySegmentInputView implements InputView {
     public short readShort() throws IOException {
         if (position >= 0 && position < end - 1) {
             short v = segment.getShort(position);
-            position += 2;
-            return v;
-        } else {
-            throw new EOFException();
-        }
-    }
-
-    @Override
-    public char readChar() throws IOException {
-        if (position >= 0 && position < end - 1) {
-            char v = segment.getChar(position);
             position += 2;
             return v;
         } else {
@@ -136,31 +124,5 @@ public class MemorySegmentInputView implements InputView {
         } else {
             throw new IllegalArgumentException("Length may not be negative.");
         }
-    }
-
-    @Override
-    public int skipBytes(int n) throws IOException {
-        if (n <= 0) {
-            return 0;
-        }
-
-        int available = end - position;
-        int skip = Math.min(n, available);
-        position += skip;
-        return skip;
-    }
-
-    @Override
-    public String readUTF() throws IOException {
-        // 实现UTF-8字符串读取
-        int length = readShort() & 0xFFFF; // 读取short并转换为无符号
-        byte[] bytes = new byte[length];
-        readFully(bytes);
-        return new String(bytes, StandardCharsets.UTF_8);
-    }
-
-    @Override
-    public int readUnsignedShort() throws IOException {
-        return readShort() & 0xFFFF;
     }
 }

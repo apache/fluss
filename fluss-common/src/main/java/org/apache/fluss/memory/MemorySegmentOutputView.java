@@ -18,7 +18,6 @@
 package org.apache.fluss.memory;
 
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 
 /**
@@ -66,8 +65,12 @@ public class MemorySegmentOutputView implements OutputView, MemorySegmentWritabl
     }
 
     @Override
-    public void write(int b) throws IOException {
-        writeByte(b);
+    public void writeByte(int b) throws IOException {
+        if (this.position >= memorySegment.size()) {
+            resize(1);
+        }
+
+        memorySegment.put(position++, (byte) (b & 0xff));
     }
 
     @Override
@@ -94,31 +97,12 @@ public class MemorySegmentOutputView implements OutputView, MemorySegmentWritabl
     }
 
     @Override
-    public void writeByte(int b) throws IOException {
-        if (this.position >= memorySegment.size()) {
-            resize(1);
-        }
-
-        memorySegment.put(position++, (byte) (b & 0xff));
-    }
-
-    @Override
     public void writeShort(int v) throws IOException {
         if (this.position >= this.memorySegment.size() - 1) {
             resize(2);
         }
 
         memorySegment.putShort(position, (short) v);
-        position += 2;
-    }
-
-    @Override
-    public void writeChar(int v) throws IOException {
-        if (this.position >= this.memorySegment.size() - 1) {
-            resize(2);
-        }
-
-        memorySegment.putChar(position, (char) v);
         position += 2;
     }
 
@@ -167,31 +151,16 @@ public class MemorySegmentOutputView implements OutputView, MemorySegmentWritabl
     }
 
     @Override
-    public void writeBytes(String s) throws IOException {
-        if (s == null) {
-            throw new NullPointerException();
+    public void write(MemorySegment segment, int off, int len) throws IOException {
+        if (len < 0 || off < 0 || off > segment.size() - len) {
+            throw new IndexOutOfBoundsException(
+                    String.format("offset: %d, length: %d, size: %d", off, len, segment.size()));
         }
-        for (int i = 0; i < s.length(); i++) {
-            writeByte(s.charAt(i));
+        if (this.position > this.memorySegment.size() - len) {
+            resize(len);
         }
-    }
-
-    @Override
-    public void writeChars(String s) throws IOException {
-        if (s == null) {
-            throw new NullPointerException();
-        }
-        for (int i = 0; i < s.length(); i++) {
-            writeChar(s.charAt(i));
-        }
-    }
-
-    @Override
-    public void writeUTF(String str) throws IOException {
-        // 实现UTF-8字符串写入
-        byte[] bytes = str.getBytes(StandardCharsets.UTF_8);
-        writeShort(bytes.length);
-        write(bytes);
+        segment.copyTo(off, memorySegment, position, len);
+        this.position += len;
     }
 
     private void resize(int minCapacityAdd) throws IOException {
@@ -213,28 +182,22 @@ public class MemorySegmentOutputView implements OutputView, MemorySegmentWritabl
                     // still not possible. give an informative exception message that reports the
                     // size
                     throw new IOException(
-                            "Serialization failed because the record length would exceed 2GB (max addressable array size in Java).");
+                            "Failed to serialize element. Serialized size (> "
+                                    + newLen
+                                    + " bytes) exceeds JVM heap space",
+                            ee);
                 }
             } else {
                 throw new IOException(
-                        "Serialization failed because the record length would exceed 2GB (max addressable array size in Java).");
+                        "Failed to serialize element. Serialized size (> "
+                                + newLen
+                                + " bytes) exceeds JVM heap space",
+                        e);
             }
         }
 
-        System.arraycopy(this.memorySegment.getHeapMemory(), 0, nb, 0, this.position);
-        this.memorySegment = MemorySegment.wrap(nb);
-    }
-
-    @Override
-    public void write(MemorySegment segment, int off, int len) throws IOException {
-        if (len < 0 || off < 0 || off > segment.size() - len) {
-            throw new IndexOutOfBoundsException(
-                    String.format("offset: %d, length: %d, size: %d", off, len, segment.size()));
-        }
-        if (this.position > this.memorySegment.size() - len) {
-            resize(len);
-        }
-        segment.copyTo(off, memorySegment, position, len);
-        this.position += len;
+        MemorySegment newMemorySegment = MemorySegment.wrap(nb);
+        memorySegment.copyTo(0, newMemorySegment, 0, this.memorySegment.size());
+        this.memorySegment = newMemorySegment;
     }
 }

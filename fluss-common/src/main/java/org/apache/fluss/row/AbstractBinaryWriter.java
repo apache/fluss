@@ -1,13 +1,12 @@
 /*
- * Licensed to the Apache Software Foundation (ASF) under one
- * or more contributor license agreements.  See the NOTICE file
- * distributed with this work for additional information
- * regarding copyright ownership.  The ASF licenses this file
- * to you under the Apache License, Version 2.0 (the
- * "License"); you may not use this file except in compliance
- * with the License.  You may obtain a copy of the License at
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -19,7 +18,7 @@
 package org.apache.fluss.row;
 
 import org.apache.fluss.memory.MemorySegment;
-import org.apache.fluss.row.serializer.InternalArraySerializer;
+import org.apache.fluss.row.serializer.ArraySerializer;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
@@ -36,11 +35,11 @@ import static org.apache.fluss.row.BinarySection.MAX_FIX_PART_DATA_SIZE;
  *
  * <p>If want to reuse this writer, please invoke {@link #reset()} first.
  */
-abstract class AbstractArrayWriter implements ArrayWriter {
+public abstract class AbstractBinaryWriter implements BinaryWriter {
 
     protected MemorySegment segment;
 
-    protected int position;
+    protected int cursor;
 
     /** Set offset and size to fix len part. */
     protected abstract void setOffsetAndSize(int pos, int offset, long size);
@@ -72,6 +71,7 @@ abstract class AbstractArrayWriter implements ArrayWriter {
         }
     }
 
+    @Override
     public void writeBytes(int pos, byte[] bytes) {
         int len = bytes.length;
         if (len <= MAX_FIX_PART_DATA_SIZE) {
@@ -82,7 +82,7 @@ abstract class AbstractArrayWriter implements ArrayWriter {
     }
 
     @Override
-    public void writeArray(int pos, InternalArray input, InternalArraySerializer serializer) {
+    public void writeArray(int pos, InternalArray input, ArraySerializer serializer) {
         BinaryArray binary = serializer.toBinaryArray(input);
         writeSegmentsToVarLenPart(
                 pos, binary.getSegments(), binary.getOffset(), binary.getSizeInBytes());
@@ -105,19 +105,16 @@ abstract class AbstractArrayWriter implements ArrayWriter {
 
     @Override
     public void writeChar(int pos, BinaryString value, int length) {
-        byte[] bytes = new byte[length];
-        BinaryString.encodeUTF8(value.toString(), bytes);
-        writeBytes(pos, bytes);
+        // TODO: currently, we encoding CHAR(length) as the same with STRING, the length info can
+        //  be omitted and the bytes length should be enforced in the future.
+        writeString(pos, value);
     }
 
     @Override
     public void writeBinary(int pos, byte[] bytes, int length) {
-        int len = bytes.length;
-        if (len <= MAX_FIX_PART_DATA_SIZE) {
-            writeBytesToFixLenPart(segment, getFieldOffset(pos), bytes, len);
-        } else {
-            writeBytesToVarLenPart(pos, bytes, len);
-        }
+        // TODO: currently, we encoding BINARY(length) as the same with BYTES, the length info can
+        //  be omitted and the bytes length should be enforced in the future.
+        writeBytes(pos, bytes);
     }
 
     @Override
@@ -132,26 +129,26 @@ abstract class AbstractArrayWriter implements ArrayWriter {
             ensureCapacity(16);
 
             // zero-out the bytes
-            segment.putLong(position, 0L);
-            segment.putLong(position + 8, 0L);
+            segment.putLong(cursor, 0L);
+            segment.putLong(cursor + 8, 0L);
 
             // Make sure Decimal object has the same scale as DecimalType.
             // Note that we may pass in null Decimal object to set null for it.
             if (value == null) {
                 setNullBit(pos);
                 // keep the offset for future update
-                setOffsetAndSize(pos, position, 0);
+                setOffsetAndSize(pos, cursor, 0);
             } else {
                 final byte[] bytes = value.toUnscaledBytes();
                 assert bytes.length <= 16;
 
                 // Write the bytes to the variable length portion.
-                segment.put(position, bytes, 0, bytes.length);
-                setOffsetAndSize(pos, position, bytes.length);
+                segment.put(cursor, bytes, 0, bytes.length);
+                setOffsetAndSize(pos, cursor, bytes.length);
             }
 
             // move the cursor forward.
-            position += 16;
+            cursor += 16;
         }
     }
 
@@ -166,14 +163,14 @@ abstract class AbstractArrayWriter implements ArrayWriter {
             if (value == null) {
                 setNullBit(pos);
                 // zero-out the bytes
-                segment.putLong(position, 0L);
-                setOffsetAndSize(pos, position, 0);
+                segment.putLong(cursor, 0L);
+                setOffsetAndSize(pos, cursor, 0);
             } else {
-                segment.putLong(position, value.getMillisecond());
-                setOffsetAndSize(pos, position, value.getNanoOfMillisecond());
+                segment.putLong(cursor, value.getMillisecond());
+                setOffsetAndSize(pos, cursor, value.getNanoOfMillisecond());
             }
 
-            position += 8;
+            cursor += 8;
         }
     }
 
@@ -188,25 +185,25 @@ abstract class AbstractArrayWriter implements ArrayWriter {
             if (value == null) {
                 setNullBit(pos);
                 // zero-out the bytes
-                segment.putLong(position, 0L);
-                setOffsetAndSize(pos, position, 0);
+                segment.putLong(cursor, 0L);
+                setOffsetAndSize(pos, cursor, 0);
             } else {
-                segment.putLong(position, value.getEpochMillisecond());
-                setOffsetAndSize(pos, position, value.getNanoOfMillisecond());
+                segment.putLong(cursor, value.getEpochMillisecond());
+                setOffsetAndSize(pos, cursor, value.getNanoOfMillisecond());
             }
 
-            position += 8;
+            cursor += 8;
         }
     }
 
     protected void zeroOutPaddingBytes(int numBytes) {
         if ((numBytes & 0x07) > 0) {
-            segment.putLong(position + ((numBytes >> 3) << 3), 0L);
+            segment.putLong(cursor + ((numBytes >> 3) << 3), 0L);
         }
     }
 
     protected void ensureCapacity(int neededSize) {
-        final int length = position + neededSize;
+        final int length = cursor + neededSize;
         if (segment.size() < length) {
             grow(length);
         }
@@ -221,22 +218,22 @@ abstract class AbstractArrayWriter implements ArrayWriter {
         zeroOutPaddingBytes(size);
 
         if (segments.length == 1) {
-            segments[0].copyTo(offset, segment, position, size);
+            segments[0].copyTo(offset, segment, cursor, size);
         } else {
             writeMultiSegmentsToVarLenPart(segments, offset, size);
         }
 
-        setOffsetAndSize(pos, position, size);
+        setOffsetAndSize(pos, cursor, size);
 
         // move the cursor forward.
-        position += roundedSize;
+        cursor += roundedSize;
     }
 
     private void writeMultiSegmentsToVarLenPart(MemorySegment[] segments, int offset, int size) {
         // Write the bytes to the variable length portion.
         int needCopy = size;
         int fromOffset = offset;
-        int toOffset = position;
+        int toOffset = cursor;
         for (MemorySegment sourceSegment : segments) {
             int remain = sourceSegment.size() - fromOffset;
             if (remain > 0) {
@@ -260,12 +257,12 @@ abstract class AbstractArrayWriter implements ArrayWriter {
         zeroOutPaddingBytes(len);
 
         // Write the bytes to the variable length portion.
-        segment.put(position, bytes, 0, len);
+        segment.put(cursor, bytes, 0, len);
 
-        setOffsetAndSize(pos, position, len);
+        setOffsetAndSize(pos, cursor, len);
 
         // move the cursor forward.
-        position += roundedSize;
+        cursor += roundedSize;
     }
 
     /** Increases the capacity to ensure that it can hold at least the minimum capacity argument. */

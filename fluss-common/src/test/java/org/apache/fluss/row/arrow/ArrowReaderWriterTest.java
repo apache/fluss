@@ -21,7 +21,6 @@ import org.apache.fluss.memory.AbstractPagedOutputView;
 import org.apache.fluss.memory.ManagedPagedOutputView;
 import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.memory.TestingMemorySegmentPool;
-import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.Decimal;
 import org.apache.fluss.row.GenericArray;
 import org.apache.fluss.row.GenericRow;
@@ -49,6 +48,7 @@ import static org.apache.fluss.record.LogRecordBatch.CURRENT_LOG_MAGIC_VALUE;
 import static org.apache.fluss.record.LogRecordBatchFormat.arrowChangeTypeOffset;
 import static org.apache.fluss.record.TestData.DATA1;
 import static org.apache.fluss.record.TestData.DATA1_ROW_TYPE;
+import static org.apache.fluss.row.BinaryString.fromString;
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.apache.fluss.testutils.InternalRowAssert.assertThatRow;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -87,7 +87,9 @@ class ArrowReaderWriterTest {
                     DataTypes.TIMESTAMP_LTZ(3),
                     DataTypes.TIMESTAMP_LTZ(6),
                     DataTypes.TIMESTAMP_LTZ(9),
-                    DataTypes.ARRAY(DataTypes.INT()))
+                    DataTypes.ARRAY(DataTypes.INT()),
+                    DataTypes.ARRAY(DataTypes.FLOAT().copy(false)), // vector embedding type
+                    DataTypes.ARRAY(DataTypes.ARRAY(DataTypes.STRING()))) // nested array
             // TODO: Add Map and Row types in Issue #1973 and #1974
             // DataTypes.MAP(DataTypes.INT(), DataTypes.STRING()),
             // DataTypes.ROW(...)
@@ -104,8 +106,8 @@ class ArrowReaderWriterTest {
                             5.0f,
                             6.0,
                             Decimal.fromUnscaledLong(1234, 10, 3),
-                            BinaryString.fromString("abc"),
-                            BinaryString.fromString("Hello World!"),
+                            fromString("abc"),
+                            fromString("Hello World!"),
                             new byte[] {1, 2, 3, 4, 5},
                             new byte[] {1, 2, 3, 4, 5, 6, 7, 8, 9, 10},
                             3600000,
@@ -118,7 +120,11 @@ class ArrowReaderWriterTest {
                             TimestampLtz.fromEpochMillis(3600123),
                             TimestampLtz.fromEpochMillis(3600123, 456000),
                             TimestampLtz.fromEpochMillis(3600123, 456789),
-                            GenericArray.of(1, 2, 3)),
+                            GenericArray.of(1, 2, 3, 4, 5, -11, 222, 444, 102234),
+                            GenericArray.of(0.1f, 1.1f, 2.2f, 3.3f, 4.4f, -0.5f, 6.6f),
+                            GenericArray.of(
+                                    GenericArray.of(fromString("a"), fromString("b")),
+                                    GenericArray.of(fromString("c"), fromString("d")))),
                     // TODO: Add Map and Row test data in Issue #1973 and #1974
                     // GenericMap.of(...),
                     // GenericRow.of(...)),
@@ -131,7 +137,7 @@ class ArrowReaderWriterTest {
                             5.0f,
                             6.0,
                             Decimal.fromUnscaledLong(1234, 10, 3),
-                            BinaryString.fromString("abc"),
+                            fromString("abc"),
                             null,
                             new byte[] {1, 2, 3, 4, 5},
                             new byte[] {1, 2, 3, 4, 5, 6, 7, 8, 9, 10},
@@ -145,7 +151,19 @@ class ArrowReaderWriterTest {
                             TimestampLtz.fromEpochMillis(3600120),
                             TimestampLtz.fromEpochMillis(3600120, 120000),
                             TimestampLtz.fromEpochMillis(3600120, 123450),
-                            GenericArray.of(1, 2, 3)));
+                            GenericArray.of(1, 2, 3, null, Integer.MAX_VALUE, Integer.MIN_VALUE),
+                            GenericArray.of(
+                                    0.0f,
+                                    -0.1f,
+                                    1.1f,
+                                    2.2f,
+                                    3.3f,
+                                    Float.MAX_VALUE,
+                                    Float.MIN_VALUE),
+                            GenericArray.of(
+                                    GenericArray.of(fromString("a"), null, fromString("c")),
+                                    null,
+                                    GenericArray.of(fromString("hello"), fromString("world")))));
     // TODO: Add Map and Row test data in Issue #1973 and #1974
     // GenericMap.of(...),
     // GenericRow.of(...)));

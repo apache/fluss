@@ -28,8 +28,7 @@ import org.apache.fluss.types.MapType;
  * must be of the same type; same for values. See {@link InternalRow} for more information about
  * internal data structures.
  *
- * @see GenericMap
- * @since 0.6
+ * @since 0.9
  */
 @PublicEvolving
 public interface InternalMap {

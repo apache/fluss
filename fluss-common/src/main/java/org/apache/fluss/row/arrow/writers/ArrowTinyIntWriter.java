@@ -23,35 +23,19 @@ import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.TinyIntVector;
 
 /** {@link ArrowFieldWriter} for TinyInt. */
 @Internal
-public class ArrowTinyIntWriter extends ArrowFieldWriter<DataGetters> {
+public class ArrowTinyIntWriter extends ArrowFieldWriter {
 
-    public static ArrowTinyIntWriter forField(TinyIntVector tinyIntVector) {
-        return new ArrowTinyIntWriter(tinyIntVector);
-    }
-
-    private ArrowTinyIntWriter(TinyIntVector tinyIntVector) {
+    public ArrowTinyIntWriter(TinyIntVector tinyIntVector) {
         super(tinyIntVector);
     }
 
     @Override
     public void doWrite(int rowIndex, DataGetters row, int ordinal, boolean handleSafe) {
-        TinyIntVector vector = (TinyIntVector) getValueVector();
-        if (isNullAt(row, ordinal)) {
-            vector.setNull(getCount());
+        TinyIntVector vector = (TinyIntVector) fieldVector;
+        if (handleSafe) {
+            vector.setSafe(rowIndex, row.getByte(ordinal));
         } else {
-            if (handleSafe) {
-                vector.setSafe(getCount(), readByte(row, ordinal));
-            } else {
-                vector.set(getCount(), readByte(row, ordinal));
-            }
+            vector.set(rowIndex, row.getByte(ordinal));
         }
-    }
-
-    private boolean isNullAt(DataGetters row, int ordinal) {
-        return row.isNullAt(ordinal);
-    }
-
-    private byte readByte(DataGetters row, int ordinal) {
-        return row.getByte(ordinal);
     }
 }

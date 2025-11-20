@@ -25,18 +25,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 public class ColumnVectorTest {
 
     @Test
-    public void testDefaultGetCapacity() {
-        TestColumnVector columnVector = new TestColumnVector(10);
-        assertThat(columnVector.getCapacity()).isEqualTo(Integer.MAX_VALUE);
-    }
-
-    @Test
-    public void testDefaultGetChildren() {
-        TestColumnVector columnVector = new TestColumnVector(10);
-        assertThat(columnVector.getChildren()).isNull();
-    }
-
-    @Test
     public void testIsNullAt() {
         boolean[] nulls = {false, true, false, true, false};
         TestColumnVector columnVector = new TestColumnVector(5, nulls);
@@ -46,24 +34,6 @@ public class ColumnVectorTest {
         assertThat(columnVector.isNullAt(2)).isFalse();
         assertThat(columnVector.isNullAt(3)).isTrue();
         assertThat(columnVector.isNullAt(4)).isFalse();
-    }
-
-    @Test
-    public void testCustomCapacity() {
-        TestColumnVectorWithCapacity columnVector = new TestColumnVectorWithCapacity(100, 100);
-        assertThat(columnVector.getCapacity()).isEqualTo(100);
-    }
-
-    @Test
-    public void testCustomChildren() {
-        ColumnVector[] children = new ColumnVector[3];
-        children[0] = new TestColumnVector(10);
-        children[1] = new TestColumnVector(10);
-        children[2] = new TestColumnVector(10);
-
-        TestColumnVectorWithChildren columnVector = new TestColumnVectorWithChildren(10, children);
-        assertThat(columnVector.getChildren()).isEqualTo(children);
-        assertThat(columnVector.getChildren()).hasSize(3);
     }
 
     @Test
@@ -107,10 +77,6 @@ public class ColumnVectorTest {
         private final int size;
         private final boolean[] nulls;
 
-        TestColumnVector(int size) {
-            this(size, new boolean[size]);
-        }
-
         TestColumnVector(int size, boolean[] nulls) {
             this.size = size;
             this.nulls = nulls;
@@ -119,46 +85,6 @@ public class ColumnVectorTest {
         @Override
         public boolean isNullAt(int i) {
             return i < nulls.length && nulls[i];
-        }
-    }
-
-    private static class TestColumnVectorWithCapacity implements ColumnVector {
-        private final int size;
-        private final int capacity;
-
-        TestColumnVectorWithCapacity(int size, int capacity) {
-            this.size = size;
-            this.capacity = capacity;
-        }
-
-        @Override
-        public boolean isNullAt(int i) {
-            return false;
-        }
-
-        @Override
-        public int getCapacity() {
-            return capacity;
-        }
-    }
-
-    private static class TestColumnVectorWithChildren implements ColumnVector {
-        private final int size;
-        private final ColumnVector[] children;
-
-        TestColumnVectorWithChildren(int size, ColumnVector[] children) {
-            this.size = size;
-            this.children = children;
-        }
-
-        @Override
-        public boolean isNullAt(int i) {
-            return false;
-        }
-
-        @Override
-        public ColumnVector[] getChildren() {
-            return children;
         }
     }
 }

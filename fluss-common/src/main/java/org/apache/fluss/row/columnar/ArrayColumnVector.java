@@ -23,6 +23,4 @@ import org.apache.fluss.row.InternalArray;
 /** Array column vector. */
 public interface ArrayColumnVector extends ColumnVector {
     InternalArray getArray(int i);
-
-    ColumnVector getColumnVector();
 }

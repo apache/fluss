@@ -43,6 +43,8 @@ import java.util.Arrays;
 @PublicEvolving
 public final class GenericRow implements InternalRow, Serializable {
 
+    private static final long serialVersionUID = 1L;
+
     /** The array to store the actual internal format values. */
     private final Object[] fields;
 

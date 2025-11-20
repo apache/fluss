@@ -152,7 +152,7 @@ public class IcebergRecordAsFlussRow implements InternalRow {
     @Override
     public InternalArray getArray(int pos) {
         // TODO: Support Array type conversion from Iceberg to Fluss
-        return null;
+        throw new UnsupportedOperationException();
     }
 
     // TODO: Support Map type conversion from Iceberg to Fluss

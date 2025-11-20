@@ -1,13 +1,12 @@
 /*
- * Licensed to the Apache Software Foundation (ASF) under one
- * or more contributor license agreements.  See the NOTICE file
- * distributed with this work for additional information
- * regarding copyright ownership.  The ASF licenses this file
- * to you under the Apache License, Version 2.0 (the
- * "License"); you may not use this file except in compliance
- * with the License.  You may obtain a copy of the License at
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -25,6 +24,7 @@ import org.apache.fluss.types.DataType;
 import java.lang.reflect.Array;
 
 import static org.apache.fluss.memory.MemoryUtils.UNSAFE;
+import static org.apache.fluss.utils.Preconditions.checkArgument;
 
 /**
  * A binary implementation of {@link InternalArray} which is backed by {@link MemorySegment}s.
@@ -38,10 +38,18 @@ import static org.apache.fluss.memory.MemoryUtils.UNSAFE;
  * [size(int)] + [null bits(4-byte word boundaries)] + [values or offset&length] + [variable length part].
  * </pre>
  *
- * @since 0.8
+ * <p>Note: different from {@link BinaryRow}, we only have one implementation of {@link
+ * BinaryArray}. Even for {@link org.apache.fluss.row.compacted.CompactedRow}, we still use {@link
+ * BinaryArray} to represent its array field instead of introducing a compacted array (use
+ * var-length encoding for numerics). This is because the var-length encoding will lose memory-copy
+ * from binary to in-memory primitive arrays (see {@link #fromPrimitiveArray(float[])}), this is
+ * very important for performance of vector embedding encodings.
+ *
+ * @since 0.9
  */
 @PublicEvolving
-public final class BinaryArray extends BinarySection implements InternalArray, DataSetters {
+public final class BinaryArray extends BinarySection
+        implements InternalArray, MemoryAwareGetters, DataSetters {
 
     private static final long serialVersionUID = 1L;
 
@@ -70,17 +78,15 @@ public final class BinaryArray extends BinarySection implements InternalArray, D
             case TINYINT:
                 return 1;
             case CHAR:
-
             case STRING:
             case BINARY:
-
+            case BYTES:
             case DECIMAL:
             case BIGINT:
             case DOUBLE:
             case TIMESTAMP_WITHOUT_TIME_ZONE:
             case TIMESTAMP_WITH_LOCAL_TIME_ZONE:
             case ARRAY:
-
             case MAP:
             case ROW:
                 // long and double are 8 bytes;
@@ -123,6 +129,8 @@ public final class BinaryArray extends BinarySection implements InternalArray, D
 
     @Override
     public void pointTo(MemorySegment[] segments, int offset, int sizeInBytes) {
+        checkArgument(
+                segments.length == 1, "Currently, segments.length must be 1 for AlignedArray");
         // Read the number of elements from the first 4 bytes.
         final int size = BinarySegmentUtils.getInt(segments, offset);
         assert size >= 0 : "size (" + size + ") should >= 0";
@@ -215,9 +223,7 @@ public final class BinaryArray extends BinarySection implements InternalArray, D
     @Override
     public byte[] getBinary(int pos, int length) {
         assertIndexIsValid(pos);
-        int fieldOffset = getElementOffset(pos, 8);
-        final long offsetAndSize = BinarySegmentUtils.getLong(segments, fieldOffset);
-        return BinarySegmentUtils.readBinary(segments, offset, fieldOffset, offsetAndSize);
+        return getBytes(pos);
     }
 
     @Override
@@ -239,7 +245,7 @@ public final class BinaryArray extends BinarySection implements InternalArray, D
 
         int fieldOffset = getElementOffset(pos, 8);
         final long offsetAndNanoOfMilli = BinarySegmentUtils.getLong(segments, fieldOffset);
-        return BinarySegmentUtils.readTimestampNtzData(segments, offset, offsetAndNanoOfMilli);
+        return BinarySegmentUtils.readTimestampNtz(segments, offset, offsetAndNanoOfMilli);
     }
 
     @Override
@@ -253,21 +259,13 @@ public final class BinaryArray extends BinarySection implements InternalArray, D
 
         int fieldOffset = getElementOffset(pos, 8);
         final long offsetAndNanoOfMilli = BinarySegmentUtils.getLong(segments, fieldOffset);
-        return BinarySegmentUtils.readTimestampLtzData(segments, offset, offsetAndNanoOfMilli);
-    }
-
-    @Override
-    public byte[] getBinary(int pos) {
-        assertIndexIsValid(pos);
-        int fieldOffset = getElementOffset(pos, 8);
-        final long offsetAndSize = BinarySegmentUtils.getLong(segments, fieldOffset);
-        return BinarySegmentUtils.readBinary(segments, offset, fieldOffset, offsetAndSize);
+        return BinarySegmentUtils.readTimestampLtz(segments, offset, offsetAndNanoOfMilli);
     }
 
     @Override
     public InternalArray getArray(int pos) {
         assertIndexIsValid(pos);
-        return BinarySegmentUtils.readArrayData(segments, offset, getLong(pos));
+        return BinarySegmentUtils.readBinaryArray(segments, offset, getLong(pos));
     }
 
     // TODO: getMap() will be added in Issue #1973
@@ -448,8 +446,8 @@ public final class BinaryArray extends BinarySection implements InternalArray, D
                 // keep the offset for future update
                 BinarySegmentUtils.setLong(segments, fieldOffset, ((long) cursor) << 32);
             } else {
-                // write nanoOfMillisecond to the variable length portion.
-                BinarySegmentUtils.setLong(segments, offset + cursor, value.getNanoOfMillisecond());
+                // write epochMillisecond to the variable length portion.
+                BinarySegmentUtils.setLong(segments, offset + cursor, value.getEpochMillisecond());
                 // write nanoOfMillisecond to the fixed-length portion.
                 setLong(pos, ((long) cursor << 32) | (long) value.getNanoOfMillisecond());
             }
@@ -537,13 +535,11 @@ public final class BinaryArray extends BinarySection implements InternalArray, D
     @SuppressWarnings("unchecked")
     public <T> T[] toObjectArray(DataType elementType) {
         Class<T> elementClass = (Class<T>) InternalRow.getDataClass(elementType);
+        InternalArray.ElementGetter elementGetter = InternalArray.createElementGetter(elementType);
         T[] values = (T[]) Array.newInstance(elementClass, size);
         for (int i = 0; i < size; i++) {
             if (!isNullAt(i)) {
-                values[i] =
-                        (T)
-                                InternalArray.createElementGetter(elementType, i)
-                                        .getElementOrNull(this);
+                values[i] = (T) elementGetter.getElementOrNull(this, i);
             }
         }
         return values;

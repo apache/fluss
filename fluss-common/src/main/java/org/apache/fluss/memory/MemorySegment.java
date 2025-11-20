@@ -24,7 +24,6 @@ import javax.annotation.Nullable;
 import java.io.DataInput;
 import java.io.DataOutput;
 import java.io.IOException;
-import java.io.Serializable;
 import java.nio.BufferOverflowException;
 import java.nio.BufferUnderflowException;
 import java.nio.ByteBuffer;
@@ -66,7 +65,7 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
  * implementations on invocations of abstract methods.
  */
 @Internal
-public final class MemorySegment implements Serializable {
+public final class MemorySegment {
 
     /** The unsafe handle for transparent memory copied (heap / off-heap). */
     private static final sun.misc.Unsafe UNSAFE = MemoryUtils.UNSAFE;

@@ -23,30 +23,20 @@ import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.DateDayVector;
 
 /** {@link ArrowFieldWriter} for Date. */
 @Internal
-public class ArrowDateWriter extends ArrowFieldWriter<DataGetters> {
+public class ArrowDateWriter extends ArrowFieldWriter {
 
-    public static ArrowDateWriter forField(DateDayVector dateDayVector) {
-        return new ArrowDateWriter(dateDayVector);
-    }
-
-    private ArrowDateWriter(DateDayVector dateDayVector) {
+    public ArrowDateWriter(DateDayVector dateDayVector) {
         super(dateDayVector);
     }
 
     @Override
     public void doWrite(int rowIndex, DataGetters row, int ordinal, boolean handleSafe) {
-        DateDayVector vector = (DateDayVector) getValueVector();
-        if (isNullAt(row, ordinal)) {
-            vector.setNull(getCount());
-        } else if (handleSafe) {
-            vector.setSafe(getCount(), readDate(row, ordinal));
+        DateDayVector vector = (DateDayVector) fieldVector;
+        if (handleSafe) {
+            vector.setSafe(rowIndex, readDate(row, ordinal));
         } else {
-            vector.set(getCount(), readDate(row, ordinal));
+            vector.set(rowIndex, readDate(row, ordinal));
         }
-    }
-
-    private boolean isNullAt(DataGetters row, int ordinal) {
-        return row.isNullAt(ordinal);
     }
 
     private int readDate(DataGetters row, int ordinal) {

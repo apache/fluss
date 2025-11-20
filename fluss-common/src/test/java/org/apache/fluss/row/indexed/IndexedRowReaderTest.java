@@ -18,8 +18,11 @@
 package org.apache.fluss.row.indexed;
 
 import org.apache.fluss.row.BinaryString;
+import org.apache.fluss.row.BinaryWriter;
 import org.apache.fluss.row.Decimal;
+import org.apache.fluss.row.GenericArray;
 import org.apache.fluss.types.DataType;
+import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.utils.DateTimeUtils;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -30,9 +33,11 @@ import java.math.BigInteger;
 import java.time.LocalDate;
 import java.time.LocalTime;
 
+import static org.apache.fluss.row.BinaryString.fromString;
 import static org.apache.fluss.row.TestInternalRowGenerator.createAllTypes;
 import static org.apache.fluss.row.indexed.IndexedRowTest.assertAllTypeEquals;
 import static org.apache.fluss.row.indexed.IndexedRowTest.genRecordForAllTypes;
+import static org.apache.fluss.testutils.InternalArrayAssert.assertThatArray;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test of {@link IndexedRowReader}. */
@@ -57,16 +62,16 @@ public class IndexedRowReaderTest {
 
     @Test
     void testCreateFieldReader() {
-        IndexedRowWriter.FieldWriter[] writers = new IndexedRowWriter.FieldWriter[dataTypes.length];
+        BinaryWriter.ValueWriter[] writers = new BinaryWriter.ValueWriter[dataTypes.length];
         IndexedRowReader.FieldReader[] readers = new IndexedRowReader.FieldReader[dataTypes.length];
         for (int i = 0; i < dataTypes.length; i++) {
             readers[i] = IndexedRowReader.createFieldReader(dataTypes[i]);
-            writers[i] = IndexedRowWriter.createFieldWriter(dataTypes[i]);
+            writers[i] = BinaryWriter.createValueWriter(dataTypes[i]);
         }
 
         IndexedRowWriter writer1 = new IndexedRowWriter(dataTypes);
         for (int i = 0; i < dataTypes.length; i++) {
-            writers[i].writeField(writer1, i, readers[i].readField(reader, i));
+            writers[i].writeValue(writer1, i, readers[i].readField(reader, i));
         }
 
         IndexedRow row1 = new IndexedRow(dataTypes);
@@ -97,6 +102,19 @@ public class IndexedRowReaderTest {
         assertThat(reader.readTimestampNtz(5).toString()).isEqualTo("2023-10-25T12:01:13.182");
         assertThat(reader.readTimestampLtz(1).toString()).isEqualTo("2023-10-25T12:01:13.182Z");
         assertThat(reader.readTimestampLtz(5).toString()).isEqualTo("2023-10-25T12:01:13.182Z");
-        assertThat(reader.isNullAt(19)).isTrue();
+        assertThatArray(reader.readArray())
+                .withElementType(DataTypes.INT())
+                .isEqualTo(GenericArray.of(1, 2, 3, 4, 5, -11, null, 444, 102234));
+        assertThatArray(reader.readArray())
+                .withElementType(DataTypes.FLOAT().copy(false))
+                .isEqualTo(
+                        GenericArray.of(0.1f, 1.1f, -0.5f, 6.6f, Float.MAX_VALUE, Float.MIN_VALUE));
+        assertThatArray(reader.readArray())
+                .withElementType(DataTypes.ARRAY(DataTypes.STRING()))
+                .isEqualTo(
+                        GenericArray.of(
+                                GenericArray.of(fromString("a"), null, fromString("c")),
+                                null,
+                                GenericArray.of(fromString("hello"), fromString("world"))));
     }
 }

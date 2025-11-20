@@ -23,29 +23,20 @@ import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.Float4Vector;
 
 /** {@link ArrowFieldWriter} for Float. */
 @Internal
-public class ArrowFloatWriter extends ArrowFieldWriter<DataGetters> {
-    public static ArrowFloatWriter forField(Float4Vector float4Vector) {
-        return new ArrowFloatWriter(float4Vector);
-    }
+public class ArrowFloatWriter extends ArrowFieldWriter {
 
-    private ArrowFloatWriter(Float4Vector float4Vector) {
+    public ArrowFloatWriter(Float4Vector float4Vector) {
         super(float4Vector);
     }
 
     @Override
     public void doWrite(int rowIndex, DataGetters row, int ordinal, boolean handleSafe) {
-        Float4Vector vector = (Float4Vector) getValueVector();
-        if (isNullAt(row, ordinal)) {
-            vector.setNull(getCount());
-        } else if (handleSafe) {
-            vector.setSafe(getCount(), readFloat(row, ordinal));
+        Float4Vector vector = (Float4Vector) fieldVector;
+        if (handleSafe) {
+            vector.setSafe(rowIndex, readFloat(row, ordinal));
         } else {
-            vector.set(getCount(), readFloat(row, ordinal));
+            vector.set(rowIndex, readFloat(row, ordinal));
         }
-    }
-
-    private boolean isNullAt(DataGetters row, int ordinal) {
-        return row.isNullAt(ordinal);
     }
 
     private float readFloat(DataGetters row, int ordinal) {

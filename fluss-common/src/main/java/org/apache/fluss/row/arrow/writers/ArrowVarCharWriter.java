@@ -18,7 +18,6 @@
 package org.apache.fluss.row.arrow.writers;
 
 import org.apache.fluss.annotation.Internal;
-import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.DataGetters;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.VarCharVector;
 
@@ -26,32 +25,16 @@ import java.nio.ByteBuffer;
 
 /** {@link ArrowFieldWriter} for VarChar. */
 @Internal
-public class ArrowVarCharWriter extends ArrowFieldWriter<DataGetters> {
+public class ArrowVarCharWriter extends ArrowFieldWriter {
 
-    public static ArrowVarCharWriter forField(VarCharVector varCharVector) {
-        return new ArrowVarCharWriter(varCharVector);
-    }
-
-    private ArrowVarCharWriter(VarCharVector varCharVector) {
+    public ArrowVarCharWriter(VarCharVector varCharVector) {
         super(varCharVector);
     }
 
     @Override
     public void doWrite(int rowIndex, DataGetters row, int ordinal, boolean handleSafe) {
-        VarCharVector vector = (VarCharVector) getValueVector();
-        if (isNullAt(row, ordinal)) {
-            vector.setNull(getCount());
-        } else {
-            ByteBuffer buffer = readString(row, ordinal).wrapByteBuffer();
-            vector.setSafe(getCount(), buffer, buffer.position(), buffer.remaining());
-        }
-    }
-
-    private boolean isNullAt(DataGetters row, int ordinal) {
-        return row.isNullAt(ordinal);
-    }
-
-    private BinaryString readString(DataGetters row, int ordinal) {
-        return row.getString(ordinal);
+        VarCharVector vector = (VarCharVector) fieldVector;
+        ByteBuffer buffer = row.getString(ordinal).wrapByteBuffer();
+        vector.setSafe(rowIndex, buffer, buffer.position(), buffer.remaining());
     }
 }

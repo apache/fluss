@@ -20,79 +20,64 @@ package org.apache.fluss.row.arrow.writers;
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.row.DataGetters;
 import org.apache.fluss.row.TimestampNtz;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.FieldVector;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.TimeStampMicroVector;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.TimeStampMilliVector;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.TimeStampSecVector;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.TimeStampVector;
-import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.ValueVector;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.types.pojo.ArrowType;
 
 import static org.apache.fluss.utils.Preconditions.checkState;
 
 /** {@link ArrowFieldWriter} for TimestampNtz. */
 @Internal
-public class ArrowTimestampNtzWriter extends ArrowFieldWriter<DataGetters> {
-    public static ArrowTimestampNtzWriter forField(ValueVector valueVector, int precision) {
-        return new ArrowTimestampNtzWriter(valueVector, precision);
-    }
+public class ArrowTimestampNtzWriter extends ArrowFieldWriter {
 
     private final int precision;
 
-    private ArrowTimestampNtzWriter(ValueVector valueVector, int precision) {
-        super(valueVector);
+    public ArrowTimestampNtzWriter(FieldVector fieldVector, int precision) {
+        super(fieldVector);
         checkState(
-                valueVector instanceof TimeStampVector
-                        && ((ArrowType.Timestamp) valueVector.getField().getType()).getTimezone()
+                fieldVector instanceof TimeStampVector
+                        && ((ArrowType.Timestamp) fieldVector.getField().getType()).getTimezone()
                                 == null);
         this.precision = precision;
     }
 
     @Override
     public void doWrite(int rowIndex, DataGetters row, int ordinal, boolean handleSafe) {
-        TimeStampVector vector = (TimeStampVector) getValueVector();
-        if (isNullAt(row, ordinal)) {
-            vector.setNull(getCount());
-        } else {
-            TimestampNtz timestamp = readTimestamp(row, ordinal);
-            if (vector instanceof TimeStampSecVector) {
-                long sec = timestamp.getMillisecond() / 1000;
-                if (handleSafe) {
-                    vector.setSafe(getCount(), sec);
-                } else {
-                    vector.set(getCount(), sec);
-                }
-            } else if (vector instanceof TimeStampMilliVector) {
-                long ms = timestamp.getMillisecond();
-                if (handleSafe) {
-                    vector.setSafe(getCount(), ms);
-                } else {
-                    vector.set(getCount(), ms);
-                }
-            } else if (vector instanceof TimeStampMicroVector) {
-                long microSec =
-                        timestamp.getMillisecond() * 1000 + timestamp.getNanoOfMillisecond() / 1000;
-                if (handleSafe) {
-                    vector.setSafe(getCount(), microSec);
-                } else {
-                    vector.set(getCount(), microSec);
-                }
+        TimeStampVector vector = (TimeStampVector) fieldVector;
+        TimestampNtz timestamp = row.getTimestampNtz(ordinal, precision);
+        if (vector instanceof TimeStampSecVector) {
+            long sec = timestamp.getMillisecond() / 1000;
+            if (handleSafe) {
+                vector.setSafe(rowIndex, sec);
             } else {
-                long nanoSec =
-                        timestamp.getMillisecond() * 1_000_000 + timestamp.getNanoOfMillisecond();
-                if (handleSafe) {
-                    vector.setSafe(getCount(), nanoSec);
-                } else {
-                    vector.set(getCount(), nanoSec);
-                }
+                vector.set(rowIndex, sec);
+            }
+        } else if (vector instanceof TimeStampMilliVector) {
+            long ms = timestamp.getMillisecond();
+            if (handleSafe) {
+                vector.setSafe(rowIndex, ms);
+            } else {
+                vector.set(rowIndex, ms);
+            }
+        } else if (vector instanceof TimeStampMicroVector) {
+            long microSec =
+                    timestamp.getMillisecond() * 1000 + timestamp.getNanoOfMillisecond() / 1000;
+            if (handleSafe) {
+                vector.setSafe(rowIndex, microSec);
+            } else {
+                vector.set(rowIndex, microSec);
+            }
+        } else {
+            long nanoSec =
+                    timestamp.getMillisecond() * 1_000_000 + timestamp.getNanoOfMillisecond();
+            if (handleSafe) {
+                vector.setSafe(rowIndex, nanoSec);
+            } else {
+                vector.set(rowIndex, nanoSec);
             }
         }
-    }
-
-    private boolean isNullAt(DataGetters row, int ordinal) {
-        return row.isNullAt(ordinal);
-    }
-
-    private TimestampNtz readTimestamp(DataGetters row, int ordinal) {
-        return row.getTimestampNtz(ordinal, precision);
     }
 }

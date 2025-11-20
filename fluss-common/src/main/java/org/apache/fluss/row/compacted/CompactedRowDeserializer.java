@@ -23,10 +23,8 @@ import org.apache.fluss.types.DataType;
 /** A decoder for {@link CompactedRow}. */
 public class CompactedRowDeserializer {
     private final CompactedRowReader.FieldReader[] readers;
-    private final DataType[] types;
 
     public CompactedRowDeserializer(DataType[] types) {
-        this.types = types;
         this.readers = new CompactedRowReader.FieldReader[types.length];
         for (int i = 0; i < types.length; i++) {
             // Don't need to copy to nullable because decode method checks value is null or not
@@ -40,9 +38,5 @@ public class CompactedRowDeserializer {
             // Currently ROW type is not supported in CompactedRowReader.createFieldReader
             output.setField(i, readers[i].readField(reader, i));
         }
-    }
-
-    public DataType[] getTypes() {
-        return types;
     }
 }

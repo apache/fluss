@@ -19,7 +19,6 @@
 package org.apache.fluss.row.columnar;
 
 import org.apache.fluss.row.BinaryString;
-import org.apache.fluss.row.DataSetters;
 import org.apache.fluss.row.Decimal;
 import org.apache.fluss.row.InternalArray;
 import org.apache.fluss.row.TimestampLtz;
@@ -30,7 +29,7 @@ import java.util.Arrays;
 import java.util.Objects;
 
 /** Columnar array to support access to vector column data. */
-public final class ColumnarArray implements InternalArray, DataSetters, Serializable {
+public final class ColumnarArray implements InternalArray, Serializable {
 
     private static final long serialVersionUID = 1L;
 
@@ -118,28 +117,11 @@ public final class ColumnarArray implements InternalArray, DataSetters, Serializ
 
     @Override
     public byte[] getBinary(int pos, int length) {
-        BytesColumnVector.Bytes byteArray = getByteArray(pos);
-        if (byteArray.len == byteArray.data.length) {
-            return byteArray.data;
-        } else {
-            return Arrays.copyOfRange(
-                    byteArray.data, byteArray.offset, byteArray.offset + byteArray.len);
-        }
+        return getBytes(pos);
     }
 
     @Override
     public byte[] getBytes(int pos) {
-        BytesColumnVector.Bytes byteArray = getByteArray(pos);
-        if (byteArray.len == byteArray.data.length) {
-            return byteArray.data;
-        } else {
-            return Arrays.copyOfRange(
-                    byteArray.data, byteArray.offset, byteArray.offset + byteArray.len);
-        }
-    }
-
-    @Override
-    public byte[] getBinary(int pos) {
         BytesColumnVector.Bytes byteArray = getByteArray(pos);
         if (byteArray.len == byteArray.data.length) {
             return byteArray.data;
@@ -156,61 +138,6 @@ public final class ColumnarArray implements InternalArray, DataSetters, Serializ
 
     // TODO: getMap() will be added in Issue #1973
     // TODO: getRow() will be added in Issue #1974
-
-    @Override
-    public void setNullAt(int pos) {
-        throw new UnsupportedOperationException("Not support the operation!");
-    }
-
-    @Override
-    public void setBoolean(int pos, boolean value) {
-        throw new UnsupportedOperationException("Not support the operation!");
-    }
-
-    @Override
-    public void setByte(int pos, byte value) {
-        throw new UnsupportedOperationException("Not support the operation!");
-    }
-
-    @Override
-    public void setShort(int pos, short value) {
-        throw new UnsupportedOperationException("Not support the operation!");
-    }
-
-    @Override
-    public void setInt(int pos, int value) {
-        throw new UnsupportedOperationException("Not support the operation!");
-    }
-
-    @Override
-    public void setLong(int pos, long value) {
-        throw new UnsupportedOperationException("Not support the operation!");
-    }
-
-    @Override
-    public void setFloat(int pos, float value) {
-        throw new UnsupportedOperationException("Not support the operation!");
-    }
-
-    @Override
-    public void setDouble(int pos, double value) {
-        throw new UnsupportedOperationException("Not support the operation!");
-    }
-
-    @Override
-    public void setDecimal(int pos, Decimal value, int precision) {
-        throw new UnsupportedOperationException("Not support the operation!");
-    }
-
-    @Override
-    public void setTimestampNtz(int pos, TimestampNtz value, int precision) {
-        throw new UnsupportedOperationException("Not support the operation!");
-    }
-
-    @Override
-    public void setTimestampLtz(int pos, TimestampLtz value, int precision) {
-        throw new UnsupportedOperationException("Not support the operation!");
-    }
 
     @Override
     public boolean[] toBooleanArray() {

@@ -18,11 +18,13 @@
 package org.apache.fluss.row.indexed;
 
 import org.apache.fluss.memory.MemorySegment;
-import org.apache.fluss.row.BinaryString;
+import org.apache.fluss.row.BinaryWriter;
 import org.apache.fluss.row.Decimal;
+import org.apache.fluss.row.GenericArray;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
+import org.apache.fluss.row.serializer.ArraySerializer;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.IntType;
@@ -37,7 +39,9 @@ import java.math.BigInteger;
 import java.time.LocalDate;
 import java.time.LocalTime;
 
+import static org.apache.fluss.row.BinaryString.fromString;
 import static org.apache.fluss.row.TestInternalRowGenerator.createAllTypes;
+import static org.apache.fluss.testutils.InternalArrayAssert.assertThatArray;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -68,10 +72,10 @@ public class IndexedRowTest {
 
         assertAllTypeEquals(row);
 
-        assertThat(row.getHeaderSizeInBytes()).isEqualTo(19);
-        assertThat(row.getSizeInBytes()).isEqualTo(133);
-        assertThat(row.getFieldCount()).isEqualTo(20);
-        assertThat(row.anyNull()).isTrue();
+        assertThat(row.getHeaderSizeInBytes()).isEqualTo(27);
+        assertThat(row.getSizeInBytes()).isEqualTo(309);
+        assertThat(row.getFieldCount()).isEqualTo(22);
+        assertThat(row.anyNull()).isFalse();
         assertThat(row.anyNull(new int[] {0, 1})).isFalse();
     }
 
@@ -118,15 +122,15 @@ public class IndexedRowTest {
         row.pointTo(writer.segment(), 0, writer.position());
 
         InternalRow.FieldGetter[] fieldGetter = new InternalRow.FieldGetter[dataTypes.length];
-        IndexedRowWriter.FieldWriter[] writers = new IndexedRowWriter.FieldWriter[dataTypes.length];
+        BinaryWriter.ValueWriter[] writers = new BinaryWriter.ValueWriter[dataTypes.length];
         for (int i = 0; i < dataTypes.length; i++) {
             fieldGetter[i] = InternalRow.createFieldGetter(dataTypes[i], i);
-            writers[i] = IndexedRowWriter.createFieldWriter(dataTypes[i]);
+            writers[i] = BinaryWriter.createValueWriter(dataTypes[i]);
         }
 
         IndexedRowWriter writer1 = new IndexedRowWriter(dataTypes);
         for (int i = 0; i < dataTypes.length; i++) {
-            writers[i].writeField(writer1, i, fieldGetter[i].getFieldOrNull(row));
+            writers[i].writeValue(writer1, i, fieldGetter[i].getFieldOrNull(row));
         }
 
         IndexedRow row1 = new IndexedRow(dataTypes);
@@ -155,15 +159,15 @@ public class IndexedRowTest {
         IndexedRowWriter writer = new IndexedRowWriter(dataTypes);
         writer.writeInt(1000);
         writer.writeInt(2000);
-        writer.writeString(BinaryString.fromString("hello"));
+        writer.writeString(fromString("hello"));
         writer.writeLong(500000L);
         row.pointTo(writer.segment(), 0, writer.position());
         assertThat(row.getInt(0)).isEqualTo(1000);
-        assertThat(row.getString(2)).isEqualTo(BinaryString.fromString("hello"));
+        assertThat(row.getString(2)).isEqualTo(fromString("hello"));
 
         IndexedRow projectRow = row.projectRow(new int[] {0, 2});
         assertThat(projectRow.getInt(0)).isEqualTo(1000);
-        assertThat(projectRow.getString(1)).isEqualTo(BinaryString.fromString("hello"));
+        assertThat(projectRow.getString(1)).isEqualTo(fromString("hello"));
 
         assertThatThrownBy(() -> row.projectRow(new int[] {0, 1, 2, 3, 4}))
                 .isInstanceOf(IllegalArgumentException.class)
@@ -183,15 +187,26 @@ public class IndexedRowTest {
         writer.writeInt((int) TypeUtils.castFromString("09:30:00.0", DataTypes.TIME()));
         writer.writeBinary("1234567890".getBytes(), 20);
         writer.writeBytes("20".getBytes());
-        writer.writeChar(BinaryString.fromString("1"), 2);
-        writer.writeString(BinaryString.fromString("hello"));
+        writer.writeChar(fromString("1"), 2);
+        writer.writeString(fromString("hello"));
         writer.writeDecimal(Decimal.fromUnscaledLong(9, 5, 2), 5);
         writer.writeDecimal(Decimal.fromBigDecimal(new BigDecimal(10), 20, 0), 20);
         writer.writeTimestampNtz(TimestampNtz.fromMillis(1698235273182L), 1);
         writer.writeTimestampNtz(TimestampNtz.fromMillis(1698235273182L), 5);
         writer.writeTimestampLtz(TimestampLtz.fromEpochMillis(1698235273182L), 1);
         writer.writeTimestampLtz(TimestampLtz.fromEpochMillis(1698235273182L), 5);
-        writer.setNullAt(19);
+        writer.writeArray(
+                GenericArray.of(1, 2, 3, 4, 5, -11, null, 444, 102234),
+                new ArraySerializer(DataTypes.INT()));
+        writer.writeArray(
+                GenericArray.of(0.1f, 1.1f, -0.5f, 6.6f, Float.MAX_VALUE, Float.MIN_VALUE),
+                new ArraySerializer(DataTypes.FLOAT().copy(false)));
+        writer.writeArray(
+                GenericArray.of(
+                        GenericArray.of(fromString("a"), null, fromString("c")),
+                        null,
+                        GenericArray.of(fromString("hello"), fromString("world"))),
+                new ArraySerializer(DataTypes.ARRAY(DataTypes.STRING())));
         return writer;
     }
 
@@ -207,8 +222,8 @@ public class IndexedRowTest {
         assertThat(DateTimeUtils.toLocalTime(row.getInt(8))).isEqualTo(LocalTime.of(9, 30, 0, 0));
         assertThat(row.getBinary(9, 20)).isEqualTo("1234567890".getBytes());
         assertThat(row.getBytes(10)).isEqualTo("20".getBytes());
-        assertThat(row.getChar(11, 2)).isEqualTo(BinaryString.fromString("1"));
-        assertThat(row.getString(12)).isEqualTo(BinaryString.fromString("hello"));
+        assertThat(row.getChar(11, 2)).isEqualTo(fromString("1"));
+        assertThat(row.getString(12)).isEqualTo(fromString("hello"));
         assertThat(row.getDecimal(13, 5, 2)).isEqualTo(Decimal.fromUnscaledLong(9, 5, 2));
         assertThat(row.getDecimal(14, 20, 0))
                 .isEqualTo(Decimal.fromBigDecimal(new BigDecimal(10), 20, 0));
@@ -216,6 +231,19 @@ public class IndexedRowTest {
         assertThat(row.getTimestampNtz(16, 5).toString()).isEqualTo("2023-10-25T12:01:13.182");
         assertThat(row.getTimestampLtz(17, 1).toString()).isEqualTo("2023-10-25T12:01:13.182Z");
         assertThat(row.getTimestampLtz(18, 5).toString()).isEqualTo("2023-10-25T12:01:13.182Z");
-        assertThat(row.isNullAt(19)).isTrue();
+        assertThatArray(row.getArray(19))
+                .withElementType(DataTypes.INT())
+                .isEqualTo(GenericArray.of(1, 2, 3, 4, 5, -11, null, 444, 102234));
+        assertThatArray(row.getArray(20))
+                .withElementType(DataTypes.FLOAT().copy(false))
+                .isEqualTo(
+                        GenericArray.of(0.1f, 1.1f, -0.5f, 6.6f, Float.MAX_VALUE, Float.MIN_VALUE));
+        assertThatArray(row.getArray(21))
+                .withElementType(DataTypes.ARRAY(DataTypes.STRING()))
+                .isEqualTo(
+                        GenericArray.of(
+                                GenericArray.of(fromString("a"), null, fromString("c")),
+                                null,
+                                GenericArray.of(fromString("hello"), fromString("world"))));
     }
 }

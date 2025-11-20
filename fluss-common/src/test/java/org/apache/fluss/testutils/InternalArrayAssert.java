@@ -19,12 +19,14 @@
 package org.apache.fluss.testutils;
 
 import org.apache.fluss.row.InternalArray;
+import org.apache.fluss.types.ArrayType;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.LocalZonedTimestampType;
 import org.apache.fluss.types.TimestampType;
 
 import org.assertj.core.api.AbstractAssert;
 
+import static org.apache.fluss.types.DataTypeChecks.getLength;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** AssertJ assert for {@link InternalArray}. */
@@ -50,85 +52,158 @@ public class InternalArrayAssert extends AbstractAssert<InternalArrayAssert, Int
         assertThat(actual.size()).isEqualTo(expected.size());
         switch (elementType.getTypeRoot()) {
             case CHAR:
+                int charLength = getLength(elementType);
                 for (int i = 0; i < actual.size(); i++) {
-                    assertThat(actual.getChar(i, expected.getChar(i, 0).numChars()))
-                            .isEqualTo(expected.getChar(i, 0));
+                    if (expected.isNullAt(i)) {
+                        assertThat(actual.isNullAt(i)).isTrue();
+                    } else {
+                        assertThat(actual.getChar(i, charLength))
+                                .isEqualTo(expected.getChar(i, charLength));
+                    }
                 }
                 break;
 
             case STRING:
                 for (int i = 0; i < actual.size(); i++) {
-                    assertThat(actual.getString(i)).isEqualTo(expected.getString(i));
+                    if (expected.isNullAt(i)) {
+                        assertThat(actual.isNullAt(i)).isTrue();
+                    } else {
+                        assertThat(actual.getString(i)).isEqualTo(expected.getString(i));
+                    }
                 }
                 break;
             case BOOLEAN:
                 for (int i = 0; i < actual.size(); i++) {
-                    assertThat(actual.getBoolean(i)).isEqualTo(expected.getBoolean(i));
+                    if (expected.isNullAt(i)) {
+                        assertThat(actual.isNullAt(i)).isTrue();
+                    } else {
+                        assertThat(actual.getBoolean(i)).isEqualTo(expected.getBoolean(i));
+                    }
                 }
                 break;
             case BINARY:
+                int binaryLength = getLength(elementType);
                 for (int i = 0; i < actual.size(); i++) {
-                    assertThat(actual.getBinary(i)).isEqualTo(expected.getBinary(i));
+                    if (expected.isNullAt(i)) {
+                        assertThat(actual.isNullAt(i)).isTrue();
+                    } else {
+                        assertThat(actual.getBinary(i, binaryLength))
+                                .isEqualTo(expected.getBinary(i, binaryLength));
+                    }
                 }
                 break;
             case BYTES:
+                for (int i = 0; i < actual.size(); i++) {
+                    if (expected.isNullAt(i)) {
+                        assertThat(actual.isNullAt(i)).isTrue();
+                    } else {
+                        assertThat(actual.getBytes(i)).isEqualTo(expected.getBytes(i));
+                    }
+                }
+                break;
             case TINYINT:
                 for (int i = 0; i < actual.size(); i++) {
-                    assertThat(actual.getByte(i)).isEqualTo(expected.getByte(i));
+                    if (expected.isNullAt(i)) {
+                        assertThat(actual.isNullAt(i)).isTrue();
+                    } else {
+                        assertThat(actual.getByte(i)).isEqualTo(expected.getByte(i));
+                    }
                 }
                 break;
             case DECIMAL:
                 for (int i = 0; i < actual.size(); i++) {
-                    assertThat(actual.getDecimal(i, 0, 0)).isEqualTo(expected.getDecimal(i, 0, 0));
+                    if (expected.isNullAt(i)) {
+                        assertThat(actual.isNullAt(i)).isTrue();
+                    } else {
+                        assertThat(actual.getDecimal(i, 0, 0))
+                                .isEqualTo(expected.getDecimal(i, 0, 0));
+                    }
                 }
                 break;
             case SMALLINT:
                 for (int i = 0; i < actual.size(); i++) {
-                    assertThat(actual.getShort(i)).isEqualTo(expected.getShort(i));
+                    if (expected.isNullAt(i)) {
+                        assertThat(actual.isNullAt(i)).isTrue();
+                    } else {
+                        assertThat(actual.getShort(i)).isEqualTo(expected.getShort(i));
+                    }
                 }
                 break;
             case INTEGER:
             case TIME_WITHOUT_TIME_ZONE:
             case DATE:
                 for (int i = 0; i < actual.size(); i++) {
-                    assertThat(actual.getInt(i)).isEqualTo(expected.getInt(i));
+                    if (expected.isNullAt(i)) {
+                        assertThat(actual.isNullAt(i)).isTrue();
+                    } else {
+                        assertThat(actual.getInt(i)).isEqualTo(expected.getInt(i));
+                    }
                 }
                 break;
             case BIGINT:
                 for (int i = 0; i < actual.size(); i++) {
-                    assertThat(actual.getLong(i)).isEqualTo(expected.getLong(i));
+                    if (expected.isNullAt(i)) {
+                        assertThat(actual.isNullAt(i)).isTrue();
+                    } else {
+                        assertThat(actual.getLong(i)).isEqualTo(expected.getLong(i));
+                    }
                 }
                 break;
             case FLOAT:
                 for (int i = 0; i < actual.size(); i++) {
-                    assertThat(actual.getFloat(i)).isEqualTo(expected.getFloat(i));
+                    if (expected.isNullAt(i)) {
+                        assertThat(actual.isNullAt(i)).isTrue();
+                    } else {
+                        assertThat(actual.getFloat(i)).isEqualTo(expected.getFloat(i));
+                    }
                 }
                 break;
             case DOUBLE:
                 for (int i = 0; i < actual.size(); i++) {
-                    assertThat(actual.getDouble(i)).isEqualTo(expected.getDouble(i));
+                    if (expected.isNullAt(i)) {
+                        assertThat(actual.isNullAt(i)).isTrue();
+                    } else {
+                        assertThat(actual.getDouble(i)).isEqualTo(expected.getDouble(i));
+                    }
                 }
                 break;
             case TIMESTAMP_WITHOUT_TIME_ZONE:
                 TimestampType timestampType = (TimestampType) elementType;
                 for (int i = 0; i < actual.size(); i++) {
-                    assertThat(actual.getTimestampNtz(i, timestampType.getPrecision()))
-                            .isEqualTo(expected.getTimestampNtz(i, timestampType.getPrecision()));
+                    if (expected.isNullAt(i)) {
+                        assertThat(actual.isNullAt(i)).isTrue();
+                    } else {
+                        assertThat(actual.getTimestampNtz(i, timestampType.getPrecision()))
+                                .isEqualTo(
+                                        expected.getTimestampNtz(i, timestampType.getPrecision()));
+                    }
                 }
                 break;
             case TIMESTAMP_WITH_LOCAL_TIME_ZONE:
                 LocalZonedTimestampType localZonedTimestampType =
                         (LocalZonedTimestampType) elementType;
                 for (int i = 0; i < actual.size(); i++) {
-                    assertThat(actual.getTimestampLtz(i, localZonedTimestampType.getPrecision()))
-                            .isEqualTo(
-                                    expected.getTimestampLtz(
-                                            i, localZonedTimestampType.getPrecision()));
+                    if (expected.isNullAt(i)) {
+                        assertThat(actual.isNullAt(i)).isTrue();
+                    } else {
+                        assertThat(
+                                        actual.getTimestampLtz(
+                                                i, localZonedTimestampType.getPrecision()))
+                                .isEqualTo(
+                                        expected.getTimestampLtz(
+                                                i, localZonedTimestampType.getPrecision()));
+                    }
                 }
                 break;
             case ARRAY:
                 for (int i = 0; i < actual.size(); i++) {
-                    assertThat(actual.getArray(i)).isEqualTo(expected.getArray(i));
+                    if (expected.isNullAt(i)) {
+                        assertThat(actual.isNullAt(i)).isTrue();
+                    } else {
+                        assertThatArray(actual.getArray(i))
+                                .withElementType(((ArrayType) elementType).getElementType())
+                                .isEqualTo(expected.getArray(i));
+                    }
                 }
                 break;
                 // TODO: MAP support will be added in Issue #1973
