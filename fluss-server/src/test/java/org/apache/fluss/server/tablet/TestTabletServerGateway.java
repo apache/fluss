@@ -127,6 +127,9 @@ public class TestTabletServerGateway implements TabletServerGateway {
     private final Queue<Tuple2<ApiMessage, CompletableFuture<?>>> requests =
             new ConcurrentLinkedDeque<>();
 
+    /** The id to define the response logic. */
+    private int responseLogicId;
+
     public TestTabletServerGateway(boolean alwaysFail) {
         this.alwaysFail = alwaysFail;
         this.responseLogicId = 0;
@@ -178,12 +181,28 @@ public class TestTabletServerGateway implements TabletServerGateway {
     public CompletableFuture<FetchLogResponse> fetchLog(FetchLogRequest request) {
         Map<TableBucket, FetchReqInfo> fetchLogData = getFetchLogData(request);
         Map<TableBucket, FetchLogResultForBucket> resultForBucketMap = new HashMap<>();
-        fetchLogData.forEach(
-                (tableBucket, fetchData) -> {
-                    FetchLogResultForBucket fetchLogResultForBucket =
-                            new FetchLogResultForBucket(tableBucket, MemoryLogRecords.EMPTY, 0L);
-                    resultForBucketMap.put(tableBucket, fetchLogResultForBucket);
-                });
+
+        if (responseLogicId == 1) {
+            // return with NotLeaderOrFollowerException.
+            fetchLogData.forEach(
+                    (tableBucket, fetchData) -> {
+                        FetchLogResultForBucket fetchLogResultForBucket =
+                                new FetchLogResultForBucket(
+                                        tableBucket,
+                                        ApiError.fromThrowable(
+                                                new NotLeaderOrFollowerException(
+                                                        "mock fetchLog fail for not leader or follower exception.")));
+                        resultForBucketMap.put(tableBucket, fetchLogResultForBucket);
+                    });
+        } else {
+            fetchLogData.forEach(
+                    (tableBucket, fetchData) -> {
+                        FetchLogResultForBucket fetchLogResultForBucket =
+                                new FetchLogResultForBucket(
+                                        tableBucket, MemoryLogRecords.EMPTY, 0L);
+                        resultForBucketMap.put(tableBucket, fetchLogResultForBucket);
+                    });
+        }
         return CompletableFuture.completedFuture(makeFetchLogResponse(resultForBucketMap));
     }
 
