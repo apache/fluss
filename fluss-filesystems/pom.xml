@@ -40,7 +40,7 @@
     <packaging>pom</packaging>
 
     <properties>
-        <fs.hadoopshaded.version>3.3.4</fs.hadoopshaded.version>
+        <fs.hadoopshaded.version>3.4.0</fs.hadoopshaded.version>
         <commons.beanutils.version>1.9.4</commons.beanutils.version>
     </properties>
 
