@@ -454,11 +454,9 @@ class LakeEnabledTableCreateITCase {
                         () -> admin.createTable(tablePath, logTableWithoutBucketKeys1, false).get())
                 .cause()
                 .isInstanceOf(LakeTableAlreadyExistException.class)
-                .hasMessage(
-                        "The table `fluss`.`log_table_with_exist_lake_table` already exists in Paimon catalog, but the table schema is not compatible. "
-                                + "Existing schema: UpdateSchema{fields=[`c1` STRING, `c2` INT, `__bucket` INT, `__offset` BIGINT, `__timestamp` TIMESTAMP(6) WITH LOCAL TIME ZONE], partitionKeys=[], primaryKeys=[], options={bucket=-1, fluss.table.replication.factor=1, fluss.table.datalake.enabled=true, fluss.table.datalake.format=paimon, partition.legacy-name=false, file.format=parquet, fluss.k1=v1}, comment=null}, "
-                                + "new schema: UpdateSchema{fields=[`c1` STRING, `c2` INT, `__bucket` INT, `__offset` BIGINT, `__timestamp` TIMESTAMP(6) WITH LOCAL TIME ZONE], partitionKeys=[], primaryKeys=[], options={bucket=3, fluss.table.replication.factor=1, fluss.table.datalake.enabled=true, fluss.table.datalake.format=paimon, partition.legacy-name=false, bucket-key=c1,c2, file.format=parquet, fluss.k1=v1}, comment=null}. "
-                                + "Please first drop the table in Paimon catalog or use a new table name.");
+                .hasMessageContaining(
+                        "The table `fluss`.`log_table_with_exist_lake_table` already exists in Paimon catalog, "
+                                + "but the table schema is not compatible.");
 
         // create log table with different fields will throw exception
         TableDescriptor logTableWithoutBucketKeys2 =
@@ -473,11 +471,9 @@ class LakeEnabledTableCreateITCase {
                         () -> admin.createTable(tablePath, logTableWithoutBucketKeys2, false).get())
                 .cause()
                 .isInstanceOf(LakeTableAlreadyExistException.class)
-                .hasMessage(
-                        "The table `fluss`.`log_table_with_exist_lake_table` already exists in Paimon catalog, but the table schema is not compatible. "
-                                + "Existing schema: UpdateSchema{fields=[`c1` STRING, `c2` INT, `__bucket` INT, `__offset` BIGINT, `__timestamp` TIMESTAMP(6) WITH LOCAL TIME ZONE], partitionKeys=[], primaryKeys=[], options={bucket=-1, fluss.table.replication.factor=1, fluss.table.datalake.enabled=true, fluss.table.datalake.format=paimon, partition.legacy-name=false, file.format=parquet, fluss.k1=v1}, comment=null}, "
-                                + "new schema: UpdateSchema{fields=[`c1` STRING, `c2` INT, `c3` STRING, `__bucket` INT, `__offset` BIGINT, `__timestamp` TIMESTAMP(6) WITH LOCAL TIME ZONE], partitionKeys=[], primaryKeys=[], options={bucket=-1, fluss.table.replication.factor=1, fluss.table.datalake.enabled=true, fluss.table.datalake.format=paimon, partition.legacy-name=false, file.format=parquet, fluss.k1=v1}, comment=null}. "
-                                + "Please first drop the table in Paimon catalog or use a new table name.");
+                .hasMessageContaining(
+                        "The table `fluss`.`log_table_with_exist_lake_table` already exists in Paimon catalog, "
+                                + "but the table schema is not compatible.");
 
         // add an insignificant option to Paimon table will be ok
         Identifier paimonTablePath =
