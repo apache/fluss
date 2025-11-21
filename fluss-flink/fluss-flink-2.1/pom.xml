@@ -30,7 +30,7 @@
     <name>Fluss : Engine Flink : 2.1 </name>
     <properties>
         <flink.major.version>2.1</flink.major.version>
-        <flink.minor.version>2.1.0</flink.minor.version>
+        <flink.minor.version>2.1.1</flink.minor.version>
     </properties>
 
     <dependencies>
