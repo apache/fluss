@@ -31,7 +31,7 @@ datalake.iceberg.warehouse: /tmp/iceberg
 
 Fluss processes Iceberg configurations by stripping the `datalake.iceberg.` prefix and uses the stripped configurations (without the prefix `datalake.iceberg.`) to initialize the Iceberg catalog.
 
-This approach enables passing custom configurations for Iceberg catalog initialization. Check out the [Iceberg Catalog Properties](https://iceberg.apache.org/docs/1.9.1/configuration/#catalog-properties) for more details on available catalog configurations.
+This approach enables passing custom configurations for Iceberg catalog initialization. Check out the [Iceberg Catalog Properties](https://iceberg.apache.org/docs/1.10.0/configuration/#catalog-properties) for more details on available catalog configurations.
 
 #### Supported Catalog Types
 
@@ -93,11 +93,11 @@ Fluss only bundles catalog implementations included in the `iceberg-core` module
 
 ##### 3. Version Compatibility
 
-The Iceberg version that Fluss bundles is based on `1.9.1`. Please ensure the JARs you add are compatible with `Iceberg-1.9.1`.
+The Iceberg version that Fluss bundles is based on `1.10.0`. Please ensure the JARs you add are compatible with `Iceberg-1.10.0`.
 
 #### Important Notes
 
-- Ensure all JAR files are compatible with Iceberg 1.9.1
+- Ensure all JAR files are compatible with Iceberg 1.10.0
 - If using an existing Hadoop environment, it's recommended to use the `HADOOP_CLASSPATH` environment variable
 - Configuration changes take effect after restarting the Fluss service
 
@@ -171,8 +171,8 @@ Put the JARs required by your Iceberg FileIO into `${FLINK_HOME}/lib`:
 **S3 FileIO:**
 ```bash
 # Required JARs for S3 FileIO
-iceberg-aws-1.9.1.jar
-iceberg-aws-bundle-1.9.1.jar
+iceberg-aws-1.10.0.jar
+iceberg-aws-bundle-1.10.0.jar
 failsafe-3.3.2.jar
 ```
 
@@ -190,7 +190,7 @@ When following the [Start Datalake Tiering Service](maintenance/tiered-storage/l
 
 #### Important Notes
 
-- Ensure all JAR files are compatible with Iceberg 1.9.1
+- Ensure all JAR files are compatible with Iceberg 1.10.0
 - Verify that all required dependencies are in the `${FLINK_HOME}/lib` directory
 - Check the Flink job logs for any missing dependency errors
 - Restart the Flink cluster after adding new JAR files
