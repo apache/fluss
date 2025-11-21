@@ -21,8 +21,6 @@ package org.apache.fluss.lake.values;
 import org.apache.fluss.lake.lakestorage.LakeCatalog;
 import org.apache.fluss.lake.lakestorage.LakeStorage;
 import org.apache.fluss.lake.source.LakeSource;
-import org.apache.fluss.lake.values.ValuesLake;
-import org.apache.fluss.lake.values.ValuesLakeCatalog;
 import org.apache.fluss.lake.values.tiering.ValuesLakeTieringFactory;
 import org.apache.fluss.lake.writer.LakeTieringFactory;
 import org.apache.fluss.metadata.TablePath;

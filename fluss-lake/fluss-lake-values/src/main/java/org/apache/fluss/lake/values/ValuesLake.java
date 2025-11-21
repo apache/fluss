@@ -23,12 +23,14 @@ import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.utils.MapUtils;
 import org.apache.fluss.utils.types.Tuple2;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -130,7 +132,7 @@ public class ValuesLake {
         public ValuesTable(String tableId, Schema schema) {
             this.tableId = tableId;
             this.lock = new Object();
-            this.records = new HashMap<>();
+            this.records = new LinkedHashMap<>();
             this.stageRecords = new HashMap<>();
             this.schema = schema;
             this.columns = new ArrayList<>(schema.getColumns());

@@ -34,8 +34,7 @@ import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
-import java.time.OffsetDateTime;
-import java.time.ZoneOffset;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Iterator;
@@ -91,6 +90,7 @@ public class ValuesTieringITCase extends FlinkValuesTieringTestBase {
         long t1Id = createPkTable(t1, 1, false, pkSchema);
         TableBucket t1Bucket = new TableBucket(t1Id, 0);
         // write records
+        List<InternalRow> expectedRows = new ArrayList<>();
         List<InternalRow> rows =
                 Arrays.asList(
                         row(
@@ -153,6 +153,7 @@ public class ValuesTieringITCase extends FlinkValuesTieringTestBase {
                                 TypeUtils.castFromString("09:30:00.0", DataTypes.TIME()),
                                 BinaryString.fromString("abc"),
                                 new byte[] {1, 2, 3, 4, 5, 6, 7, 8, 9, 10}));
+        expectedRows.addAll(rows);
         writeRows(t1, rows);
         waitUntilSnapshot(t1Id, 1, 0);
 
@@ -162,7 +163,7 @@ public class ValuesTieringITCase extends FlinkValuesTieringTestBase {
             // check the status of replica after synced
             assertReplicaStatus(t1Bucket, 3);
 
-            checkDataInIcebergPrimaryKeyTable(t1, rows);
+            checkDataInValuesPrimaryKeyTable(t1, rows);
             // check snapshot property in iceberg
             Map<String, String> properties =
                     new HashMap<String, String>() {
@@ -238,6 +239,7 @@ public class ValuesTieringITCase extends FlinkValuesTieringTestBase {
                                     TypeUtils.castFromString("09:30:00.0", DataTypes.TIME()),
                                     BinaryString.fromString("abc"),
                                     new byte[] {1, 2, 3, 4, 5, 6, 7, 8, 9, 10}));
+            expectedRows.addAll(rows);
             // write records
             writeRows(t1, rows);
 
@@ -245,15 +247,15 @@ public class ValuesTieringITCase extends FlinkValuesTieringTestBase {
             // not check start offset since we won't
             // update start log offset for primary key table
             // 3 initial + (3 deletes + 3 inserts) = 9
-            assertReplicaStatus(t1Bucket, 9);
+            assertReplicaStatus(t1Bucket, expectedRows.size());
 
-            checkDataInIcebergPrimaryKeyTable(t1, rows);
+            checkDataInValuesPrimaryKeyTable(t1, expectedRows);
         } finally {
             jobClient.cancel().get();
         }
     }
 
-    private void checkDataInIcebergPrimaryKeyTable(
+    private void checkDataInValuesPrimaryKeyTable(
             TablePath tablePath, List<InternalRow> expectedRows) throws Exception {
         Iterator<InternalRow> acturalIterator = getValuesRecords(tablePath).iterator();
         Iterator<InternalRow> iterator = expectedRows.iterator();
@@ -261,7 +263,7 @@ public class ValuesTieringITCase extends FlinkValuesTieringTestBase {
             InternalRow row = iterator.next();
             InternalRow record = acturalIterator.next();
             assertThat(record.getBoolean(0)).isEqualTo(row.getBoolean(0));
-            assertThat(record.getByte(1)).isEqualTo( row.getByte(1));
+            assertThat(record.getByte(1)).isEqualTo(row.getByte(1));
             assertThat(record.getShort(2)).isEqualTo(row.getShort(2));
             assertThat(record.getInt(3)).isEqualTo(row.getInt(3));
             assertThat(record.getLong(4)).isEqualTo(row.getLong(4));
@@ -274,12 +276,9 @@ public class ValuesTieringITCase extends FlinkValuesTieringTestBase {
             assertThat(record.getDecimal(9, 20, 0).toBigDecimal())
                     .isEqualTo(row.getDecimal(9, 20, 0).toBigDecimal());
             assertThat(record.getTimestampLtz(10, 3).toInstant())
-                    .isEqualTo(
-
-                                    record.getTimestampLtz(10, 3).toInstant());
+                    .isEqualTo(record.getTimestampLtz(10, 3).toInstant());
             assertThat(record.getTimestampLtz(11, 6).toInstant())
-                    .isEqualTo(
-                                    row.getTimestampLtz(11, 6).toInstant());
+                    .isEqualTo(row.getTimestampLtz(11, 6).toInstant());
             assertThat(record.getTimestampNtz(12, 6).toLocalDateTime())
                     .isEqualTo(row.getTimestampNtz(12, 6).toLocalDateTime());
             assertThat(record.getTimestampNtz(13, 6).toLocalDateTime())

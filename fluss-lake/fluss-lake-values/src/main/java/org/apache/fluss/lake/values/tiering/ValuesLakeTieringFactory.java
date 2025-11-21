@@ -27,7 +27,7 @@ import org.apache.fluss.lake.writer.WriterInitContext;
 
 import java.io.IOException;
 
-/** {@link LakeTieringFactory} for {@link ValuesLake}. */
+/** {@link LakeTieringFactory} for {@link org.apache.fluss.lake.values.ValuesLake}. */
 public class ValuesLakeTieringFactory
         implements LakeTieringFactory<ValuesWriteResult, ValuesCommittable> {
     @Override

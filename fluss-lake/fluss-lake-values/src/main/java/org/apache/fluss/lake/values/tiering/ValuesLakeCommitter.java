@@ -23,14 +23,13 @@ import org.apache.fluss.lake.committer.LakeCommitter;
 import org.apache.fluss.lake.values.ValuesLake;
 
 import javax.annotation.Nullable;
+
 import java.io.IOException;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 
-/**
- * {@link LakeCommitter} for {@link ValuesLake}.
- */
+/** {@link LakeCommitter} for {@link ValuesLake}. */
 public class ValuesLakeCommitter implements LakeCommitter<ValuesWriteResult, ValuesCommittable> {
     private final String tableId;
 
@@ -59,12 +58,11 @@ public class ValuesLakeCommitter implements LakeCommitter<ValuesWriteResult, Val
     }
 
     @Override
-    public CommittedLakeSnapshot getMissingLakeSnapshot(
-            @Nullable Long latestLakeSnapshotIdOfFluss) throws IOException {
+    public CommittedLakeSnapshot getMissingLakeSnapshot(@Nullable Long latestLakeSnapshotIdOfFluss)
+            throws IOException {
         return null;
     }
 
     @Override
-    public void close() throws Exception {
-    }
+    public void close() throws Exception {}
 }
