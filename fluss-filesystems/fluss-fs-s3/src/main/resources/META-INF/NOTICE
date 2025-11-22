@@ -14,12 +14,10 @@ This project bundles the following dependencies under the Apache Software Licens
 - com.fasterxml.jackson.core:jackson-databind:2.15.3
 - com.fasterxml.jackson.dataformat:jackson-dataformat-cbor:2.15.3
 - com.fasterxml.woodstox:woodstox-core:5.4.0
-- com.github.pjfanning:jersey-json:1.20
 - com.google.guava:failureaccess:1.0
 - com.google.guava:guava:27.0-jre
 - com.google.guava:listenablefuture:9999.0-empty-to-avoid-conflict-with-guava
 - com.google.j2objc:j2objc-annotations:1.1
-- com.sun.xml.bind:jaxb-impl:2.2.3-1
 - commons-beanutils:commons-beanutils:1.9.4
 - commons-codec:commons-codec:1.15
 - commons-collections:commons-collections:3.2.2
@@ -73,6 +71,7 @@ See bundled license files for details.
 This project bundles the following dependencies under the CDDL 1.1 license.
 See bundled license files for details.
 
+- com.github.pjfanning:jersey-json:1.20
 - javax.xml.bind:jaxb-api:2.3.1
 
 This project bundles the following dependencies under the Go License (https://golang.org/LICENSE).
@@ -88,4 +87,5 @@ See bundled license files for details.
 This project bundles the following dependencies under EDL 1.0 License (https://www.eclipse.org/org/documents/edl-v10.php).
 See bundled license files for details.
 
+- com.sun.xml.bind:jaxb-impl:2.2.3-1
 - jakarta.activation:jakarta.activation-api:1.2.1
