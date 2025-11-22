@@ -25,6 +25,7 @@ import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.within;
 
 /** Tests for {@link PojoToRowConverter}. */
 public class PojoToRowConverterTest {
@@ -248,14 +249,14 @@ public class PojoToRowConverterTest {
 
     @Test
     public void testFloatToDoubleWidening() {
-        RowType table = RowType.builder().field("price", DataTypes.DOUBLE()).build();
+        RowType table = RowType.builder().field("value", DataTypes.DOUBLE()).build();
         RowType projection = table;
 
         PojoToRowConverter<FloatFieldPojo> converter =
                 PojoToRowConverter.of(FloatFieldPojo.class, table, projection);
 
         FloatFieldPojo pojo = new FloatFieldPojo();
-        pojo.price = 99.99f;
+        pojo.value = 99.99f;
         GenericRow row = converter.toRow(pojo);
 
         assertThat(row.getDouble(0)).isCloseTo(99.99, org.assertj.core.data.Offset.offset(0.01));
@@ -375,6 +376,414 @@ public class PojoToRowConverterTest {
         assertThat(row.isNullAt(0)).isTrue();
     }
 
+    // ----------------------- IEEE 754 Special Values Tests -----------------------
+
+    /**
+     * Tests that Float.NaN values are preserved through POJO-to-Row conversion without data loss.
+     * This validates FR-001: System MUST preserve Float.NaN through conversion.
+     *
+     * <p>IEEE 754 defines NaN (Not-a-Number) as a special floating-point value representing invalid
+     * or undefined calculation results. This test ensures NaN survives the conversion pipeline
+     * without being corrupted or normalized.
+     */
+    @Test
+    public void testFloatNaNPreservation() {
+        RowType table = RowType.builder().field("value", DataTypes.FLOAT()).build();
+        RowType projection = table;
+
+        PojoToRowConverter<FloatFieldPojo> converter =
+                PojoToRowConverter.of(FloatFieldPojo.class, table, projection);
+
+        FloatFieldPojo pojo = new FloatFieldPojo();
+        pojo.value = Float.NaN;
+        GenericRow row = converter.toRow(pojo);
+
+        assertThat(Float.isNaN(row.getFloat(0)))
+                .as("Float.NaN should be preserved through POJO-to-Row conversion")
+                .isTrue();
+    }
+
+    /**
+     * Tests that Double.NaN values are preserved through POJO-to-Row conversion without data loss.
+     * This validates FR-002: System MUST preserve Double.NaN through conversion.
+     *
+     * <p>IEEE 754 defines NaN (Not-a-Number) for both single and double precision. This test
+     * ensures Double.NaN is correctly handled by the conversion logic.
+     */
+    @Test
+    public void testDoubleNaNPreservation() {
+        RowType table = RowType.builder().field("value", DataTypes.DOUBLE()).build();
+        RowType projection = table;
+
+        PojoToRowConverter<DoubleFieldPojo> converter =
+                PojoToRowConverter.of(DoubleFieldPojo.class, table, projection);
+
+        DoubleFieldPojo pojo = new DoubleFieldPojo();
+        pojo.value = Double.NaN;
+        GenericRow row = converter.toRow(pojo);
+
+        assertThat(Double.isNaN(row.getDouble(0)))
+                .as("Double.NaN should be preserved through POJO-to-Row conversion")
+                .isTrue();
+    }
+
+    /**
+     * Tests that Float.NaN values are correctly widened to Double.NaN when converting from Float
+     * POJO field to Double table column. This validates FR-005: System MUST correctly widen Float
+     * special values to Double following IEEE 754 semantics.
+     *
+     * <p>IEEE 754 specifies that NaN values maintain their semantic meaning during type widening
+     * (Float → Double).
+     */
+    @Test
+    public void testFloatNaNToDoubleWidening() {
+        RowType table = RowType.builder().field("value", DataTypes.DOUBLE()).build();
+        RowType projection = table;
+
+        PojoToRowConverter<FloatFieldPojo> converter =
+                PojoToRowConverter.of(FloatFieldPojo.class, table, projection);
+
+        FloatFieldPojo pojo = new FloatFieldPojo();
+        pojo.value = Float.NaN;
+        GenericRow row = converter.toRow(pojo);
+
+        assertThat(Double.isNaN(row.getDouble(0)))
+                .as("Float.NaN should widen to Double.NaN following IEEE 754 rules")
+                .isTrue();
+    }
+
+    /**
+     * Tests that Float.POSITIVE_INFINITY values are preserved through POJO-to-Row conversion. This
+     * validates FR-003: System MUST preserve Float.POSITIVE_INFINITY through conversion.
+     *
+     * <p>IEEE 754 defines positive infinity as the result of overflow in positive direction or
+     * division of positive number by zero. This test ensures the sign and infinity status are
+     * preserved.
+     */
+    @Test
+    public void testFloatPositiveInfinityPreservation() {
+        RowType table = RowType.builder().field("value", DataTypes.FLOAT()).build();
+        RowType projection = table;
+
+        PojoToRowConverter<FloatFieldPojo> converter =
+                PojoToRowConverter.of(FloatFieldPojo.class, table, projection);
+
+        FloatFieldPojo pojo = new FloatFieldPojo();
+        pojo.value = Float.POSITIVE_INFINITY;
+        GenericRow row = converter.toRow(pojo);
+
+        float result = row.getFloat(0);
+        assertThat(Float.isInfinite(result) && result > 0)
+                .as("Float.POSITIVE_INFINITY should be preserved with correct sign")
+                .isTrue();
+    }
+
+    /**
+     * Tests that Float.NEGATIVE_INFINITY values are preserved through POJO-to-Row conversion. This
+     * validates FR-003: System MUST preserve Float.NEGATIVE_INFINITY through conversion.
+     *
+     * <p>IEEE 754 defines negative infinity as the result of overflow in negative direction or
+     * division of negative number by zero. This test ensures the sign and infinity status are
+     * preserved.
+     */
+    @Test
+    public void testFloatNegativeInfinityPreservation() {
+        RowType table = RowType.builder().field("value", DataTypes.FLOAT()).build();
+        RowType projection = table;
+
+        PojoToRowConverter<FloatFieldPojo> converter =
+                PojoToRowConverter.of(FloatFieldPojo.class, table, projection);
+
+        FloatFieldPojo pojo = new FloatFieldPojo();
+        pojo.value = Float.NEGATIVE_INFINITY;
+        GenericRow row = converter.toRow(pojo);
+
+        float result = row.getFloat(0);
+        assertThat(Float.isInfinite(result) && result < 0)
+                .as("Float.NEGATIVE_INFINITY should be preserved with correct sign")
+                .isTrue();
+    }
+
+    /**
+     * Tests that Double.POSITIVE_INFINITY values are preserved through POJO-to-Row conversion. This
+     * validates FR-004: System MUST preserve Double.POSITIVE_INFINITY through conversion.
+     */
+    @Test
+    public void testDoublePositiveInfinityPreservation() {
+        RowType table = RowType.builder().field("value", DataTypes.DOUBLE()).build();
+        RowType projection = table;
+
+        PojoToRowConverter<DoubleFieldPojo> converter =
+                PojoToRowConverter.of(DoubleFieldPojo.class, table, projection);
+
+        DoubleFieldPojo pojo = new DoubleFieldPojo();
+        pojo.value = Double.POSITIVE_INFINITY;
+        GenericRow row = converter.toRow(pojo);
+
+        double result = row.getDouble(0);
+        assertThat(Double.isInfinite(result) && result > 0)
+                .as("Double.POSITIVE_INFINITY should be preserved with correct sign")
+                .isTrue();
+    }
+
+    /**
+     * Tests that Double.NEGATIVE_INFINITY values are preserved through POJO-to-Row conversion. This
+     * validates FR-004: System MUST preserve Double.NEGATIVE_INFINITY through conversion.
+     */
+    @Test
+    public void testDoubleNegativeInfinityPreservation() {
+        RowType table = RowType.builder().field("value", DataTypes.DOUBLE()).build();
+        RowType projection = table;
+
+        PojoToRowConverter<DoubleFieldPojo> converter =
+                PojoToRowConverter.of(DoubleFieldPojo.class, table, projection);
+
+        DoubleFieldPojo pojo = new DoubleFieldPojo();
+        pojo.value = Double.NEGATIVE_INFINITY;
+        GenericRow row = converter.toRow(pojo);
+
+        double result = row.getDouble(0);
+        assertThat(Double.isInfinite(result) && result < 0)
+                .as("Double.NEGATIVE_INFINITY should be preserved with correct sign")
+                .isTrue();
+    }
+
+    /**
+     * Tests that Float.POSITIVE_INFINITY correctly widens to Double.POSITIVE_INFINITY when
+     * converting from Float POJO field to Double table column. This validates FR-005: System MUST
+     * correctly widen Float special values to Double.
+     */
+    @Test
+    public void testFloatPositiveInfinityToDoubleWidening() {
+        RowType table = RowType.builder().field("value", DataTypes.DOUBLE()).build();
+        RowType projection = table;
+
+        PojoToRowConverter<FloatFieldPojo> converter =
+                PojoToRowConverter.of(FloatFieldPojo.class, table, projection);
+
+        FloatFieldPojo pojo = new FloatFieldPojo();
+        pojo.value = Float.POSITIVE_INFINITY;
+        GenericRow row = converter.toRow(pojo);
+
+        assertThat(row.getDouble(0))
+                .as("Float.POSITIVE_INFINITY should widen to Double.POSITIVE_INFINITY")
+                .isEqualTo(Double.POSITIVE_INFINITY);
+    }
+
+    /**
+     * Tests that Float.NEGATIVE_INFINITY correctly widens to Double.NEGATIVE_INFINITY when
+     * converting from Float POJO field to Double table column. This validates FR-005: System MUST
+     * correctly widen Float special values to Double.
+     */
+    @Test
+    public void testFloatNegativeInfinityToDoubleWidening() {
+        RowType table = RowType.builder().field("value", DataTypes.DOUBLE()).build();
+        RowType projection = table;
+
+        PojoToRowConverter<FloatFieldPojo> converter =
+                PojoToRowConverter.of(FloatFieldPojo.class, table, projection);
+
+        FloatFieldPojo pojo = new FloatFieldPojo();
+        pojo.value = Float.NEGATIVE_INFINITY;
+        GenericRow row = converter.toRow(pojo);
+
+        assertThat(row.getDouble(0))
+                .as("Float.NEGATIVE_INFINITY should widen to Double.NEGATIVE_INFINITY")
+                .isEqualTo(Double.NEGATIVE_INFINITY);
+    }
+
+    /**
+     * Tests that a POJO with mixed normal and special Float values converts correctly to a table
+     * with multiple FLOAT columns. This validates FR-012: System MUST handle mixed normal and
+     * special values without errors.
+     *
+     * <p>Real-world datasets often contain a mix of valid measurements and error conditions (NaN)
+     * or overflow conditions (Infinity). This test ensures robust handling of realistic data.
+     */
+    @Test
+    public void testMixedFloatSpecialAndNormalValues() {
+        RowType table =
+                RowType.builder()
+                        .field("normalValue", DataTypes.FLOAT())
+                        .field("nanValue", DataTypes.FLOAT())
+                        .field("posInfValue", DataTypes.FLOAT())
+                        .field("negInfValue", DataTypes.FLOAT())
+                        .build();
+        RowType projection = table;
+
+        PojoToRowConverter<MixedFloatValuesPojo> converter =
+                PojoToRowConverter.of(MixedFloatValuesPojo.class, table, projection);
+
+        MixedFloatValuesPojo pojo = new MixedFloatValuesPojo();
+        pojo.normalValue = 99.99f;
+        pojo.nanValue = Float.NaN;
+        pojo.posInfValue = Float.POSITIVE_INFINITY;
+        pojo.negInfValue = Float.NEGATIVE_INFINITY;
+        GenericRow row = converter.toRow(pojo);
+
+        assertThat(row.getFloat(0)).as("Normal Float value should be preserved").isEqualTo(99.99f);
+        assertThat(Float.isNaN(row.getFloat(1)))
+                .as("Float.NaN should be preserved in mixed value row")
+                .isTrue();
+        assertThat(row.getFloat(2))
+                .as("Float.POSITIVE_INFINITY should be preserved in mixed value row")
+                .isEqualTo(Float.POSITIVE_INFINITY);
+        assertThat(row.getFloat(3))
+                .as("Float.NEGATIVE_INFINITY should be preserved in mixed value row")
+                .isEqualTo(Float.NEGATIVE_INFINITY);
+    }
+
+    /**
+     * Tests that a POJO with mixed normal and special Double values converts correctly to a table
+     * with multiple DOUBLE columns. This validates FR-012: System MUST handle mixed normal and
+     * special values without errors.
+     */
+    @Test
+    public void testMixedDoubleSpecialAndNormalValues() {
+        RowType table =
+                RowType.builder()
+                        .field("normalValue", DataTypes.DOUBLE())
+                        .field("nanValue", DataTypes.DOUBLE())
+                        .field("posInfValue", DataTypes.DOUBLE())
+                        .field("negInfValue", DataTypes.DOUBLE())
+                        .build();
+        RowType projection = table;
+
+        PojoToRowConverter<MixedDoubleValuesPojo> converter =
+                PojoToRowConverter.of(MixedDoubleValuesPojo.class, table, projection);
+
+        MixedDoubleValuesPojo pojo = new MixedDoubleValuesPojo();
+        pojo.normalValue = 123.456;
+        pojo.nanValue = Double.NaN;
+        pojo.posInfValue = Double.POSITIVE_INFINITY;
+        pojo.negInfValue = Double.NEGATIVE_INFINITY;
+        GenericRow row = converter.toRow(pojo);
+
+        assertThat(row.getDouble(0))
+                .as("Normal Double value should be preserved")
+                .isEqualTo(123.456);
+        assertThat(Double.isNaN(row.getDouble(1)))
+                .as("Double.NaN should be preserved in mixed value row")
+                .isTrue();
+        assertThat(row.getDouble(2))
+                .as("Double.POSITIVE_INFINITY should be preserved in mixed value row")
+                .isEqualTo(Double.POSITIVE_INFINITY);
+        assertThat(row.getDouble(3))
+                .as("Double.NEGATIVE_INFINITY should be preserved in mixed value row")
+                .isEqualTo(Double.NEGATIVE_INFINITY);
+    }
+
+    /**
+     * Tests that Float special values correctly widen to Double equivalents when converting a POJO
+     * with Float fields containing mixed values to a table with DOUBLE columns. This validates
+     * FR-005: System MUST correctly widen Float special values to Double.
+     */
+    @Test
+    public void testMixedFloatToDoubleWidening() {
+        RowType table =
+                RowType.builder()
+                        .field("normalValue", DataTypes.DOUBLE())
+                        .field("nanValue", DataTypes.DOUBLE())
+                        .field("posInfValue", DataTypes.DOUBLE())
+                        .field("negInfValue", DataTypes.DOUBLE())
+                        .build();
+        RowType projection = table;
+
+        PojoToRowConverter<MixedFloatValuesPojo> converter =
+                PojoToRowConverter.of(MixedFloatValuesPojo.class, table, projection);
+
+        MixedFloatValuesPojo pojo = new MixedFloatValuesPojo();
+        pojo.normalValue = 99.99f;
+        pojo.nanValue = Float.NaN;
+        pojo.posInfValue = Float.POSITIVE_INFINITY;
+        pojo.negInfValue = Float.NEGATIVE_INFINITY;
+        GenericRow row = converter.toRow(pojo);
+
+        assertThat(row.getDouble(0))
+                .as("Normal Float value should widen to Double correctly")
+                .isCloseTo(99.99, within(0.01));
+        assertThat(Double.isNaN(row.getDouble(1)))
+                .as("Float.NaN should widen to Double.NaN")
+                .isTrue();
+        assertThat(row.getDouble(2))
+                .as("Float.POSITIVE_INFINITY should widen to Double.POSITIVE_INFINITY")
+                .isEqualTo(Double.POSITIVE_INFINITY);
+        assertThat(row.getDouble(3))
+                .as("Float.NEGATIVE_INFINITY should widen to Double.NEGATIVE_INFINITY")
+                .isEqualTo(Double.NEGATIVE_INFINITY);
+    }
+
+    /**
+     * Tests that null and Float.NaN are correctly distinguished in nullable Float columns. This
+     * validates FR-011: System MUST distinguish between null and NaN.
+     *
+     * <p>Null represents missing/unknown data, while NaN represents invalid calculation results.
+     * These are semantically different and must be preserved distinctly.
+     */
+    @Test
+    public void testNullVsNaNDistinctionFloat() {
+        RowType table = RowType.builder().field("value", DataTypes.FLOAT()).build();
+        RowType projection = table;
+
+        PojoToRowConverter<FloatFieldPojo> converter =
+                PojoToRowConverter.of(FloatFieldPojo.class, table, projection);
+
+        // Test 1: null field
+        FloatFieldPojo nullPojo = new FloatFieldPojo();
+        nullPojo.value = null;
+        GenericRow nullRow = converter.toRow(nullPojo);
+
+        assertThat(nullRow.isNullAt(0))
+                .as("Null Float field should result in null row value")
+                .isTrue();
+
+        // Test 2: NaN field
+        FloatFieldPojo nanPojo = new FloatFieldPojo();
+        nanPojo.value = Float.NaN;
+        GenericRow nanRow = converter.toRow(nanPojo);
+
+        assertThat(nanRow.isNullAt(0))
+                .as("Float.NaN field should NOT result in null row value")
+                .isFalse();
+        assertThat(Float.isNaN(nanRow.getFloat(0)))
+                .as("Float.NaN should be stored as NaN, not null")
+                .isTrue();
+    }
+
+    /**
+     * Tests that null and Double.NaN are correctly distinguished in nullable Double columns. This
+     * validates FR-011: System MUST distinguish between null and NaN.
+     */
+    @Test
+    public void testNullVsNaNDistinctionDouble() {
+        RowType table = RowType.builder().field("value", DataTypes.DOUBLE()).build();
+        RowType projection = table;
+
+        PojoToRowConverter<DoubleFieldPojo> converter =
+                PojoToRowConverter.of(DoubleFieldPojo.class, table, projection);
+
+        // Test 1: null field
+        DoubleFieldPojo nullPojo = new DoubleFieldPojo();
+        nullPojo.value = null;
+        GenericRow nullRow = converter.toRow(nullPojo);
+
+        assertThat(nullRow.isNullAt(0))
+                .as("Null Double field should result in null row value")
+                .isTrue();
+
+        // Test 2: NaN field
+        DoubleFieldPojo nanPojo = new DoubleFieldPojo();
+        nanPojo.value = Double.NaN;
+        GenericRow nanRow = converter.toRow(nanPojo);
+
+        assertThat(nanRow.isNullAt(0))
+                .as("Double.NaN field should NOT result in null row value")
+                .isFalse();
+        assertThat(Double.isNaN(nanRow.getDouble(0)))
+                .as("Double.NaN should be stored as NaN, not null")
+                .isTrue();
+    }
+
     // ----------------------- Test POJO Classes -----------------------
 
     /** Test POJO with Byte field. */
@@ -407,7 +816,7 @@ public class PojoToRowConverterTest {
 
     /** Test POJO with Float field. */
     public static class FloatFieldPojo {
-        public Float price;
+        public Float value;
 
         public FloatFieldPojo() {}
     }
@@ -420,5 +829,32 @@ public class PojoToRowConverterTest {
         public Float floatVal;
 
         public MixedNumericPojo() {}
+    }
+
+    /** Test POJO with Double field for special values testing. */
+    public static class DoubleFieldPojo {
+        public Double value;
+
+        public DoubleFieldPojo() {}
+    }
+
+    /** Test POJO with mixed Float special and normal values. */
+    public static class MixedFloatValuesPojo {
+        public Float normalValue;
+        public Float nanValue;
+        public Float posInfValue;
+        public Float negInfValue;
+
+        public MixedFloatValuesPojo() {}
+    }
+
+    /** Test POJO with mixed Double special and normal values. */
+    public static class MixedDoubleValuesPojo {
+        public Double normalValue;
+        public Double nanValue;
+        public Double posInfValue;
+        public Double negInfValue;
+
+        public MixedDoubleValuesPojo() {}
     }
 }

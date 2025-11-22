@@ -257,4 +257,45 @@ public final class ConvertersTestFixtures {
             this.charField = c;
         }
     }
+
+    /** POJO with Float field for special value tests. */
+    public static class FloatFieldPojo {
+        public Float value;
+
+        public FloatFieldPojo() {}
+    }
+
+    /** POJO with Double field for special value tests. */
+    public static class DoubleFieldPojo {
+        public Double value;
+
+        public DoubleFieldPojo() {}
+    }
+
+    /** POJO with Integer field for nullable tests. */
+    public static class IntFieldPojo {
+        public Integer orderId;
+
+        public IntFieldPojo() {}
+    }
+
+    /** POJO with mixed Float values for testing normal and special values together. */
+    public static class MixedFloatValuesPojo {
+        public Float normalValue;
+        public Float nanValue;
+        public Float posInfValue;
+        public Float negInfValue;
+
+        public MixedFloatValuesPojo() {}
+    }
+
+    /** POJO with mixed Double values for testing normal and special values together. */
+    public static class MixedDoubleValuesPojo {
+        public Double normalValue;
+        public Double nanValue;
+        public Double posInfValue;
+        public Double negInfValue;
+
+        public MixedDoubleValuesPojo() {}
+    }
 }
