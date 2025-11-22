@@ -243,6 +243,13 @@ public class TieringSplitGenerator {
             @Nullable Long latestOffsetOfSnapshot,
             @Nullable Long lastCommittedBucketOffset,
             long latestBucketOffset) {
+        if (latestBucketOffset <= 0) {
+            LOG.debug(
+                    "The latestBucketOffset {} is equals or less than 0, skip generating split for bucket {}",
+                    latestBucketOffset,
+                    tableBucket);
+            return Optional.empty();
+        }
 
         // the bucket is never been tiered, read kv snapshot is more efficient
         if (lastCommittedBucketOffset == null) {
@@ -280,6 +287,11 @@ public class TieringSplitGenerator {
                                 latestBucketOffset,
                                 0));
             } else {
+                LOG.info(
+                        "The lastCommittedBucketOffset {} is equals or bigger than latestBucketOffset {}, skip generating split for bucket {}",
+                        lastCommittedBucketOffset,
+                        latestBucketOffset,
+                        tableBucket);
                 return Optional.empty();
             }
         }
@@ -291,6 +303,13 @@ public class TieringSplitGenerator {
             @Nullable String partitionName,
             @Nullable Long lastCommittedBucketOffset,
             long latestBucketOffset) {
+        if (latestBucketOffset <= 0) {
+            LOG.debug(
+                    "The latestBucketOffset {} is equals or less than 0, skip generating split for bucket {}",
+                    latestBucketOffset,
+                    tableBucket);
+            return Optional.empty();
+        }
 
         // the bucket is never been tiered
         if (lastCommittedBucketOffset == null) {

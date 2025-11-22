@@ -43,7 +43,7 @@ public class LanceLakeCatalog implements LakeCatalog {
     }
 
     @Override
-    public void createTable(TablePath tablePath, TableDescriptor tableDescriptor) {
+    public void createTable(TablePath tablePath, TableDescriptor tableDescriptor, Context context) {
         // currently, we don't support primary key table for lance
         if (tableDescriptor.hasPrimaryKey()) {
             throw new InvalidTableException(
@@ -71,7 +71,7 @@ public class LanceLakeCatalog implements LakeCatalog {
     }
 
     @Override
-    public void alterTable(TablePath tablePath, List<TableChange> tableChanges)
+    public void alterTable(TablePath tablePath, List<TableChange> tableChanges, Context context)
             throws TableNotExistException {
         throw new UnsupportedOperationException(
                 "Alter table is not supported for Lance at the moment");

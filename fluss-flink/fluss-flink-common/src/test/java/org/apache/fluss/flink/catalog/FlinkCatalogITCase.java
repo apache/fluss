@@ -20,6 +20,7 @@ package org.apache.fluss.flink.catalog;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.InvalidAlterTableException;
 import org.apache.fluss.exception.InvalidConfigException;
 import org.apache.fluss.exception.InvalidTableException;
@@ -47,6 +48,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 
+import java.nio.file.Files;
 import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -76,11 +78,23 @@ abstract class FlinkCatalogITCase {
                     .setClusterConf(initClusterConf())
                     .build();
 
+    protected static String paimonWarehousePath;
+
     static Configuration initClusterConf() {
         Configuration clusterConf = new Configuration();
         // use a small check interval to cleanup partitions quickly
         clusterConf.set(ConfigOptions.AUTO_PARTITION_CHECK_INTERVAL, Duration.ofSeconds(3));
         clusterConf.set(ConfigOptions.DATALAKE_FORMAT, DataLakeFormat.PAIMON);
+        try {
+            paimonWarehousePath =
+                    Files.createTempDirectory("fluss-catalog-itcase")
+                            .resolve("warehouse")
+                            .toString();
+        } catch (Exception e) {
+            throw new FlussRuntimeException("Failed to create warehouse path");
+        }
+        clusterConf.setString("datalake.paimon.warehouse", paimonWarehousePath);
+
         return clusterConf;
     }
 
@@ -208,6 +222,7 @@ abstract class FlinkCatalogITCase {
         expectedOptions.put("bucket.num", "5");
         expectedOptions.put("table.datalake.enabled", "true");
         expectedOptions.put("table.datalake.format", "paimon");
+        expectedOptions.put("table.datalake.paimon.warehouse", paimonWarehousePath);
         assertOptionsEqual(table.getOptions(), expectedOptions);
 
         // alter table

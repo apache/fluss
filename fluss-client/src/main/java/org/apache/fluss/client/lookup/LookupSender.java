@@ -18,10 +18,15 @@
 package org.apache.fluss.client.lookup;
 
 import org.apache.fluss.annotation.Internal;
+import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.client.metadata.MetadataUpdater;
+import org.apache.fluss.exception.ApiException;
 import org.apache.fluss.exception.FlussRuntimeException;
+import org.apache.fluss.exception.InvalidMetadataException;
 import org.apache.fluss.exception.LeaderNotAvailableException;
+import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.LookupRequest;
 import org.apache.fluss.rpc.messages.LookupResponse;
@@ -36,10 +41,14 @@ import org.apache.fluss.utils.types.Tuple2;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.annotation.Nullable;
+
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.Semaphore;
 import java.util.stream.Collectors;
 
@@ -145,7 +154,8 @@ class LookupSender implements Runnable {
         return lookupBatchesByLeader;
     }
 
-    private void sendLookups(
+    @VisibleForTesting
+    void sendLookups(
             int destination, LookupType lookupType, List<AbstractLookupQuery<?>> lookupBatches) {
         TabletServerGateway gateway = metadataUpdater.newTabletServerClientForNode(destination);
         if (gateway == null) {
@@ -155,16 +165,16 @@ class LookupSender implements Runnable {
         }
 
         if (lookupType == LookupType.LOOKUP) {
-            sendLookupRequest(gateway, lookupBatches);
+            sendLookupRequest(destination, gateway, lookupBatches);
         } else if (lookupType == LookupType.PREFIX_LOOKUP) {
-            sendPrefixLookupRequest(gateway, lookupBatches);
+            sendPrefixLookupRequest(destination, gateway, lookupBatches);
         } else {
             throw new IllegalArgumentException("Unsupported lookup type: " + lookupType);
         }
     }
 
     private void sendLookupRequest(
-            TabletServerGateway gateway, List<AbstractLookupQuery<?>> lookups) {
+            int destination, TabletServerGateway gateway, List<AbstractLookupQuery<?>> lookups) {
         // table id -> (bucket -> lookups)
         Map<Long, Map<TableBucket, LookupBatch>> lookupByTableId = new HashMap<>();
         for (AbstractLookupQuery<?> abstractLookupQuery : lookups) {
@@ -180,6 +190,7 @@ class LookupSender implements Runnable {
         lookupByTableId.forEach(
                 (tableId, lookupsByBucket) ->
                         sendLookupRequestAndHandleResponse(
+                                destination,
                                 gateway,
                                 makeLookupRequest(tableId, lookupsByBucket.values()),
                                 tableId,
@@ -187,7 +198,9 @@ class LookupSender implements Runnable {
     }
 
     private void sendPrefixLookupRequest(
-            TabletServerGateway gateway, List<AbstractLookupQuery<?>> prefixLookups) {
+            int destination,
+            TabletServerGateway gateway,
+            List<AbstractLookupQuery<?>> prefixLookups) {
         // table id -> (bucket -> lookups)
         Map<Long, Map<TableBucket, PrefixLookupBatch>> lookupByTableId = new HashMap<>();
         for (AbstractLookupQuery<?> abstractLookupQuery : prefixLookups) {
@@ -203,6 +216,7 @@ class LookupSender implements Runnable {
         lookupByTableId.forEach(
                 (tableId, prefixLookupBatch) ->
                         sendPrefixLookupRequestAndHandleResponse(
+                                destination,
                                 gateway,
                                 makePrefixLookupRequest(tableId, prefixLookupBatch.values()),
                                 tableId,
@@ -210,6 +224,7 @@ class LookupSender implements Runnable {
     }
 
     private void sendLookupRequestAndHandleResponse(
+            int destination,
             TabletServerGateway gateway,
             LookupRequest lookupRequest,
             long tableId,
@@ -224,7 +239,8 @@ class LookupSender implements Runnable {
                 .thenAccept(
                         lookupResponse -> {
                             try {
-                                handleLookupResponse(tableId, lookupResponse, lookupsByBucket);
+                                handleLookupResponse(
+                                        tableId, destination, lookupResponse, lookupsByBucket);
                             } finally {
                                 maxInFlightReuqestsSemaphore.release();
                             }
@@ -232,7 +248,7 @@ class LookupSender implements Runnable {
                 .exceptionally(
                         e -> {
                             try {
-                                handleLookupRequestException(e, lookupsByBucket);
+                                handleLookupRequestException(e, destination, lookupsByBucket);
                                 return null;
                             } finally {
                                 maxInFlightReuqestsSemaphore.release();
@@ -241,6 +257,7 @@ class LookupSender implements Runnable {
     }
 
     private void sendPrefixLookupRequestAndHandleResponse(
+            int destination,
             TabletServerGateway gateway,
             PrefixLookupRequest prefixLookupRequest,
             long tableId,
@@ -256,7 +273,10 @@ class LookupSender implements Runnable {
                         prefixLookupResponse -> {
                             try {
                                 handlePrefixLookupResponse(
-                                        tableId, prefixLookupResponse, lookupsByBucket);
+                                        tableId,
+                                        destination,
+                                        prefixLookupResponse,
+                                        lookupsByBucket);
                             } finally {
                                 maxInFlightReuqestsSemaphore.release();
                             }
@@ -264,7 +284,7 @@ class LookupSender implements Runnable {
                 .exceptionally(
                         e -> {
                             try {
-                                handlePrefixLookupException(e, lookupsByBucket);
+                                handlePrefixLookupException(e, destination, lookupsByBucket);
                                 return null;
                             } finally {
                                 maxInFlightReuqestsSemaphore.release();
@@ -274,6 +294,7 @@ class LookupSender implements Runnable {
 
     private void handleLookupResponse(
             long tableId,
+            int destination,
             LookupResponse lookupResponse,
             Map<TableBucket, LookupBatch> lookupsByBucket) {
         for (PbLookupRespForBucket pbLookupRespForBucket : lookupResponse.getBucketsRespsList()) {
@@ -288,10 +309,7 @@ class LookupSender implements Runnable {
             if (pbLookupRespForBucket.hasErrorCode()) {
                 // TODO for re-triable error, we should retry here instead of throwing exception.
                 ApiError error = ApiError.fromErrorMessage(pbLookupRespForBucket);
-                LOG.warn(
-                        "Get error lookup response on table bucket {}, fail. Error: {}",
-                        tableBucket,
-                        error.formatErrMsg());
+                handleLookupExceptionForBucket(tableBucket, destination, error, "lookup");
                 lookupBatch.completeExceptionally(error.exception());
             } else {
                 List<byte[]> byteValues =
@@ -312,6 +330,7 @@ class LookupSender implements Runnable {
 
     private void handlePrefixLookupResponse(
             long tableId,
+            int destination,
             PrefixLookupResponse prefixLookupResponse,
             Map<TableBucket, PrefixLookupBatch> prefixLookupsByBucket) {
         for (PbPrefixLookupRespForBucket pbRespForBucket :
@@ -328,10 +347,7 @@ class LookupSender implements Runnable {
             if (pbRespForBucket.hasErrorCode()) {
                 // TODO for re-triable error, we should retry here instead of throwing exception.
                 ApiError error = ApiError.fromErrorMessage(pbRespForBucket);
-                LOG.warn(
-                        "Get error prefix lookup response on table bucket {}, fail. Error: {}",
-                        tableBucket,
-                        error.formatErrMsg());
+                handleLookupExceptionForBucket(tableBucket, destination, error, "prefixLookup");
                 prefixLookupBatch.completeExceptionally(error.exception());
             } else {
                 List<List<byte[]>> result = new ArrayList<>(pbRespForBucket.getValueListsCount());
@@ -349,24 +365,22 @@ class LookupSender implements Runnable {
     }
 
     private void handleLookupRequestException(
-            Throwable t, Map<TableBucket, LookupBatch> lookupsByBucket) {
+            Throwable t, int destination, Map<TableBucket, LookupBatch> lookupsByBucket) {
         ApiError error = ApiError.fromThrowable(t);
         for (LookupBatch lookupBatch : lookupsByBucket.values()) {
             // TODO for re-triable error, we should retry here instead of throwing exception.
-            LOG.warn(
-                    "Get error lookup response on table bucket {}, fail. Error: {}",
-                    lookupBatch.tableBucket(),
-                    error.formatErrMsg());
+            handleLookupExceptionForBucket(lookupBatch.tableBucket(), destination, error, "lookup");
             lookupBatch.completeExceptionally(error.exception());
         }
     }
 
     private void handlePrefixLookupException(
-            Throwable t, Map<TableBucket, PrefixLookupBatch> lookupsByBucket) {
+            Throwable t, int destination, Map<TableBucket, PrefixLookupBatch> lookupsByBucket) {
         ApiError error = ApiError.fromThrowable(t);
         // TODO If error, we need to retry send the request instead of throw exception.
-        LOG.warn("Get error prefix lookup response. Error: {}", error.formatErrMsg());
         for (PrefixLookupBatch lookupBatch : lookupsByBucket.values()) {
+            handleLookupExceptionForBucket(
+                    lookupBatch.tableBucket(), destination, error, "prefixLookup");
             lookupBatch.completeExceptionally(error.exception());
         }
     }
@@ -381,5 +395,49 @@ class LookupSender implements Runnable {
         // breaking from the sender loop. Otherwise, we may miss some callbacks when shutting down.
         lookupQueue.close();
         running = false;
+    }
+
+    private void handleLookupExceptionForBucket(
+            TableBucket tb, int destination, ApiError error, String lookupType) {
+        ApiException exception = error.error().exception();
+        LOG.error(
+                "Failed to {} from node {} for bucket {}", lookupType, destination, tb, exception);
+        if (exception instanceof InvalidMetadataException) {
+            LOG.warn(
+                    "Invalid metadata error in {} request. Going to request metadata update.",
+                    lookupType,
+                    exception);
+            long tableId = tb.getTableId();
+            TableOrPartitions tableOrPartitions;
+            if (tb.getPartitionId() == null) {
+                tableOrPartitions = new TableOrPartitions(Collections.singleton(tableId), null);
+            } else {
+                tableOrPartitions =
+                        new TableOrPartitions(
+                                null,
+                                Collections.singleton(
+                                        new TablePartition(tableId, tb.getPartitionId())));
+            }
+            invalidTableOrPartitions(tableOrPartitions);
+        }
+    }
+
+    /** A helper class to hold table ids or table partitions. */
+    private static class TableOrPartitions {
+        private final @Nullable Set<Long> tableIds;
+        private final @Nullable Set<TablePartition> tablePartitions;
+
+        TableOrPartitions(
+                @Nullable Set<Long> tableIds, @Nullable Set<TablePartition> tablePartitions) {
+            this.tableIds = tableIds;
+            this.tablePartitions = tablePartitions;
+        }
+    }
+
+    private void invalidTableOrPartitions(TableOrPartitions tableOrPartitions) {
+        Set<PhysicalTablePath> physicalTablePaths =
+                metadataUpdater.getPhysicalTablePathByIds(
+                        tableOrPartitions.tableIds, tableOrPartitions.tablePartitions);
+        metadataUpdater.invalidPhysicalTableBucketMeta(physicalTablePaths);
     }
 }

@@ -78,6 +78,10 @@ public class TestingMetadataUpdater extends MetadataUpdater {
         this.cluster = cluster;
     }
 
+    public void setResponseLogicId(int serverId, int responseLogicId) {
+        tabletServerGatewayMap.get(serverId).setResponseLogicId(responseLogicId);
+    }
+
     @Override
     public void checkAndUpdateTableMetadata(Set<TablePath> tablePaths) {
         Set<TablePath> needUpdateTablePaths =

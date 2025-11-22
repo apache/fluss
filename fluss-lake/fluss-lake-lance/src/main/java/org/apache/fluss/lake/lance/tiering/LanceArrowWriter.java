@@ -38,7 +38,7 @@ public class LanceArrowWriter extends ArrowReader {
     private final RowType rowType;
     private final int batchSize;
 
-    private volatile boolean finished;
+    private volatile boolean finished = false;
 
     private final AtomicLong totalBytesRead = new AtomicLong();
     private ArrowWriter arrowWriter = null;
@@ -74,8 +74,8 @@ public class LanceArrowWriter extends ArrowReader {
     }
 
     void setFinished() {
-        loadToken.release();
         finished = true;
+        loadToken.release();
     }
 
     @Override

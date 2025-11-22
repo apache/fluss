@@ -44,14 +44,14 @@ gpg: Good signature from "Jark Wu (CODE SIGNING KEY) <jark@apache.org>"
 Next, verify all the checksums:
 
 ```bash
-for i in *.tgz; do echo $i; sha512sum --check  $i.sha512*; done
+shasum *.sha512 > checklist.chk; shasum -c checklist.chk
 ```
 
 If the verification is successful, you will see a message like this:
 
 ```
-fluss-0.8.0-incubating-src.tgz
-fluss-0.8.0-incubating-src.tgz: OK
+fluss-0.8.0-incubating-bin.tgz.sha512: OK
+fluss-0.8.0-incubating-src.tgz.sha512: OK
 ```
 
 ## Verifying build

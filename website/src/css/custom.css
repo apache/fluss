@@ -190,7 +190,6 @@
         color: var(--ifm-color-primary);
     }
     ul {
-        margin: 16px 0;
         padding-left: 20px;
         li {
             margin-top: 4px;
@@ -208,7 +207,6 @@
         }*/
     }
     ol {
-        margin: 16px 0;
         padding-left: 20px;
         li {
             list-style: decimal;

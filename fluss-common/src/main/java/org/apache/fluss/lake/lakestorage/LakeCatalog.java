@@ -23,6 +23,7 @@ import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.security.acl.FlussPrincipal;
 
 import java.util.List;
 
@@ -39,9 +40,10 @@ public interface LakeCatalog extends AutoCloseable {
      *
      * @param tablePath path of the table to be created
      * @param tableDescriptor The descriptor of the table to be created
+     * @param context contextual information needed for create table
      * @throws TableAlreadyExistException if the table already exists
      */
-    void createTable(TablePath tablePath, TableDescriptor tableDescriptor)
+    void createTable(TablePath tablePath, TableDescriptor tableDescriptor, Context context)
             throws TableAlreadyExistException;
 
     /**
@@ -49,13 +51,38 @@ public interface LakeCatalog extends AutoCloseable {
      *
      * @param tablePath path of the table to be altered
      * @param tableChanges The changes to be applied to the table
+     * @param context contextual information needed for alter table
      * @throws TableNotExistException if the table not exists
      */
-    void alterTable(TablePath tablePath, List<TableChange> tableChanges)
+    void alterTable(TablePath tablePath, List<TableChange> tableChanges, Context context)
             throws TableNotExistException;
 
     @Override
     default void close() throws Exception {
         // default do nothing
+    }
+
+    /**
+     * Contextual information for lake catalog methods that modify metadata in an external data
+     * lake. It can be used to:
+     *
+     * <ul>
+     *   <li>Access the fluss principal currently accessing the catalog.
+     * </ul>
+     *
+     * @since 0.9
+     */
+    @PublicEvolving
+    interface Context {
+
+        /**
+         * Whether the current operation is creating a fluss table.
+         *
+         * @return true if the current operation is creating a fluss table
+         */
+        boolean isCreatingFlussTable();
+
+        /** Get the fluss principal currently accessing the catalog. */
+        FlussPrincipal getFlussPrincipal();
     }
 }

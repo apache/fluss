@@ -29,7 +29,6 @@ import org.apache.fluss.metrics.MetricNames;
 import org.apache.fluss.metrics.SimpleCounter;
 import org.apache.fluss.metrics.ThreadSafeSimpleCounter;
 import org.apache.fluss.metrics.groups.AbstractMetricGroup;
-import org.apache.fluss.metrics.groups.MetricGroup;
 import org.apache.fluss.metrics.registry.MetricRegistry;
 import org.apache.fluss.utils.MapUtils;
 
@@ -107,12 +106,11 @@ public class TabletServerMetricGroup extends AbstractMetricGroup {
         bytesOut = new ThreadSafeSimpleCounter();
         meter(MetricNames.BYTES_OUT_RATE, new MeterView(bytesOut));
 
-        MetricGroup logMetricGroup = this.addGroup("log");
         // about flush
         logFlushCount = new SimpleCounter();
-        logMetricGroup.meter(MetricNames.LOG_FLUSH_RATE, new MeterView(logFlushCount));
+        meter(MetricNames.LOG_FLUSH_RATE, new MeterView(logFlushCount));
         logFlushLatencyHistogram = new DescriptiveStatisticsHistogram(WINDOW_SIZE);
-        logMetricGroup.histogram(MetricNames.LOG_FLUSH_LATENCY_MS, logFlushLatencyHistogram);
+        histogram(MetricNames.LOG_FLUSH_LATENCY_MS, logFlushLatencyHistogram);
 
         // about pre-write buffer.
         kvFlushCount = new SimpleCounter();

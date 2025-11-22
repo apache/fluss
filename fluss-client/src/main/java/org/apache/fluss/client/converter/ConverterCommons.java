@@ -24,8 +24,9 @@ import org.apache.fluss.types.RowType;
 
 import java.math.BigDecimal;
 import java.util.Arrays;
-import java.util.HashMap;
+import java.util.EnumMap;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
@@ -43,7 +44,7 @@ final class ConverterCommons {
     static final Map<DataTypeRoot, Set<Class<?>>> SUPPORTED_TYPES = createSupportedTypes();
 
     private static Map<DataTypeRoot, Set<Class<?>>> createSupportedTypes() {
-        Map<DataTypeRoot, Set<Class<?>>> map = new HashMap<>();
+        Map<DataTypeRoot, Set<Class<?>>> map = new EnumMap<>(DataTypeRoot.class);
         map.put(DataTypeRoot.BOOLEAN, setOf(Boolean.class));
 
         // Numeric types with widening support
@@ -94,15 +95,15 @@ final class ConverterCommons {
 
     static void validatePojoMatchesTable(PojoType<?> pojoType, RowType tableSchema) {
         Set<String> pojoNames = pojoType.getProperties().keySet();
-        Set<String> tableNames = new HashSet<>(tableSchema.getFieldNames());
-        if (!pojoNames.equals(tableNames)) {
+        List<String> fieldNames = tableSchema.getFieldNames();
+        if (!pojoNames.containsAll(fieldNames)) {
             throw new IllegalArgumentException(
                     String.format(
                             "POJO fields %s must exactly match table schema fields %s.",
-                            pojoNames, tableNames));
+                            pojoNames, fieldNames));
         }
         for (int i = 0; i < tableSchema.getFieldCount(); i++) {
-            String name = tableSchema.getFieldNames().get(i);
+            String name = fieldNames.get(i);
             DataType dt = tableSchema.getTypeAt(i);
             PojoType.Property prop = pojoType.getProperty(name);
             validateCompatibility(dt, prop);

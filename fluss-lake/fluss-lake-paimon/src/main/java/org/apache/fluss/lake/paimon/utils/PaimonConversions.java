@@ -20,7 +20,6 @@ package org.apache.fluss.lake.paimon.utils;
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.exception.InvalidConfigException;
 import org.apache.fluss.exception.InvalidTableException;
-import org.apache.fluss.lake.paimon.FlussDataTypeToPaimonDataType;
 import org.apache.fluss.lake.paimon.source.FlussRowAsPaimonRow;
 import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
@@ -49,8 +48,15 @@ import static org.apache.fluss.lake.paimon.PaimonLakeCatalog.SYSTEM_COLUMNS;
 /** Utils for conversion between Paimon and Fluss. */
 public class PaimonConversions {
 
+    // use literal directly, a future paimon version will rename
+    // the variable PARTITION_GENERATE_LEGCY_NAME to PARTITION_GENERATE_LEGACY_NAME, use literal
+    // can help avoid NoSuchField error
+    // todo: after upgrade paimon version, we call fall back to use PARTITION_GENERATE_LEGACY_NAME
+    // again
+    private static final String PARTITION_GENERATE_LEGACY_NAME_OPTION_KEY = "partition.legacy-name";
+
     // for fluss config
-    private static final String FLUSS_CONF_PREFIX = "fluss.";
+    public static final String FLUSS_CONF_PREFIX = "fluss.";
     // for paimon config
     private static final String PAIMON_CONF_PREFIX = "paimon.";
 
@@ -60,7 +66,8 @@ public class PaimonConversions {
     static {
         PAIMON_UNSETTABLE_OPTIONS.add(CoreOptions.BUCKET.key());
         PAIMON_UNSETTABLE_OPTIONS.add(CoreOptions.BUCKET_KEY.key());
-        PAIMON_UNSETTABLE_OPTIONS.add(CoreOptions.PARTITION_GENERATE_LEGCY_NAME.key());
+        PAIMON_UNSETTABLE_OPTIONS.add(CoreOptions.PATH.key());
+        PAIMON_UNSETTABLE_OPTIONS.add(PARTITION_GENERATE_LEGACY_NAME_OPTION_KEY);
     }
 
     public static RowKind toRowKind(ChangeType changeType) {
@@ -196,6 +203,10 @@ public class PaimonConversions {
                 .getCustomProperties()
                 .forEach((k, v) -> setFlussPropertyToPaimon(k, v, options));
         schemaBuilder.options(options.toMap());
+
+        // set comment
+        tableDescriptor.getComment().ifPresent(schemaBuilder::comment);
+
         return schemaBuilder.build();
     }
 
@@ -219,7 +230,7 @@ public class PaimonConversions {
     private static void setPaimonDefaultProperties(Options options) {
         // set partition.legacy-name to false, otherwise paimon will use toString for all types,
         // which will cause inconsistent partition value for the same binary value
-        options.set(CoreOptions.PARTITION_GENERATE_LEGCY_NAME, false);
+        options.set(PARTITION_GENERATE_LEGACY_NAME_OPTION_KEY, Boolean.FALSE.toString());
     }
 
     private static void setFlussPropertyToPaimon(String key, String value, Options options) {
