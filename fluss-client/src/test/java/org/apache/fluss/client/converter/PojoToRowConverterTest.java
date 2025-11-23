@@ -24,9 +24,13 @@ import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 
 import java.time.Instant;
 import java.time.LocalDateTime;
+import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -175,94 +179,122 @@ public class PojoToRowConverterTest {
                 .hasMessageContaining("mapField");
     }
 
-    @Test
-    void testByteToSmallIntWidening() {
-        RowType table = RowType.builder().field("value", DataTypes.SMALLINT()).build();
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("numericWideningTestCases")
+    public <T> void testNumericTypeWidening(
+            String testName,
+            Class<T> pojoClass,
+            String fieldName,
+            org.apache.fluss.types.DataType targetType,
+            Object inputValue,
+            Object expectedValue,
+            java.util.function.Function<GenericRow, Object> valueGetter)
+            throws Exception {
+        RowType table = RowType.builder().field(fieldName, targetType).build();
         RowType projection = table;
 
-        PojoToRowConverter<ByteFieldPojo> converter =
-                PojoToRowConverter.of(ByteFieldPojo.class, table, projection);
+        PojoToRowConverter<T> converter = PojoToRowConverter.of(pojoClass, table, projection);
 
-        ByteFieldPojo pojo = new ByteFieldPojo();
-        pojo.value = (byte) 42;
+        T pojo = pojoClass.getDeclaredConstructor().newInstance();
+        java.lang.reflect.Field field = pojoClass.getField(fieldName);
+        field.set(pojo, inputValue);
+
         GenericRow row = converter.toRow(pojo);
+        Object actualValue = valueGetter.apply(row);
 
-        assertThat(row.getShort(0)).isEqualTo((short) 42);
+        if (expectedValue instanceof Float && actualValue instanceof Float) {
+            assertThat((Float) actualValue)
+                    .isCloseTo((Float) expectedValue, org.assertj.core.data.Offset.offset(0.01f));
+        } else if (expectedValue instanceof Double && actualValue instanceof Double) {
+            assertThat((Double) actualValue)
+                    .isCloseTo((Double) expectedValue, org.assertj.core.data.Offset.offset(0.01));
+        } else {
+            assertThat(actualValue).isEqualTo(expectedValue);
+        }
     }
 
-    @Test
-    public void testIntToBigIntWidening() {
-        RowType table = RowType.builder().field("orderId", DataTypes.BIGINT()).build();
-        RowType projection = table;
-
-        PojoToRowConverter<IntFieldPojo> converter =
-                PojoToRowConverter.of(IntFieldPojo.class, table, projection);
-
-        IntFieldPojo pojo = new IntFieldPojo();
-        pojo.orderId = 123456;
-        GenericRow row = converter.toRow(pojo);
-
-        assertThat(row.getLong(0)).isEqualTo(123456L);
-    }
-
-    @Test
-    public void testShortToBigIntWidening() {
-        RowType table = RowType.builder().field("quantity", DataTypes.BIGINT()).build();
-        RowType projection = table;
-
-        PojoToRowConverter<ShortFieldPojo> converter =
-                PojoToRowConverter.of(ShortFieldPojo.class, table, projection);
-
-        ShortFieldPojo pojo = new ShortFieldPojo();
-        pojo.quantity = (short) 999;
-        GenericRow row = converter.toRow(pojo);
-
-        assertThat(row.getLong(0)).isEqualTo(999L);
-    }
-
-    @Test
-    public void testIntToFloatWidening() {
-        RowType table = RowType.builder().field("orderId", DataTypes.FLOAT()).build();
-        RowType projection = table;
-
-        PojoToRowConverter<IntFieldPojo> converter =
-                PojoToRowConverter.of(IntFieldPojo.class, table, projection);
-
-        IntFieldPojo pojo = new IntFieldPojo();
-        pojo.orderId = 1000;
-        GenericRow row = converter.toRow(pojo);
-
-        assertThat(row.getFloat(0)).isEqualTo(1000.0f);
-    }
-
-    @Test
-    public void testLongToDoubleWidening() {
-        RowType table = RowType.builder().field("value", DataTypes.DOUBLE()).build();
-        RowType projection = table;
-
-        PojoToRowConverter<LongFieldPojo> converter =
-                PojoToRowConverter.of(LongFieldPojo.class, table, projection);
-
-        LongFieldPojo pojo = new LongFieldPojo();
-        pojo.value = 123456789L;
-        GenericRow row = converter.toRow(pojo);
-
-        assertThat(row.getDouble(0)).isEqualTo(123456789.0);
-    }
-
-    @Test
-    public void testFloatToDoubleWidening() {
-        RowType table = RowType.builder().field("value", DataTypes.DOUBLE()).build();
-        RowType projection = table;
-
-        PojoToRowConverter<FloatFieldPojo> converter =
-                PojoToRowConverter.of(FloatFieldPojo.class, table, projection);
-
-        FloatFieldPojo pojo = new FloatFieldPojo();
-        pojo.value = 99.99f;
-        GenericRow row = converter.toRow(pojo);
-
-        assertThat(row.getDouble(0)).isCloseTo(99.99, org.assertj.core.data.Offset.offset(0.01));
+    private static Stream<Arguments> numericWideningTestCases() {
+        return Stream.of(
+                Arguments.of(
+                        "Byte → SMALLINT",
+                        ByteFieldPojo.class,
+                        "value",
+                        DataTypes.SMALLINT(),
+                        (byte) 42,
+                        (short) 42,
+                        (java.util.function.Function<GenericRow, Object>) row -> row.getShort(0)),
+                Arguments.of(
+                        "Integer → BIGINT",
+                        IntFieldPojo.class,
+                        "orderId",
+                        DataTypes.BIGINT(),
+                        123456,
+                        123456L,
+                        (java.util.function.Function<GenericRow, Object>) row -> row.getLong(0)),
+                Arguments.of(
+                        "Short → BIGINT",
+                        ShortFieldPojo.class,
+                        "quantity",
+                        DataTypes.BIGINT(),
+                        (short) 999,
+                        999L,
+                        (java.util.function.Function<GenericRow, Object>) row -> row.getLong(0)),
+                Arguments.of(
+                        "Integer → FLOAT",
+                        IntFieldPojo.class,
+                        "orderId",
+                        DataTypes.FLOAT(),
+                        1000,
+                        1000.0f,
+                        (java.util.function.Function<GenericRow, Object>) row -> row.getFloat(0)),
+                Arguments.of(
+                        "Long → DOUBLE",
+                        LongFieldPojo.class,
+                        "value",
+                        DataTypes.DOUBLE(),
+                        123456789L,
+                        123456789.0,
+                        (java.util.function.Function<GenericRow, Object>) row -> row.getDouble(0)),
+                Arguments.of(
+                        "Float → DOUBLE",
+                        FloatFieldPojo.class,
+                        "value",
+                        DataTypes.DOUBLE(),
+                        99.99f,
+                        99.99,
+                        (java.util.function.Function<GenericRow, Object>) row -> row.getDouble(0)),
+                Arguments.of(
+                        "Byte → INT",
+                        ByteFieldPojo.class,
+                        "value",
+                        DataTypes.INT(),
+                        (byte) 100,
+                        100,
+                        (java.util.function.Function<GenericRow, Object>) row -> row.getInt(0)),
+                Arguments.of(
+                        "Short → INT",
+                        ShortFieldPojo.class,
+                        "quantity",
+                        DataTypes.INT(),
+                        (short) 5000,
+                        5000,
+                        (java.util.function.Function<GenericRow, Object>) row -> row.getInt(0)),
+                Arguments.of(
+                        "Byte → FLOAT",
+                        ByteFieldPojo.class,
+                        "value",
+                        DataTypes.FLOAT(),
+                        (byte) 50,
+                        50.0f,
+                        (java.util.function.Function<GenericRow, Object>) row -> row.getFloat(0)),
+                Arguments.of(
+                        "Integer → DOUBLE",
+                        IntFieldPojo.class,
+                        "orderId",
+                        DataTypes.DOUBLE(),
+                        987654,
+                        987654.0,
+                        (java.util.function.Function<GenericRow, Object>) row -> row.getDouble(0)));
     }
 
     @Test
@@ -302,66 +334,6 @@ public class PojoToRowConverterTest {
         assertThatThrownBy(() -> PojoToRowConverter.of(LongFieldPojo.class, table, projection))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("incompatible with Fluss type");
-    }
-
-    @Test
-    public void testByteToIntWidening() {
-        RowType table = RowType.builder().field("value", DataTypes.INT()).build();
-        RowType projection = table;
-
-        PojoToRowConverter<ByteFieldPojo> converter =
-                PojoToRowConverter.of(ByteFieldPojo.class, table, projection);
-
-        ByteFieldPojo pojo = new ByteFieldPojo();
-        pojo.value = (byte) 100;
-        GenericRow row = converter.toRow(pojo);
-
-        assertThat(row.getInt(0)).isEqualTo(100);
-    }
-
-    @Test
-    public void testShortToIntWidening() {
-        RowType table = RowType.builder().field("quantity", DataTypes.INT()).build();
-        RowType projection = table;
-
-        PojoToRowConverter<ShortFieldPojo> converter =
-                PojoToRowConverter.of(ShortFieldPojo.class, table, projection);
-
-        ShortFieldPojo pojo = new ShortFieldPojo();
-        pojo.quantity = (short) 5000;
-        GenericRow row = converter.toRow(pojo);
-
-        assertThat(row.getInt(0)).isEqualTo(5000);
-    }
-
-    @Test
-    public void testByteToFloatWidening() {
-        RowType table = RowType.builder().field("value", DataTypes.FLOAT()).build();
-        RowType projection = table;
-
-        PojoToRowConverter<ByteFieldPojo> converter =
-                PojoToRowConverter.of(ByteFieldPojo.class, table, projection);
-
-        ByteFieldPojo pojo = new ByteFieldPojo();
-        pojo.value = (byte) 50;
-        GenericRow row = converter.toRow(pojo);
-
-        assertThat(row.getFloat(0)).isEqualTo(50.0f);
-    }
-
-    @Test
-    public void testIntToDoubleWidening() {
-        RowType table = RowType.builder().field("orderId", DataTypes.DOUBLE()).build();
-        RowType projection = table;
-
-        PojoToRowConverter<IntFieldPojo> converter =
-                PojoToRowConverter.of(IntFieldPojo.class, table, projection);
-
-        IntFieldPojo pojo = new IntFieldPojo();
-        pojo.orderId = 987654;
-        GenericRow row = converter.toRow(pojo);
-
-        assertThat(row.getDouble(0)).isEqualTo(987654.0);
     }
 
     @Test

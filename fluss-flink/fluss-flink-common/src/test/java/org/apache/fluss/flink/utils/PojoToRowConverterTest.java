@@ -38,6 +38,9 @@ import org.apache.fluss.types.TinyIntType;
 
 import org.apache.flink.api.common.functions.InvalidTypesException;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -45,6 +48,7 @@ import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -478,202 +482,133 @@ public class PojoToRowConverterTest {
 
     // ========== Numeric Type Widening Tests ==========
 
-    @Test
-    public void testIntToBigIntWidening() throws Exception {
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("numericWideningTestCases")
+    public <T> void testNumericTypeWidening(
+            String testName,
+            Class<T> pojoClass,
+            String fieldName,
+            org.apache.fluss.types.DataType targetType,
+            Object inputValue,
+            Object expectedValue,
+            java.util.function.Function<GenericRow, Object> valueGetter)
+            throws Exception {
         RowType rowType =
                 new RowType(
                         true,
                         Collections.singletonList(
-                                new DataField("orderId", new BigIntType(false), "Order ID")));
+                                new DataField(fieldName, targetType, "Test field")));
 
-        PojoToRowConverter<IntOrderPojo> converter =
-                new PojoToRowConverter<>(IntOrderPojo.class, rowType);
+        PojoToRowConverter<T> converter = new PojoToRowConverter<>(pojoClass, rowType);
 
-        IntOrderPojo pojo = new IntOrderPojo();
-        pojo.orderId = 123456;
+        T pojo = pojoClass.getDeclaredConstructor().newInstance();
+        java.lang.reflect.Field field = pojoClass.getField(fieldName);
+        field.set(pojo, inputValue);
 
         GenericRow row = converter.convert(pojo);
-        assertThat(row.getLong(0)).isEqualTo(123456L);
+        Object actualValue = valueGetter.apply(row);
+
+        if (expectedValue instanceof Float && actualValue instanceof Float) {
+            assertThat((Float) actualValue)
+                    .isCloseTo((Float) expectedValue, org.assertj.core.data.Offset.offset(0.01f));
+        } else if (expectedValue instanceof Double && actualValue instanceof Double) {
+            assertThat((Double) actualValue)
+                    .isCloseTo((Double) expectedValue, org.assertj.core.data.Offset.offset(0.01));
+        } else {
+            assertThat(actualValue).isEqualTo(expectedValue);
+        }
     }
 
-    @Test
-    public void testShortToBigIntWidening() throws Exception {
-        RowType rowType =
-                new RowType(
-                        true,
-                        Collections.singletonList(
-                                new DataField("quantity", new BigIntType(false), "Quantity")));
-
-        PojoToRowConverter<ShortQuantityPojo> converter =
-                new PojoToRowConverter<>(ShortQuantityPojo.class, rowType);
-
-        ShortQuantityPojo pojo = new ShortQuantityPojo();
-        pojo.quantity = (short) 999;
-
-        GenericRow row = converter.convert(pojo);
-        assertThat(row.getLong(0)).isEqualTo(999L);
-    }
-
-    @Test
-    public void testByteToIntWidening() throws Exception {
-        RowType rowType =
-                new RowType(
-                        true,
-                        Collections.singletonList(
-                                new DataField("value", new IntType(false), "Value")));
-
-        PojoToRowConverter<ByteValuePojo> converter =
-                new PojoToRowConverter<>(ByteValuePojo.class, rowType);
-
-        ByteValuePojo pojo = new ByteValuePojo();
-        pojo.value = (byte) 42;
-
-        GenericRow row = converter.convert(pojo);
-        assertThat(row.getInt(0)).isEqualTo(42);
-    }
-
-    @Test
-    public void testByteToSmallIntWidening() throws Exception {
-        RowType rowType =
-                new RowType(
-                        true,
-                        Collections.singletonList(
-                                new DataField("value", new SmallIntType(false), "Value")));
-
-        PojoToRowConverter<ByteValuePojo> converter =
-                new PojoToRowConverter<>(ByteValuePojo.class, rowType);
-
-        ByteValuePojo pojo = new ByteValuePojo();
-        pojo.value = (byte) 42;
-
-        GenericRow row = converter.convert(pojo);
-        assertThat(row.getShort(0)).isEqualTo((short) 42);
-    }
-
-    @Test
-    public void testShortToIntWidening() throws Exception {
-        RowType rowType =
-                new RowType(
-                        true,
-                        Collections.singletonList(
-                                new DataField("quantity", new IntType(false), "Quantity")));
-
-        PojoToRowConverter<ShortQuantityPojo> converter =
-                new PojoToRowConverter<>(ShortQuantityPojo.class, rowType);
-
-        ShortQuantityPojo pojo = new ShortQuantityPojo();
-        pojo.quantity = (short) 999;
-
-        GenericRow row = converter.convert(pojo);
-        assertThat(row.getInt(0)).isEqualTo(999);
-    }
-
-    @Test
-    public void testIntToFloatWidening() throws Exception {
-        RowType rowType =
-                new RowType(
-                        true,
-                        Collections.singletonList(
-                                new DataField("orderId", new FloatType(false), "Order ID")));
-
-        PojoToRowConverter<IntOrderPojo> converter =
-                new PojoToRowConverter<>(IntOrderPojo.class, rowType);
-
-        IntOrderPojo pojo = new IntOrderPojo();
-        pojo.orderId = 1000;
-
-        GenericRow row = converter.convert(pojo);
-        assertThat(row.getFloat(0)).isEqualTo(1000.0f);
-    }
-
-    @Test
-    public void testLongToFloatWidening() throws Exception {
-        RowType rowType =
-                new RowType(
-                        true,
-                        Collections.singletonList(
-                                new DataField("value", new FloatType(false), "Value")));
-
-        PojoToRowConverter<LongValuePojo> converter =
-                new PojoToRowConverter<>(LongValuePojo.class, rowType);
-
-        LongValuePojo pojo = new LongValuePojo();
-        pojo.value = 123456789L;
-
-        GenericRow row = converter.convert(pojo);
-        assertThat(row.getFloat(0)).isEqualTo(1.23456792E8f);
-    }
-
-    @Test
-    public void testFloatToDoubleWidening() throws Exception {
-        RowType rowType =
-                new RowType(
-                        true,
-                        Collections.singletonList(
-                                new DataField("price", new DoubleType(false), "Price")));
-
-        PojoToRowConverter<FloatPricePojo> converter =
-                new PojoToRowConverter<>(FloatPricePojo.class, rowType);
-
-        FloatPricePojo pojo = new FloatPricePojo();
-        pojo.price = 99.99f;
-
-        GenericRow row = converter.convert(pojo);
-        assertThat(row.getDouble(0)).isCloseTo(99.99, org.assertj.core.data.Offset.offset(0.01));
-    }
-
-    @Test
-    public void testLongToDoubleWidening() throws Exception {
-        RowType rowType =
-                new RowType(
-                        true,
-                        Collections.singletonList(
-                                new DataField("value", new DoubleType(false), "Value")));
-
-        PojoToRowConverter<LongValuePojo> converter =
-                new PojoToRowConverter<>(LongValuePojo.class, rowType);
-
-        LongValuePojo pojo = new LongValuePojo();
-        pojo.value = 123456789L;
-
-        GenericRow row = converter.convert(pojo);
-        assertThat(row.getDouble(0)).isEqualTo(123456789.0);
-    }
-
-    @Test
-    public void testIntToDoubleWidening() throws Exception {
-        RowType rowType =
-                new RowType(
-                        true,
-                        Collections.singletonList(
-                                new DataField("orderId", new DoubleType(false), "Order ID")));
-
-        PojoToRowConverter<IntOrderPojo> converter =
-                new PojoToRowConverter<>(IntOrderPojo.class, rowType);
-
-        IntOrderPojo pojo = new IntOrderPojo();
-        pojo.orderId = 1000;
-
-        GenericRow row = converter.convert(pojo);
-        assertThat(row.getDouble(0)).isEqualTo(1000.0);
-    }
-
-    @Test
-    public void testPrimitiveIntToBigIntWidening() throws Exception {
-        RowType rowType =
-                new RowType(
-                        true,
-                        Collections.singletonList(
-                                new DataField("id", new BigIntType(false), "ID")));
-
-        PojoToRowConverter<PrimitiveIntPojo> converter =
-                new PojoToRowConverter<>(PrimitiveIntPojo.class, rowType);
-
-        PrimitiveIntPojo pojo = new PrimitiveIntPojo();
-        pojo.id = 789;
-
-        GenericRow row = converter.convert(pojo);
-        assertThat(row.getLong(0)).isEqualTo(789L);
+    private static Stream<Arguments> numericWideningTestCases() {
+        return Stream.of(
+                Arguments.of(
+                        "Integer → BIGINT",
+                        IntOrderPojo.class,
+                        "orderId",
+                        new BigIntType(false),
+                        123456,
+                        123456L,
+                        (java.util.function.Function<GenericRow, Object>) row -> row.getLong(0)),
+                Arguments.of(
+                        "Short → BIGINT",
+                        ShortQuantityPojo.class,
+                        "quantity",
+                        new BigIntType(false),
+                        (short) 999,
+                        999L,
+                        (java.util.function.Function<GenericRow, Object>) row -> row.getLong(0)),
+                Arguments.of(
+                        "Byte → INT",
+                        ByteValuePojo.class,
+                        "value",
+                        new IntType(false),
+                        (byte) 42,
+                        42,
+                        (java.util.function.Function<GenericRow, Object>) row -> row.getInt(0)),
+                Arguments.of(
+                        "Byte → SMALLINT",
+                        ByteValuePojo.class,
+                        "value",
+                        new SmallIntType(false),
+                        (byte) 42,
+                        (short) 42,
+                        (java.util.function.Function<GenericRow, Object>) row -> row.getShort(0)),
+                Arguments.of(
+                        "Short → INT",
+                        ShortQuantityPojo.class,
+                        "quantity",
+                        new IntType(false),
+                        (short) 999,
+                        999,
+                        (java.util.function.Function<GenericRow, Object>) row -> row.getInt(0)),
+                Arguments.of(
+                        "Integer → FLOAT",
+                        IntOrderPojo.class,
+                        "orderId",
+                        new FloatType(false),
+                        1000,
+                        1000.0f,
+                        (java.util.function.Function<GenericRow, Object>) row -> row.getFloat(0)),
+                Arguments.of(
+                        "Long → FLOAT",
+                        LongValuePojo.class,
+                        "value",
+                        new FloatType(false),
+                        123456789L,
+                        1.23456792E8f,
+                        (java.util.function.Function<GenericRow, Object>) row -> row.getFloat(0)),
+                Arguments.of(
+                        "Float → DOUBLE",
+                        FloatPricePojo.class,
+                        "price",
+                        new DoubleType(false),
+                        99.99f,
+                        99.99,
+                        (java.util.function.Function<GenericRow, Object>) row -> row.getDouble(0)),
+                Arguments.of(
+                        "Long → DOUBLE",
+                        LongValuePojo.class,
+                        "value",
+                        new DoubleType(false),
+                        123456789L,
+                        123456789.0,
+                        (java.util.function.Function<GenericRow, Object>) row -> row.getDouble(0)),
+                Arguments.of(
+                        "Integer → DOUBLE",
+                        IntOrderPojo.class,
+                        "orderId",
+                        new DoubleType(false),
+                        1000,
+                        1000.0,
+                        (java.util.function.Function<GenericRow, Object>) row -> row.getDouble(0)),
+                Arguments.of(
+                        "int (primitive) → BIGINT",
+                        PrimitiveIntPojo.class,
+                        "id",
+                        new BigIntType(false),
+                        789,
+                        789L,
+                        (java.util.function.Function<GenericRow, Object>) row -> row.getLong(0)));
     }
 
     @Test
