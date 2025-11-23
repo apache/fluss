@@ -175,7 +175,6 @@ public class PojoToRowConverterTest {
                 .hasMessageContaining("mapField");
     }
 
-
     @Test
     void testByteToSmallIntWidening() {
         RowType table = RowType.builder().field("value", DataTypes.SMALLINT()).build();
@@ -926,7 +925,6 @@ public class PojoToRowConverterTest {
         int truncatedNanos = (instant.getNano() / divisor) * divisor;
         return Instant.ofEpochSecond(instant.getEpochSecond(), truncatedNanos);
     }
-
 
     /** Test POJO with Byte field. */
     public static class ByteFieldPojo {
