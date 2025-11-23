@@ -178,7 +178,7 @@ public class PojoToRowConverterTest {
     // ----------------------- Numeric Type Widening Tests -----------------------
 
     @Test
-   void testByteToSmallIntWidening() {
+    void testByteToSmallIntWidening() {
         RowType table = RowType.builder().field("value", DataTypes.SMALLINT()).build();
         RowType projection = table;
 
