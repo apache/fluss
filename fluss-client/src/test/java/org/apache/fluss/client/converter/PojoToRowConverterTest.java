@@ -861,6 +861,8 @@ public class PojoToRowConverterTest {
         public Double negInfValue;
 
         public MixedDoubleValuesPojo() {}
+    }
+
     @Test
     public void testTimestampPrecision3() {
         // Test with precision 3 milliseconds
