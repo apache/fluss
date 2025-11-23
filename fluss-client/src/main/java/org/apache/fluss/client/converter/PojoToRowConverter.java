@@ -420,23 +420,8 @@ public final class PojoToRowConverter<T> {
         if (v == null) {
             return null;
         }
-        if (v instanceof Double) {
-            return (Double) v;
-        }
-        if (v instanceof Float) {
-            return ((Float) v).doubleValue(); // float -> double widening
-        }
-        if (v instanceof Long) {
-            return ((Long) v).doubleValue(); // long -> double widening
-        }
-        if (v instanceof Integer) {
-            return ((Integer) v).doubleValue(); // int -> double widening
-        }
-        if (v instanceof Short) {
-            return ((Short) v).doubleValue(); // short -> double widening
-        }
-        if (v instanceof Byte) {
-            return ((Byte) v).doubleValue(); // byte -> double widening
+        if (v instanceof Number) {
+            return ((Number) v).doubleValue();
         }
         throw new IllegalArgumentException(
                 String.format(
