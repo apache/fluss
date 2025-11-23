@@ -175,7 +175,6 @@ public class PojoToRowConverterTest {
                 .hasMessageContaining("mapField");
     }
 
-    // ----------------------- Numeric Type Widening Tests -----------------------
 
     @Test
     void testByteToSmallIntWidening() {
@@ -381,7 +380,6 @@ public class PojoToRowConverterTest {
         assertThat(row.isNullAt(0)).isTrue();
     }
 
-    // ----------------------- IEEE 754 Special Values Tests -----------------------
 
     /**
      * Tests that Float.NaN values are preserved through POJO-to-Row conversion without data loss.
@@ -789,80 +787,6 @@ public class PojoToRowConverterTest {
                 .isTrue();
     }
 
-    // ----------------------- Test POJO Classes -----------------------
-
-    /** Test POJO with Byte field. */
-    public static class ByteFieldPojo {
-        public Byte value;
-
-        public ByteFieldPojo() {}
-    }
-
-    /** Test POJO with Short field. */
-    public static class ShortFieldPojo {
-        public Short quantity;
-
-        public ShortFieldPojo() {}
-    }
-
-    /** Test POJO with Integer field. */
-    public static class IntFieldPojo {
-        public Integer orderId;
-
-        public IntFieldPojo() {}
-    }
-
-    /** Test POJO with Long field. */
-    public static class LongFieldPojo {
-        public Long value;
-
-        public LongFieldPojo() {}
-    }
-
-    /** Test POJO with Float field. */
-    public static class FloatFieldPojo {
-        public Float value;
-
-        public FloatFieldPojo() {}
-    }
-
-    /** Test POJO with mixed numeric types. */
-    public static class MixedNumericPojo {
-        public Byte byteVal;
-        public Short shortVal;
-        public Integer intVal;
-        public Float floatVal;
-
-        public MixedNumericPojo() {}
-    }
-
-    /** Test POJO with Double field for special values testing. */
-    public static class DoubleFieldPojo {
-        public Double value;
-
-        public DoubleFieldPojo() {}
-    }
-
-    /** Test POJO with mixed Float special and normal values. */
-    public static class MixedFloatValuesPojo {
-        public Float normalValue;
-        public Float nanValue;
-        public Float posInfValue;
-        public Float negInfValue;
-
-        public MixedFloatValuesPojo() {}
-    }
-
-    /** Test POJO with mixed Double special and normal values. */
-    public static class MixedDoubleValuesPojo {
-        public Double normalValue;
-        public Double nanValue;
-        public Double posInfValue;
-        public Double negInfValue;
-
-        public MixedDoubleValuesPojo() {}
-    }
-
     @Test
     public void testTimestampPrecision3() {
         // Test with precision 3 milliseconds
@@ -1001,6 +925,79 @@ public class PojoToRowConverterTest {
         int divisor = (int) Math.pow(10, 9 - precision);
         int truncatedNanos = (instant.getNano() / divisor) * divisor;
         return Instant.ofEpochSecond(instant.getEpochSecond(), truncatedNanos);
+    }
+
+
+    /** Test POJO with Byte field. */
+    public static class ByteFieldPojo {
+        public Byte value;
+
+        public ByteFieldPojo() {}
+    }
+
+    /** Test POJO with Short field. */
+    public static class ShortFieldPojo {
+        public Short quantity;
+
+        public ShortFieldPojo() {}
+    }
+
+    /** Test POJO with Integer field. */
+    public static class IntFieldPojo {
+        public Integer orderId;
+
+        public IntFieldPojo() {}
+    }
+
+    /** Test POJO with Long field. */
+    public static class LongFieldPojo {
+        public Long value;
+
+        public LongFieldPojo() {}
+    }
+
+    /** Test POJO with Float field. */
+    public static class FloatFieldPojo {
+        public Float value;
+
+        public FloatFieldPojo() {}
+    }
+
+    /** Test POJO with mixed numeric types. */
+    public static class MixedNumericPojo {
+        public Byte byteVal;
+        public Short shortVal;
+        public Integer intVal;
+        public Float floatVal;
+
+        public MixedNumericPojo() {}
+    }
+
+    /** Test POJO with Double field for special values testing. */
+    public static class DoubleFieldPojo {
+        public Double value;
+
+        public DoubleFieldPojo() {}
+    }
+
+    /** Test POJO with mixed Float special and normal values. */
+    public static class MixedFloatValuesPojo {
+        public Float normalValue;
+        public Float nanValue;
+        public Float posInfValue;
+        public Float negInfValue;
+
+        public MixedFloatValuesPojo() {}
+    }
+
+    /** Test POJO with mixed Double special and normal values. */
+    public static class MixedDoubleValuesPojo {
+        public Double normalValue;
+        public Double nanValue;
+        public Double posInfValue;
+        public Double negInfValue;
+
+        public MixedDoubleValuesPojo() {}
     }
 
     /** POJO for testing timestamp precision. */

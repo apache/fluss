@@ -78,7 +78,7 @@ final class ConverterCommons {
                         Short.class,
                         Byte.class)); // all numerics can widen to double
 
-        // Non-numeric types remain unchanged
+        // Numeric types remain unchanged
         map.put(DataTypeRoot.CHAR, setOf(String.class, Character.class));
         map.put(DataTypeRoot.STRING, setOf(String.class, Character.class));
         map.put(DataTypeRoot.BINARY, setOf(byte[].class));
