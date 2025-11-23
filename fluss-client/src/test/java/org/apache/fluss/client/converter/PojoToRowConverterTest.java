@@ -379,7 +379,6 @@ public class PojoToRowConverterTest {
         assertThat(row.isNullAt(0)).isTrue();
     }
 
-
     /**
      * Tests that Float.NaN values are preserved through POJO-to-Row conversion without data loss.
      * This validates FR-001: System MUST preserve Float.NaN through conversion.
