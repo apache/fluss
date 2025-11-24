@@ -31,7 +31,6 @@ import org.apache.iceberg.transforms.Transforms;
 import org.apache.iceberg.types.Types;
 import org.junit.jupiter.api.Test;
 
-import java.io.IOException;
 import java.math.BigDecimal;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
@@ -44,7 +43,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class IcebergBucketingFunctionTest {
 
     @Test
-    void testIntegerHash() throws IOException {
+    void testIntegerHash() {
         int testValue = 42;
         int bucketNum = 10;
 
@@ -69,7 +68,7 @@ class IcebergBucketingFunctionTest {
     }
 
     @Test
-    void testLongHash() throws IOException {
+    void testLongHash() {
         long testValue = 1234567890123456789L;
         int bucketNum = 10;
 
@@ -94,7 +93,7 @@ class IcebergBucketingFunctionTest {
     }
 
     @Test
-    void testStringHash() throws IOException {
+    void testStringHash() {
         String testValue = "Hello Iceberg, Fluss this side!";
         int bucketNum = 10;
 
@@ -120,7 +119,7 @@ class IcebergBucketingFunctionTest {
     }
 
     @Test
-    void testDecimalHash() throws IOException {
+    void testDecimalHash() {
         BigDecimal testValue = new BigDecimal("123.45");
         Decimal decimal = Decimal.fromBigDecimal(testValue, 10, 2);
         int bucketNum = 10;
@@ -148,7 +147,7 @@ class IcebergBucketingFunctionTest {
     }
 
     @Test
-    void testTimestampEncodingHash() throws IOException {
+    void testTimestampEncodingHash() {
         // Iceberg expects microseconds for TIMESTAMP type
         long millis = 1698235273182L;
         int nanos = 123456;
@@ -179,7 +178,7 @@ class IcebergBucketingFunctionTest {
     }
 
     @Test
-    void testDateHash() throws IOException {
+    void testDateHash() {
         int dateValue = 19655;
         int bucketNum = 10;
 
@@ -204,7 +203,7 @@ class IcebergBucketingFunctionTest {
     }
 
     @Test
-    void testTimeHashing() throws IOException {
+    void testTimeHashing() {
         // Fluss stores time as int (milliseconds since midnight)
         int timeMillis = 34200000;
         long timeMicros = timeMillis * 1000L; // Convert to microseconds for Iceberg
@@ -231,7 +230,7 @@ class IcebergBucketingFunctionTest {
     }
 
     @Test
-    void testBinaryEncoding() throws IOException {
+    void testBinaryEncoding() {
         byte[] testValue = "Hello i only understand binary data".getBytes();
         int bucketNum = 10;
 
