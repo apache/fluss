@@ -144,8 +144,11 @@ The delta join feature is introduced since Flink 2.1 and still evolving, and its
 
 Refer to the [Delta Join Issue](https://issues.apache.org/jira/browse/FLINK-37836) for the most up-to-date information.
 
+:::warning
+There is a known issue ([FLINK-38399](https://issues.apache.org/jira/browse/FLINK-38399)) in Flink ≤ 2.1.1 that prevents certain queries from being translated into delta joins. This has been fixed in Flink 2.1.2 and Flink 2.2.
+:::
 
-### Flink 2.1.2 and later
+### Flink 2.1
 
 #### Supported Features
 
@@ -156,11 +159,13 @@ Refer to the [Delta Join Issue](https://issues.apache.org/jira/browse/FLINK-3783
 - The primary key or the prefix key of the tables must be included as part of the equivalence conditions in the join.
 - The join must be a INNER join.
 - The downstream nodes of the join can accept duplicate changes, such as a sink that provides UPSERT mode without `upsertMaterialize`.
+  - When the pk of the sink does not align with (or does not include) the upstream upsert key, the sink will produce a sink materialization (called `upsertMaterialize`).
+  - In Flink, an upsert key is formed when the update history order of unique keys is maintained. This allows for the recognition of record updates and inserts during stream processing, and enables downstream operators to accurately track the update history for the efficient handling of both update-before and update-after records.
 - All join inputs should be INSERT-ONLY streams.
   - This is why the option `'table.merge-engine' = 'first_row'` is added to the source table DDL.
 - All upstream nodes of the join should be `TableSourceScan` or `Exchange`.
 
-### Flink 2.2.0 and later
+### Flink 2.2
 
 #### Supported Features
 
@@ -175,6 +180,8 @@ Refer to the [Delta Join Issue](https://issues.apache.org/jira/browse/FLINK-3783
 - The primary key or the prefix key of the tables must be included as part of the equivalence conditions in the join.
 - The join must be a INNER join.
 - The downstream nodes of the join can accept duplicate changes, such as a sink that provides UPSERT mode without `upsertMaterialize`.
+  - When the pk of the sink does not align with (or does not include) the upstream upsert key, the sink will produce a sink materialization (called `upsertMaterialize`).
+  - In Flink, an upsert key is formed when the update history order of unique keys is maintained. This allows for the recognition of record updates and inserts during stream processing, and enables downstream operators to accurately track the update history for the efficient handling of both update-before and update-after records.
 - When consuming a CDC stream, the join key used in the delta join must be part of the primary key.
 - All filters must be applied on the upsert key, and neither filters nor projections should contain non-deterministic functions.
 
