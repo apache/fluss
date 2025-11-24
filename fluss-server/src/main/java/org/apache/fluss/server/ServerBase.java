@@ -32,6 +32,7 @@ import org.apache.fluss.server.tablet.TabletServer;
 import org.apache.fluss.server.utils.ConfigurationParserUtils;
 import org.apache.fluss.server.utils.FatalErrorHandler;
 import org.apache.fluss.server.utils.ShutdownHookUtil;
+import org.apache.fluss.server.utils.SignalHandler;
 import org.apache.fluss.utils.AutoCloseableAsync;
 import org.apache.fluss.utils.ExceptionUtils;
 import org.apache.fluss.utils.concurrent.FutureUtils;
@@ -113,6 +114,7 @@ public abstract class ServerBase implements AutoCloseableAsync, FatalErrorHandle
     }
 
     public void start() throws Exception {
+        SignalHandler.register(LOG);
         try {
             addShutDownHook();
 
