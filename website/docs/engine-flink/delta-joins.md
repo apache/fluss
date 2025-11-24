@@ -160,7 +160,7 @@ There is a known issue ([FLINK-38399](https://issues.apache.org/jira/browse/FLIN
 - The join must be a INNER join.
 - The downstream nodes of the join can accept duplicate changes, such as a sink that provides UPSERT mode without `upsertMaterialize`.
   - When the pk of the sink does not align with (or does not include) the upstream upsert key, the sink will produce a sink materialization (called `upsertMaterialize`).
-  - In Flink, an upsert key is formed when the update history order of unique keys is maintained. This allows for the recognition of record updates and inserts during stream processing, and enables downstream operators to accurately track the update history for the efficient handling of both update-before and update-after records.
+  - About upsert key and `upsertMaterialize`, more details can be found in this [blog](https://www.ververica.com/blog/flink-sql-secrets-mastering-the-art-of-changelog-events).
 - All join inputs should be INSERT-ONLY streams.
   - This is why the option `'table.merge-engine' = 'first_row'` is added to the source table DDL.
 - All upstream nodes of the join should be `TableSourceScan` or `Exchange`.
@@ -181,7 +181,7 @@ There is a known issue ([FLINK-38399](https://issues.apache.org/jira/browse/FLIN
 - The join must be a INNER join.
 - The downstream nodes of the join can accept duplicate changes, such as a sink that provides UPSERT mode without `upsertMaterialize`.
   - When the pk of the sink does not align with (or does not include) the upstream upsert key, the sink will produce a sink materialization (called `upsertMaterialize`).
-  - In Flink, an upsert key is formed when the update history order of unique keys is maintained. This allows for the recognition of record updates and inserts during stream processing, and enables downstream operators to accurately track the update history for the efficient handling of both update-before and update-after records.
+  - About upsert key and `upsertMaterialize`, more details can be found in this [blog](https://www.ververica.com/blog/flink-sql-secrets-mastering-the-art-of-changelog-events).
 - When consuming a CDC stream, the join key used in the delta join must be part of the primary key.
 - All filters must be applied on the upsert key, and neither filters nor projections should contain non-deterministic functions.
 
