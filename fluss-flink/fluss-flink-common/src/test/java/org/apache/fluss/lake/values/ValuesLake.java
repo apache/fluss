@@ -35,7 +35,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.stream.Collectors;
 
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
@@ -83,10 +82,6 @@ public class ValuesLake {
             throws IOException {
         ValuesTable table = globalTables.get(tableId);
         checkNotNull(table, "commit stage %s failed, table %s is not existed", stageIds, tableId);
-        TableFailureController controller = FAILURE_CONTROLLERS.get(tableId);
-        if (controller != null) {
-            controller.checkCommitShouldFail(tableId);
-        }
         table.commit(stageIds, snapshotProperties);
         LOG.info("Commit table {} stage {}", tableId, stageIds);
         return table.getSnapshotId();
@@ -106,7 +101,7 @@ public class ValuesLake {
 
     public static void createTable(String tableId, Schema schema) {
         if (!globalTables.containsKey(tableId)) {
-            globalTables.put(tableId, new ValuesTable(tableId, schema));
+            globalTables.put(tableId, new ValuesTable(schema));
             ValuesTable table = globalTables.get(tableId);
             checkNotNull(table, "create table %s failed", tableId);
         }
@@ -131,16 +126,14 @@ public class ValuesLake {
 
         private final Object lock;
 
-        private final String tableId;
-
         // [primaryKeys, rowValue]
         private final Map<String, InternalRow> records;
+        private final List<InternalRow> logRecords;
         private final Map<String, List<Tuple2<String, LogRecord>>> stageRecords;
+        private final Map<String, List<LogRecord>> stageLogRecords;
         private final Schema schema;
 
         private final List<Schema.Column> columns;
-
-        private final List<String> columnNames;
 
         private final List<String> primaryKeys;
 
@@ -151,18 +144,19 @@ public class ValuesLake {
 
         private final Map<Long, Map<String, String>> snapshotProperties = new HashMap<>();
 
-        public ValuesTable(String tableId, Schema schema) {
-            this.tableId = tableId;
+        public ValuesTable(Schema schema) {
             this.lock = new Object();
             this.records = new LinkedHashMap<>();
+            this.logRecords = new ArrayList<>();
             this.stageRecords = new HashMap<>();
+            this.stageLogRecords = new HashMap<>();
             this.schema = schema;
             this.columns = new ArrayList<>(schema.getColumns());
-            this.columnNames =
-                    columns.stream().map(Schema.Column::getName).collect(Collectors.toList());
             this.primaryKeys = schema.getPrimaryKeyColumnNames();
             this.primaryKeyIndexes = new ArrayList<>();
-            updatePrimaryKeyIndexes();
+            if (!primaryKeys.isEmpty()) {
+                updatePrimaryKeyIndexes();
+            }
         }
 
         private void updatePrimaryKeyIndexes() {
@@ -181,35 +175,60 @@ public class ValuesLake {
         public List<InternalRow> getResult() {
             List<InternalRow> results = new ArrayList<>();
             synchronized (lock) {
-                records.forEach((key, record) -> results.add(record));
+                if (primaryKeys.isEmpty()) {
+                    results.addAll(logRecords);
+                } else {
+                    records.forEach((key, record) -> results.add(record));
+                }
             }
             return results;
         }
 
         public void writeRecord(String stageId, LogRecord record) {
             synchronized (lock) {
-                this.stageRecords
-                        .computeIfAbsent(stageId, k -> new ArrayList<>())
-                        .add(new Tuple2<>(buildPrimaryKeyStr(record.getRow()), record));
+                if (primaryKeys.isEmpty()) {
+                    this.stageLogRecords
+                            .computeIfAbsent(stageId, k -> new ArrayList<>())
+                            .add(record);
+                } else {
+                    this.stageRecords
+                            .computeIfAbsent(stageId, k -> new ArrayList<>())
+                            .add(new Tuple2<>(buildPrimaryKeyStr(record.getRow()), record));
+                }
             }
         }
 
         public void commit(List<String> stageIds, Map<String, String> snapshotProperties) {
             synchronized (lock) {
-                for (String stageId : stageIds) {
-                    List<Tuple2<String, LogRecord>> stageRecords = this.stageRecords.get(stageId);
-                    stageRecords.forEach(record -> records.put(record.f0, record.f1.getRow()));
-                    this.stageRecords.remove(stageId);
+                if (primaryKeys.isEmpty()) {
+                    for (String stageId : stageIds) {
+                        List<LogRecord> stageRecords = this.stageLogRecords.get(stageId);
+                        stageRecords.forEach(record -> logRecords.add(record.getRow()));
+                        this.stageLogRecords.remove(stageId);
+                    }
+                } else {
+                    for (String stageId : stageIds) {
+                        List<Tuple2<String, LogRecord>> stageRecords =
+                                this.stageRecords.get(stageId);
+                        stageRecords.forEach(record -> records.put(record.f0, record.f1.getRow()));
+                        this.stageRecords.remove(stageId);
+                    }
+                    this.snapshotId++;
+                    this.snapshotProperties.put(this.snapshotId, snapshotProperties);
                 }
-                this.snapshotId++;
-                this.snapshotProperties.put(this.snapshotId, snapshotProperties);
             }
         }
 
         public void abort(List<String> stageIds) {
             synchronized (lock) {
-                for (String stageId : stageIds) {
-                    this.stageRecords.remove(stageId);
+                if (primaryKeys.isEmpty()) {
+                    for (String stageId : stageIds) {
+                        this.stageLogRecords.remove(stageId);
+                    }
+                } else {
+                    for (String stageId : stageIds) {
+                        this.stageRecords.remove(stageId);
+                    }
                 }
             }
         }
@@ -240,20 +259,17 @@ public class ValuesLake {
         }
     }
 
+    /** Controller to control the failure of table write and commit. */
     public static class TableFailureController {
         private volatile boolean writeFailEnabled = false;
         private final AtomicInteger writeFailTimes = new AtomicInteger(0);
         private final AtomicInteger writeFailCounter = new AtomicInteger(0);
 
-        private volatile boolean commitFailEnabled = false;
-        private final AtomicInteger commitFailTimes = new AtomicInteger(0);
-        private final AtomicInteger commitFailCounter = new AtomicInteger(0);
-
         public TableFailureController failWriteOnce() {
             return failWriteNext(1);
         }
 
-        /** Force the next N write calls to throw IOException (thread-safe) */
+        /** Force the next N write calls to throw IOException (thread-safe). */
         public TableFailureController failWriteNext(int times) {
             this.writeFailEnabled = true;
             this.writeFailTimes.set(times);
@@ -261,32 +277,16 @@ public class ValuesLake {
             return this;
         }
 
-        /** Fail only the next single write call */
+        /** Fail only the next single write call. */
         public TableFailureController disableWriteFail() {
             this.writeFailEnabled = false;
             return this;
         }
 
-        /** Fail only the next single commit call */
-        public TableFailureController failCommitOnce() {
-            return failCommitNext(1);
-        }
-
-        /** Force the next N commit calls to throw IOException (recommended for failover tests) */
-        public TableFailureController failCommitNext(int times) {
-            this.commitFailEnabled = true;
-            this.commitFailTimes.set(times);
-            this.commitFailCounter.set(0);
-            return this;
-        }
-
-        public TableFailureController disableCommitFail() {
-            this.commitFailEnabled = false;
-            return this;
-        }
-
         private void checkWriteShouldFail(String tableId) throws IOException {
-            if (!writeFailEnabled) return;
+            if (!writeFailEnabled) {
+                return;
+            }
 
             int count = writeFailCounter.incrementAndGet();
             if (count <= writeFailTimes.get()) {
@@ -301,25 +301,6 @@ public class ValuesLake {
                                 count, writeFailTimes.get()));
             } else {
                 writeFailEnabled = false;
-            }
-        }
-
-        private void checkCommitShouldFail(String tableId) throws IOException {
-            if (!commitFailEnabled) return;
-
-            int count = commitFailCounter.incrementAndGet();
-            if (count <= commitFailTimes.get()) {
-                LOG.warn(
-                        "ValuesLake FAIL_INJECTED: commit() intentionally failed [table={} attempt={}/{}] → will trigger Flink failover",
-                        tableId,
-                        count,
-                        commitFailTimes.get());
-                throw new IOException(
-                        String.format(
-                                "ValuesLake commit failure injected for test (attempt %d of %d) → triggers Flink job failover",
-                                count, commitFailTimes.get()));
-            } else {
-                commitFailEnabled = false;
             }
         }
     }

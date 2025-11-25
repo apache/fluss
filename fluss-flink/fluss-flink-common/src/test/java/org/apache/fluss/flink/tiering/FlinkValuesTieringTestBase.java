@@ -22,7 +22,6 @@ import org.apache.fluss.client.Connection;
 import org.apache.fluss.client.ConnectionFactory;
 import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.client.table.Table;
-import org.apache.fluss.client.table.writer.AppendWriter;
 import org.apache.fluss.client.table.writer.TableWriter;
 import org.apache.fluss.client.table.writer.UpsertWriter;
 import org.apache.fluss.config.ConfigOptions;
@@ -146,11 +145,7 @@ public class FlinkValuesTieringTestBase {
             TableWriter tableWriter;
             tableWriter = table.newUpsert().createWriter();
             for (InternalRow row : rows) {
-                if (tableWriter instanceof AppendWriter) {
-                    ((AppendWriter) tableWriter).append(row);
-                } else {
-                    ((UpsertWriter) tableWriter).upsert(row);
-                }
+                ((UpsertWriter) tableWriter).upsert(row);
             }
             tableWriter.flush();
         }

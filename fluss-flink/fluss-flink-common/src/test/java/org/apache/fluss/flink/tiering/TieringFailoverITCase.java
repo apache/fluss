@@ -170,6 +170,7 @@ public class TieringFailoverITCase extends FlinkValuesTieringTestBase {
         writeRows(t1, rows);
         waitUntilSnapshot(t1Id, 1, 0);
 
+        // fail the first write to the pk table
         ValuesLake.failWhen(t1.toString()).failWriteOnce();
 
         // then start tiering job
@@ -261,7 +262,6 @@ public class TieringFailoverITCase extends FlinkValuesTieringTestBase {
             // check the status of replica of t1 after synced
             // not check start offset since we won't
             // update start log offset for primary key table
-            // 3 initial + (3 deletes + 3 inserts) = 9
             assertReplicaStatus(t1Bucket, expectedRows.size());
 
             checkDataInValuesPrimaryKeyTable(t1, expectedRows);
