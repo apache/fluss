@@ -56,90 +56,6 @@ public class ValuesLake {
         FAILURE_CONTROLLERS.clear();
     }
 
-    public static class TableFailureController {
-        private volatile boolean writeFailEnabled = false;
-        private final AtomicInteger writeFailTimes = new AtomicInteger(0);
-        private final AtomicInteger writeFailCounter = new AtomicInteger(0);
-
-        private volatile boolean commitFailEnabled = false;
-        private final AtomicInteger commitFailTimes = new AtomicInteger(0);
-        private final AtomicInteger commitFailCounter = new AtomicInteger(0);
-
-        public TableFailureController failWriteOnce() {
-            return failWriteNext(1);
-        }
-
-        /** Force the next N write calls to throw IOException (thread-safe) */
-        public TableFailureController failWriteNext(int times) {
-            this.writeFailEnabled = true;
-            this.writeFailTimes.set(times);
-            this.writeFailCounter.set(0);
-            return this;
-        }
-
-        /** Fail only the next single write call */
-        public TableFailureController disableWriteFail() {
-            this.writeFailEnabled = false;
-            return this;
-        }
-
-        /** Fail only the next single commit call */
-        public TableFailureController failCommitOnce() {
-            return failCommitNext(1);
-        }
-
-        /** Force the next N commit calls to throw IOException (recommended for failover tests) */
-        public TableFailureController failCommitNext(int times) {
-            this.commitFailEnabled = true;
-            this.commitFailTimes.set(times);
-            this.commitFailCounter.set(0);
-            return this;
-        }
-
-        public TableFailureController disableCommitFail() {
-            this.commitFailEnabled = false;
-            return this;
-        }
-
-        private void checkWriteShouldFail(String tableId) throws IOException {
-            if (!writeFailEnabled) return;
-
-            int count = writeFailCounter.incrementAndGet();
-            if (count <= writeFailTimes.get()) {
-                LOG.warn(
-                        "ValuesLake FAIL_INJECTED: write() intentionally failed [table={} attempt={}/{}]",
-                        tableId,
-                        count,
-                        writeFailTimes.get());
-                throw new IOException(
-                        String.format(
-                                "ValuesLake write failure injected for test (attempt %d of %d)",
-                                count, writeFailTimes.get()));
-            } else {
-                writeFailEnabled = false;
-            }
-        }
-
-        private void checkCommitShouldFail(String tableId) throws IOException {
-            if (!commitFailEnabled) return;
-
-            int count = commitFailCounter.incrementAndGet();
-            if (count <= commitFailTimes.get()) {
-                LOG.warn(
-                        "ValuesLake FAIL_INJECTED: commit() intentionally failed [table={} attempt={}/{}] → will trigger Flink failover",
-                        tableId,
-                        count,
-                        commitFailTimes.get());
-                throw new IOException(
-                        String.format(
-                                "ValuesLake commit failure injected for test (attempt %d of %d) → triggers Flink job failover",
-                                count, commitFailTimes.get()));
-            } else {
-                commitFailEnabled = false;
-            }
-        }
-    }
-
     public static Schema getTableSchema(String tableId) {
         return globalTables.get(tableId).schema;
     }
@@ -321,6 +237,90 @@ public class ValuesLake {
 
         public Map<String, String> currentSnapshotProperties() {
             return getSnapshotProperties(snapshotId);
+        }
+    }
+
+    public static class TableFailureController {
+        private volatile boolean writeFailEnabled = false;
+        private final AtomicInteger writeFailTimes = new AtomicInteger(0);
+        private final AtomicInteger writeFailCounter = new AtomicInteger(0);
+
+        private volatile boolean commitFailEnabled = false;
+        private final AtomicInteger commitFailTimes = new AtomicInteger(0);
+        private final AtomicInteger commitFailCounter = new AtomicInteger(0);
+
+        public TableFailureController failWriteOnce() {
+            return failWriteNext(1);
+        }
+
+        /** Force the next N write calls to throw IOException (thread-safe) */
+        public TableFailureController failWriteNext(int times) {
+            this.writeFailEnabled = true;
+            this.writeFailTimes.set(times);
+            this.writeFailCounter.set(0);
+            return this;
+        }
+
+        /** Fail only the next single write call */
+        public TableFailureController disableWriteFail() {
+            this.writeFailEnabled = false;
+            return this;
+        }
+
+        /** Fail only the next single commit call */
+        public TableFailureController failCommitOnce() {
+            return failCommitNext(1);
+        }
+
+        /** Force the next N commit calls to throw IOException (recommended for failover tests) */
+        public TableFailureController failCommitNext(int times) {
+            this.commitFailEnabled = true;
+            this.commitFailTimes.set(times);
+            this.commitFailCounter.set(0);
+            return this;
+        }
+
+        public TableFailureController disableCommitFail() {
+            this.commitFailEnabled = false;
+            return this;
+        }
+
+        private void checkWriteShouldFail(String tableId) throws IOException {
+            if (!writeFailEnabled) return;
+
+            int count = writeFailCounter.incrementAndGet();
+            if (count <= writeFailTimes.get()) {
+                LOG.warn(
+                        "ValuesLake FAIL_INJECTED: write() intentionally failed [table={} attempt={}/{}]",
+                        tableId,
+                        count,
+                        writeFailTimes.get());
+                throw new IOException(
+                        String.format(
+                                "ValuesLake write failure injected for test (attempt %d of %d)",
+                                count, writeFailTimes.get()));
+            } else {
+                writeFailEnabled = false;
+            }
+        }
+
+        private void checkCommitShouldFail(String tableId) throws IOException {
+            if (!commitFailEnabled) return;
+
+            int count = commitFailCounter.incrementAndGet();
+            if (count <= commitFailTimes.get()) {
+                LOG.warn(
+                        "ValuesLake FAIL_INJECTED: commit() intentionally failed [table={} attempt={}/{}] → will trigger Flink failover",
+                        tableId,
+                        count,
+                        commitFailTimes.get());
+                throw new IOException(
+                        String.format(
+                                "ValuesLake commit failure injected for test (attempt %d of %d) → triggers Flink job failover",
+                                count, commitFailTimes.get()));
+            } else {
+                commitFailEnabled = false;
+            }
         }
     }
 }
