@@ -51,7 +51,7 @@ import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test base for tiering to Values Lake by Flink. */
-public class FlinkValuesTieringTestBase {
+class FlinkValuesTieringTestBase {
 
     @RegisterExtension
     public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION =
