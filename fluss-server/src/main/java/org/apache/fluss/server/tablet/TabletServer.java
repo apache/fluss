@@ -382,10 +382,6 @@ public class TabletServer extends ServerBase {
             }
 
             try {
-                if (zkClient != null) {
-                    zkClient.close();
-                }
-
                 // TODO currently, rpc client don't have timeout logic. After implementing the
                 // timeout logic, we need to move the closure of rpc client to after the closure of
                 // replica manager.
@@ -431,6 +427,9 @@ public class TabletServer extends ServerBase {
                     lakeCatalogDynamicLoader.close();
                 }
 
+                if (zkClient != null) {
+                    zkClient.close();
+                }
             } catch (Throwable t) {
                 exception = ExceptionUtils.firstOrSuppressed(t, exception);
             }
