@@ -16,7 +16,7 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.lake.values;
+package org.apache.fluss.flink.tiering;
 
 import org.apache.fluss.client.Connection;
 import org.apache.fluss.client.ConnectionFactory;
@@ -27,7 +27,7 @@ import org.apache.fluss.client.table.writer.TableWriter;
 import org.apache.fluss.client.table.writer.UpsertWriter;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
-import org.apache.fluss.flink.tiering.LakeTieringJobBuilder;
+import org.apache.fluss.lake.values.ValuesLake;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
@@ -38,7 +38,6 @@ import org.apache.fluss.server.replica.Replica;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 
 import org.apache.flink.api.common.RuntimeExecutionMode;
-import org.apache.flink.core.execution.JobClient;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -46,11 +45,9 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.extension.RegisterExtension;
 
 import java.time.Duration;
-import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 
-import static org.apache.fluss.flink.tiering.source.TieringSourceOptions.POLL_TIERING_TABLE_INTERVAL;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -104,17 +101,6 @@ public class FlinkValuesTieringTestBase {
         execEnv = StreamExecutionEnvironment.getExecutionEnvironment();
         execEnv.setRuntimeMode(RuntimeExecutionMode.STREAMING);
         execEnv.setParallelism(2);
-    }
-
-    protected JobClient buildTieringJob(StreamExecutionEnvironment execEnv) throws Exception {
-        Configuration flussConfig = new Configuration(clientConf);
-        flussConfig.set(POLL_TIERING_TABLE_INTERVAL, Duration.ofMillis(500L));
-        return LakeTieringJobBuilder.newBuilder(
-                        execEnv,
-                        flussConfig,
-                        Configuration.fromMap(Collections.emptyMap()),
-                        DataLakeFormat.VALUES.toString())
-                .build();
     }
 
     protected long createPkTable(

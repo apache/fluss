@@ -16,8 +16,16 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.lake.values;
+package org.apache.fluss.flink.tiering;
 
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.flink.tiering.committer.CommittableMessageTypeInfo;
+import org.apache.fluss.flink.tiering.committer.TieringCommitOperatorFactory;
+import org.apache.fluss.flink.tiering.source.TableBucketWriteResultTypeInfo;
+import org.apache.fluss.flink.tiering.source.TieringSource;
+import org.apache.fluss.lake.values.ValuesLake;
+import org.apache.fluss.lake.values.tiering.ValuesLakeTieringFactory;
+import org.apache.fluss.lake.writer.LakeTieringFactory;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
@@ -29,11 +37,16 @@ import org.apache.fluss.row.TimestampNtz;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.utils.TypeUtils;
 
+import org.apache.flink.api.common.eventtime.WatermarkStrategy;
+import org.apache.flink.configuration.PipelineOptions;
 import org.apache.flink.core.execution.JobClient;
+import org.apache.flink.streaming.api.datastream.DataStreamSource;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
+import org.apache.flink.streaming.api.functions.sink.v2.DiscardingSink;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -41,12 +54,13 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 
+import static org.apache.fluss.flink.tiering.source.TieringSource.TIERING_SOURCE_TRANSFORMATION_UID;
+import static org.apache.fluss.flink.tiering.source.TieringSourceOptions.POLL_TIERING_TABLE_INTERVAL;
 import static org.apache.fluss.lake.committer.BucketOffset.FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY;
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.assertj.core.api.Assertions.assertThat;
 
-/** Test {@link ValuesLake} with Flink. */
-public class ValuesTieringITCase extends FlinkValuesTieringTestBase {
+public class TieringFailoverITCase extends FlinkValuesTieringTestBase {
     protected static final String DEFAULT_DB = "fluss";
 
     private static StreamExecutionEnvironment execEnv;
@@ -90,7 +104,6 @@ public class ValuesTieringITCase extends FlinkValuesTieringTestBase {
         long t1Id = createPkTable(t1, 1, false, pkSchema);
         TableBucket t1Bucket = new TableBucket(t1Id, 0);
         // write records
-        List<InternalRow> expectedRows = new ArrayList<>();
         List<InternalRow> rows =
                 Arrays.asList(
                         row(
@@ -153,9 +166,11 @@ public class ValuesTieringITCase extends FlinkValuesTieringTestBase {
                                 TypeUtils.castFromString("09:30:00.0", DataTypes.TIME()),
                                 BinaryString.fromString("abc"),
                                 new byte[] {1, 2, 3, 4, 5, 6, 7, 8, 9, 10}));
-        expectedRows.addAll(rows);
+        List<InternalRow> expectedRows = new ArrayList<>(rows);
         writeRows(t1, rows);
         waitUntilSnapshot(t1Id, 1, 0);
+
+        ValuesLake.failWhen(t1.toString()).failWriteOnce();
 
         // then start tiering job
         JobClient jobClient = buildTieringJob(execEnv);
@@ -164,7 +179,7 @@ public class ValuesTieringITCase extends FlinkValuesTieringTestBase {
             assertReplicaStatus(t1Bucket, 3);
 
             checkDataInValuesPrimaryKeyTable(t1, rows);
-            // check snapshot property in iceberg
+            // check snapshot property in values lake
             Map<String, String> properties =
                     new HashMap<String, String>() {
                         {
@@ -255,6 +270,48 @@ public class ValuesTieringITCase extends FlinkValuesTieringTestBase {
         }
     }
 
+    protected JobClient buildTieringJob(StreamExecutionEnvironment execEnv) throws Exception {
+        Configuration flussConfig = new Configuration(clientConf);
+        flussConfig.set(POLL_TIERING_TABLE_INTERVAL, Duration.ofMillis(500L));
+
+        LakeTieringFactory lakeTieringFactory = new ValuesLakeTieringFactory();
+
+        // build tiering source
+        TieringSource.Builder<?> tieringSourceBuilder =
+                new TieringSource.Builder<>(flussConfig, lakeTieringFactory);
+        if (flussConfig.get(POLL_TIERING_TABLE_INTERVAL) != null) {
+            tieringSourceBuilder.withPollTieringTableIntervalMs(
+                    flussConfig.get(POLL_TIERING_TABLE_INTERVAL).toMillis());
+        }
+        TieringSource<?> tieringSource = tieringSourceBuilder.build();
+        DataStreamSource<?> source =
+                execEnv.fromSource(
+                        tieringSource,
+                        WatermarkStrategy.noWatermarks(),
+                        "TieringSource",
+                        TableBucketWriteResultTypeInfo.of(
+                                () -> lakeTieringFactory.getWriteResultSerializer()));
+
+        source.getTransformation().setUid(TIERING_SOURCE_TRANSFORMATION_UID);
+
+        source.transform(
+                        "TieringCommitter",
+                        CommittableMessageTypeInfo.of(
+                                () -> lakeTieringFactory.getCommittableSerializer()),
+                        new TieringCommitOperatorFactory(flussConfig, lakeTieringFactory))
+                .setParallelism(1)
+                .setMaxParallelism(1)
+                .sinkTo(new DiscardingSink())
+                .name("end")
+                .setParallelism(1);
+        String jobName =
+                execEnv.getConfiguration()
+                        .getOptional(PipelineOptions.NAME)
+                        .orElse("Fluss Lake Tiering FailOver IT Test.");
+
+        return execEnv.executeAsync(jobName);
+    }
+
     private void checkDataInValuesPrimaryKeyTable(
             TablePath tablePath, List<InternalRow> expectedRows) throws Exception {
         Iterator<InternalRow> acturalIterator = getValuesRecords(tablePath).iterator();
@@ -270,20 +327,12 @@ public class ValuesTieringITCase extends FlinkValuesTieringTestBase {
             assertThat(record.getFloat(5)).isEqualTo(row.getFloat(5));
             assertThat(record.getDouble(6)).isEqualTo(row.getDouble(6));
             assertThat(record.getString(7)).isEqualTo(row.getString(7));
-            // Iceberg expects BigDecimal for decimal types.
-            assertThat(record.getDecimal(8, 5, 2).toBigDecimal())
-                    .isEqualTo(row.getDecimal(8, 5, 2).toBigDecimal());
-            assertThat(record.getDecimal(9, 20, 0).toBigDecimal())
-                    .isEqualTo(row.getDecimal(9, 20, 0).toBigDecimal());
-            assertThat(record.getTimestampLtz(10, 3).toInstant())
-                    .isEqualTo(record.getTimestampLtz(10, 3).toInstant());
-            assertThat(record.getTimestampLtz(11, 6).toInstant())
-                    .isEqualTo(row.getTimestampLtz(11, 6).toInstant());
-            assertThat(record.getTimestampNtz(12, 6).toLocalDateTime())
-                    .isEqualTo(row.getTimestampNtz(12, 6).toLocalDateTime());
-            assertThat(record.getTimestampNtz(13, 6).toLocalDateTime())
-                    .isEqualTo(row.getTimestampNtz(13, 6).toLocalDateTime());
-            // Iceberg's Record interface expects ByteBuffer for binary types.
+            assertThat(record.getDecimal(8, 5, 2)).isEqualTo(row.getDecimal(8, 5, 2));
+            assertThat(record.getDecimal(9, 20, 0)).isEqualTo(row.getDecimal(9, 20, 0));
+            assertThat(record.getTimestampLtz(10, 3)).isEqualTo(row.getTimestampLtz(10, 3));
+            assertThat(record.getTimestampLtz(11, 6)).isEqualTo(row.getTimestampLtz(11, 6));
+            assertThat(record.getTimestampNtz(12, 6)).isEqualTo(row.getTimestampNtz(12, 6));
+            assertThat(record.getTimestampNtz(13, 6)).isEqualTo(row.getTimestampNtz(13, 6));
             assertThat(record.getBinary(14, 4)).isEqualTo(row.getBinary(14, 4));
             assertThat(record.getInt(15)).isEqualTo(row.getInt(15));
             assertThat(record.getInt(16)).isEqualTo(row.getInt(16));

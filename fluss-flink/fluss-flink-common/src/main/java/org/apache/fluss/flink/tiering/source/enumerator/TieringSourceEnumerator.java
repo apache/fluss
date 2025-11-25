@@ -188,35 +188,35 @@ public class TieringSourceEnumerator
             int maxAttempt = max(readerByAttempt.keySet());
             if (maxAttempt >= 1) {
                 if (isFailOvering) {
-                    LOG.info(
-                            "Max attempt for subtask {} is {}, which is greater than 1. But it's still in failovering."
-                                    + " Current registered readers are {}.",
+                    LOG.warn(
+                            "Subtask {} (max attempt {}) registered during ongoing failover.",
                             subtaskId,
-                            maxAttempt,
-                            context.registeredReadersOfAttempts());
+                            maxAttempt);
                 } else {
-                    LOG.info(
-                            "Max attempt for subtask {} is {}, which is greater than 1. It must be failovering. Current registered readers are {}.",
+                    LOG.warn(
+                            "Detected failover: subtask {} has max attempt {} > 0. Triggering global failover handling.",
                             subtaskId,
-                            maxAttempt,
-                            context.registeredReadersOfAttempts());
+                            maxAttempt);
                     // should be failover
                     isFailOvering = true;
                     handleSourceReaderFailOver();
                 }
 
-                // if registered readers equal to current parallelism, check whether has same
-                // all has same max maxAttempt
+                // if registered readers equal to current parallelism, check whether all registered
+                // readers have same max maxAttempt
                 if (context.registeredReadersOfAttempts().size() == context.currentParallelism()) {
                     // Check if all readers have the same max attempt number
                     Set<Integer> maxAttempts =
                             context.registeredReadersOfAttempts().values().stream()
                                     .map(_readerByAttempt -> max(_readerByAttempt.keySet()))
                                     .collect(Collectors.toSet());
-                    if (maxAttempts.size() == 1 && max(maxAttempts) >= 1) {
-                        LOG.info(
-                                "All readers have the same max attempt number: {}. Failover process is complete.",
-                                max(maxAttempts));
+                    int globalMaxAttempt = max(maxAttempts);
+                    if (maxAttempts.size() == 1 && globalMaxAttempt >= 1) {
+                        LOG.warn(
+                                "Failover completed. All {} subtasks reached the same attempt number {}. Current registered readers are {}",
+                                context.currentParallelism(),
+                                globalMaxAttempt,
+                                context.registeredReadersOfAttempts());
                         isFailOvering = false;
                     }
                 }

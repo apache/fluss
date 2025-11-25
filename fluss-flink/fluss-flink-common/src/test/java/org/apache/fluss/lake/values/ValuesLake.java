@@ -27,12 +27,14 @@ import org.apache.fluss.utils.types.Tuple2;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.utils.Preconditions.checkArgument;
@@ -43,6 +45,100 @@ public class ValuesLake {
     private static final Logger LOG = LoggerFactory.getLogger(ValuesLake.class);
 
     private static final Map<String, ValuesTable> globalTables = MapUtils.newConcurrentHashMap();
+    private static final Map<String, TableFailureController> FAILURE_CONTROLLERS =
+            MapUtils.newConcurrentHashMap();
+
+    public static TableFailureController failWhen(String tableId) {
+        return FAILURE_CONTROLLERS.computeIfAbsent(tableId, k -> new TableFailureController());
+    }
+
+    public static void clearAllFailureControls() {
+        FAILURE_CONTROLLERS.clear();
+    }
+
+    public static class TableFailureController {
+        private volatile boolean writeFailEnabled = false;
+        private final AtomicInteger writeFailTimes = new AtomicInteger(0);
+        private final AtomicInteger writeFailCounter = new AtomicInteger(0);
+
+        private volatile boolean commitFailEnabled = false;
+        private final AtomicInteger commitFailTimes = new AtomicInteger(0);
+        private final AtomicInteger commitFailCounter = new AtomicInteger(0);
+
+        public TableFailureController failWriteOnce() {
+            return failWriteNext(1);
+        }
+
+        /** Force the next N write calls to throw IOException (thread-safe) */
+        public TableFailureController failWriteNext(int times) {
+            this.writeFailEnabled = true;
+            this.writeFailTimes.set(times);
+            this.writeFailCounter.set(0);
+            return this;
+        }
+
+        /** Fail only the next single write call */
+        public TableFailureController disableWriteFail() {
+            this.writeFailEnabled = false;
+            return this;
+        }
+
+        /** Fail only the next single commit call */
+        public TableFailureController failCommitOnce() {
+            return failCommitNext(1);
+        }
+
+        /** Force the next N commit calls to throw IOException (recommended for failover tests) */
+        public TableFailureController failCommitNext(int times) {
+            this.commitFailEnabled = true;
+            this.commitFailTimes.set(times);
+            this.commitFailCounter.set(0);
+            return this;
+        }
+
+        public TableFailureController disableCommitFail() {
+            this.commitFailEnabled = false;
+            return this;
+        }
+
+        private void checkWriteShouldFail(String tableId) throws IOException {
+            if (!writeFailEnabled) return;
+
+            int count = writeFailCounter.incrementAndGet();
+            if (count <= writeFailTimes.get()) {
+                LOG.warn(
+                        "ValuesLake FAIL_INJECTED: write() intentionally failed [table={} attempt={}/{}]",
+                        tableId,
+                        count,
+                        writeFailTimes.get());
+                throw new IOException(
+                        String.format(
+                                "ValuesLake write failure injected for test (attempt %d of %d)",
+                                count, writeFailTimes.get()));
+            } else {
+                writeFailEnabled = false;
+            }
+        }
+
+        private void checkCommitShouldFail(String tableId) throws IOException {
+            if (!commitFailEnabled) return;
+
+            int count = commitFailCounter.incrementAndGet();
+            if (count <= commitFailTimes.get()) {
+                LOG.warn(
+                        "ValuesLake FAIL_INJECTED: commit() intentionally failed [table={} attempt={}/{}] → will trigger Flink failover",
+                        tableId,
+                        count,
+                        commitFailTimes.get());
+                throw new IOException(
+                        String.format(
+                                "ValuesLake commit failure injected for test (attempt %d of %d) → triggers Flink job failover",
+                                count, commitFailTimes.get()));
+            } else {
+                commitFailEnabled = false;
+            }
+        }
+    }
 
     public static Schema getTableSchema(String tableId) {
         return globalTables.get(tableId).schema;
@@ -54,17 +150,27 @@ public class ValuesLake {
         return table.getResult();
     }
 
-    public static void writeRecord(String tableId, String stageId, LogRecord record) {
+    public static void writeRecord(String tableId, String stageId, LogRecord record)
+            throws IOException {
         ValuesTable table = globalTables.get(tableId);
         checkNotNull(table, tableId + " is not existed");
-        table.writeRecords(stageId, record);
-        LOG.info("Write records to stage {}: {}", stageId, record);
+        TableFailureController controller = FAILURE_CONTROLLERS.get(tableId);
+        if (controller != null) {
+            controller.checkWriteShouldFail(tableId);
+        }
+        table.writeRecord(stageId, record);
+        LOG.info("Write record to stage {}: {}", stageId, record);
     }
 
     public static long commit(
-            String tableId, List<String> stageIds, Map<String, String> snapshotProperties) {
+            String tableId, List<String> stageIds, Map<String, String> snapshotProperties)
+            throws IOException {
         ValuesTable table = globalTables.get(tableId);
         checkNotNull(table, "commit stage %s failed, table %s is not existed", stageIds, tableId);
+        TableFailureController controller = FAILURE_CONTROLLERS.get(tableId);
+        if (controller != null) {
+            controller.checkCommitShouldFail(tableId);
+        }
         table.commit(stageIds, snapshotProperties);
         LOG.info("Commit table {} stage {}", tableId, stageIds);
         return table.getSnapshotId();
@@ -164,7 +270,7 @@ public class ValuesLake {
             return results;
         }
 
-        public void writeRecords(String stageId, LogRecord record) {
+        public void writeRecord(String stageId, LogRecord record) {
             synchronized (lock) {
                 this.stageRecords
                         .computeIfAbsent(stageId, k -> new ArrayList<>())

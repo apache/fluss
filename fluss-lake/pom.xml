@@ -79,7 +79,6 @@
         <module>fluss-lake-paimon</module>
         <module>fluss-lake-iceberg</module>
         <module>fluss-lake-lance</module>
-        <module>fluss-lake-values</module>
     </modules>
     <packaging>pom</packaging>
 </project>
