@@ -60,9 +60,7 @@ import static org.apache.fluss.lake.committer.BucketOffset.FLUSS_LAKE_SNAP_BUCKE
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.assertj.core.api.Assertions.assertThat;
 
-/**
- * Test tiering failover.
- */
+/** Test tiering failover. */
 class TieringFailoverITCase extends FlinkValuesTieringTestBase {
     protected static final String DEFAULT_DB = "fluss";
 
