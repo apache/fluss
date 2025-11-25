@@ -176,7 +176,7 @@ public class ReplicaManager {
     private final SnapshotContext kvSnapshotContext;
 
     // remote log manager for remote log storage.
-    private final RemoteLogManager remoteLogManager;
+    protected final RemoteLogManager remoteLogManager;
 
     // for metrics
     private final TabletServerMetricGroup serverMetricGroup;
@@ -217,7 +217,7 @@ public class ReplicaManager {
     }
 
     @VisibleForTesting
-    ReplicaManager(
+    protected ReplicaManager(
             Configuration conf,
             Scheduler scheduler,
             LogManager logManager,
@@ -1111,7 +1111,9 @@ public class ReplicaManager {
 
                 FetchLogResultForBucket result;
                 if (replica != null && e instanceof LogOffsetOutOfRangeException) {
-                    result = handleFetchOutOfRangeException(replica, fetchOffset, e);
+                    result =
+                            handleFetchOutOfRangeException(
+                                    replica, fetchOffset, fetchParams.isFromFollower(), e);
                 } else {
                     result = new FetchLogResultForBucket(tb, ApiError.fromThrowable(e));
                 }
@@ -1123,7 +1125,7 @@ public class ReplicaManager {
     }
 
     private FetchLogResultForBucket handleFetchOutOfRangeException(
-            Replica replica, long fetchOffset, Exception e) {
+            Replica replica, long fetchOffset, boolean isFromFollower, Exception e) {
         TableBucket tb = replica.getTableBucket();
         if (fetchOffset == FetchParams.FETCH_FROM_EARLIEST_OFFSET) {
             fetchOffset = replica.getLogStartOffset();
@@ -1141,7 +1143,8 @@ public class ReplicaManager {
         // of RemoteLogSegment. For client fetcher, it will fetch the log from remote in client.
         // For follower, it can update its local metadata to adjust the next fetch offset.
         else if (canFetchFromRemoteLog(replica, fetchOffset)) {
-            RemoteLogFetchInfo remoteLogFetchInfo = fetchLogFromRemote(replica, fetchOffset);
+            RemoteLogFetchInfo remoteLogFetchInfo =
+                    fetchLogFromRemote(replica, fetchOffset, isFromFollower);
             if (remoteLogFetchInfo != null) {
                 return new FetchLogResultForBucket(
                         tb, remoteLogFetchInfo, replica.getLogHighWatermark());
@@ -1167,13 +1170,20 @@ public class ReplicaManager {
         return replica.getLogTablet().canFetchFromRemoteLog(fetchOffset);
     }
 
-    private @Nullable RemoteLogFetchInfo fetchLogFromRemote(Replica replica, long fetchOffset) {
+    private @Nullable RemoteLogFetchInfo fetchLogFromRemote(
+            Replica replica, long fetchOffset, boolean isFromFollower) {
         List<RemoteLogSegment> remoteLogSegmentList =
                 remoteLogManager.relevantRemoteLogSegments(replica.getTableBucket(), fetchOffset);
         if (!remoteLogSegmentList.isEmpty()) {
-            int firstStartPos =
-                    remoteLogManager.lookupPositionForOffset(
-                            remoteLogSegmentList.get(0), fetchOffset);
+            // follower does not require firstStartPos, so we do not look up this value.
+            // On one hand, this reduces query overhead, and on the other hand,
+            // it helps prevent unexpected issues caused by corrupted index files.
+            int firstStartPos = -1;
+            if (!isFromFollower) {
+                firstStartPos =
+                        remoteLogManager.lookupPositionForOffset(
+                                remoteLogSegmentList.get(0), fetchOffset);
+            }
             PhysicalTablePath physicalTablePath = replica.getPhysicalTablePath();
             FsPath remoteLogTabletDir =
                     FlussPaths.remoteLogTabletDir(
