@@ -30,7 +30,6 @@ import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.exception.RetriableException;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
-import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.GatewayClientProxy;
@@ -96,24 +95,8 @@ public class MetadataUpdater {
         return cluster.getPartitionIdOrElseThrow(physicalTablePath);
     }
 
-    public TableInfo getTableInfoOrElseThrow(TablePath tablePath) {
-        return cluster.getTableOrElseThrow(tablePath);
-    }
-
     public Optional<BucketLocation> getBucketLocation(TableBucket tableBucket) {
         return cluster.getBucketLocation(tableBucket);
-    }
-
-    private Optional<TableInfo> getTableInfo(TablePath tablePath) {
-        return cluster.getTable(tablePath);
-    }
-
-    public TableInfo getTableInfoOrElseThrow(long tableId) {
-        return getTableInfo(cluster.getTablePathOrElseThrow(tableId))
-                .orElseThrow(
-                        () ->
-                                new FlussRuntimeException(
-                                        "Table not found for table id: " + tableId));
     }
 
     public int leaderFor(TableBucket tableBucket) {

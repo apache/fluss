@@ -30,6 +30,7 @@ import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.IllegalConfigurationException;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.metrics.ClientMetricGroup;
 import org.apache.fluss.utils.CopyOnWriteMap;
@@ -86,6 +87,8 @@ public class WriterClient {
     private final IdempotenceManager idempotenceManager;
     private final WriterMetricGroup writerMetricGroup;
     private final DynamicPartitionCreator dynamicPartitionCreator;
+    private final Admin admin;
+    private final TableInfoCache tableInfoCache;
 
     public WriterClient(
             Configuration conf,
@@ -106,13 +109,19 @@ public class WriterClient {
 
             short acks = configureAcks(idempotenceManager.idempotenceEnabled());
             int retries = configureRetries(idempotenceManager.idempotenceEnabled());
+            this.tableInfoCache = new TableInfoCache();
             this.accumulator =
                     new RecordAccumulator(
-                            conf, idempotenceManager, writerMetricGroup, SystemClock.getInstance());
+                            conf,
+                            idempotenceManager,
+                            writerMetricGroup,
+                            SystemClock.getInstance(),
+                            tableInfoCache);
             this.sender = newSender(acks, retries);
             this.ioThreadPool = createThreadPool();
             ioThreadPool.submit(sender);
 
+            this.admin = admin;
             this.dynamicPartitionCreator =
                     new DynamicPartitionCreator(
                             metadataUpdater,
@@ -126,8 +135,7 @@ public class WriterClient {
                             "Failed to construct writer. Max request size: %d bytes, Idempotence enabled: %b",
                             maxRequestSizeLocal,
                             idempotenceManagerLocal != null
-                                    ? idempotenceManagerLocal.idempotenceEnabled()
-                                    : false),
+                                    && idempotenceManagerLocal.idempotenceEnabled()),
                     t);
         }
     }
@@ -137,6 +145,11 @@ public class WriterClient {
      * been acknowledged.
      */
     public void send(WriteRecord record, WriteCallback callback) {
+        TablePath tablePath = record.getPhysicalTablePath().getTablePath();
+        if (!tableInfoCache.contains(tablePath)) {
+            tableInfoCache.put(admin.getTableInfo(tablePath).join());
+        }
+
         doSend(record, callback);
     }
 
@@ -181,8 +194,7 @@ public class WriterClient {
             Cluster cluster = metadataUpdater.getCluster();
             BucketAssigner bucketAssigner =
                     bucketAssignerMap.computeIfAbsent(
-                            physicalTablePath,
-                            k -> createBucketAssigner(physicalTablePath, conf, cluster));
+                            physicalTablePath, k -> createBucketAssigner(physicalTablePath, conf));
 
             // Append the record to the accumulator.
             int bucketId = bucketAssigner.assignBucket(record.getBucketKey(), cluster);
@@ -300,7 +312,8 @@ public class WriterClient {
                 retries,
                 metadataUpdater,
                 idempotenceManager,
-                writerMetricGroup);
+                writerMetricGroup,
+                tableInfoCache);
     }
 
     public void close(Duration timeout) {
@@ -332,6 +345,11 @@ public class WriterClient {
         if (sender != null) {
             sender.forceClose();
         }
+
+        if (tableInfoCache != null) {
+            tableInfoCache.clear();
+        }
+
         LOG.info("Writer closed.");
     }
 
@@ -340,8 +358,8 @@ public class WriterClient {
     }
 
     private BucketAssigner createBucketAssigner(
-            PhysicalTablePath physicalTablePath, Configuration conf, Cluster cluster) {
-        TableInfo tableInfo = cluster.getTableOrElseThrow(physicalTablePath.getTablePath());
+            PhysicalTablePath physicalTablePath, Configuration conf) {
+        TableInfo tableInfo = tableInfoCache.get(physicalTablePath.getTablePath());
         int bucketNumber = tableInfo.getNumBuckets();
         List<String> bucketKeys = tableInfo.getBucketKeys();
         if (!bucketKeys.isEmpty()) {
@@ -360,6 +378,48 @@ public class WriterClient {
                 throw new IllegalArgumentException(
                         "Unsupported append only row bucket assigner: " + noKeyAssigner);
             }
+        }
+    }
+
+    /** TableInfo cache for writer, send and recordAccumulator. */
+    public static final class TableInfoCache {
+        private final Map<TablePath, TableInfo> infoByPath = new CopyOnWriteMap<>();
+        private final Map<Long, TablePath> pathByTableId = new CopyOnWriteMap<>();
+
+        public void put(TableInfo tableInfo) {
+            infoByPath.put(tableInfo.getTablePath(), tableInfo);
+            pathByTableId.put(tableInfo.getTableId(), tableInfo.getTablePath());
+        }
+
+        public boolean contains(TablePath tablePath) {
+            return infoByPath.containsKey(tablePath);
+        }
+
+        public TableInfo get(TablePath tablePath) {
+            if (!infoByPath.containsKey(tablePath)) {
+                throw new IllegalArgumentException(
+                        String.format("table: %s not found in TableInfoCache", tablePath));
+            }
+            return infoByPath.get(tablePath);
+        }
+
+        public TableInfo get(long tableId) {
+            if (!pathByTableId.containsKey(tableId)) {
+                throw new IllegalArgumentException(
+                        String.format("tableId: %d not found in TableInfoCache", tableId));
+            }
+            TablePath tablePath = pathByTableId.get(tableId);
+
+            if (!infoByPath.containsKey(tablePath)) {
+                throw new IllegalArgumentException(
+                        String.format("table: %s not found in TableInfoCache", tablePath));
+            }
+            return infoByPath.get(tablePath);
+        }
+
+        public void clear() {
+            infoByPath.clear();
+            pathByTableId.clear();
         }
     }
 }

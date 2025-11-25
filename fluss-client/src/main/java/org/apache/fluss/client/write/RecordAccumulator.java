@@ -20,6 +20,7 @@ package org.apache.fluss.client.write;
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.client.metrics.WriterMetricGroup;
+import org.apache.fluss.client.write.WriterClient.TableInfoCache;
 import org.apache.fluss.cluster.BucketLocation;
 import org.apache.fluss.cluster.Cluster;
 import org.apache.fluss.config.ConfigOptions;
@@ -111,6 +112,7 @@ public final class RecordAccumulator {
     private final IdempotenceManager idempotenceManager;
     private final Clock clock;
     private final DynamicWriteBatchSizeEstimator batchSizeEstimator;
+    private final TableInfoCache tableInfoCache;
 
     // TODO add retryBackoffMs to retry the produce request upon receiving an error.
     // TODO add deliveryTimeoutMs to report success or failure on record delivery.
@@ -120,7 +122,8 @@ public final class RecordAccumulator {
             Configuration conf,
             IdempotenceManager idempotenceManager,
             WriterMetricGroup writerMetricGroup,
-            Clock clock) {
+            Clock clock,
+            TableInfoCache tableInfoCache) {
         this.closed = false;
         this.flushesInProgress = new AtomicInteger(0);
         this.appendsInProgress = new AtomicInteger(0);
@@ -144,6 +147,7 @@ public final class RecordAccumulator {
                         (int) conf.get(ConfigOptions.CLIENT_WRITER_BUFFER_PAGE_SIZE).getBytes());
         this.idempotenceManager = idempotenceManager;
         this.clock = clock;
+        this.tableInfoCache = tableInfoCache;
         registerMetrics(writerMetricGroup);
     }
 
@@ -172,7 +176,7 @@ public final class RecordAccumulator {
             throws Exception {
         PhysicalTablePath physicalTablePath = writeRecord.getPhysicalTablePath();
 
-        TableInfo tableInfo = cluster.getTableOrElseThrow(physicalTablePath.getTablePath());
+        TableInfo tableInfo = tableInfoCache.get(physicalTablePath.getTablePath());
         Optional<Long> partitionIdOpt = cluster.getPartitionId(physicalTablePath);
         BucketAndWriteBatches bucketAndWriteBatches =
                 writeBatches.computeIfAbsent(
@@ -507,7 +511,11 @@ public final class RecordAccumulator {
             }
 
             int bucketId = entry.getKey();
-            TableBucket tableBucket = cluster.getTableBucket(physicalTablePath, bucketId);
+            TableBucket tableBucket =
+                    cluster.getTableBucket(
+                            tableInfoCache.get(physicalTablePath.getTablePath()),
+                            physicalTablePath,
+                            bucketId);
             Integer leader = cluster.leaderFor(tableBucket);
             if (leader == null) {
                 // This is a bucket for which leader is not known, but messages are

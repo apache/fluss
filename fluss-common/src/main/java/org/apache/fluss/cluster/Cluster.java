@@ -20,7 +20,6 @@ package org.apache.fluss.cluster;
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.metadata.PhysicalTablePath;
-import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
@@ -224,7 +223,11 @@ public final class Cluster {
         return availableLocationsByPath.getOrDefault(physicalTablePath, Collections.emptyList());
     }
 
-    /** Get the table info for this table. */
+    /**
+     * Get the table info for this table.
+     *
+     * <p>TODO this method need to be remove, use Admin getTableInfo instead.
+     */
     public Optional<TableInfo> getTable(TablePath tablePath) {
         return Optional.ofNullable(tableInfoByPath.get(tablePath));
     }
@@ -234,26 +237,8 @@ public final class Cluster {
         return Optional.ofNullable(partitionsIdByPath.get(physicalTablePath));
     }
 
-    /** Return whether the cluster contains the given physical table path or not. */
-    public boolean contains(PhysicalTablePath physicalTablePath) {
-        if (physicalTablePath.getPartitionName() == null) {
-            return getTable(physicalTablePath.getTablePath()).isPresent();
-        } else {
-            return getPartitionId(physicalTablePath).isPresent();
-        }
-    }
-
-    public TableInfo getTableOrElseThrow(TablePath tablePath) {
-        return getTable(tablePath)
-                .orElseThrow(
-                        () ->
-                                new IllegalArgumentException(
-                                        String.format(
-                                                "table: %s not found in cluster", tablePath)));
-    }
-
-    public TableBucket getTableBucket(PhysicalTablePath physicalTablePath, int bucketId) {
-        TableInfo tableInfo = getTableOrElseThrow(physicalTablePath.getTablePath());
+    public TableBucket getTableBucket(
+            TableInfo tableInfo, PhysicalTablePath physicalTablePath, int bucketId) {
         if (physicalTablePath.getPartitionName() != null) {
             Long partitionId = getPartitionIdOrElseThrow(physicalTablePath);
             return new TableBucket(tableInfo.getTableId(), partitionId, bucketId);
@@ -284,12 +269,6 @@ public final class Cluster {
 
     public Optional<String> getPartitionName(long partitionId) {
         return Optional.ofNullable(partitionNameById.get(partitionId));
-    }
-
-    /** Get the latest schema for the given table. */
-    public Optional<SchemaInfo> getSchema(TablePath tablePath) {
-        return getTable(tablePath)
-                .map(tableInfo -> new SchemaInfo(tableInfo.getSchema(), tableInfo.getSchemaId()));
     }
 
     /** Get the table path to table id map. */

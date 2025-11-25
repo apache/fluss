@@ -33,7 +33,6 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.fs.FileSystem;
-import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.metrics.registry.MetricRegistry;
 import org.apache.fluss.rpc.GatewayClientProxy;
@@ -61,6 +60,7 @@ public final class FlussConnection implements Connection {
     private volatile LookupClient lookupClient;
     private volatile RemoteFileDownloader remoteFileDownloader;
     private volatile SecurityTokenManager securityTokenManager;
+    private volatile Admin admin;
 
     FlussConnection(Configuration conf) {
         this(conf, MetricRegistry.create(conf, null));
@@ -93,19 +93,16 @@ public final class FlussConnection implements Connection {
 
     @Override
     public Admin getAdmin() {
-        return new FlussAdmin(rpcClient, metadataUpdater);
+        return getOrCreateAdmin();
     }
 
     @Override
     public Table getTable(TablePath tablePath) {
-        // force to update the table info from server to avoid stale data in cache
+        // force to update the table info from server to avoid stale data in cache.
         metadataUpdater.updateTableOrPartitionMetadata(tablePath, null);
-        TableInfo tableInfo = metadataUpdater.getTableInfoOrElseThrow(tablePath);
-        return new FlussTable(this, tablePath, tableInfo);
-    }
 
-    public RpcClient getRpcClient() {
-        return rpcClient;
+        Admin admin = getOrCreateAdmin();
+        return new FlussTable(this, tablePath, admin.getTableInfo(tablePath).join());
     }
 
     public MetadataUpdater getMetadataUpdater() {
@@ -138,6 +135,17 @@ public final class FlussConnection implements Connection {
             }
         }
         return lookupClient;
+    }
+
+    public Admin getOrCreateAdmin() {
+        if (admin == null) {
+            synchronized (this) {
+                if (admin == null) {
+                    admin = new FlussAdmin(rpcClient, metadataUpdater);
+                }
+            }
+        }
+        return admin;
     }
 
     public RemoteFileDownloader getOrCreateRemoteFileDownloader() {

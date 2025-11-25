@@ -125,7 +125,7 @@ public class DynamicPartitionCreator {
         String partitionName = physicalTablePath.getPartitionName();
         TablePath tablePath = physicalTablePath.getTablePath();
         checkArgument(partitionName != null, "Partition name shouldn't be null.");
-        TableInfo tableInfo = metadataUpdater.getTableInfoOrElseThrow(tablePath);
+        TableInfo tableInfo = admin.getTableInfo(tablePath).join();
         List<String> partitionKeys = tableInfo.getPartitionKeys();
         ResolvedPartitionSpec resolvedPartitionSpec =
                 ResolvedPartitionSpec.fromPartitionName(partitionKeys, partitionName);

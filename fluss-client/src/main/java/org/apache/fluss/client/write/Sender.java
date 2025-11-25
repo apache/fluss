@@ -21,6 +21,7 @@ import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.client.metrics.WriterMetricGroup;
 import org.apache.fluss.client.write.RecordAccumulator.ReadyCheckResult;
+import org.apache.fluss.client.write.WriterClient.TableInfoCache;
 import org.apache.fluss.cluster.Cluster;
 import org.apache.fluss.exception.InvalidMetadataException;
 import org.apache.fluss.exception.LeaderNotAvailableException;
@@ -106,6 +107,7 @@ public class Sender implements Runnable {
     private final IdempotenceManager idempotenceManager;
 
     private final WriterMetricGroup writerMetricGroup;
+    private final TableInfoCache tableInfoCache;
 
     public Sender(
             RecordAccumulator accumulator,
@@ -115,7 +117,8 @@ public class Sender implements Runnable {
             int retries,
             MetadataUpdater metadataUpdater,
             IdempotenceManager idempotenceManager,
-            WriterMetricGroup writerMetricGroup) {
+            WriterMetricGroup writerMetricGroup,
+            TableInfoCache tableInfoCache) {
         this.accumulator = accumulator;
         this.maxRequestSize = maxRequestSize;
         this.maxRequestTimeoutMs = maxRequestTimeoutMs;
@@ -129,6 +132,7 @@ public class Sender implements Runnable {
 
         this.idempotenceManager = idempotenceManager;
         this.writerMetricGroup = writerMetricGroup;
+        this.tableInfoCache = tableInfoCache;
 
         // TODO add retry logic while send failed. See FLUSS-56364375
     }
@@ -377,7 +381,7 @@ public class Sender implements Runnable {
         } else {
             writeBatchByTable.forEach(
                     (tableId, writeBatches) -> {
-                        TableInfo tableInfo = metadataUpdater.getTableInfoOrElseThrow(tableId);
+                        TableInfo tableInfo = tableInfoCache.get(tableId);
                         if (tableInfo.hasPrimaryKey()) {
                             sendPutKvRequestAndHandleResponse(
                                     gateway,

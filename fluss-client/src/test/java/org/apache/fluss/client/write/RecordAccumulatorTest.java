@@ -18,6 +18,7 @@
 package org.apache.fluss.client.write;
 
 import org.apache.fluss.client.metrics.TestingWriterMetricGroup;
+import org.apache.fluss.client.write.WriterClient.TableInfoCache;
 import org.apache.fluss.cluster.BucketLocation;
 import org.apache.fluss.cluster.Cluster;
 import org.apache.fluss.cluster.ServerNode;
@@ -127,10 +128,12 @@ class RecordAccumulatorTest {
     private final ManualClock clock = new ManualClock(System.currentTimeMillis());
     private Configuration conf;
     private Cluster cluster;
+    private TableInfoCache tableInfoCache;
 
     @BeforeEach
     public void start() {
         conf = new Configuration();
+        tableInfoCache = new TableInfoCache();
         // init cluster.
         cluster = updateCluster(Arrays.asList(bucket1, bucket2, bucket3));
     }
@@ -576,6 +579,9 @@ class RecordAccumulatorTest {
         tableInfoByPath.put(DATA1_TABLE_PATH, data1NonPkTableInfo);
         tableInfoByPath.put(ZSTD_TABLE_INFO.getTablePath(), ZSTD_TABLE_INFO);
 
+        tableInfoCache.put(data1NonPkTableInfo);
+        tableInfoCache.put(ZSTD_TABLE_INFO);
+
         return new Cluster(
                 aliveTabletServersById,
                 new ServerNode(0, "localhost", 89, ServerType.COORDINATOR),
@@ -649,7 +655,8 @@ class RecordAccumulatorTest {
                                         conf, TestingClientMetricGroup.newInstance(), false),
                                 TabletServerGateway.class)),
                 TestingWriterMetricGroup.newInstance(),
-                clock);
+                clock,
+                tableInfoCache);
     }
 
     private long getTestBatchSize(BinaryRow row) {

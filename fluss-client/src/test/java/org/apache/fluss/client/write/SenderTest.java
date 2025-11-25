@@ -19,6 +19,7 @@ package org.apache.fluss.client.write;
 
 import org.apache.fluss.client.metadata.TestingMetadataUpdater;
 import org.apache.fluss.client.metrics.TestingWriterMetricGroup;
+import org.apache.fluss.client.write.WriterClient.TableInfoCache;
 import org.apache.fluss.cluster.Cluster;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.config.ConfigOptions;
@@ -76,11 +77,14 @@ final class SenderTest {
     private RecordAccumulator accumulator = null;
     private Sender sender = null;
     private TestingWriterMetricGroup writerMetricGroup;
+    private TableInfoCache tableInfoCache;
 
     // TODO add more tests as kafka SenderTest.
 
     @BeforeEach
     public void setup() {
+        tableInfoCache = new TableInfoCache();
+        tableInfoCache.put(DATA1_TABLE_INFO);
         metadataUpdater = initializeMetadataUpdater();
         writerMetricGroup = TestingWriterMetricGroup.newInstance();
         sender = setupWithIdempotenceState();
@@ -776,7 +780,11 @@ final class SenderTest {
         conf.set(ConfigOptions.CLIENT_WRITER_BATCH_TIMEOUT, Duration.ofMillis(batchTimeoutMs));
         accumulator =
                 new RecordAccumulator(
-                        conf, idempotenceManager, writerMetricGroup, SystemClock.getInstance());
+                        conf,
+                        idempotenceManager,
+                        writerMetricGroup,
+                        SystemClock.getInstance(),
+                        tableInfoCache);
         return new Sender(
                 accumulator,
                 REQUEST_TIMEOUT,
@@ -785,7 +793,8 @@ final class SenderTest {
                 reties,
                 metadataUpdater,
                 idempotenceManager,
-                writerMetricGroup);
+                writerMetricGroup,
+                tableInfoCache);
     }
 
     private IdempotenceManager createIdempotenceManager(boolean idempotenceEnabled) {
