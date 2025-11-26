@@ -17,6 +17,8 @@
 
 package org.apache.fluss.fs.s3.token;
 
+import org.apache.fluss.annotation.VisibleForTesting;
+import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.fs.token.CredentialsJsonSerde;
 import org.apache.fluss.fs.token.ObtainedSecurityToken;
 

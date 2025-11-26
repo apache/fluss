@@ -27,6 +27,7 @@ import org.apache.fluss.flink.source.FlinkTableSource;
 import org.apache.fluss.flink.utils.FlinkConnectorOptionsUtils;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.utils.PropertiesUtils;
 
 import org.apache.flink.api.common.RuntimeExecutionMode;
 import org.apache.flink.configuration.ConfigOption;
@@ -70,8 +71,8 @@ import static org.apache.fluss.flink.utils.FlinkConversions.toFlinkOption;
 /** Factory to create table source and table sink for Fluss. */
 public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTableSinkFactory {
 
-  private static final Logger LOG = LoggerFactory.getLogger(FlinkTableFactory.class);
-  private static final String FLUSS_PREFIX = "fluss.";
+    private static final Logger LOG = LoggerFactory.getLogger(FlinkTableFactory.class);
+    private static final String FLUSS_PREFIX = "fluss.";
 
     protected final LakeFlinkCatalog lakeFlinkCatalog;
     private volatile LakeTableFactory lakeTableFactory;
