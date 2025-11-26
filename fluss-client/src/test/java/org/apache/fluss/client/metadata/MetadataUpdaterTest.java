@@ -20,15 +20,17 @@ package org.apache.fluss.client.metadata;
 import org.apache.fluss.cluster.Cluster;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.ServerType;
+import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.StaleMetadataException;
+import org.apache.fluss.rpc.RpcClient;
 import org.apache.fluss.rpc.gateway.AdminReadOnlyGateway;
 import org.apache.fluss.rpc.messages.MetadataRequest;
 import org.apache.fluss.rpc.messages.MetadataResponse;
+import org.apache.fluss.rpc.metrics.TestingClientMetricGroup;
 import org.apache.fluss.server.coordinator.TestCoordinatorGateway;
 
 import org.junit.jupiter.api.Test;
 
-import java.net.InetSocketAddress;
 import java.util.Collections;
 import java.util.concurrent.CompletableFuture;
 
@@ -45,20 +47,21 @@ public class MetadataUpdaterTest {
 
     @Test
     void testInitializeClusterWithRetries() throws Exception {
+        Configuration configuration = new Configuration();
+        RpcClient rpcClient =
+                RpcClient.create(configuration, TestingClientMetricGroup.newInstance(), false);
+
         // retry lower than max retry count.
         AdminReadOnlyGateway gateway = new TestingAdminReadOnlyGateway(2);
         Cluster cluster =
-                MetadataUpdater.tryToInitializeClusterWithRetries(
-                        new InetSocketAddress("localhost", 8080), gateway, 3);
+                MetadataUpdater.tryToInitializeClusterWithRetries(rpcClient, CS_NODE, gateway, 3);
         assertThat(cluster).isNotNull();
         assertThat(cluster.getCoordinatorServer()).isEqualTo(CS_NODE);
         assertThat(cluster.getAliveTabletServerList()).containsExactly(TS_NODE);
 
         // retry higher than max retry count.
         gateway = new TestingAdminReadOnlyGateway(5);
-        cluster =
-                MetadataUpdater.tryToInitializeClusterWithRetries(
-                        new InetSocketAddress("localhost", 8080), gateway, 3);
+        cluster = MetadataUpdater.tryToInitializeClusterWithRetries(rpcClient, CS_NODE, gateway, 3);
         assertThat(cluster).isNull();
     }
 

@@ -305,10 +305,15 @@ public class MetadataUpdater {
                 AdminReadOnlyGateway adminReadOnlyGateway =
                         GatewayClientProxy.createGatewayProxy(
                                 () -> serverNode, rpcClient, AdminReadOnlyGateway.class);
-                cluster =
-                        tryToInitializeClusterWithRetries(
-                                address, adminReadOnlyGateway, MAX_RETRY_TIMES);
-                break;
+                if (inetSocketAddresses.size() == 1) {
+                    // if there is only one bootstrap server, we can retry to connect to it.
+                    cluster =
+                            tryToInitializeClusterWithRetries(
+                                    rpcClient, serverNode, adminReadOnlyGateway, MAX_RETRY_TIMES);
+                } else {
+                    cluster = tryToInitializeCluster(adminReadOnlyGateway);
+                    break;
+                }
             } catch (Exception e) {
                 LOG.error(
                         "Failed to initialize fluss client connection to bootstrap server: {}",
@@ -332,7 +337,10 @@ public class MetadataUpdater {
 
     @VisibleForTesting
     static @Nullable Cluster tryToInitializeClusterWithRetries(
-            InetSocketAddress address, AdminReadOnlyGateway gateway, int maxRetryTimes)
+            RpcClient rpcClient,
+            ServerNode serverNode,
+            AdminReadOnlyGateway gateway,
+            int maxRetryTimes)
             throws Exception {
         int retryCount = 0;
         while (retryCount <= maxRetryTimes) {
@@ -349,15 +357,19 @@ public class MetadataUpdater {
                     LOG.warn(
                             "Max retries ({}) exceeded to connect to {}. ",
                             maxRetryTimes,
-                            address,
+                            serverNode,
                             e);
                     return null;
                 }
 
+                // We should dis-connected with the bootstrap server id to make sure the next
+                // retry can rebuild the connection.
+                rpcClient.disconnect(serverNode.uid());
+
                 long delayMs = (long) (RETRY_INTERVAL_MS * Math.pow(2, retryCount));
                 LOG.warn(
                         "Failed to connect to bootstrap server: {} (retry {}/{}). Retrying in {} ms.",
-                        address,
+                        serverNode,
                         retryCount + 1,
                         maxRetryTimes,
                         delayMs,
