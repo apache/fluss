@@ -194,9 +194,6 @@ public class FlinkConversions {
             schemBuilder.primaryKey(resolvedSchema.getPrimaryKey().get().getColumns());
         }
 
-        // convert some flink options to fluss table configs.
-        Map<String, String> properties = convertFlinkOptionsToFlussTableProperties(flinkTableConf);
-
         // first build schema with physical columns
         schemBuilder.fromColumns(
                 resolvedSchema.getColumns().stream()
@@ -209,13 +206,14 @@ public class FlinkConversions {
                                                 column.getComment().orElse(null)))
                         .collect(Collectors.toList()));
 
-        List<String> autoIncrementColumns = new ArrayList<>();
+        // convert some flink options to fluss table configs.
+        Map<String, String> properties = convertFlinkOptionsToFlussTableProperties(flinkTableConf);
+
         if (properties.containsKey(TABLE_AUTO_INCREMENT_FIELDS.key())) {
-            autoIncrementColumns.addAll(
-                    Arrays.asList(properties.get(TABLE_AUTO_INCREMENT_FIELDS.key()).split(",")));
-        }
-        for (String autoIncrementColumn : autoIncrementColumns) {
-            schemBuilder.enableAutoIncrement(autoIncrementColumn);
+            for (String autoIncrementColumn :
+                    properties.get(TABLE_AUTO_INCREMENT_FIELDS.key()).split(",")) {
+                schemBuilder.enableAutoIncrement(autoIncrementColumn);
+            }
         }
 
         Schema schema = schemBuilder.build();

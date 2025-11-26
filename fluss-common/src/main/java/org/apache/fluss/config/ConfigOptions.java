@@ -1402,7 +1402,8 @@ public class ConfigOptions {
                             "Defines the auto increment columns. "
                                     + "The auto increment column can only be used in primary-key table."
                                     + "With an auto increment column in the table, whenever a new row is inserted into the table, the new row will be assigned with the next available value from the auto-increment sequence."
-                                    + "The auto increment column can only be used in primary-key table. The data type of the auto increment column must be INT or BIGINT.");
+                                    + "The auto increment column can only be used in primary-key table. The data type of the auto increment column must be INT or BIGINT."
+                                    + "Currently a table can have only one auto-increment column.");
 
     // ------------------------------------------------------------------------
     //  ConfigOptions for Kv
