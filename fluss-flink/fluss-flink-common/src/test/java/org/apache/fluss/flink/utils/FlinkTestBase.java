@@ -153,12 +153,12 @@ public class FlinkTestBase extends AbstractTestBase {
     protected static void beforeAll() {
         clientConf = FLUSS_CLUSTER_EXTENSION.getClientConfig();
         bootstrapServers = FLUSS_CLUSTER_EXTENSION.getBootstrapServers();
-        conn = ConnectionFactory.createConnection(clientConf);
-        admin = conn.getAdmin();
     }
 
     @BeforeEach
     void beforeEach() throws Exception {
+        conn = ConnectionFactory.createConnection(clientConf);
+        admin = conn.getAdmin();
         admin.createDatabase(DEFAULT_DB, DatabaseDescriptor.EMPTY, true).get();
     }
 
