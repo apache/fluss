@@ -17,6 +17,9 @@
 
 package org.apache.fluss.fs.s3.token;
 
+import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.exception.FlussRuntimeException;
+import org.apache.fluss.fs.s3.S3ConfigOptions;
 import org.apache.fluss.fs.token.Credentials;
 import org.apache.fluss.fs.token.CredentialsJsonSerde;
 import org.apache.fluss.fs.token.ObtainedSecurityToken;
@@ -108,7 +111,7 @@ public class S3DelegationTokenReceiver implements SecurityTokenReceiver {
         } else {
             additionalInfos = token.getAdditionInfos();
             LOG.info(
-                    "Received an empty token. This usually indicates that {} has been disabled. Updated additional infos only: {}",
+                    "Received an empty token. This indicates that {} has been disabled and clients will authenticate using their own credentials. Updated additional infos only: {}",
                     ConfigOptions.FILE_SYSTEM_S3_ENABLE_TOKEN_DELEGATION.key(),
                     additionalInfos);
         }

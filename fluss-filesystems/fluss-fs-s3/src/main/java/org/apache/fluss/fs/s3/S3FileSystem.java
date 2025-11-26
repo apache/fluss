@@ -17,13 +17,13 @@
 
 package org.apache.fluss.fs.s3;
 
+import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.fs.hdfs.HadoopFileSystem;
 import org.apache.fluss.fs.s3.token.S3DelegationTokenProvider;
 import org.apache.fluss.fs.token.ObtainedSecurityToken;
 
 import java.util.function.Supplier;
-import org.apache.hadoop.conf.Configuration;
 
 /**
  * Implementation of the Fluss {@link FileSystem} interface for S3. This class implements the common
