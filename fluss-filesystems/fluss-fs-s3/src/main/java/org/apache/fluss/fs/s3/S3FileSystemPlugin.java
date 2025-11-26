@@ -28,7 +28,6 @@ import org.apache.fluss.fs.s3.token.DynamicTemporaryAWSCredentialsProvider;
 import org.apache.fluss.fs.s3.token.S3ADelegationTokenReceiver;
 import org.apache.fluss.fs.s3.token.S3DelegationTokenProvider;
 import org.apache.fluss.fs.s3.token.S3DelegationTokenReceiver;
-
 import org.apache.hadoop.fs.s3a.S3AFileSystem;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -143,6 +142,7 @@ public class S3FileSystemPlugin implements FileSystemPlugin {
     org.apache.hadoop.conf.Configuration getHadoopConfiguration(Configuration flussConfig) {
         org.apache.hadoop.conf.Configuration conf = new org.apache.hadoop.conf.Configuration();
 
+        // Credential providers must be explicitly set by the user
         conf.set(S3ConfigOptions.PROVIDER_CONFIG_NAME, "");
 
         if (flussConfig == null) {
