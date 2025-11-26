@@ -17,8 +17,13 @@
 
 package org.apache.fluss.server.utils;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 /** Utility class to shut down log system. */
 public class LogShutdownUtil {
+
+    private static final Logger LOG = LoggerFactory.getLogger(LogShutdownUtil.class);
 
     public static void shutdownLogIfPossible() {
         // To avoid binding to a specific logging implementation, we use reflection here.
@@ -29,10 +34,9 @@ public class LogShutdownUtil {
             Class<?> logManager = Class.forName("org.apache.logging.log4j.LogManager");
             logManager.getMethod("shutdown").invoke(null);
         } catch (ClassNotFoundException e) {
-            System.err.println("Class org.apache.logging.log4j.LogManager not found");
+            LOG.error("Class org.apache.logging.log4j.LogManager not found", e);
         } catch (Exception e) {
-            System.err.println(
-                    "Error to invoke shutdown method of org.apache.logging.log4j.LogManager");
+            LOG.error("Error to invoke shutdown method of org.apache.logging.log4j.LogManager", e);
         }
     }
 }
