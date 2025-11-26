@@ -190,6 +190,9 @@ public class FlinkSinkWriterTest extends FlinkTestBase {
             try (FlinkSinkWriter<RowData> writer =
                     createSinkWriter(clientConfig, mockWriterInitContext.getMailboxExecutor())) {
                 writer.initialize(mockWriterInitContext.metricGroup());
+                writer.write(
+                        GenericRowData.of(1, StringData.fromString("a")),
+                        new MockSinkWriterContext());
                 flussClusterExtension.close();
                 writer.write(
                         GenericRowData.of(1, StringData.fromString("a")),
