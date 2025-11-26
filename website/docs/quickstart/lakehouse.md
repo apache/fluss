@@ -260,7 +260,7 @@ The Docker Compose environment consists of the following containers:
 - **Fluss Cluster:** a Fluss `CoordinatorServer`, a Fluss `TabletServer` and a `ZooKeeper` server.
 - **Flink Cluster**: a Flink `JobManager` and a Flink `TaskManager` container to execute queries.
 
-**Note:** The `apache/fluss-quickstart-flink` image is based on [flink:1.20.3-java17](https://hub.docker.com/layers/library/flink/1.20-java17/images/sha256:bf1af6406c4f4ad8faa46efe2b3d0a0bf811d1034849c42c1e3484712bc83505) and
+**Note:** The `apache/fluss-quickstart-flink` image is based on [flink:1.20.3-java17](https://hub.docker.com/layers/library/flink/1.20-java17/images/sha256:296c7c23fa40a9a3547771b08fc65e25f06bc4cfd3549eee243c99890778cafc) and
 includes the [fluss-flink](engine-flink/getting-started.md), [iceberg-flink](https://iceberg.apache.org/docs/latest/flink/) and
 [flink-connector-faker](https://flink-packages.org/packages/flink-faker) to simplify this guide.
 
