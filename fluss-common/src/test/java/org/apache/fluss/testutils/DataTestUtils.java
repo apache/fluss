@@ -104,6 +104,16 @@ public class DataTestUtils {
         return row;
     }
 
+    public static GenericRow row(RowType rowType, Object... objects) {
+        GenericRow row = new GenericRow(objects.length);
+        List<DataType> fieldTypes = rowType.getChildren();
+        for (int i = 0; i < objects.length; i++) {
+            Object value = toInternalObject(objects[i], fieldTypes.get(i));
+            row.setField(i, value);
+        }
+        return row;
+    }
+
     private static Object toInternalObject(Object obj) {
         if (obj == null) {
             return null;
@@ -122,6 +132,45 @@ public class DataTestUtils {
         } else {
             return obj;
         }
+    }
+
+    private static Object toInternalObject(Object obj, DataType dataType) {
+        if (obj == null) {
+            return null;
+        }
+
+        DataTypeRoot typeRoot = dataType.getTypeRoot();
+
+        if (typeRoot == DataTypeRoot.ROW) {
+            if (obj instanceof Object[]) {
+                return row((RowType) dataType, (Object[]) obj);
+            }
+            throw new IllegalArgumentException(
+                    "Expected Object[] for ROW type, but got: " + obj.getClass().getSimpleName());
+        }
+
+        if (typeRoot == DataTypeRoot.ARRAY) {
+            if (obj instanceof int[]) {
+                return new GenericArray((int[]) obj);
+            }
+            if (obj instanceof Object[]) {
+                DataType elementType = dataType.getChildren().get(0);
+                Object[] array = (Object[]) obj;
+                Object[] internalArray = new Object[array.length];
+                for (int j = 0; j < array.length; j++) {
+                    internalArray[j] = toInternalObject(array[j], elementType);
+                }
+                return new GenericArray(internalArray);
+            }
+            throw new IllegalArgumentException(
+                    "Expected array for ARRAY type, but got: " + obj.getClass().getSimpleName());
+        }
+
+        if (obj instanceof String) {
+            return BinaryString.fromString((String) obj);
+        }
+
+        return obj;
     }
 
     public static CompactedRow compactedRow(RowType rowType, Object[] objects) {
@@ -474,7 +523,7 @@ public class DataTestUtils {
             throws Exception {
         if (logFormat == LogFormat.ARROW) {
             List<InternalRow> rows =
-                    objects.stream().map(DataTestUtils::row).collect(Collectors.toList());
+                    objects.stream().map(objs -> row(rowType, objs)).collect(Collectors.toList());
             return createArrowMemoryLogRecords(
                     rowType,
                     offsetBase,

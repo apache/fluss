@@ -94,4 +94,7 @@ public interface DataGetters {
 
     /** Returns the array value at the given position. */
     InternalArray getArray(int pos);
+
+    /** Returns the row value at the given position. */
+    InternalRow getRow(int pos, int numFields);
 }

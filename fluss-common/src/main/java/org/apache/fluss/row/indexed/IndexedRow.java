@@ -30,11 +30,14 @@ import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.NullAwareGetters;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
+import org.apache.fluss.row.array.IndexedArray;
+import org.apache.fluss.types.ArrayType;
 import org.apache.fluss.types.BinaryType;
 import org.apache.fluss.types.CharType;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DecimalType;
 import org.apache.fluss.types.IntType;
+import org.apache.fluss.types.RowType;
 import org.apache.fluss.types.StringType;
 import org.apache.fluss.utils.MurmurHashUtils;
 
@@ -236,7 +239,7 @@ public class IndexedRow implements BinaryRow, NullAwareGetters {
         BinaryWriter.ValueWriter[] writers = new BinaryWriter.ValueWriter[newType.length];
         for (int i = 0; i < newType.length; i++) {
             fieldGetter[i] = InternalRow.createFieldGetter(newType[i], fields[i]);
-            writers[i] = BinaryWriter.createValueWriter(newType[i]);
+            writers[i] = BinaryWriter.createValueWriter(newType[i], BinaryRowFormat.INDEXED);
         }
 
         IndexedRow projectRow = new IndexedRow(newType);
@@ -383,11 +386,36 @@ public class IndexedRow implements BinaryRow, NullAwareGetters {
         int offset = getFieldOffset(pos);
         int length = columnLengths[pos];
         long offsetAndLength = ((long) offset << 32) | length;
-        return BinarySegmentUtils.readBinaryArray(segments, 0, offsetAndLength);
+        DataType fieldType = fieldTypes[pos];
+        if (fieldType instanceof ArrayType) {
+            DataType elementType = ((ArrayType) fieldType).getElementType();
+            return BinarySegmentUtils.readBinaryArray(
+                    segments, 0, offsetAndLength, new IndexedArray(elementType));
+        } else {
+            throw new IllegalStateException(
+                    "Field type at position " + pos + " is not ArrayType: " + fieldType);
+        }
     }
 
     // TODO: getMap() will be added in Issue #1973
-    // TODO: getRow() will be added in Issue #1974
+
+    @Override
+    public InternalRow getRow(int pos, int numFields) {
+        assertIndexIsValid(pos);
+        int offset = getFieldOffset(pos);
+        int length = columnLengths[pos];
+        long offsetAndLength = ((long) offset << 32) | length;
+        DataType fieldType = fieldTypes[pos];
+        if (fieldType instanceof RowType) {
+            DataType[] nestedFieldTypes =
+                    ((RowType) fieldType).getFieldTypes().toArray(new DataType[0]);
+            return BinarySegmentUtils.readIndexedRow(
+                    segments, 0, offsetAndLength, nestedFieldTypes);
+        } else {
+            throw new IllegalStateException(
+                    "Field type at position " + pos + " is not RowType: " + fieldType);
+        }
+    }
 
     private void assertIndexIsValid(int index) {
         assert index >= 0 : "index (" + index + ") should >= 0";

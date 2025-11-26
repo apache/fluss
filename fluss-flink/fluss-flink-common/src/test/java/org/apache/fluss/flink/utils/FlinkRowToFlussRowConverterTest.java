@@ -52,7 +52,7 @@ public class FlinkRowToFlussRowConverterTest {
         try (FlinkRowToFlussRowConverter converter =
                 FlinkRowToFlussRowConverter.create(toFlinkRowType(flussRowType))) {
             InternalRow internalRow = converter.toInternalRow(genRowDataForAllType());
-            assertThat(internalRow.getFieldCount()).isEqualTo(22);
+            assertThat(internalRow.getFieldCount()).isEqualTo(23);
             assertAllTypeEquals(internalRow);
         }
 
@@ -61,13 +61,13 @@ public class FlinkRowToFlussRowConverterTest {
                 FlinkRowToFlussRowConverter.create(
                         toFlinkRowType(flussRowType), KvFormat.COMPACTED)) {
             InternalRow internalRow = converter.toInternalRow(genRowDataForAllType());
-            assertThat(internalRow.getFieldCount()).isEqualTo(22);
+            assertThat(internalRow.getFieldCount()).isEqualTo(23);
             assertAllTypeEquals(internalRow);
         }
     }
 
     private static RowData genRowDataForAllType() {
-        GenericRowData genericRowData = new GenericRowData(22);
+        GenericRowData genericRowData = new GenericRowData(23);
         genericRowData.setField(0, true);
         genericRowData.setField(1, (byte) 2);
         genericRowData.setField(2, Short.parseShort("10"));
@@ -91,6 +91,8 @@ public class FlinkRowToFlussRowConverterTest {
         genericRowData.setField(
                 18,
                 TimestampData.fromLocalDateTime(LocalDateTime.parse("2023-10-25T12:01:13.182")));
+
+        // 19: array
         genericRowData.setField(
                 19, new GenericArrayData(new Integer[] {1, 2, 3, 4, 5, -11, null, 444, 102234}));
         genericRowData.setField(
@@ -107,6 +109,11 @@ public class FlinkRowToFlussRowConverterTest {
                             new GenericArrayData(
                                     new StringData[] {fromString("hello"), fromString("world")})
                         }));
+
+        // 22: row (nested row with fields: u1: INT, u2: ROW(v1: INT), u3: STRING)
+        genericRowData.setField(
+                22, GenericRowData.of(123, GenericRowData.of(22), StringData.fromString("Test")));
+
         return genericRowData;
     }
 }

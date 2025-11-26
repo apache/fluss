@@ -75,12 +75,12 @@ public class FlussRowToFlinkRowConverter {
     /**
      * Create a nullable runtime {@link FlussDeserializationConverter} from given {@link DataType}.
      */
-    protected FlussDeserializationConverter createNullableInternalConverter(
+    protected static FlussDeserializationConverter createNullableInternalConverter(
             DataType flussDataType) {
         return wrapIntoNullableInternalConverter(createInternalConverter(flussDataType));
     }
 
-    protected FlussDeserializationConverter wrapIntoNullableInternalConverter(
+    protected static FlussDeserializationConverter wrapIntoNullableInternalConverter(
             FlussDeserializationConverter flussDeserializationConverter) {
         return val -> {
             if (val == null) {
@@ -108,7 +108,7 @@ public class FlussRowToFlinkRowConverter {
     }
 
     // TODO: use flink row type
-    private FlussDeserializationConverter createInternalConverter(DataType flussDataType) {
+    static FlussDeserializationConverter createInternalConverter(DataType flussDataType) {
         switch (flussDataType.getTypeRoot()) {
             case BOOLEAN:
             case TINYINT:
@@ -160,6 +160,28 @@ public class FlussRowToFlinkRowConverter {
                         flinkArray[i] = elementConverter.deserialize(flussElement);
                     }
                     return new GenericArrayData(flinkArray);
+                };
+            case MAP:
+                // TODO: Add Map type support in future
+                throw new UnsupportedOperationException("Map type not supported yet");
+            case ROW:
+                RowType rowType = (RowType) flussDataType;
+                int fieldCount = rowType.getFieldCount();
+                InternalRow.FieldGetter[] fieldGetters = new InternalRow.FieldGetter[fieldCount];
+                FlussDeserializationConverter[] fieldConverters =
+                        new FlussDeserializationConverter[fieldCount];
+                for (int i = 0; i < fieldCount; i++) {
+                    fieldGetters[i] = InternalRow.createFieldGetter(rowType.getTypeAt(i), i);
+                    fieldConverters[i] = createNullableInternalConverter(rowType.getTypeAt(i));
+                }
+                return (flussField) -> {
+                    InternalRow flussRow = (InternalRow) flussField;
+                    GenericRowData flinkRowData = new GenericRowData(fieldCount);
+                    for (int i = 0; i < fieldCount; i++) {
+                        Object flussFieldValue = fieldGetters[i].getFieldOrNull(flussRow);
+                        flinkRowData.setField(i, fieldConverters[i].deserialize(flussFieldValue));
+                    }
+                    return flinkRowData;
                 };
             default:
                 throw new UnsupportedOperationException("Unsupported data type: " + flussDataType);

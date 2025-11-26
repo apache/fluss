@@ -18,16 +18,22 @@
 package org.apache.fluss.row.compacted;
 
 import org.apache.fluss.memory.MemorySegment;
+import org.apache.fluss.row.BinaryRow.BinaryRowFormat;
 import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.Decimal;
+import org.apache.fluss.row.GenericArray;
+import org.apache.fluss.row.GenericRow;
+import org.apache.fluss.row.InternalArray;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
+import org.apache.fluss.row.serializer.ArraySerializer;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypes;
 
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link CompactedRow}. */
 public class CompactedRowTest {
@@ -411,5 +417,89 @@ public class CompactedRowTest {
         for (int i = 0; i < numFields; i++) {
             assertThat(row.getInt(i)).isEqualTo(i * 10);
         }
+    }
+
+    @Test
+    public void testCompactedArrayGetRowWithInvalidType() {
+        DataType arrayType = DataTypes.ARRAY(DataTypes.INT());
+        DataType[] fieldTypes = {arrayType};
+
+        CompactedRow outerRow = new CompactedRow(fieldTypes);
+        CompactedRowWriter outerWriter = new CompactedRowWriter(fieldTypes.length);
+
+        GenericArray arrayData = GenericArray.of(1, 2, 3);
+        ArraySerializer serializer =
+                new ArraySerializer(DataTypes.INT(), BinaryRowFormat.COMPACTED);
+        outerWriter.writeArray(arrayData, serializer);
+
+        outerRow.pointTo(outerWriter.segment(), 0, outerWriter.position());
+
+        InternalArray array = outerRow.getArray(0);
+        assertThatThrownBy(() -> array.getRow(0, 1))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Can not get row from Array of type");
+    }
+
+    @Test
+    public void testCompactedArrayGetRowWithWrongNumFields() {
+        DataType rowType =
+                DataTypes.ROW(
+                        DataTypes.FIELD("f1", DataTypes.INT()),
+                        DataTypes.FIELD("f2", DataTypes.STRING()));
+        DataType arrayType = DataTypes.ARRAY(rowType);
+        DataType[] fieldTypes = {arrayType};
+
+        CompactedRow outerRow = new CompactedRow(fieldTypes);
+        CompactedRowWriter outerWriter = new CompactedRowWriter(fieldTypes.length);
+
+        GenericRow innerRow = GenericRow.of(100, BinaryString.fromString("test"));
+        GenericArray arrayData = GenericArray.of(innerRow);
+
+        ArraySerializer serializer = new ArraySerializer(rowType, BinaryRowFormat.COMPACTED);
+        outerWriter.writeArray(arrayData, serializer);
+
+        outerRow.pointTo(outerWriter.segment(), 0, outerWriter.position());
+
+        InternalArray array = outerRow.getArray(0);
+        assertThatThrownBy(() -> array.getRow(0, 5))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Unexpected number of fields");
+    }
+
+    @Test
+    public void testCompactedArrayGetNestedArray() {
+        DataType innerArrayType = DataTypes.ARRAY(DataTypes.INT());
+        DataType outerArrayType = DataTypes.ARRAY(innerArrayType);
+        DataType[] fieldTypes = {outerArrayType};
+
+        CompactedRow outerRow = new CompactedRow(fieldTypes);
+        CompactedRowWriter outerWriter = new CompactedRowWriter(fieldTypes.length);
+
+        GenericArray innerArray1 = GenericArray.of(10, 20, 30);
+        GenericArray innerArray2 = GenericArray.of(40, 50, 60);
+        GenericArray outerArrayData = GenericArray.of(innerArray1, innerArray2);
+
+        ArraySerializer serializer = new ArraySerializer(innerArrayType, BinaryRowFormat.COMPACTED);
+        outerWriter.writeArray(outerArrayData, serializer);
+
+        outerRow.pointTo(outerWriter.segment(), 0, outerWriter.position());
+
+        InternalArray outerArray = outerRow.getArray(0);
+        assertThat(outerArray).isNotNull();
+        assertThat(outerArray.size()).isEqualTo(2);
+
+        InternalArray nestedArray1 = outerArray.getArray(0);
+        assertThat(nestedArray1).isNotNull();
+        assertThat(nestedArray1.size()).isEqualTo(3);
+        assertThat(nestedArray1.getInt(0)).isEqualTo(10);
+        assertThat(nestedArray1.getInt(1)).isEqualTo(20);
+        assertThat(nestedArray1.getInt(2)).isEqualTo(30);
+
+        InternalArray nestedArray2 = outerArray.getArray(1);
+        assertThat(nestedArray2).isNotNull();
+        assertThat(nestedArray2.size()).isEqualTo(3);
+        assertThat(nestedArray2.getInt(0)).isEqualTo(40);
+        assertThat(nestedArray2.getInt(1)).isEqualTo(50);
+        assertThat(nestedArray2.getInt(2)).isEqualTo(60);
     }
 }

@@ -21,6 +21,7 @@ package org.apache.fluss.row.columnar;
 import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.Decimal;
 import org.apache.fluss.row.InternalArray;
+import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
 
@@ -137,7 +138,11 @@ public final class ColumnarArray implements InternalArray, Serializable {
     }
 
     // TODO: getMap() will be added in Issue #1973
-    // TODO: getRow() will be added in Issue #1974
+
+    @Override
+    public InternalRow getRow(int pos, int numFields) {
+        return ((RowColumnVector) data).getRow(offset + pos);
+    }
 
     @Override
     public boolean[] toBooleanArray() {

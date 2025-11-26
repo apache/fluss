@@ -24,6 +24,8 @@ import org.apache.fluss.row.compacted.CompactedRowDeserializer;
 import org.apache.fluss.row.compacted.CompactedRowWriter;
 import org.apache.fluss.types.DataType;
 
+import static org.apache.fluss.row.BinaryRow.BinaryRowFormat.COMPACTED;
+
 /**
  * A {@link RowEncoder} for {@link CompactedRow}.
  *
@@ -43,7 +45,7 @@ public class CompactedRowEncoder implements RowEncoder {
         writer = new CompactedRowWriter(fieldDataTypes.length);
         fieldWriters = new BinaryWriter.ValueWriter[fieldDataTypes.length];
         for (int i = 0; i < fieldDataTypes.length; i++) {
-            fieldWriters[i] = BinaryWriter.createValueWriter(fieldDataTypes[i]);
+            fieldWriters[i] = BinaryWriter.createValueWriter(fieldDataTypes[i], COMPACTED);
         }
         this.compactedRowDeserializer = new CompactedRowDeserializer(fieldDataTypes);
     }

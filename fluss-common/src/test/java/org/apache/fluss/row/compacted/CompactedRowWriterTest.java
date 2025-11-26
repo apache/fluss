@@ -33,6 +33,7 @@ import org.junit.jupiter.api.Test;
 
 import java.util.Random;
 
+import static org.apache.fluss.row.BinaryRow.BinaryRowFormat.COMPACTED;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test for {@link CompactedRowWriter}. */
@@ -97,7 +98,7 @@ class CompactedRowWriterTest {
                 new CompactedRowReader.FieldReader[allDataTypes.length];
         for (int i = 0; i < allDataTypes.length; i++) {
             getters[i] = InternalRow.createFieldGetter(allDataTypes[i], i);
-            writers[i] = BinaryWriter.createValueWriter(allDataTypes[i]);
+            writers[i] = BinaryWriter.createValueWriter(allDataTypes[i], COMPACTED);
             readers[i] = CompactedRowReader.createFieldReader(allDataTypes[i]);
         }
         for (int i = 0; i < 1000; i++) {

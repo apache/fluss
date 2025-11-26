@@ -130,4 +130,9 @@ public class PaddingRow implements InternalRow {
     public InternalArray getArray(int pos) {
         return row.getArray(pos);
     }
+
+    @Override
+    public InternalRow getRow(int pos, int numFields) {
+        return row.getRow(pos, numFields);
+    }
 }

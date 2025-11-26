@@ -25,7 +25,10 @@ import org.apache.fluss.row.InternalArray;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
+import org.apache.fluss.row.array.CompactedArray;
+import org.apache.fluss.types.ArrayType;
 import org.apache.fluss.types.DataType;
+import org.apache.fluss.types.RowType;
 
 import java.io.Serializable;
 
@@ -319,17 +322,15 @@ public class CompactedRowReader {
                 fieldReader = (reader, pos) -> reader.readTimestampLtz(timestampLtzPrecision);
                 break;
             case ARRAY:
-                fieldReader = (reader, pos) -> reader.readArray();
+                DataType elementType = ((ArrayType) fieldType).getElementType();
+                fieldReader = (reader, pos) -> reader.readArray(elementType);
                 break;
 
-            case MAP:
-                // TODO: Map type support will be added in Issue #1973
-                throw new UnsupportedOperationException(
-                        "Map type in KV table is not supported yet. Will be added in Issue #1976.");
             case ROW:
-                // TODO: Row type support will be added in Issue #1974
-                throw new UnsupportedOperationException(
-                        "Row type in KV table is not supported yet. Will be added in Issue #1977.");
+                DataType[] nestedFieldTypes =
+                        ((RowType) fieldType).getFieldTypes().toArray(new DataType[0]);
+                fieldReader = (reader, pos) -> reader.readRow(nestedFieldTypes);
+                break;
             default:
                 throw new IllegalArgumentException("Unsupported type for IndexedRow: " + fieldType);
         }
@@ -344,11 +345,21 @@ public class CompactedRowReader {
         };
     }
 
-    public InternalArray readArray() {
+    public InternalArray readArray(DataType elementType) {
         int length = readInt();
-        InternalArray array = BinarySegmentUtils.readBinaryArray(segments, position, length);
+        InternalArray array =
+                BinarySegmentUtils.readBinaryArray(
+                        segments, position, length, new CompactedArray(elementType));
         position += length;
         return array;
+    }
+
+    public InternalRow readRow(DataType[] nestedFieldTypes) {
+        int length = readInt();
+        CompactedRow row = new CompactedRow(nestedFieldTypes);
+        row.pointTo(segments, position, length);
+        position += length;
+        return row;
     }
 
     /**

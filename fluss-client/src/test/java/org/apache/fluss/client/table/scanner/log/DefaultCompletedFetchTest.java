@@ -227,21 +227,32 @@ public class DefaultCompletedFetchTest {
                         new Object[] {
                             1,
                             new String[] {"a", "b"},
-                            new Object[] {new int[] {1, 2}, new int[] {3, 4}}
+                            new Object[] {new int[] {1, 2}, new int[] {3, 4}},
+                            new Object[] {10, new Object[] {20, "nested"}, "row1"}
                         },
                         new Object[] {
-                            2, new String[] {"c", null}, new Object[] {null, new int[] {3, 4}}
+                            2,
+                            new String[] {"c", null},
+                            new Object[] {null, new int[] {3, 4}},
+                            new Object[] {30, new Object[] {40, "test"}, "row2"}
                         },
                         new Object[] {
                             3,
                             new String[] {"e", "f"},
-                            new Object[] {new int[] {5, 6, 7}, new int[] {8}}
+                            new Object[] {new int[] {5, 6, 7}, new int[] {8}},
+                            new Object[] {50, new Object[] {60, "value"}, "row3"}
                         });
         Schema schema =
                 Schema.newBuilder()
                         .column("a", DataTypes.INT())
                         .column("b", DataTypes.ARRAY(DataTypes.STRING()))
                         .column("c", DataTypes.ARRAY(DataTypes.ARRAY(DataTypes.INT())))
+                        .column(
+                                "d",
+                                DataTypes.ROW(
+                                        DataTypes.INT(),
+                                        DataTypes.ROW(DataTypes.INT(), DataTypes.STRING()),
+                                        DataTypes.STRING()))
                         .build();
         TableInfo tableInfo =
                 TableInfo.of(
@@ -299,6 +310,17 @@ public class DefaultCompletedFetchTest {
                     .isEqualTo(Arrays.deepToString((Object[]) complexData.get(i)[1]));
             assertThat(row.getArray(2).toString())
                     .isEqualTo(Arrays.deepToString((Object[]) complexData.get(i)[2]));
+            InternalRow nestedRow = row.getRow(3, 3);
+            assertThat(nestedRow).isNotNull();
+            assertThat(nestedRow.getInt(0)).isEqualTo(((Object[]) complexData.get(i)[3])[0]);
+            InternalRow deeplyNestedRow = nestedRow.getRow(1, 2);
+            assertThat(deeplyNestedRow).isNotNull();
+            assertThat(deeplyNestedRow.getInt(0))
+                    .isEqualTo(((Object[]) ((Object[]) complexData.get(i)[3])[1])[0]);
+            assertThat(deeplyNestedRow.getString(1).toString())
+                    .isEqualTo(((Object[]) ((Object[]) complexData.get(i)[3])[1])[1]);
+            assertThat(nestedRow.getString(2).toString())
+                    .isEqualTo(((Object[]) complexData.get(i)[3])[2]);
         }
     }
 

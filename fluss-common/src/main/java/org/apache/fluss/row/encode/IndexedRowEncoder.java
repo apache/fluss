@@ -24,6 +24,8 @@ import org.apache.fluss.row.indexed.IndexedRowWriter;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.RowType;
 
+import static org.apache.fluss.row.BinaryRow.BinaryRowFormat.INDEXED;
+
 /**
  * A {@link RowEncoder} for {@link IndexedRow}.
  *
@@ -46,7 +48,7 @@ public class IndexedRowEncoder implements RowEncoder {
         this.fieldWriters = new BinaryWriter.ValueWriter[fieldDataTypes.length];
         this.rowWriter = new IndexedRowWriter(fieldDataTypes);
         for (int i = 0; i < fieldDataTypes.length; i++) {
-            fieldWriters[i] = BinaryWriter.createValueWriter(fieldDataTypes[i]);
+            fieldWriters[i] = BinaryWriter.createValueWriter(fieldDataTypes[i], INDEXED);
         }
     }
 

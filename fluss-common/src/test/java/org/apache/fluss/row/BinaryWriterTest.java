@@ -17,6 +17,8 @@
 
 package org.apache.fluss.row;
 
+import org.apache.fluss.row.array.PrimitiveBinaryArray;
+import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypes;
 
 import org.junit.jupiter.api.Test;
@@ -29,28 +31,24 @@ public class BinaryWriterTest {
 
     @Test
     public void testCreateValueSetterForAllTypes() {
-        BinaryWriter.ValueWriter booleanSetter =
-                BinaryWriter.createValueWriter(DataTypes.BOOLEAN());
-        BinaryWriter.ValueWriter tinyintSetter =
-                BinaryWriter.createValueWriter(DataTypes.TINYINT());
-        BinaryWriter.ValueWriter smallintSetter =
-                BinaryWriter.createValueWriter(DataTypes.SMALLINT());
-        BinaryWriter.ValueWriter intSetter = BinaryWriter.createValueWriter(DataTypes.INT());
-        BinaryWriter.ValueWriter bigintSetter = BinaryWriter.createValueWriter(DataTypes.BIGINT());
-        BinaryWriter.ValueWriter floatSetter = BinaryWriter.createValueWriter(DataTypes.FLOAT());
-        BinaryWriter.ValueWriter doubleSetter = BinaryWriter.createValueWriter(DataTypes.DOUBLE());
-        BinaryWriter.ValueWriter stringSetter = BinaryWriter.createValueWriter(DataTypes.STRING());
-        BinaryWriter.ValueWriter charSetter = BinaryWriter.createValueWriter(DataTypes.CHAR(10));
-        BinaryWriter.ValueWriter binarySetter =
-                BinaryWriter.createValueWriter(DataTypes.BINARY(10));
+        BinaryWriter.ValueWriter booleanSetter = createPrimitiveValueWriter(DataTypes.BOOLEAN());
+        BinaryWriter.ValueWriter tinyintSetter = createPrimitiveValueWriter(DataTypes.TINYINT());
+        BinaryWriter.ValueWriter smallintSetter = createPrimitiveValueWriter(DataTypes.SMALLINT());
+        BinaryWriter.ValueWriter intSetter = createPrimitiveValueWriter(DataTypes.INT());
+        BinaryWriter.ValueWriter bigintSetter = createPrimitiveValueWriter(DataTypes.BIGINT());
+        BinaryWriter.ValueWriter floatSetter = createPrimitiveValueWriter(DataTypes.FLOAT());
+        BinaryWriter.ValueWriter doubleSetter = createPrimitiveValueWriter(DataTypes.DOUBLE());
+        BinaryWriter.ValueWriter stringSetter = createPrimitiveValueWriter(DataTypes.STRING());
+        BinaryWriter.ValueWriter charSetter = createPrimitiveValueWriter(DataTypes.CHAR(10));
+        BinaryWriter.ValueWriter binarySetter = createPrimitiveValueWriter(DataTypes.BINARY(10));
         BinaryWriter.ValueWriter decimalSetter =
-                BinaryWriter.createValueWriter(DataTypes.DECIMAL(5, 2));
+                createPrimitiveValueWriter(DataTypes.DECIMAL(5, 2));
         BinaryWriter.ValueWriter timestampNtzSetter =
-                BinaryWriter.createValueWriter(DataTypes.TIMESTAMP(3));
+                createPrimitiveValueWriter(DataTypes.TIMESTAMP(3));
         BinaryWriter.ValueWriter timestampLtzSetter =
-                BinaryWriter.createValueWriter(DataTypes.TIMESTAMP_LTZ(3));
-        BinaryWriter.ValueWriter dateSetter = BinaryWriter.createValueWriter(DataTypes.DATE());
-        BinaryWriter.ValueWriter timeSetter = BinaryWriter.createValueWriter(DataTypes.TIME());
+                createPrimitiveValueWriter(DataTypes.TIMESTAMP_LTZ(3));
+        BinaryWriter.ValueWriter dateSetter = createPrimitiveValueWriter(DataTypes.DATE());
+        BinaryWriter.ValueWriter timeSetter = createPrimitiveValueWriter(DataTypes.TIME());
 
         assertThat(booleanSetter).isNotNull();
         assertThat(tinyintSetter).isNotNull();
@@ -71,10 +69,10 @@ public class BinaryWriterTest {
 
     @Test
     public void testValueSetterWithBooleanType() {
-        BinaryArray array = new BinaryArray();
+        BinaryArray array = new PrimitiveBinaryArray();
         BinaryArrayWriter writer = new BinaryArrayWriter(array, 2, 1);
 
-        BinaryWriter.ValueWriter setter = BinaryWriter.createValueWriter(DataTypes.BOOLEAN());
+        BinaryWriter.ValueWriter setter = createPrimitiveValueWriter(DataTypes.BOOLEAN());
         setter.writeValue(writer, 0, true);
         setter.writeValue(writer, 1, false);
         writer.complete();
@@ -85,10 +83,10 @@ public class BinaryWriterTest {
 
     @Test
     public void testValueSetterWithIntType() {
-        BinaryArray array = new BinaryArray();
+        BinaryArray array = new PrimitiveBinaryArray();
         BinaryArrayWriter writer = new BinaryArrayWriter(array, 2, 4);
 
-        BinaryWriter.ValueWriter setter = BinaryWriter.createValueWriter(DataTypes.INT());
+        BinaryWriter.ValueWriter setter = createPrimitiveValueWriter(DataTypes.INT());
         setter.writeValue(writer, 0, 100);
         setter.writeValue(writer, 1, 200);
         writer.complete();
@@ -99,10 +97,10 @@ public class BinaryWriterTest {
 
     @Test
     public void testValueSetterWithStringType() {
-        BinaryArray array = new BinaryArray();
+        BinaryArray array = new PrimitiveBinaryArray();
         BinaryArrayWriter writer = new BinaryArrayWriter(array, 2, 8);
 
-        BinaryWriter.ValueWriter setter = BinaryWriter.createValueWriter(DataTypes.STRING());
+        BinaryWriter.ValueWriter setter = createPrimitiveValueWriter(DataTypes.STRING());
         setter.writeValue(writer, 0, BinaryString.fromString("hello"));
         setter.writeValue(writer, 1, BinaryString.fromString("world"));
         writer.complete();
@@ -113,10 +111,10 @@ public class BinaryWriterTest {
 
     @Test
     public void testValueSetterWithDecimalType() {
-        BinaryArray array = new BinaryArray();
+        BinaryArray array = new PrimitiveBinaryArray();
         BinaryArrayWriter writer = new BinaryArrayWriter(array, 2, 8);
 
-        BinaryWriter.ValueWriter setter = BinaryWriter.createValueWriter(DataTypes.DECIMAL(5, 2));
+        BinaryWriter.ValueWriter setter = createPrimitiveValueWriter(DataTypes.DECIMAL(5, 2));
         setter.writeValue(writer, 0, Decimal.fromUnscaledLong(123, 5, 2));
         setter.writeValue(writer, 1, Decimal.fromUnscaledLong(456, 5, 2));
         writer.complete();
@@ -129,30 +127,18 @@ public class BinaryWriterTest {
     public void testCreateValueSetterForMapThrowsException() {
         assertThatThrownBy(
                         () ->
-                                BinaryWriter.createValueWriter(
+                                createPrimitiveValueWriter(
                                         DataTypes.MAP(DataTypes.INT(), DataTypes.STRING())))
                 .isInstanceOf(UnsupportedOperationException.class)
                 .hasMessageContaining("Map type is not supported yet");
     }
 
     @Test
-    public void testCreateValueSetterForRowThrowsException() {
-        assertThatThrownBy(
-                        () ->
-                                BinaryWriter.createValueWriter(
-                                        DataTypes.ROW(
-                                                DataTypes.FIELD("a", DataTypes.INT()),
-                                                DataTypes.FIELD("b", DataTypes.STRING()))))
-                .isInstanceOf(UnsupportedOperationException.class)
-                .hasMessageContaining("Row type is not supported yet");
-    }
-
-    @Test
     public void testValueSetterWithByteType() {
-        BinaryArray array = new BinaryArray();
+        BinaryArray array = new PrimitiveBinaryArray();
         BinaryArrayWriter writer = new BinaryArrayWriter(array, 2, 1);
 
-        BinaryWriter.ValueWriter setter = BinaryWriter.createValueWriter(DataTypes.TINYINT());
+        BinaryWriter.ValueWriter setter = createPrimitiveValueWriter(DataTypes.TINYINT());
         setter.writeValue(writer, 0, (byte) 10);
         setter.writeValue(writer, 1, (byte) 20);
         writer.complete();
@@ -163,10 +149,10 @@ public class BinaryWriterTest {
 
     @Test
     public void testValueSetterWithShortType() {
-        BinaryArray array = new BinaryArray();
+        BinaryArray array = new PrimitiveBinaryArray();
         BinaryArrayWriter writer = new BinaryArrayWriter(array, 2, 2);
 
-        BinaryWriter.ValueWriter setter = BinaryWriter.createValueWriter(DataTypes.SMALLINT());
+        BinaryWriter.ValueWriter setter = createPrimitiveValueWriter(DataTypes.SMALLINT());
         setter.writeValue(writer, 0, (short) 100);
         setter.writeValue(writer, 1, (short) 200);
         writer.complete();
@@ -177,10 +163,10 @@ public class BinaryWriterTest {
 
     @Test
     public void testValueSetterWithLongType() {
-        BinaryArray array = new BinaryArray();
+        BinaryArray array = new PrimitiveBinaryArray();
         BinaryArrayWriter writer = new BinaryArrayWriter(array, 2, 8);
 
-        BinaryWriter.ValueWriter setter = BinaryWriter.createValueWriter(DataTypes.BIGINT());
+        BinaryWriter.ValueWriter setter = createPrimitiveValueWriter(DataTypes.BIGINT());
         setter.writeValue(writer, 0, 1000L);
         setter.writeValue(writer, 1, 2000L);
         writer.complete();
@@ -191,10 +177,10 @@ public class BinaryWriterTest {
 
     @Test
     public void testValueSetterWithFloatType() {
-        BinaryArray array = new BinaryArray();
+        BinaryArray array = new PrimitiveBinaryArray();
         BinaryArrayWriter writer = new BinaryArrayWriter(array, 2, 4);
 
-        BinaryWriter.ValueWriter setter = BinaryWriter.createValueWriter(DataTypes.FLOAT());
+        BinaryWriter.ValueWriter setter = createPrimitiveValueWriter(DataTypes.FLOAT());
         setter.writeValue(writer, 0, 1.5f);
         setter.writeValue(writer, 1, 2.5f);
         writer.complete();
@@ -205,10 +191,10 @@ public class BinaryWriterTest {
 
     @Test
     public void testValueSetterWithDoubleType() {
-        BinaryArray array = new BinaryArray();
+        BinaryArray array = new PrimitiveBinaryArray();
         BinaryArrayWriter writer = new BinaryArrayWriter(array, 2, 8);
 
-        BinaryWriter.ValueWriter setter = BinaryWriter.createValueWriter(DataTypes.DOUBLE());
+        BinaryWriter.ValueWriter setter = createPrimitiveValueWriter(DataTypes.DOUBLE());
         setter.writeValue(writer, 0, 1.1);
         setter.writeValue(writer, 1, 2.2);
         writer.complete();
@@ -219,10 +205,10 @@ public class BinaryWriterTest {
 
     @Test
     public void testValueSetterWithCharType() {
-        BinaryArray array = new BinaryArray();
+        BinaryArray array = new PrimitiveBinaryArray();
         BinaryArrayWriter writer = new BinaryArrayWriter(array, 2, 8);
 
-        BinaryWriter.ValueWriter setter = BinaryWriter.createValueWriter(DataTypes.CHAR(5));
+        BinaryWriter.ValueWriter setter = createPrimitiveValueWriter(DataTypes.CHAR(5));
         setter.writeValue(writer, 0, BinaryString.fromString("hello"));
         setter.writeValue(writer, 1, BinaryString.fromString("world"));
         writer.complete();
@@ -233,10 +219,10 @@ public class BinaryWriterTest {
 
     @Test
     public void testValueSetterWithBinaryType() {
-        BinaryArray array = new BinaryArray();
+        BinaryArray array = new PrimitiveBinaryArray();
         BinaryArrayWriter writer = new BinaryArrayWriter(array, 2, 8);
 
-        BinaryWriter.ValueWriter setter = BinaryWriter.createValueWriter(DataTypes.BINARY(3));
+        BinaryWriter.ValueWriter setter = createPrimitiveValueWriter(DataTypes.BINARY(3));
         setter.writeValue(writer, 0, new byte[] {1, 2, 3});
         setter.writeValue(writer, 1, new byte[] {4, 5, 6});
         writer.complete();
@@ -247,10 +233,10 @@ public class BinaryWriterTest {
 
     @Test
     public void testValueSetterWithTimestampNtzType() {
-        BinaryArray array = new BinaryArray();
+        BinaryArray array = new PrimitiveBinaryArray();
         BinaryArrayWriter writer = new BinaryArrayWriter(array, 2, 8);
 
-        BinaryWriter.ValueWriter setter = BinaryWriter.createValueWriter(DataTypes.TIMESTAMP(3));
+        BinaryWriter.ValueWriter setter = createPrimitiveValueWriter(DataTypes.TIMESTAMP(3));
         setter.writeValue(writer, 0, TimestampNtz.fromMillis(1000L));
         setter.writeValue(writer, 1, TimestampNtz.fromMillis(2000L));
         writer.complete();
@@ -261,11 +247,10 @@ public class BinaryWriterTest {
 
     @Test
     public void testValueSetterWithTimestampLtzType() {
-        BinaryArray array = new BinaryArray();
+        BinaryArray array = new PrimitiveBinaryArray();
         BinaryArrayWriter writer = new BinaryArrayWriter(array, 2, 8);
 
-        BinaryWriter.ValueWriter setter =
-                BinaryWriter.createValueWriter(DataTypes.TIMESTAMP_LTZ(3));
+        BinaryWriter.ValueWriter setter = createPrimitiveValueWriter(DataTypes.TIMESTAMP_LTZ(3));
         setter.writeValue(writer, 0, TimestampLtz.fromEpochMillis(1000L));
         setter.writeValue(writer, 1, TimestampLtz.fromEpochMillis(2000L));
         writer.complete();
@@ -276,10 +261,10 @@ public class BinaryWriterTest {
 
     @Test
     public void testValueSetterWithDateType() {
-        BinaryArray array = new BinaryArray();
+        BinaryArray array = new PrimitiveBinaryArray();
         BinaryArrayWriter writer = new BinaryArrayWriter(array, 2, 4);
 
-        BinaryWriter.ValueWriter setter = BinaryWriter.createValueWriter(DataTypes.DATE());
+        BinaryWriter.ValueWriter setter = createPrimitiveValueWriter(DataTypes.DATE());
         setter.writeValue(writer, 0, 18000);
         setter.writeValue(writer, 1, 18001);
         writer.complete();
@@ -290,15 +275,20 @@ public class BinaryWriterTest {
 
     @Test
     public void testValueSetterWithTimeType() {
-        BinaryArray array = new BinaryArray();
+        BinaryArray array = new PrimitiveBinaryArray();
         BinaryArrayWriter writer = new BinaryArrayWriter(array, 2, 4);
 
-        BinaryWriter.ValueWriter setter = BinaryWriter.createValueWriter(DataTypes.TIME());
+        BinaryWriter.ValueWriter setter = createPrimitiveValueWriter(DataTypes.TIME());
         setter.writeValue(writer, 0, 3600000);
         setter.writeValue(writer, 1, 7200000);
         writer.complete();
 
         assertThat(array.getInt(0)).isEqualTo(3600000);
         assertThat(array.getInt(1)).isEqualTo(7200000);
+    }
+
+    private static BinaryWriter.ValueWriter createPrimitiveValueWriter(DataType elementType) {
+        // use null for row format if there is no nested row type
+        return BinaryWriter.createValueWriter(elementType, null);
     }
 }

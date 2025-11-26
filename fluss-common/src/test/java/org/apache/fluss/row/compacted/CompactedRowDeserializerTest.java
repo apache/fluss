@@ -25,6 +25,7 @@ import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalArray;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
+import org.apache.fluss.row.array.PrimitiveBinaryArray;
 import org.apache.fluss.row.serializer.ArraySerializer;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypes;
@@ -34,6 +35,7 @@ import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
 
+import static org.apache.fluss.row.BinaryRow.BinaryRowFormat.COMPACTED;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test for {@link CompactedRowDeserializer}. */
@@ -923,7 +925,7 @@ public class CompactedRowDeserializerTest {
         CompactedRowDeserializer deserializer = new CompactedRowDeserializer(types);
 
         BinaryArray intArray = BinaryArray.fromPrimitiveArray(new int[] {1, 2, 3, 4, 5});
-        ArraySerializer arraySerializer = new ArraySerializer(DataTypes.INT());
+        ArraySerializer arraySerializer = new ArraySerializer(DataTypes.INT(), COMPACTED);
 
         CompactedRowWriter writer = new CompactedRowWriter(types.length);
         writer.writeInt(100);
@@ -948,14 +950,14 @@ public class CompactedRowDeserializerTest {
         DataType[] types = {DataTypes.ARRAY(DataTypes.STRING())};
         CompactedRowDeserializer deserializer = new CompactedRowDeserializer(types);
 
-        BinaryArray strArray = new BinaryArray();
+        BinaryArray strArray = new PrimitiveBinaryArray();
         BinaryArrayWriter strArrayWriter = new BinaryArrayWriter(strArray, 3, 8);
         strArrayWriter.writeString(0, BinaryString.fromString("hello"));
         strArrayWriter.writeString(1, BinaryString.fromString("world"));
         strArrayWriter.writeString(2, BinaryString.fromString("test"));
         strArrayWriter.complete();
 
-        ArraySerializer arraySerializer = new ArraySerializer(DataTypes.STRING());
+        ArraySerializer arraySerializer = new ArraySerializer(DataTypes.STRING(), COMPACTED);
 
         CompactedRowWriter writer = new CompactedRowWriter(types.length);
         writer.writeArray(strArray, arraySerializer);

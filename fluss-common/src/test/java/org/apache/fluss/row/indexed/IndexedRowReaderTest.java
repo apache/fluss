@@ -21,6 +21,8 @@ import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.BinaryWriter;
 import org.apache.fluss.row.Decimal;
 import org.apache.fluss.row.GenericArray;
+import org.apache.fluss.row.GenericRow;
+import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.utils.DateTimeUtils;
@@ -33,11 +35,13 @@ import java.math.BigInteger;
 import java.time.LocalDate;
 import java.time.LocalTime;
 
+import static org.apache.fluss.row.BinaryRow.BinaryRowFormat.INDEXED;
 import static org.apache.fluss.row.BinaryString.fromString;
 import static org.apache.fluss.row.TestInternalRowGenerator.createAllTypes;
 import static org.apache.fluss.row.indexed.IndexedRowTest.assertAllTypeEquals;
 import static org.apache.fluss.row.indexed.IndexedRowTest.genRecordForAllTypes;
 import static org.apache.fluss.testutils.InternalArrayAssert.assertThatArray;
+import static org.apache.fluss.testutils.InternalRowAssert.assertThatRow;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test of {@link IndexedRowReader}. */
@@ -66,7 +70,7 @@ public class IndexedRowReaderTest {
         IndexedRowReader.FieldReader[] readers = new IndexedRowReader.FieldReader[dataTypes.length];
         for (int i = 0; i < dataTypes.length; i++) {
             readers[i] = IndexedRowReader.createFieldReader(dataTypes[i]);
-            writers[i] = BinaryWriter.createValueWriter(dataTypes[i]);
+            writers[i] = BinaryWriter.createValueWriter(dataTypes[i], INDEXED);
         }
 
         IndexedRowWriter writer1 = new IndexedRowWriter(dataTypes);
@@ -102,19 +106,32 @@ public class IndexedRowReaderTest {
         assertThat(reader.readTimestampNtz(5).toString()).isEqualTo("2023-10-25T12:01:13.182");
         assertThat(reader.readTimestampLtz(1).toString()).isEqualTo("2023-10-25T12:01:13.182Z");
         assertThat(reader.readTimestampLtz(5).toString()).isEqualTo("2023-10-25T12:01:13.182Z");
-        assertThatArray(reader.readArray())
+        assertThatArray(reader.readArray(dataTypes[19]))
                 .withElementType(DataTypes.INT())
                 .isEqualTo(GenericArray.of(1, 2, 3, 4, 5, -11, null, 444, 102234));
-        assertThatArray(reader.readArray())
-                .withElementType(DataTypes.FLOAT().copy(false))
+        assertThatArray(reader.readArray(dataTypes[20]))
+                .withElementType(DataTypes.FLOAT())
                 .isEqualTo(
                         GenericArray.of(0.1f, 1.1f, -0.5f, 6.6f, Float.MAX_VALUE, Float.MIN_VALUE));
-        assertThatArray(reader.readArray())
+        assertThatArray(reader.readArray(dataTypes[21]))
                 .withElementType(DataTypes.ARRAY(DataTypes.STRING()))
                 .isEqualTo(
                         GenericArray.of(
                                 GenericArray.of(fromString("a"), null, fromString("c")),
                                 null,
                                 GenericArray.of(fromString("hello"), fromString("world"))));
+        InternalRow nestedRow =
+                reader.readRow(dataTypes[22].getChildren().toArray(new DataType[0]));
+        GenericRow expectedInnerRow = GenericRow.of(22);
+        GenericRow expectedNestedRow = GenericRow.of(123, expectedInnerRow, fromString("Test"));
+        assertThatRow(nestedRow)
+                .withSchema(
+                        DataTypes.ROW(
+                                DataTypes.FIELD("u1", DataTypes.INT()),
+                                DataTypes.FIELD(
+                                        "u2",
+                                        DataTypes.ROW(DataTypes.FIELD("v1", DataTypes.INT()))),
+                                DataTypes.FIELD("u3", DataTypes.STRING())))
+                .isEqualTo(expectedNestedRow);
     }
 }

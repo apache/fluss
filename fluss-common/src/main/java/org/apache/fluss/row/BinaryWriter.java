@@ -18,9 +18,14 @@
 package org.apache.fluss.row;
 
 import org.apache.fluss.annotation.PublicEvolving;
+import org.apache.fluss.row.BinaryRow.BinaryRowFormat;
 import org.apache.fluss.row.serializer.ArraySerializer;
+import org.apache.fluss.row.serializer.RowSerializer;
 import org.apache.fluss.types.ArrayType;
 import org.apache.fluss.types.DataType;
+import org.apache.fluss.types.RowType;
+
+import javax.annotation.Nullable;
 
 import java.io.Serializable;
 
@@ -73,9 +78,7 @@ public interface BinaryWriter {
 
     void writeArray(int pos, InternalArray value, ArraySerializer serializer);
 
-    // TODO: Map and Row write methods will be added in Issue #1973 and #1974
-    // void writeMap(int pos, InternalMap value, InternalMapSerializer serializer);
-    // void writeRow(int pos, InternalRow value, InternalRowSerializer serializer);
+    void writeRow(int pos, InternalRow value, RowSerializer serializer);
 
     /** Finally, complete write to set real size to binary. */
     void complete();
@@ -87,9 +90,12 @@ public interface BinaryWriter {
      * Creates an accessor for setting the elements of a binary writer during runtime.
      *
      * @param elementType the element type
+     * @param rowFormat the binary row format, it is required when the element type has nested row
+     *     type, otherwise, {@link IllegalArgumentException} will be thrown.
      */
-    static BinaryWriter.ValueWriter createValueWriter(DataType elementType) {
-        BinaryWriter.ValueWriter valueWriter = createNotNullValueWriter(elementType);
+    static BinaryWriter.ValueWriter createValueWriter(
+            DataType elementType, BinaryRowFormat rowFormat) {
+        BinaryWriter.ValueWriter valueWriter = createNotNullValueWriter(elementType, rowFormat);
         if (!elementType.isNullable()) {
             return valueWriter;
         }
@@ -108,7 +114,8 @@ public interface BinaryWriter {
      *
      * @param elementType the element type
      */
-    static BinaryWriter.ValueWriter createNotNullValueWriter(DataType elementType) {
+    static BinaryWriter.ValueWriter createNotNullValueWriter(
+            DataType elementType, @Nullable BinaryRowFormat rowFormat) {
         switch (elementType.getTypeRoot()) {
             case CHAR:
                 int charLength = getLength(elementType);
@@ -152,7 +159,7 @@ public interface BinaryWriter {
                         writer.writeTimestampLtz(pos, (TimestampLtz) value, timestampLtzPrecision);
             case ARRAY:
                 final ArraySerializer arraySerializer =
-                        new ArraySerializer(((ArrayType) elementType).getElementType());
+                        new ArraySerializer(((ArrayType) elementType).getElementType(), rowFormat);
                 return (writer, pos, value) ->
                         writer.writeArray(pos, (InternalArray) value, arraySerializer);
 
@@ -161,9 +168,16 @@ public interface BinaryWriter {
                 throw new UnsupportedOperationException(
                         "Map type is not supported yet. Will be added in Issue #1973.");
             case ROW:
-                // TODO: Row type support will be added in Issue #1974
-                throw new UnsupportedOperationException(
-                        "Row type is not supported yet. Will be added in Issue #1974.");
+                if (rowFormat == null) {
+                    throw new IllegalArgumentException(
+                            "Binary row format is required to write row.");
+                }
+                final RowType rowType = (RowType) elementType;
+                final RowSerializer rowSerializer =
+                        new RowSerializer(
+                                rowType.getFieldTypes().toArray(new DataType[0]), rowFormat);
+                return (writer, pos, value) ->
+                        writer.writeRow(pos, (InternalRow) value, rowSerializer);
             default:
                 String msg =
                         String.format(

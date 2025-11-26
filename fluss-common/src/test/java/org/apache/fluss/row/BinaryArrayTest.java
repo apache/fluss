@@ -17,6 +17,7 @@
 
 package org.apache.fluss.row;
 
+import org.apache.fluss.row.array.PrimitiveBinaryArray;
 import org.apache.fluss.types.DataTypes;
 
 import org.junit.jupiter.api.Test;
@@ -103,7 +104,7 @@ public class BinaryArrayTest {
 
     @Test
     public void testWriteAndReadInt() {
-        BinaryArray array = new BinaryArray();
+        BinaryArray array = new PrimitiveBinaryArray();
         BinaryArrayWriter writer = new BinaryArrayWriter(array, 3, 4);
 
         writer.writeInt(0, 10);
@@ -119,7 +120,7 @@ public class BinaryArrayTest {
 
     @Test
     public void testWriteAndReadString() {
-        BinaryArray array = new BinaryArray();
+        BinaryArray array = new PrimitiveBinaryArray();
         BinaryArrayWriter writer = new BinaryArrayWriter(array, 2, 8);
 
         writer.writeString(0, BinaryString.fromString("hello"));
@@ -133,7 +134,7 @@ public class BinaryArrayTest {
 
     @Test
     public void testSetNull() {
-        BinaryArray array = new BinaryArray();
+        BinaryArray array = new PrimitiveBinaryArray();
         BinaryArrayWriter writer = new BinaryArrayWriter(array, 3, 8);
 
         writer.writeLong(0, 100L);
@@ -151,7 +152,7 @@ public class BinaryArrayTest {
 
     @Test
     public void testSetAndGetDecimal() {
-        BinaryArray array = new BinaryArray();
+        BinaryArray array = new PrimitiveBinaryArray();
         BinaryArrayWriter writer = new BinaryArrayWriter(array, 2, 8);
 
         Decimal decimal1 = Decimal.fromUnscaledLong(123, 5, 2);
@@ -168,7 +169,7 @@ public class BinaryArrayTest {
 
     @Test
     public void testSetAndGetTimestampNtz() {
-        BinaryArray array = new BinaryArray();
+        BinaryArray array = new PrimitiveBinaryArray();
         BinaryArrayWriter writer = new BinaryArrayWriter(array, 2, 8);
 
         TimestampNtz ts1 = TimestampNtz.fromMillis(1000L);
@@ -185,7 +186,7 @@ public class BinaryArrayTest {
 
     @Test
     public void testSetAndGetTimestampLtz() {
-        BinaryArray array = new BinaryArray();
+        BinaryArray array = new PrimitiveBinaryArray();
         BinaryArrayWriter writer = new BinaryArrayWriter(array, 2, 8);
 
         TimestampLtz ts1 = TimestampLtz.fromEpochMillis(1000L);
@@ -202,7 +203,7 @@ public class BinaryArrayTest {
 
     @Test
     public void testSetAndGetBinary() {
-        BinaryArray array = new BinaryArray();
+        BinaryArray array = new PrimitiveBinaryArray();
         BinaryArrayWriter writer = new BinaryArrayWriter(array, 2, 8);
 
         byte[] binary1 = {1, 2, 3};
@@ -215,32 +216,6 @@ public class BinaryArrayTest {
         assertThat(array.size()).isEqualTo(2);
         assertThat(array.getBytes(0)).isEqualTo(binary1);
         assertThat(array.getBinary(1, 3)).isEqualTo(binary2);
-    }
-
-    @Test
-    public void testCopy() {
-        int[] intArray = {1, 2, 3, 4, 5};
-        BinaryArray original = BinaryArray.fromPrimitiveArray(intArray);
-
-        BinaryArray copied = original.copy();
-
-        assertThat(copied.size()).isEqualTo(original.size());
-        assertThat(copied.getInt(0)).isEqualTo(1);
-        assertThat(copied.getInt(4)).isEqualTo(5);
-    }
-
-    @Test
-    public void testCopyWithReuse() {
-        int[] intArray = {1, 2, 3};
-        BinaryArray original = BinaryArray.fromPrimitiveArray(intArray);
-
-        BinaryArray reuse = new BinaryArray();
-        BinaryArray copied = original.copy(reuse);
-
-        assertThat(copied).isSameAs(reuse);
-        assertThat(copied.size()).isEqualTo(3);
-        assertThat(copied.getInt(0)).isEqualTo(1);
-        assertThat(copied.getInt(2)).isEqualTo(3);
     }
 
     @Test
@@ -285,7 +260,7 @@ public class BinaryArrayTest {
 
     @Test
     public void testAnyNull() {
-        BinaryArray array = new BinaryArray();
+        BinaryArray array = new PrimitiveBinaryArray();
         BinaryArrayWriter writer = new BinaryArrayWriter(array, 3, 4);
 
         writer.writeInt(0, 10);
@@ -304,7 +279,7 @@ public class BinaryArrayTest {
 
     @Test
     public void testToArrayWithNullThrowsException() {
-        BinaryArray array = new BinaryArray();
+        BinaryArray array = new PrimitiveBinaryArray();
         BinaryArrayWriter writer = new BinaryArrayWriter(array, 3, 4);
 
         writer.writeInt(0, 10);
@@ -327,7 +302,7 @@ public class BinaryArrayTest {
 
     @Test
     public void testToObjectArrayWithNull() {
-        BinaryArray array = new BinaryArray();
+        BinaryArray array = new PrimitiveBinaryArray();
         BinaryArrayWriter writer = new BinaryArrayWriter(array, 3, 4);
 
         writer.writeInt(0, 10);
@@ -341,7 +316,7 @@ public class BinaryArrayTest {
 
     @Test
     public void testGetChar() {
-        BinaryArray array = new BinaryArray();
+        BinaryArray array = new PrimitiveBinaryArray();
         BinaryArrayWriter writer = new BinaryArrayWriter(array, 2, 8);
 
         writer.writeString(0, BinaryString.fromString("hello"));
@@ -354,7 +329,7 @@ public class BinaryArrayTest {
 
     @Test
     public void testSetBoolean() {
-        BinaryArray array = new BinaryArray();
+        BinaryArray array = new PrimitiveBinaryArray();
         BinaryArrayWriter writer = new BinaryArrayWriter(array, 3, 1);
 
         writer.writeBoolean(0, true);
@@ -369,7 +344,7 @@ public class BinaryArrayTest {
 
     @Test
     public void testSetByte() {
-        BinaryArray array = new BinaryArray();
+        BinaryArray array = new PrimitiveBinaryArray();
         BinaryArrayWriter writer = new BinaryArrayWriter(array, 3, 1);
 
         writer.writeByte(0, (byte) 1);
@@ -384,7 +359,7 @@ public class BinaryArrayTest {
 
     @Test
     public void testSetShort() {
-        BinaryArray array = new BinaryArray();
+        BinaryArray array = new PrimitiveBinaryArray();
         BinaryArrayWriter writer = new BinaryArrayWriter(array, 3, 2);
 
         writer.writeShort(0, (short) 10);
@@ -399,7 +374,7 @@ public class BinaryArrayTest {
 
     @Test
     public void testSetFloat() {
-        BinaryArray array = new BinaryArray();
+        BinaryArray array = new PrimitiveBinaryArray();
         BinaryArrayWriter writer = new BinaryArrayWriter(array, 3, 4);
 
         writer.writeFloat(0, 1.5f);
@@ -414,7 +389,7 @@ public class BinaryArrayTest {
 
     @Test
     public void testSetDouble() {
-        BinaryArray array = new BinaryArray();
+        BinaryArray array = new PrimitiveBinaryArray();
         BinaryArrayWriter writer = new BinaryArrayWriter(array, 3, 8);
 
         writer.writeDouble(0, 1.1);
@@ -454,7 +429,7 @@ public class BinaryArrayTest {
         int[] intArray = {1, 2, 3};
         BinaryArray array1 = BinaryArray.fromPrimitiveArray(intArray);
 
-        BinaryArray array2 = new BinaryArray();
+        BinaryArray array2 = new PrimitiveBinaryArray();
         array2.pointTo(array1.getSegments(), array1.getOffset(), array1.getSizeInBytes());
 
         assertThat(array2.size()).isEqualTo(3);
@@ -465,7 +440,7 @@ public class BinaryArrayTest {
 
     @Test
     public void testHighPrecisionTimestamp() {
-        BinaryArray array = new BinaryArray();
+        BinaryArray array = new PrimitiveBinaryArray();
         BinaryArrayWriter writer = new BinaryArrayWriter(array, 2, 8);
 
         TimestampNtz ts1 = TimestampNtz.fromMillis(1000L, 123456);
@@ -481,7 +456,7 @@ public class BinaryArrayTest {
 
     @Test
     public void testHighPrecisionTimestampLtz() {
-        BinaryArray array = new BinaryArray();
+        BinaryArray array = new PrimitiveBinaryArray();
         BinaryArrayWriter writer = new BinaryArrayWriter(array, 2, 8);
 
         TimestampLtz ts1 = TimestampLtz.fromEpochMillis(1000L, 123456);
@@ -497,7 +472,7 @@ public class BinaryArrayTest {
 
     @Test
     public void testLargeDecimal() {
-        BinaryArray array = new BinaryArray();
+        BinaryArray array = new PrimitiveBinaryArray();
         BinaryArrayWriter writer = new BinaryArrayWriter(array, 2, 8);
 
         Decimal decimal1 = Decimal.fromBigDecimal(new java.math.BigDecimal("123.456"), 20, 3);
@@ -513,7 +488,7 @@ public class BinaryArrayTest {
 
     @Test
     public void testSetNotNullAt() {
-        BinaryArray array = new BinaryArray();
+        BinaryArray array = new PrimitiveBinaryArray();
         BinaryArrayWriter writer = new BinaryArrayWriter(array, 3, 8);
 
         writer.setNullLong(0);
@@ -529,7 +504,7 @@ public class BinaryArrayTest {
 
     @Test
     public void testSetNullAt() {
-        BinaryArray array = new BinaryArray();
+        BinaryArray array = new PrimitiveBinaryArray();
         BinaryArrayWriter writer = new BinaryArrayWriter(array, 3, 8);
 
         writer.writeLong(0, 100L);
@@ -567,7 +542,7 @@ public class BinaryArrayTest {
 
     @Test
     public void testSetDecimalCompact() {
-        BinaryArray array = new BinaryArray();
+        BinaryArray array = new PrimitiveBinaryArray();
         BinaryArrayWriter writer = new BinaryArrayWriter(array, 2, 8);
 
         Decimal decimal1 = Decimal.fromUnscaledLong(123, 5, 2);
@@ -586,7 +561,7 @@ public class BinaryArrayTest {
 
     @Test
     public void testSetTimestampNtzCompact() {
-        BinaryArray array = new BinaryArray();
+        BinaryArray array = new PrimitiveBinaryArray();
         BinaryArrayWriter writer = new BinaryArrayWriter(array, 2, 8);
 
         TimestampNtz ts1 = TimestampNtz.fromMillis(1000L);
@@ -605,7 +580,7 @@ public class BinaryArrayTest {
 
     @Test
     public void testSetTimestampLtzCompact() {
-        BinaryArray array = new BinaryArray();
+        BinaryArray array = new PrimitiveBinaryArray();
         BinaryArrayWriter writer = new BinaryArrayWriter(array, 2, 8);
 
         TimestampLtz ts1 = TimestampLtz.fromEpochMillis(1000L);
@@ -624,7 +599,7 @@ public class BinaryArrayTest {
 
     @Test
     public void testToObjectArrayWithNulls() {
-        BinaryArray array = new BinaryArray();
+        BinaryArray array = new PrimitiveBinaryArray();
         BinaryArrayWriter writer = new BinaryArrayWriter(array, 3, 4);
 
         writer.writeInt(0, 100);
@@ -683,7 +658,7 @@ public class BinaryArrayTest {
 
     @Test
     public void testSetNullLong() {
-        BinaryArray array = new BinaryArray();
+        BinaryArray array = new PrimitiveBinaryArray();
         BinaryArrayWriter writer = new BinaryArrayWriter(array, 2, 8);
         writer.setNullLong(0);
         writer.writeLong(1, 100L);
@@ -695,7 +670,7 @@ public class BinaryArrayTest {
 
     @Test
     public void testSetNullInt() {
-        BinaryArray array = new BinaryArray();
+        BinaryArray array = new PrimitiveBinaryArray();
         BinaryArrayWriter writer = new BinaryArrayWriter(array, 2, 4);
         writer.setNullInt(0);
         writer.writeInt(1, 100);
@@ -707,7 +682,7 @@ public class BinaryArrayTest {
 
     @Test
     public void testSetNullFloat() {
-        BinaryArray array = new BinaryArray();
+        BinaryArray array = new PrimitiveBinaryArray();
         BinaryArrayWriter writer = new BinaryArrayWriter(array, 2, 4);
         writer.setNullFloat(0);
         writer.writeFloat(1, 3.14f);
@@ -719,7 +694,7 @@ public class BinaryArrayTest {
 
     @Test
     public void testSetNullDouble() {
-        BinaryArray array = new BinaryArray();
+        BinaryArray array = new PrimitiveBinaryArray();
         BinaryArrayWriter writer = new BinaryArrayWriter(array, 2, 8);
         writer.setNullDouble(0);
         writer.writeDouble(1, 3.14159);
@@ -731,7 +706,7 @@ public class BinaryArrayTest {
 
     @Test
     public void testSetNullBoolean() {
-        BinaryArray array = new BinaryArray();
+        BinaryArray array = new PrimitiveBinaryArray();
         BinaryArrayWriter writer = new BinaryArrayWriter(array, 2, 1);
         writer.setNullBoolean(0);
         writer.writeBoolean(1, true);
@@ -743,7 +718,7 @@ public class BinaryArrayTest {
 
     @Test
     public void testSetNullByte() {
-        BinaryArray array = new BinaryArray();
+        BinaryArray array = new PrimitiveBinaryArray();
         BinaryArrayWriter writer = new BinaryArrayWriter(array, 2, 1);
         writer.setNullByte(0);
         writer.writeByte(1, (byte) 42);
@@ -755,7 +730,7 @@ public class BinaryArrayTest {
 
     @Test
     public void testSetNullShort() {
-        BinaryArray array = new BinaryArray();
+        BinaryArray array = new PrimitiveBinaryArray();
         BinaryArrayWriter writer = new BinaryArrayWriter(array, 2, 2);
         writer.setNullShort(0);
         writer.writeShort(1, (short) 123);
@@ -767,7 +742,7 @@ public class BinaryArrayTest {
 
     @Test
     public void testGetString() {
-        BinaryArray array = new BinaryArray();
+        BinaryArray array = new PrimitiveBinaryArray();
         BinaryArrayWriter writer = new BinaryArrayWriter(array, 1, 8);
         writer.writeString(0, BinaryString.fromString("test"));
         writer.complete();
@@ -777,7 +752,7 @@ public class BinaryArrayTest {
 
     @Test
     public void testGetBytes() {
-        BinaryArray array = new BinaryArray();
+        BinaryArray array = new PrimitiveBinaryArray();
         BinaryArrayWriter writer = new BinaryArrayWriter(array, 1, 8);
         byte[] bytes = {1, 2, 3, 4, 5};
         writer.writeBinary(0, bytes, 10);
@@ -808,18 +783,6 @@ public class BinaryArrayTest {
     }
 
     @Test
-    public void testCopyWithMultipleTypes() {
-        BinaryArray array = BinaryArray.fromPrimitiveArray(new int[] {1, 2, 3, 4, 5});
-
-        BinaryArray copied = array.copy();
-
-        assertThat(copied).isNotSameAs(array);
-        assertThat(copied.size()).isEqualTo(5);
-        assertThat(copied.getInt(0)).isEqualTo(1);
-        assertThat(copied.getInt(4)).isEqualTo(5);
-    }
-
-    @Test
     public void testHashCodeConsistency() {
         BinaryArray array1 = BinaryArray.fromPrimitiveArray(new int[] {1, 2, 3});
         BinaryArray array2 = BinaryArray.fromPrimitiveArray(new int[] {1, 2, 3});
@@ -829,7 +792,7 @@ public class BinaryArrayTest {
 
     @Test
     public void testSetDecimalNonCompact() {
-        BinaryArray array = new BinaryArray();
+        BinaryArray array = new PrimitiveBinaryArray();
         BinaryArrayWriter writer = new BinaryArrayWriter(array, 2, 8);
 
         Decimal largeDecimal =
@@ -849,7 +812,7 @@ public class BinaryArrayTest {
 
     @Test
     public void testSetTimestampNtzNonCompact() {
-        BinaryArray array = new BinaryArray();
+        BinaryArray array = new PrimitiveBinaryArray();
         BinaryArrayWriter writer = new BinaryArrayWriter(array, 2, 8);
 
         TimestampNtz ts1 = TimestampNtz.fromMillis(1000L, 123456);
@@ -868,7 +831,7 @@ public class BinaryArrayTest {
 
     @Test
     public void testSetTimestampLtzNonCompact() {
-        BinaryArray array = new BinaryArray();
+        BinaryArray array = new PrimitiveBinaryArray();
         BinaryArrayWriter writer = new BinaryArrayWriter(array, 2, 8);
 
         TimestampLtz ts1 = TimestampLtz.fromEpochMillis(1000L, 123456);
@@ -919,7 +882,7 @@ public class BinaryArrayTest {
 
     @Test
     public void testGetBinaryWithLength() {
-        BinaryArray array = new BinaryArray();
+        BinaryArray array = new PrimitiveBinaryArray();
         BinaryArrayWriter writer = new BinaryArrayWriter(array, 1, 8);
         byte[] data = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10};
         writer.writeBytes(0, data);
@@ -931,7 +894,7 @@ public class BinaryArrayTest {
 
     @Test
     public void testGetDecimalNonCompact() {
-        BinaryArray array = new BinaryArray();
+        BinaryArray array = new PrimitiveBinaryArray();
         BinaryArrayWriter writer = new BinaryArrayWriter(array, 1, 8);
 
         Decimal largeDecimal =
@@ -945,7 +908,7 @@ public class BinaryArrayTest {
 
     @Test
     public void testGetTimestampNonCompact() {
-        BinaryArray array = new BinaryArray();
+        BinaryArray array = new PrimitiveBinaryArray();
         BinaryArrayWriter writer = new BinaryArrayWriter(array, 2, 8);
 
         TimestampNtz tsNtz = TimestampNtz.fromMillis(1000L, 123456);
@@ -965,5 +928,37 @@ public class BinaryArrayTest {
                 .isEqualTo(8);
         assertThat(BinaryArray.calculateFixLengthPartSize(DataTypes.CHAR(10))).isEqualTo(8);
         assertThat(BinaryArray.calculateFixLengthPartSize(DataTypes.BINARY(20))).isEqualTo(8);
+    }
+
+    @Test
+    public void testPrimitiveBinaryArrayGetRowThrowsException() {
+        PrimitiveBinaryArray array = new PrimitiveBinaryArray();
+        BinaryArrayWriter writer = new BinaryArrayWriter(array, 3, 4);
+        writer.writeInt(0, 10);
+        writer.writeInt(1, 20);
+        writer.writeInt(2, 30);
+        writer.complete();
+
+        assertThatThrownBy(() -> array.getRow(0, 2))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Can not get nested row from array of primitive type");
+    }
+
+    @Test
+    public void testPrimitiveBinaryArrayGetArray() {
+        PrimitiveBinaryArray innerArray1 = new PrimitiveBinaryArray();
+        BinaryArrayWriter innerWriter1 = new BinaryArrayWriter(innerArray1, 2, 4);
+        innerWriter1.writeInt(0, 10);
+        innerWriter1.writeInt(1, 20);
+        innerWriter1.complete();
+
+        PrimitiveBinaryArray outerArray = new PrimitiveBinaryArray();
+        BinaryArrayWriter outerWriter = new BinaryArrayWriter(outerArray, 1, 8);
+        outerWriter.setOffsetAndSize(0, 0, innerArray1.getSizeInBytes());
+        outerWriter.complete();
+
+        InternalArray result = outerArray.getArray(0);
+        assertThat(result).isNotNull();
+        assertThat(result).isInstanceOf(PrimitiveBinaryArray.class);
     }
 }

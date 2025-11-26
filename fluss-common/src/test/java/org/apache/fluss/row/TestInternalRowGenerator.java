@@ -32,6 +32,7 @@ import java.time.LocalDate;
 import java.time.LocalTime;
 import java.util.Random;
 
+import static org.apache.fluss.row.BinaryRow.BinaryRowFormat.INDEXED;
 import static org.apache.fluss.row.BinaryString.fromString;
 
 /** Test all types and generate test internal row. */
@@ -66,16 +67,16 @@ public class TestInternalRowGenerator {
                         "f20",
                         DataTypes.ARRAY(DataTypes.FLOAT().copy(false))), // vector embedding type
                 new DataField(
-                        "f21", DataTypes.ARRAY(DataTypes.ARRAY(DataTypes.STRING()))) // nested array
-                // TODO: Add Map and Row fields in Issue #1973 and #1974
-                // new DataField("u", DataTypes.MAP(DataTypes.INT(), DataTypes.STRING())),
-                // new DataField(
-                //         "v",
-                //         DataTypes.ROW(
-                //                 new DataField("u1", DataTypes.INT()),
-                //                 new DataField("u2", DataTypes.ROW(DataTypes.INT())),
-                //                 new DataField("u3", DataTypes.STRING())))
-                );
+                        "f21",
+                        DataTypes.ARRAY(DataTypes.ARRAY(DataTypes.STRING()))), // nested array
+                // TODO: Add Map and Row fields in Issue #1973
+                new DataField(
+                        "f22",
+                        DataTypes.ROW(
+                                new DataField("u1", DataTypes.INT()),
+                                new DataField(
+                                        "u2", DataTypes.ROW(new DataField("v1", DataTypes.INT()))),
+                                new DataField("u3", DataTypes.STRING()))));
     }
 
     public static IndexedRow genIndexedRowForAllType() {
@@ -84,7 +85,7 @@ public class TestInternalRowGenerator {
 
         BinaryWriter.ValueWriter[] writers = new BinaryWriter.ValueWriter[dataTypes.length];
         for (int i = 0; i < dataTypes.length; i++) {
-            writers[i] = BinaryWriter.createValueWriter(dataTypes[i]);
+            writers[i] = BinaryWriter.createValueWriter(dataTypes[i], INDEXED);
         }
 
         Random rnd = new Random();
@@ -147,10 +148,9 @@ public class TestInternalRowGenerator {
         // GenericMap map = new GenericMap(javaMap);
         // setRandomNull(writers[20], writer, 20, rnd, map);
 
-        // TODO: Row type support will be added in Issue #1974
-        // GenericRow innerRow = GenericRow.of(123);
-        // GenericRow genericRow = GenericRow.of(20, innerRow, BinaryString.fromString("Test"));
-        // setRandomNull(writers[21], writer, 21, rnd, genericRow);
+        GenericRow innerRow = GenericRow.of(22);
+        GenericRow genericRow = GenericRow.of(123, innerRow, BinaryString.fromString("Test"));
+        setRandomNull(writers[22], writer, 22, rnd, genericRow);
 
         IndexedRow row = new IndexedRow(dataTypes);
         row.pointTo(writer.segment(), 0, writer.position());

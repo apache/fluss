@@ -31,6 +31,7 @@ import org.apache.fluss.row.arrow.vectors.ArrowDecimalColumnVector;
 import org.apache.fluss.row.arrow.vectors.ArrowDoubleColumnVector;
 import org.apache.fluss.row.arrow.vectors.ArrowFloatColumnVector;
 import org.apache.fluss.row.arrow.vectors.ArrowIntColumnVector;
+import org.apache.fluss.row.arrow.vectors.ArrowRowColumnVector;
 import org.apache.fluss.row.arrow.vectors.ArrowSmallIntColumnVector;
 import org.apache.fluss.row.arrow.vectors.ArrowTimeColumnVector;
 import org.apache.fluss.row.arrow.vectors.ArrowTimestampLtzColumnVector;
@@ -48,6 +49,7 @@ import org.apache.fluss.row.arrow.writers.ArrowDoubleWriter;
 import org.apache.fluss.row.arrow.writers.ArrowFieldWriter;
 import org.apache.fluss.row.arrow.writers.ArrowFloatWriter;
 import org.apache.fluss.row.arrow.writers.ArrowIntWriter;
+import org.apache.fluss.row.arrow.writers.ArrowRowWriter;
 import org.apache.fluss.row.arrow.writers.ArrowSmallIntWriter;
 import org.apache.fluss.row.arrow.writers.ArrowTimeWriter;
 import org.apache.fluss.row.arrow.writers.ArrowTimestampLtzWriter;
@@ -56,6 +58,7 @@ import org.apache.fluss.row.arrow.writers.ArrowTinyIntWriter;
 import org.apache.fluss.row.arrow.writers.ArrowVarBinaryWriter;
 import org.apache.fluss.row.arrow.writers.ArrowVarCharWriter;
 import org.apache.fluss.row.columnar.ColumnVector;
+import org.apache.fluss.row.columnar.VectorizedColumnBatch;
 import org.apache.fluss.shaded.arrow.com.google.flatbuffers.FlatBufferBuilder;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.flatbuf.MessageHeader;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.flatbuf.RecordBatch;
@@ -84,6 +87,7 @@ import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.VarCharVector;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.VectorLoader;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.VectorSchemaRoot;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.complex.ListVector;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.complex.StructVector;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.compression.NoCompressionCodec;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.ipc.ReadChannel;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.ipc.WriteChannel;
@@ -131,7 +135,6 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.Channels;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.stream.Collectors;
@@ -336,11 +339,20 @@ public class ArrowUtils {
             FieldVector elementFieldVector = ((ListVector) vector).getDataVector();
             return new ArrowArrayWriter(
                     vector, ArrowUtils.createArrowFieldWriter(elementFieldVector, elementType));
+        } else if (vector instanceof StructVector && dataType instanceof RowType) {
+            RowType rowType = (RowType) dataType;
+            StructVector structVector = (StructVector) vector;
+            List<FieldVector> fieldVectors = structVector.getChildrenFromFields();
+            ArrowFieldWriter[] fieldWriters = new ArrowFieldWriter[fieldVectors.size()];
+            for (int i = 0; i < fieldVectors.size(); i++) {
+                fieldWriters[i] =
+                        ArrowUtils.createArrowFieldWriter(
+                                fieldVectors.get(i), rowType.getTypeAt(i));
+            }
+            return new ArrowRowWriter(vector, fieldWriters);
         } else {
             throw new UnsupportedOperationException(
-                    String.format(
-                            "Unsupported type %s. Map and Row types will be supported in Issue #1973 and #1974.",
-                            dataType));
+                    String.format("Unsupported type %s.", dataType));
         }
     }
 
@@ -387,11 +399,21 @@ public class ArrowUtils {
             return new ArrowArrayColumnVector(
                     listVector,
                     ArrowUtils.createArrowColumnVector(listVector.getDataVector(), elementType));
+
+        } else if (vector instanceof StructVector && dataType instanceof RowType) {
+            RowType rowType = (RowType) dataType;
+            StructVector structVector = (StructVector) vector;
+            List<FieldVector> fieldVectors = structVector.getChildrenFromFields();
+            ColumnVector[] columnVectors = new ColumnVector[fieldVectors.size()];
+            for (int i = 0; i < fieldVectors.size(); i++) {
+                columnVectors[i] =
+                        ArrowUtils.createArrowColumnVector(
+                                fieldVectors.get(i), rowType.getTypeAt(i));
+            }
+            return new ArrowRowColumnVector(structVector, new VectorizedColumnBatch(columnVectors));
         } else {
             throw new UnsupportedOperationException(
-                    String.format(
-                            "Unsupported type %s. Map and Row types will be supported in Issue #1973 and #1974.",
-                            dataType));
+                    String.format("Unsupported type %s.", dataType));
         }
     }
 
@@ -412,19 +434,9 @@ public class ArrowUtils {
             for (DataField field : rowType.getFields()) {
                 children.add(toArrowField(field.getName(), field.getType()));
             }
-        } else if (logicalType instanceof MapType) {
-            MapType mapType = (MapType) logicalType;
-            Preconditions.checkArgument(
-                    !mapType.getKeyType().isNullable(), "Map key type should be non-nullable");
-            children =
-                    Collections.singletonList(
-                            new Field(
-                                    "items",
-                                    new FieldType(false, ArrowType.Struct.INSTANCE, null),
-                                    Arrays.asList(
-                                            toArrowField("key", mapType.getKeyType()),
-                                            toArrowField("value", mapType.getValueType()))));
         }
+        // TODO: Add Map type support in future
+        // else if (logicalType instanceof MapType) { ... }
         return new Field(fieldName, fieldType, children);
     }
 

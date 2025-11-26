@@ -26,82 +26,74 @@ import org.apache.fluss.row.TimestampNtz;
 
 import org.apache.paimon.data.Timestamp;
 
-import static org.apache.fluss.lake.paimon.PaimonLakeCatalog.SYSTEM_COLUMNS;
+/** Wraps a Paimon {@link org.apache.paimon.data.InternalArray} as a Fluss {@link InternalArray}. */
+public class PaimonArrayAsFlussArray implements InternalArray {
 
-/** Adapter for paimon row as fluss row. */
-public class PaimonRowAsFlussRow implements InternalRow {
+    private final org.apache.paimon.data.InternalArray paimonArray;
 
-    private org.apache.paimon.data.InternalRow paimonRow;
-
-    public PaimonRowAsFlussRow() {}
-
-    public PaimonRowAsFlussRow(org.apache.paimon.data.InternalRow paimonRow) {
-        this.paimonRow = paimonRow;
-    }
-
-    public PaimonRowAsFlussRow replaceRow(org.apache.paimon.data.InternalRow paimonRow) {
-        this.paimonRow = paimonRow;
-        return this;
+    public PaimonArrayAsFlussArray(org.apache.paimon.data.InternalArray paimonArray) {
+        this.paimonArray = paimonArray;
     }
 
     @Override
-    public int getFieldCount() {
-        return paimonRow.getFieldCount() - SYSTEM_COLUMNS.size();
+    public int size() {
+        return paimonArray.size();
     }
 
     @Override
     public boolean isNullAt(int pos) {
-        return paimonRow.isNullAt(pos);
+        return paimonArray.isNullAt(pos);
     }
 
     @Override
     public boolean getBoolean(int pos) {
-        return paimonRow.getBoolean(pos);
+        return paimonArray.getBoolean(pos);
     }
 
     @Override
     public byte getByte(int pos) {
-        return paimonRow.getByte(pos);
+        return paimonArray.getByte(pos);
     }
 
     @Override
     public short getShort(int pos) {
-        return paimonRow.getShort(pos);
+        return paimonArray.getShort(pos);
     }
 
     @Override
     public int getInt(int pos) {
-        return paimonRow.getInt(pos);
+        return paimonArray.getInt(pos);
     }
 
     @Override
     public long getLong(int pos) {
-        return paimonRow.getLong(pos);
+        return paimonArray.getLong(pos);
     }
 
     @Override
     public float getFloat(int pos) {
-        return paimonRow.getFloat(pos);
+        return paimonArray.getFloat(pos);
     }
 
     @Override
     public double getDouble(int pos) {
-        return paimonRow.getDouble(pos);
+        return paimonArray.getDouble(pos);
     }
 
     @Override
     public BinaryString getChar(int pos, int length) {
-        return BinaryString.fromBytes(paimonRow.getString(pos).toBytes());
+        return BinaryString.fromBytes(paimonArray.getString(pos).toBytes());
     }
 
     @Override
     public BinaryString getString(int pos) {
-        return BinaryString.fromBytes(paimonRow.getString(pos).toBytes());
+        return BinaryString.fromBytes(paimonArray.getString(pos).toBytes());
     }
 
     @Override
     public Decimal getDecimal(int pos, int precision, int scale) {
-        org.apache.paimon.data.Decimal paimonDecimal = paimonRow.getDecimal(pos, precision, scale);
+        org.apache.paimon.data.Decimal paimonDecimal =
+                paimonArray.getDecimal(pos, precision, scale);
         if (paimonDecimal.isCompact()) {
             return Decimal.fromUnscaledLong(paimonDecimal.toUnscaledLong(), precision, scale);
         } else {
@@ -111,7 +103,7 @@ public class PaimonRowAsFlussRow implements InternalRow {
 
     @Override
     public TimestampNtz getTimestampNtz(int pos, int precision) {
-        Timestamp timestamp = paimonRow.getTimestamp(pos, precision);
+        Timestamp timestamp = paimonArray.getTimestamp(pos, precision);
         if (TimestampNtz.isCompact(precision)) {
             return TimestampNtz.fromMillis(timestamp.getMillisecond());
         } else {
@@ -122,7 +114,7 @@ public class PaimonRowAsFlussRow implements InternalRow {
 
     @Override
     public TimestampLtz getTimestampLtz(int pos, int precision) {
-        Timestamp timestamp = paimonRow.getTimestamp(pos, precision);
+        Timestamp timestamp = paimonArray.getTimestamp(pos, precision);
         if (TimestampLtz.isCompact(precision)) {
             return TimestampLtz.fromEpochMillis(timestamp.getMillisecond());
         } else {
@@ -133,27 +125,56 @@ public class PaimonRowAsFlussRow implements InternalRow {
 
     @Override
     public byte[] getBinary(int pos, int length) {
-        return paimonRow.getBinary(pos);
+        return paimonArray.getBinary(pos);
     }
 
     @Override
     public byte[] getBytes(int pos) {
-        return paimonRow.getBinary(pos);
+        return paimonArray.getBinary(pos);
     }
 
     @Override
     public InternalArray getArray(int pos) {
-        return new PaimonArrayAsFlussArray(paimonRow.getArray(pos));
+        return new PaimonArrayAsFlussArray(paimonArray.getArray(pos));
     }
-
-    // TODO: Add Map type support in future
-    // @Override
-    // public InternalMap getMap(int pos) {
-    //     return new PaimonMapAsFlussMap(paimonRow.getMap(pos));
-    // }
 
     @Override
     public InternalRow getRow(int pos, int numFields) {
-        return new PaimonRowAsFlussRow(paimonRow.getRow(pos, numFields));
+        return new PaimonRowAsFlussRow(paimonArray.getRow(pos, numFields));
+    }
+
+    @Override
+    public boolean[] toBooleanArray() {
+        return paimonArray.toBooleanArray();
+    }
+
+    @Override
+    public byte[] toByteArray() {
+        return paimonArray.toByteArray();
+    }
+
+    @Override
+    public short[] toShortArray() {
+        return paimonArray.toShortArray();
+    }
+
+    @Override
+    public int[] toIntArray() {
+        return paimonArray.toIntArray();
+    }
+
+    @Override
+    public long[] toLongArray() {
+        return paimonArray.toLongArray();
+    }
+
+    @Override
+    public float[] toFloatArray() {
+        return paimonArray.toFloatArray();
+    }
+
+    @Override
+    public double[] toDoubleArray() {
+        return paimonArray.toDoubleArray();
     }
 }

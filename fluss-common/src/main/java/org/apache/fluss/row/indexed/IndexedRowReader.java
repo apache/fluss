@@ -23,9 +23,13 @@ import org.apache.fluss.row.BinarySegmentUtils;
 import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.Decimal;
 import org.apache.fluss.row.InternalArray;
+import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
+import org.apache.fluss.row.array.IndexedArray;
+import org.apache.fluss.types.ArrayType;
 import org.apache.fluss.types.DataType;
+import org.apache.fluss.types.RowType;
 
 import java.io.Serializable;
 import java.util.Arrays;
@@ -200,12 +204,23 @@ public class IndexedRowReader {
         return Arrays.copyOfRange(bytes, 0, newLen);
     }
 
-    public InternalArray readArray() {
+    public InternalArray readArray(DataType elementType) {
         int length = readVarLengthFromVarLengthList();
         MemorySegment[] segments = new MemorySegment[] {segment};
-        InternalArray array = BinarySegmentUtils.readBinaryArray(segments, position, length);
+        InternalArray array =
+                BinarySegmentUtils.readBinaryArray(
+                        segments, position, length, new IndexedArray(elementType));
         position += length;
         return array;
+    }
+
+    public InternalRow readRow(DataType[] nestedFieldTypes) {
+        int length = readVarLengthFromVarLengthList();
+        MemorySegment[] segments = new MemorySegment[] {segment};
+        InternalRow row =
+                BinarySegmentUtils.readIndexedRow(segments, position, length, nestedFieldTypes);
+        position += length;
+        return row;
     }
 
     /**
@@ -268,16 +283,18 @@ public class IndexedRowReader {
                 fieldReader = (reader, pos) -> reader.readTimestampLtz(timestampLtzPrecision);
                 break;
             case ARRAY:
-                fieldReader = (reader, pos) -> reader.readArray();
+                DataType elementType = ((ArrayType) fieldType).getElementType();
+                fieldReader = (reader, pos) -> reader.readArray(elementType);
+                break;
+            case ROW:
+                DataType[] nestedFieldTypes =
+                        ((RowType) fieldType).getFieldTypes().toArray(new DataType[0]);
+                fieldReader = (reader, pos) -> reader.readRow(nestedFieldTypes);
                 break;
             case MAP:
                 // TODO: Map type support will be added in Issue #1973
                 throw new UnsupportedOperationException(
                         "Map type for Indexed row format is not supported yet.");
-            case ROW:
-                // TODO: Row type support will be added in Issue #1974
-                throw new UnsupportedOperationException(
-                        "Row type for Indexed row format is not supported yet.");
             default:
                 throw new IllegalArgumentException("Unsupported type for IndexedRow: " + fieldType);
         }

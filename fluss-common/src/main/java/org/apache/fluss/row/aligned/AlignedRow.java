@@ -30,6 +30,7 @@ import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.NullAwareGetters;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
+import org.apache.fluss.row.array.AlignedArray;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DecimalType;
 import org.apache.fluss.types.LocalZonedTimestampType;
@@ -390,11 +391,19 @@ public final class AlignedRow extends BinarySection
         assertIndexIsValid(pos);
         int fieldOffset = getFieldOffset(pos);
         final long offsetAndSize = segments[0].getLong(fieldOffset);
-        return BinarySegmentUtils.readBinaryArray(segments, offset, offsetAndSize);
+        return BinarySegmentUtils.readBinaryArray(
+                segments, offset, offsetAndSize, new AlignedArray());
     }
 
     // TODO: getMap() will be added in Issue #1973
-    // TODO: getRow() will be added in Issue #1974
+
+    @Override
+    public InternalRow getRow(int pos, int numFields) {
+        assertIndexIsValid(pos);
+        int fieldOffset = getFieldOffset(pos);
+        final long offsetAndSize = segments[0].getLong(fieldOffset);
+        return BinarySegmentUtils.readAlignedRow(segments, offset, offsetAndSize, numFields);
+    }
 
     /** The bit is 1 when the field is null. Default is 0. */
     public boolean anyNull() {

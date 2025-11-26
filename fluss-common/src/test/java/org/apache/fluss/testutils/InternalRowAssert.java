@@ -28,6 +28,8 @@ import org.apache.fluss.types.RowType;
 import org.assertj.core.api.AbstractAssert;
 
 import static org.apache.fluss.types.DataTypeRoot.ARRAY;
+import static org.apache.fluss.types.DataTypeRoot.MAP;
+import static org.apache.fluss.types.DataTypeRoot.ROW;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Extend assertj assertions to easily assert {@link InternalRow}. */
@@ -76,12 +78,20 @@ public class InternalRowAssert extends AbstractAssert<InternalRowAssert, Interna
                 Object actualField = fieldGetters[i].getFieldOrNull(actual);
                 Object expectedField = fieldGetters[i].getFieldOrNull(expected);
 
-                // Special handling for Array types to compare content not instance
+                // Special handling for Array, Map, and Row types to compare content not instance
                 if (fieldType.getTypeRoot() == ARRAY) {
                     InternalArrayAssert.assertThatArray((InternalArray) actualField)
                             .withElementType(((ArrayType) fieldType).getElementType())
                             .as("InternalRow#get" + fieldType.getTypeRoot() + "(" + i + ")")
                             .isEqualTo((InternalArray) expectedField);
+                } else if (fieldType.getTypeRoot() == MAP) {
+                    // TODO: Add Map type assertion support in future
+                    throw new UnsupportedOperationException("Map type not supported yet");
+                } else if (fieldType.getTypeRoot() == ROW) {
+                    assertThatRow((InternalRow) actualField)
+                            .withSchema((RowType) fieldType)
+                            .as("InternalRow#get" + fieldType.getTypeRoot() + "(" + i + ")")
+                            .isEqualTo((InternalRow) expectedField);
                 } else {
                     assertThat(actualField)
                             .as("InternalRow#get" + fieldType.getTypeRoot() + "(" + i + ")")

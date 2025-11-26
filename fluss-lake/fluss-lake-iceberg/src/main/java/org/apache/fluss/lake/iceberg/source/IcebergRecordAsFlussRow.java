@@ -155,6 +155,8 @@ public class IcebergRecordAsFlussRow implements InternalRow {
         throw new UnsupportedOperationException();
     }
 
-    // TODO: Support Map type conversion from Iceberg to Fluss
-    // TODO: Support Row type conversion from Iceberg to Fluss
+    @Override
+    public InternalRow getRow(int pos, int numFields) {
+        throw new UnsupportedOperationException();
+    }
 }

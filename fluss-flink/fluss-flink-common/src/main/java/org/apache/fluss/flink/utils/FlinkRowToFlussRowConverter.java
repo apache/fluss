@@ -179,6 +179,12 @@ public class FlinkRowToFlussRowConverter implements AutoCloseable {
                 };
             case ARRAY:
                 return flinkField -> new FlinkAsFlussArray((ArrayData) flinkField);
+            case MAP:
+            case MULTISET:
+                // TODO: Add Map type support in future
+                throw new UnsupportedOperationException("Map type not supported yet");
+            case ROW:
+                return flinkField -> new FlinkAsFlussRow((RowData) flinkField);
             default:
                 throw new UnsupportedOperationException(
                         "Fluss Unsupported data type: " + flinkDataType);

@@ -124,6 +124,13 @@ class FlussRowToFlinkRowConverterTest {
                             .toObjectArray(DataTypes.STRING());
             assertThat(stringArray2)
                     .isEqualTo(new BinaryString[] {fromString("hello"), fromString("world")});
+
+            // nested row: ROW<u1: INT, u2: ROW<v1: INT>, u3: STRING>
+            assertThat(flinkRow.getRow(22, 3)).isNotNull();
+            assertThat(flinkRow.getRow(22, 3).getInt(0)).isEqualTo(123);
+            assertThat(flinkRow.getRow(22, 3).getRow(1, 1)).isNotNull();
+            assertThat(flinkRow.getRow(22, 3).getRow(1, 1).getInt(0)).isEqualTo(22);
+            assertThat(flinkRow.getRow(22, 3).getString(2).toString()).isEqualTo("Test");
         }
     }
 }

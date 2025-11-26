@@ -256,7 +256,11 @@ public class CompactedRow implements BinaryRow {
     }
 
     // TODO: getMap() will be added in Issue #1973
-    // TODO: getRow() will be added in Issue #1974
+
+    @Override
+    public InternalRow getRow(int pos, int numFields) {
+        return decodedRow().getRow(pos, numFields);
+    }
 
     @Override
     public boolean equals(Object o) {

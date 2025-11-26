@@ -279,6 +279,32 @@ abstract class FlinkComplexTypeITCase extends AbstractTestBase {
     }
 
     @Test
+    void testRowTypesInLogTable() throws Exception {
+        tEnv.executeSql(
+                "create table row_log_test ("
+                        + "id int, "
+                        + "simple_row row<a int, b string>, "
+                        + "nested_row row<x int, y row<z int, w string>, v string>, "
+                        + "array_of_rows array<row<a int, b string>>"
+                        + ") with ('bucket.num' = '3')");
+
+        tEnv.executeSql(
+                        "INSERT INTO row_log_test VALUES "
+                                + "(1, ROW(10, 'hello'), ROW(20, ROW(30, 'nested'), 'row1'), "
+                                + "ARRAY[ROW(1, 'a'), ROW(2, 'b')]), "
+                                + "(2, ROW(40, 'world'), ROW(50, ROW(60, 'test'), 'row2'), "
+                                + "ARRAY[ROW(3, 'c')])")
+                .await();
+
+        CloseableIterator<Row> rowIter = tEnv.executeSql("select * from row_log_test").collect();
+        List<String> expectedRows =
+                Arrays.asList(
+                        "+I[1, +I[10, hello], +I[20, +I[30, nested], row1], [+I[1, a], +I[2, b]]]",
+                        "+I[2, +I[40, world], +I[50, +I[60, test], row2], [+I[3, c]]]");
+        assertResultsIgnoreOrder(rowIter, expectedRows, true);
+    }
+
+    @Test
     void testExceptionsForArrayTypeUsage() {
         assertThatThrownBy(
                         () ->

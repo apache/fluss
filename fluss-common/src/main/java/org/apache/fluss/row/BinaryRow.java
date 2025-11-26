@@ -18,6 +18,9 @@
 package org.apache.fluss.row;
 
 import org.apache.fluss.memory.MemorySegment;
+import org.apache.fluss.row.aligned.AlignedRow;
+import org.apache.fluss.row.compacted.CompactedRow;
+import org.apache.fluss.row.indexed.IndexedRow;
 
 /**
  * A binary format {@link InternalRow} that is backed on {@link MemorySegment} and supports all
@@ -57,4 +60,20 @@ public interface BinaryRow extends InternalRow, MemoryAwareGetters {
      * @param sizeInBytes The size of the row.
      */
     void pointTo(MemorySegment[] segments, int offset, int sizeInBytes);
+
+    /**
+     * The binary row format types, it indicates the generated {@link BinaryRow} type by the {@link
+     * BinaryWriter}.
+     */
+    enum BinaryRowFormat {
+
+        /** Compacted binary row format, see {@link CompactedRow}. */
+        COMPACTED,
+
+        /** Aligned binary row format, see {@link AlignedRow}. */
+        ALIGNED,
+
+        /** Indexed binary row format, see {@link IndexedRow}. */
+        INDEXED
+    }
 }

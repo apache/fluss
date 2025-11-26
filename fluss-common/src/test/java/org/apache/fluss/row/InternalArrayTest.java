@@ -17,6 +17,7 @@
 
 package org.apache.fluss.row;
 
+import org.apache.fluss.row.array.PrimitiveBinaryArray;
 import org.apache.fluss.types.DataTypes;
 
 import org.junit.jupiter.api.Test;
@@ -233,7 +234,7 @@ public class InternalArrayTest {
 
     @Test
     public void testBinaryArrayWithNullElementGetter() {
-        BinaryArray array = new BinaryArray();
+        BinaryArray array = new PrimitiveBinaryArray();
         BinaryArrayWriter writer = new BinaryArrayWriter(array, 3, 4);
 
         writer.writeInt(0, 10);

@@ -20,6 +20,8 @@ package org.apache.fluss.row.compacted;
 import org.apache.fluss.row.BinaryWriter;
 import org.apache.fluss.types.DataType;
 
+import static org.apache.fluss.row.BinaryRow.BinaryRowFormat.COMPACTED;
+
 /**
  * A wrapping of {@link CompactedRowWriter} used to encode key columns.
  *
@@ -35,7 +37,7 @@ public class CompactedKeyWriter extends CompactedRowWriter {
     }
 
     public static ValueWriter createValueWriter(DataType fieldType) {
-        ValueWriter valueWriter = BinaryWriter.createValueWriter(fieldType);
+        ValueWriter valueWriter = BinaryWriter.createValueWriter(fieldType, COMPACTED);
         return (writer, pos, value) -> {
             if (value == null) {
                 throw new IllegalArgumentException(

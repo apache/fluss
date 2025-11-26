@@ -20,6 +20,7 @@ package org.apache.fluss.row;
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.memory.OutputView;
+import org.apache.fluss.row.aligned.AlignedRow;
 import org.apache.fluss.row.compacted.CompactedRow;
 import org.apache.fluss.row.indexed.IndexedRow;
 import org.apache.fluss.types.DataType;
@@ -989,14 +990,16 @@ public final class BinarySegmentUtils {
         return Decimal.fromUnscaledBytes(bytes, precision, scale);
     }
 
-    /** Gets an instance of {@link InternalArray} from underlying {@link MemorySegment}. */
+    /**
+     * Read the array data into the reused {@link BinaryArray} instance from underlying {@link
+     * MemorySegment}.
+     */
     public static BinaryArray readBinaryArray(
-            MemorySegment[] segments, int baseOffset, long offsetAndSize) {
+            MemorySegment[] segments, int baseOffset, long offsetAndSize, BinaryArray reusedArray) {
         final int size = ((int) offsetAndSize);
         int offset = (int) (offsetAndSize >> 32);
-        BinaryArray array = new BinaryArray();
-        array.pointTo(segments, offset + baseOffset, size);
-        return array;
+        reusedArray.pointTo(segments, offset + baseOffset, size);
+        return reusedArray;
     }
 
     /** Read map data from segments. */
@@ -1013,27 +1016,33 @@ public final class BinarySegmentUtils {
                 "Map type is not supported yet. Will be added in Issue #1973.");
     }
 
-    /** Read indexed row data from segments. */
-    public static InternalRow readIndexedRow(
-            MemorySegment[] segments,
-            int offset,
-            int numBytes,
-            int numFields,
-            DataType[] fieldTypes) {
-        IndexedRow row = new IndexedRow(fieldTypes);
-        row.pointTo(segments, offset, numBytes);
+    /** Read aligned row from segments. */
+    public static InternalRow readAlignedRow(
+            MemorySegment[] segments, int baseOffset, long offsetAndSize, int numFields) {
+        final int size = ((int) offsetAndSize);
+        int offset = (int) (offsetAndSize >> 32);
+        AlignedRow row = new AlignedRow(numFields);
+        row.pointTo(segments, baseOffset + offset, size);
         return row;
     }
 
-    /** Read compacted row data from segments. */
+    /** Read indexed row from segments. */
+    public static InternalRow readIndexedRow(
+            MemorySegment[] segments, int baseOffset, long offsetAndSize, DataType[] fieldTypes) {
+        final int size = ((int) offsetAndSize);
+        int offset = (int) (offsetAndSize >> 32);
+        IndexedRow row = new IndexedRow(fieldTypes);
+        row.pointTo(segments, baseOffset + offset, size);
+        return row;
+    }
+
+    /** Read compacted row from segments. */
     public static InternalRow readCompactedRow(
-            MemorySegment[] segments,
-            int offset,
-            int numBytes,
-            int numFields,
-            DataType[] fieldTypes) {
+            MemorySegment[] segments, int baseOffset, long offsetAndSize, DataType[] fieldTypes) {
+        final int size = ((int) offsetAndSize);
+        int offset = (int) (offsetAndSize >> 32);
         CompactedRow row = new CompactedRow(fieldTypes);
-        row.pointTo(segments, offset, numBytes);
+        row.pointTo(segments, baseOffset + offset, size);
         return row;
     }
 

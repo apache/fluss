@@ -19,6 +19,7 @@ package org.apache.fluss.row;
 
 import org.apache.fluss.annotation.PublicEvolving;
 import org.apache.fluss.memory.MemorySegment;
+import org.apache.fluss.row.array.PrimitiveBinaryArray;
 import org.apache.fluss.types.DataType;
 
 import java.lang.reflect.Array;
@@ -48,7 +49,7 @@ import static org.apache.fluss.utils.Preconditions.checkArgument;
  * @since 0.9
  */
 @PublicEvolving
-public final class BinaryArray extends BinarySection
+public abstract class BinaryArray extends BinarySection
         implements InternalArray, MemoryAwareGetters, DataSetters {
 
     private static final long serialVersionUID = 1L;
@@ -111,9 +112,7 @@ public final class BinaryArray extends BinarySection
     /** The position to start storing array elements. */
     private transient int elementOffset;
 
-    public BinaryArray() {}
-
-    private void assertIndexIsValid(int ordinal) {
+    protected void assertIndexIsValid(int ordinal) {
         assert ordinal >= 0 : "ordinal (" + ordinal + ") should >= 0";
         assert ordinal < size : "ordinal (" + ordinal + ") should < " + size;
     }
@@ -265,11 +264,14 @@ public final class BinaryArray extends BinarySection
     @Override
     public InternalArray getArray(int pos) {
         assertIndexIsValid(pos);
-        return BinarySegmentUtils.readBinaryArray(segments, offset, getLong(pos));
+        return BinarySegmentUtils.readBinaryArray(
+                segments, offset, getLong(pos), createNestedArrayInstance());
     }
 
+    /** Creates a nested {@link BinaryArray} with the nested data type information. */
+    protected abstract BinaryArray createNestedArrayInstance();
+
     // TODO: getMap() will be added in Issue #1973
-    // TODO: getRow() will be added in Issue #1974
 
     @Override
     public boolean getBoolean(int pos) {
@@ -545,19 +547,24 @@ public final class BinaryArray extends BinarySection
         return values;
     }
 
-    public BinaryArray copy() {
-        return copy(new BinaryArray());
-    }
-
-    public BinaryArray copy(BinaryArray reuse) {
-        byte[] bytes = BinarySegmentUtils.copyToBytes(segments, offset, sizeInBytes);
-        reuse.pointTo(MemorySegment.wrap(bytes), 0, sizeInBytes);
-        return reuse;
-    }
-
     @Override
     public int hashCode() {
         return BinarySegmentUtils.hash(segments, offset, sizeInBytes);
+    }
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) {
+            return true;
+        }
+        // override equals and only checks the other object is instance of BinaryArray
+        if (!(o instanceof BinaryArray)) {
+            return false;
+        }
+        final BinarySection that = (BinarySection) o;
+        return sizeInBytes == that.sizeInBytes
+                && BinarySegmentUtils.equals(
+                        segments, offset, that.segments, that.offset, sizeInBytes);
     }
 
     // ------------------------------------------------------------------------------------------
@@ -611,13 +618,13 @@ public final class BinaryArray extends BinarySection
         UNSAFE.copyMemory(
                 arr, offset, data, BYTE_ARRAY_BASE_OFFSET + headerInBytes, valueRegionInBytes);
 
-        BinaryArray result = new BinaryArray();
+        BinaryArray result = new PrimitiveBinaryArray();
         result.pointTo(MemorySegment.wrap(data), 0, (int) totalSize);
         return result;
     }
 
     public static BinaryArray fromLongArray(Long[] arr) {
-        BinaryArray array = new BinaryArray();
+        BinaryArray array = new PrimitiveBinaryArray();
         BinaryArrayWriter writer = new BinaryArrayWriter(array, arr.length, 8);
         for (int i = 0; i < arr.length; i++) {
             Long v = arr[i];
@@ -636,7 +643,7 @@ public final class BinaryArray extends BinarySection
             return (BinaryArray) arr;
         }
 
-        BinaryArray array = new BinaryArray();
+        BinaryArray array = new PrimitiveBinaryArray();
         BinaryArrayWriter writer = new BinaryArrayWriter(array, arr.size(), 8);
         for (int i = 0; i < arr.size(); i++) {
             if (arr.isNullAt(i)) {

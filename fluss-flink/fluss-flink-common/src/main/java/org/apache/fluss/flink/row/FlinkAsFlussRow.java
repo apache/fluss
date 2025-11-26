@@ -35,6 +35,10 @@ public class FlinkAsFlussRow implements InternalRow {
 
     public FlinkAsFlussRow() {}
 
+    public FlinkAsFlussRow(RowData flinkRow) {
+        this.flinkRow = flinkRow;
+    }
+
     public FlinkAsFlussRow replace(RowData flinkRow) {
         this.flinkRow = flinkRow;
         return this;
@@ -139,6 +143,8 @@ public class FlinkAsFlussRow implements InternalRow {
         return new FlinkAsFlussArray(flinkRow.getArray(pos));
     }
 
-    // TODO: Support Map type conversion from Flink to Fluss
-    // TODO: Support Row type conversion from Flink to Fluss
+    @Override
+    public InternalRow getRow(int pos, int numFields) {
+        return new FlinkAsFlussRow(flinkRow.getRow(pos, numFields));
+    }
 }
