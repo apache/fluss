@@ -158,9 +158,9 @@ There is a known issue ([FLINK-38399](https://issues.apache.org/jira/browse/FLIN
 
 - The primary key or the prefix key of the tables must be included as part of the equivalence conditions in the join.
 - The join must be a INNER join.
-- The downstream nodes of the join can accept duplicate changes, such as a sink that provides UPSERT mode without `upsertMaterialize`.
-  - When the pk of the sink does not align with (or does not include) the upstream upsert key, the sink will produce a sink materialization (called `upsertMaterialize`).
-  - About upsert key and `upsertMaterialize`, more details can be found in this [blog](https://www.ververica.com/blog/flink-sql-secrets-mastering-the-art-of-changelog-events).
+- The downstream node of the join must support idempotent updates, typically it's an upsert sink and should not have a `SinkUpsertMaterializer` node before it.
+  - Flink planner automatically inserts a `SinkUpsertMaterializer` when the sink’s primary key does not fully cover the upstream update key.
+  - You can learn more details about `SinkUpsertMaterializer` by reading this [blog](https://www.ververica.com/blog/flink-sql-secrets-mastering-the-art-of-changelog-events).
 - All join inputs should be INSERT-ONLY streams.
   - This is why the option `'table.merge-engine' = 'first_row'` is added to the source table DDL.
 - All upstream nodes of the join should be `TableSourceScan` or `Exchange`.
@@ -179,11 +179,14 @@ There is a known issue ([FLINK-38399](https://issues.apache.org/jira/browse/FLIN
 
 - The primary key or the prefix key of the tables must be included as part of the equivalence conditions in the join.
 - The join must be a INNER join.
-- The downstream nodes of the join can accept duplicate changes, such as a sink that provides UPSERT mode without `upsertMaterialize`.
-  - When the pk of the sink does not align with (or does not include) the upstream upsert key, the sink will produce a sink materialization (called `upsertMaterialize`).
-  - About upsert key and `upsertMaterialize`, more details can be found in this [blog](https://www.ververica.com/blog/flink-sql-secrets-mastering-the-art-of-changelog-events).
-- When consuming a CDC stream, the join key used in the delta join must be part of the primary key.
-- All filters must be applied on the upsert key, and neither filters nor projections should contain non-deterministic functions.
+- The downstream node of the join must support idempotent updates, typically it's an upsert sink and should not have a `SinkUpsertMaterializer` node before it.
+  - Flink planner automatically inserts a `SinkUpsertMaterializer` when the sink’s primary key does not fully cover the upstream update key.
+  - You can learn more details about `SinkUpsertMaterializer` by reading this [blog](https://www.ververica.com/blog/flink-sql-secrets-mastering-the-art-of-changelog-events).
+- Since delta join does not support to handle update-before messages, it is necessary to ensure that the entire pipeline can safely discard update-before messages. That means when consuming a CDC stream:
+  - The join key used in the delta join must be part of the primary key.
+  - The sink's primary key must be the same as the upstream update key.
+  - All filters must be applied on the upsert key.
+- Neither filters nor projections should contain non-deterministic functions.
 
 ## Future Plan
 
