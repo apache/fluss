@@ -23,7 +23,7 @@ import org.apache.fluss.metadata.DeleteBehavior;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.MergeEngineType;
 import org.apache.fluss.metadata.Schema;
-import org.apache.fluss.row.BinaryRow;
+import org.apache.fluss.row.InternalRow;
 
 import javax.annotation.Nullable;
 
@@ -40,7 +40,7 @@ public interface RowMerger {
      * @return the merged row, if the returned row is the same to the old row, then nothing happens
      *     to the row (no update, no delete).
      */
-    BinaryRow merge(BinaryRow oldRow, BinaryRow newRow);
+    InternalRow merge(InternalRow oldRow, InternalRow newRow);
 
     /**
      * Merge the old row with a delete row.
@@ -52,7 +52,7 @@ public interface RowMerger {
      * @return the merged row, or null if the row is deleted.
      */
     @Nullable
-    BinaryRow delete(BinaryRow oldRow);
+    InternalRow delete(InternalRow oldRow);
 
     /**
      * The behavior of delete operations on primary key tables.
@@ -62,10 +62,10 @@ public interface RowMerger {
     DeleteBehavior deleteBehavior();
 
     /** Dynamically configure the target columns to merge and return the effective merger. */
-    RowMerger configureTargetColumns(@Nullable int[] targetColumns);
+    RowMerger configureTargetColumns(@Nullable int[] targetColumns, short schemaId, Schema schema);
 
     /** Create a row merger based on the given configuration. */
-    static RowMerger create(TableConfig tableConf, Schema schema, KvFormat kvFormat) {
+    static RowMerger create(TableConfig tableConf, KvFormat kvFormat) {
         Optional<MergeEngineType> mergeEngineType = tableConf.getMergeEngineType();
         @Nullable DeleteBehavior deleteBehavior = tableConf.getDeleteBehavior().orElse(null);
 
@@ -81,14 +81,13 @@ public interface RowMerger {
                                         "'%s' must be set for versioned merge engine.",
                                         ConfigOptions.TABLE_MERGE_ENGINE_VERSION_COLUMN.key()));
                     }
-                    return new VersionedRowMerger(
-                            schema.getRowType(), versionColumn.get(), deleteBehavior);
+                    return new VersionedRowMerger(versionColumn.get(), deleteBehavior);
                 default:
                     throw new IllegalArgumentException(
                             "Unsupported merge engine type: " + mergeEngineType.get());
             }
         } else {
-            return new DefaultRowMerger(schema, kvFormat, deleteBehavior);
+            return new DefaultRowMerger(kvFormat, deleteBehavior);
         }
     }
 }

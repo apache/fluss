@@ -20,6 +20,7 @@ package org.apache.fluss.record;
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.compression.ArrowCompressionInfo;
 import org.apache.fluss.exception.InvalidColumnProjectionException;
+import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.record.bytesview.MultiBytesView;
 import org.apache.fluss.shaded.arrow.com.google.flatbuffers.FlatBufferBuilder;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.flatbuf.Buffer;
@@ -53,6 +54,7 @@ import java.util.BitSet;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 import static org.apache.fluss.record.DefaultLogRecordBatch.APPEND_ONLY_FLAG_MASK;
 import static org.apache.fluss.record.LogRecordBatchFormat.LENGTH_OFFSET;
@@ -66,6 +68,7 @@ import static org.apache.fluss.record.LogRecordBatchFormat.arrowChangeTypeOffset
 import static org.apache.fluss.record.LogRecordBatchFormat.attributeOffset;
 import static org.apache.fluss.record.LogRecordBatchFormat.recordBatchHeaderSize;
 import static org.apache.fluss.record.LogRecordBatchFormat.recordsCountOffset;
+import static org.apache.fluss.record.LogRecordBatchFormat.schemaIdOffset;
 import static org.apache.fluss.utils.FileUtils.readFully;
 import static org.apache.fluss.utils.FileUtils.readFullyOrFail;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
@@ -82,7 +85,7 @@ public class FileLogProjection {
     private static final int ARROW_HEADER_SIZE =
             ARROW_IPC_CONTINUATION_LENGTH + ARROW_IPC_METADATA_SIZE_LENGTH;
 
-    final Map<Long, ProjectionInfo> projectionsCache = new HashMap<>();
+    final Map<ProjectionKey, ProjectionInfo> projectionsCache = new HashMap<>();
     ProjectionInfo currentProjection;
 
     // shared resources for multiple projections
@@ -97,6 +100,10 @@ public class FileLogProjection {
 
     private final ByteBuffer arrowHeaderBuffer = ByteBuffer.allocate(ARROW_HEADER_SIZE);
     private ByteBuffer arrowMetadataBuffer;
+    private SchemaGetter schemaGetter;
+    private long tableId;
+    private ArrowCompressionInfo compressionInfo;
+    private int[] selectedFieldPositions;
 
     public FileLogProjection() {
         this.outputStream = new ByteArrayOutputStream();
@@ -109,60 +116,20 @@ public class FileLogProjection {
 
     public void setCurrentProjection(
             long tableId,
-            RowType schema,
+            SchemaGetter schemaGetter,
             ArrowCompressionInfo compressionInfo,
-            int[] selectedFields) {
-        if (projectionsCache.containsKey(tableId)) {
-            // the schema and projection should identical for the same table id.
-            currentProjection = projectionsCache.get(tableId);
-            if (!Arrays.equals(currentProjection.selectedFields, selectedFields)
-                    || !currentProjection.schema.equals(schema)) {
-                throw new InvalidColumnProjectionException(
-                        "The schema and projection should be identical for the same table id.");
-            }
-            return;
-        }
+            int[] selectedFieldIds) {
+        this.tableId = tableId;
+        this.schemaGetter = schemaGetter;
+        this.compressionInfo = compressionInfo;
 
-        // initialize the projection util information
-        Schema arrowSchema = ArrowUtils.toArrowSchema(schema);
-        BitSet selection = toBitSet(arrowSchema.getFields().size(), selectedFields);
-        List<Tuple2<Field, Boolean>> flattenedFields = new ArrayList<>();
-        flattenFields(arrowSchema.getFields(), selection, flattenedFields);
-        int totalFieldNodes = flattenedFields.size();
-        int[] bufferLayoutCount = new int[totalFieldNodes];
-        BitSet nodesProjection = new BitSet(totalFieldNodes);
-        int totalBuffers = 0;
-        for (int i = 0; i < totalFieldNodes; i++) {
-            Field fieldNode = flattenedFields.get(i).f0;
-            boolean selected = flattenedFields.get(i).f1;
-            nodesProjection.set(i, selected);
-            bufferLayoutCount[i] = TypeLayout.getTypeBufferCount(fieldNode.getType());
-            totalBuffers += bufferLayoutCount[i];
-        }
-        BitSet buffersProjection = new BitSet(totalBuffers);
-        int bufferIndex = 0;
-        for (int i = 0; i < totalFieldNodes; i++) {
-            if (nodesProjection.get(i)) {
-                buffersProjection.set(bufferIndex, bufferIndex + bufferLayoutCount[i]);
-            }
-            bufferIndex += bufferLayoutCount[i];
-        }
-
-        Schema projectedArrowSchema = ArrowUtils.toArrowSchema(schema.project(selectedFields));
-        ArrowBodyCompression bodyCompression =
-                CompressionUtil.createBodyCompression(compressionInfo.createCompressionCodec());
-        int metadataLength =
-                ArrowUtils.estimateArrowMetadataLength(projectedArrowSchema, bodyCompression);
-        currentProjection =
-                new ProjectionInfo(
-                        nodesProjection,
-                        buffersProjection,
-                        bufferIndex,
-                        schema,
-                        metadataLength,
-                        bodyCompression,
-                        selectedFields);
-        projectionsCache.put(tableId, currentProjection);
+        // Currently, only add last column is supported.Thus selectedFieldPositions is always same
+        // from same selectedFieldIds.
+        // TODO: if support drop column or add column in middle, this selectedFieldPositions should
+        // be re-calculated for each schema.
+        this.selectedFieldPositions =
+                selectedFieldPositions(
+                        schemaGetter.getLatestSchemaInfo().getSchema(), selectedFieldIds);
     }
 
     /**
@@ -173,7 +140,7 @@ public class FileLogProjection {
      */
     public BytesViewLogRecords project(FileChannel channel, int start, int end, int maxBytes)
             throws IOException {
-        checkNotNull(currentProjection, "There is no projection registered yet.");
+
         MultiBytesView.Builder builder = MultiBytesView.builder();
         int position = start;
 
@@ -194,6 +161,10 @@ public class FileLogProjection {
             byte magic = logHeaderBuffer.get(MAGIC_OFFSET);
             int recordBatchHeaderSize = recordBatchHeaderSize(magic);
             int batchSizeInBytes = LOG_OVERHEAD + logHeaderBuffer.getInt(LENGTH_OFFSET);
+            short schemaId = logHeaderBuffer.getShort(schemaIdOffset(magic));
+            setCurrentSchema(schemaId);
+            checkNotNull(currentProjection, "There is no projection registered yet.");
+
             if (position > end - batchSizeInBytes) {
                 // the remaining bytes in the file are not enough to read a full batch
                 return new BytesViewLogRecords(builder.build());
@@ -434,6 +405,118 @@ public class FileLogProjection {
         return logHeaderBuffer;
     }
 
+    private void setCurrentSchema(short schemaId) {
+        org.apache.fluss.metadata.Schema schema = schemaGetter.getSchema(schemaId);
+        RowType rowType = schema.getRowType();
+        ProjectionKey projectionKey = new ProjectionKey(tableId, schemaId);
+        if (projectionsCache.containsKey(projectionKey)) {
+            // the schema and projection should identical for the same table id.
+            currentProjection = projectionsCache.get(projectionKey);
+            if (!Arrays.equals(currentProjection.selectedFieldPositions, selectedFieldPositions)
+                    || !currentProjection.schema.equals(rowType)) {
+                throw new InvalidColumnProjectionException(
+                        "The schema and projection should be identical for the same table id.");
+            }
+            return;
+        }
+
+        // initialize the projection util information
+        Schema arrowSchema = ArrowUtils.toArrowSchema(rowType);
+        BitSet selection = toBitSet(arrowSchema.getFields().size(), selectedFieldPositions);
+        List<Tuple2<Field, Boolean>> flattenedFields = new ArrayList<>();
+        flattenFields(arrowSchema.getFields(), selection, flattenedFields);
+        int totalFieldNodes = flattenedFields.size();
+        int[] bufferLayoutCount = new int[totalFieldNodes];
+        BitSet nodesProjection = new BitSet(totalFieldNodes);
+        int totalBuffers = 0;
+        for (int i = 0; i < totalFieldNodes; i++) {
+            Field fieldNode = flattenedFields.get(i).f0;
+            boolean selected = flattenedFields.get(i).f1;
+            nodesProjection.set(i, selected);
+            bufferLayoutCount[i] = TypeLayout.getTypeBufferCount(fieldNode.getType());
+            totalBuffers += bufferLayoutCount[i];
+        }
+        BitSet buffersProjection = new BitSet(totalBuffers);
+        int bufferIndex = 0;
+        for (int i = 0; i < totalFieldNodes; i++) {
+            if (nodesProjection.get(i)) {
+                buffersProjection.set(bufferIndex, bufferIndex + bufferLayoutCount[i]);
+            }
+            bufferIndex += bufferLayoutCount[i];
+        }
+
+        Schema projectedArrowSchema =
+                ArrowUtils.toArrowSchema(rowType.project(selectedFieldPositions));
+        ArrowBodyCompression bodyCompression =
+                CompressionUtil.createBodyCompression(compressionInfo.createCompressionCodec());
+        int metadataLength =
+                ArrowUtils.estimateArrowMetadataLength(projectedArrowSchema, bodyCompression);
+        currentProjection =
+                new ProjectionInfo(
+                        nodesProjection,
+                        buffersProjection,
+                        bufferIndex,
+                        rowType,
+                        metadataLength,
+                        bodyCompression,
+                        selectedFieldPositions);
+        projectionsCache.put(projectionKey, currentProjection);
+    }
+
+    int[] selectedFieldPositions(org.apache.fluss.metadata.Schema schema, int[] projectedFields) {
+        Map<Integer, Integer> columnIdPositions = new HashMap<>();
+        List<Integer> columnIds = schema.getColumnIds();
+        for (int i = 0; i < columnIds.size(); i++) {
+            columnIdPositions.put(columnIds.get(i), i);
+        }
+
+        int prev = -1;
+        int[] selectedFieldPositions = new int[projectedFields.length];
+        for (int i = 0; i < projectedFields.length; i++) {
+            int fieldId = projectedFields[i];
+            Integer position = columnIdPositions.get(fieldId);
+            if (position == null) {
+                throw new InvalidColumnProjectionException(
+                        String.format(
+                                "Projected field id %s is not contains in %s", fieldId, columnIds));
+            }
+
+            selectedFieldPositions[i] = position;
+            if (position < prev) {
+                throw new InvalidColumnProjectionException(
+                        "The projection indexes should be in field order, but is "
+                                + Arrays.toString(projectedFields));
+            }
+
+            prev = position;
+        }
+        return selectedFieldPositions;
+    }
+
+    static final class ProjectionKey {
+        private final long tableId;
+        private final short schemaId;
+
+        ProjectionKey(long tableId, short schemaId) {
+            this.tableId = tableId;
+            this.schemaId = schemaId;
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (!(o instanceof ProjectionKey)) {
+                return false;
+            }
+            ProjectionKey that = (ProjectionKey) o;
+            return tableId == that.tableId && schemaId == that.schemaId;
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(tableId, schemaId);
+        }
+    }
+
     static final class ProjectionInfo {
         final BitSet nodesProjection;
         final BitSet buffersProjection;
@@ -441,7 +524,7 @@ public class FileLogProjection {
         final RowType schema;
         final int arrowMetadataLength;
         final ArrowBodyCompression bodyCompression;
-        final int[] selectedFields;
+        final int[] selectedFieldPositions;
 
         private ProjectionInfo(
                 BitSet nodesProjection,
@@ -450,14 +533,14 @@ public class FileLogProjection {
                 RowType schema,
                 int arrowMetadataLength,
                 ArrowBodyCompression bodyCompression,
-                int[] selectedFields) {
+                int[] selectedFieldPositions) {
             this.nodesProjection = nodesProjection;
             this.buffersProjection = buffersProjection;
             this.bufferCount = bufferCount;
             this.schema = schema;
             this.arrowMetadataLength = arrowMetadataLength;
             this.bodyCompression = bodyCompression;
-            this.selectedFields = selectedFields;
+            this.selectedFieldPositions = selectedFieldPositions;
         }
     }
 

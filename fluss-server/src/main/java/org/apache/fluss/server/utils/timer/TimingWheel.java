@@ -108,8 +108,8 @@ import java.util.concurrent.atomic.AtomicInteger;
  * while priority queue based timers takes O(log N) for both insert and delete where N is the number
  * of items in the queue.
  *
- * <p>This class is not thread-safe. There should not be any add calls while advanceClock is
- * executing. It is caller's responsibility to enforce it. Simultaneous add calls are thread-safe.
+ * <p>This class is not thread-safe. There should not be anyadd calls while advanceClock is
+ * executing. It is caller's responsibility to enforce it. Simultaneousadd calls are thread-safe.
  */
 @NotThreadSafe
 final class TimingWheel {

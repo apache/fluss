@@ -17,6 +17,7 @@
 
 package org.apache.fluss.flink.source.reader;
 
+import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.client.Connection;
 import org.apache.fluss.client.ConnectionFactory;
 import org.apache.fluss.client.table.Table;
@@ -57,7 +58,6 @@ import java.io.IOException;
 import java.time.Duration;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -119,7 +119,6 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
             Configuration flussConf,
             TablePath tablePath,
             RowType sourceOutputType,
-            @Nullable int[] projectedFields,
             FlinkSourceReaderMetrics flinkSourceReaderMetrics,
             @Nullable LakeSource<LakeSplit> lakeSource) {
         this.flinkMetricRegistry =
@@ -129,13 +128,17 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
         this.sourceOutputType = sourceOutputType;
         this.boundedSplits = new ArrayDeque<>();
         this.subscribedBuckets = new HashMap<>();
-        this.projectedFields = projectedFields;
         this.flinkSourceReaderMetrics = flinkSourceReaderMetrics;
-        sanityCheck(table.getTableInfo().getRowType(), projectedFields);
+        this.projectedFields =
+                reCalculateProjectedFields(sourceOutputType, table.getTableInfo().getRowType());
         this.logScanner = table.newScan().project(projectedFields).createLogScanner();
         this.stoppingOffsets = new HashMap<>();
         this.emptyLogSplits = new HashSet<>();
         this.lakeSource = lakeSource;
+        LOG.info(
+                "fluss table schema: {}, flink table output type:{}",
+                table.getTableInfo().getSchema(),
+                sourceOutputType);
     }
 
     @Override
@@ -213,7 +216,8 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
                     LakeSnapshotAndFlussLogSplit lakeSnapshotAndFlussLogSplit =
                             (LakeSnapshotAndFlussLogSplit) sourceSplitBase;
                     if (lakeSnapshotAndFlussLogSplit.isStreaming()) {
-                        // is streaming split which has no stopping offset, we need also subscribe
+                        // is streaming split which has no stopping offset, we need also
+                        // subscribe
                         // change log
                         subscribeLog(
                                 lakeSnapshotAndFlussLogSplit,
@@ -560,35 +564,33 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
         flinkMetricRegistry.close();
     }
 
-    private void sanityCheck(RowType flussTableRowType, @Nullable int[] projectedFields) {
-        RowType tableRowType =
-                projectedFields != null
-                        ? flussTableRowType.project(projectedFields)
-                        : flussTableRowType;
-        if (!sourceOutputType.copy(false).equals(tableRowType.copy(false))) {
-            // The default nullability of Flink row type and Fluss row type might be not the same,
-            // thus we need to compare the row type without nullability here.
-
-            final String flussSchemaMsg;
-            if (projectedFields == null) {
-                flussSchemaMsg = "\nFluss table schema: " + tableRowType;
-            } else {
-                flussSchemaMsg =
-                        "\nFluss table schema: "
-                                + tableRowType
-                                + " (projection "
-                                + Arrays.toString(projectedFields)
-                                + ")";
-            }
-            // Throw exception if the schema is the not same, this should rarely happen because we
-            // only allow fluss tables derived from fluss catalog. But this can happen if an ALTER
-            // TABLE command executed on the fluss table, after the job is submitted but before the
-            // SinkFunction is opened.
-            throw new ValidationException(
-                    "The Flink query schema is not matched to Fluss table schema. "
-                            + "\nFlink query schema: "
-                            + sourceOutputType
-                            + flussSchemaMsg);
+    /**
+     * The projected fields for the fluss table from the source output types. Mapping based on
+     * column name rather thn column id.
+     */
+    private static int[] reCalculateProjectedFields(
+            RowType sourceOutputType, RowType flussRowType) {
+        if (sourceOutputType.copy(false).equals(flussRowType.copy(false))) {
+            return null;
         }
+
+        List<String> fieldNames = sourceOutputType.getFieldNames();
+        int[] projectedFlussFields = new int[fieldNames.size()];
+        for (int i = 0; i < fieldNames.size(); i++) {
+            int fieldIndex = flussRowType.getFieldIndex(fieldNames.get(i));
+            if (fieldIndex == -1) {
+                throw new ValidationException(
+                        String.format(
+                                "The field %s is not found in the fluss table.",
+                                fieldNames.get(i)));
+            }
+            projectedFlussFields[i] = fieldIndex;
+        }
+        return projectedFlussFields;
+    }
+
+    @VisibleForTesting
+    public int[] getProjectedFields() {
+        return projectedFields;
     }
 }

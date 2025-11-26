@@ -69,14 +69,14 @@ class CoordinatorChannelManagerTest {
         // now, shouldn't send as we already remove the tablet server
         checkSendRequest(coordinatorChannelManager, server0.id(), false);
 
-        // test add tablet server
-        // before add, shouldn't send
+        // test addColumn tablet server
+        // before addColumn, shouldn't send
         ServerNode server1 = tabletServersNode.get(1);
         checkSendRequest(coordinatorChannelManager, server1.id(), false);
 
         coordinatorChannelManager.addTabletServer(server1);
 
-        // after add the tablet server, should send
+        // after addColumn the tablet server, should send
         // try to send message
         checkSendRequest(coordinatorChannelManager, server1.id(), true);
 

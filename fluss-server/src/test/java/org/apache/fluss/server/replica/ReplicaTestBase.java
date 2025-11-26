@@ -342,7 +342,7 @@ public class ReplicaTestBase {
     }
 
     // TODO this is only for single tablet server unit test.
-    // TODO add more test cases for partition table which make leader by this method.
+    // TODO addColumn more test cases for partition table which make leader by this method.
     protected void makeLogTableAsLeader(int bucketId) {
         makeLogTableAsLeader(new TableBucket(DATA1_TABLE_ID, bucketId), false);
     }
@@ -375,7 +375,7 @@ public class ReplicaTestBase {
     }
 
     // TODO this is only for single tablet server unit test.
-    // TODO add more test cases for partition table which make leader by this method.
+    // TODO addColumn more test cases for partition table which make leader by this method.
     protected void makeKvTableAsLeader(long tableId, TablePath tablePath, int bucketId) {
         makeKvTableAsLeader(
                 new TableBucket(tableId, bucketId), tablePath, INITIAL_LEADER_EPOCH, false);

@@ -23,19 +23,23 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.DeletionDisabledException;
 import org.apache.fluss.exception.KvStorageException;
+import org.apache.fluss.exception.SchemaNotExistException;
 import org.apache.fluss.memory.MemorySegmentPool;
 import org.apache.fluss.metadata.DeleteBehavior;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.Schema;
+import org.apache.fluss.metadata.SchemaGetter;
+import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.ChangeType;
 import org.apache.fluss.record.KvRecord;
 import org.apache.fluss.record.KvRecordBatch;
 import org.apache.fluss.record.KvRecordReadContext;
-import org.apache.fluss.row.BinaryRow;
+import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.row.ProjectedRow;
 import org.apache.fluss.row.arrow.ArrowWriterPool;
 import org.apache.fluss.row.arrow.ArrowWriterProvider;
 import org.apache.fluss.row.encode.ValueDecoder;
@@ -57,7 +61,6 @@ import org.apache.fluss.server.log.LogTablet;
 import org.apache.fluss.server.metrics.group.TabletServerMetricGroup;
 import org.apache.fluss.server.utils.FatalErrorHandler;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
-import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.BytesUtils;
 import org.apache.fluss.utils.FileUtils;
@@ -80,6 +83,7 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
+import static org.apache.fluss.utils.SchemaUtil.getTargetColumns;
 import static org.apache.fluss.utils.concurrent.LockUtils.inReadLock;
 import static org.apache.fluss.utils.concurrent.LockUtils.inWriteLock;
 
@@ -104,10 +108,11 @@ public final class KvTablet {
     private final ReadWriteLock kvLock = new ReentrantReadWriteLock();
     private final LogFormat logFormat;
     private final KvFormat kvFormat;
-    private final Schema schema;
     // defines how to merge rows on the same primary key
     private final RowMerger rowMerger;
     private final ArrowCompressionInfo arrowCompressionInfo;
+
+    private final SchemaGetter schemaGetter;
 
     /**
      * The kv data in pre-write buffer whose log offset is less than the flushedLogOffset has been
@@ -130,9 +135,9 @@ public final class KvTablet {
             BufferAllocator arrowBufferAllocator,
             MemorySegmentPool memorySegmentPool,
             KvFormat kvFormat,
-            Schema schema,
             RowMerger rowMerger,
-            ArrowCompressionInfo arrowCompressionInfo) {
+            ArrowCompressionInfo arrowCompressionInfo,
+            SchemaGetter schemaGetter) {
         this.physicalPath = physicalPath;
         this.tableBucket = tableBucket;
         this.logTablet = logTablet;
@@ -144,9 +149,9 @@ public final class KvTablet {
         this.arrowWriterProvider = new ArrowWriterPool(arrowBufferAllocator);
         this.memorySegmentPool = memorySegmentPool;
         this.kvFormat = kvFormat;
-        this.schema = schema;
         this.rowMerger = rowMerger;
         this.arrowCompressionInfo = arrowCompressionInfo;
+        this.schemaGetter = schemaGetter;
     }
 
     public static KvTablet create(
@@ -157,9 +162,9 @@ public final class KvTablet {
             BufferAllocator arrowBufferAllocator,
             MemorySegmentPool memorySegmentPool,
             KvFormat kvFormat,
-            Schema schema,
             RowMerger rowMerger,
-            ArrowCompressionInfo arrowCompressionInfo)
+            ArrowCompressionInfo arrowCompressionInfo,
+            SchemaGetter schemaGetter)
             throws IOException {
         Tuple2<PhysicalTablePath, TableBucket> tablePathAndBucket =
                 FlussPaths.parseTabletDir(kvTabletDir);
@@ -173,9 +178,9 @@ public final class KvTablet {
                 arrowBufferAllocator,
                 memorySegmentPool,
                 kvFormat,
-                schema,
                 rowMerger,
-                arrowCompressionInfo);
+                arrowCompressionInfo,
+                schemaGetter);
     }
 
     public static KvTablet create(
@@ -188,9 +193,9 @@ public final class KvTablet {
             BufferAllocator arrowBufferAllocator,
             MemorySegmentPool memorySegmentPool,
             KvFormat kvFormat,
-            Schema schema,
             RowMerger rowMerger,
-            ArrowCompressionInfo arrowCompressionInfo)
+            ArrowCompressionInfo arrowCompressionInfo,
+            SchemaGetter schemaGetter)
             throws IOException {
         RocksDBKv kv = buildRocksDBKv(serverConf, kvTabletDir);
         return new KvTablet(
@@ -205,9 +210,9 @@ public final class KvTablet {
                 arrowBufferAllocator,
                 memorySegmentPool,
                 kvFormat,
-                schema,
                 rowMerger,
-                arrowCompressionInfo);
+                arrowCompressionInfo,
+                schemaGetter);
     }
 
     private static RocksDBKv buildRocksDBKv(Configuration configuration, File kvDir)
@@ -259,26 +264,58 @@ public final class KvTablet {
                 kvLock,
                 () -> {
                     rocksDBKv.checkIfRocksDBClosed();
-                    short schemaId = kvRecords.schemaId();
-                    RowMerger currentMerger = rowMerger.configureTargetColumns(targetColumns);
-                    RowType rowType = schema.getRowType();
-                    WalBuilder walBuilder = createWalBuilder(schemaId, rowType);
+
+                    SchemaInfo schemaInfo = schemaGetter.getLatestSchemaInfo();
+                    Schema latestSchema = schemaInfo.getSchema();
+                    // In the following scenario, we need to support schema migration:
+                    // schema1: old data's schema -> valueDecoder
+                    // schema2: new data's schema
+                    // schema3: current schema (also the latest schema)
+                    // schema1 <= schema2 <= current schema id
+                    short latestSchemaId = (short) schemaInfo.getSchemaId();
+                    short schemaIdOfNewData = kvRecords.schemaId();
+                    if (schemaIdOfNewData > latestSchemaId || schemaIdOfNewData < 0) {
+                        throw new SchemaNotExistException(
+                                "Invalid schema id: "
+                                        + schemaIdOfNewData
+                                        + ", latest schema id: "
+                                        + latestSchemaId);
+                    }
+                    Schema schemaOfNewData = schemaGetter.getSchema(schemaIdOfNewData);
+                    RowMerger currentMerger =
+                            rowMerger.configureTargetColumns(
+                                    schemaIdOfNewData == latestSchemaId
+                                            ? targetColumns
+                                            : getTargetColumns(
+                                                    targetColumns, schemaOfNewData, latestSchema),
+                                    latestSchemaId,
+                                    latestSchema);
+                    RowType currentRowType = latestSchema.getRowType();
+                    WalBuilder walBuilder = createWalBuilder(latestSchemaId, currentRowType);
                     walBuilder.setWriterState(kvRecords.writerId(), kvRecords.batchSequence());
                     // get offset to track the offset corresponded to the kv record
                     long logEndOffsetOfPrevBatch = logTablet.localLogEndOffset();
-                    DataType[] fieldTypes = rowType.getChildren().toArray(new DataType[0]);
                     try {
                         long logOffset = logEndOffsetOfPrevBatch;
 
                         // TODO: reuse the read context and decoder
                         KvRecordBatch.ReadContext readContext =
-                                KvRecordReadContext.createReadContext(kvFormat, fieldTypes);
-                        ValueDecoder valueDecoder =
-                                new ValueDecoder(readContext.getRowDecoder(schemaId));
+                                KvRecordReadContext.createReadContext(kvFormat, schemaGetter);
+
+                        // replace new row with current schema if the schema id is older than now
+                        ProjectedRow projectedRow =
+                                ProjectedRow.from(schemaOfNewData, latestSchema);
+                        ValueDecoder valueDecoder = new ValueDecoder(schemaGetter, kvFormat);
                         for (KvRecord kvRecord : kvRecords.records(readContext)) {
+
                             byte[] keyBytes = BytesUtils.toArray(kvRecord.getKey());
                             KvPreWriteBuffer.Key key = KvPreWriteBuffer.Key.of(keyBytes);
-                            if (kvRecord.getRow() == null) {
+                            InternalRow row = kvRecord.getRow();
+                            if (row != null && schemaIdOfNewData < latestSchemaId) {
+                                row = projectedRow.replaceRow(row);
+                            }
+
+                            if (row == null) {
                                 DeleteBehavior deleteBehavior = rowMerger.deleteBehavior();
                                 if (deleteBehavior == DeleteBehavior.IGNORE) {
                                     // skip delete rows if the merger doesn't support yet
@@ -290,14 +327,26 @@ public final class KvTablet {
                                 }
                                 // it's for deletion
                                 byte[] oldValue = getFromBufferOrKv(key);
+
                                 if (oldValue == null) {
                                     // there might be large amount of such deletion, so we don't log
                                     LOG.debug(
                                             "The specific key can't be found in kv tablet although the kv record is for deletion, "
                                                     + "ignore it directly as it doesn't exist in the kv tablet yet.");
                                 } else {
-                                    BinaryRow oldRow = valueDecoder.decodeValue(oldValue).row;
-                                    BinaryRow newRow = currentMerger.delete(oldRow);
+                                    ValueDecoder.Value oldRowAndSchemaId =
+                                            valueDecoder.decodeValue(oldValue);
+                                    InternalRow oldRow = oldRowAndSchemaId.row;
+                                    if (oldRow != null
+                                            && oldRowAndSchemaId.schemaId != latestSchemaId) {
+                                        // todo: 后续想办法复用对应的projected row.
+                                        Schema schemaOfOldData =
+                                                schemaGetter.getSchema(oldRowAndSchemaId.schemaId);
+                                        oldRow =
+                                                ProjectedRow.from(schemaOfOldData, latestSchema)
+                                                        .replaceRow(oldRow);
+                                    }
+                                    InternalRow newRow = currentMerger.delete(oldRow);
                                     // if newRow is null, it means the row should be deleted
                                     if (newRow == null) {
                                         walBuilder.append(ChangeType.DELETE, oldRow);
@@ -308,7 +357,11 @@ public final class KvTablet {
                                         walBuilder.append(ChangeType.UPDATE_AFTER, newRow);
                                         kvPreWriteBuffer.put(
                                                 key,
-                                                ValueEncoder.encodeValue(schemaId, newRow),
+                                                ValueEncoder.encodeRow(
+                                                        latestSchemaId,
+                                                        kvFormat,
+                                                        currentRowType,
+                                                        newRow),
                                                 logOffset + 1);
                                         logOffset += 2;
                                     }
@@ -318,32 +371,53 @@ public final class KvTablet {
                                 byte[] oldValue = getFromBufferOrKv(key);
                                 // it's update
                                 if (oldValue != null) {
-                                    BinaryRow oldRow = valueDecoder.decodeValue(oldValue).row;
-                                    BinaryRow newRow =
-                                            currentMerger.merge(oldRow, kvRecord.getRow());
+                                    ValueDecoder.Value oldRowAndSchemaId =
+                                            valueDecoder.decodeValue(oldValue);
+                                    InternalRow oldRow = oldRowAndSchemaId.row;
+                                    if (oldRow != null
+                                            && oldRowAndSchemaId.schemaId != latestSchemaId) {
+                                        // todo: 后续想办法复用对应的projected row.
+                                        Schema schemaOfOldData =
+                                                schemaGetter.getSchema(oldRowAndSchemaId.schemaId);
+                                        oldRow =
+                                                ProjectedRow.from(schemaOfOldData, latestSchema)
+                                                        .replaceRow(oldRow);
+                                    }
+
+                                    InternalRow newRow = currentMerger.merge(oldRow, row);
                                     if (newRow == oldRow) {
                                         // newRow is the same to oldRow, means nothing
                                         // happens (no update/delete), and input should be ignored
                                         continue;
                                     }
+
                                     walBuilder.append(ChangeType.UPDATE_BEFORE, oldRow);
                                     walBuilder.append(ChangeType.UPDATE_AFTER, newRow);
                                     // logOffset is for -U, logOffset + 1 is for +U, we need to use
                                     // the log offset for +U
                                     kvPreWriteBuffer.put(
                                             key,
-                                            ValueEncoder.encodeValue(schemaId, newRow),
+                                            ValueEncoder.encodeRow(
+                                                    latestSchemaId,
+                                                    kvFormat,
+                                                    currentRowType,
+                                                    newRow),
                                             logOffset + 1);
                                     logOffset += 2;
                                 } else {
                                     // it's insert
-                                    // TODO: we should add guarantees that all non-specified columns
+                                    // TODO: we shouldadd guarantees that all non-specified
+                                    // columns
                                     //  of the input row are set to null.
-                                    BinaryRow newRow = kvRecord.getRow();
+                                    InternalRow newRow = row;
                                     walBuilder.append(ChangeType.INSERT, newRow);
                                     kvPreWriteBuffer.put(
                                             key,
-                                            ValueEncoder.encodeValue(schemaId, newRow),
+                                            ValueEncoder.encodeRow(
+                                                    latestSchemaId,
+                                                    kvFormat,
+                                                    currentRowType,
+                                                    newRow),
                                             logOffset++);
                                 }
                             }

@@ -57,6 +57,7 @@ import static org.apache.fluss.record.TestData.DATA1;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_ID;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
 import static org.apache.fluss.record.TestData.DEFAULT_SCHEMA_ID;
+import static org.apache.fluss.record.TestData.TEST_SCHEMA_GETTER;
 import static org.apache.fluss.testutils.DataTestUtils.genMemoryLogRecordsByObject;
 import static org.apache.fluss.testutils.DataTestUtils.genMemoryLogRecordsWithWriterId;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
@@ -72,7 +73,7 @@ final class LogTabletTest extends LogTestBase {
     private FlussScheduler scheduler;
     private File logDir;
 
-    // TODO add more tests refer to kafka's UnifiedLogTest.
+    // TODOadd more tests refer to kafka's UnifiedLogTest.
 
     @BeforeEach
     public void setup() throws Exception {
@@ -373,7 +374,7 @@ final class LogTabletTest extends LogTestBase {
 
         log.updateHighWatermark(log.localLogEndOffset());
 
-        // TODO add delete log segment logic.
+        // TODOadd delete log segment logic.
     }
 
     @Test
@@ -512,7 +513,8 @@ final class LogTabletTest extends LogTestBase {
         List<Long> actualOffsets = new ArrayList<>();
         Iterable<LogRecordBatch> batchIterable = fetchInfo.getRecords().batches();
         try (LogRecordReadContext readContext =
-                LogRecordReadContext.createArrowReadContext(baseRowType, DEFAULT_SCHEMA_ID)) {
+                LogRecordReadContext.createArrowReadContext(
+                        baseRowType, DEFAULT_SCHEMA_ID, TEST_SCHEMA_GETTER)) {
             for (LogRecordBatch batch : batchIterable) {
                 try (CloseableIterator<LogRecord> iter = batch.records(readContext)) {
                     while (iter.hasNext()) {
@@ -546,7 +548,8 @@ final class LogTabletTest extends LogTestBase {
         assertThat(readInfo.getRecords().sizeInBytes() > 0).isTrue();
 
         try (LogRecordReadContext readContext =
-                LogRecordReadContext.createArrowReadContext(baseRowType, DEFAULT_SCHEMA_ID)) {
+                LogRecordReadContext.createArrowReadContext(
+                        baseRowType, DEFAULT_SCHEMA_ID, TEST_SCHEMA_GETTER)) {
             for (LogRecordBatch batch : readInfo.getRecords().batches()) {
                 try (CloseableIterator<LogRecord> iter = batch.records(readContext)) {
                     while (iter.hasNext()) {

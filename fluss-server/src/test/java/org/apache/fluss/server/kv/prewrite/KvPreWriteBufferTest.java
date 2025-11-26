@@ -163,13 +163,13 @@ class KvPreWriteBufferTest {
         }
         assertThat(getValue(buffer, "key6")).isNull();
 
-        // add delete records.
+        // addColumn delete records.
         elementCount = 5;
         bufferDelete(buffer, "key4", elementCount++);
         bufferDelete(buffer, "key3", elementCount++);
         assertThat(getValue(buffer, "key3")).isNull();
 
-        // add update records
+        // addColumn update records
         bufferPut(buffer, "key2", "value2-1", elementCount++);
         bufferPut(buffer, "key1", "value1-1", elementCount++);
         assertThat(getValue(buffer, "key1")).isEqualTo("value1-1");

@@ -23,10 +23,12 @@ import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
+import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.LogTestBase;
 import org.apache.fluss.record.MemoryLogRecords;
+import org.apache.fluss.record.TestingSchemaGetter;
 import org.apache.fluss.server.kv.KvManager;
 import org.apache.fluss.server.kv.KvTablet;
 import org.apache.fluss.server.metrics.group.TestingMetricGroups;
@@ -50,6 +52,7 @@ import java.io.File;
 import static org.apache.fluss.compression.ArrowCompressionInfo.DEFAULT_COMPRESSION;
 import static org.apache.fluss.record.TestData.DATA1;
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
+import static org.apache.fluss.record.TestData.DATA1_SCHEMA_PK;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_ID;
 import static org.apache.fluss.testutils.DataTestUtils.genMemoryLogRecordsByObject;
@@ -235,7 +238,7 @@ final class DroppedTableRecoveryTest extends LogTestBase {
                         tableBucket1,
                         log1,
                         KvFormat.COMPACTED,
-                        DATA1_SCHEMA,
+                        new TestingSchemaGetter(new SchemaInfo(DATA1_SCHEMA_PK, 0)),
                         tableConfig,
                         DEFAULT_COMPRESSION);
         KvTablet kvTablet2 =
@@ -244,7 +247,7 @@ final class DroppedTableRecoveryTest extends LogTestBase {
                         tableBucket2,
                         log2,
                         KvFormat.COMPACTED,
-                        DATA1_SCHEMA,
+                        new TestingSchemaGetter(new SchemaInfo(DATA1_SCHEMA_PK, 0)),
                         tableConfig,
                         DEFAULT_COMPRESSION);
 
@@ -313,7 +316,7 @@ final class DroppedTableRecoveryTest extends LogTestBase {
                         partitionedTableBucket,
                         log,
                         KvFormat.COMPACTED,
-                        DATA1_SCHEMA,
+                        new TestingSchemaGetter(new SchemaInfo(DATA1_SCHEMA, 0)),
                         tableConfig,
                         DEFAULT_COMPRESSION);
 

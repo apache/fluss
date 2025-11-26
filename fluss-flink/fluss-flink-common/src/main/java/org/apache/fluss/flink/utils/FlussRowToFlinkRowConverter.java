@@ -39,18 +39,32 @@ import org.apache.flink.types.RowKind;
 import java.io.Serializable;
 
 import static org.apache.fluss.flink.utils.FlinkConversions.toFlinkRowKind;
+import static org.apache.fluss.flink.utils.FlinkConversions.toFlinkRowType;
 
 /** A converter to convert Fluss's {@link InternalRow} to Flink's {@link RowData}. */
 public class FlussRowToFlinkRowConverter {
     private final FlussDeserializationConverter[] toFlinkFieldConverters;
     private final InternalRow.FieldGetter[] flussFieldGetters;
+    private final int[] indexMapping;
 
+    // todo: remove
     public FlussRowToFlinkRowConverter(RowType rowType) {
-        this.toFlinkFieldConverters = new FlussDeserializationConverter[rowType.getFieldCount()];
-        this.flussFieldGetters = new InternalRow.FieldGetter[rowType.getFieldCount()];
-        for (int i = 0; i < rowType.getFieldCount(); i++) {
-            toFlinkFieldConverters[i] = createNullableInternalConverter(rowType.getTypeAt(i));
-            flussFieldGetters[i] = InternalRow.createFieldGetter(rowType.getTypeAt(i), i);
+        this(rowType, toFlinkRowType(rowType));
+    }
+
+    public FlussRowToFlinkRowConverter(
+            RowType sourceFlussRowType,
+            org.apache.flink.table.types.logical.RowType targetFlinkRowType) {
+        this.indexMapping =
+                FlinkConversions.toFlinkRowTypeIndexMapping(sourceFlussRowType, targetFlinkRowType);
+        this.toFlinkFieldConverters =
+                new FlussDeserializationConverter[sourceFlussRowType.getFieldCount()];
+        this.flussFieldGetters = new InternalRow.FieldGetter[sourceFlussRowType.getFieldCount()];
+        for (int i = 0; i < sourceFlussRowType.getFieldCount(); i++) {
+            toFlinkFieldConverters[i] =
+                    createNullableInternalConverter(sourceFlussRowType.getTypeAt(i));
+            flussFieldGetters[i] =
+                    InternalRow.createFieldGetter(sourceFlussRowType.getTypeAt(i), i);
         }
     }
 
@@ -63,11 +77,18 @@ public class FlussRowToFlinkRowConverter {
     }
 
     private RowData toFlinkRowData(InternalRow flussRow, RowKind rowKind) {
-        GenericRowData genericRowData = new GenericRowData(toFlinkFieldConverters.length);
+        int targetLength = indexMapping.length;
+        GenericRowData genericRowData = new GenericRowData(targetLength);
         genericRowData.setRowKind(rowKind);
-        for (int i = 0; i < toFlinkFieldConverters.length; i++) {
-            Object flussField = flussFieldGetters[i].getFieldOrNull(flussRow);
-            genericRowData.setField(i, toFlinkFieldConverters[i].deserialize(flussField));
+        for (int i = 0; i < targetLength; i++) {
+            int flussIndex = indexMapping[i];
+            if (flussIndex == -1) {
+                genericRowData.setField(i, null);
+            } else {
+                Object flussField = flussFieldGetters[flussIndex].getFieldOrNull(flussRow);
+                genericRowData.setField(
+                        i, toFlinkFieldConverters[flussIndex].deserialize(flussField));
+            }
         }
         return genericRowData;
     }

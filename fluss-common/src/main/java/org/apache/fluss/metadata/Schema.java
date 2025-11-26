@@ -38,6 +38,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
@@ -55,14 +56,19 @@ import static org.apache.fluss.utils.Preconditions.checkState;
 public final class Schema implements Serializable {
 
     private static final long serialVersionUID = 1L;
-
     private static final Schema EMPTY = Schema.newBuilder().build();
 
     private final List<Column> columns;
     private final @Nullable PrimaryKey primaryKey;
     private final RowType rowType;
 
-    private Schema(List<Column> columns, @Nullable PrimaryKey primaryKey) {
+    /**
+     * The highest field ID in this schema, this can only increase during the life cycle of the
+     * schema. Otherwise, the removed columns will influence it.
+     */
+    private final int highestFieldId;
+
+    private Schema(List<Column> columns, @Nullable PrimaryKey primaryKey, int highestFieldId) {
         this.columns = normalizeColumns(columns, primaryKey);
         this.primaryKey = primaryKey;
         // pre-create the row type as it is the most frequently used part of the schema
@@ -74,6 +80,7 @@ public final class Schema implements Serializable {
                                                 new DataField(
                                                         column.getName(), column.getDataType()))
                                 .collect(Collectors.toList()));
+        this.highestFieldId = highestFieldId;
     }
 
     public List<Column> getColumns() {
@@ -125,6 +132,10 @@ public final class Schema implements Serializable {
         return columns.stream().map(Column::getName).collect(Collectors.toList());
     }
 
+    public List<Integer> getColumnIds() {
+        return columns.stream().map(Column::getColumnId).collect(Collectors.toList());
+    }
+
     /** Returns the column names in given column indexes. */
     public List<String> getColumnNames(int[] columnIndexes) {
         List<String> columnNames = new ArrayList<>();
@@ -141,6 +152,10 @@ public final class Schema implements Serializable {
             keyIndexes[i] = rowType.getFieldIndex(keyNames.get(i));
         }
         return keyIndexes;
+    }
+
+    public int getHighestFieldId() {
+        return highestFieldId;
     }
 
     @Override
@@ -188,9 +203,11 @@ public final class Schema implements Serializable {
     public static final class Builder {
         private final List<Column> columns;
         private @Nullable PrimaryKey primaryKey;
+        private AtomicInteger highestFieldId;
 
         private Builder() {
             columns = new ArrayList<>();
+            highestFieldId = new AtomicInteger(-1);
         }
 
         /** Adopts all members from the given schema. */
@@ -199,10 +216,15 @@ public final class Schema implements Serializable {
             if (schema.primaryKey != null) {
                 primaryKeyNamed(schema.primaryKey.constraintName, schema.primaryKey.columnNames);
             }
+            this.highestFieldId = new AtomicInteger(schema.highestFieldId);
             return this;
         }
 
-        /** Adopts all fields of the given row as columns of the schema. */
+        public Builder highestFieldId(int highestFieldId) {
+            this.highestFieldId = new AtomicInteger(highestFieldId);
+            return this;
+        }
+
         public Builder fromRowType(RowType rowType) {
             checkNotNull(rowType, "rowType must not be null.");
             final List<DataType> fieldDataTypes = rowType.getChildren();
@@ -227,7 +249,33 @@ public final class Schema implements Serializable {
 
         /** Adopts all columns from the given list. */
         public Builder fromColumns(List<Column> inputColumns) {
-            columns.addAll(inputColumns);
+            boolean nonMatchColumnId =
+                    inputColumns.stream()
+                            .noneMatch(column -> column.columnId != Column.UNKNOWN_COLUMN_ID);
+            boolean allMatchColumnId =
+                    inputColumns.stream()
+                            .allMatch(column -> column.columnId != Column.UNKNOWN_COLUMN_ID);
+            checkState(
+                    nonMatchColumnId || allMatchColumnId,
+                    "All columns must have columnId or none of them must have columnId.");
+
+            if (allMatchColumnId) {
+                columns.addAll(inputColumns);
+                highestFieldId =
+                        new AtomicInteger(
+                                inputColumns.stream()
+                                        .mapToInt(Column::getColumnId)
+                                        .max()
+                                        .orElse(-1));
+            } else {
+                // if all columnId is not set, this maybe from old version schema. Just use its
+                // position as columnId.
+                inputColumns.forEach(
+                        column ->
+                                this.column(column.columnName, column.dataType)
+                                        .withComment(column.comment));
+            }
+
             return this;
         }
 
@@ -239,12 +287,11 @@ public final class Schema implements Serializable {
          * from and written to an external system.
          *
          * @param columnName column name
-         * @param dataType data type of the column
          */
         public Builder column(String columnName, DataType dataType) {
             checkNotNull(columnName, "Column name must not be null.");
             checkNotNull(dataType, "Data type must not be null.");
-            columns.add(new Column(columnName, dataType));
+            columns.add(new Column(columnName, dataType, null, highestFieldId.incrementAndGet()));
             return this;
         }
 
@@ -316,7 +363,17 @@ public final class Schema implements Serializable {
 
         /** Returns an instance of an {@link Schema}. */
         public Schema build() {
-            return new Schema(columns, primaryKey);
+            Integer maximumColumnId =
+                    columns.stream().map(Column::getColumnId).max(Integer::compareTo).orElse(0);
+
+            checkState(
+                    columns.isEmpty() || highestFieldId.get() >= maximumColumnId,
+                    "Highest field id must be greater than or equal to the maximum column id.");
+
+            checkState(
+                    columns.stream().map(Column::getColumnId).distinct().count() == columns.size(),
+                    "Column ids must be unique.");
+            return new Schema(columns, primaryKey, highestFieldId.get());
         }
     }
 
@@ -331,19 +388,27 @@ public final class Schema implements Serializable {
      */
     @PublicStable
     public static final class Column implements Serializable {
+        public static final int UNKNOWN_COLUMN_ID = -1;
         private static final long serialVersionUID = 1L;
+        private final int columnId;
         private final String columnName;
         private final DataType dataType;
         private final @Nullable String comment;
 
         public Column(String columnName, DataType dataType) {
-            this(columnName, dataType, null);
+            this(columnName, dataType, null, UNKNOWN_COLUMN_ID);
         }
 
         public Column(String columnName, DataType dataType, @Nullable String comment) {
+            this(columnName, dataType, comment, UNKNOWN_COLUMN_ID);
+        }
+
+        public Column(
+                String columnName, DataType dataType, @Nullable String comment, int columnId) {
             this.columnName = columnName;
             this.dataType = dataType;
             this.comment = comment;
+            this.columnId = columnId;
         }
 
         public String getName() {
@@ -354,12 +419,16 @@ public final class Schema implements Serializable {
             return Optional.ofNullable(comment);
         }
 
+        public int getColumnId() {
+            return columnId;
+        }
+
         public DataType getDataType() {
             return dataType;
         }
 
         public Column withComment(String comment) {
-            return new Column(columnName, dataType, comment);
+            return new Column(columnName, dataType, comment, columnId);
         }
 
         @Override
@@ -387,12 +456,13 @@ public final class Schema implements Serializable {
             Column that = (Column) o;
             return Objects.equals(columnName, that.columnName)
                     && Objects.equals(dataType, that.dataType)
-                    && Objects.equals(comment, that.comment);
+                    && Objects.equals(comment, that.comment)
+                    && Objects.equals(columnId, that.columnId);
         }
 
         @Override
         public int hashCode() {
-            return Objects.hash(columnName, dataType, comment);
+            return Objects.hash(columnName, dataType, comment, columnId);
         }
     }
 
@@ -492,9 +562,8 @@ public final class Schema implements Serializable {
                         new Column(
                                 column.getName(),
                                 column.getDataType().copy(false),
-                                column.getComment().isPresent()
-                                        ? column.getComment().get()
-                                        : null));
+                                column.getComment().isPresent() ? column.getComment().get() : null,
+                                column.getColumnId()));
             } else {
                 newColumns.add(column);
             }

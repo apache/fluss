@@ -73,7 +73,7 @@ public class IndexedLogRecord implements LogRecord {
         this.timestamp = timestamp;
     }
 
-    private void pointTo(MemorySegment segment, int offset, int sizeInBytes) {
+    void pointTo(MemorySegment segment, int offset, int sizeInBytes) {
         this.segment = segment;
         this.offset = offset;
         this.sizeInBytes = sizeInBytes;

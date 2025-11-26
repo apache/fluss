@@ -157,7 +157,7 @@ class MetadataUpdateITCase {
                                 expectedTablePathById,
                                 Collections.emptyMap()));
 
-        // add back tablet server2
+        // addColumn back tablet server2
         FLUSS_CLUSTER_EXTENSION.startTabletServer(2);
         retry(
                 Duration.ofMinutes(1),

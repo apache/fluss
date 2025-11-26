@@ -164,7 +164,7 @@
                                             <excludes>
                                                 <exclude>fluss-test-coverage/**</exclude>
                                                 <exclude>fluss-test-utils/**</exclude>
-                                                <!-- exclude adapter classes to avoid Jacoco error: "Can't add different class with same name" -->
+                                                <!-- exclude adapter classes to avoid Jacoco error: "Can'tadd different class with same name" -->
                                                 <exclude>fluss-flink/**/target/classes/org/apache/fluss/flink/adapter/**</exclude>
                                             </excludes>
                                         </resource>
@@ -206,7 +206,7 @@
                                             <excludes>
                                                 <exclude>fluss-test-coverage/**</exclude>
                                                 <exclude>fluss-test-utils/**</exclude>
-                                                <!-- exclude adapter classes to avoid Jacoco error: "Can't add different class with same name" -->
+                                                <!-- exclude adapter classes to avoid Jacoco error: "Can'tadd different class with same name" -->
                                                 <exclude>fluss-flink/**/target/classes/org/apache/fluss/flink/adapter/**</exclude>
                                             </excludes>
                                         </resource>

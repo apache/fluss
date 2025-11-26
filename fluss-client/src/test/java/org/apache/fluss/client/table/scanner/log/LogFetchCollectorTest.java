@@ -40,6 +40,7 @@ import static org.apache.fluss.record.TestData.DATA1_TABLE_ID;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_INFO;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
 import static org.apache.fluss.record.TestData.DEFAULT_SCHEMA_ID;
+import static org.apache.fluss.record.TestData.TEST_SCHEMA_GETTER;
 import static org.apache.fluss.testutils.DataTestUtils.genMemoryLogRecordsByObject;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -66,7 +67,8 @@ public class LogFetchCollectorTest {
                 new LogFetchCollector(
                         DATA1_TABLE_PATH, logScannerStatus, new Configuration(), metadataUpdater);
         readContext =
-                LogRecordReadContext.createArrowReadContext(DATA1_ROW_TYPE, DEFAULT_SCHEMA_ID);
+                LogRecordReadContext.createArrowReadContext(
+                        DATA1_ROW_TYPE, DEFAULT_SCHEMA_ID, TEST_SCHEMA_GETTER);
     }
 
     @AfterEach
@@ -91,7 +93,8 @@ public class LogFetchCollectorTest {
         logFetchBuffer.add(completedFetch);
         assertThat(logFetchBuffer.isEmpty()).isFalse();
 
-        // Validate that the completed fetch isn't initialized just because we add it to the buffer.
+        // Validate that the completed fetch isn't initialized just because we add it to the
+        // buffer.
         assertThat(completedFetch.isInitialized()).isFalse();
 
         // Fetch the data and validate that we get all the records we want back.

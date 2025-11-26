@@ -33,7 +33,7 @@ import org.apache.fluss.exception.NotLeaderOrFollowerException;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
-import org.apache.fluss.metadata.Schema;
+import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
@@ -74,6 +74,7 @@ import org.apache.fluss.server.log.LogTablet;
 import org.apache.fluss.server.log.checkpoint.OffsetCheckpointFile;
 import org.apache.fluss.server.log.remote.RemoteLogManager;
 import org.apache.fluss.server.metadata.ServerMetadataCache;
+import org.apache.fluss.server.metadata.TabletServerMetadataCache;
 import org.apache.fluss.server.metrics.group.BucketMetricGroup;
 import org.apache.fluss.server.metrics.group.TableMetricGroup;
 import org.apache.fluss.server.metrics.group.TabletServerMetricGroup;
@@ -86,7 +87,6 @@ import org.apache.fluss.server.zk.ZkSequenceIDCounter;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.ZkData;
-import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.CloseableRegistry;
 import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.IOUtils;
@@ -105,7 +105,6 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
@@ -167,7 +166,7 @@ public final class Replica {
     /** The manger to manger the isr expand and shrink. */
     private final AdjustIsrManager adjustIsrManager;
 
-    private final Schema schema;
+    private final SchemaGetter schemaGetter;
     private final TableConfig tableConfig;
     // logFormat and arrowCompressionInfo are used in hot-path, so cache them here.
     private final LogFormat logFormat;
@@ -216,7 +215,7 @@ public final class Replica {
             DelayedOperationManager<DelayedFetchLog> delayedFetchLogManager,
             AdjustIsrManager adjustIsrManager,
             SnapshotContext snapshotContext,
-            ServerMetadataCache metadataCache,
+            TabletServerMetadataCache metadataCache,
             FatalErrorHandler fatalErrorHandler,
             BucketMetricGroup bucketMetricGroup,
             TableInfo tableInfo,
@@ -235,7 +234,11 @@ public final class Replica {
         this.adjustIsrManager = adjustIsrManager;
         this.fatalErrorHandler = fatalErrorHandler;
         this.bucketMetricGroup = bucketMetricGroup;
-        this.schema = tableInfo.getSchema();
+        this.schemaGetter =
+                metadataCache.subscribeWithInitialSchema(
+                        physicalPath.getTablePath(),
+                        tableInfo.getSchemaId(),
+                        tableInfo.getSchema());
         this.tableConfig = tableInfo.getTableConfig();
         this.logFormat = tableConfig.getLogFormat();
         this.arrowCompressionInfo = tableConfig.getArrowCompressionInfo();
@@ -284,10 +287,6 @@ public final class Replica {
 
     public boolean isKvTable() {
         return kvManager != null;
-    }
-
-    public RowType getRowType() {
-        return schema.getRowType();
     }
 
     public ArrowCompressionInfo getArrowCompressionInfo() {
@@ -372,6 +371,10 @@ public final class Replica {
 
     public TableMetricGroup tableMetrics() {
         return bucketMetricGroup.getTableMetricGroup();
+    }
+
+    public LogFormat getLogFormat() {
+        return logFormat;
     }
 
     public void makeLeader(NotifyLeaderAndIsrData data) throws IOException {
@@ -491,37 +494,9 @@ public final class Replica {
                     // drop log then
                     logManager.dropLog(tableBucket);
                     // close the closeable registry
+                    IOUtils.closeQuietly(schemaGetter::release);
                     IOUtils.closeQuietly(closeableRegistry);
                 });
-    }
-
-    public void checkProjection(@Nullable int[] projectedFields) {
-        if (projectedFields != null) {
-            if (logFormat != LogFormat.ARROW) {
-                throw new InvalidColumnProjectionException(
-                        String.format(
-                                "Column projection is only supported for ARROW format, but the table %s is %s format.",
-                                physicalPath.getTablePath(), logFormat));
-            }
-            int fieldCount = schema.getColumns().size();
-            int prev = -1;
-            for (int i : projectedFields) {
-                if (i <= prev) {
-                    throw new InvalidColumnProjectionException(
-                            "The projection indexes should be in field order, but is "
-                                    + Arrays.toString(projectedFields));
-                }
-                if (i >= fieldCount) {
-                    throw new InvalidColumnProjectionException(
-                            "Projected fields "
-                                    + Arrays.toString(projectedFields)
-                                    + " is out of bound for schema with "
-                                    + fieldCount
-                                    + " fields.");
-                }
-                prev = i;
-            }
-        }
     }
 
     public LogOffsetSnapshot fetchOffsetSnapshot(boolean fetchOnlyFromLeader) throws IOException {
@@ -675,7 +650,7 @@ public final class Replica {
                 downloadKvSnapshots(completedSnapshot, tabletDir.toPath());
 
                 // as we have downloaded kv files into the tablet dir, now, we can load it
-                kvTablet = kvManager.loadKv(tabletDir);
+                kvTablet = kvManager.loadKv(tabletDir, schemaGetter);
 
                 checkNotNull(kvTablet, "kv tablet should not be null.");
                 restoreStartOffset = completedSnapshot.getLogOffset();
@@ -684,6 +659,7 @@ public final class Replica {
                         "No snapshot found for {} of {}, restore from log.",
                         tableBucket,
                         physicalPath);
+
                 // actually, kv manager always create a kv tablet since we will drop the kv
                 // if it exists before init kv tablet
                 kvTablet =
@@ -692,7 +668,7 @@ public final class Replica {
                                 tableBucket,
                                 logTablet,
                                 tableConfig.getKvFormat(),
-                                schema,
+                                schemaGetter,
                                 tableConfig,
                                 arrowCompressionInfo);
             }
@@ -774,7 +750,8 @@ public final class Replica {
                             logTablet,
                             startRecoverLogOffset,
                             recoverContext,
-                            tableConfig.getKvFormat());
+                            tableConfig.getKvFormat(),
+                            schemaGetter);
             kvRecoverHelper.recover();
         } catch (Exception e) {
             throw new KvStorageException(
@@ -1540,7 +1517,7 @@ public final class Replica {
         List<Integer> isrToSend = new ArrayList<>(isrState.isr());
         isrToSend.add(newInSyncReplicaId);
 
-        // TODO add server epoch to isr.
+        // TODOadd server epoch to isr.
 
         LeaderAndIsr newLeaderAndIsr =
                 new LeaderAndIsr(
@@ -1562,7 +1539,7 @@ public final class Replica {
         // erroneously advance the HW if the `AdjustIsr` were to fail. Hence, the "maximal ISR"
         // for `PendingShrinkIsr` is the current ISR.
 
-        // TODO add server epoch to isr.
+        // TODOadd server epoch to isr.
 
         LeaderAndIsr newLeaderAndIsr =
                 new LeaderAndIsr(
@@ -1936,5 +1913,10 @@ public final class Replica {
     @VisibleForTesting
     public List<Integer> getIsr() {
         return isrState.isr();
+    }
+
+    @VisibleForTesting
+    public SchemaGetter getSchemaGetter() {
+        return schemaGetter;
     }
 }

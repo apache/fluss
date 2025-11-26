@@ -26,6 +26,7 @@ import org.apache.fluss.client.metadata.LakeSnapshot;
 import org.apache.fluss.client.write.KvWriteBatch;
 import org.apache.fluss.client.write.ReadyWriteBatch;
 import org.apache.fluss.config.cluster.AlterConfigOpType;
+import org.apache.fluss.config.cluster.ColumnPositionType;
 import org.apache.fluss.config.cluster.ConfigEntry;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.fs.FsPathAndFileName;
@@ -36,6 +37,7 @@ import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.rpc.messages.AlterTableRequest;
 import org.apache.fluss.rpc.messages.CreatePartitionRequest;
 import org.apache.fluss.rpc.messages.DropPartitionRequest;
 import org.apache.fluss.rpc.messages.GetFileSystemSecurityTokenResponse;
@@ -46,20 +48,26 @@ import org.apache.fluss.rpc.messages.ListOffsetsRequest;
 import org.apache.fluss.rpc.messages.ListPartitionInfosResponse;
 import org.apache.fluss.rpc.messages.LookupRequest;
 import org.apache.fluss.rpc.messages.MetadataRequest;
+import org.apache.fluss.rpc.messages.PbAddColumn;
 import org.apache.fluss.rpc.messages.PbAlterConfig;
 import org.apache.fluss.rpc.messages.PbDescribeConfig;
+import org.apache.fluss.rpc.messages.PbDropColumn;
 import org.apache.fluss.rpc.messages.PbKeyValue;
 import org.apache.fluss.rpc.messages.PbKvSnapshot;
 import org.apache.fluss.rpc.messages.PbLakeSnapshotForBucket;
 import org.apache.fluss.rpc.messages.PbLookupReqForBucket;
+import org.apache.fluss.rpc.messages.PbModifyColumn;
 import org.apache.fluss.rpc.messages.PbPartitionSpec;
 import org.apache.fluss.rpc.messages.PbPrefixLookupReqForBucket;
 import org.apache.fluss.rpc.messages.PbProduceLogReqForBucket;
 import org.apache.fluss.rpc.messages.PbPutKvReqForBucket;
 import org.apache.fluss.rpc.messages.PbRemotePathAndLocalFile;
+import org.apache.fluss.rpc.messages.PbRenameColumn;
 import org.apache.fluss.rpc.messages.PrefixLookupRequest;
 import org.apache.fluss.rpc.messages.ProduceLogRequest;
 import org.apache.fluss.rpc.messages.PutKvRequest;
+import org.apache.fluss.utils.json.DataTypeJsonSerde;
+import org.apache.fluss.utils.json.JsonSerdeUtils;
 
 import javax.annotation.Nullable;
 
@@ -370,6 +378,78 @@ public class ClientRpcMessageUtils {
                     "Unsupported table change: " + tableChange.getClass());
         }
         return info;
+    }
+
+    public static void addPbAlterSchemas(
+            AlterTableRequest request, List<TableChange> tableChanges) {
+        List<PbAddColumn> addColumns = new ArrayList<>();
+        List<PbDropColumn> dropColumns = new ArrayList<>();
+        List<PbRenameColumn> renameColumns = new ArrayList<>();
+        List<PbModifyColumn> modifyColumns = new ArrayList<>();
+        for (TableChange tableChange : tableChanges) {
+            if (tableChange instanceof TableChange.AddColumn) {
+                addColumns.add(toPbAddColumn((TableChange.AddColumn) tableChange));
+            } else if (tableChange instanceof TableChange.DropColumn) {
+                dropColumns.add(toPbDropColumn((TableChange.DropColumn) tableChange));
+            } else if (tableChange instanceof TableChange.RenameColumn) {
+                renameColumns.add(toPbRenameColumn((TableChange.RenameColumn) tableChange));
+            } else if (tableChange instanceof TableChange.ModifyColumn) {
+                modifyColumns.add(toPbModifyColumn((TableChange.ModifyColumn) tableChange));
+            } else {
+                throw new IllegalArgumentException(
+                        "Unsupported table change: " + tableChange.getClass());
+            }
+        }
+
+        request.addAllAddColumns(addColumns)
+                .addAllDropColumns(dropColumns)
+                .addAllRenameColumns(renameColumns)
+                .addAllModifyColumns(modifyColumns);
+    }
+
+    public static PbAddColumn toPbAddColumn(TableChange.AddColumn addColumn) {
+        ColumnPositionType columnPositionType = ColumnPositionType.from(addColumn.getPosition());
+
+        PbAddColumn pbAddColumn =
+                new PbAddColumn()
+                        .setColumnName(addColumn.getName())
+                        .setDataTypeJson(
+                                JsonSerdeUtils.writeValueAsBytes(
+                                        addColumn.getDataType(), DataTypeJsonSerde.INSTANCE))
+                        .setColumnPositionType(columnPositionType.value());
+        if (addColumn.getComment() != null) {
+            pbAddColumn.setComment(addColumn.getComment());
+        }
+
+        return pbAddColumn;
+    }
+
+    public static PbDropColumn toPbDropColumn(TableChange.DropColumn dropColumn) {
+        return new PbDropColumn().setColumnName(dropColumn.getName());
+    }
+
+    public static PbRenameColumn toPbRenameColumn(TableChange.RenameColumn dropColumn) {
+        return new PbRenameColumn()
+                .setOldColumnName(dropColumn.getOldColumnName())
+                .setNewColumnName(dropColumn.getNewColumnName());
+    }
+
+    public static PbModifyColumn toPbModifyColumn(TableChange.ModifyColumn modifyColumn) {
+        PbModifyColumn pbModifyColumn =
+                new PbModifyColumn()
+                        .setColumnName(modifyColumn.getName())
+                        .setDataTypeJson(
+                                JsonSerdeUtils.writeValueAsBytes(
+                                        modifyColumn.getDataType(), DataTypeJsonSerde.INSTANCE));
+        if (modifyColumn.getNewPosition() != null) {
+            ColumnPositionType columnPositionType =
+                    ColumnPositionType.from(modifyColumn.getNewPosition());
+            pbModifyColumn.setColumnPositionType(columnPositionType.value());
+        }
+        if (modifyColumn.getComment() != null) {
+            pbModifyColumn.setComment(modifyColumn.getComment());
+        }
+        return pbModifyColumn;
     }
 
     public static List<ConfigEntry> toConfigEntries(List<PbDescribeConfig> pbDescribeConfigs) {

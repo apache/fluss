@@ -810,16 +810,18 @@ public class ZooKeeperClient implements AutoCloseable {
 
     /** Register schema to ZK metadata and return the schema id. */
     public int registerSchema(TablePath tablePath, Schema schema) throws Exception {
-        int currentSchemaId = getCurrentSchemaId(tablePath);
+        return registerSchema(tablePath, schema, getCurrentSchemaId(tablePath) + 1);
+    }
+
+    public int registerSchema(TablePath tablePath, Schema schema, int schemaId) throws Exception {
         // increase schema id.
-        currentSchemaId++;
-        String path = SchemaZNode.path(tablePath, currentSchemaId);
+        String path = SchemaZNode.path(tablePath, schemaId);
         zkClient.create()
                 .creatingParentsIfNeeded()
                 .withMode(CreateMode.PERSISTENT)
                 .forPath(path, SchemaZNode.encode(schema));
-        LOG.info("Registered new schema version {} for table {}.", currentSchemaId, tablePath);
-        return currentSchemaId;
+        LOG.info("Registered new schema version {} for table {}.", schemaId, tablePath);
+        return schemaId;
     }
 
     /** Get the specific schema by schema id in ZK metadata. */
@@ -1130,7 +1132,7 @@ public class ZooKeeperClient implements AutoCloseable {
                 .forPath(
                         AclChangeNotificationNode.pathPrefix(),
                         AclChangeNotificationNode.encode(resource));
-        LOG.info("add acl change notification for resource {}  ", resource);
+        LOG.info("addColumn acl change notification for resource {}  ", resource);
     }
 
     public Map<String, String> fetchEntityConfig() throws Exception {

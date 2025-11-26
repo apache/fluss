@@ -27,12 +27,10 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.flink.row.FlinkAsFlussRow;
 import org.apache.fluss.flink.source.lookup.LookupNormalizer.RemainingFilter;
-import org.apache.fluss.flink.utils.FlinkConversions;
 import org.apache.fluss.flink.utils.FlinkUtils;
 import org.apache.fluss.flink.utils.FlussRowToFlinkRowConverter;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.InternalRow;
-import org.apache.fluss.row.ProjectedRow;
 import org.apache.fluss.utils.ExceptionUtils;
 
 import org.apache.flink.table.data.RowData;
@@ -87,6 +85,10 @@ public class FlinkAsyncLookupFunction extends AsyncLookupFunction {
         LOG.info("start open ...");
         connection = ConnectionFactory.createConnection(flussConfig);
         table = connection.getTable(tablePath);
+        org.apache.fluss.types.RowType flussRowType = table.getTableInfo().getRowType();
+        LOG.info("Current Fluss Schema is {}, Flink RowType is {}", flussRowType, flinkRowType);
+        // Currently, only primary key and prefix lookup are supported. These keys must be primary
+        // key which cannot modified.
         lookupRow = new FlinkAsFlussRow();
 
         final RowType outputRowType;
@@ -95,8 +97,8 @@ public class FlinkAsyncLookupFunction extends AsyncLookupFunction {
         } else {
             outputRowType = FlinkUtils.projectRowType(flinkRowType, projection);
         }
-        flussRowToFlinkRowConverter =
-                new FlussRowToFlinkRowConverter(FlinkConversions.toFlussRowType(outputRowType));
+
+        flussRowToFlinkRowConverter = new FlussRowToFlinkRowConverter(flussRowType, outputRowType);
 
         Lookup lookup = table.newLookup();
         if (lookupNormalizer.getLookupType() == LookupType.PREFIX_LOOKUP) {
@@ -162,21 +164,13 @@ public class FlinkAsyncLookupFunction extends AsyncLookupFunction {
         List<RowData> projectedRow = new ArrayList<>();
         for (InternalRow row : lookupResult) {
             if (row != null) {
-                RowData flinkRow = flussRowToFlinkRowConverter.toFlinkRowData(maybeProject(row));
+                RowData flinkRow = flussRowToFlinkRowConverter.toFlinkRowData(row);
                 if (remainingFilter == null || remainingFilter.isMatch(flinkRow)) {
                     projectedRow.add(flinkRow);
                 }
             }
         }
         resultFuture.complete(projectedRow);
-    }
-
-    private InternalRow maybeProject(InternalRow row) {
-        if (projection == null) {
-            return row;
-        }
-        // should not reuse objects for async operations
-        return ProjectedRow.from(projection).replaceRow(row);
     }
 
     @Override

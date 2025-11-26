@@ -79,7 +79,8 @@ public class HadoopUtils {
         }
 
         // Approach 3: Fluss configuration
-        // add all configuration key with prefix 'iceberg.hadoop.' in fluss conf to hadoop conf
+        // add all configuration key with prefix 'iceberg.hadoop.' in fluss conf to hadoop
+        // conf
         for (String key : flussConfiguration.keySet()) {
             for (String prefix : FLUSS_CONFIG_PREFIXES) {
                 if (key.startsWith(prefix)) {
@@ -108,7 +109,7 @@ public class HadoopUtils {
     }
 
     /**
-     * Search Hadoop configuration files in the given path, and add them to the configuration if
+     * Search Hadoop configuration files in the given path, andadd them to the configuration if
      * found.
      */
     private static boolean addHadoopConfIfFound(

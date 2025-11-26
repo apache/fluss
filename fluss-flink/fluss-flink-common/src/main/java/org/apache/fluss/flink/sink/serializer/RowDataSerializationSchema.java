@@ -63,7 +63,7 @@ public class RowDataSerializationSchema implements FlussSerializationSchema<RowD
      */
     @Override
     public void open(InitializationContext context) throws Exception {
-        this.converter = new FlinkAsFlussRow();
+        this.converter = FlinkAsFlussRow.from(context.getTableRowType(), context.getRowSchema());
     }
 
     /**

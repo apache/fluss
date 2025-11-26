@@ -30,6 +30,7 @@ import org.apache.fluss.exception.InvalidMetadataException;
 import org.apache.fluss.exception.LeaderNotAvailableException;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.PhysicalTablePath;
+import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePartition;
@@ -115,12 +116,14 @@ public class LogFetcher implements Closeable {
             Configuration conf,
             MetadataUpdater metadataUpdater,
             ScannerMetricGroup scannerMetricGroup,
-            RemoteFileDownloader remoteFileDownloader) {
+            RemoteFileDownloader remoteFileDownloader,
+            SchemaGetter schemaGetter) {
         this.tablePath = tableInfo.getTablePath();
         this.isPartitioned = tableInfo.isPartitioned();
-        this.readContext = LogRecordReadContext.createReadContext(tableInfo, false, projection);
+        this.readContext =
+                LogRecordReadContext.createReadContext(tableInfo, false, projection, schemaGetter);
         this.remoteReadContext =
-                LogRecordReadContext.createReadContext(tableInfo, true, projection);
+                LogRecordReadContext.createReadContext(tableInfo, true, projection, schemaGetter);
         this.projection = projection;
         this.logScannerStatus = logScannerStatus;
         this.maxFetchBytes =
@@ -360,7 +363,8 @@ public class LogFetcher implements Closeable {
                             LogRecords logRecords = fetchResultForBucket.recordsOrEmpty();
                             if (!MemoryLogRecords.EMPTY.equals(logRecords)
                                     || fetchResultForBucket.getErrorCode() != Errors.NONE.code()) {
-                                // In oder to not signal notEmptyCondition, add completed fetch to
+                                // In oder to not signal notEmptyCondition, add completed
+                                // fetch to
                                 // buffer until log records is not empty.
                                 DefaultCompletedFetch completedFetch =
                                         new DefaultCompletedFetch(
@@ -479,7 +483,7 @@ public class LogFetcher implements Closeable {
                             assert projection != null;
                             reqForTable
                                     .setProjectionPushdownEnabled(true)
-                                    .setProjectedFields(projection.getProjectionInOrder());
+                                    .setProjectedFields(projection.getProjectionIdInOrder());
                         } else {
                             reqForTable.setProjectionPushdownEnabled(false);
                         }

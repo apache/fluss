@@ -38,6 +38,7 @@ import org.apache.fluss.lake.lakestorage.LakeCatalog;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.DatabaseInfo;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
+import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
@@ -320,6 +321,37 @@ public class MetadataManager {
                 "Fail to create table " + tablePath);
     }
 
+    public void alterTableSchema(
+            TablePath tablePath, List<TableChange> schemaChanges, boolean ignoreIfNotExists)
+            throws TableNotExistException, TableNotPartitionedException {
+        try {
+
+            TableInfo table = getTable(tablePath);
+
+            // validate the table column changes
+            if (!schemaChanges.isEmpty()) {
+                UpdateSchema schemaUpdate = new SchemaUpdate(table);
+                for (TableChange schemaChange : schemaChanges) {
+                    schemaUpdate = schemaUpdate.applySchemaChange(schemaChange);
+                }
+                Schema newSchema = schemaUpdate.getSchema();
+                // update the schema
+                zookeeperClient.registerSchema(tablePath, newSchema);
+            }
+        } catch (Exception e) {
+            if (e instanceof TableNotExistException) {
+                if (ignoreIfNotExists) {
+                    return;
+                }
+                throw (TableNotExistException) e;
+            } else if (e instanceof RuntimeException) {
+                throw (RuntimeException) e;
+            } else {
+                throw new FlussRuntimeException("Failed to alter table schema: " + tablePath, e);
+            }
+        }
+    }
+
     public void alterTableProperties(
             TablePath tablePath,
             List<TableChange> tableChanges,
@@ -386,7 +418,8 @@ public class MetadataManager {
             } else if (e instanceof RuntimeException) {
                 throw (RuntimeException) e;
             } else {
-                throw new FlussRuntimeException("Failed to alter table: " + tablePath, e);
+                throw new FlussRuntimeException(
+                        "Failed to alter table properties: " + tablePath, e);
             }
         }
     }
@@ -452,7 +485,7 @@ public class MetadataManager {
 
         if (toEnableDataLake) {
             TableInfo newTableInfo = newTableRegistration.toTableInfo(tablePath, schemaInfo);
-            // if the table is lake table, we need to add it to lake table tiering manager
+            // if the table is lake table, we need toadd it to lake table tiering manager
             lakeTableTieringManager.addNewLakeTable(newTableInfo);
         } else if (toDisableDataLake) {
             lakeTableTieringManager.removeLakeTable(newTableRegistration.tableId);

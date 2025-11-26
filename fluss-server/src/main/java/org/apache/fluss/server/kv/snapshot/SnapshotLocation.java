@@ -328,7 +328,7 @@ public class SnapshotLocation {
             Exception latestException = null;
             for (int attempt = 0; attempt < 10; attempt++) {
                 try {
-                    // todo: may add entropy injection?
+                    // todo: mayadd entropy injection?
                     this.kvFilePath = createFilePath();
                     this.outStream = fs.create(kvFilePath, FileSystem.WriteMode.NO_OVERWRITE);
                     return;

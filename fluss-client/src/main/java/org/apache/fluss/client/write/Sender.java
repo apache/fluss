@@ -130,7 +130,7 @@ public class Sender implements Runnable {
         this.idempotenceManager = idempotenceManager;
         this.writerMetricGroup = writerMetricGroup;
 
-        // TODO add retry logic while send failed. See FLUSS-56364375
+        // TODOadd retry logic while send failed. See FLUSS-56364375
     }
 
     @VisibleForTesting
@@ -167,7 +167,7 @@ public class Sender implements Runnable {
             }
         }
 
-        // TODO if force close failed, add logic to abort incomplete batches.
+        // TODO if force close failed,add logic to abort incomplete batches.
         LOG.debug("Shutdown of Fluss write sender I/O thread has completed.");
     }
 
@@ -245,7 +245,7 @@ public class Sender implements Runnable {
         if (!batches.isEmpty()) {
             addToInflightBatches(batches);
 
-            // TODO add logic for batch expire.
+            // TODOadd logic for batch expire.
 
             sendWriteRequests(batches);
 

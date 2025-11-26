@@ -19,6 +19,7 @@ package org.apache.fluss.flink.sink.serializer;
 
 import org.apache.fluss.types.RowType;
 
+import static org.apache.fluss.flink.utils.FlinkConversions.toFlinkRowType;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /**
@@ -27,14 +28,26 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
  */
 public class SerializerInitContextImpl implements FlussSerializationSchema.InitializationContext {
 
-    private final RowType rowSchema;
+    private final RowType flussRowSchema;
+    private final org.apache.flink.table.types.logical.RowType flinkRowType;
 
     public SerializerInitContextImpl(RowType rowSchema) {
-        this.rowSchema = checkNotNull(rowSchema, "rowSchema");
+        this(rowSchema, toFlinkRowType(rowSchema));
+    }
+
+    public SerializerInitContextImpl(
+            RowType rowSchema, org.apache.flink.table.types.logical.RowType flinkRowType) {
+        this.flussRowSchema = checkNotNull(rowSchema, "flussRowSchema");
+        this.flinkRowType = checkNotNull(flinkRowType, "flinkRowType");
     }
 
     @Override
     public RowType getRowSchema() {
-        return rowSchema;
+        return flussRowSchema;
+    }
+
+    @Override
+    public org.apache.flink.table.types.logical.RowType getTableRowType() {
+        return flinkRowType;
     }
 }

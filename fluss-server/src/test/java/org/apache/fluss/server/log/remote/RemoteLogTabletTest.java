@@ -94,7 +94,7 @@ class RemoteLogTabletTest extends RemoteLogTestBase {
         assertThat(remoteLogTablet.getRemoteLogStartOffset()).isEqualTo(0);
         assertThat(remoteLogTablet.getRemoteLogEndOffset()).isEqualTo(OptionalLong.of(30));
 
-        // delete first remote log segment and add another one remote log segments.
+        // delete first remote log segment and addColumn another one remote log segments.
         remoteLogTablet.addAndDeleteLogSegments(
                 Collections.singletonList(remoteLogSegmentList.get(3)),
                 Collections.singletonList(remoteLogSegmentList.get(0)));
@@ -102,7 +102,7 @@ class RemoteLogTabletTest extends RemoteLogTestBase {
         assertThat(remoteLogTablet.getRemoteLogStartOffset()).isEqualTo(10);
         assertThat(remoteLogTablet.getRemoteLogEndOffset()).isEqualTo(OptionalLong.of(40));
 
-        // delete all exist and append one. we will first add then delete.
+        // delete all exist and append one. we will first addColumn then delete.
         remoteLogTablet.addAndDeleteLogSegments(
                 Collections.singletonList(remoteLogSegmentList.get(4)), remoteLogSegmentList);
         assertThat(remoteLogTablet.getIdToRemoteLogSegmentMap()).hasSize(0);

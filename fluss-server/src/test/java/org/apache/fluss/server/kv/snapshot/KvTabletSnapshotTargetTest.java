@@ -247,7 +247,7 @@ class KvTabletSnapshotTargetTest {
         final String errMsg = "Add to snapshot handle failed.";
         AtomicBoolean shouldFail = new AtomicBoolean(true);
         // we use a store will fail when the variable shouldFail is true
-        // add the snapshot to store will fail
+        // addColumn the snapshot to store will fail
         CompletedSnapshotHandleStore completedSnapshotHandleStore =
                 TestCompletedSnapshotHandleStore.newBuilder()
                         .setAddFunction(

@@ -22,6 +22,7 @@ import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.cluster.AlterConfigOpType;
+import org.apache.fluss.config.cluster.ColumnPositionType;
 import org.apache.fluss.config.cluster.ConfigEntry;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.fs.token.ObtainedSecurityToken;
@@ -52,6 +53,7 @@ import org.apache.fluss.rpc.entity.ProduceLogResultForBucket;
 import org.apache.fluss.rpc.entity.PutKvResultForBucket;
 import org.apache.fluss.rpc.messages.AdjustIsrRequest;
 import org.apache.fluss.rpc.messages.AdjustIsrResponse;
+import org.apache.fluss.rpc.messages.AlterTableRequest;
 import org.apache.fluss.rpc.messages.CommitKvSnapshotRequest;
 import org.apache.fluss.rpc.messages.CommitLakeTableSnapshotRequest;
 import org.apache.fluss.rpc.messages.CommitRemoteLogManifestRequest;
@@ -79,6 +81,7 @@ import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrRequest;
 import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrResponse;
 import org.apache.fluss.rpc.messages.NotifyRemoteLogOffsetsRequest;
 import org.apache.fluss.rpc.messages.PbAclInfo;
+import org.apache.fluss.rpc.messages.PbAddColumn;
 import org.apache.fluss.rpc.messages.PbAdjustIsrReqForBucket;
 import org.apache.fluss.rpc.messages.PbAdjustIsrReqForTable;
 import org.apache.fluss.rpc.messages.PbAdjustIsrRespForBucket;
@@ -89,6 +92,7 @@ import org.apache.fluss.rpc.messages.PbCreateAclRespInfo;
 import org.apache.fluss.rpc.messages.PbDescribeConfig;
 import org.apache.fluss.rpc.messages.PbDropAclsFilterResult;
 import org.apache.fluss.rpc.messages.PbDropAclsMatchingAcl;
+import org.apache.fluss.rpc.messages.PbDropColumn;
 import org.apache.fluss.rpc.messages.PbFetchLogReqForBucket;
 import org.apache.fluss.rpc.messages.PbFetchLogReqForTable;
 import org.apache.fluss.rpc.messages.PbFetchLogRespForBucket;
@@ -101,6 +105,7 @@ import org.apache.fluss.rpc.messages.PbLakeTableSnapshotInfo;
 import org.apache.fluss.rpc.messages.PbListOffsetsRespForBucket;
 import org.apache.fluss.rpc.messages.PbLookupReqForBucket;
 import org.apache.fluss.rpc.messages.PbLookupRespForBucket;
+import org.apache.fluss.rpc.messages.PbModifyColumn;
 import org.apache.fluss.rpc.messages.PbNotifyLakeTableOffsetReqForBucket;
 import org.apache.fluss.rpc.messages.PbNotifyLeaderAndIsrReqForBucket;
 import org.apache.fluss.rpc.messages.PbNotifyLeaderAndIsrRespForBucket;
@@ -115,6 +120,7 @@ import org.apache.fluss.rpc.messages.PbPutKvReqForBucket;
 import org.apache.fluss.rpc.messages.PbPutKvRespForBucket;
 import org.apache.fluss.rpc.messages.PbRemoteLogSegment;
 import org.apache.fluss.rpc.messages.PbRemotePathAndLocalFile;
+import org.apache.fluss.rpc.messages.PbRenameColumn;
 import org.apache.fluss.rpc.messages.PbServerNode;
 import org.apache.fluss.rpc.messages.PbStopReplicaReqForBucket;
 import org.apache.fluss.rpc.messages.PbStopReplicaRespForBucket;
@@ -160,6 +166,8 @@ import org.apache.fluss.server.metadata.TableMetadata;
 import org.apache.fluss.server.zk.data.BucketSnapshot;
 import org.apache.fluss.server.zk.data.LakeTableSnapshot;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
+import org.apache.fluss.utils.json.DataTypeJsonSerde;
+import org.apache.fluss.utils.json.JsonSerdeUtils;
 
 import javax.annotation.Nullable;
 
@@ -260,11 +268,85 @@ public class ServerRpcMessageUtils {
         }
     }
 
-    public static List<TableChange> toTableChanges(List<PbAlterConfig> alterConfigs) {
+    public static List<TableChange> toAlterTableConfigChanges(List<PbAlterConfig> alterConfigs) {
         return alterConfigs.stream()
                 .filter(Objects::nonNull)
                 .map(ServerRpcMessageUtils::toTableChange)
                 .collect(Collectors.toList());
+    }
+
+    public static List<TableChange> toAlterTableSchemaChanges(AlterTableRequest request) {
+        List<TableChange> alterTableSchemaChanges = new ArrayList<>();
+        alterTableSchemaChanges.addAll(toAddColumns(request.getAddColumnsList()));
+        alterTableSchemaChanges.addAll(toDropColumns(request.getDropColumnsList()));
+        alterTableSchemaChanges.addAll(toRenameColumns(request.getRenameColumnsList()));
+        alterTableSchemaChanges.addAll(toModifyColumns(request.getModifyColumnsList()));
+        return alterTableSchemaChanges;
+    }
+
+    public static List<TableChange> toAddColumns(List<PbAddColumn> addColumns) {
+        return addColumns.stream()
+                .filter(Objects::nonNull)
+                .map(
+                        pbAddColumn ->
+                                TableChange.addColumn(
+                                        pbAddColumn.getColumnName(),
+                                        JsonSerdeUtils.readValue(
+                                                pbAddColumn.getDataTypeJson(),
+                                                DataTypeJsonSerde.INSTANCE),
+                                        pbAddColumn.hasComment() ? pbAddColumn.getComment() : null,
+                                        toColumnPosition(pbAddColumn.getColumnPositionType())))
+                .collect(Collectors.toList());
+    }
+
+    public static List<TableChange.SchemaChange> toDropColumns(List<PbDropColumn> dropColumns) {
+        return dropColumns.stream()
+                .filter(Objects::nonNull)
+                .map(pbDropColumn -> TableChange.dropColumn(pbDropColumn.getColumnName()))
+                .collect(Collectors.toList());
+    }
+
+    public static List<TableChange.SchemaChange> toRenameColumns(
+            List<PbRenameColumn> alterColumns) {
+        return alterColumns.stream()
+                .filter(Objects::nonNull)
+                .map(
+                        pbRenameColumn ->
+                                TableChange.renameColumn(
+                                        pbRenameColumn.getOldColumnName(),
+                                        pbRenameColumn.getNewColumnName()))
+                .collect(Collectors.toList());
+    }
+
+    public static List<TableChange.SchemaChange> toModifyColumns(
+            List<PbModifyColumn> modifyColumns) {
+        return modifyColumns.stream()
+                .filter(Objects::nonNull)
+                .map(
+                        pbModifyColumn ->
+                                TableChange.modifyColumn(
+                                        pbModifyColumn.getColumnName(),
+                                        JsonSerdeUtils.readValue(
+                                                pbModifyColumn.getDataTypeJson(),
+                                                DataTypeJsonSerde.INSTANCE),
+                                        pbModifyColumn.hasComment()
+                                                ? pbModifyColumn.getComment()
+                                                : null,
+                                        pbModifyColumn.hasColumnPositionType()
+                                                ? toColumnPosition(
+                                                        pbModifyColumn.getColumnPositionType())
+                                                : null))
+                .collect(Collectors.toList());
+    }
+
+    private static @Nullable TableChange.ColumnPosition toColumnPosition(int columnPositionType) {
+        ColumnPositionType opType = ColumnPositionType.from(columnPositionType);
+        switch (opType) {
+            case LAST:
+                return TableChange.ColumnPosition.last();
+            default:
+                throw new IllegalArgumentException("Unsupported column position type " + opType);
+        }
     }
 
     public static MetadataResponse buildMetadataResponse(

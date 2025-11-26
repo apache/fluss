@@ -90,6 +90,7 @@ import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
 
+import static org.apache.fluss.client.utils.ClientRpcMessageUtils.addPbAlterSchemas;
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeCreatePartitionRequest;
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeDropPartitionRequest;
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeListOffsetsRequest;
@@ -249,12 +250,17 @@ public class FlussAdmin implements Admin {
             TablePath tablePath, List<TableChange> tableChanges, boolean ignoreIfNotExists) {
         tablePath.validate();
         AlterTableRequest request = new AlterTableRequest();
-
         List<PbAlterConfig> pbFlussTableChanges =
                 tableChanges.stream()
+                        .filter(tableChange -> !(tableChange instanceof TableChange.SchemaChange))
                         .map(ClientRpcMessageUtils::toPbAlterConfigs)
                         .collect(Collectors.toList());
 
+        List<TableChange> schemaChanges =
+                tableChanges.stream()
+                        .filter(tableChange -> tableChange instanceof TableChange.SchemaChange)
+                        .collect(Collectors.toList());
+        addPbAlterSchemas(request, schemaChanges);
         request.addAllConfigChanges(pbFlussTableChanges)
                 .setIgnoreIfNotExists(ignoreIfNotExists)
                 .setTablePath()

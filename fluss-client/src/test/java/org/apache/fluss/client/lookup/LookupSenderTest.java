@@ -44,6 +44,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -478,7 +479,7 @@ public class LookupSenderTest {
                 prefixLookupHandler;
 
         public ConfigurableTestTabletServerGateway() {
-            super(false);
+            super(false, Collections.emptySet());
         }
 
         public void setLookupHandler(

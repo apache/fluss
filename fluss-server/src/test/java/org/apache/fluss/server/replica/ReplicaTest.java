@@ -21,6 +21,8 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.exception.OutOfOrderSequenceException;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
+import org.apache.fluss.metadata.SchemaGetter;
+import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.ChangeType;
@@ -41,6 +43,7 @@ import org.apache.fluss.server.zk.NOPErrorHandler;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.testutils.DataTestUtils;
 import org.apache.fluss.testutils.common.ManuallyTriggeredScheduledExecutorService;
+import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.types.Tuple2;
 
 import org.junit.jupiter.api.Test;
@@ -70,11 +73,15 @@ import static org.apache.fluss.record.TestData.DATA1_TABLE_ID;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_ID_PK;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH_PK;
+import static org.apache.fluss.record.TestData.DATA2;
+import static org.apache.fluss.record.TestData.DATA2_ROW_TYPE;
+import static org.apache.fluss.record.TestData.DATA2_SCHEMA;
 import static org.apache.fluss.record.TestData.DEFAULT_SCHEMA_ID;
 import static org.apache.fluss.server.coordinator.CoordinatorContext.INITIAL_COORDINATOR_EPOCH;
 import static org.apache.fluss.server.zk.data.LeaderAndIsr.INITIAL_LEADER_EPOCH;
 import static org.apache.fluss.testutils.DataTestUtils.assertLogRecordsEquals;
 import static org.apache.fluss.testutils.DataTestUtils.createBasicMemoryLogRecords;
+import static org.apache.fluss.testutils.DataTestUtils.createRecordsWithoutBaseLogOffset;
 import static org.apache.fluss.testutils.DataTestUtils.genKvRecordBatch;
 import static org.apache.fluss.testutils.DataTestUtils.genKvRecords;
 import static org.apache.fluss.testutils.DataTestUtils.genMemoryLogRecordsByObject;
@@ -87,8 +94,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link Replica}. */
 final class ReplicaTest extends ReplicaTestBase {
-    // TODO add more tests refer to kafka's PartitionTest.
-    // TODO add more tests to cover partition table
+    // TODO addColumn more tests refer to kafka's PartitionTest.
+    // TODO addColumn more tests to cover partition table
 
     @Test
     void testMakeLeader() throws Exception {
@@ -116,6 +123,8 @@ final class ReplicaTest extends ReplicaTestBase {
     void testAppendRecordsToLeader() throws Exception {
         Replica logReplica =
                 makeLogReplica(DATA1_PHYSICAL_TABLE_PATH, new TableBucket(DATA1_TABLE_ID, 1));
+        SchemaGetter schemaGetter = logReplica.getSchemaGetter();
+
         makeLogReplicaAsLeader(logReplica);
 
         MemoryLogRecords mr = genMemoryLogRecordsByObject(DATA1);
@@ -129,9 +138,39 @@ final class ReplicaTest extends ReplicaTestBase {
                                 conf.get(ConfigOptions.CLIENT_SCANNER_LOG_FETCH_MAX_BYTES)
                                         .getBytes());
         fetchParams.setCurrentFetch(
-                DATA1_TABLE_ID, 0, Integer.MAX_VALUE, DATA1_ROW_TYPE, DEFAULT_COMPRESSION, null);
+                DATA1_TABLE_ID, 0, Integer.MAX_VALUE, schemaGetter, DEFAULT_COMPRESSION, null);
         LogReadInfo logReadInfo = logReplica.fetchRecords(fetchParams);
-        assertLogRecordsEquals(DATA1_ROW_TYPE, logReadInfo.getFetchedData().getRecords(), DATA1);
+        assertLogRecordsEquals(
+                DATA1_ROW_TYPE, logReadInfo.getFetchedData().getRecords(), DATA1, schemaGetter);
+
+        // schema evolution.
+        serverMetadataCache.updateLatestSchema(
+                DATA1_TABLE_PATH, new SchemaInfo(DATA2_SCHEMA, (short) 2));
+        mr =
+                createRecordsWithoutBaseLogOffset(
+                        DATA2_ROW_TYPE,
+                        2,
+                        0,
+                        System.currentTimeMillis(),
+                        CURRENT_LOG_MAGIC_VALUE,
+                        DATA2,
+                        LogFormat.ARROW);
+        appendInfo = logReplica.appendRecordsToLeader(mr, 0);
+        assertThat(appendInfo.shallowCount()).isEqualTo(1);
+        fetchParams.setCurrentFetch(
+                DATA1_TABLE_ID,
+                appendInfo.firstOffset(),
+                Integer.MAX_VALUE,
+                schemaGetter,
+                DEFAULT_COMPRESSION,
+                null);
+        logReadInfo = logReplica.fetchRecords(fetchParams);
+        assertLogRecordsEquals(
+                2, DATA2_ROW_TYPE, logReadInfo.getFetchedData().getRecords(), DATA2, schemaGetter);
+
+        // read with old schema id.
+        assertLogRecordsEquals(
+                DATA1_ROW_TYPE, logReadInfo.getFetchedData().getRecords(), DATA2, schemaGetter);
     }
 
     @Test
@@ -222,6 +261,7 @@ final class ReplicaTest extends ReplicaTestBase {
 
         assertThatLogRecords(fetchRecords(kvReplica, 4))
                 .withSchema(DATA1_ROW_TYPE)
+                .withSchemaGetter(kvReplica.getSchemaGetter())
                 .isEqualTo(expected);
     }
 
@@ -229,6 +269,7 @@ final class ReplicaTest extends ReplicaTestBase {
     void testPutRecordsToLeader() throws Exception {
         Replica kvReplica =
                 makeKvReplica(DATA1_PHYSICAL_TABLE_PATH_PK, new TableBucket(DATA1_TABLE_ID_PK, 1));
+        SchemaGetter schemaGetter = kvReplica.getSchemaGetter();
         makeKvReplicaAsLeader(kvReplica);
 
         // two records in a batch with same key, should also generate +I/-U/+U
@@ -290,6 +331,7 @@ final class ReplicaTest extends ReplicaTestBase {
                                 new Object[] {5, "b4"}));
         assertThatLogRecords(fetchRecords(kvReplica, currentOffset))
                 .withSchema(DATA1_ROW_TYPE)
+                .withSchemaGetter(schemaGetter)
                 .isEqualTo(expected);
         currentOffset += 5;
 
@@ -315,6 +357,7 @@ final class ReplicaTest extends ReplicaTestBase {
                                 new Object[] {6, "b4"}));
         assertThatLogRecords(fetchRecords(kvReplica, currentOffset))
                 .withSchema(DATA1_ROW_TYPE)
+                .withSchemaGetter(schemaGetter)
                 .isEqualTo(expected);
         currentOffset += 3;
 
@@ -343,6 +386,35 @@ final class ReplicaTest extends ReplicaTestBase {
                         Arrays.asList(new Object[] {1, "a1"}, new Object[] {1, "aaa"}));
         assertThatLogRecords(fetchRecords(kvReplica, currentOffset))
                 .withSchema(DATA1_ROW_TYPE)
+                .withSchemaGetter(schemaGetter)
+                .isEqualTo(expected);
+
+        // test schema change
+        currentOffset += 2;
+        short newSchemaId = 2;
+        serverMetadataCache.updateLatestSchema(
+                DATA1_TABLE_PATH_PK, new SchemaInfo(DATA2_SCHEMA, newSchemaId));
+        KvRecordTestUtils.KvRecordBatchFactory kvRecordBatchFactory2 =
+                KvRecordTestUtils.KvRecordBatchFactory.of(newSchemaId);
+        KvRecordTestUtils.KvRecordFactory kvRecordFactory2 =
+                KvRecordTestUtils.KvRecordFactory.of(DATA2_ROW_TYPE);
+        kvRecords =
+                kvRecordBatchFactory2.ofRecords(
+                        kvRecordFactory2.ofRecord("k1", null),
+                        kvRecordFactory2.ofRecord("k1", new Object[] {1, "aaaa", "bbb"}));
+        logAppendInfo = putRecordsToLeader(kvReplica, kvRecords);
+        assertThat(logAppendInfo.lastOffset()).isEqualTo(16);
+        expected =
+                logRecords(
+                        (short) 2,
+                        DATA2_ROW_TYPE,
+                        currentOffset,
+                        Arrays.asList(ChangeType.DELETE, ChangeType.INSERT),
+                        Arrays.asList(
+                                new Object[] {1, "aaa", null}, new Object[] {1, "aaaa", "bbb"}));
+        assertThatLogRecords(fetchRecords(kvReplica, currentOffset))
+                .withSchema(DATA2_ROW_TYPE)
+                .withSchemaGetter(schemaGetter)
                 .isEqualTo(expected);
     }
 
@@ -631,6 +703,44 @@ final class ReplicaTest extends ReplicaTestBase {
                                 new Object[] {3, "c"}));
         kvTablet = kvReplica.getKvTablet();
         verifyGetKeyValues(kvTablet, expectedKeyValues);
+
+        // test recover with schema evolution.
+        short newSchemaId = 2;
+        // trigger one snapshot.
+        scheduledExecutorService.removeNonPeriodicScheduledTask();
+        scheduledExecutorService.triggerNonPeriodicScheduledTask();
+        // wait until the snapshot success
+        kvSnapshotStore.waitUntilSnapshotComplete(tableBucket, 1);
+        // write data with old schema
+        putRecordsToLeader(
+                kvReplica,
+                DataTestUtils.genKvRecordBatch(new Object[] {4, "555"}, new Object[] {3, "d"}));
+        // update schema.
+        zkClient.registerSchema(DATA1_TABLE_PATH_PK, DATA2_SCHEMA, newSchemaId);
+        serverMetadataCache.updateLatestSchema(
+                DATA1_TABLE_PATH_PK, new SchemaInfo(DATA2_SCHEMA, newSchemaId));
+        // write data with new schema
+        putRecordsToLeader(
+                kvReplica,
+                DataTestUtils.genKvRecordBatch(
+                        newSchemaId,
+                        DATA2_ROW_TYPE,
+                        new Object[] {5, "555", "666"},
+                        new Object[] {4, "555", "666"}));
+        expectedKeyValues =
+                getKeyValuePairs(genKvRecords(new Object[] {1, "a"}, new Object[] {2, "bbb"}));
+        expectedKeyValues.addAll(
+                getKeyValuePairs(
+                        newSchemaId,
+                        genKvRecords(
+                                DATA2_ROW_TYPE,
+                                new Object[] {3, "d", null},
+                                new Object[] {4, "555", "666"},
+                                new Object[] {5, "555", "666"})));
+        // restore again and apply the schema.
+        makeKvReplicaAsLeader(kvReplica, 4);
+        kvTablet = kvReplica.getKvTablet();
+        verifyGetKeyValues(kvTablet, expectedKeyValues);
     }
 
     private void makeLogReplicaAsLeader(Replica replica) throws Exception {
@@ -696,7 +806,7 @@ final class ReplicaTest extends ReplicaTestBase {
                 replica.getTableBucket().getTableId(),
                 offset,
                 Integer.MAX_VALUE,
-                replica.getRowType(),
+                replica.getSchemaGetter(),
                 DEFAULT_COMPRESSION,
                 null);
         LogReadInfo logReadInfo = replica.fetchRecords(fetchParams);
@@ -705,9 +815,19 @@ final class ReplicaTest extends ReplicaTestBase {
 
     private static MemoryLogRecords logRecords(
             long baseOffset, List<ChangeType> changeTypes, List<Object[]> values) throws Exception {
+        return logRecords(DEFAULT_SCHEMA_ID, DATA1_ROW_TYPE, baseOffset, changeTypes, values);
+    }
+
+    private static MemoryLogRecords logRecords(
+            short schemaId,
+            RowType rowType,
+            long baseOffset,
+            List<ChangeType> changeTypes,
+            List<Object[]> values)
+            throws Exception {
         return createBasicMemoryLogRecords(
-                DATA1_ROW_TYPE,
-                DEFAULT_SCHEMA_ID,
+                rowType,
+                schemaId,
                 baseOffset,
                 -1L,
                 CURRENT_LOG_MAGIC_VALUE,

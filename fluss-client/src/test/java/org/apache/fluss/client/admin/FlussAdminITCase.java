@@ -228,7 +228,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
     }
 
     @Test
-    void testAlterTable() throws Exception {
+    void testAlterTableConfig() throws Exception {
         // create table
         TablePath tablePath = TablePath.of("test_db", "alter_table_1");
         admin.createTable(tablePath, DEFAULT_TABLE_DESCRIPTOR, false).get();
@@ -300,6 +300,90 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                         tableChanges,
                         true)
                 .get();
+    }
+
+    @Test
+    void testAlterTableColumn() throws Exception {
+        // create table
+        TablePath tablePath = TablePath.of("test_db", "alter_table_1");
+        admin.createTable(tablePath, DEFAULT_TABLE_DESCRIPTOR, false).get();
+
+        assertThatThrownBy(
+                        () ->
+                                admin.alterTable(
+                                                tablePath,
+                                                Collections.singletonList(
+                                                        TableChange.dropColumn("id")),
+                                                false)
+                                        .get())
+                .hasMessageContaining("Not support drop column now.");
+        assertThatThrownBy(
+                        () ->
+                                admin.alterTable(
+                                                tablePath,
+                                                Collections.singletonList(
+                                                        TableChange.renameColumn("id", "id2")),
+                                                false)
+                                        .get())
+                .hasMessageContaining("Not support rename column now.");
+        assertThatThrownBy(
+                        () ->
+                                admin.alterTable(
+                                                tablePath,
+                                                Collections.singletonList(
+                                                        TableChange.modifyColumn(
+                                                                "id",
+                                                                DataTypes.INT(),
+                                                                "person id",
+                                                                null)),
+                                                false)
+                                        .get())
+                .hasMessageContaining("Not support modify column now.");
+
+        assertThatThrownBy(
+                        () ->
+                                admin.alterTable(
+                                                tablePath,
+                                                Collections.singletonList(
+                                                        TableChange.addColumn(
+                                                                "c1",
+                                                                DataTypes.STRING().copy(false),
+                                                                null,
+                                                                TableChange.ColumnPosition.last())),
+                                                false)
+                                        .get())
+                .hasMessageContaining("Column c1 must be nullable");
+
+        admin.alterTable(
+                        tablePath,
+                        Collections.singletonList(
+                                TableChange.addColumn(
+                                        "c1",
+                                        DataTypes.STRING(),
+                                        null,
+                                        TableChange.ColumnPosition.last())),
+                        false)
+                .get();
+
+        Schema expectedSchema =
+                Schema.newBuilder()
+                        .primaryKey("id")
+                        .fromColumns(
+                                Arrays.asList(
+                                        new Schema.Column(
+                                                "id", DataTypes.INT(), "person id", (short) 0),
+                                        new Schema.Column(
+                                                "name",
+                                                DataTypes.STRING(),
+                                                "person name",
+                                                (short) 1),
+                                        new Schema.Column(
+                                                "age", DataTypes.INT(), "person age", (short) 2),
+                                        new Schema.Column(
+                                                "c1", DataTypes.STRING(), null, (short) 3)))
+                        .build();
+        SchemaInfo schemaInfo = admin.getTableSchema(tablePath).get();
+        assertThat(schemaInfo).isEqualTo(new SchemaInfo(expectedSchema, 2));
     }
 
     @Test

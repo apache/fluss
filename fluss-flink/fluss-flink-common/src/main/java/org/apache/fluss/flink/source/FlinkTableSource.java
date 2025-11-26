@@ -325,7 +325,6 @@ public class FlinkTableSource
                         hasPrimaryKey(),
                         isPartitioned(),
                         flussRowType,
-                        projectedFields,
                         offsetsInitializer,
                         scanPartitionDiscoveryIntervalMs,
                         new RowDataDeserializationSchema(),

@@ -77,7 +77,7 @@ public class AdjustIsrManager {
 
     public CompletableFuture<LeaderAndIsr> submit(
             TableBucket tableBucket, LeaderAndIsr leaderAndIsr) {
-        // TODO add coordinatorEpoch.
+        // TODOadd coordinatorEpoch.
         CompletableFuture<LeaderAndIsr> future = new CompletableFuture<>();
         AdjustIsrItem adjustIsrItem = new AdjustIsrItem(tableBucket, leaderAndIsr, future);
         boolean enqueued = unsentAdjustIsrMap.putIfAbsent(tableBucket, adjustIsrItem) == null;

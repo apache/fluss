@@ -98,17 +98,17 @@ public final class RowType extends DataType {
         return -1;
     }
 
-    public RowType project(int[] projectFields) {
+    public RowType project(int[] projectFieldPositions) {
         List<DataField> projectedFields = new ArrayList<>();
-        for (int projectField : projectFields) {
+        for (int projectField : projectFieldPositions) {
             projectedFields.add(this.fields.get(projectField));
         }
         return new RowType(this.isNullable(), projectedFields);
     }
 
-    public RowType project(List<String> projectFields) {
+    public RowType project(List<String> projectFieldNames) {
         List<DataField> projectedFields = new ArrayList<>();
-        for (String projectField : projectFields) {
+        for (String projectField : projectFieldNames) {
             int index = getFieldIndex(projectField);
             if (index == -1) {
                 throw new IllegalArgumentException(

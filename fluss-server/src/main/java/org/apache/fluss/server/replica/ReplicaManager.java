@@ -21,6 +21,7 @@ import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.FencedLeaderEpochException;
+import org.apache.fluss.exception.InvalidColumnProjectionException;
 import org.apache.fluss.exception.InvalidCoordinatorException;
 import org.apache.fluss.exception.InvalidRequiredAcksException;
 import org.apache.fluss.exception.LogOffsetOutOfRangeException;
@@ -29,6 +30,7 @@ import org.apache.fluss.exception.NotLeaderOrFollowerException;
 import org.apache.fluss.exception.StorageException;
 import org.apache.fluss.exception.UnknownTableOrBucketException;
 import org.apache.fluss.fs.FsPath;
+import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
@@ -839,7 +841,7 @@ public class ReplicaManager {
      *      2. Stop fetchers for these replicas so that no more data can be added by the replica fetcher threads.
      *      3. Truncate the log and checkpoint offsets for these replicas.
      *      4. Clear the delayed produce in the purgatory.
-     *      5. If the server is not shutting down, add the fetcher to the new leaders.
+     *      5. If the server is not shutting down,add the fetcher to the new leaders.
      * </pre>
      */
     private void makeFollowers(
@@ -1066,12 +1068,20 @@ public class ReplicaManager {
                         "Fetching log record for replica {}, offset {}",
                         tb,
                         fetchReqInfo.getFetchOffset());
-                replica.checkProjection(fetchReqInfo.getProjectFields());
+                // todo: change here to modified project fields.
+                if (fetchReqInfo.getProjectFields() != null
+                        && replica.getLogFormat() != LogFormat.ARROW) {
+                    throw new InvalidColumnProjectionException(
+                            String.format(
+                                    "Column projection is only supported for ARROW format, but the table %s is %s format.",
+                                    replica.getTablePath(), replica.getLogFormat()));
+                }
+
                 fetchParams.setCurrentFetch(
                         tb.getTableId(),
                         fetchOffset,
                         adjustedMaxBytes,
-                        replica.getRowType(),
+                        replica.getSchemaGetter(),
                         replica.getArrowCompressionInfo(),
                         fetchReqInfo.getProjectFields());
                 LogReadInfo readInfo = replica.fetchRecords(fetchParams);
@@ -1522,6 +1532,7 @@ public class ReplicaManager {
                 PhysicalTablePath physicalTablePath = data.getPhysicalTablePath();
                 TablePath tablePath = physicalTablePath.getTablePath();
                 TableInfo tableInfo = getTableInfo(zkClient, tablePath);
+
                 boolean isKvTable = tableInfo.hasPrimaryKey();
                 BucketMetricGroup bucketMetricGroup =
                         serverMetricGroup.addTableBucketMetricGroup(

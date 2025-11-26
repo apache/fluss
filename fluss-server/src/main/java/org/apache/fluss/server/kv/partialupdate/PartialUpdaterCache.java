@@ -42,13 +42,13 @@ public class PartialUpdaterCache {
 
     // TODO: extend to tableId and schemaId when the cache is shared across all tables
     public PartialUpdater getOrCreatePartialUpdater(
-            KvFormat kvFormat, Schema schema, int[] targetColumns) {
+            KvFormat kvFormat, short schemaId, Schema schema, int[] targetColumns) {
         return rowPartialUpdaters.get(
-                getPartialUpdaterKey(targetColumns),
+                getPartialUpdaterKey(targetColumns, schemaId),
                 k -> new PartialUpdater(kvFormat, schema, targetColumns));
     }
 
-    private String getPartialUpdaterKey(int[] targetColumns) {
-        return Arrays.toString(targetColumns);
+    private String getPartialUpdaterKey(int[] targetColumns, int schemaId) {
+        return schemaId + "_" + Arrays.toString(targetColumns);
     }
 }

@@ -148,7 +148,7 @@ public class CompletedSnapshotStoreManager {
                                     () -> getAllSnapshotSize(bucket));
                         } else {
                             LOG.warn(
-                                    "Failed to add bucketMetricGroup for tableBucket {} when creating completed snapshot.",
+                                    "Failed toadd bucketMetricGroup for tableBucket {} when creating completed snapshot.",
                                     bucket);
                         }
                         return snapshotStore;

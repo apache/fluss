@@ -22,13 +22,14 @@ import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.client.table.getter.PartitionGetter;
 import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.metadata.DataLakeFormat;
+import org.apache.fluss.metadata.Schema;
+import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.row.InternalRow;
-import org.apache.fluss.row.decode.RowDecoder;
+import org.apache.fluss.row.ProjectedRow;
 import org.apache.fluss.row.encode.KeyEncoder;
 import org.apache.fluss.row.encode.ValueDecoder;
-import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.RowType;
 
 import javax.annotation.Nullable;
@@ -70,8 +71,11 @@ class PrefixKeyLookuper implements Lookuper {
     /** Decode the lookup bytes to result row. */
     private final ValueDecoder kvValueDecoder;
 
+    private final SchemaGetter schemaGetter;
+
     public PrefixKeyLookuper(
             TableInfo tableInfo,
+            SchemaGetter schemaGetter,
             MetadataUpdater metadataUpdater,
             LookupClient lookupClient,
             List<String> lookupColumnNames) {
@@ -93,10 +97,8 @@ class PrefixKeyLookuper implements Lookuper {
                         ? new PartitionGetter(lookupRowType, tableInfo.getPartitionKeys())
                         : null;
         this.kvValueDecoder =
-                new ValueDecoder(
-                        RowDecoder.create(
-                                tableInfo.getTableConfig().getKvFormat(),
-                                tableInfo.getRowType().getChildren().toArray(new DataType[0])));
+                new ValueDecoder(schemaGetter, tableInfo.getTableConfig().getKvFormat());
+        this.schemaGetter = schemaGetter;
     }
 
     private void validatePrefixLookup(TableInfo tableInfo, List<String> lookupColumns) {
@@ -167,18 +169,35 @@ class PrefixKeyLookuper implements Lookuper {
         }
 
         TableBucket tableBucket = new TableBucket(tableInfo.getTableId(), partitionId, bucketId);
-        return lookupClient
-                .prefixLookup(tableBucket, bucketKeyBytes)
-                .thenApply(
-                        result -> {
-                            List<InternalRow> rowList = new ArrayList<>(result.size());
-                            for (byte[] valueBytes : result) {
-                                if (valueBytes == null) {
-                                    continue;
-                                }
-                                rowList.add(kvValueDecoder.decodeValue(valueBytes).row);
+        CompletableFuture<LookupResult> future = new CompletableFuture<>();
+
+        CompletableFuture.runAsync(
+                () -> {
+                    try {
+                        List<byte[]> result =
+                                lookupClient.prefixLookup(tableBucket, bucketKeyBytes).get();
+                        List<InternalRow> rowList = new ArrayList<>(result.size());
+                        for (byte[] valueBytes : result) {
+                            if (valueBytes == null) {
+                                continue;
                             }
-                            return new LookupResult(rowList);
-                        });
+                            ValueDecoder.Value value = kvValueDecoder.decodeValue(valueBytes);
+                            InternalRow row;
+                            if (value.schemaId == tableInfo.getSchemaId()) {
+                                row = value.row;
+                            } else {
+                                Schema schema = schemaGetter.getSchema(value.schemaId);
+                                row =
+                                        ProjectedRow.from(schema, tableInfo.getSchema())
+                                                .replaceRow(value.row);
+                            }
+                            rowList.add(row);
+                        }
+                        future.complete(new LookupResult(rowList));
+                    } catch (Exception e) {
+                        future.complete(new LookupResult(Collections.emptyList()));
+                    }
+                });
+        return future;
     }
 }

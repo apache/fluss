@@ -20,6 +20,8 @@ package org.apache.fluss.server.kv.rowmerger;
 import org.apache.fluss.metadata.DeleteBehavior;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.row.BinaryRow;
+import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.row.ProjectedRow;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
 import org.apache.fluss.types.DataType;
@@ -123,18 +125,16 @@ class VersionedRowMergerTest {
     @ParameterizedTest
     @MethodSource("parameters")
     void testAllTypes(DataType type, List<TestSpec> testSpecs) {
-        RowType schema =
-                Schema.newBuilder()
-                        .column("a", type)
-                        .column("b", DataTypes.STRING())
-                        .build()
-                        .getRowType();
-        VersionedRowMerger merger = new VersionedRowMerger(schema, "a", DeleteBehavior.DISABLE);
+        Schema schema =
+                Schema.newBuilder().column("a", type).column("b", DataTypes.STRING()).build();
+        RowType rowType = schema.getRowType();
+        VersionedRowMerger merger = new VersionedRowMerger("a", DeleteBehavior.DISABLE);
+        merger.configureTargetColumns(null, (short) 1, schema);
 
         for (TestSpec testSpec : testSpecs) {
-            BinaryRow oldRow = compactedRow(schema, new Object[] {testSpec.oldValue, "dummy"});
-            BinaryRow newRow = compactedRow(schema, new Object[] {testSpec.newValue, "dummy"});
-            BinaryRow mergedRow = merger.merge(oldRow, newRow);
+            BinaryRow oldRow = compactedRow(rowType, new Object[] {testSpec.oldValue, "dummy"});
+            BinaryRow newRow = compactedRow(rowType, new Object[] {testSpec.newValue, "dummy"});
+            InternalRow mergedRow = merger.merge(oldRow, newRow);
             if (testSpec.expected.equals("old")) {
                 assertThat(mergedRow).isSameAs(oldRow);
             } else if (testSpec.expected.equals("new")) {
@@ -147,16 +147,49 @@ class VersionedRowMergerTest {
 
     @Test
     void testNormal() {
-        RowType schema =
+        Schema schema =
                 Schema.newBuilder()
                         .column("a", DataTypes.INT())
                         .column("b", DataTypes.STRING())
-                        .build()
-                        .getRowType();
-        VersionedRowMerger merger = new VersionedRowMerger(schema, "a", DeleteBehavior.DISABLE);
+                        .build();
+        VersionedRowMerger merger = new VersionedRowMerger("a", DeleteBehavior.DISABLE);
+        merger.configureTargetColumns(null, (short) 1, schema);
 
         assertThat(merger.deleteBehavior()).isEqualTo(DeleteBehavior.DISABLE);
-        assertThat(merger.configureTargetColumns(null)).isSameAs(merger);
+        assertThat(merger.configureTargetColumns(null, (short) 1, schema)).isSameAs(merger);
+    }
+
+    @Test
+    void testSchemaChange() {
+        Schema schema =
+                Schema.newBuilder()
+                        .column("a", DataTypes.INT())
+                        .column("b", DataTypes.STRING())
+                        .build();
+        RowType rowType = schema.getRowType();
+        VersionedRowMerger merger = new VersionedRowMerger("a", DeleteBehavior.DISABLE);
+        merger.configureTargetColumns(null, (short) 1, schema);
+        InternalRow oldRow = compactedRow(rowType, new Object[] {11, "dummy"});
+        BinaryRow newRow = compactedRow(rowType, new Object[] {2, "dummy"});
+        assertThat(merger.merge(oldRow, newRow)).isSameAs(oldRow);
+
+        Schema schema2 =
+                Schema.newBuilder()
+                        .fromColumns(
+                                Arrays.asList(
+                                        new Schema.Column("c", DataTypes.STRING(), null, (short) 2),
+                                        new Schema.Column("a", DataTypes.INT(), null, (short) 0),
+                                        new Schema.Column(
+                                                "b", DataTypes.STRING(), null, (short) 1)))
+                        .build();
+        rowType = schema2.getRowType();
+        merger.configureTargetColumns(null, (short) 2, schema2);
+
+        oldRow = ProjectedRow.from(schema, schema2).replaceRow(oldRow);
+        newRow = compactedRow(rowType, new Object[] {"a", 2, "dummy"});
+        assertThat(merger.merge(oldRow, newRow)).isSameAs(oldRow);
+        newRow = compactedRow(rowType, new Object[] {"b", 20, "dummy"});
+        assertThat(merger.merge(oldRow, newRow)).isSameAs(newRow);
     }
 
     private static TimestampNtz timestampNtz(String timestamp) {

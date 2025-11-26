@@ -21,12 +21,15 @@ import org.apache.fluss.annotation.PublicEvolving;
 import org.apache.fluss.client.FlussConnection;
 import org.apache.fluss.client.lookup.Lookup;
 import org.apache.fluss.client.lookup.TableLookup;
+import org.apache.fluss.client.metadata.ClientSchemaGetter;
 import org.apache.fluss.client.table.scanner.Scan;
 import org.apache.fluss.client.table.scanner.TableScan;
 import org.apache.fluss.client.table.writer.Append;
 import org.apache.fluss.client.table.writer.TableAppend;
 import org.apache.fluss.client.table.writer.TableUpsert;
 import org.apache.fluss.client.table.writer.Upsert;
+import org.apache.fluss.metadata.SchemaGetter;
+import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 
@@ -44,12 +47,18 @@ public class FlussTable implements Table {
     private final TablePath tablePath;
     private final TableInfo tableInfo;
     private final boolean hasPrimaryKey;
+    private final SchemaGetter schemaGetter;
 
     public FlussTable(FlussConnection conn, TablePath tablePath, TableInfo tableInfo) {
         this.conn = conn;
         this.tablePath = tablePath;
         this.tableInfo = tableInfo;
         this.hasPrimaryKey = tableInfo.hasPrimaryKey();
+        this.schemaGetter =
+                new ClientSchemaGetter(
+                        tableInfo.getTablePath(),
+                        new SchemaInfo(tableInfo.getSchema(), tableInfo.getSchemaId()),
+                        conn.getAdmin());
     }
 
     @Override
@@ -59,13 +68,13 @@ public class FlussTable implements Table {
 
     @Override
     public Scan newScan() {
-        return new TableScan(conn, tableInfo);
+        return new TableScan(conn, tableInfo, schemaGetter);
     }
 
     @Override
     public Lookup newLookup() {
         return new TableLookup(
-                tableInfo, conn.getMetadataUpdater(), conn.getOrCreateLookupClient());
+                tableInfo, schemaGetter, conn.getMetadataUpdater(), conn.getOrCreateLookupClient());
     }
 
     @Override
@@ -89,5 +98,6 @@ public class FlussTable implements Table {
     @Override
     public void close() throws Exception {
         // do nothing
+        schemaGetter.release();
     }
 }

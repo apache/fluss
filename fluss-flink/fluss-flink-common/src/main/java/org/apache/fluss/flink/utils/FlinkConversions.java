@@ -58,12 +58,14 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.stream.Collectors;
 
 import static org.apache.flink.table.factories.FactoryUtil.CONNECTOR;
 import static org.apache.flink.table.utils.EncodingUtils.decodeBase64ToBytes;
 import static org.apache.flink.table.utils.EncodingUtils.encodeBytesToBase64;
 import static org.apache.flink.util.Preconditions.checkNotNull;
+import static org.apache.flink.util.Preconditions.checkState;
 import static org.apache.fluss.config.FlussConfigUtils.isTableStorageConfig;
 import static org.apache.fluss.flink.FlinkConnectorOptions.BUCKET_KEY;
 import static org.apache.fluss.flink.FlinkConnectorOptions.BUCKET_NUMBER;
@@ -83,6 +85,18 @@ import static org.apache.fluss.utils.PropertiesUtils.excludeByPrefix;
 public class FlinkConversions {
 
     private FlinkConversions() {}
+
+    public static int[] toFlinkRowTypeIndexMapping(
+            RowType sourceFlussRowType,
+            org.apache.flink.table.types.logical.RowType targetFlinkRowType) {
+        int[] indexMapping = new int[targetFlinkRowType.getFieldCount()];
+        for (int i = 0; i < targetFlinkRowType.getFieldCount(); i++) {
+            String fieldName = targetFlinkRowType.getFieldNames().get(i);
+            int index = sourceFlussRowType.getFieldIndex(fieldName);
+            indexMapping[i] = index;
+        }
+        return indexMapping;
+    }
 
     /** Convert Fluss's type to Flink's type. */
     @VisibleForTesting
@@ -394,6 +408,44 @@ public class FlinkConversions {
             return Collections.singletonList(
                     convertSetOption(
                             (org.apache.flink.table.catalog.TableChange.SetOption) tableChange));
+        } else if (tableChange instanceof org.apache.flink.table.catalog.TableChange.AddColumn) {
+            org.apache.flink.table.catalog.TableChange.AddColumn addColumn =
+                    (org.apache.flink.table.catalog.TableChange.AddColumn) tableChange;
+            Column column = addColumn.getColumn();
+            return Collections.singletonList(
+                    TableChange.addColumn(
+                            column.getName(),
+                            toFlussType(column.getDataType()),
+                            column.getComment().orElse(null),
+                            toFlussColumnPosition(addColumn.getPosition())));
+        } else if (tableChange instanceof org.apache.flink.table.catalog.TableChange.DropColumn) {
+            return Collections.singletonList(
+                    TableChange.dropColumn(
+                            ((org.apache.flink.table.catalog.TableChange.DropColumn) tableChange)
+                                    .getColumnName()));
+        } else if (tableChange
+                instanceof org.apache.flink.table.catalog.TableChange.ModifyColumnName) {
+            org.apache.flink.table.catalog.TableChange.ModifyColumnName renameColumn =
+                    (org.apache.flink.table.catalog.TableChange.ModifyColumnName) tableChange;
+            return Collections.singletonList(
+                    TableChange.renameColumn(
+                            renameColumn.getOldColumn().getName(),
+                            renameColumn.getNewColumnName()));
+        } else if (tableChange instanceof org.apache.flink.table.catalog.TableChange.ModifyColumn) {
+            org.apache.flink.table.catalog.TableChange.ModifyColumn modifyColumn =
+                    (org.apache.flink.table.catalog.TableChange.ModifyColumn) tableChange;
+            checkState(
+                    Objects.equals(
+                            modifyColumn.getNewColumn().getName(),
+                            modifyColumn.getOldColumn().getName()),
+                    "Can only modify columns with the same name.");
+            Column newColumn = modifyColumn.getNewColumn();
+            return Collections.singletonList(
+                    TableChange.modifyColumn(
+                            newColumn.getName(),
+                            toFlussType(newColumn.getDataType()),
+                            newColumn.getComment().orElse(null),
+                            toFlussColumnPosition(modifyColumn.getNewPosition())));
         } else if (tableChange instanceof org.apache.flink.table.catalog.TableChange.ResetOption) {
             return Collections.singletonList(
                     convertResetOption(
@@ -405,6 +457,21 @@ public class FlinkConversions {
         } else {
             throw new UnsupportedOperationException(
                     String.format("Unsupported flink table change: %s.", tableChange));
+        }
+    }
+
+    private static TableChange.ColumnPosition toFlussColumnPosition(
+            org.apache.flink.table.catalog.TableChange.ColumnPosition columnPosition) {
+        if (columnPosition == null) {
+            return TableChange.ColumnPosition.last();
+        } else if (columnPosition instanceof org.apache.flink.table.catalog.TableChange.First) {
+            return TableChange.ColumnPosition.first();
+        } else if (columnPosition instanceof org.apache.flink.table.catalog.TableChange.After) {
+            return TableChange.ColumnPosition.after(
+                    ((org.apache.flink.table.catalog.TableChange.After) columnPosition).column());
+        } else {
+            throw new UnsupportedOperationException(
+                    String.format("Unsupported column position: %s.", columnPosition));
         }
     }
 

@@ -25,6 +25,7 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.MemorySize;
 import org.apache.fluss.fs.local.LocalFileSystem;
 import org.apache.fluss.metadata.PhysicalTablePath;
+import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.metrics.registry.MetricRegistry;
@@ -50,6 +51,7 @@ import org.apache.fluss.server.coordinator.MetadataManager;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshotHandle;
+import org.apache.fluss.server.metadata.SchemaMetadataManager;
 import org.apache.fluss.server.metadata.ServerInfo;
 import org.apache.fluss.server.metadata.TabletServerMetadataCache;
 import org.apache.fluss.server.replica.Replica;
@@ -64,6 +66,7 @@ import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
 import org.apache.fluss.server.zk.data.RemoteLogManifestHandle;
 import org.apache.fluss.server.zk.data.TableAssignment;
+import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.clock.Clock;
 import org.apache.fluss.utils.clock.SystemClock;
@@ -283,7 +286,7 @@ public final class FlussClusterExtension
     }
 
     private void startTabletServers() throws Exception {
-        // add tablet server to make generate assignment for table possible
+        // addColumn tablet server to make generate assignment for table possible
         for (int i = 0; i < initialNumOfTabletServers; i++) {
             startTabletServer(i);
         }
@@ -657,6 +660,32 @@ public final class FlussClusterExtension
                     ReplicaManager replicaManager = getTabletServerById(leader).getReplicaManager();
                     assertThat(replicaManager.getReplicaOrException(tableBucket).isLeader())
                             .isTrue();
+                });
+    }
+
+    public void waitAllSchemaSync(TablePath tablePath, int schemaId) {
+        ZooKeeperClient zkClient = getZooKeeperClient();
+        retry(
+                Duration.ofMinutes(1),
+                () -> {
+                    TableRegistration tableRegistration = zkClient.getTable(tablePath).get();
+                    int bucketCount = tableRegistration.bucketCount;
+                    for (int bucketId = 0; bucketId < bucketCount; bucketId++) {
+                        TableBucket tableBucket =
+                                new TableBucket(tableRegistration.tableId, bucketId);
+                        Optional<LeaderAndIsr> leaderAndIsrOpt =
+                                zkClient.getLeaderAndIsr(tableBucket);
+                        assertThat(leaderAndIsrOpt).isPresent();
+                        int leader = leaderAndIsrOpt.get().leader();
+                        TabletServer tabletServer = getTabletServerById(leader);
+                        SchemaMetadataManager schemaMetadataManager =
+                                tabletServer.getMetadataCache().getSchemaMetadataManager();
+                        Map<TablePath, SchemaInfo> latestSchemaByTablePath =
+                                schemaMetadataManager.getLatestSchemaByTablePath();
+                        assertThat(latestSchemaByTablePath).containsKey(tablePath);
+                        assertThat(latestSchemaByTablePath.get(tablePath).getSchemaId())
+                                .isEqualTo(schemaId);
+                    }
                 });
     }
 

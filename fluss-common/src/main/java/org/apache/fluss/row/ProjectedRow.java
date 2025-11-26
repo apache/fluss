@@ -18,8 +18,11 @@
 package org.apache.fluss.row;
 
 import org.apache.fluss.annotation.PublicEvolving;
+import org.apache.fluss.metadata.Schema;
 
 import java.util.Arrays;
+
+import static org.apache.fluss.utils.SchemaUtil.getIndexMapping;
 
 /**
  * An implementation of {@link InternalRow} which provides a projected view of the underlying {@link
@@ -31,12 +34,13 @@ import java.util.Arrays;
  */
 @PublicEvolving
 public class ProjectedRow implements InternalRow {
+    public static final int UNEXIST_MAPPING = -1;
 
-    private final int[] indexMapping;
+    protected final int[] indexMapping;
 
-    private InternalRow row;
+    protected InternalRow row;
 
-    private ProjectedRow(int[] indexMapping) {
+    protected ProjectedRow(int[] indexMapping) {
         this.indexMapping = indexMapping;
     }
 
@@ -60,6 +64,9 @@ public class ProjectedRow implements InternalRow {
 
     @Override
     public boolean isNullAt(int pos) {
+        if (indexMapping[pos] == UNEXIST_MAPPING) {
+            return true;
+        }
         return row.isNullAt(indexMapping[pos]);
     }
 
@@ -143,6 +150,12 @@ public class ProjectedRow implements InternalRow {
 
     @Override
     public boolean equals(Object o) {
+        // only can compare when the index mapping and row are equal.
+        if (o instanceof ProjectedRow
+                && Arrays.equals(indexMapping, ((ProjectedRow) o).indexMapping)
+                && row.equals(((ProjectedRow) o).row)) {
+            return true;
+        }
         throw new UnsupportedOperationException("Projected row data cannot be compared");
     }
 
@@ -167,5 +180,10 @@ public class ProjectedRow implements InternalRow {
      */
     public static ProjectedRow from(int[] projection) {
         return new ProjectedRow(projection);
+    }
+
+    public static ProjectedRow from(Schema originSchema, Schema expectedSchema) {
+        int[] indexMapping = getIndexMapping(originSchema, expectedSchema);
+        return new ProjectedRow(indexMapping);
     }
 }

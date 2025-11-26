@@ -29,16 +29,19 @@ import org.apache.fluss.server.coordinator.event.CreateTableEvent;
 import org.apache.fluss.server.coordinator.event.DropPartitionEvent;
 import org.apache.fluss.server.coordinator.event.DropTableEvent;
 import org.apache.fluss.server.coordinator.event.EventManager;
+import org.apache.fluss.server.coordinator.event.SchemaChangeEvent;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
 import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.server.zk.data.ZkData.DatabasesZNode;
 import org.apache.fluss.server.zk.data.ZkData.PartitionZNode;
+import org.apache.fluss.server.zk.data.ZkData.SchemaZNode;
 import org.apache.fluss.server.zk.data.ZkData.TableZNode;
 import org.apache.fluss.shaded.curator5.org.apache.curator.framework.recipes.cache.ChildData;
 import org.apache.fluss.shaded.curator5.org.apache.curator.framework.recipes.cache.CuratorCache;
 import org.apache.fluss.shaded.curator5.org.apache.curator.framework.recipes.cache.CuratorCacheListener;
+import org.apache.fluss.utils.types.Tuple2;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -102,6 +105,14 @@ public class TableChangeWatcher {
                                         physicalTablePath.getTablePath(),
                                         physicalTablePath.getPartitionName(),
                                         newData);
+                                break;
+                            }
+
+                            Tuple2<TablePath, Integer> tablePathIntegerTuple2 =
+                                    SchemaZNode.parsePath(newData.getPath());
+                            if (tablePathIntegerTuple2 != null) {
+                                processSchemaChange(
+                                        tablePathIntegerTuple2.f0, tablePathIntegerTuple2.f1);
                             }
                         }
                         break;
@@ -229,6 +240,33 @@ public class TableChangeWatcher {
             eventManager.put(
                     new CreatePartitionEvent(
                             tablePath, tableId, partitionId, partitionName, partitionAssignment));
+        }
+    }
+
+    private void processSchemaChange(TablePath tablePath, int schemaId) {
+
+        try {
+            int currentSchemaId = zooKeeperClient.getCurrentSchemaId(tablePath);
+            SchemaInfo schemaInfo;
+            if (schemaId != currentSchemaId) {
+                LOG.warn(
+                        "Schema id {} is not equal to current schema id {}. Skipping schema change processing.",
+                        schemaId,
+                        currentSchemaId);
+                return;
+            }
+
+            Optional<SchemaInfo> optSchema = zooKeeperClient.getSchemaById(tablePath, schemaId);
+            if (!optSchema.isPresent()) {
+                LOG.error("No schema for table {} in zookeeper.", tablePath);
+                return;
+            } else {
+                schemaInfo = optSchema.get();
+            }
+
+            eventManager.put(new SchemaChangeEvent(tablePath, schemaInfo));
+        } catch (Exception e) {
+            LOG.error("Fail to get current schema id for table {}.", tablePath, e);
         }
     }
 }

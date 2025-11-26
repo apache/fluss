@@ -74,7 +74,9 @@ public class TestingMetadataUpdater extends MetadataUpdater {
         } else {
             tabletServerGatewayMap = new HashMap<>();
             for (ServerNode tabletServer : tabletServers) {
-                tabletServerGatewayMap.put(tabletServer.id(), new TestTabletServerGateway(false));
+                tabletServerGatewayMap.put(
+                        tabletServer.id(),
+                        new TestTabletServerGateway(false, Collections.emptySet()));
             }
         }
     }

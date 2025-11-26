@@ -62,10 +62,17 @@ public interface FlussSerializationSchema<T> extends Serializable {
     @PublicEvolving
     interface InitializationContext {
         /**
-         * Returns the target row schema.
+         * Returns the Fluss physical row schema.
          *
          * @return The schema of the target row.
          */
         RowType getRowSchema();
+
+        /**
+         * Returns the Flink table row schema.
+         *
+         * @return The schema of the Flink table row.
+         */
+        org.apache.flink.table.types.logical.RowType getTableRowType();
     }
 }

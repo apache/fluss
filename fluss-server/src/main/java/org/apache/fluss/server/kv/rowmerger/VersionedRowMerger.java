@@ -19,7 +19,8 @@ package org.apache.fluss.server.kv.rowmerger;
 
 import org.apache.fluss.metadata.DeleteBehavior;
 import org.apache.fluss.metadata.MergeEngineType;
-import org.apache.fluss.row.BinaryRow;
+import org.apache.fluss.metadata.Schema;
+import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
 import org.apache.fluss.types.DataType;
@@ -45,31 +46,32 @@ public class VersionedRowMerger implements RowMerger {
     private static final TimestampLtz MIN_TIMESTAMP_LTZ =
             TimestampLtz.fromEpochMillis(Long.MIN_VALUE, 0);
 
-    private final Comparator<BinaryRow> versionComparator;
-
+    private final String versionColumnName;
     private final DeleteBehavior deleteBehavior;
 
-    public VersionedRowMerger(
-            RowType schema, String versionColumnName, @Nullable DeleteBehavior deleteBehavior) {
-        this.versionComparator = createVersionComparator(schema, versionColumnName);
+    private int schemaId;
+    private Comparator<InternalRow> versionComparator;
+
+    public VersionedRowMerger(String versionColumnName, @Nullable DeleteBehavior deleteBehavior) {
         if (deleteBehavior == DeleteBehavior.ALLOW) {
             throw new IllegalArgumentException(
                     "DELETE is not supported for the versioned merge engine.");
         }
         // for compatibility, default to IGNORE if not specified
         this.deleteBehavior = deleteBehavior != null ? deleteBehavior : DeleteBehavior.IGNORE;
+        this.versionColumnName = versionColumnName;
     }
 
     @Nullable
     @Override
-    public BinaryRow merge(BinaryRow oldRow, BinaryRow newRow) {
+    public InternalRow merge(InternalRow oldRow, InternalRow newRow) {
         // return newRow if newRow's version is larger or equal than oldRow's version
         return versionComparator.compare(oldRow, newRow) <= 0 ? newRow : oldRow;
     }
 
     @Nullable
     @Override
-    public BinaryRow delete(BinaryRow oldRow) {
+    public InternalRow delete(InternalRow oldRow) {
         throw new UnsupportedOperationException(
                 "DELETE is not supported for the versioned merge engine.");
     }
@@ -80,8 +82,14 @@ public class VersionedRowMerger implements RowMerger {
     }
 
     @Override
-    public RowMerger configureTargetColumns(@Nullable int[] targetColumns) {
+    public RowMerger configureTargetColumns(
+            @Nullable int[] targetColumns, short schemaId, Schema schema) {
         if (targetColumns == null) {
+            if (schemaId != this.schemaId) {
+                this.schemaId = schemaId;
+                this.versionComparator =
+                        createVersionComparator(schema.getRowType(), versionColumnName);
+            }
             return this;
         } else {
             throw new UnsupportedOperationException(
@@ -90,7 +98,7 @@ public class VersionedRowMerger implements RowMerger {
     }
 
     /** Create a comparator for version column. */
-    public static Comparator<BinaryRow> createVersionComparator(
+    public static Comparator<InternalRow> createVersionComparator(
             RowType schema, String versionColumnName) {
         int columnIndex = schema.getFieldIndex(versionColumnName);
         checkArgument(

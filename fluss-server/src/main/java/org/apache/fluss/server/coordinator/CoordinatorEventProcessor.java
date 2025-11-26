@@ -31,6 +31,7 @@ import org.apache.fluss.exception.InvalidUpdateVersionException;
 import org.apache.fluss.exception.TabletServerNotAvailableException;
 import org.apache.fluss.exception.UnknownTableOrBucketException;
 import org.apache.fluss.metadata.PhysicalTablePath;
+import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableBucketReplica;
 import org.apache.fluss.metadata.TableInfo;
@@ -62,6 +63,7 @@ import org.apache.fluss.server.coordinator.event.FencedCoordinatorEvent;
 import org.apache.fluss.server.coordinator.event.NewTabletServerEvent;
 import org.apache.fluss.server.coordinator.event.NotifyKvSnapshotOffsetEvent;
 import org.apache.fluss.server.coordinator.event.NotifyLeaderAndIsrResponseReceivedEvent;
+import org.apache.fluss.server.coordinator.event.SchemaChangeEvent;
 import org.apache.fluss.server.coordinator.event.watcher.TableChangeWatcher;
 import org.apache.fluss.server.coordinator.event.watcher.TabletServerChangeWatcher;
 import org.apache.fluss.server.coordinator.statemachine.ReplicaStateMachine;
@@ -499,6 +501,9 @@ public class CoordinatorEventProcessor implements EventProcessor {
             processDropTable((DropTableEvent) event);
         } else if (event instanceof DropPartitionEvent) {
             processDropPartition((DropPartitionEvent) event);
+        } else if (event instanceof SchemaChangeEvent) {
+            SchemaChangeEvent schemaChangeEvent = (SchemaChangeEvent) event;
+            processSchemaChange(schemaChangeEvent);
         } else if (event instanceof NotifyLeaderAndIsrResponseReceivedEvent) {
             processNotifyLeaderAndIsrResponseReceivedEvent(
                     (NotifyLeaderAndIsrResponseReceivedEvent) event);
@@ -551,6 +556,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
 
     private void processCreateTable(CreateTableEvent createTableEvent) {
         long tableId = createTableEvent.getTableInfo().getTableId();
+        int schemaId = createTableEvent.getTableInfo().getSchemaId();
         // skip the table if it already exists
         if (coordinatorContext.containsTableId(tableId)) {
             return;
@@ -593,6 +599,44 @@ public class CoordinatorEventProcessor implements EventProcessor {
                     null,
                     Collections.emptySet());
         }
+    }
+
+    private void processSchemaChange(SchemaChangeEvent schemaChangeEvent) {
+        TablePath tablePath = schemaChangeEvent.getTablePath();
+        SchemaInfo schemaInfo = schemaChangeEvent.getSchemaInfo();
+        long tableId = coordinatorContext.getTableIdByPath(tablePath);
+
+        // if table is created, will create schema first. In this case, schema id will be included
+        // in CreateTableEvent.
+        if (tableId == TableInfo.UNKNOWN_TABLE_ID) {
+            return;
+        }
+
+        TableInfo oldTableInfo = coordinatorContext.getTableInfoById(tableId);
+        if (oldTableInfo.getSchemaId() == schemaInfo.getSchemaId()) {
+            return;
+        }
+
+        coordinatorContext.putTableInfo(
+                new TableInfo(
+                        tablePath,
+                        tableId,
+                        schemaInfo.getSchemaId(),
+                        schemaInfo.getSchema(),
+                        oldTableInfo.getBucketKeys(),
+                        oldTableInfo.getPartitionKeys(),
+                        oldTableInfo.getNumBuckets(),
+                        oldTableInfo.getProperties(),
+                        oldTableInfo.getCustomProperties(),
+                        oldTableInfo.getComment().orElse(null),
+                        oldTableInfo.getCreatedTime(),
+                        System.currentTimeMillis()));
+
+        updateTabletServerMetadataCache(
+                new HashSet<>(coordinatorContext.getLiveTabletServers().values()),
+                tableId,
+                null,
+                null);
     }
 
     private void processCreatePartition(CreatePartitionEvent createPartitionEvent) {
@@ -1310,6 +1354,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
                 aliveTabletServers.stream().map(ServerInfo::id).collect(Collectors.toSet());
 
         Set<Long> tablesToBeDeleted = coordinatorContext.getTablesToBeDeleted();
+
         tablesToBeDeleted.forEach(
                 tableId ->
                         coordinatorRequestBatch.addUpdateMetadataRequestForTabletServers(

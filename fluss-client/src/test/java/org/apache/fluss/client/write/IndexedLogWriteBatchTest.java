@@ -19,6 +19,7 @@ package org.apache.fluss.client.write;
 
 import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.memory.PreAllocatedPagedOutputView;
+import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.record.ChangeType;
 import org.apache.fluss.record.IndexedLogRecord;
@@ -26,6 +27,7 @@ import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.record.LogRecordBatch;
 import org.apache.fluss.record.LogRecordReadContext;
 import org.apache.fluss.record.MemoryLogRecords;
+import org.apache.fluss.record.TestingSchemaGetter;
 import org.apache.fluss.record.bytesview.BytesView;
 import org.apache.fluss.row.indexed.IndexedRow;
 import org.apache.fluss.utils.CloseableIterator;
@@ -43,6 +45,7 @@ import static org.apache.fluss.record.LogRecordBatch.CURRENT_LOG_MAGIC_VALUE;
 import static org.apache.fluss.record.LogRecordBatchFormat.recordBatchHeaderSize;
 import static org.apache.fluss.record.TestData.DATA1_PHYSICAL_TABLE_PATH;
 import static org.apache.fluss.record.TestData.DATA1_ROW_TYPE;
+import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_ID;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_INFO;
 import static org.apache.fluss.testutils.DataTestUtils.indexedRow;
@@ -98,7 +101,8 @@ public class IndexedLogWriteBatchTest {
         BytesView bytesView = logProducerBatch.build();
         MemoryLogRecords logRecords = MemoryLogRecords.pointToBytesView(bytesView);
         Iterator<LogRecordBatch> iterator = logRecords.batches().iterator();
-        assertDefaultLogRecordBatchEquals(iterator.next());
+        assertDefaultLogRecordBatchEquals(
+                iterator.next(), new TestingSchemaGetter(new SchemaInfo(DATA1_SCHEMA, (short) 1)));
         assertThat(iterator.hasNext()).isFalse();
     }
 
@@ -219,13 +223,14 @@ public class IndexedLogWriteBatchTest {
                 System.currentTimeMillis());
     }
 
-    private void assertDefaultLogRecordBatchEquals(LogRecordBatch recordBatch) {
+    private void assertDefaultLogRecordBatchEquals(
+            LogRecordBatch recordBatch, TestingSchemaGetter schemaGetter) {
         assertThat(recordBatch.getRecordCount()).isEqualTo(1);
         assertThat(recordBatch.baseLogOffset()).isEqualTo(0L);
         assertThat(recordBatch.schemaId()).isEqualTo((short) DATA1_TABLE_INFO.getSchemaId());
         try (LogRecordReadContext readContext =
                         LogRecordReadContext.createIndexedReadContext(
-                                DATA1_ROW_TYPE, DATA1_TABLE_INFO.getSchemaId());
+                                DATA1_ROW_TYPE, DATA1_TABLE_INFO.getSchemaId(), schemaGetter);
                 CloseableIterator<LogRecord> iterator = recordBatch.records(readContext)) {
             assertThat(iterator.hasNext()).isTrue();
             LogRecord record = iterator.next();

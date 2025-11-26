@@ -40,8 +40,6 @@ import org.apache.flink.api.connector.source.SourceReaderContext;
 import org.apache.flink.connector.base.source.reader.RecordsWithSplitIds;
 import org.apache.flink.connector.base.source.reader.synchronization.FutureCompletingBlockingQueue;
 
-import javax.annotation.Nullable;
-
 import java.util.Map;
 import java.util.Set;
 import java.util.function.Consumer;
@@ -57,7 +55,6 @@ public class FlinkSourceReader<OUT>
             TablePath tablePath,
             RowType sourceOutputType,
             SourceReaderContext context,
-            @Nullable int[] projectedFields,
             FlinkSourceReaderMetrics flinkSourceReaderMetrics,
             FlinkRecordEmitter<OUT> recordEmitter,
             LakeSource<LakeSplit> lakeSource) {
@@ -70,7 +67,6 @@ public class FlinkSourceReader<OUT>
                                         flussConfig,
                                         tablePath,
                                         sourceOutputType,
-                                        projectedFields,
                                         flinkSourceReaderMetrics,
                                         lakeSource),
                         (ignore) -> {}),

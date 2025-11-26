@@ -50,7 +50,7 @@ public final class WriteRecord {
             @Nullable int[] targetColumns) {
         checkNotNull(row, "row must not be null");
         checkNotNull(key, "key must not be null");
-        checkNotNull(bucketKey, "key must not be null");
+        checkNotNull(bucketKey, "bucketKey must not be null");
         int estimatedSizeInBytes =
                 DefaultKvRecord.sizeOf(key, row) + DefaultKvRecordBatch.RECORD_BATCH_HEADER_SIZE;
         return new WriteRecord(
@@ -204,5 +204,9 @@ public final class WriteRecord {
                             writeFormat));
         }
         return estimatedSizeInBytes;
+    }
+
+    public int getSchemaId() {
+        return tableInfo.getSchemaId();
     }
 }

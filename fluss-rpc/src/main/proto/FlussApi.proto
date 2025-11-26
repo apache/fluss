@@ -113,8 +113,11 @@ message AlterTableRequest {
   required PbTablePath table_path = 1;
   required bool ignore_if_not_exists = 2;
   repeated PbAlterConfig config_changes = 3;
+  repeated PbAddColumn add_columns = 4;
+  repeated PbDropColumn drop_columns = 5;
+  repeated PbRenameColumn rename_columns = 6;
+  repeated PbModifyColumn modify_columns = 7;
 }
-
 
 message AlterTableResponse {
 }
@@ -914,6 +917,32 @@ message PbAlterConfig {
   optional string config_value = 2;
   required int32 op_type = 3; // SET=0, DELETE=1, APPEND=2, SUBTRACT=3
 }
+
+message PbAddColumn{
+  required string column_name = 1;
+  required bytes data_type_json = 2;
+  optional string comment = 3;
+  required int32 column_position_type = 4; // LAST=0,FIRST=1,AFTER=3
+}
+
+message PbDropColumn{
+  required string column_name = 1;
+}
+
+message PbRenameColumn{
+  required string old_column_name = 1;
+  required string new_column_name = 2;
+}
+
+
+message PbModifyColumn{
+  required string column_name = 1;
+  required bytes data_type_json = 2;
+  optional string comment = 3;
+  optional int32 column_position_type = 4; // LAST=0,FIRST=1,AFTER=3
+}
+
+
 
 message PbDescribeConfig{
   required string config_key = 1;

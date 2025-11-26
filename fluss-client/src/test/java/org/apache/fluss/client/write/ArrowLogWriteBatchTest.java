@@ -49,6 +49,7 @@ import static org.apache.fluss.record.TestData.DATA1_PHYSICAL_TABLE_PATH;
 import static org.apache.fluss.record.TestData.DATA1_ROW_TYPE;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_ID;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_INFO;
+import static org.apache.fluss.record.TestData.TEST_SCHEMA_GETTER;
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -95,7 +96,10 @@ public class ArrowLogWriteBatchTest {
         LogRecordBatch batch = records.batches().iterator().next();
         assertThat(batch.getRecordCount()).isEqualTo(count);
         try (LogRecordReadContext readContext =
-                        createArrowReadContext(DATA1_ROW_TYPE, DATA1_TABLE_INFO.getSchemaId());
+                        createArrowReadContext(
+                                DATA1_ROW_TYPE,
+                                DATA1_TABLE_INFO.getSchemaId(),
+                                TEST_SCHEMA_GETTER);
                 CloseableIterator<LogRecord> recordsIter = batch.records(readContext)) {
             int readCount = 0;
             while (recordsIter.hasNext()) {
@@ -153,7 +157,10 @@ public class ArrowLogWriteBatchTest {
         LogRecordBatch batch = records.batches().iterator().next();
         assertThat(batch.getRecordCount()).isEqualTo(count);
         try (LogRecordReadContext readContext =
-                        createArrowReadContext(DATA1_ROW_TYPE, DATA1_TABLE_INFO.getSchemaId());
+                        createArrowReadContext(
+                                DATA1_ROW_TYPE,
+                                DATA1_TABLE_INFO.getSchemaId(),
+                                TEST_SCHEMA_GETTER);
                 CloseableIterator<LogRecord> recordsIter = batch.records(readContext)) {
             int readCount = 0;
             while (recordsIter.hasNext()) {

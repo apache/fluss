@@ -24,8 +24,6 @@ import org.apache.fluss.flink.source.enumerator.initializer.OffsetsInitializer;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.types.RowType;
 
-import javax.annotation.Nullable;
-
 /**
  * A Flink DataStream source implementation for reading data from Fluss tables.
  *
@@ -63,7 +61,6 @@ public class FlussSource<OUT> extends FlinkSource<OUT> {
             boolean hasPrimaryKey,
             boolean isPartitioned,
             RowType sourceOutputType,
-            @Nullable int[] projectedFields,
             OffsetsInitializer offsetsInitializer,
             long scanPartitionDiscoveryIntervalMs,
             FlussDeserializationSchema<OUT> deserializationSchema,
@@ -75,7 +72,6 @@ public class FlussSource<OUT> extends FlinkSource<OUT> {
                 hasPrimaryKey,
                 isPartitioned,
                 sourceOutputType,
-                projectedFields,
                 offsetsInitializer,
                 scanPartitionDiscoveryIntervalMs,
                 deserializationSchema,

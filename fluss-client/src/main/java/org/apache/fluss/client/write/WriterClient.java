@@ -120,6 +120,7 @@ public class WriterClient {
                             conf.get(ConfigOptions.CLIENT_WRITER_DYNAMIC_CREATE_PARTITION_ENABLED),
                             this::maybeAbortBatches);
         } catch (Throwable t) {
+            LOG.error("Failed to construct writer.", t);
             close(Duration.ofMillis(0));
             throw new FlussRuntimeException(
                     String.format(

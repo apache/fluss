@@ -17,7 +17,10 @@
 
 package org.apache.fluss.row.encode;
 
+import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.row.BinaryRow;
+import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.UnsafeUtils;
 
 /** An encoder to encode {@link BinaryRow} with a schema id as value to be stored in kv store. */
@@ -37,5 +40,25 @@ public class ValueEncoder {
         UnsafeUtils.putShort(values, 0, schemaId);
         row.copyTo(values, SCHEMA_ID_LENGTH);
         return values;
+    }
+
+    public static byte[] encodeRow(
+            short schemaId, KvFormat kvFormat, RowType currentRowType, InternalRow row)
+            throws Exception {
+        if (row instanceof BinaryRow) {
+            return encodeValue(schemaId, (BinaryRow) row);
+        }
+        // todo: reuse the encoder here
+        try (RowEncoder rowEncoder = RowEncoder.create(kvFormat, currentRowType)) {
+            rowEncoder.startNewRow();
+            for (int i = 0; i < currentRowType.getFieldCount(); i++) {
+                rowEncoder.encodeField(
+                        i,
+                        InternalRow.createFieldGetter(currentRowType.getTypeAt(i), i)
+                                .getFieldOrNull(row));
+            }
+            BinaryRow binaryRow = rowEncoder.finishRow();
+            return encodeValue(schemaId, binaryRow);
+        }
     }
 }

@@ -79,7 +79,7 @@ final class LogManagerTest extends LogTestBase {
     private TableBucket tableBucket2;
     private LogManager logManager;
 
-    // TODO add more tests refer to kafka's LogManagerTest.
+    // TODOadd more tests refer to kafka's LogManagerTest.
 
     @BeforeAll
     static void baseBeforeAll() {

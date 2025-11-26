@@ -28,7 +28,7 @@ import org.apache.fluss.memory.LazyMemorySegmentPool;
 import org.apache.fluss.memory.MemorySegmentPool;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
-import org.apache.fluss.metadata.Schema;
+import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
@@ -161,7 +161,7 @@ public final class KvManager extends TabletManagerBase {
             TableBucket tableBucket,
             LogTablet logTablet,
             KvFormat kvFormat,
-            Schema schema,
+            SchemaGetter schemaGetter,
             TableConfig tableConfig,
             ArrowCompressionInfo arrowCompressionInfo)
             throws Exception {
@@ -173,8 +173,7 @@ public final class KvManager extends TabletManagerBase {
                     }
 
                     File tabletDir = getOrCreateTabletDir(tablePath, tableBucket);
-
-                    RowMerger merger = RowMerger.create(tableConfig, schema, kvFormat);
+                    RowMerger merger = RowMerger.create(tableConfig, kvFormat);
                     KvTablet tablet =
                             KvTablet.create(
                                     logTablet,
@@ -184,9 +183,9 @@ public final class KvManager extends TabletManagerBase {
                                     arrowBufferAllocator,
                                     memorySegmentPool,
                                     kvFormat,
-                                    schema,
                                     merger,
-                                    arrowCompressionInfo);
+                                    arrowCompressionInfo,
+                                    schemaGetter);
                     currentKvs.put(tableBucket, tablet);
 
                     LOG.info(
@@ -256,7 +255,7 @@ public final class KvManager extends TabletManagerBase {
         }
     }
 
-    public KvTablet loadKv(File tabletDir) throws Exception {
+    public KvTablet loadKv(File tabletDir, SchemaGetter schemaGetter) throws Exception {
         Tuple2<PhysicalTablePath, TableBucket> pathAndBucket = FlussPaths.parseTabletDir(tabletDir);
         PhysicalTablePath physicalTablePath = pathAndBucket.f0;
         TableBucket tableBucket = pathAndBucket.f1;
@@ -277,11 +276,10 @@ public final class KvManager extends TabletManagerBase {
         // TODO: we should support recover schema from disk to decouple put and schema.
         TablePath tablePath = physicalTablePath.getTablePath();
         TableInfo tableInfo = getTableInfo(zkClient, tablePath);
+
         RowMerger rowMerger =
                 RowMerger.create(
-                        tableInfo.getTableConfig(),
-                        tableInfo.getSchema(),
-                        tableInfo.getTableConfig().getKvFormat());
+                        tableInfo.getTableConfig(), tableInfo.getTableConfig().getKvFormat());
         KvTablet kvTablet =
                 KvTablet.create(
                         physicalTablePath,
@@ -293,9 +291,9 @@ public final class KvManager extends TabletManagerBase {
                         arrowBufferAllocator,
                         memorySegmentPool,
                         tableInfo.getTableConfig().getKvFormat(),
-                        tableInfo.getSchema(),
                         rowMerger,
-                        tableInfo.getTableConfig().getArrowCompressionInfo());
+                        tableInfo.getTableConfig().getArrowCompressionInfo(),
+                        schemaGetter);
         if (this.currentKvs.containsKey(tableBucket)) {
             throw new IllegalStateException(
                     String.format(

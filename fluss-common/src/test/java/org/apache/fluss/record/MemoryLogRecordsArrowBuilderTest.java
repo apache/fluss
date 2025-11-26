@@ -58,6 +58,7 @@ import static org.apache.fluss.record.LogRecordBatchFormat.LOG_MAGIC_VALUE_V1;
 import static org.apache.fluss.record.TestData.DATA1;
 import static org.apache.fluss.record.TestData.DATA1_ROW_TYPE;
 import static org.apache.fluss.record.TestData.DEFAULT_SCHEMA_ID;
+import static org.apache.fluss.record.TestData.TEST_SCHEMA_GETTER;
 import static org.apache.fluss.row.arrow.ArrowWriter.BUFFER_USAGE_RATIO;
 import static org.apache.fluss.testutils.DataTestUtils.assertLogRecordsEquals;
 import static org.apache.fluss.testutils.DataTestUtils.row;
@@ -278,9 +279,10 @@ public class MemoryLogRecordsArrowBuilderTest {
         assertThat(logRecordBatch.lastLogOffset()).isEqualTo(0);
         assertThat(logRecordBatch.nextLogOffset()).isEqualTo(1);
         assertThat(logRecordBatch.baseLogOffset()).isEqualTo(0);
+        TestingSchemaGetter schemaGetter = TEST_SCHEMA_GETTER;
         try (LogRecordReadContext readContext =
                         LogRecordReadContext.createArrowReadContext(
-                                DATA1_ROW_TYPE, DEFAULT_SCHEMA_ID);
+                                DATA1_ROW_TYPE, DEFAULT_SCHEMA_ID, schemaGetter);
                 CloseableIterator<LogRecord> iter = logRecordBatch.records(readContext)) {
             assertThat(iter.hasNext()).isFalse();
         }
@@ -305,7 +307,7 @@ public class MemoryLogRecordsArrowBuilderTest {
         assertThat(logRecordBatch.baseLogOffset()).isEqualTo(100);
         try (LogRecordReadContext readContext =
                         LogRecordReadContext.createArrowReadContext(
-                                DATA1_ROW_TYPE, DEFAULT_SCHEMA_ID);
+                                DATA1_ROW_TYPE, DEFAULT_SCHEMA_ID, schemaGetter);
                 CloseableIterator<LogRecord> iter = logRecordBatch.records(readContext)) {
             assertThat(iter.hasNext()).isFalse();
         }

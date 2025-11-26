@@ -55,7 +55,7 @@ public class BatchRegisterLeadAndIsr {
                             tableBucket, leaderAndIsr, partitionName, liveReplicas));
         } else {
             throw new IllegalArgumentException(
-                    "Try to add a bucket with different tableId or partitionId in collection when try to batch register to Zookeeper."
+                    "Try toadd a bucket with different tableId or partitionId in collection when try to batch register to Zookeeper."
                             + "batch tableId="
                             + tableId
                             + " batch partitionId:"

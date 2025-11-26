@@ -20,7 +20,7 @@ package org.apache.fluss.server.kv.rowmerger;
 import org.apache.fluss.metadata.DeleteBehavior;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.Schema;
-import org.apache.fluss.row.BinaryRow;
+import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.server.kv.partialupdate.PartialUpdater;
 import org.apache.fluss.server.kv.partialupdate.PartialUpdaterCache;
 
@@ -34,12 +34,9 @@ public class DefaultRowMerger implements RowMerger {
 
     private final PartialUpdaterCache partialUpdaterCache;
     private final KvFormat kvFormat;
-    private final Schema schema;
     private final DeleteBehavior deleteBehavior;
 
-    public DefaultRowMerger(
-            Schema schema, KvFormat kvFormat, @Nullable DeleteBehavior deleteBehavior) {
-        this.schema = schema;
+    public DefaultRowMerger(KvFormat kvFormat, @Nullable DeleteBehavior deleteBehavior) {
         this.kvFormat = kvFormat;
         // for compatibility, default to ALLOW if not specified
         this.deleteBehavior = deleteBehavior != null ? deleteBehavior : DeleteBehavior.ALLOW;
@@ -49,14 +46,14 @@ public class DefaultRowMerger implements RowMerger {
 
     @Nullable
     @Override
-    public BinaryRow merge(BinaryRow oldRow, BinaryRow newRow) {
+    public InternalRow merge(InternalRow oldRow, InternalRow newRow) {
         // always retain the new row (latest row)
         return newRow;
     }
 
     @Nullable
     @Override
-    public BinaryRow delete(BinaryRow oldRow) {
+    public InternalRow delete(InternalRow oldRow) {
         // returns null to indicate the row is deleted
         return null;
     }
@@ -67,13 +64,15 @@ public class DefaultRowMerger implements RowMerger {
     }
 
     @Override
-    public RowMerger configureTargetColumns(@Nullable int[] targetColumns) {
+    public RowMerger configureTargetColumns(
+            @Nullable int[] targetColumns, short schemaId, Schema schema) {
         if (targetColumns == null) {
             return this;
         } else {
             // this also sanity checks the validity of the partial update
             PartialUpdater partialUpdater =
-                    partialUpdaterCache.getOrCreatePartialUpdater(kvFormat, schema, targetColumns);
+                    partialUpdaterCache.getOrCreatePartialUpdater(
+                            kvFormat, schemaId, schema, targetColumns);
             return new PartialUpdateRowMerger(partialUpdater, deleteBehavior);
         }
     }
@@ -91,20 +90,21 @@ public class DefaultRowMerger implements RowMerger {
         }
 
         @Override
-        public RowMerger configureTargetColumns(int[] targetColumns) {
+        public RowMerger configureTargetColumns(
+                int[] targetColumns, short schemaId, Schema schema) {
             throw new IllegalStateException(
                     "PartialUpdateRowMerger does not support reconfigure target merge columns.");
         }
 
         @Nullable
         @Override
-        public BinaryRow merge(BinaryRow oldRow, BinaryRow newRow) {
+        public InternalRow merge(InternalRow oldRow, InternalRow newRow) {
             return partialUpdater.updateRow(oldRow, newRow);
         }
 
         @Nullable
         @Override
-        public BinaryRow delete(BinaryRow oldRow) {
+        public InternalRow delete(InternalRow oldRow) {
             return partialUpdater.deleteRow(oldRow);
         }
 

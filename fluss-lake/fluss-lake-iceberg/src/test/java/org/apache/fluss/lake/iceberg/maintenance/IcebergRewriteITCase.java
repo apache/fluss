@@ -147,7 +147,7 @@ class IcebergRewriteITCase extends FlinkIcebergTieringTestBase {
             // add pos-delete and trigger compaction
             rows = Arrays.asList(row(4, "v1"), row(4, "v2"));
             flussRows.add(writeIcebergTableRecords(t1, t1Bucket, 6, false, rows).get(1));
-            // rewritten files should fail to commit due to conflict, add check here
+            // rewritten files should fail to commit due to conflict,add check here
             checkRecords(getIcebergRecords(t1), flussRows);
             // 4 data file and 1 delete file
             checkFileStatusInIcebergTable(t1, 4, true);

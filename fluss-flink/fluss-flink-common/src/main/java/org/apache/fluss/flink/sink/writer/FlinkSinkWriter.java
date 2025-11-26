@@ -110,11 +110,15 @@ public abstract class FlinkSinkWriter<InputT> implements SinkWriter<InputT> {
                         metricGroup, Collections.singleton(MetricNames.WRITER_SEND_LATENCY_MS));
         connection = ConnectionFactory.createConnection(flussConfig, flinkMetricRegistry);
         table = connection.getTable(tablePath);
-        sanityCheck(table.getTableInfo());
+        LOG.info(
+                "Current Fluss Schema is {}, Table RowType is {}",
+                table.getTableInfo().getSchema(),
+                tableRowType);
+        // sanityCheck(table.getTableInfo());
 
         try {
             this.serializationSchema.open(
-                    new SerializerInitContextImpl(table.getTableInfo().getRowType()));
+                    new SerializerInitContextImpl(table.getTableInfo().getRowType(), tableRowType));
         } catch (Exception e) {
             throw new FlussRuntimeException(e);
         }

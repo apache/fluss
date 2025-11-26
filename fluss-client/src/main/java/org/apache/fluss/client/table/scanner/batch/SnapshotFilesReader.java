@@ -20,14 +20,13 @@ package org.apache.fluss.client.table.scanner.batch;
 import org.apache.fluss.client.table.scanner.ScanRecord;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.metadata.KvFormat;
+import org.apache.fluss.metadata.Schema;
+import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.rocksdb.RocksDBHandle;
 import org.apache.fluss.rocksdb.RocksIteratorWrapper;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.ProjectedRow;
-import org.apache.fluss.row.decode.RowDecoder;
 import org.apache.fluss.row.encode.ValueDecoder;
-import org.apache.fluss.types.DataType;
-import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.CloseableIterator;
 import org.apache.fluss.utils.CloseableRegistry;
 import org.apache.fluss.utils.IOUtils;
@@ -52,6 +51,9 @@ import java.nio.file.Path;
 @NotThreadSafe
 class SnapshotFilesReader implements CloseableIterator<InternalRow> {
 
+    private final int targetSchemaId;
+    private final Schema targetSchema;
+    private final SchemaGetter schemaGetter;
     private final ValueDecoder valueDecoder;
     @Nullable private final int[] projectedFields;
     private RocksIteratorWrapper rocksIteratorWrapper;
@@ -65,13 +67,15 @@ class SnapshotFilesReader implements CloseableIterator<InternalRow> {
     SnapshotFilesReader(
             KvFormat kvFormat,
             Path rocksDbPath,
-            RowType tableRowType,
-            @Nullable int[] projectedFields)
+            @Nullable int[] projectedFields,
+            int targetSchemaId,
+            Schema targetSchema,
+            SchemaGetter schemaGetter)
             throws IOException {
-        this.valueDecoder =
-                new ValueDecoder(
-                        RowDecoder.create(
-                                kvFormat, tableRowType.getChildren().toArray(new DataType[0])));
+        this.targetSchemaId = targetSchemaId;
+        this.targetSchema = targetSchema;
+        this.schemaGetter = schemaGetter;
+        this.valueDecoder = new ValueDecoder(schemaGetter, kvFormat);
         this.projectedFields = projectedFields;
         closeableRegistry = new CloseableRegistry();
         try {
@@ -151,7 +155,14 @@ class SnapshotFilesReader implements CloseableIterator<InternalRow> {
         byte[] value = rocksIteratorWrapper.value();
         rocksIteratorWrapper.next();
 
-        InternalRow originRow = valueDecoder.decodeValue(value).row;
+        ValueDecoder.Value originValue = valueDecoder.decodeValue(value);
+        InternalRow originRow = originValue.row;
+        if (targetSchemaId != originValue.schemaId) {
+            originRow =
+                    ProjectedRow.from(schemaGetter.getSchema(originValue.schemaId), targetSchema)
+                            .replaceRow(originRow);
+        }
+
         if (projectedFields != null) {
             ProjectedRow projectedRow = ProjectedRow.from(projectedFields);
             projectedRow.replaceRow(originRow);

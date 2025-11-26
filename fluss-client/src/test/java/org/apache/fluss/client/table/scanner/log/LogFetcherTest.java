@@ -18,18 +18,26 @@
 package org.apache.fluss.client.table.scanner.log;
 
 import org.apache.fluss.client.admin.ClientToServerITCaseBase;
+import org.apache.fluss.client.admin.FlussAdmin;
+import org.apache.fluss.client.metadata.ClientSchemaGetter;
 import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.client.metrics.TestingScannerMetricGroup;
 import org.apache.fluss.client.table.scanner.RemoteFileDownloader;
 import org.apache.fluss.client.table.scanner.ScanRecord;
 import org.apache.fluss.cluster.Cluster;
 import org.apache.fluss.cluster.ServerNode;
+import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableChange;
+import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.record.MemoryLogRecords;
+import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.rpc.RpcClient;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.PbProduceLogRespForBucket;
 import org.apache.fluss.rpc.messages.ProduceLogResponse;
+import org.apache.fluss.testutils.DataTestUtils;
+import org.apache.fluss.types.DataTypes;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -43,11 +51,17 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
 
+import static org.apache.fluss.record.LogRecordBatch.CURRENT_LOG_MAGIC_VALUE;
 import static org.apache.fluss.record.TestData.DATA1;
+import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_INFO;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
+import static org.apache.fluss.record.TestData.DATA2;
+import static org.apache.fluss.record.TestData.DATA2_ROW_TYPE;
+import static org.apache.fluss.record.TestData.DATA2_SCHEMA;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newProduceLogRequest;
 import static org.apache.fluss.testutils.DataTestUtils.genMemoryLogRecordsByObject;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
@@ -60,6 +74,9 @@ public class LogFetcherTest extends ClientToServerITCaseBase {
     private final int bucketId0 = 0;
     private final int bucketId1 = 1;
     private LogScannerStatus logScannerStatus;
+    private FlussAdmin admin;
+    private MetadataUpdater metadataUpdater;
+    private ClientSchemaGetter clientSchemaGetter;
 
     // TODO covert this test to UT as kafka.
 
@@ -72,7 +89,7 @@ public class LogFetcherTest extends ClientToServerITCaseBase {
         FLUSS_CLUSTER_EXTENSION.waitUntilTableReady(tableId);
 
         RpcClient rpcClient = FLUSS_CLUSTER_EXTENSION.getRpcClient();
-        MetadataUpdater metadataUpdater = new MetadataUpdater(clientConf, rpcClient);
+        metadataUpdater = new MetadataUpdater(clientConf, rpcClient);
         metadataUpdater.checkAndUpdateTableMetadata(Collections.singleton(DATA1_TABLE_PATH));
 
         Map<TableBucket, Long> scanBuckets = new HashMap<>();
@@ -81,6 +98,9 @@ public class LogFetcherTest extends ClientToServerITCaseBase {
         scanBuckets.put(new TableBucket(tableId, bucketId1), 0L);
         logScannerStatus = new LogScannerStatus();
         logScannerStatus.assignScanBuckets(scanBuckets);
+        admin = new FlussAdmin(rpcClient, metadataUpdater);
+        clientSchemaGetter =
+                new ClientSchemaGetter(DATA1_TABLE_PATH, new SchemaInfo(DATA1_SCHEMA, 1), admin);
         logFetcher =
                 new LogFetcher(
                         DATA1_TABLE_INFO,
@@ -89,7 +109,96 @@ public class LogFetcherTest extends ClientToServerITCaseBase {
                         clientConf,
                         metadataUpdater,
                         TestingScannerMetricGroup.newInstance(),
-                        new RemoteFileDownloader(1));
+                        new RemoteFileDownloader(1),
+                        clientSchemaGetter);
+    }
+
+    @Test
+    void testFetchWithSchemaChange() throws Exception {
+        // add one batch records to tb0.
+        TableBucket tb0 = new TableBucket(tableId, bucketId0);
+        addRecordsToBucket(tb0, genMemoryLogRecordsByObject(DATA1), 0L);
+
+        // add new column(which equals to DATA2_ROW_TYPE)
+        admin.alterTable(
+                        DATA1_TABLE_PATH,
+                        Collections.singletonList(
+                                TableChange.addColumn(
+                                        "c",
+                                        DataTypes.STRING(),
+                                        null,
+                                        TableChange.ColumnPosition.last())),
+                        false)
+                .get();
+        // add one batch records with new schema to tb0.
+        addRecordsToBucket(
+                tb0,
+                genMemoryLogRecordsByObject(DATA2_ROW_TYPE, 2, CURRENT_LOG_MAGIC_VALUE, DATA2),
+                10L);
+
+        // Read data with old schema, thus DATA2 will be truncated as DATA1
+        List<GenericRow> expectedRows =
+                DATA1.stream().map(DataTestUtils::row).collect(Collectors.toList());
+        expectedRows.addAll(DATA1.stream().map(DataTestUtils::row).collect(Collectors.toList()));
+        logFetcher.sendFetches();
+        // The fetcher is async to fetch data, so we need to wait the result write to the
+        // logFetchBuffer.
+        retry(
+                Duration.ofMinutes(1),
+                () -> {
+                    assertThat(logFetcher.hasAvailableFetches()).isTrue();
+                    assertThat(logFetcher.getCompletedFetchesSize()).isEqualTo(2);
+                });
+        Map<TableBucket, List<ScanRecord>> records = logFetcher.collectFetch();
+        assertThat(records.size()).isEqualTo(1);
+        List<ScanRecord> scanRecords = records.get(tb0);
+        assertThat(scanRecords.stream().map(ScanRecord::getRow).collect(Collectors.toList()))
+                .isEqualTo(expectedRows);
+
+        // read data with new schema, thus DATA2 will be appended with null value.
+        expectedRows =
+                DATA1.stream()
+                        .map(row -> DataTestUtils.row(row[0], row[1], null))
+                        .collect(Collectors.toList());
+        expectedRows.addAll(DATA2.stream().map(DataTestUtils::row).collect(Collectors.toList()));
+        logScannerStatus.assignScanBuckets(Collections.singletonMap(tb0, 0L));
+        LogFetcher newSchemaLogFetcher =
+                new LogFetcher(
+                        new TableInfo(
+                                DATA1_TABLE_INFO.getTablePath(),
+                                tableId,
+                                2,
+                                DATA2_SCHEMA,
+                                DATA1_TABLE_INFO.getBucketKeys(),
+                                DATA1_TABLE_INFO.getPartitionKeys(),
+                                DATA1_TABLE_INFO.getNumBuckets(),
+                                DATA1_TABLE_INFO.getProperties(),
+                                DATA1_TABLE_INFO.getCustomProperties(),
+                                DATA1_TABLE_INFO.getComment().orElse(null),
+                                DATA1_TABLE_INFO.getCreatedTime(),
+                                DATA1_TABLE_INFO.getModifiedTime()),
+                        null,
+                        logScannerStatus,
+                        clientConf,
+                        metadataUpdater,
+                        TestingScannerMetricGroup.newInstance(),
+                        new RemoteFileDownloader(1),
+                        clientSchemaGetter);
+        newSchemaLogFetcher.sendFetches();
+        // The fetcher is async to fetch data, so we need to wait the result write to the
+        // logFetchBuffer.
+        retry(
+                Duration.ofMinutes(1),
+                () -> {
+                    assertThat(newSchemaLogFetcher.hasAvailableFetches()).isTrue();
+                    assertThat(newSchemaLogFetcher.getCompletedFetchesSize()).isEqualTo(2);
+                });
+        records = newSchemaLogFetcher.collectFetch();
+        assertThat(records.size()).isEqualTo(1);
+        assertThat(records.get(tb0)).hasSize(20);
+        scanRecords = records.get(tb0);
+        assertThat(scanRecords.stream().map(ScanRecord::getRow).collect(Collectors.toList()))
+                .isEqualTo(expectedRows);
     }
 
     @Test
@@ -157,6 +266,12 @@ public class LogFetcherTest extends ClientToServerITCaseBase {
         LogScannerStatus logScannerStatus = new LogScannerStatus();
         logScannerStatus.assignScanBuckets(Collections.singletonMap(tb0, 0L));
 
+        ClientSchemaGetter clientSchemaGetter =
+                new ClientSchemaGetter(
+                        DATA1_TABLE_PATH,
+                        new SchemaInfo(DATA1_SCHEMA, 1),
+                        new FlussAdmin(rpcClient, metadataUpdater));
+
         LogFetcher logFetcher =
                 new LogFetcher(
                         DATA1_TABLE_INFO,
@@ -165,7 +280,8 @@ public class LogFetcherTest extends ClientToServerITCaseBase {
                         clientConf,
                         metadataUpdater,
                         TestingScannerMetricGroup.newInstance(),
-                        new RemoteFileDownloader(1));
+                        new RemoteFileDownloader(1),
+                        clientSchemaGetter);
 
         // send fetches to fetch data, should have no available fetch.
         logFetcher.sendFetches();
@@ -191,6 +307,11 @@ public class LogFetcherTest extends ClientToServerITCaseBase {
     void testFetchWithInvalidTableOrPartitions() throws Exception {
         MetadataUpdater metadataUpdater1 =
                 new MetadataUpdater(clientConf, FLUSS_CLUSTER_EXTENSION.getRpcClient());
+        ClientSchemaGetter clientSchemaGetter =
+                new ClientSchemaGetter(
+                        DATA1_TABLE_PATH,
+                        new SchemaInfo(DATA1_SCHEMA, 1),
+                        new FlussAdmin(FLUSS_CLUSTER_EXTENSION.getRpcClient(), metadataUpdater1));
         logFetcher =
                 new LogFetcher(
                         DATA1_TABLE_INFO,
@@ -199,7 +320,8 @@ public class LogFetcherTest extends ClientToServerITCaseBase {
                         clientConf,
                         metadataUpdater1,
                         TestingScannerMetricGroup.newInstance(),
-                        new RemoteFileDownloader(1));
+                        new RemoteFileDownloader(1),
+                        clientSchemaGetter);
 
         ExecutorService executor = Executors.newSingleThreadExecutor();
         Future<?> future =

@@ -130,7 +130,7 @@ class RemoveOfflineReplicaFromIsrITCase {
         FLUSS_CLUSTER_EXTENSION.startTabletServer(follower);
         isr.add(follower);
 
-        // make sure the stopped follower can add back to isr after restart
+        // make sure the stopped follower can addColumn back to isr after restart
         retry(
                 Duration.ofMinutes(1),
                 () ->

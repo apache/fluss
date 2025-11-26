@@ -487,7 +487,7 @@ public class DefaultAuthorizerTest {
         Set<AccessControlEntry> expectedAcls = new HashSet<>();
 
         for (int i = 0; i < 50; i++) {
-            // each task represent that add acl to different user on same resource.
+            // each task represent that addColumn acl to different user on same resource.
             final AccessControlEntry accessControlEntry =
                     createAclEntry(String.valueOf(i), "host-1", READ);
             int finalI = i;
@@ -550,7 +550,7 @@ public class DefaultAuthorizerTest {
         // generate 50 concurrent acl operation tasks.
         List<Runnable> concurrentTasks = new ArrayList<>();
         for (int i = 0; i < 50; i++) {
-            // each task represent that add acl to same user on same resource.
+            // each task represent that addColumn acl to same user on same resource.
             Runnable runnable =
                     () -> {
                         addAcls(

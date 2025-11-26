@@ -32,7 +32,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 /** Test for {@link AdjustIsrManager}. */
 class AdjustIsrManagerTest {
 
-    // TODO add more test refer to kafka AlterPartitionManagerTest, See: FLUSS-56278513
+    // TODO addColumn more test refer to kafka AlterPartitionManagerTest, See: FLUSS-56278513
 
     @Test
     void testSubmitShrinkIsr() throws Exception {

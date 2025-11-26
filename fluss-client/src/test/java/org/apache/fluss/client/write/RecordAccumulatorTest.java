@@ -27,6 +27,8 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.MemorySize;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
+import org.apache.fluss.metadata.SchemaGetter;
+import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
@@ -38,6 +40,7 @@ import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.record.LogRecordBatch;
 import org.apache.fluss.record.LogRecordReadContext;
 import org.apache.fluss.record.MemoryLogRecords;
+import org.apache.fluss.record.TestingSchemaGetter;
 import org.apache.fluss.row.BinaryRow;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.arrow.ArrowWriter;
@@ -127,12 +130,15 @@ class RecordAccumulatorTest {
     private final ManualClock clock = new ManualClock(System.currentTimeMillis());
     private Configuration conf;
     private Cluster cluster;
+    private SchemaGetter schemaGetter;
 
     @BeforeEach
     public void start() {
         conf = new Configuration();
         // init cluster.
         cluster = updateCluster(Arrays.asList(bucket1, bucket2, bucket3));
+        // todo: 从cluster中获取schema getter
+        schemaGetter = new TestingSchemaGetter(new SchemaInfo(DATA1_SCHEMA, (short) 1));
     }
 
     // TODO Add more tests to test lingMs, retryBackoffMs, deliveryTimeoutMs and
@@ -292,7 +298,7 @@ class RecordAccumulatorTest {
         Iterator<LogRecordBatch> iterator = memoryLogRecords.batches().iterator();
         try (LogRecordReadContext readContext =
                         LogRecordReadContext.createIndexedReadContext(
-                                DATA1_ROW_TYPE, DATA1_TABLE_INFO.getSchemaId());
+                                DATA1_ROW_TYPE, DATA1_TABLE_INFO.getSchemaId(), schemaGetter);
                 CloseableIterator<LogRecord> iter = iterator.next().records(readContext)) {
             for (int i = 0; i < appends; i++) {
                 LogRecord record = iter.next();
@@ -329,7 +335,7 @@ class RecordAccumulatorTest {
         LogRecordBatch logRecordBatch = iterator.next();
         try (LogRecordReadContext readContext =
                 LogRecordReadContext.createIndexedReadContext(
-                        DATA1_ROW_TYPE, DATA1_TABLE_INFO.getSchemaId())) {
+                        DATA1_ROW_TYPE, DATA1_TABLE_INFO.getSchemaId(), schemaGetter)) {
             LogRecord record = logRecordBatch.records(readContext).next();
             assertThat(record.getChangeType()).isEqualTo(ChangeType.APPEND_ONLY);
             assertThat(record.logOffset()).isEqualTo(0L);

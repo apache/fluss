@@ -867,7 +867,8 @@ public final class RecordAccumulator {
                     orderedBatches.size());
             // Either we have reached a point where there are batches without a sequence (i.e. never
             // been drained and are hence in order by default), or the batch at the front of the
-            // queue has a sequence greater than the incoming batch. This is the right place to add
+            // queue has a sequence greater than the incoming batch. This is the right place to
+            // add
             // the incoming batch.
             deque.addFirst(batch);
 
@@ -920,6 +921,8 @@ public final class RecordAccumulator {
 
         writerBufferPool.close();
         arrowWriterPool.close();
+        // Release all the memory segments.
+        bufferAllocator.releaseBytes(bufferAllocator.getAllocatedMemory());
         bufferAllocator.close();
     }
 

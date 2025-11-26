@@ -50,6 +50,7 @@ public class KvWriteBatch extends WriteBatch {
     private final AbstractPagedOutputView outputView;
     private final KvRecordBatchBuilder recordsBuilder;
     private final @Nullable int[] targetColumns;
+    private final int schemaId;
 
     public KvWriteBatch(
             int bucketId,
@@ -65,6 +66,7 @@ public class KvWriteBatch extends WriteBatch {
         this.recordsBuilder =
                 KvRecordBatchBuilder.builder(schemaId, writeLimit, outputView, kvFormat);
         this.targetColumns = targetColumns;
+        this.schemaId = schemaId;
     }
 
     @Override
@@ -74,6 +76,13 @@ public class KvWriteBatch extends WriteBatch {
 
     @Override
     public boolean tryAppend(WriteRecord writeRecord, WriteCallback callback) throws Exception {
+        if (schemaId != writeRecord.getSchemaId()) {
+            throw new IllegalStateException(
+                    String.format(
+                            "schema id %d of the write record to append is not the same as the current schema id %d in the batch.",
+                            writeRecord.getSchemaId(), schemaId));
+        }
+
         // currently, we throw exception directly when the target columns of the write record is
         // not the same as the current target columns in the batch.
         // this should be quite fast as they should be the same objects.

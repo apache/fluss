@@ -27,9 +27,11 @@ import org.apache.fluss.client.write.HashBucketAssigner;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.row.ProjectedRow;
 import org.apache.fluss.row.encode.CompactedKeyEncoder;
 import org.apache.fluss.row.encode.KeyEncoder;
 import org.apache.fluss.types.DataTypes;
@@ -39,6 +41,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -116,13 +119,85 @@ class KvSnapshotBatchScannerITCase extends ClientToServerITCaseBase {
         testSnapshotRead(tablePath, expectedRowByBuckets);
     }
 
-    private Map<TableBucket, List<InternalRow>> putRows(long tableId, TablePath tablePath, int rows)
-            throws Exception {
+    @Test
+    void testScanSnapshotDuringSchemaChange() throws Exception {
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "test-table-snapshot-schema-change");
+        long tableId = createTable(tablePath, DEFAULT_TABLE_DESCRIPTOR, true);
+
+        // put into values with old schema.
+        Map<TableBucket, List<InternalRow>> oldSchemaRowByBuckets = putRows(tableId, tablePath, 10);
+        waitUntilAllSnapshotFinished(oldSchemaRowByBuckets.keySet(), 0);
+
+        // add a new column and rename an existing column
+        admin.alterTable(
+                        tablePath,
+                        Collections.singletonList(
+                                TableChange.addColumn(
+                                        "new_column",
+                                        DataTypes.BIGINT().copy(false).copy(true),
+                                        null,
+                                        TableChange.ColumnPosition.last())),
+                        false)
+                .get();
+        FLUSS_CLUSTER_EXTENSION.waitAllSchemaSync(tablePath, 2);
+
+        Schema newSchema =
+                Schema.newBuilder()
+                        .primaryKey("id")
+                        .column("id", DataTypes.INT())
+                        .column("name", DataTypes.STRING())
+                        .column("new_column", DataTypes.BIGINT())
+                        .build();
+        // put into values with old schema.
+        List<InternalRow> rows = new ArrayList<>();
+        for (int i = 10; i < 20; i++) {
+            InternalRow row =
+                    compactedRow(newSchema.getRowType(), new Object[] {i, "v" + i, (long) i});
+            rows.add(row);
+        }
+        Map<TableBucket, List<InternalRow>> newSchemaByBuckets = putRows(tableId, tablePath, rows);
+
+        Map<TableBucket, List<InternalRow>> expectedRowByBuckets = new HashMap<>();
+        for (TableBucket tableBucket : oldSchemaRowByBuckets.keySet()) {
+            List<InternalRow> expectedRows =
+                    expectedRowByBuckets.computeIfAbsent(tableBucket, k -> new ArrayList<>());
+            oldSchemaRowByBuckets
+                    .get(tableBucket)
+                    .forEach(
+                            row ->
+                                    expectedRows.add(
+                                            ProjectedRow.from(DEFAULT_SCHEMA, newSchema)
+                                                    .replaceRow(row)));
+        }
+        for (TableBucket tableBucket : newSchemaByBuckets.keySet()) {
+            expectedRowByBuckets
+                    .computeIfAbsent(tableBucket, k -> new ArrayList<>())
+                    .addAll(newSchemaByBuckets.get(tableBucket));
+        }
+
+        // wait snapshot finish
+        waitUntilAllSnapshotFinished(expectedRowByBuckets.keySet(), 1);
+
+        // test read snapshot with new Schema
+        testSnapshotRead(tablePath, expectedRowByBuckets);
+    }
+
+    private Map<TableBucket, List<InternalRow>> putRows(
+            long tableId, TablePath tablePath, int rowNumber) throws Exception {
+        List<InternalRow> rows = new ArrayList<>();
+        for (int i = 0; i < rowNumber; i++) {
+            InternalRow row = compactedRow(DATA1_ROW_TYPE, new Object[] {i, "v" + i});
+            rows.add(row);
+        }
+        return putRows(tableId, tablePath, rows);
+    }
+
+    private Map<TableBucket, List<InternalRow>> putRows(
+            long tableId, TablePath tablePath, List<InternalRow> rows) throws Exception {
         Map<TableBucket, List<InternalRow>> rowsByBuckets = new HashMap<>();
         try (Table table = conn.getTable(tablePath)) {
             UpsertWriter upsertWriter = table.newUpsert().createWriter();
-            for (int i = 0; i < rows; i++) {
-                InternalRow row = compactedRow(DATA1_ROW_TYPE, new Object[] {i, "v" + i});
+            for (InternalRow row : rows) {
                 upsertWriter.upsert(row);
                 TableBucket tableBucket = new TableBucket(tableId, getBucketId(row));
                 rowsByBuckets.computeIfAbsent(tableBucket, k -> new ArrayList<>()).add(row);

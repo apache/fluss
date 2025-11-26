@@ -18,26 +18,39 @@
 package org.apache.fluss.record;
 
 import org.apache.fluss.metadata.KvFormat;
+import org.apache.fluss.metadata.Schema;
+import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.row.decode.RowDecoder;
 import org.apache.fluss.types.DataType;
 
+import java.util.HashMap;
+import java.util.Map;
+
 /** A default implementation of {@link ValueRecordBatch.ReadContext} . */
 public class ValueRecordReadContext implements ValueRecordBatch.ReadContext {
+    private final Map<Integer, RowDecoder> rowDecoderCache;
+    private final SchemaGetter schemaGetter;
+    private final KvFormat kvFormat;
 
-    private final RowDecoder rowDecoder;
-
-    public ValueRecordReadContext(RowDecoder rowDecoder) {
-        this.rowDecoder = rowDecoder;
+    private ValueRecordReadContext(SchemaGetter schemaGetter, KvFormat kvFormat) {
+        this.rowDecoderCache = new HashMap<>();
+        this.schemaGetter = schemaGetter;
+        this.kvFormat = kvFormat;
     }
 
     public static ValueRecordReadContext createReadContext(
-            KvFormat kvFormat, DataType[] fieldTypes) {
-        return new ValueRecordReadContext(RowDecoder.create(kvFormat, fieldTypes));
+            SchemaGetter schemaGetter, KvFormat kvFormat) {
+        return new ValueRecordReadContext(schemaGetter, kvFormat);
     }
 
     @Override
     public RowDecoder getRowDecoder(int schemaId) {
-        // assume schema id are always not changed for now.
-        return rowDecoder;
+        return rowDecoderCache.computeIfAbsent(
+                schemaId,
+                (id) -> {
+                    Schema schema = schemaGetter.getSchema(schemaId);
+                    return RowDecoder.create(
+                            kvFormat, schema.getRowType().getChildren().toArray(new DataType[0]));
+                });
     }
 }

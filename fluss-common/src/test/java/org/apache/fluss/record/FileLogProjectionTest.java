@@ -18,11 +18,14 @@
 package org.apache.fluss.record;
 
 import org.apache.fluss.exception.InvalidColumnProjectionException;
+import org.apache.fluss.exception.SchemaNotExistException;
 import org.apache.fluss.metadata.LogFormat;
+import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.CloseableIterator;
 
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -56,77 +59,130 @@ import static org.assertj.core.api.Assertions.fail;
 class FileLogProjectionTest {
 
     private @TempDir File tempDir;
+    private TestingSchemaGetter testingSchemaGetter;
 
-    // TODO: add tests for nested types
+    @BeforeEach
+    void beforeEach() {
+        testingSchemaGetter = new TestingSchemaGetter(new SchemaInfo(TestData.DATA1_SCHEMA, 1));
+        testingSchemaGetter.updateLatestSchemaInfo(new SchemaInfo(TestData.DATA2_SCHEMA, 2));
+    }
+
     @Test
-    void testSetCurrentProjection() {
+    void testSetCurrentProjection() throws Exception {
+        short schemaId = (short) 2;
+        FileLogRecords recordsOfData2RowType =
+                createFileLogRecords(
+                        schemaId,
+                        LOG_MAGIC_VALUE_V1,
+                        TestData.DATA2_ROW_TYPE,
+                        TestData.DATA2,
+                        TestData.DATA2);
+
         FileLogProjection projection = new FileLogProjection();
-        projection.setCurrentProjection(
-                1L, TestData.DATA2_ROW_TYPE, DEFAULT_COMPRESSION, new int[] {0, 2});
+        // get schema during running.
+        doProjection(
+                1L,
+                schemaId,
+                projection,
+                recordsOfData2RowType,
+                new int[] {0, 2},
+                recordsOfData2RowType.sizeInBytes());
         FileLogProjection.ProjectionInfo info1 = projection.currentProjection;
         assertThat(info1).isNotNull();
         assertThat(info1.nodesProjection.stream().toArray()).isEqualTo(new int[] {0, 2});
         // a int: [0,1] ; b string: [2,3,4] ; c string: [5,6,7]
         assertThat(info1.buffersProjection.stream().toArray()).isEqualTo(new int[] {0, 1, 5, 6, 7});
         assertThat(projection.projectionsCache).hasSize(1);
-        assertThat(projection.projectionsCache.get(1L)).isSameAs(info1);
+        assertThat(
+                        projection.projectionsCache.get(
+                                new FileLogProjection.ProjectionKey(1L, schemaId)))
+                .isSameAs(info1);
 
-        projection.setCurrentProjection(
-                2L, TestData.DATA2_ROW_TYPE, DEFAULT_COMPRESSION, new int[] {1});
+        doProjection(
+                2L,
+                schemaId,
+                projection,
+                recordsOfData2RowType,
+                new int[] {1},
+                recordsOfData2RowType.sizeInBytes());
         FileLogProjection.ProjectionInfo info2 = projection.currentProjection;
         assertThat(info2).isNotNull();
         assertThat(info2.nodesProjection.stream().toArray()).isEqualTo(new int[] {1});
         // a int: [0,1] ; b string: [2,3,4] ; c string: [5,6,7]
         assertThat(info2.buffersProjection.stream().toArray()).isEqualTo(new int[] {2, 3, 4});
         assertThat(projection.projectionsCache).hasSize(2);
-        assertThat(projection.projectionsCache.get(2L)).isSameAs(info2);
+        assertThat(
+                        projection.projectionsCache.get(
+                                new FileLogProjection.ProjectionKey(2L, schemaId)))
+                .isSameAs(info2);
 
-        projection.setCurrentProjection(
-                1L, TestData.DATA2_ROW_TYPE, DEFAULT_COMPRESSION, new int[] {0, 2});
+        doProjection(
+                1L,
+                schemaId,
+                projection,
+                recordsOfData2RowType,
+                new int[] {0, 2},
+                recordsOfData2RowType.sizeInBytes());
         assertThat(projection.currentProjection).isNotNull().isSameAs(info1);
 
         assertThatThrownBy(
                         () ->
-                                projection.setCurrentProjection(
+                                doProjection(
                                         1L,
-                                        TestData.DATA1_ROW_TYPE,
-                                        DEFAULT_COMPRESSION,
-                                        new int[] {1}))
+                                        schemaId,
+                                        projection,
+                                        recordsOfData2RowType,
+                                        new int[] {1},
+                                        recordsOfData2RowType.sizeInBytes()))
                 .isInstanceOf(InvalidColumnProjectionException.class)
                 .hasMessage("The schema and projection should be identical for the same table id.");
     }
 
     @Test
-    void testIllegalSetCurrentProjection() {
+    void testIllegalSetCurrentProjection() throws Exception {
+        long tableId = 1L;
+        short schemaId = (short) 2;
+        FileLogRecords recordsOfData2RowType =
+                createFileLogRecords(
+                        schemaId,
+                        LOG_MAGIC_VALUE_V1,
+                        TestData.DATA2_ROW_TYPE,
+                        TestData.DATA2,
+                        TestData.DATA2);
         FileLogProjection projection = new FileLogProjection();
-
         assertThatThrownBy(
                         () ->
-                                projection.setCurrentProjection(
-                                        1L,
-                                        TestData.DATA2_ROW_TYPE,
-                                        DEFAULT_COMPRESSION,
-                                        new int[] {3}))
+                                doProjection(
+                                        tableId,
+                                        schemaId,
+                                        projection,
+                                        recordsOfData2RowType,
+                                        new int[] {3},
+                                        recordsOfData2RowType.sizeInBytes()))
                 .isInstanceOf(InvalidColumnProjectionException.class)
-                .hasMessage("Projected fields [3] is out of bound for schema with 3 fields.");
+                .hasMessage("Projected field id 3 is not contains in [0, 1, 2]");
 
         assertThatThrownBy(
                         () ->
-                                projection.setCurrentProjection(
-                                        1L,
-                                        TestData.DATA2_ROW_TYPE,
-                                        DEFAULT_COMPRESSION,
-                                        new int[] {1, 0}))
+                                doProjection(
+                                        tableId,
+                                        schemaId,
+                                        projection,
+                                        recordsOfData2RowType,
+                                        new int[] {1, 0},
+                                        recordsOfData2RowType.sizeInBytes()))
                 .isInstanceOf(InvalidColumnProjectionException.class)
                 .hasMessage("The projection indexes should be in field order, but is [1, 0]");
 
         assertThatThrownBy(
                         () ->
-                                projection.setCurrentProjection(
-                                        1L,
-                                        TestData.DATA2_ROW_TYPE,
-                                        DEFAULT_COMPRESSION,
-                                        new int[] {0, 0, 0}))
+                                doProjection(
+                                        tableId,
+                                        schemaId,
+                                        projection,
+                                        recordsOfData2RowType,
+                                        new int[] {0, 0, 0},
+                                        recordsOfData2RowType.sizeInBytes()))
                 .isInstanceOf(InvalidColumnProjectionException.class)
                 .hasMessage(
                         "The projection indexes should not contain duplicated fields, but is [0, 0, 0]");
@@ -134,28 +190,38 @@ class FileLogProjectionTest {
 
     static Stream<Arguments> projectedFieldsArgs() {
         return Stream.of(
-                Arguments.of((Object) new int[] {0}, LOG_MAGIC_VALUE_V0),
-                Arguments.arguments((Object) new int[] {1}, LOG_MAGIC_VALUE_V0),
-                Arguments.arguments((Object) new int[] {0, 1}, LOG_MAGIC_VALUE_V0),
-                Arguments.of((Object) new int[] {0}, LOG_MAGIC_VALUE_V1),
-                Arguments.arguments((Object) new int[] {1}, LOG_MAGIC_VALUE_V1),
-                Arguments.arguments((Object) new int[] {0, 1}, LOG_MAGIC_VALUE_V1));
+                Arguments.of((Object) new int[] {0}, LOG_MAGIC_VALUE_V0, (short) 1),
+                Arguments.arguments((Object) new int[] {1}, LOG_MAGIC_VALUE_V0, (short) 1),
+                Arguments.arguments((Object) new int[] {0, 1}, LOG_MAGIC_VALUE_V0, (short) 1),
+                Arguments.of((Object) new int[] {0}, LOG_MAGIC_VALUE_V1, (short) 1),
+                Arguments.arguments((Object) new int[] {1}, LOG_MAGIC_VALUE_V1, (short) 1),
+                Arguments.arguments((Object) new int[] {0, 1}, LOG_MAGIC_VALUE_V1, (short) 1),
+                Arguments.of((Object) new int[] {0}, LOG_MAGIC_VALUE_V0, (short) 2),
+                Arguments.arguments((Object) new int[] {1}, LOG_MAGIC_VALUE_V0, (short) 2),
+                Arguments.arguments((Object) new int[] {0, 1}, LOG_MAGIC_VALUE_V0, (short) 2),
+                Arguments.of((Object) new int[] {0}, LOG_MAGIC_VALUE_V1, (short) 2),
+                Arguments.arguments((Object) new int[] {1}, LOG_MAGIC_VALUE_V1, (short) 2),
+                Arguments.arguments((Object) new int[] {0, 1}, LOG_MAGIC_VALUE_V1, (short) 2));
     }
 
     @ParameterizedTest
     @MethodSource("projectedFieldsArgs")
-    void testProject(int[] projectedFields, byte recordBatchMagic) throws Exception {
+    void testProject(int[] projectedFields, byte recordBatchMagic, short schemaId)
+            throws Exception {
+        testingSchemaGetter.updateLatestSchemaInfo(new SchemaInfo(TestData.DATA1_SCHEMA, schemaId));
         FileLogRecords fileLogRecords =
                 createFileLogRecords(
+                        schemaId,
                         recordBatchMagic,
                         TestData.DATA1_ROW_TYPE,
                         TestData.DATA1,
                         TestData.ANOTHER_DATA1);
         List<Object[]> results =
                 doProjection(
+                        1L,
+                        schemaId,
                         new FileLogProjection(),
                         fileLogRecords,
-                        TestData.DATA1_ROW_TYPE,
                         projectedFields,
                         Integer.MAX_VALUE);
         List<Object[]> allData = new ArrayList<>();
@@ -176,7 +242,7 @@ class FileLogProjectionTest {
     @ParameterizedTest
     @ValueSource(bytes = {LOG_MAGIC_VALUE_V0, LOG_MAGIC_VALUE_V1})
     void testIllegalByteOrder(byte recordBatchMagic) throws Exception {
-        FileLogRecords fileLogRecords =
+        final FileLogRecords fileLogRecords =
                 createFileLogRecords(
                         recordBatchMagic,
                         TestData.DATA1_ROW_TYPE,
@@ -185,17 +251,38 @@ class FileLogProjectionTest {
         FileLogProjection projection = new FileLogProjection();
         // overwrite the wrong decoding byte order endian
         projection.getLogHeaderBuffer().order(ByteOrder.BIG_ENDIAN);
-        // should throw exception.
         assertThatThrownBy(
                         () ->
                                 doProjection(
                                         projection,
                                         fileLogRecords,
-                                        TestData.DATA1_ROW_TYPE,
+                                        new int[] {0, 1},
+                                        Integer.MAX_VALUE))
+                .isInstanceOf(SchemaNotExistException.class);
+
+        // The BIG_ENDIAN of schema will be read as 256 wronly. In this case, we use 256 to skip it.
+        short schemaId = 256;
+        testingSchemaGetter.updateLatestSchemaInfo(new SchemaInfo(TestData.DATA2_SCHEMA, schemaId));
+        final FileLogRecords fileLogRecords2 =
+                createFileLogRecords(
+                        schemaId,
+                        recordBatchMagic,
+                        TestData.DATA1_ROW_TYPE,
+                        TestData.DATA1,
+                        TestData.ANOTHER_DATA1);
+
+        assertThatThrownBy(
+                        () ->
+                                doProjection(
+                                        1L,
+                                        schemaId,
+                                        projection,
+                                        fileLogRecords2,
                                         new int[] {0, 1},
                                         Integer.MAX_VALUE))
                 .isInstanceOf(EOFException.class)
                 .hasMessageContaining("Failed to read `arrow header` from file channel");
+        fileLogRecords2.close();
     }
 
     @ParameterizedTest
@@ -218,11 +305,7 @@ class FileLogProjectionTest {
             int maxBytes = totalSize / i;
             List<Object[]> results =
                     doProjection(
-                            new FileLogProjection(),
-                            fileLogRecords,
-                            TestData.DATA1_ROW_TYPE,
-                            new int[] {0, 1},
-                            maxBytes);
+                            new FileLogProjection(), fileLogRecords, new int[] {0, 1}, maxBytes);
             if (results.isEmpty()) {
                 hasEmpty = true;
             } else if (results.size() == TestData.DATA1.size()) {
@@ -323,13 +406,20 @@ class FileLogProjectionTest {
     @SafeVarargs
     final FileLogRecords createFileLogRecords(
             byte recordBatchMagic, RowType rowType, List<Object[]>... inputs) throws Exception {
+        return createFileLogRecords(DEFAULT_SCHEMA_ID, recordBatchMagic, rowType, inputs);
+    }
+
+    @SafeVarargs
+    final FileLogRecords createFileLogRecords(
+            int schemaId, byte recordBatchMagic, RowType rowType, List<Object[]>... inputs)
+            throws Exception {
         FileLogRecords fileLogRecords = FileLogRecords.open(new File(tempDir, "test.tmp"));
         long offsetBase = 0L;
         for (List<Object[]> input : inputs) {
             fileLogRecords.append(
                     createRecordsWithoutBaseLogOffset(
                             rowType,
-                            DEFAULT_SCHEMA_ID,
+                            schemaId,
                             offsetBase,
                             System.currentTimeMillis(),
                             recordBatchMagic,
@@ -344,20 +434,33 @@ class FileLogProjectionTest {
     private List<Object[]> doProjection(
             FileLogProjection projection,
             FileLogRecords fileLogRecords,
-            RowType rowType,
             int[] projectedFields,
             int fetchMaxBytes)
             throws Exception {
-        projection.setCurrentProjection(1L, rowType, DEFAULT_COMPRESSION, projectedFields);
-        RowType projectedType = rowType.project(projectedFields);
+        return doProjection(
+                1L, DEFAULT_SCHEMA_ID, projection, fileLogRecords, projectedFields, fetchMaxBytes);
+    }
+
+    private List<Object[]> doProjection(
+            long tableId,
+            short schemaId,
+            FileLogProjection projection,
+            FileLogRecords fileLogRecords,
+            int[] projectedFields,
+            int fetchMaxBytes)
+            throws Exception {
+        projection.setCurrentProjection(
+                tableId, testingSchemaGetter, DEFAULT_COMPRESSION, projectedFields);
         LogRecords project =
                 projection.project(
                         fileLogRecords.channel(), 0, fileLogRecords.sizeInBytes(), fetchMaxBytes);
         assertThat(project.sizeInBytes()).isLessThanOrEqualTo(fetchMaxBytes);
+        RowType rowType = testingSchemaGetter.getSchema(schemaId).getRowType();
+        RowType projectedType = rowType.project(projectedFields);
         List<Object[]> results = new ArrayList<>();
         long expectedOffset = 0L;
         try (LogRecordReadContext context =
-                createArrowReadContext(projectedType, DEFAULT_SCHEMA_ID)) {
+                createArrowReadContext(projectedType, schemaId, testingSchemaGetter)) {
             for (LogRecordBatch batch : project.batches()) {
                 try (CloseableIterator<LogRecord> records = batch.records(context)) {
                     while (records.hasNext()) {

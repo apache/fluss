@@ -100,7 +100,6 @@ public final class FlussConnection implements Connection {
     public Table getTable(TablePath tablePath) {
         // force to update the table info from server to avoid stale data in cache.
         metadataUpdater.updateTableOrPartitionMetadata(tablePath, null);
-
         Admin admin = getOrCreateAdmin();
         return new FlussTable(this, tablePath, admin.getTableInfo(tablePath).join());
     }
