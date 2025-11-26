@@ -23,6 +23,7 @@ import org.apache.fluss.row.columnar.ColumnarRow;
 import org.apache.fluss.row.columnar.VectorizedColumnBatch;
 import org.apache.fluss.types.ArrayType;
 import org.apache.fluss.types.DataType;
+import org.apache.fluss.types.RowType;
 
 import javax.annotation.Nullable;
 
@@ -132,10 +133,12 @@ public interface InternalArray extends DataGetters {
             case ARRAY:
                 elementGetter = InternalArray::getArray;
                 break;
-                // TODO: MAP support will be added in Issue #1973
-                // TODO: ROW support will be added in Issue #1974
-            case MAP:
             case ROW:
+                final int rowFieldCount = ((RowType) fieldType).getFieldCount();
+                elementGetter = (array, pos) -> array.getRow(pos, rowFieldCount);
+                break;
+                // TODO: MAP support will be added in Issue #1973
+            case MAP:
             default:
                 String msg =
                         String.format(
@@ -181,8 +184,24 @@ public interface InternalArray extends DataGetters {
                             return new GenericArray(objs);
                         };
                 break;
-            case MAP:
             case ROW:
+                RowType rowType = (RowType) fieldType;
+                int numFields = rowType.getFieldCount();
+                InternalRow.FieldGetter[] fieldGetters = new InternalRow.FieldGetter[numFields];
+                for (int i = 0; i < numFields; i++) {
+                    fieldGetters[i] = InternalRow.createDeepFieldGetter(rowType.getTypeAt(i), i);
+                }
+                elementGetter =
+                        (array, pos) -> {
+                            InternalRow row = array.getRow(pos, numFields);
+                            GenericRow genericRow = new GenericRow(numFields);
+                            for (int i = 0; i < numFields; i++) {
+                                genericRow.setField(i, fieldGetters[i].getFieldOrNull(row));
+                            }
+                            return genericRow;
+                        };
+                break;
+            case MAP:
                 String msg =
                         String.format(
                                 "type %s not support in %s",

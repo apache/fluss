@@ -215,9 +215,10 @@ public interface InternalRow extends DataGetters {
                 fieldGetter = row -> row.getArray(fieldPos);
                 break;
                 // TODO: MAP support will be added in Issue #1973
-                // TODO: ROW support will be added in Issue #1974
-            case MAP:
             case ROW:
+                final int numFields = ((RowType) fieldType).getFieldCount();
+                fieldGetter = row -> row.getRow(fieldPos, numFields);
+                break;
             default:
                 throw new IllegalArgumentException("Illegal type: " + fieldType);
         }
@@ -259,8 +260,25 @@ public interface InternalRow extends DataGetters {
                             return new GenericArray(objs);
                         };
                 break;
-            case MAP:
             case ROW:
+                RowType rowType = (RowType) fieldType;
+                int numFields = rowType.getFieldCount();
+                FieldGetter[] nestedFieldGetters = new FieldGetter[numFields];
+                for (int i = 0; i < numFields; i++) {
+                    nestedFieldGetters[i] = createDeepFieldGetter(rowType.getTypeAt(i), i);
+                }
+                fieldGetter =
+                        row -> {
+                            InternalRow nestedRow = row.getRow(fieldPos, numFields);
+                            GenericRow genericRow = new GenericRow(numFields);
+                            for (int i = 0; i < numFields; i++) {
+                                genericRow.setField(
+                                        i, nestedFieldGetters[i].getFieldOrNull(nestedRow));
+                            }
+                            return genericRow;
+                        };
+                break;
+            case MAP:
                 String msg =
                         String.format(
                                 "type %s not support in %s",

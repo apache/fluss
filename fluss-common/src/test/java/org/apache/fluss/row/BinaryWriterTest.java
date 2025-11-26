@@ -136,18 +136,6 @@ public class BinaryWriterTest {
     }
 
     @Test
-    public void testCreateValueSetterForRowThrowsException() {
-        assertThatThrownBy(
-                        () ->
-                                BinaryWriter.createValueWriter(
-                                        DataTypes.ROW(
-                                                DataTypes.FIELD("a", DataTypes.INT()),
-                                                DataTypes.FIELD("b", DataTypes.STRING()))))
-                .isInstanceOf(UnsupportedOperationException.class)
-                .hasMessageContaining("Row type is not supported yet");
-    }
-
-    @Test
     public void testValueSetterWithByteType() {
         BinaryArray array = new BinaryArray();
         BinaryArrayWriter writer = new BinaryArrayWriter(array, 2, 1);

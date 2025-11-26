@@ -21,10 +21,10 @@ import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.row.BinaryWriter;
 import org.apache.fluss.row.Decimal;
 import org.apache.fluss.row.GenericArray;
+import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
-import org.apache.fluss.row.serializer.ArraySerializer;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.IntType;
@@ -42,6 +42,7 @@ import java.time.LocalTime;
 import static org.apache.fluss.row.BinaryString.fromString;
 import static org.apache.fluss.row.TestInternalRowGenerator.createAllTypes;
 import static org.apache.fluss.testutils.InternalArrayAssert.assertThatArray;
+import static org.apache.fluss.testutils.InternalRowAssert.assertThatRow;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -72,9 +73,7 @@ public class IndexedRowTest {
 
         assertAllTypeEquals(row);
 
-        assertThat(row.getHeaderSizeInBytes()).isEqualTo(27);
-        assertThat(row.getSizeInBytes()).isEqualTo(309);
-        assertThat(row.getFieldCount()).isEqualTo(22);
+        assertThat(row.getFieldCount()).isEqualTo(21);
         assertThat(row.anyNull()).isFalse();
         assertThat(row.anyNull(new int[] {0, 1})).isFalse();
     }
@@ -122,19 +121,19 @@ public class IndexedRowTest {
         row.pointTo(writer.segment(), 0, writer.position());
 
         InternalRow.FieldGetter[] fieldGetter = new InternalRow.FieldGetter[dataTypes.length];
-        BinaryWriter.ValueWriter[] writers = new BinaryWriter.ValueWriter[dataTypes.length];
+        IndexedRowWriter.FieldWriter[] writers = new IndexedRowWriter.FieldWriter[dataTypes.length];
         for (int i = 0; i < dataTypes.length; i++) {
             fieldGetter[i] = InternalRow.createFieldGetter(dataTypes[i], i);
-            writers[i] = BinaryWriter.createValueWriter(dataTypes[i]);
+            writers[i] = IndexedRowWriter.createFieldWriter(dataTypes[i]);
         }
 
         IndexedRowWriter writer1 = new IndexedRowWriter(dataTypes);
         for (int i = 0; i < dataTypes.length; i++) {
-            writers[i].writeValue(writer1, i, fieldGetter[i].getFieldOrNull(row));
+            writers[i].writeField(writer1, i, fieldGetter[i].getFieldOrNull(row));
         }
 
         IndexedRow row1 = new IndexedRow(dataTypes);
-        row1.pointTo(writer1.segment(), 0, writer.position());
+        row1.pointTo(writer1.segment(), 0, writer1.position());
         assertAllTypeEquals(row1);
     }
 
@@ -176,37 +175,39 @@ public class IndexedRowTest {
 
     public static IndexedRowWriter genRecordForAllTypes(DataType[] dataTypes) {
         IndexedRowWriter writer = new IndexedRowWriter(dataTypes);
-        writer.writeBoolean(true);
-        writer.writeByte((byte) 2);
-        writer.writeShort(Short.parseShort("10"));
-        writer.writeInt(100);
-        writer.writeLong(new BigInteger("12345678901234567890").longValue());
-        writer.writeFloat(Float.parseFloat("13.2"));
-        writer.writeDouble(Double.parseDouble("15.21"));
-        writer.writeInt((int) TypeUtils.castFromString("2023-10-25", DataTypes.DATE()));
-        writer.writeInt((int) TypeUtils.castFromString("09:30:00.0", DataTypes.TIME()));
-        writer.writeBinary("1234567890".getBytes(), 20);
-        writer.writeBytes("20".getBytes());
-        writer.writeChar(fromString("1"), 2);
-        writer.writeString(fromString("hello"));
-        writer.writeDecimal(Decimal.fromUnscaledLong(9, 5, 2), 5);
-        writer.writeDecimal(Decimal.fromBigDecimal(new BigDecimal(10), 20, 0), 20);
-        writer.writeTimestampNtz(TimestampNtz.fromMillis(1698235273182L), 1);
-        writer.writeTimestampNtz(TimestampNtz.fromMillis(1698235273182L), 5);
-        writer.writeTimestampLtz(TimestampLtz.fromEpochMillis(1698235273182L), 1);
-        writer.writeTimestampLtz(TimestampLtz.fromEpochMillis(1698235273182L), 5);
-        writer.writeArray(
-                GenericArray.of(1, 2, 3, 4, 5, -11, null, 444, 102234),
-                new ArraySerializer(DataTypes.INT()));
-        writer.writeArray(
-                GenericArray.of(0.1f, 1.1f, -0.5f, 6.6f, Float.MAX_VALUE, Float.MIN_VALUE),
-                new ArraySerializer(DataTypes.FLOAT().copy(false)));
-        writer.writeArray(
-                GenericArray.of(
-                        GenericArray.of(fromString("a"), null, fromString("c")),
-                        null,
-                        GenericArray.of(fromString("hello"), fromString("world"))),
-                new ArraySerializer(DataTypes.ARRAY(DataTypes.STRING())));
+
+        BinaryWriter.ValueWriter[] writers = new BinaryWriter.ValueWriter[dataTypes.length];
+        for (int i = 0; i < dataTypes.length; i++) {
+            writers[i] = BinaryWriter.createValueWriter(dataTypes[i]);
+        }
+
+        writers[0].writeValue(writer, 0, true);
+        writers[1].writeValue(writer, 1, (byte) 2);
+        writers[2].writeValue(writer, 2, Short.parseShort("10"));
+        writers[3].writeValue(writer, 3, 100);
+        writers[4].writeValue(writer, 4, new BigInteger("12345678901234567890").longValue());
+        writers[5].writeValue(writer, 5, Float.parseFloat("13.2"));
+        writers[6].writeValue(writer, 6, Double.parseDouble("15.21"));
+        writers[7].writeValue(
+                writer, 7, (int) TypeUtils.castFromString("2023-10-25", DataTypes.DATE()));
+        writers[8].writeValue(
+                writer, 8, (int) TypeUtils.castFromString("09:30:00.0", DataTypes.TIME()));
+        writers[9].writeValue(writer, 9, "1234567890".getBytes());
+        writers[10].writeValue(writer, 10, "20".getBytes());
+        writers[11].writeValue(writer, 11, fromString("1"));
+        writers[12].writeValue(writer, 12, fromString("hello"));
+        writers[13].writeValue(writer, 13, Decimal.fromUnscaledLong(9, 5, 2));
+        writers[14].writeValue(writer, 14, Decimal.fromBigDecimal(new BigDecimal(10), 20, 0));
+        writers[15].writeValue(writer, 15, TimestampNtz.fromMillis(1698235273182L));
+        writers[16].writeValue(writer, 16, TimestampNtz.fromMillis(1698235273182L));
+        writers[17].writeValue(writer, 17, TimestampLtz.fromEpochMillis(1698235273182L));
+        writers[18].writeValue(writer, 18, TimestampLtz.fromEpochMillis(1698235273182L));
+        writers[19].writeValue(writer, 19, GenericArray.of(1, 2, 3, 4, 5, -11, null, 444, 102234));
+
+        GenericRow innerRow = GenericRow.of(20);
+        GenericRow nestedRow = GenericRow.of(123, innerRow, fromString("Test"));
+        writers[20].writeValue(writer, 20, nestedRow);
+
         return writer;
     }
 
@@ -234,16 +235,16 @@ public class IndexedRowTest {
         assertThatArray(row.getArray(19))
                 .withElementType(DataTypes.INT())
                 .isEqualTo(GenericArray.of(1, 2, 3, 4, 5, -11, null, 444, 102234));
-        assertThatArray(row.getArray(20))
-                .withElementType(DataTypes.FLOAT().copy(false))
-                .isEqualTo(
-                        GenericArray.of(0.1f, 1.1f, -0.5f, 6.6f, Float.MAX_VALUE, Float.MIN_VALUE));
-        assertThatArray(row.getArray(21))
-                .withElementType(DataTypes.ARRAY(DataTypes.STRING()))
-                .isEqualTo(
-                        GenericArray.of(
-                                GenericArray.of(fromString("a"), null, fromString("c")),
-                                null,
-                                GenericArray.of(fromString("hello"), fromString("world"))));
+        GenericRow expectedInnerRow = GenericRow.of(20);
+        GenericRow expectedNestedRow = GenericRow.of(123, expectedInnerRow, fromString("Test"));
+        assertThatRow(row.getRow(20, 3))
+                .withSchema(
+                        DataTypes.ROW(
+                                DataTypes.FIELD("u1", DataTypes.INT()),
+                                DataTypes.FIELD(
+                                        "u2",
+                                        DataTypes.ROW(DataTypes.FIELD("v1", DataTypes.INT()))),
+                                DataTypes.FIELD("u3", DataTypes.STRING())))
+                .isEqualTo(expectedNestedRow);
     }
 }

@@ -22,14 +22,17 @@ import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.memory.MemorySegmentWritable;
 import org.apache.fluss.memory.OutputView;
 import org.apache.fluss.row.BinaryArray;
+import org.apache.fluss.row.BinaryRow;
 import org.apache.fluss.row.BinarySegmentUtils;
 import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.Decimal;
 import org.apache.fluss.row.InternalArray;
+import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.SequentialBinaryWriter;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
 import org.apache.fluss.row.serializer.ArraySerializer;
+import org.apache.fluss.row.serializer.RowSerializer;
 import org.apache.fluss.utils.UnsafeUtils;
 
 import java.io.IOException;
@@ -319,7 +322,7 @@ public class CompactedRowWriter implements SequentialBinaryWriter {
         write(length, segments, offset);
     }
 
-    // TODO: Map and Row write methods will be added in Issue #1973 and #1974
+    // TODO: Map and Row write methods will be added in Issue #1973
     // public void writeMap(InternalMap value, InternalMapSerializer serializer) {
     //     BinaryMap binaryMap = serializer.toBinaryMap(value);
     //     MemorySegment[] segments = binaryMap.getSegments();
@@ -328,15 +331,16 @@ public class CompactedRowWriter implements SequentialBinaryWriter {
     //
     //     write(length, segments, offset);
     // }
-    //
-    // public void writeRow(InternalRow value, InternalRowSerializer serializer) {
-    //     BinaryRow binaryRow = serializer.toBinaryRow(value);
-    //     MemorySegment[] segments = binaryRow.getSegments();
-    //     int offset = binaryRow.getOffset();
-    //     int length = binaryRow.getSizeInBytes();
-    //
-    //     write(length, segments, offset);
-    // }
+
+    @Override
+    public void writeRow(InternalRow value, RowSerializer serializer) {
+        BinaryRow binaryRow = serializer.toBinaryRow(value);
+        MemorySegment[] segments = binaryRow.getSegments();
+        int offset = binaryRow.getOffset();
+        int length = binaryRow.getSizeInBytes();
+
+        write(length, segments, offset);
+    }
 
     @Override
     public void complete() {}

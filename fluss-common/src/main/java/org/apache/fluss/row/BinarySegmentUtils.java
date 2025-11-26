@@ -1013,8 +1013,29 @@ public final class BinarySegmentUtils {
                 "Map type is not supported yet. Will be added in Issue #1973.");
     }
 
+    /** Gets an instance of {@link BinaryRow} from underlying {@link MemorySegment}. */
+    public static BinaryRow readBinaryRow(
+            MemorySegment[] segments, int baseOffset, int numFields, long offsetAndSize) {
+        final int size = ((int) offsetAndSize);
+        int offset = (int) (offsetAndSize >> 32);
+        org.apache.fluss.row.aligned.AlignedRow row =
+                new org.apache.fluss.row.aligned.AlignedRow(numFields);
+        row.pointTo(segments, offset + baseOffset, size);
+        return row;
+    }
+
     /** Read indexed row data from segments. */
     public static InternalRow readIndexedRow(
+            MemorySegment[] segments,
+            int offset,
+            int numBytes,
+            int numFields,
+            DataType[] fieldTypes) {
+        return readIndexedRowData(segments, offset, numBytes, numFields, fieldTypes);
+    }
+
+    /** Read IndexedRow data from segments. */
+    public static IndexedRow readIndexedRowData(
             MemorySegment[] segments,
             int offset,
             int numBytes,
