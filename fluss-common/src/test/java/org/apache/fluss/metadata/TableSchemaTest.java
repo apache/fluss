@@ -86,7 +86,7 @@ class TableSchemaTest {
                                         .build())
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage(
-                        "Auto increment column f4 does not exist in table columns [f0, f1, f3]");
+                        "Auto increment column f4 does not exist in table columns [f0, f1, f3].");
         assertThatThrownBy(
                         () ->
                                 Schema.newBuilder()
