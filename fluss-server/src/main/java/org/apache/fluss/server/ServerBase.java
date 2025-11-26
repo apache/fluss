@@ -49,6 +49,8 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
+import static org.apache.fluss.server.utils.LogShutdownUtil.shutdownLogIfPossible;
+
 /** An abstract base server class for {@link CoordinatorServer} & {@link TabletServer}. */
 public abstract class ServerBase implements AutoCloseableAsync, FatalErrorHandler {
 
@@ -146,7 +148,12 @@ public abstract class ServerBase implements AutoCloseableAsync, FatalErrorHandle
     private void addShutDownHook() {
         shutDownHook =
                 ShutdownHookUtil.addShutdownHook(
-                        () -> this.closeAsync(Result.JVM_SHUTDOWN).join(), getServerName(), LOG);
+                        () -> {
+                            this.closeAsync(Result.JVM_SHUTDOWN).join();
+                            shutdownLogIfPossible();
+                        },
+                        getServerName(),
+                        LOG);
     }
 
     @Override
