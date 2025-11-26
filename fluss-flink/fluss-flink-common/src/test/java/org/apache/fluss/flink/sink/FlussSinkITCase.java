@@ -41,7 +41,6 @@ import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.types.RowKind;
-import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -91,11 +90,6 @@ public class FlussSinkITCase extends FlinkTestBase {
         bootstrapServers = conn.getConfiguration().get(ConfigOptions.BOOTSTRAP_SERVERS).get(0);
         env = StreamExecutionEnvironment.getExecutionEnvironment();
         env.setParallelism(2);
-    }
-
-    @AfterAll
-    protected static void afterAll() throws Exception {
-        conn.close();
     }
 
     @Test

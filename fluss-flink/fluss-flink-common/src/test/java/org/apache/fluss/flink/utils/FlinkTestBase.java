@@ -44,7 +44,7 @@ import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.types.DataTypes;
 
 import org.apache.flink.test.util.AbstractTestBase;
-import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.extension.RegisterExtension;
@@ -143,11 +143,11 @@ public class FlinkTestBase extends AbstractTestBase {
     protected static final TablePath DEFAULT_TABLE_PATH =
             TablePath.of(DEFAULT_DB, "test-flink-table");
 
-    protected static Connection conn;
-    protected static Admin admin;
-
     protected static Configuration clientConf;
     protected static String bootstrapServers;
+
+    protected Connection conn;
+    protected Admin admin;
 
     @BeforeAll
     protected static void beforeAll() {
@@ -156,14 +156,14 @@ public class FlinkTestBase extends AbstractTestBase {
     }
 
     @BeforeEach
-    void beforeEach() throws Exception {
+    public void beforeEach() throws Exception {
         conn = ConnectionFactory.createConnection(clientConf);
         admin = conn.getAdmin();
         admin.createDatabase(DEFAULT_DB, DatabaseDescriptor.EMPTY, true).get();
     }
 
-    @AfterAll
-    static void afterAll() throws Exception {
+    @AfterEach
+    public void afterEach() throws Exception {
         if (admin != null) {
             admin.close();
             admin = null;
