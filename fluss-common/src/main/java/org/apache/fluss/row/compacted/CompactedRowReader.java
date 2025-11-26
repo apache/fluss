@@ -26,6 +26,7 @@ import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
 import org.apache.fluss.types.DataType;
+import org.apache.fluss.types.RowType;
 
 import java.io.Serializable;
 
@@ -322,14 +323,10 @@ public class CompactedRowReader {
                 fieldReader = (reader, pos) -> reader.readArray();
                 break;
 
-            case MAP:
-                // TODO: Map type support will be added in Issue #1973
-                throw new UnsupportedOperationException(
-                        "Map type in KV table is not supported yet. Will be added in Issue #1976.");
             case ROW:
-                // TODO: Row type support will be added in Issue #1974
-                throw new UnsupportedOperationException(
-                        "Row type in KV table is not supported yet. Will be added in Issue #1977.");
+                final int rowFieldCount = ((RowType) fieldType).getFieldCount();
+                fieldReader = (reader, pos) -> reader.readRow(rowFieldCount);
+                break;
             default:
                 throw new IllegalArgumentException("Unsupported type for IndexedRow: " + fieldType);
         }
@@ -349,6 +346,15 @@ public class CompactedRowReader {
         InternalArray array = BinarySegmentUtils.readBinaryArray(segments, position, length);
         position += length;
         return array;
+    }
+
+    public InternalRow readRow(int numFields) {
+        int length = readInt();
+        InternalRow row =
+                BinarySegmentUtils.readBinaryRow(
+                        segments, 0, numFields, ((long) position << 32) | length);
+        position += length;
+        return row;
     }
 
     /**

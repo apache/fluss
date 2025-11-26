@@ -165,6 +165,11 @@ public class FlinkAsFlussArray implements InternalArray {
         return new FlinkAsFlussArray(flinkArray.getArray(pos));
     }
 
+    @Override
+    public InternalRow getRow(int pos, int numFields) {
+        return new FlinkAsFlussRow(flinkArray.getRow(pos, numFields));
+    }
+
     @SuppressWarnings("unchecked")
     public <T> T[] toObjectArray(DataType elementType) {
         Class<T> elementClass = (Class<T>) InternalRow.getDataClass(elementType);

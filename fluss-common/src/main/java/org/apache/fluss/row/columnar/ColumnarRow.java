@@ -137,8 +137,10 @@ public class ColumnarRow implements InternalRow {
         return vectorizedColumnBatch.getArray(rowId, pos);
     }
 
-    // TODO: getMap() will be added in Issue #1973
-    // TODO: getRow() will be added in Issue #1974
+    @Override
+    public InternalRow getRow(int pos, int numFields) {
+        return vectorizedColumnBatch.getRow(rowId, pos);
+    }
 
     @Override
     public int getFieldCount() {

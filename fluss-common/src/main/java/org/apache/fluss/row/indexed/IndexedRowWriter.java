@@ -22,20 +22,26 @@ import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.memory.MemorySegmentWritable;
 import org.apache.fluss.memory.OutputView;
 import org.apache.fluss.row.BinaryArray;
+import org.apache.fluss.row.BinaryRow;
 import org.apache.fluss.row.BinarySegmentUtils;
 import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.Decimal;
 import org.apache.fluss.row.InternalArray;
+import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.SequentialBinaryWriter;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
 import org.apache.fluss.row.serializer.ArraySerializer;
+import org.apache.fluss.row.serializer.RowSerializer;
+import org.apache.fluss.types.ArrayType;
 import org.apache.fluss.types.DataType;
+import org.apache.fluss.types.DataTypeChecks;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.UnsafeUtils;
 
 import java.io.IOException;
 import java.io.OutputStream;
+import java.io.Serializable;
 import java.util.Arrays;
 
 /** Writer for {@link IndexedRow}. */
@@ -216,24 +222,15 @@ public class IndexedRowWriter extends OutputStream
         write(length, segments, offset);
     }
 
-    // TODO: Map and Row write methods will be added in Issue #1973 and #1974
-    // public void writeMap(InternalMap value, InternalMapSerializer serializer) {
-    //     BinaryMap binaryMap = serializer.toBinaryMap(value);
-    //     MemorySegment[] segments = binaryMap.getSegments();
-    //     int offset = binaryMap.getOffset();
-    //     int length = binaryMap.getSizeInBytes();
-    //
-    //     write(length, segments, offset);
-    // }
-    //
-    // public void writeRow(InternalRow value, InternalRowSerializer serializer) {
-    //     BinaryRow binaryRow = serializer.toBinaryRow(value);
-    //     MemorySegment[] segments = binaryRow.getSegments();
-    //     int offset = binaryRow.getOffset();
-    //     int length = binaryRow.getSizeInBytes();
-    //
-    //     write(length, segments, offset);
-    // }
+    @Override
+    public void writeRow(InternalRow value, RowSerializer serializer) {
+        BinaryRow binaryRow = serializer.toBinaryRow(value);
+        MemorySegment[] segments = binaryRow.getSegments();
+        int offset = binaryRow.getOffset();
+        int length = binaryRow.getSizeInBytes();
+
+        write(length, segments, offset);
+    }
 
     @Override
     public void complete() {}
@@ -319,6 +316,103 @@ public class IndexedRowWriter extends OutputStream
 
     // ------------------------------------------------------------------------------------------
 
+    /**
+     * Creates an accessor for writing the elements of an indexed row writer during runtime.
+     *
+     * @param fieldType the field type of the indexed row
+     */
+    public static FieldWriter createFieldWriter(DataType fieldType) {
+        final FieldWriter fieldWriter;
+        switch (fieldType.getTypeRoot()) {
+            case CHAR:
+                final int charLength = DataTypeChecks.getLength(fieldType);
+                fieldWriter =
+                        (writer, pos, value) -> writer.writeChar((BinaryString) value, charLength);
+                break;
+            case STRING:
+                fieldWriter = (writer, pos, value) -> writer.writeString((BinaryString) value);
+                break;
+            case BOOLEAN:
+                fieldWriter = (writer, pos, value) -> writer.writeBoolean((boolean) value);
+                break;
+            case BINARY:
+                final int binaryLength = DataTypeChecks.getLength(fieldType);
+                fieldWriter =
+                        (writer, pos, value) -> writer.writeBinary((byte[]) value, binaryLength);
+                break;
+            case BYTES:
+                fieldWriter = (writer, pos, value) -> writer.writeBytes((byte[]) value);
+                break;
+            case DECIMAL:
+                final int decimalPrecision = DataTypeChecks.getPrecision(fieldType);
+                fieldWriter =
+                        (writer, pos, value) ->
+                                writer.writeDecimal((Decimal) value, decimalPrecision);
+                break;
+            case TINYINT:
+                fieldWriter = (writer, pos, value) -> writer.writeByte((byte) value);
+                break;
+            case SMALLINT:
+                fieldWriter = (writer, pos, value) -> writer.writeShort((short) value);
+                break;
+            case INTEGER:
+            case DATE:
+            case TIME_WITHOUT_TIME_ZONE:
+                fieldWriter = (writer, pos, value) -> writer.writeInt((int) value);
+                break;
+            case BIGINT:
+                fieldWriter = (writer, pos, value) -> writer.writeLong((long) value);
+                break;
+            case FLOAT:
+                fieldWriter = (writer, pos, value) -> writer.writeFloat((float) value);
+                break;
+            case DOUBLE:
+                fieldWriter = (writer, pos, value) -> writer.writeDouble((double) value);
+                break;
+            case TIMESTAMP_WITHOUT_TIME_ZONE:
+                final int timestampNtzPrecision = DataTypeChecks.getPrecision(fieldType);
+                fieldWriter =
+                        (writer, pos, value) ->
+                                writer.writeTimestampNtz(
+                                        (TimestampNtz) value, timestampNtzPrecision);
+                break;
+            case TIMESTAMP_WITH_LOCAL_TIME_ZONE:
+                final int timestampLtzPrecision = DataTypeChecks.getPrecision(fieldType);
+                fieldWriter =
+                        (writer, pos, value) ->
+                                writer.writeTimestampLtz(
+                                        (TimestampLtz) value, timestampLtzPrecision);
+                break;
+            case ARRAY:
+                final ArraySerializer arraySerializer =
+                        new ArraySerializer(((ArrayType) fieldType).getElementType());
+                fieldWriter =
+                        (writer, pos, value) ->
+                                writer.writeArray((InternalArray) value, arraySerializer);
+                break;
+            case ROW:
+                final DataType[] rowFieldTypes =
+                        ((RowType) fieldType).getFieldTypes().toArray(new DataType[0]);
+                final RowSerializer rowSerializer = new RowSerializer(rowFieldTypes);
+                fieldWriter =
+                        (writer, pos, value) -> writer.writeRow((InternalRow) value, rowSerializer);
+                break;
+            default:
+                throw new IllegalArgumentException("Unsupported type for IndexedRow: " + fieldType);
+        }
+
+        if (!fieldType.isNullable()) {
+            return fieldWriter;
+        }
+        return (writer, pos, value) -> {
+            if (value == null) {
+                writer.setNullAt(pos);
+            } else {
+                fieldWriter.writeField(writer, pos, value);
+            }
+        };
+    }
+
     public static void serializeIndexedRow(IndexedRow row, OutputView target) throws IOException {
         int sizeInBytes = row.getSizeInBytes();
         if (target instanceof MemorySegmentWritable) {
@@ -328,5 +422,10 @@ public class IndexedRowWriter extends OutputStream
             row.getSegment().get(row.getOffset(), bytes, 0, sizeInBytes);
             target.write(bytes, 0, sizeInBytes);
         }
+    }
+
+    /** Accessor for writing the elements of an indexed row writer during runtime. */
+    public interface FieldWriter extends Serializable {
+        void writeField(IndexedRowWriter writer, int pos, Object value);
     }
 }
