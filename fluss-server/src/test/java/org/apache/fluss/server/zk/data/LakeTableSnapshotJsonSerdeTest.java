@@ -18,6 +18,8 @@
 package org.apache.fluss.server.zk.data;
 
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
+import org.apache.fluss.server.zk.data.lake.LakeTableSnapshotJsonSerde;
 import org.apache.fluss.utils.json.JsonSerdeTestBase;
 
 import java.util.Collections;

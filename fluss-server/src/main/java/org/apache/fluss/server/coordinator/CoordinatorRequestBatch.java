@@ -43,8 +43,8 @@ import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
 import org.apache.fluss.server.metadata.BucketMetadata;
 import org.apache.fluss.server.metadata.PartitionMetadata;
 import org.apache.fluss.server.metadata.TableMetadata;
-import org.apache.fluss.server.zk.data.LakeTableSnapshot;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
+import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;

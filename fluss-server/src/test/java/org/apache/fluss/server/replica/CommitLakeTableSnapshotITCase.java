@@ -31,7 +31,7 @@ import org.apache.fluss.server.log.LogTablet;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.server.testutils.RpcMessageTestUtils;
 import org.apache.fluss.server.zk.ZooKeeperClient;
-import org.apache.fluss.server.zk.data.LakeTableSnapshot;
+import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
 
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
