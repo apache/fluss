@@ -318,31 +318,12 @@
                                     <include>*:*</include>
                                 </includes>
                             </artifactSet>
-                            <relocations>
-                                <!-- Shade Iceberg to Fluss namespace for complete isolation -->
-                                <relocation>
-                                    <pattern>org.apache.iceberg</pattern>
-                                    <shadedPattern>org.apache.fluss.lake.iceberg.shaded.org.apache.iceberg</shadedPattern>
-                                </relocation>
-                                <!-- Shade Jackson to Fluss namespace -->
-                                <relocation>
-                                    <pattern>com.fasterxml.jackson</pattern>
-                                    <shadedPattern>org.apache.fluss.lake.iceberg.shaded.com.fasterxml.jackson</shadedPattern>
-                                </relocation>
-                                <!-- Shade Parquet to Fluss namespace -->
-                                <relocation>
-                                    <pattern>org.apache.parquet</pattern>
-                                    <shadedPattern>org.apache.fluss.lake.iceberg.shaded.org.apache.parquet</shadedPattern>
-                                </relocation>
-                            </relocations>
                             <filters>
                                 <filter>
                                     <artifact>*</artifact>
                                     <excludes>
                                         <exclude>LICENSE</exclude>
                                         <exclude>NOTICE</exclude>
-                                        <!-- Exclude multi-release JAR versions that cause shading issues -->
-                                        <exclude>META-INF/versions/**</exclude>
                                     </excludes>
                                 </filter>
                             </filters>
