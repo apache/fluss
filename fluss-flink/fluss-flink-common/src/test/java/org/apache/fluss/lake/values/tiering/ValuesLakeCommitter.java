@@ -20,17 +20,23 @@ package org.apache.fluss.lake.values.tiering;
 
 import org.apache.fluss.lake.committer.CommittedLakeSnapshot;
 import org.apache.fluss.lake.committer.LakeCommitter;
+import org.apache.fluss.lake.serializer.SimpleVersionedSerializer;
 import org.apache.fluss.lake.values.ValuesLake;
+import org.apache.fluss.utils.InstantiationUtils;
 
 import javax.annotation.Nullable;
 
 import java.io.IOException;
+import java.io.Serializable;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 
-/** {@link LakeCommitter} for {@link ValuesLake}. */
-public class ValuesLakeCommitter implements LakeCommitter<ValuesWriteResult, ValuesCommittable> {
+/** Implementation of {@link LakeCommitter} for values lake. */
+public class ValuesLakeCommitter
+        implements LakeCommitter<
+                ValuesLakeWriter.ValuesWriteResult, ValuesLakeCommitter.ValuesCommittable> {
     private final String tableId;
 
     public ValuesLakeCommitter(String tableId) {
@@ -38,11 +44,11 @@ public class ValuesLakeCommitter implements LakeCommitter<ValuesWriteResult, Val
     }
 
     @Override
-    public ValuesCommittable toCommittable(List<ValuesWriteResult> valuesWriteResults)
-            throws IOException {
+    public ValuesCommittable toCommittable(
+            List<ValuesLakeWriter.ValuesWriteResult> valuesWriteResults) throws IOException {
         return new ValuesCommittable(
                 valuesWriteResults.stream()
-                        .map(ValuesWriteResult::getStageId)
+                        .map(ValuesLakeWriter.ValuesWriteResult::getStageId)
                         .collect(Collectors.toList()));
     }
 
@@ -65,4 +71,48 @@ public class ValuesLakeCommitter implements LakeCommitter<ValuesWriteResult, Val
 
     @Override
     public void close() throws Exception {}
+
+    /** Committable of {@link ValuesLake}. */
+    public static class ValuesCommittable implements Serializable {
+        private static final long serialVersionUID = 1L;
+
+        private final List<String> stageIdList = new ArrayList<>();
+
+        public ValuesCommittable(List<String> stageIds) {
+            this.stageIdList.addAll(stageIds);
+        }
+
+        public List<String> getStageIds() {
+            return stageIdList;
+        }
+    }
+
+    /** A serializer for {@link ValuesCommittable}. */
+    public static class ValuesCommittableSerializer
+            implements SimpleVersionedSerializer<ValuesCommittable> {
+        private static final int CURRENT_VERSION = 1;
+
+        @Override
+        public int getVersion() {
+            return CURRENT_VERSION;
+        }
+
+        @Override
+        public byte[] serialize(ValuesCommittable committable) throws IOException {
+            return InstantiationUtils.serializeObject(committable);
+        }
+
+        @Override
+        public ValuesCommittable deserialize(int version, byte[] serialized) throws IOException {
+            ValuesCommittable valuesCommittable;
+            try {
+                valuesCommittable =
+                        InstantiationUtils.deserializeObject(
+                                serialized, getClass().getClassLoader());
+            } catch (ClassNotFoundException e) {
+                throw new IOException(e);
+            }
+            return valuesCommittable;
+        }
+    }
 }

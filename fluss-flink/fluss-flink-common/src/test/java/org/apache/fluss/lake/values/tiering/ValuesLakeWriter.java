@@ -18,15 +18,18 @@
 
 package org.apache.fluss.lake.values.tiering;
 
+import org.apache.fluss.lake.serializer.SimpleVersionedSerializer;
 import org.apache.fluss.lake.values.ValuesLake;
 import org.apache.fluss.lake.writer.LakeWriter;
 import org.apache.fluss.record.LogRecord;
+import org.apache.fluss.utils.InstantiationUtils;
 
 import java.io.IOException;
+import java.io.Serializable;
 import java.util.UUID;
 
-/** {@link LakeWriter} for {@link ValuesLake}. */
-public class ValuesLakeWriter implements LakeWriter<ValuesWriteResult> {
+/** Implementation of {@link LakeWriter} for values lake. */
+public class ValuesLakeWriter implements LakeWriter<ValuesLakeWriter.ValuesWriteResult> {
     private final String tableId;
     private final String stageId;
 
@@ -47,4 +50,49 @@ public class ValuesLakeWriter implements LakeWriter<ValuesWriteResult> {
 
     @Override
     public void close() throws IOException {}
+
+    /** Write result of {@link ValuesLake}. */
+    public static class ValuesWriteResult implements Serializable {
+        private static final long serialVersionUID = 1L;
+
+        private final String stageId;
+
+        public ValuesWriteResult(String stageId) {
+            this.stageId = stageId;
+        }
+
+        public String getStageId() {
+            return stageId;
+        }
+    }
+
+    /** A serializer for {@link ValuesWriteResult}. */
+    public static class ValuesWriteResultSerializer
+            implements SimpleVersionedSerializer<ValuesWriteResult> {
+
+        private static final int CURRENT_VERSION = 1;
+
+        @Override
+        public int getVersion() {
+            return CURRENT_VERSION;
+        }
+
+        @Override
+        public byte[] serialize(ValuesWriteResult valuesWriteResult) throws IOException {
+            return InstantiationUtils.serializeObject(valuesWriteResult);
+        }
+
+        @Override
+        public ValuesWriteResult deserialize(int version, byte[] serialized) throws IOException {
+            ValuesWriteResult valuesWriteResult;
+            try {
+                valuesWriteResult =
+                        InstantiationUtils.deserializeObject(
+                                serialized, getClass().getClassLoader());
+            } catch (ClassNotFoundException e) {
+                throw new IOException(e);
+            }
+            return valuesWriteResult;
+        }
+    }
 }

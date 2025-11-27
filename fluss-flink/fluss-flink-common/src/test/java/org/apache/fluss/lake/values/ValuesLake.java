@@ -39,7 +39,12 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
-/** {@link ValuesLake} for {@link ValuesLake}. */
+/**
+ * In-memory implementation of a lake storage for testing purposes.
+ *
+ * <p>Provides utilities for managing tables, writing records, committing stages, and retrieving
+ * results in a test environment.
+ */
 public class ValuesLake {
     private static final Logger LOG = LoggerFactory.getLogger(ValuesLake.class);
 
@@ -61,14 +66,14 @@ public class ValuesLake {
 
     public static List<InternalRow> getResults(String tableId) {
         ValuesTable table = globalTables.get(tableId);
-        checkNotNull(table, tableId + " is not existed");
+        checkNotNull(table, tableId + " does not exist");
         return table.getResult();
     }
 
     public static void writeRecord(String tableId, String stageId, LogRecord record)
             throws IOException {
         ValuesTable table = globalTables.get(tableId);
-        checkNotNull(table, tableId + " is not existed");
+        checkNotNull(table, tableId + " does not exist");
         TableFailureController controller = FAILURE_CONTROLLERS.get(tableId);
         if (controller != null) {
             controller.checkWriteShouldFail(tableId);
@@ -81,7 +86,7 @@ public class ValuesLake {
             String tableId, List<String> stageIds, Map<String, String> snapshotProperties)
             throws IOException {
         ValuesTable table = globalTables.get(tableId);
-        checkNotNull(table, "commit stage %s failed, table %s is not existed", stageIds, tableId);
+        checkNotNull(table, "commit stage %s failed, table %s does not exist", stageIds, tableId);
         table.commit(stageIds, snapshotProperties);
         LOG.info("Commit table {} stage {}", tableId, stageIds);
         return table.getSnapshotId();
@@ -90,7 +95,7 @@ public class ValuesLake {
     public static void abort(String tableId, List<String> stageIds) {
         ValuesTable table = globalTables.get(tableId);
         checkNotNull(
-                table, "abort stage record %s failed, table %s is not existed", stageIds, tableId);
+                table, "abort stage record %s failed, table %s does not exist", stageIds, tableId);
         table.abort(stageIds);
         LOG.info("Abort table {} stage {}", tableId, stageIds);
     }

@@ -315,11 +315,11 @@ class TieringFailoverITCase extends FlinkValuesTieringTestBase {
 
     private void checkDataInValuesPrimaryKeyTable(
             TablePath tablePath, List<InternalRow> expectedRows) throws Exception {
-        Iterator<InternalRow> acturalIterator = getValuesRecords(tablePath).iterator();
+        Iterator<InternalRow> actualIterator = getValuesRecords(tablePath).iterator();
         Iterator<InternalRow> iterator = expectedRows.iterator();
-        while (iterator.hasNext() && acturalIterator.hasNext()) {
+        while (iterator.hasNext() && actualIterator.hasNext()) {
             InternalRow row = iterator.next();
-            InternalRow record = acturalIterator.next();
+            InternalRow record = actualIterator.next();
             assertThat(record.getBoolean(0)).isEqualTo(row.getBoolean(0));
             assertThat(record.getByte(1)).isEqualTo(row.getByte(1));
             assertThat(record.getShort(2)).isEqualTo(row.getShort(2));
@@ -340,7 +340,7 @@ class TieringFailoverITCase extends FlinkValuesTieringTestBase {
             assertThat(record.getChar(17, 3)).isEqualTo(row.getChar(17, 3));
             assertThat(record.getBinary(18, 10)).isEqualTo(row.getBinary(18, 10));
         }
-        assertThat(acturalIterator.hasNext()).isFalse();
+        assertThat(actualIterator.hasNext()).isFalse();
         assertThat(iterator.hasNext()).isFalse();
     }
 }

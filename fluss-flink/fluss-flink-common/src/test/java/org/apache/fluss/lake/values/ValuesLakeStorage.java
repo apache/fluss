@@ -25,7 +25,7 @@ import org.apache.fluss.lake.values.tiering.ValuesLakeTieringFactory;
 import org.apache.fluss.lake.writer.LakeTieringFactory;
 import org.apache.fluss.metadata.TablePath;
 
-/** {@link LakeStorage} for {@link ValuesLake}. */
+/** Implementation of {@link LakeStorage} for values lake. */
 public class ValuesLakeStorage implements LakeStorage {
     @Override
     public LakeTieringFactory<?, ?> createLakeTieringFactory() {

@@ -27,7 +27,7 @@ import org.apache.fluss.metadata.TablePath;
 
 import java.util.List;
 
-/** {@link LakeCatalog} for {@link ValuesLake}. */
+/** Implementation of {@link LakeCatalog} for values lake. */
 public class ValuesLakeCatalog implements LakeCatalog {
     @Override
     public void createTable(TablePath tablePath, TableDescriptor tableDescriptor, Context context)

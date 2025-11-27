@@ -27,28 +27,31 @@ import org.apache.fluss.lake.writer.WriterInitContext;
 
 import java.io.IOException;
 
-/** {@link LakeTieringFactory} for {@link org.apache.fluss.lake.values.ValuesLake}. */
+/** Implementation of {@link LakeTieringFactory} for values lake. */
 public class ValuesLakeTieringFactory
-        implements LakeTieringFactory<ValuesWriteResult, ValuesCommittable> {
+        implements LakeTieringFactory<
+                ValuesLakeWriter.ValuesWriteResult, ValuesLakeCommitter.ValuesCommittable> {
     @Override
-    public LakeWriter<ValuesWriteResult> createLakeWriter(WriterInitContext writerInitContext)
-            throws IOException {
+    public LakeWriter<ValuesLakeWriter.ValuesWriteResult> createLakeWriter(
+            WriterInitContext writerInitContext) throws IOException {
         return new ValuesLakeWriter(writerInitContext.tablePath().toString());
     }
 
     @Override
-    public SimpleVersionedSerializer<ValuesWriteResult> getWriteResultSerializer() {
-        return new ValuesWriteResultSerializer();
+    public SimpleVersionedSerializer<ValuesLakeWriter.ValuesWriteResult>
+            getWriteResultSerializer() {
+        return new ValuesLakeWriter.ValuesWriteResultSerializer();
     }
 
     @Override
-    public LakeCommitter<ValuesWriteResult, ValuesCommittable> createLakeCommitter(
-            CommitterInitContext committerInitContext) throws IOException {
+    public LakeCommitter<ValuesLakeWriter.ValuesWriteResult, ValuesLakeCommitter.ValuesCommittable>
+            createLakeCommitter(CommitterInitContext committerInitContext) throws IOException {
         return new ValuesLakeCommitter(committerInitContext.tablePath().toString());
     }
 
     @Override
-    public SimpleVersionedSerializer<ValuesCommittable> getCommittableSerializer() {
-        return new ValuesCommittableSerializer();
+    public SimpleVersionedSerializer<ValuesLakeCommitter.ValuesCommittable>
+            getCommittableSerializer() {
+        return new ValuesLakeCommitter.ValuesCommittableSerializer();
     }
 }

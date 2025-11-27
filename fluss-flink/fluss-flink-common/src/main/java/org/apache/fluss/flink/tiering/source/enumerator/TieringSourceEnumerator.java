@@ -203,7 +203,7 @@ public class TieringSourceEnumerator
                 }
 
                 // if registered readers equal to current parallelism, check whether all registered
-                // readers have same max maxAttempt
+                // readers have same max attempt
                 if (context.registeredReadersOfAttempts().size() == context.currentParallelism()) {
                     // Check if all readers have the same max attempt number
                     Set<Integer> maxAttempts =

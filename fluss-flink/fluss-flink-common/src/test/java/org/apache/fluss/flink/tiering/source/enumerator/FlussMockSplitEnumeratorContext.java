@@ -32,7 +32,7 @@ import java.util.concurrent.ConcurrentMap;
 import static org.apache.flink.util.Preconditions.checkState;
 
 /**
- * A mock extends of {@link MockSplitEnumeratorContext} for testing purposes, support registering
+ * A mock extension of {@link MockSplitEnumeratorContext} for testing purposes, support registering
  * source readers with attempt number.
  *
  * @param <SplitT> The type of {@link SourceSplit} used by the source.

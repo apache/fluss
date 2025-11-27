@@ -23,7 +23,7 @@ import org.apache.fluss.lake.lakestorage.LakeStorage;
 import org.apache.fluss.lake.lakestorage.LakeStoragePlugin;
 import org.apache.fluss.metadata.DataLakeFormat;
 
-/** {@link LakeStoragePlugin} for {@link ValuesLake}. */
+/** Implementation of {@link LakeStoragePlugin} for values lake. */
 public class ValuesLakeStoragePlugin implements LakeStoragePlugin {
 
     private static final String IDENTIFIER = DataLakeFormat.VALUES.toString();
