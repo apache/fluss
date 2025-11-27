@@ -1,12 +1,13 @@
 /*
- * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
- * this work for additional information regarding copyright ownership.
- * The ASF licenses this file to You under the Apache License, Version 2.0
- * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
  *
- *    http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -15,12 +16,13 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.server.zk.data;
+package org.apache.fluss.server.zk.data.lake;
 
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.core.JsonGenerator;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
 import org.apache.fluss.utils.json.JsonDeserializer;
+import org.apache.fluss.utils.json.JsonSerdeUtils;
 import org.apache.fluss.utils.json.JsonSerializer;
 
 import java.io.IOException;
@@ -145,5 +147,15 @@ public class LakeTableSnapshotJsonSerde
                 bucketLogEndOffset,
                 bucketMaxTimestamp,
                 partitionNameIdByPartitionId);
+    }
+
+    /** Serialize the {@link LakeTableSnapshot} to json bytes. */
+    public static byte[] toJson(LakeTableSnapshot lakeTableSnapshot) {
+        return JsonSerdeUtils.writeValueAsBytes(lakeTableSnapshot, INSTANCE);
+    }
+
+    /** Deserialize the json bytes to {@link LakeTableSnapshot}. */
+    public static LakeTableSnapshot fromJson(byte[] json) {
+        return JsonSerdeUtils.readValue(json, INSTANCE);
     }
 }

@@ -20,6 +20,9 @@ package org.apache.fluss.server.zk;
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.fs.FSDataOutputStream;
+import org.apache.fluss.fs.FileSystem;
+import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.Schema;
@@ -40,7 +43,6 @@ import org.apache.fluss.server.zk.ZkAsyncResponse.ZkGetDataResponse;
 import org.apache.fluss.server.zk.data.BucketSnapshot;
 import org.apache.fluss.server.zk.data.CoordinatorAddress;
 import org.apache.fluss.server.zk.data.DatabaseRegistration;
-import org.apache.fluss.server.zk.data.LakeTableSnapshot;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
 import org.apache.fluss.server.zk.data.RemoteLogManifestHandle;
@@ -74,6 +76,9 @@ import org.apache.fluss.server.zk.data.ZkData.TableSequenceIdZNode;
 import org.apache.fluss.server.zk.data.ZkData.TableZNode;
 import org.apache.fluss.server.zk.data.ZkData.TablesZNode;
 import org.apache.fluss.server.zk.data.ZkData.WriterIdZNode;
+import org.apache.fluss.server.zk.data.lake.LakeTable;
+import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
+import org.apache.fluss.server.zk.data.lake.LakeTableSnapshotJsonSerde;
 import org.apache.fluss.shaded.curator5.org.apache.curator.framework.CuratorFramework;
 import org.apache.fluss.shaded.curator5.org.apache.curator.framework.api.BackgroundCallback;
 import org.apache.fluss.shaded.curator5.org.apache.curator.framework.api.CuratorEvent;
@@ -82,6 +87,7 @@ import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.CreateMode;
 import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException;
 import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.data.Stat;
 import org.apache.fluss.utils.ExceptionUtils;
+import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.types.Tuple2;
 
 import org.slf4j.Logger;
@@ -90,6 +96,7 @@ import org.slf4j.LoggerFactory;
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -133,6 +140,7 @@ public class ZooKeeperClient implements AutoCloseable {
     private final ZkSequenceIDCounter writerIdCounter;
 
     private final Semaphore inFlightRequests;
+    private final Configuration configuration;
 
     public ZooKeeperClient(
             CuratorFrameworkWithUnhandledErrorListener curatorFrameworkWrapper,
@@ -147,6 +155,7 @@ public class ZooKeeperClient implements AutoCloseable {
         int maxInFlightRequests =
                 configuration.getInt(ConfigOptions.ZOOKEEPER_MAX_INFLIGHT_REQUESTS);
         this.inFlightRequests = new Semaphore(maxInFlightRequests);
+        this.configuration = configuration;
     }
 
     public Optional<byte[]> getOrEmpty(String path) throws Exception {
@@ -1023,16 +1032,29 @@ public class ZooKeeperClient implements AutoCloseable {
         return getOrEmpty(path).map(BucketRemoteLogsZNode::decode);
     }
 
-    public void upsertLakeTableSnapshot(long tableId, LakeTableSnapshot lakeTableSnapshot)
+    /**
+     * Upserts a lake table snapshot for the given table.
+     *
+     * <p>This method merges the new snapshot with the existing one (if any) and stores it(data in
+     * remote file, the remote file path in ZK).
+     *
+     * @param tableId the table ID
+     * @param tablePath the table path
+     * @param lakeTableSnapshot the new snapshot to upsert
+     * @throws Exception if the operation fails
+     */
+    public void upsertLakeTableSnapshot(
+            long tableId, TablePath tablePath, LakeTableSnapshot lakeTableSnapshot)
             throws Exception {
-        String path = LakeTableZNode.path(tableId);
-        Optional<LakeTableSnapshot> optLakeTableSnapshot = getLakeTableSnapshot(tableId);
-        if (optLakeTableSnapshot.isPresent()) {
-            // we need to merge current lake table snapshot with previous
-            // since the current lake table snapshot request won't carry all
-            // the bucket for the table. It will only carry the bucket that is written
-            // after the previous commit
-            LakeTableSnapshot previous = optLakeTableSnapshot.get();
+        String zkPath = LakeTableZNode.path(tableId);
+        Optional<LakeTable> optPreviousLakeTable = getLakeTable(tableId);
+
+        // Merge with previous snapshot if exists
+        if (optPreviousLakeTable.isPresent()) {
+            // Merge current snapshot with previous one since the current snapshot request
+            // may not carry all buckets for the table. It typically only carries buckets
+            // that were written after the previous commit.
+            LakeTableSnapshot previous = optPreviousLakeTable.get().toLakeTableSnapshot();
 
             // merge log startup offset, current will override the previous
             Map<TableBucket, Long> bucketLogStartOffset =
@@ -1061,17 +1083,54 @@ public class ZooKeeperClient implements AutoCloseable {
                             bucketLogEndOffset,
                             bucketMaxTimestamp,
                             partitionNameById);
-            zkClient.setData().forPath(path, LakeTableZNode.encode(lakeTableSnapshot));
-        } else {
-            zkClient.create()
-                    .creatingParentsIfNeeded()
-                    .forPath(path, LakeTableZNode.encode(lakeTableSnapshot));
+        }
+
+        LakeTable lakeTable = storeLakeTableSnapshot(tablePath, tableId, lakeTableSnapshot);
+        byte[] zkData = LakeTableZNode.encode(lakeTable);
+        try {
+            if (optPreviousLakeTable.isPresent()) {
+                zkClient.setData().forPath(zkPath, zkData);
+            } else {
+                zkClient.create().creatingParentsIfNeeded().forPath(zkPath, zkData);
+            }
+        } catch (Exception e) {
+            LOG.warn("Failed to upsert lake table snapshot in zk.", e);
+            // discard the new lake table
+            lakeTable.discard();
+        }
+
+        // discard previous lake table
+        if (optPreviousLakeTable.isPresent()) {
+            optPreviousLakeTable.get().discard();
         }
     }
 
+    /**
+     * Gets the {@link LakeTable} for the given table ID.
+     *
+     * @param tableId the table ID
+     * @return an Optional containing the LakeTable if it exists, empty otherwise
+     * @throws Exception if the operation fails
+     */
+    public Optional<LakeTable> getLakeTable(long tableId) throws Exception {
+        String zkPath = LakeTableZNode.path(tableId);
+        return getOrEmpty(zkPath).map(LakeTableZNode::decode);
+    }
+
+    /**
+     * Gets the {@link LakeTableSnapshot} for the given table ID.
+     *
+     * @param tableId the table ID
+     * @return an Optional containing the LakeTableSnapshot if the table exists, empty otherwise
+     * @throws Exception if the operation fails
+     */
     public Optional<LakeTableSnapshot> getLakeTableSnapshot(long tableId) throws Exception {
-        String path = LakeTableZNode.path(tableId);
-        return getOrEmpty(path).map(LakeTableZNode::decode);
+        Optional<LakeTable> optLakeTable = getLakeTable(tableId);
+        if (optLakeTable.isPresent()) {
+            return Optional.of(optLakeTable.get().toLakeTableSnapshot());
+        } else {
+            return Optional.empty();
+        }
     }
 
     /**
@@ -1233,6 +1292,28 @@ public class ZooKeeperClient implements AutoCloseable {
 
     public CuratorFramework getCuratorClient() {
         return zkClient;
+    }
+
+    /** Store the lake table snapshot info, return LakeTable stored in Zk Node. */
+    private LakeTable storeLakeTableSnapshot(
+            TablePath tablePath, long tableId, LakeTableSnapshot lakeTableSnapshot)
+            throws IOException {
+        // get the remote file path to store the lake table snapshot information
+        FsPath remoteLakeTableSnapshotPath =
+                FlussPaths.remoteLakeTableSnapshotPath(
+                        configuration, tablePath, tableId, lakeTableSnapshot.getSnapshotId());
+        // check whether the parent directory exists, if not, create the directory
+        FileSystem fileSystem = remoteLakeTableSnapshotPath.getFileSystem();
+        if (!fileSystem.exists(remoteLakeTableSnapshotPath.getParent())) {
+            fileSystem.mkdirs(remoteLakeTableSnapshotPath.getParent());
+        }
+        // serialize table snapshot to json bytes, and write to file
+        byte[] jsonBytes = LakeTableSnapshotJsonSerde.toJson(lakeTableSnapshot);
+        try (FSDataOutputStream outputStream =
+                fileSystem.create(remoteLakeTableSnapshotPath, FileSystem.WriteMode.OVERWRITE)) {
+            outputStream.write(jsonBytes);
+        }
+        return new LakeTable(remoteLakeTableSnapshotPath);
     }
 
     // --------------------------------------------------------------------------------------------
