@@ -32,12 +32,15 @@ import org.apache.fluss.utils.IOUtils;
 import org.apache.iceberg.PartitionSpec;
 import org.apache.iceberg.Schema;
 import org.apache.iceberg.SortOrder;
+import org.apache.iceberg.Table;
+import org.apache.iceberg.UpdateProperties;
 import org.apache.iceberg.catalog.Catalog;
 import org.apache.iceberg.catalog.Namespace;
 import org.apache.iceberg.catalog.SupportsNamespaces;
 import org.apache.iceberg.catalog.TableIdentifier;
 import org.apache.iceberg.exceptions.AlreadyExistsException;
 import org.apache.iceberg.exceptions.NoSuchNamespaceException;
+import org.apache.iceberg.exceptions.NoSuchTableException;
 import org.apache.iceberg.types.Type;
 import org.apache.iceberg.types.Types;
 
@@ -119,8 +122,27 @@ public class IcebergLakeCatalog implements LakeCatalog {
     @Override
     public void alterTable(TablePath tablePath, List<TableChange> tableChanges, Context context)
             throws TableNotExistException {
-        throw new UnsupportedOperationException(
-                "Alter table is not supported for Iceberg at the moment");
+        try {
+            Table table = icebergCatalog.loadTable(toIcebergTableIdentifier(tablePath));
+            UpdateProperties updateProperties = table.updateProperties();
+            for (TableChange tableChange : tableChanges) {
+                if (tableChange instanceof TableChange.SetOption) {
+                    TableChange.SetOption option = (TableChange.SetOption) tableChange;
+                    updateProperties.set(
+                            convertFlussPropertyKeyToIceberg(option.getKey()), option.getValue());
+                } else if (tableChange instanceof TableChange.ResetOption) {
+                    TableChange.ResetOption option = (TableChange.ResetOption) tableChange;
+                    updateProperties.remove(convertFlussPropertyKeyToIceberg(option.getKey()));
+                } else {
+                    throw new UnsupportedOperationException(
+                            "Unsupported table change: " + tableChange.getClass());
+                }
+            }
+
+            updateProperties.commit();
+        } catch (NoSuchTableException e) {
+            throw new TableNotExistException("Table " + tablePath + " does not exist.");
+        }
     }
 
     private TableIdentifier toIcebergTableIdentifier(TablePath tablePath) {
@@ -246,6 +268,14 @@ public class IcebergLakeCatalog implements LakeCatalog {
             icebergProperties.put(key.substring(ICEBERG_CONF_PREFIX.length()), value);
         } else {
             icebergProperties.put(FLUSS_CONF_PREFIX + key, value);
+        }
+    }
+
+    private static String convertFlussPropertyKeyToIceberg(String key) {
+        if (key.startsWith(ICEBERG_CONF_PREFIX)) {
+            return key.substring(ICEBERG_CONF_PREFIX.length());
+        } else {
+            return FLUSS_CONF_PREFIX + key;
         }
     }
 
