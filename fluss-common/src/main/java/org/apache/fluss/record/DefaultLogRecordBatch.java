@@ -381,7 +381,7 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
 
         @Override
         public void close() {
-            reader.close();
+            // reader has no resources to release
         }
     }
 

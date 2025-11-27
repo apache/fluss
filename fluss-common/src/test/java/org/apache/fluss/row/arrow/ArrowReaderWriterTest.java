@@ -238,7 +238,6 @@ class ArrowReaderWriterTest {
                 assertThat(row.getTimestampLtz(20, 6)).isEqualTo(rowData.getTimestampLtz(20, 6));
                 assertThat(row.getTimestampLtz(21, 9)).isEqualTo(rowData.getTimestampLtz(21, 9));
             }
-            reader.close();
         }
     }
 

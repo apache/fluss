@@ -175,7 +175,8 @@ public class ArrowUtils {
                 columnVectors.add(
                         createArrowColumnVector(fieldVectors.get(i), rowType.getTypeAt(i)));
             }
-            return new ArrowReader(schemaRoot, columnVectors.toArray(new ColumnVector[0]));
+            return new ArrowReader(
+                    columnVectors.toArray(new ColumnVector[0]), schemaRoot.getRowCount());
         } catch (IOException e) {
             throw new RuntimeException("Failed to deserialize ArrowRecordBatch.", e);
         }

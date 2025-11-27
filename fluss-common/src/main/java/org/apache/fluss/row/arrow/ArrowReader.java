@@ -58,6 +58,7 @@ public class ArrowReader {
     }
 
     public void close() {
-        root.close();
+        // Do not close the VectorSchemaRoot here.
+        // The root will be closed when LogRecordReadContext closes.
     }
 }

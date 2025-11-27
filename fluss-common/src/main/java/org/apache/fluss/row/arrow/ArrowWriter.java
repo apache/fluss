@@ -30,6 +30,7 @@ import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.BaseVariableWidthVe
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.FieldVector;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.VectorSchemaRoot;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.VectorUnloader;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.complex.ListVector;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.compression.CompressionCodec;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.compression.CompressionUtil;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.ipc.WriteChannel;
@@ -87,8 +88,6 @@ public class ArrowWriter implements AutoCloseable {
      */
     private final int metadataLength;
 
-    private final RowType schema;
-
     private final CompressionCodec compressionCodec;
     private final ArrowCompressionRatioEstimator compressionRatioEstimator;
 
@@ -112,7 +111,6 @@ public class ArrowWriter implements AutoCloseable {
             ArrowCompressionInfo compressionInfo,
             ArrowCompressionRatioEstimator compressionRatioEstimator) {
         this.writerKey = writerKey;
-        this.schema = schema;
         this.root = VectorSchemaRoot.create(ArrowUtils.toArrowSchema(schema), allocator);
         this.provider = checkNotNull(provider);
         this.compressionCodec = compressionInfo.createCompressionCodec();
@@ -181,7 +179,10 @@ public class ArrowWriter implements AutoCloseable {
         for (int i = 0; i < fieldWriters.length; i++) {
             FieldVector fieldVector = root.getVector(i);
             initFieldVector(fieldVector);
-            fieldWriters[i] = ArrowUtils.createArrowFieldWriter(fieldVector, schema.getTypeAt(i));
+        }
+        // Reset field writers to clear their offset counters (for ArrayWriter)
+        for (ArrowFieldWriter fieldWriter : fieldWriters) {
+            fieldWriter.reset();
         }
         root.setRowCount(0);
         recordsCount = 0;
@@ -285,6 +286,10 @@ public class ArrowWriter implements AutoCloseable {
         if (this.epoch == epoch) {
             root.clear();
             recordsCount = 0;
+            // Reset array writers when recycling
+            for (ArrowFieldWriter fieldWriter : fieldWriters) {
+                fieldWriter.reset();
+            }
             provider.recycleWriter(this);
         }
     }
@@ -302,6 +307,13 @@ public class ArrowWriter implements AutoCloseable {
             ((BaseFixedWidthVector) fieldVector).allocateNew(INITIAL_CAPACITY);
         } else if (fieldVector instanceof BaseVariableWidthVector) {
             ((BaseVariableWidthVector) fieldVector).allocateNew(INITIAL_CAPACITY);
+        } else if (fieldVector instanceof ListVector) {
+            ListVector listVector = (ListVector) fieldVector;
+            listVector.allocateNew();
+            FieldVector dataVector = listVector.getDataVector();
+            if (dataVector != null) {
+                initFieldVector(dataVector);
+            }
         } else {
             fieldVector.allocateNew();
         }

@@ -59,4 +59,9 @@ public abstract class ArrowFieldWriter {
             doWrite(rowIndex, getters, ordinal, handleSafe);
         }
     }
+
+    /** Resets the state of the writer to write the next batch of fields. */
+    public void reset() {
+        fieldVector.reset();
+    }
 }

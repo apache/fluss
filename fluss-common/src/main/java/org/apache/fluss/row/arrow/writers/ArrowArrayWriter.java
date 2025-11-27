@@ -46,4 +46,12 @@ public class ArrowArrayWriter extends ArrowFieldWriter {
         offset += array.size();
         listVector.endValue(rowIndex, array.size());
     }
+
+    /** Resets the offset counter for reuse. */
+    @Override
+    public void reset() {
+        super.reset();
+        elementWriter.reset();
+        offset = 0;
+    }
 }
