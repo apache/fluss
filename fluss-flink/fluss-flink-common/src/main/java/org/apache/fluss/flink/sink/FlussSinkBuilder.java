@@ -73,6 +73,9 @@ public class FlussSinkBuilder<InputT> {
     private final Map<String, String> configOptions = new HashMap<>();
     private FlussSerializationSchema<InputT> serializationSchema;
     private boolean shuffleByBucketId = true;
+    // Optional list of columns for partial update. When set, upsert will only update these columns.
+    // The primary key columns must be fully specified in this list.
+    private List<String> partialUpdateColumns;
 
     /** Set the bootstrap server for the sink. */
     public FlussSinkBuilder<InputT> setBootstrapServers(String bootstrapServers) {
@@ -95,6 +98,28 @@ public class FlussSinkBuilder<InputT> {
     /** Set shuffle by bucket id. */
     public FlussSinkBuilder<InputT> setShuffleByBucketId(boolean shuffleByBucketId) {
         this.shuffleByBucketId = shuffleByBucketId;
+        return this;
+    }
+
+    /**
+     * Enable partial update by specifying the column names to update for upsert tables.
+     * Primary key columns must be included in this list.
+     */
+    public FlussSinkBuilder<InputT> setPartialUpdateColumns(List<String> columns) {
+        this.partialUpdateColumns = columns;
+        return this;
+    }
+
+    /**
+     * Enable partial update by specifying the column names to update for upsert tables.
+     * Convenience varargs overload.
+     */
+    public FlussSinkBuilder<InputT> setPartialUpdateColumns(String... columns) {
+        if (columns == null) {
+            this.partialUpdateColumns = null;
+        } else {
+            this.partialUpdateColumns = java.util.Arrays.asList(columns);
+        }
         return this;
     }
 
@@ -130,7 +155,7 @@ public class FlussSinkBuilder<InputT> {
 
         TableInfo tableInfo;
         try (Connection connection = ConnectionFactory.createConnection(flussConfig);
-                Admin admin = connection.getAdmin()) {
+             Admin admin = connection.getAdmin()) {
             try {
                 tableInfo = admin.getTableInfo(tablePath).get();
             } catch (InterruptedException e) {
@@ -153,12 +178,17 @@ public class FlussSinkBuilder<InputT> {
 
         if (isUpsert) {
             LOG.info("Initializing Fluss upsert sink writer ...");
+            int[] targetColumnIndexes =
+                    computeTargetColumnIndexes(
+                            tableRowType.getFieldNames(),
+                            tableInfo.getPrimaryKeys(),
+                            partialUpdateColumns);
             writerBuilder =
                     new FlinkSink.UpsertSinkWriterBuilder<>(
                             tablePath,
                             flussConfig,
                             tableRowType,
-                            null, // not support partialUpdateColumns yet
+                            targetColumnIndexes,
                             numBucket,
                             bucketKeys,
                             partitionKeys,
@@ -192,5 +222,48 @@ public class FlussSinkBuilder<InputT> {
 
         checkNotNull(tableName, "Table name is required but not provided.");
         checkArgument(!tableName.isEmpty(), "Table name cannot be empty.");
+    }
+
+    // -------------- Test-visible helper methods --------------
+    /**
+     * Computes target column indexes for partial updates.
+     * If {@code specifiedColumns} is null or empty, returns null indicating full update.
+     * Validates that all primary key columns are included in the specified columns.
+     *
+     * @param allFieldNames the list of all field names in table row type order
+     * @param primaryKeyNames the list of primary key column names
+     * @param specifiedColumns the optional list of columns specified for partial update
+     * @return the indexes into {@code allFieldNames} corresponding to {@code specifiedColumns}, or null for full update
+     * @throws IllegalArgumentException if a specified column does not exist or primary key coverage is incomplete
+     */
+    static int[] computeTargetColumnIndexes(
+            List<String> allFieldNames, List<String> primaryKeyNames, List<String> specifiedColumns) {
+        if (specifiedColumns == null || specifiedColumns.isEmpty()) {
+            return null; // full update
+        }
+
+        // Map specified column names to indexes
+        int[] indexes = new int[specifiedColumns.size()];
+        for (int i = 0; i < specifiedColumns.size(); i++) {
+            String col = specifiedColumns.get(i);
+            int idx = allFieldNames.indexOf(col);
+            checkArgument(
+                    idx >= 0,
+                    "Column '%s' not found in table schema: %s",
+                    col,
+                    allFieldNames);
+            indexes[i] = idx;
+        }
+
+        // Validate that all primary key columns are covered
+        for (String pk : primaryKeyNames) {
+            checkArgument(
+                    specifiedColumns.contains(pk),
+                    "Partial updates must include all primary key columns. Missing primary key column: %s. Provided columns: %s",
+                    pk,
+                    specifiedColumns);
+        }
+
+        return indexes;
     }
 }
