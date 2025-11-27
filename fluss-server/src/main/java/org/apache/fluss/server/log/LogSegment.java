@@ -44,7 +44,6 @@ import javax.annotation.concurrent.NotThreadSafe;
 
 import java.io.File;
 import java.io.IOException;
-import java.nio.file.NoSuchFileException;
 import java.util.Optional;
 
 import static org.apache.fluss.record.LogRecordBatchFormat.V0_RECORD_BATCH_HEADER_SIZE;
@@ -173,23 +172,6 @@ public final class LogSegment {
         timeIndex().resize(size);
     }
 
-    public void sanityCheck(boolean timeIndexFileNewlyCreated) throws IOException {
-        if (lazyOffsetIndex.file().exists()) {
-            // Resize the time index file to 0 if it is newly created.
-            if (timeIndexFileNewlyCreated) {
-                timeIndex().resize(0);
-            }
-            // Sanity checks for time index and offset index are skipped because
-            // we will recover the segments above the recovery point in recoverLog()
-            // in any case so sanity checking them here is redundant.
-        } else {
-            throw new NoSuchFileException(
-                    "Offset index file "
-                            + lazyOffsetIndex.file().getAbsolutePath()
-                            + " does not exist.");
-        }
-    }
-
     /**
      * The maximum timestamp we see so far.
      *
@@ -302,7 +284,7 @@ public final class LogSegment {
      * Run recovery on the given segment. This will rebuild the index from the log file and lop off
      * any invalid bytes from the end of the log and index.
      */
-    public int recover() throws IOException {
+    public int recover() throws Exception {
         offsetIndex().reset();
         timeIndex().reset();
         int validBytes = 0;
