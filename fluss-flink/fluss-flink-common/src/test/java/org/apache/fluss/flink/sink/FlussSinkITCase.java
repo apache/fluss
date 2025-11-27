@@ -334,7 +334,6 @@ public class FlussSinkITCase extends FlinkTestBase {
         initialStream.sinkTo(initialSink).name("Fluss Initial Data Sink");
         env.execute("First Stream Updates");
 
-
         ArrayList<TestOrder> itemIdUpdates = new ArrayList<>();
         itemIdUpdates.add(new TestOrder(2001, -1, 100, "addr1", RowKind.UPDATE_AFTER));
         itemIdUpdates.add(new TestOrder(2003, -1, 300, "addr3", RowKind.UPDATE_AFTER));
@@ -351,7 +350,7 @@ public class FlussSinkITCase extends FlinkTestBase {
                         .build();
 
         updateStream.sinkTo(updateSink).name("Fluss Amount/Address Update Sink");
-        env.execute("Test Amount/Address Updates"); 
+        env.execute("Test Amount/Address Updates");
 
         Table table = conn.getTable(new TablePath(DEFAULT_DB, "partial_update_two_writers_test"));
         LogScanner logScanner = table.newScan().createLogScanner();
@@ -464,7 +463,8 @@ public class FlussSinkITCase extends FlinkTestBase {
         insertEnv.execute("Test Inserts for Partial Updates Two Writers");
 
         // Now start partial updates in a separate async job to avoid racing with inserts
-        StreamExecutionEnvironment updatesEnv = StreamExecutionEnvironment.getExecutionEnvironment();
+        StreamExecutionEnvironment updatesEnv =
+                StreamExecutionEnvironment.getExecutionEnvironment();
         DataStream<RowData> streamWriter1 = updatesEnv.fromData(updatesWriter1);
         DataStream<RowData> streamWriter2 = updatesEnv.fromData(updatesWriter2);
 
@@ -571,7 +571,8 @@ public class FlussSinkITCase extends FlinkTestBase {
         i1.setRowKind(RowKind.INSERT);
         inserts.add(i1);
 
-        // Partial update only address (orderId, address). Other columns are explicitly null in input
+        // Partial update only address (orderId, address). Other columns are explicitly null in
+        // input
         List<RowData> updates = new ArrayList<>();
         RowData u1 = converter.toFlinkRowData(row(201L, null, null, "x1_new"));
         u1.setRowKind(RowKind.UPDATE_AFTER);
@@ -580,7 +581,8 @@ public class FlussSinkITCase extends FlinkTestBase {
         // Stage 1: run inserts in a dedicated synchronous job to avoid race with partial updates
         StreamExecutionEnvironment insertEnv = StreamExecutionEnvironment.getExecutionEnvironment();
         DataStream<RowData> insertStream = insertEnv.fromData(inserts);
-        RowDataSerializationSchema insertSerializationSchema = new RowDataSerializationSchema(false, true);
+        RowDataSerializationSchema insertSerializationSchema =
+                new RowDataSerializationSchema(false, true);
         FlinkSink<RowData> insertSink =
                 FlussSink.<RowData>builder()
                         .setBootstrapServers(bootstrapServers)
@@ -594,7 +596,8 @@ public class FlussSinkITCase extends FlinkTestBase {
         // Stage 2: start partial updates in a separate async job
         StreamExecutionEnvironment updateEnv = StreamExecutionEnvironment.getExecutionEnvironment();
         DataStream<RowData> updateStream = updateEnv.fromData(updates);
-        RowDataSerializationSchema updateSerializationSchema = new RowDataSerializationSchema(false, true);
+        RowDataSerializationSchema updateSerializationSchema =
+                new RowDataSerializationSchema(false, true);
         FlinkSink<RowData> partialSink =
                 FlussSink.<RowData>builder()
                         .setBootstrapServers(bootstrapServers)

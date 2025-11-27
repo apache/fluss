@@ -103,8 +103,8 @@ public class FlussSinkBuilder<InputT> {
     }
 
     /**
-     * Enable partial update by specifying the column names to update for upsert tables.
-     * Primary key columns must be included in this list.
+     * Enable partial update by specifying the column names to update for upsert tables. Primary key
+     * columns must be included in this list.
      */
     public FlussSinkBuilder<InputT> setPartialUpdateColumns(List<String> columns) {
         this.partialUpdateColumns = columns;
@@ -112,12 +112,11 @@ public class FlussSinkBuilder<InputT> {
     }
 
     /**
-     * Enable partial update by specifying the column names to update for upsert tables.
-     * Convenience varargs overload.
+     * Enable partial update by specifying the column names to update for upsert tables. Convenience
+     * varargs overload.
      */
     public FlussSinkBuilder<InputT> setPartialUpdateColumns(String... columns) {
-        return setPartialUpdateColumns(
-                columns == null ? null : Arrays.asList(columns));
+        return setPartialUpdateColumns(columns == null ? null : Arrays.asList(columns));
     }
 
     /** Set a configuration option. */
@@ -152,7 +151,7 @@ public class FlussSinkBuilder<InputT> {
 
         TableInfo tableInfo;
         try (Connection connection = ConnectionFactory.createConnection(flussConfig);
-             Admin admin = connection.getAdmin()) {
+                Admin admin = connection.getAdmin()) {
             try {
                 tableInfo = admin.getTableInfo(tablePath).get();
             } catch (InterruptedException e) {
@@ -223,18 +222,22 @@ public class FlussSinkBuilder<InputT> {
 
     // -------------- Test-visible helper methods --------------
     /**
-     * Computes target column indexes for partial updates.
-     * If {@code specifiedColumns} is null or empty, returns null indicating full update.
-     * Validates that all primary key columns are included in the specified columns.
+     * Computes target column indexes for partial updates. If {@code specifiedColumns} is null or
+     * empty, returns null indicating full update. Validates that all primary key columns are
+     * included in the specified columns.
      *
      * @param allFieldNames the list of all field names in table row type order
      * @param primaryKeyNames the list of primary key column names
      * @param specifiedColumns the optional list of columns specified for partial update
-     * @return the indexes into {@code allFieldNames} corresponding to {@code specifiedColumns}, or null for full update
-     * @throws IllegalArgumentException if a specified column does not exist or primary key coverage is incomplete
+     * @return the indexes into {@code allFieldNames} corresponding to {@code specifiedColumns}, or
+     *     null for full update
+     * @throws IllegalArgumentException if a specified column does not exist or primary key coverage
+     *     is incomplete
      */
     static int[] computeTargetColumnIndexes(
-            List<String> allFieldNames, List<String> primaryKeyNames, List<String> specifiedColumns) {
+            List<String> allFieldNames,
+            List<String> primaryKeyNames,
+            List<String> specifiedColumns) {
         if (specifiedColumns == null || specifiedColumns.isEmpty()) {
             return null; // full update
         }
@@ -245,10 +248,7 @@ public class FlussSinkBuilder<InputT> {
             String col = specifiedColumns.get(i);
             int idx = allFieldNames.indexOf(col);
             checkArgument(
-                    idx >= 0,
-                    "Column '%s' not found in table schema: %s",
-                    col,
-                    allFieldNames);
+                    idx >= 0, "Column '%s' not found in table schema: %s", col, allFieldNames);
             indexes[i] = idx;
         }
 
