@@ -39,7 +39,7 @@ import java.util.Map;
 public class TestingLakeTieringFactory
         implements LakeTieringFactory<TestingWriteResult, TestingCommittable> {
 
-    @Nullable private final TestingLakeCommitter testingLakeCommitter;
+    @Nullable private TestingLakeCommitter testingLakeCommitter;
 
     public TestingLakeTieringFactory(@Nullable TestingLakeCommitter testingLakeCommitter) {
         this.testingLakeCommitter = testingLakeCommitter;
@@ -63,7 +63,10 @@ public class TestingLakeTieringFactory
     @Override
     public LakeCommitter<TestingWriteResult, TestingCommittable> createLakeCommitter(
             CommitterInitContext committerInitContext) throws IOException {
-        return testingLakeCommitter == null ? new TestingLakeCommitter() : testingLakeCommitter;
+        if (testingLakeCommitter == null) {
+            this.testingLakeCommitter = new TestingLakeCommitter();
+        }
+        return testingLakeCommitter;
     }
 
     @Override

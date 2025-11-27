@@ -81,7 +81,6 @@ import org.apache.fluss.server.metrics.group.CoordinatorMetricGroup;
 import org.apache.fluss.server.utils.ServerRpcMessageUtils;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.BucketAssignment;
-import org.apache.fluss.server.zk.data.LakeTableSnapshot;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
 import org.apache.fluss.server.zk.data.RemoteLogManifestHandle;
@@ -89,6 +88,7 @@ import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.server.zk.data.TabletServerRegistration;
 import org.apache.fluss.server.zk.data.ZkData.PartitionIdsZNode;
 import org.apache.fluss.server.zk.data.ZkData.TableIdsZNode;
+import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
 import org.apache.fluss.utils.types.Tuple2;
 
 import org.slf4j.Logger;
@@ -1204,7 +1204,13 @@ public class CoordinatorEventProcessor implements EventProcessor {
             tableResp.setTableId(tableId);
 
             try {
-                zooKeeperClient.upsertLakeTableSnapshot(tableId, lakeTableSnapshotEntry.getValue());
+                TablePath tablePath = coordinatorContext.getTablePathById(tableId);
+                if (tablePath == null) {
+                    throw new RuntimeException(
+                            String.format("Failed to find table path for table id: %d", tableId));
+                }
+                zooKeeperClient.upsertLakeTableSnapshot(
+                        tableId, tablePath, lakeTableSnapshotEntry.getValue());
             } catch (Exception e) {
                 ApiError error = ApiError.fromThrowable(e);
                 tableResp.setError(error.error().code(), error.message());

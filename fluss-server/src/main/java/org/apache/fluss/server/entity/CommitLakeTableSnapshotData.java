@@ -18,7 +18,7 @@
 package org.apache.fluss.server.entity;
 
 import org.apache.fluss.rpc.messages.CommitLakeTableSnapshotRequest;
-import org.apache.fluss.server.zk.data.LakeTableSnapshot;
+import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
 
 import java.util.Map;
 import java.util.Objects;

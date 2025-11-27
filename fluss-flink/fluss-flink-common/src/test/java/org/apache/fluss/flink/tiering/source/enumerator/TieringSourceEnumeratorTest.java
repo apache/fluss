@@ -393,6 +393,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
 
             // mock finished tiered this round, check second round
             context.getSplitsAssignmentSequence().clear();
+            long snapshotId = 1;
             final Map<Long, Map<Integer, Long>> bucketOffsetOfInitialWrite = new HashMap<>();
             for (Map.Entry<String, Long> partitionNameById : partitionNameByIds.entrySet()) {
                 Map<Integer, Long> partitionBucketOffsetOfEarliest = new HashMap<>();
@@ -409,7 +410,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
                                 genCommitLakeTableSnapshotRequest(
                                         tableId,
                                         partitionNameById.getValue(),
-                                        1,
+                                        snapshotId++,
                                         partitionBucketOffsetOfEarliest,
                                         bucketOffsetOfInitialWrite.get(
                                                 partitionNameById.getValue())))
@@ -421,8 +422,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
             Map<Long, Map<Integer, Long>> bucketOffsetOfSecondWrite =
                     upsertRowForPartitionedTable(
                             tablePath, DEFAULT_PK_TABLE_DESCRIPTOR, partitionNameByIds, 10, 20);
-            long snapshotId = 0;
-            waitUntilPartitionTableSnapshot(tableId, partitionNameByIds, snapshotId);
+            waitUntilPartitionTableSnapshot(tableId, partitionNameByIds, 0);
 
             // request tiering table splits
             for (int subtaskId = 0; subtaskId < numSubtasks; subtaskId++) {
@@ -518,6 +518,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
             // mock finished tiered this round, check second round
             context.getSplitsAssignmentSequence().clear();
             final Map<Long, Map<Integer, Long>> bucketOffsetOfInitialWrite = new HashMap<>();
+            long snapshot = 1;
             for (Map.Entry<String, Long> partitionNameById : partitionNameByIds.entrySet()) {
                 long partitionId = partitionNameById.getValue();
                 Map<Integer, Long> partitionInitialBucketOffsets = new HashMap<>();
@@ -537,7 +538,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
                                 genCommitLakeTableSnapshotRequest(
                                         tableId,
                                         partitionId,
-                                        1,
+                                        snapshot++,
                                         partitionInitialBucketOffsets,
                                         bucketOffsetOfInitialWrite.get(partitionId)))
                         .get();

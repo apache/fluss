@@ -91,6 +91,8 @@ public class FlussPaths {
     /** The name of the directory for shared remote snapshot kv files. */
     public static final String REMOTE_KV_SNAPSHOT_SHARED_DIR = "shared";
 
+    private static final String REMOTE_LAKE_DIR_NAME = "lake";
+
     // ----------------------------------------------------------------------------------------
     // LOG/KV Tablet Paths
     // ----------------------------------------------------------------------------------------
@@ -679,6 +681,28 @@ public class FlussPaths {
      */
     public static FsPath remoteKvSnapshotDir(FsPath remoteKvTabletDir, long snapshotId) {
         return new FsPath(remoteKvTabletDir, REMOTE_KV_SNAPSHOT_DIR_PREFIX + snapshotId);
+    }
+
+    /**
+     * Returns the remote path for storing lake snapshot metadata required by Fluss for a table.
+     *
+     * <p>The path contract:
+     *
+     * <pre>
+     * {$remote.data.dir}/lake/{databaseName}/{tableName}-{tableId}/snapshot/{snapshotId}
+     * </pre>
+     */
+    public static FsPath remoteLakeTableSnapshotPath(
+            Configuration conf, TablePath tablePath, long tableId, long snapshotId) {
+        return new FsPath(
+                String.format(
+                        "%s/%s/%s/%s-%d/snapshot/%d",
+                        conf.get(ConfigOptions.REMOTE_DATA_DIR),
+                        REMOTE_LAKE_DIR_NAME,
+                        tablePath.getDatabaseName(),
+                        tablePath.getTableName(),
+                        tableId,
+                        snapshotId));
     }
 
     /**

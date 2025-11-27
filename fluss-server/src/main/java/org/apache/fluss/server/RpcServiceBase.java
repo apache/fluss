@@ -93,7 +93,7 @@ import org.apache.fluss.server.tablet.TabletService;
 import org.apache.fluss.server.utils.ServerRpcMessageUtils;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.BucketSnapshot;
-import org.apache.fluss.server.zk.data.LakeTableSnapshot;
+import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
