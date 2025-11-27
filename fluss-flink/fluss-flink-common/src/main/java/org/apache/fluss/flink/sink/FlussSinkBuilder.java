@@ -33,6 +33,7 @@ import org.apache.flink.table.types.logical.RowType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -115,12 +116,8 @@ public class FlussSinkBuilder<InputT> {
      * Convenience varargs overload.
      */
     public FlussSinkBuilder<InputT> setPartialUpdateColumns(String... columns) {
-        if (columns == null) {
-            this.partialUpdateColumns = null;
-        } else {
-            this.partialUpdateColumns = java.util.Arrays.asList(columns);
-        }
-        return this;
+        return setPartialUpdateColumns(
+                columns == null ? null : Arrays.asList(columns));
     }
 
     /** Set a configuration option. */
