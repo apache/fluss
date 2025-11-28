@@ -49,7 +49,7 @@ public class S3DelegationTokenReceiver implements SecurityTokenReceiver {
             org.apache.hadoop.conf.Configuration hadoopConfig, List<String> credentialProvider) {
         LOG.info("Updating credential providers in Hadoop configuration");
 
-        String providers = hadoopConfig.get(S3ConfigOptions.PROVIDER_CONFIG_NAME, "");
+        String providers = hadoopConfig.get(S3ConfigOptions.CREDENTIALS_PROVIDER_CONFIG_NAME, "");
         List<String> credentialProviderPrependOrder = new ArrayList<>(credentialProvider);
         Collections.reverse(credentialProviderPrependOrder);
 
@@ -62,7 +62,7 @@ public class S3DelegationTokenReceiver implements SecurityTokenReceiver {
                     providers = credentialProviderName + "," + providers;
                     LOG.debug("Prepending provider, new providers value: {}", providers);
                 }
-                hadoopConfig.set(S3ConfigOptions.PROVIDER_CONFIG_NAME, providers);
+                hadoopConfig.set(S3ConfigOptions.CREDENTIALS_PROVIDER_CONFIG_NAME, providers);
             } else {
                 LOG.debug("Provider {} already exists in chain", credentialProviderName);
             }
