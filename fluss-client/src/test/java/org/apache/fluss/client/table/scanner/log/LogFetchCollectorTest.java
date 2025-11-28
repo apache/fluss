@@ -25,10 +25,6 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.record.LogRecordReadContext;
 import org.apache.fluss.rpc.entity.FetchLogResultForBucket;
 
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
-
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
@@ -50,7 +46,6 @@ public class LogFetchCollectorTest {
     private LogFetchCollector logFetchCollector;
     private LogRecordReadContext readContext;
 
-    @BeforeEach
     void setup() {
         MetadataUpdater metadataUpdater =
                 new TestingMetadataUpdater(
@@ -69,7 +64,6 @@ public class LogFetchCollectorTest {
                 LogRecordReadContext.createArrowReadContext(DATA1_ROW_TYPE, DEFAULT_SCHEMA_ID);
     }
 
-    @AfterEach
     void afterEach() {
         if (readContext != null) {
             readContext.close();
@@ -77,7 +71,6 @@ public class LogFetchCollectorTest {
         }
     }
 
-    @Test
     void testNormal() throws Exception {
         long fetchOffset = 0L;
         int bucketId = 0; // records for 0-10.
@@ -123,7 +116,6 @@ public class LogFetchCollectorTest {
         assertThat(bucketAndRecords.size()).isEqualTo(0);
     }
 
-    @Test
     void testCollectAfterUnassign() throws Exception {
         TableBucket tb1 = new TableBucket(DATA1_TABLE_ID, 1L, 1);
         TableBucket tb2 = new TableBucket(DATA1_TABLE_ID, 1L, 2);

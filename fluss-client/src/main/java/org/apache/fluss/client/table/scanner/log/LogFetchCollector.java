@@ -157,7 +157,7 @@ public class LogFetchCollector {
                     nextInLineFetch.nextFetchOffset());
         } else {
             if (nextInLineFetch.nextFetchOffset() == offset) {
-                List<ScanRecord> records = nextInLineFetch.fetchRecords(maxRecords);
+                List<ScanRecord> records = Collections.emptyList();
                 LOG.trace(
                         "Returning {} fetched records at offset {} for assigned bucket {}.",
                         records.size(),

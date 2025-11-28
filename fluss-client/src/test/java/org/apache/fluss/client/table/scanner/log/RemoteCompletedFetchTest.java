@@ -30,16 +30,19 @@ import org.apache.fluss.record.FileLogRecords;
 import org.apache.fluss.record.LogRecordReadContext;
 import org.apache.fluss.remote.RemoteLogSegment;
 import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.shaded.guava32.com.google.common.collect.Iterators;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
+import org.apache.fluss.utils.CloseableIterator;
 import org.apache.fluss.utils.Projection;
 
+import org.assertj.core.util.Streams;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.ValueSource;
+import org.junit.jupiter.params.provider.CsvSource;
 
 import javax.annotation.Nullable;
 
@@ -49,8 +52,10 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.NoSuchElementException;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.stream.Collectors;
 
 import static org.apache.fluss.record.TestData.DATA2;
 import static org.apache.fluss.record.TestData.DATA2_PHYSICAL_TABLE_PATH;
@@ -62,6 +67,7 @@ import static org.apache.fluss.record.TestData.DEFAULT_SCHEMA_ID;
 import static org.apache.fluss.testutils.DataTestUtils.genLogFile;
 import static org.apache.fluss.utils.FlussPaths.remoteLogSegmentDir;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 
 /** Test for {@link org.apache.fluss.client.table.scanner.log.RemoteCompletedFetch}. */
 class RemoteCompletedFetchTest {
@@ -107,22 +113,68 @@ class RemoteCompletedFetchTest {
                         null,
                         () -> recycleCalled.set(true));
 
-        List<ScanRecord> scanRecords = completedFetch.fetchRecords(8);
-        assertThat(scanRecords.size()).isEqualTo(8);
-        assertThat(scanRecords.get(0).logOffset()).isEqualTo(0L);
+        try (CloseableIterator<ScanRecord> records = completedFetch.records()) {
+            assertThat(records.hasNext()).isTrue();
+            List<ScanRecord> scanRecords =
+                    Streams.stream(Iterators.limit(records, 8)).collect(Collectors.toList());
+            assertThat(scanRecords.size()).isEqualTo(8);
+            assertThat(scanRecords.get(0).logOffset()).isEqualTo(0L);
 
-        assertThat(recycleCalled.get()).isFalse();
-        scanRecords = completedFetch.fetchRecords(8);
-        assertThat(scanRecords.size()).isEqualTo(2);
-        assertThat(scanRecords.get(0).logOffset()).isEqualTo(8L);
+            assertThat(recycleCalled.get()).isFalse();
+            assertThat(records.hasNext()).isTrue();
+            scanRecords = Streams.stream(Iterators.limit(records, 2)).collect(Collectors.toList());
+            assertThat(scanRecords.size()).isEqualTo(2);
+            assertThat(scanRecords.get(0).logOffset()).isEqualTo(8L);
+
+            assertThat(records.hasNext()).isFalse();
+            // when read finish, the file channel should be closed.
+            assertThat(fileLogRecords.channel().isOpen()).isFalse();
+            // and recycle should be called.
+            assertThat(recycleCalled.get()).isTrue();
+
+            // no more records can be read
+            assertThat(records.hasNext()).isFalse();
+            assertThatExceptionOfType(NoSuchElementException.class).isThrownBy(records::next);
+        }
+    }
+
+    @Test
+    void testAutoclose() throws Exception {
+        long fetchOffset = 0L;
+        TableBucket tableBucket = new TableBucket(DATA2_TABLE_ID, 0);
+        AtomicBoolean recycleCalled = new AtomicBoolean(false);
+        FileLogRecords fileLogRecords =
+                createFileLogRecords(
+                        tableBucket, DATA2_PHYSICAL_TABLE_PATH, DATA2, LogFormat.ARROW);
+        RemoteCompletedFetch completedFetch =
+                makeCompletedFetch(
+                        tableBucket,
+                        fileLogRecords,
+                        fetchOffset,
+                        null,
+                        () -> recycleCalled.set(true));
+
+        CloseableIterator<ScanRecord> records = completedFetch.records();
+
+        try (records) {
+            assertThat(records.hasNext()).isTrue();
+            List<ScanRecord> scanRecords =
+                    Streams.stream(Iterators.limit(records, 8)).collect(Collectors.toList());
+            assertThat(scanRecords.size()).isEqualTo(8);
+            assertThat(scanRecords.get(0).logOffset()).isEqualTo(0L);
+
+            assertThat(records.hasNext()).isTrue();
+        }
+
+        assertThat(records.hasNext()).isFalse();
         // when read finish, the file channel should be closed.
         assertThat(fileLogRecords.channel().isOpen()).isFalse();
         // and recycle should be called.
         assertThat(recycleCalled.get()).isTrue();
 
         // no more records can be read
-        scanRecords = completedFetch.fetchRecords(8);
-        assertThat(scanRecords.size()).isEqualTo(0);
+        assertThat(records.hasNext()).isFalse();
+        assertThatExceptionOfType(NoSuchElementException.class).isThrownBy(records::next);
     }
 
     @Test
@@ -140,36 +192,29 @@ class RemoteCompletedFetchTest {
                 makeCompletedFetch(
                         tb, fileLogRecords, fetchOffset, null, () -> recycleCalled.set(true));
 
-        List<ScanRecord> scanRecords = completedFetch.fetchRecords(8);
-        assertThat(scanRecords.size()).isEqualTo(8);
-        assertThat(scanRecords.get(0).logOffset()).isEqualTo(0L);
+        try (CloseableIterator<ScanRecord> records = completedFetch.records()) {
+            assertThat(records.hasNext()).isTrue();
+            List<ScanRecord> scanRecords =
+                    Streams.stream(Iterators.limit(records, 8)).collect(Collectors.toList());
+            assertThat(scanRecords.size()).isEqualTo(8);
+            assertThat(scanRecords.get(0).logOffset()).isEqualTo(0L);
 
-        assertThat(recycleCalled.get()).isFalse();
-        scanRecords = completedFetch.fetchRecords(8);
-        assertThat(scanRecords.size()).isEqualTo(2);
-        assertThat(scanRecords.get(0).logOffset()).isEqualTo(8L);
-        // when read finish, the file channel should be closed.
-        assertThat(fileLogRecords.channel().isOpen()).isFalse();
-        // and recycle should be called.
-        assertThat(recycleCalled.get()).isTrue();
+            assertThat(recycleCalled.get()).isFalse();
+            assertThat(records.hasNext()).isTrue();
+            scanRecords = Streams.stream(Iterators.limit(records, 2)).collect(Collectors.toList());
+            assertThat(scanRecords.size()).isEqualTo(2);
+            assertThat(scanRecords.get(0).logOffset()).isEqualTo(8L);
 
-        // no more records can be read
-        scanRecords = completedFetch.fetchRecords(8);
-        assertThat(scanRecords.size()).isEqualTo(0);
-    }
+            assertThat(records.hasNext()).isFalse();
+            // when read finish, the file channel should be closed.
+            assertThat(fileLogRecords.channel().isOpen()).isFalse();
+            // and recycle should be called.
+            assertThat(recycleCalled.get()).isTrue();
 
-    @Test
-    void testNegativeFetchCount() throws Exception {
-        long fetchOffset = 0L;
-        TableBucket tableBucket = new TableBucket(DATA2_TABLE_ID, 0);
-        FileLogRecords fileLogRecords =
-                createFileLogRecords(
-                        tableBucket, DATA2_PHYSICAL_TABLE_PATH, DATA2, LogFormat.ARROW);
-        RemoteCompletedFetch completedFetch =
-                makeCompletedFetch(tableBucket, fileLogRecords, fetchOffset, null);
-
-        List<ScanRecord> scanRecords = completedFetch.fetchRecords(-10);
-        assertThat(scanRecords.size()).isEqualTo(0);
+            // no more records can be read
+            assertThat(records.hasNext()).isFalse();
+            assertThatExceptionOfType(NoSuchElementException.class).isThrownBy(records::next);
+        }
     }
 
     @Test
@@ -185,13 +230,16 @@ class RemoteCompletedFetchTest {
         RemoteCompletedFetch completedFetch =
                 makeCompletedFetch(tableBucket, fileLogRecords, fetchOffset, null);
 
-        List<ScanRecord> scanRecords = completedFetch.fetchRecords(10);
-        assertThat(scanRecords.size()).isEqualTo(0);
+        try (CloseableIterator<ScanRecord> records = completedFetch.records()) {
+            assertThat(records.hasNext()).isFalse();
+            assertThatExceptionOfType(NoSuchElementException.class).isThrownBy(records::next);
+        }
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"INDEXED", "ARROW"})
-    void testProjection(String format) throws Exception {
+    @CsvSource({"'INDEXED', 0, 2", "'INDEXED', 2, 0", "'ARROW', 0, 2", "'ARROW', 2, 0"})
+    void testProjection(String format, int projectionIndex1, int projectionIndex2)
+            throws Exception {
         LogFormat logFormat = LogFormat.fromString(format);
         Schema schema =
                 Schema.newBuilder()
@@ -220,9 +268,11 @@ class RemoteCompletedFetchTest {
                 createFileLogRecords(tableBucket, DATA2_PHYSICAL_TABLE_PATH, DATA2, logFormat);
         RemoteCompletedFetch completedFetch =
                 makeCompletedFetch(
-                        tableBucket, fileLogRecords, fetchOffset, Projection.of(new int[] {0, 2}));
+                        tableBucket,
+                        fileLogRecords,
+                        fetchOffset,
+                        Projection.of(new int[] {projectionIndex1, projectionIndex2}));
 
-        List<ScanRecord> scanRecords = completedFetch.fetchRecords(8);
         List<Object[]> expectedObjects =
                 Arrays.asList(
                         new Object[] {1, "hello"},
@@ -233,30 +283,26 @@ class RemoteCompletedFetchTest {
                         new Object[] {6, "nihao world"},
                         new Object[] {7, "hello world2"},
                         new Object[] {8, "hi world2"});
-        assertThat(scanRecords.size()).isEqualTo(8);
-        for (int i = 0; i < scanRecords.size(); i++) {
-            Object[] expectObject = expectedObjects.get(i);
-            ScanRecord actualRecord = scanRecords.get(i);
-            assertThat(actualRecord.logOffset()).isEqualTo(i);
-            assertThat(actualRecord.getChangeType()).isEqualTo(ChangeType.APPEND_ONLY);
-            InternalRow row = actualRecord.getRow();
-            assertThat(row.getInt(0)).isEqualTo(expectObject[0]);
-            assertThat(row.getString(1).toString()).isEqualTo(expectObject[1]);
-        }
 
-        completedFetch =
-                makeCompletedFetch(
-                        tableBucket, fileLogRecords, fetchOffset, Projection.of(new int[] {2, 0}));
-        scanRecords = completedFetch.fetchRecords(8);
-        assertThat(scanRecords.size()).isEqualTo(8);
-        for (int i = 0; i < scanRecords.size(); i++) {
-            Object[] expectObject = expectedObjects.get(i);
-            ScanRecord actualRecord = scanRecords.get(i);
-            assertThat(actualRecord.logOffset()).isEqualTo(i);
-            assertThat(actualRecord.getChangeType()).isEqualTo(ChangeType.APPEND_ONLY);
-            InternalRow row = actualRecord.getRow();
-            assertThat(row.getString(0).toString()).isEqualTo(expectObject[1]);
-            assertThat(row.getInt(1)).isEqualTo(expectObject[0]);
+        try (CloseableIterator<ScanRecord> records = completedFetch.records()) {
+            List<ScanRecord> scanRecords =
+                    Streams.stream(Iterators.limit(records, 8)).collect(Collectors.toList());
+            assertThat(scanRecords.size()).isEqualTo(8);
+            for (int i = 0; i < scanRecords.size(); i++) {
+                Object[] expectObject = expectedObjects.get(i);
+                ScanRecord actualRecord = scanRecords.get(i);
+                assertThat(actualRecord.logOffset()).isEqualTo(i);
+                assertThat(actualRecord.getChangeType()).isEqualTo(ChangeType.APPEND_ONLY);
+                InternalRow row = actualRecord.getRow();
+
+                if (projectionIndex1 < projectionIndex2) {
+                    assertThat(row.getInt(0)).isEqualTo(expectObject[0]);
+                    assertThat(row.getString(1).toString()).isEqualTo(expectObject[1]);
+                } else {
+                    assertThat(row.getInt(1)).isEqualTo(expectObject[0]);
+                    assertThat(row.getString(0).toString()).isEqualTo(expectObject[1]);
+                }
+            }
         }
     }
 

@@ -35,10 +35,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.Closeable;
-import java.util.ArrayList;
-import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
+import java.util.NoSuchElementException;
 
 /**
  * {@link CompletedFetch} represents the result that was returned from the tablet server via a
@@ -148,7 +147,7 @@ abstract class CompletedFetch {
      *     maxRecords}
      * @return {@link ScanRecord scan records}
      */
-    public List<ScanRecord> fetchRecords(int maxRecords) {
+    private ScanRecord fetchRecord() {
         if (corruptLastRecord) {
             throw new FetchException(
                     "Received exception when fetching the next record from "
@@ -158,41 +157,35 @@ abstract class CompletedFetch {
         }
 
         if (isConsumed) {
-            return Collections.emptyList();
+            return null;
         }
 
-        List<ScanRecord> scanRecords = new ArrayList<>();
         try {
-            for (int i = 0; i < maxRecords; i++) {
-                // Only move to next record if there was no exception in the last fetch.
-                if (cachedRecordException == null) {
-                    corruptLastRecord = true;
-                    lastRecord = nextFetchedRecord();
-                    corruptLastRecord = false;
-                }
-
-                if (lastRecord == null) {
-                    break;
-                }
-
-                ScanRecord record = toScanRecord(lastRecord);
-                scanRecords.add(record);
-                recordsRead++;
-                nextFetchOffset = lastRecord.logOffset() + 1;
-                cachedRecordException = null;
+            // Only move to next record if there was no exception in the last fetch.
+            if (cachedRecordException == null) {
+                corruptLastRecord = true;
+                lastRecord = nextFetchedRecord();
+                corruptLastRecord = false;
             }
+
+            if (lastRecord == null) {
+                return null;
+            }
+
+            ScanRecord record = toScanRecord(lastRecord);
+
+            recordsRead++;
+            nextFetchOffset = lastRecord.logOffset() + 1;
+            cachedRecordException = null;
+            return record;
         } catch (Exception e) {
             cachedRecordException = e;
-            if (scanRecords.isEmpty()) {
-                throw new FetchException(
-                        "Received exception when fetching the next record from "
-                                + tableBucket
-                                + ". If needed, please back to past the record to continue scanning.",
-                        e);
-            }
+            throw new FetchException(
+                    "Received exception when fetching the next record from "
+                            + tableBucket
+                            + ". If needed, please back to past the record to continue scanning.",
+                    e);
         }
-
-        return scanRecords;
     }
 
     private LogRecord nextFetchedRecord() throws Exception {
@@ -253,6 +246,52 @@ abstract class CompletedFetch {
             // release underlying resources
             records.close();
             records = null;
+        }
+    }
+
+    public CloseableIterator<ScanRecord> records() {
+        return new ScanRecordIterator();
+    }
+
+    private class ScanRecordIterator implements CloseableIterator<ScanRecord> {
+        private ScanRecord lastFetchedRecord;
+
+        @Override
+        public void close() {
+            drain();
+        }
+
+        @Override
+        public boolean hasNext() {
+            if (isConsumed) {
+                return false;
+            }
+
+            maybeFetch();
+            return lastFetchedRecord != null;
+        }
+
+        @Override
+        public ScanRecord next() {
+            if (isConsumed) {
+                throw new NoSuchElementException();
+            }
+
+            maybeFetch();
+
+            if (lastFetchedRecord == null) {
+                throw new NoSuchElementException();
+            }
+
+            var output = lastFetchedRecord;
+            lastFetchedRecord = null;
+            return output;
+        }
+
+        private void maybeFetch() {
+            if (lastFetchedRecord == null) {
+                lastFetchedRecord = fetchRecord();
+            }
         }
     }
 }

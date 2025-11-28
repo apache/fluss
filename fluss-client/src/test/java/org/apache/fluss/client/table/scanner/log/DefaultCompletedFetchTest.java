@@ -30,11 +30,14 @@ import org.apache.fluss.record.LogRecordReadContext;
 import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.rpc.entity.FetchLogResultForBucket;
+import org.apache.fluss.shaded.guava32.com.google.common.collect.Iterators;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
+import org.apache.fluss.utils.CloseableIterator;
 import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.Projection;
 
+import org.assertj.core.util.Streams;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -51,6 +54,8 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.NoSuchElementException;
+import java.util.stream.Collectors;
 
 import static org.apache.fluss.compression.ArrowCompressionInfo.DEFAULT_COMPRESSION;
 import static org.apache.fluss.record.LogRecordBatchFormat.LOG_MAGIC_VALUE_V0;
@@ -64,6 +69,7 @@ import static org.apache.fluss.record.TestData.DEFAULT_SCHEMA_ID;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toByteBuffer;
 import static org.apache.fluss.testutils.DataTestUtils.createRecordsWithoutBaseLogOffset;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 
 /** Test for {@link org.apache.fluss.client.table.scanner.log.DefaultCompletedFetch}. */
 public class DefaultCompletedFetchTest {
@@ -95,31 +101,53 @@ public class DefaultCompletedFetchTest {
                         tb, createMemoryLogRecords(DATA2, LogFormat.ARROW, recordBatchMagic), 10L);
         DefaultCompletedFetch defaultCompletedFetch =
                 makeCompletedFetch(tb, resultForBucket0, fetchOffset);
-        List<ScanRecord> scanRecords = defaultCompletedFetch.fetchRecords(8);
-        assertThat(scanRecords.size()).isEqualTo(8);
-        assertThat(scanRecords.get(0).logOffset()).isEqualTo(0L);
 
-        scanRecords = defaultCompletedFetch.fetchRecords(8);
-        assertThat(scanRecords.size()).isEqualTo(2);
-        assertThat(scanRecords.get(0).logOffset()).isEqualTo(8L);
+        try (CloseableIterator<ScanRecord> records = defaultCompletedFetch.records()) {
+            assertThat(records.hasNext()).isTrue();
+            List<ScanRecord> scanRecords =
+                    Streams.stream(Iterators.limit(records, 8)).collect(Collectors.toList());
+            assertThat(scanRecords.size()).isEqualTo(8);
+            assertThat(scanRecords.get(0).logOffset()).isEqualTo(0L);
 
-        scanRecords = defaultCompletedFetch.fetchRecords(8);
-        assertThat(scanRecords.size()).isEqualTo(0);
+            assertThat(records.hasNext()).isTrue();
+            scanRecords = Streams.stream(Iterators.limit(records, 2)).collect(Collectors.toList());
+            assertThat(scanRecords.size()).isEqualTo(2);
+            assertThat(scanRecords.get(0).logOffset()).isEqualTo(8L);
+
+            // no more records can be read
+            assertThat(records.hasNext()).isFalse();
+            assertThatExceptionOfType(NoSuchElementException.class).isThrownBy(records::next);
+        }
     }
 
-    @ParameterizedTest
-    @ValueSource(bytes = {LOG_MAGIC_VALUE_V0, LOG_MAGIC_VALUE_V1})
-    void testNegativeFetchCount(byte recordBatchMagic) throws Exception {
+    @Test
+    void testAutoclose() throws Exception {
         long fetchOffset = 0L;
         int bucketId = 0; // records for 0-10.
         TableBucket tb = new TableBucket(DATA2_TABLE_ID, bucketId);
         FetchLogResultForBucket resultForBucket0 =
                 new FetchLogResultForBucket(
-                        tb, createMemoryLogRecords(DATA2, LogFormat.ARROW, recordBatchMagic), 10L);
+                        tb,
+                        createMemoryLogRecords(DATA2, LogFormat.ARROW, LOG_MAGIC_VALUE_V0),
+                        10L);
         DefaultCompletedFetch defaultCompletedFetch =
                 makeCompletedFetch(tb, resultForBucket0, fetchOffset);
-        List<ScanRecord> scanRecords = defaultCompletedFetch.fetchRecords(-10);
-        assertThat(scanRecords.size()).isEqualTo(0);
+
+        CloseableIterator<ScanRecord> records = defaultCompletedFetch.records();
+
+        try (records) {
+            assertThat(records.hasNext()).isTrue();
+            List<ScanRecord> scanRecords =
+                    Streams.stream(Iterators.limit(records, 8)).collect(Collectors.toList());
+            assertThat(scanRecords.size()).isEqualTo(8);
+            assertThat(scanRecords.get(0).logOffset()).isEqualTo(0L);
+
+            assertThat(records.hasNext()).isTrue();
+        }
+
+        // no more records can be read
+        assertThat(records.hasNext()).isFalse();
+        assertThatExceptionOfType(NoSuchElementException.class).isThrownBy(records::next);
     }
 
     @Test
@@ -131,8 +159,10 @@ public class DefaultCompletedFetchTest {
                 new FetchLogResultForBucket(tb, MemoryLogRecords.EMPTY, 0L);
         DefaultCompletedFetch defaultCompletedFetch =
                 makeCompletedFetch(tb, resultForBucket0, fetchOffset);
-        List<ScanRecord> scanRecords = defaultCompletedFetch.fetchRecords(10);
-        assertThat(scanRecords.size()).isEqualTo(0);
+        try (CloseableIterator<ScanRecord> records = defaultCompletedFetch.records()) {
+            assertThat(records.hasNext()).isFalse();
+            assertThatExceptionOfType(NoSuchElementException.class).isThrownBy(records::next);
+        }
     }
 
     @ParameterizedTest
@@ -173,7 +203,6 @@ public class DefaultCompletedFetchTest {
                 new FetchLogResultForBucket(tb, memoryLogRecords, 10L);
         DefaultCompletedFetch defaultCompletedFetch =
                 makeCompletedFetch(tb, resultForBucket0, fetchOffset, projection);
-        List<ScanRecord> scanRecords = defaultCompletedFetch.fetchRecords(8);
         List<Object[]> expectedObjects =
                 Arrays.asList(
                         new Object[] {1, "hello"},
@@ -184,31 +213,40 @@ public class DefaultCompletedFetchTest {
                         new Object[] {6, "nihao world"},
                         new Object[] {7, "hello world2"},
                         new Object[] {8, "hi world2"});
-        assertThat(scanRecords.size()).isEqualTo(8);
-        for (int i = 0; i < scanRecords.size(); i++) {
-            Object[] expectObject = expectedObjects.get(i);
-            ScanRecord actualRecord = scanRecords.get(i);
-            assertThat(actualRecord.logOffset()).isEqualTo(i);
-            assertThat(actualRecord.getChangeType()).isEqualTo(ChangeType.APPEND_ONLY);
-            InternalRow row = actualRecord.getRow();
-            assertThat(row.getInt(0)).isEqualTo(expectObject[0]);
-            assertThat(row.getString(1).toString()).isEqualTo(expectObject[1]);
+
+        try (CloseableIterator<ScanRecord> records = defaultCompletedFetch.records()) {
+            List<ScanRecord> scanRecords =
+                    Streams.stream(Iterators.limit(records, 8)).collect(Collectors.toList());
+            assertThat(scanRecords.size()).isEqualTo(8);
+            for (int i = 0; i < scanRecords.size(); i++) {
+                Object[] expectObject = expectedObjects.get(i);
+                ScanRecord actualRecord = scanRecords.get(i);
+                assertThat(actualRecord.logOffset()).isEqualTo(i);
+                assertThat(actualRecord.getChangeType()).isEqualTo(ChangeType.APPEND_ONLY);
+                InternalRow row = actualRecord.getRow();
+                assertThat(row.getInt(0)).isEqualTo(expectObject[0]);
+                assertThat(row.getString(1).toString()).isEqualTo(expectObject[1]);
+            }
         }
 
         // test projection reorder.
         defaultCompletedFetch =
                 makeCompletedFetch(
                         tb, resultForBucket0, fetchOffset, Projection.of(new int[] {2, 0}));
-        scanRecords = defaultCompletedFetch.fetchRecords(8);
-        assertThat(scanRecords.size()).isEqualTo(8);
-        for (int i = 0; i < scanRecords.size(); i++) {
-            Object[] expectObject = expectedObjects.get(i);
-            ScanRecord actualRecord = scanRecords.get(i);
-            assertThat(actualRecord.logOffset()).isEqualTo(i);
-            assertThat(actualRecord.getChangeType()).isEqualTo(ChangeType.APPEND_ONLY);
-            InternalRow row = actualRecord.getRow();
-            assertThat(row.getString(0).toString()).isEqualTo(expectObject[1]);
-            assertThat(row.getInt(1)).isEqualTo(expectObject[0]);
+
+        try (CloseableIterator<ScanRecord> records = defaultCompletedFetch.records()) {
+            List<ScanRecord> scanRecords =
+                    Streams.stream(Iterators.limit(records, 8)).collect(Collectors.toList());
+            assertThat(scanRecords.size()).isEqualTo(8);
+            for (int i = 0; i < scanRecords.size(); i++) {
+                Object[] expectObject = expectedObjects.get(i);
+                ScanRecord actualRecord = scanRecords.get(i);
+                assertThat(actualRecord.logOffset()).isEqualTo(i);
+                assertThat(actualRecord.getChangeType()).isEqualTo(ChangeType.APPEND_ONLY);
+                InternalRow row = actualRecord.getRow();
+                assertThat(row.getString(0).toString()).isEqualTo(expectObject[1]);
+                assertThat(row.getInt(1)).isEqualTo(expectObject[0]);
+            }
         }
     }
 
