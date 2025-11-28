@@ -109,9 +109,8 @@ public class PaimonLakeCatalog implements LakeCatalog {
     public void alterTable(TablePath tablePath, List<TableChange> tableChanges, Context context)
             throws TableNotExistException {
         try {
-            Identifier paimonPath = toPaimon(tablePath);
             List<SchemaChange> paimonSchemaChanges = toPaimonSchemaChanges(tableChanges);
-            alterTable(paimonPath, paimonSchemaChanges);
+            alterTable(tablePath, paimonSchemaChanges);
         } catch (Catalog.ColumnAlreadyExistException | Catalog.ColumnNotExistException e) {
             // shouldn't happen before we support schema change
             throw new RuntimeException(e);
@@ -155,12 +154,12 @@ public class PaimonLakeCatalog implements LakeCatalog {
         }
     }
 
-    private void alterTable(Identifier tablePath, List<SchemaChange> tableChanges)
+    private void alterTable(TablePath tablePath, List<SchemaChange> tableChanges)
             throws Catalog.ColumnAlreadyExistException, Catalog.ColumnNotExistException {
         try {
-            paimonCatalog.alterTable(tablePath, tableChanges, false);
+            paimonCatalog.alterTable(toPaimon(tablePath), tableChanges, false);
         } catch (Catalog.TableNotExistException e) {
-            throw new TableNotExistException("Table " + tablePath + " not exists.");
+            throw new TableNotExistException("Table " + tablePath + " does not exist.");
         }
     }
 
