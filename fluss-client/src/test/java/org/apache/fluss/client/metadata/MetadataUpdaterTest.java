@@ -36,6 +36,7 @@ import java.util.concurrent.CompletableFuture;
 
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.buildMetadataResponse;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** UT Test for update metadata of {@link MetadataUpdater}. */
 public class MetadataUpdaterTest {
@@ -60,9 +61,13 @@ public class MetadataUpdaterTest {
         assertThat(cluster.getAliveTabletServerList()).containsExactly(TS_NODE);
 
         // retry higher than max retry count.
-        gateway = new TestingAdminReadOnlyGateway(5);
-        cluster = MetadataUpdater.tryToInitializeClusterWithRetries(rpcClient, CS_NODE, gateway, 3);
-        assertThat(cluster).isNull();
+        AdminReadOnlyGateway gateway2 = new TestingAdminReadOnlyGateway(5);
+        assertThatThrownBy(
+                        () ->
+                                MetadataUpdater.tryToInitializeClusterWithRetries(
+                                        rpcClient, CS_NODE, gateway2, 3))
+                .isInstanceOf(StaleMetadataException.class)
+                .hasMessageContaining("The metadata is stale.");
     }
 
     private static final class TestingAdminReadOnlyGateway extends TestCoordinatorGateway {

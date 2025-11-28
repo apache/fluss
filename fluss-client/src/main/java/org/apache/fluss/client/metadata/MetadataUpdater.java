@@ -63,7 +63,7 @@ import static org.apache.fluss.utils.ExceptionUtils.stripExecutionException;
 public class MetadataUpdater {
     private static final Logger LOG = LoggerFactory.getLogger(MetadataUpdater.class);
 
-    private static final int MAX_RETRY_TIMES = 5;
+    private static final int MAX_RETRY_TIMES = 3;
     private static final int RETRY_INTERVAL_MS = 100;
 
     private final RpcClient rpcClient;
@@ -295,16 +295,18 @@ public class MetadataUpdater {
         Cluster cluster = null;
         Exception lastException = null;
         for (InetSocketAddress address : inetSocketAddresses) {
+            ServerNode serverNode = null;
             try {
-                ServerNode serverNode =
+                serverNode =
                         new ServerNode(
                                 -1,
                                 address.getHostString(),
                                 address.getPort(),
                                 ServerType.COORDINATOR);
+                ServerNode finalServerNode = serverNode;
                 AdminReadOnlyGateway adminReadOnlyGateway =
                         GatewayClientProxy.createGatewayProxy(
-                                () -> serverNode, rpcClient, AdminReadOnlyGateway.class);
+                                () -> finalServerNode, rpcClient, AdminReadOnlyGateway.class);
                 if (inetSocketAddresses.size() == 1) {
                     // if there is only one bootstrap server, we can retry to connect to it.
                     cluster =
@@ -315,6 +317,11 @@ public class MetadataUpdater {
                     break;
                 }
             } catch (Exception e) {
+                // We should dis-connected with the bootstrap server id to make sure the next
+                // retry can rebuild the connection.
+                if (serverNode != null) {
+                    rpcClient.disconnect(serverNode.uid());
+                }
                 LOG.error(
                         "Failed to initialize fluss client connection to bootstrap server: {}",
                         address,
@@ -325,9 +332,10 @@ public class MetadataUpdater {
 
         if (cluster == null && lastException != null) {
             String errorMsg =
-                    "Failed to initialize fluss client connection to server because no "
-                            + "bootstrap server is validate. bootstrap servers: "
-                            + inetSocketAddresses;
+                    "Failed to initialize fluss client connection to bootstrap servers: "
+                            + inetSocketAddresses
+                            + ". \nReason: "
+                            + lastException.getMessage();
             LOG.error(errorMsg);
             throw new IllegalStateException(errorMsg, lastException);
         }
@@ -348,18 +356,10 @@ public class MetadataUpdater {
                 return tryToInitializeCluster(gateway);
             } catch (Exception e) {
                 Throwable cause = stripExecutionException(e);
-                if (!(cause instanceof StaleMetadataException
-                        || cause instanceof NetworkException)) {
+                // in case of bootstrap is recovering, we should retry to connect.
+                if (!(cause instanceof StaleMetadataException || cause instanceof NetworkException)
+                        || retryCount >= maxRetryTimes) {
                     throw e;
-                }
-
-                if (retryCount >= maxRetryTimes) {
-                    LOG.warn(
-                            "Max retries ({}) exceeded to connect to {}. ",
-                            maxRetryTimes,
-                            serverNode,
-                            e);
-                    return null;
                 }
 
                 // We should dis-connected with the bootstrap server id to make sure the next
