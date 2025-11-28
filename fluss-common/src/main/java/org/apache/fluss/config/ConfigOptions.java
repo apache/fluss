@@ -572,6 +572,16 @@ public class ConfigOptions {
                                     + "This allows each ZooKeeper client instance to load its own configuration file, "
                                     + "instead of relying on shared JVM-level environment settings. "
                                     + "This enables fine-grained control over ZooKeeper client behavior.");
+
+    public static final ConfigOption<Integer> ZOOKEEPER_MAX_BUFFER_SIZE =
+            key("zookeeper.client.max-buffer-size")
+                    .intType()
+                    .defaultValue(100 * 1024 * 1024) // 100MB
+                    .withDescription(
+                            "The maximum buffer size (in bytes) for ZooKeeper client. "
+                                    + "This corresponds to the jute.maxbuffer property. "
+                                    + "Default is 100MB to match the RPC frame length limit.");
+
     // ------------------------------------------------------------------------
     //  ConfigOptions for Log
     // ------------------------------------------------------------------------
