@@ -102,7 +102,7 @@ public class DefaultCompletedFetchTest {
         DefaultCompletedFetch defaultCompletedFetch =
                 makeCompletedFetch(tb, resultForBucket0, fetchOffset);
 
-        try (CloseableIterator<ScanRecord> records = defaultCompletedFetch.records()) {
+        try (CloseableIterator<ScanRecord> records = defaultCompletedFetch.toRecords()) {
             assertThat(records.hasNext()).isTrue();
             List<ScanRecord> scanRecords =
                     Streams.stream(Iterators.limit(records, 8)).collect(Collectors.toList());
@@ -133,7 +133,7 @@ public class DefaultCompletedFetchTest {
         DefaultCompletedFetch defaultCompletedFetch =
                 makeCompletedFetch(tb, resultForBucket0, fetchOffset);
 
-        CloseableIterator<ScanRecord> records = defaultCompletedFetch.records();
+        CloseableIterator<ScanRecord> records = defaultCompletedFetch.toRecords();
 
         try (records) {
             assertThat(records.hasNext()).isTrue();
@@ -159,7 +159,7 @@ public class DefaultCompletedFetchTest {
                 new FetchLogResultForBucket(tb, MemoryLogRecords.EMPTY, 0L);
         DefaultCompletedFetch defaultCompletedFetch =
                 makeCompletedFetch(tb, resultForBucket0, fetchOffset);
-        try (CloseableIterator<ScanRecord> records = defaultCompletedFetch.records()) {
+        try (CloseableIterator<ScanRecord> records = defaultCompletedFetch.toRecords()) {
             assertThat(records.hasNext()).isFalse();
             assertThatExceptionOfType(NoSuchElementException.class).isThrownBy(records::next);
         }
@@ -214,7 +214,7 @@ public class DefaultCompletedFetchTest {
                         new Object[] {7, "hello world2"},
                         new Object[] {8, "hi world2"});
 
-        try (CloseableIterator<ScanRecord> records = defaultCompletedFetch.records()) {
+        try (CloseableIterator<ScanRecord> records = defaultCompletedFetch.toRecords()) {
             List<ScanRecord> scanRecords =
                     Streams.stream(Iterators.limit(records, 8)).collect(Collectors.toList());
             assertThat(scanRecords.size()).isEqualTo(8);
@@ -234,7 +234,7 @@ public class DefaultCompletedFetchTest {
                 makeCompletedFetch(
                         tb, resultForBucket0, fetchOffset, Projection.of(new int[] {2, 0}));
 
-        try (CloseableIterator<ScanRecord> records = defaultCompletedFetch.records()) {
+        try (CloseableIterator<ScanRecord> records = defaultCompletedFetch.toRecords()) {
             List<ScanRecord> scanRecords =
                     Streams.stream(Iterators.limit(records, 8)).collect(Collectors.toList());
             assertThat(scanRecords.size()).isEqualTo(8);

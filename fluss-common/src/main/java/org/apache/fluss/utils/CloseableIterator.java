@@ -20,6 +20,8 @@ package org.apache.fluss.utils;
 import java.io.Closeable;
 import java.util.Collections;
 import java.util.Iterator;
+import java.util.List;
+import java.util.NoSuchElementException;
 
 /**
  * Iterators that need to be closed in order to release resources should implement this interface.
@@ -49,6 +51,50 @@ public interface CloseableIterator<T> extends Iterator<T>, Closeable {
             @Override
             public void remove() {
                 inner.remove();
+            }
+        };
+    }
+
+    // TODO Test case
+    static <R> CloseableIterator<R> concatenate(List<CloseableIterator<R>> inners) {
+        return new CloseableIterator<R>() {
+            Iterator<CloseableIterator<R>> iterator = inners.stream().iterator();
+            CloseableIterator<R> current;
+
+            @Override
+            public void close() {
+                if (current != null) {
+                    current.close();
+                }
+
+                while (iterator.hasNext()) {
+                    current = iterator.next();
+
+                    if (current != null) {
+                        current.close();
+                    }
+                }
+            }
+
+            @Override
+            public boolean hasNext() {
+                while (current == null || !current.hasNext()) {
+                    if (!iterator.hasNext()) {
+                        return false;
+                    }
+
+                    current = iterator.next();
+                }
+                return true;
+            }
+
+            @Override
+            public R next() {
+                if (!hasNext()) {
+                    throw new NoSuchElementException();
+                }
+
+                return current.next();
             }
         };
     }

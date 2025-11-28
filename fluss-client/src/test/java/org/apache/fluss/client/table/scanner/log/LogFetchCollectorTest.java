@@ -25,10 +25,17 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.record.LogRecordReadContext;
 import org.apache.fluss.rpc.entity.FetchLogResultForBucket;
 
+import org.apache.fluss.shaded.guava32.com.google.common.collect.Iterators;
+import org.apache.fluss.utils.CloseableIterator;
+import org.assertj.core.util.Streams;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+
 import java.util.Collections;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
+import java.util.NoSuchElementException;
 
 import static org.apache.fluss.record.TestData.DATA1;
 import static org.apache.fluss.record.TestData.DATA1_ROW_TYPE;
@@ -37,7 +44,7 @@ import static org.apache.fluss.record.TestData.DATA1_TABLE_INFO;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
 import static org.apache.fluss.record.TestData.DEFAULT_SCHEMA_ID;
 import static org.apache.fluss.testutils.DataTestUtils.genMemoryLogRecordsByObject;
-import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.*;
 
 /** Test for {@link LogFetchCollector}. */
 public class LogFetchCollectorTest {
@@ -46,6 +53,7 @@ public class LogFetchCollectorTest {
     private LogFetchCollector logFetchCollector;
     private LogRecordReadContext readContext;
 
+    @BeforeEach
     void setup() {
         MetadataUpdater metadataUpdater =
                 new TestingMetadataUpdater(
@@ -64,6 +72,7 @@ public class LogFetchCollectorTest {
                 LogRecordReadContext.createArrowReadContext(DATA1_ROW_TYPE, DEFAULT_SCHEMA_ID);
     }
 
+    @AfterEach
     void afterEach() {
         if (readContext != null) {
             readContext.close();
@@ -71,6 +80,7 @@ public class LogFetchCollectorTest {
         }
     }
 
+    @Test
     void testNormal() throws Exception {
         long fetchOffset = 0L;
         int bucketId = 0; // records for 0-10.
@@ -88,10 +98,15 @@ public class LogFetchCollectorTest {
         assertThat(completedFetch.isInitialized()).isFalse();
 
         // Fetch the data and validate that we get all the records we want back.
-        Map<TableBucket, List<ScanRecord>> bucketAndRecords =
+        Map<TableBucket, CloseableIterator<ScanRecord>> bucketAndRecords =
                 logFetchCollector.collectFetch(logFetchBuffer);
         assertThat(bucketAndRecords.size()).isEqualTo(1);
-        assertThat(bucketAndRecords.get(tb)).size().isEqualTo(10);
+
+        CloseableIterator<ScanRecord> records = bucketAndRecords.get(tb);
+        assertThat(Streams.stream(Iterators.limit(records, 10)).count()).isEqualTo(10l);
+        boolean actual = records.hasNext();
+        assertThat(actual).isFalse();
+        assertThatExceptionOfType(NoSuchElementException.class).isThrownBy(records::next);
 
         // When we collected the data from the buffer, this will cause the completed fetch to get
         // initialized.
@@ -116,6 +131,7 @@ public class LogFetchCollectorTest {
         assertThat(bucketAndRecords.size()).isEqualTo(0);
     }
 
+    @Test
     void testCollectAfterUnassign() throws Exception {
         TableBucket tb1 = new TableBucket(DATA1_TABLE_ID, 1L, 1);
         TableBucket tb2 = new TableBucket(DATA1_TABLE_ID, 1L, 2);
@@ -137,7 +153,7 @@ public class LogFetchCollectorTest {
         // unassign bucket 2
         logScannerStatus.unassignScanBuckets(Collections.singletonList(tb2));
 
-        Map<TableBucket, List<ScanRecord>> bucketAndRecords =
+        Map<TableBucket, CloseableIterator<ScanRecord>> bucketAndRecords =
                 logFetchCollector.collectFetch(logFetchBuffer);
         // should only contain records for bucket 1
         assertThat(bucketAndRecords.keySet()).containsExactly(tb1);

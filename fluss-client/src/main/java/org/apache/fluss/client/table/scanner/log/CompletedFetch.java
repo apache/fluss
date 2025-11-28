@@ -36,13 +36,12 @@ import org.slf4j.LoggerFactory;
 
 import java.io.Closeable;
 import java.util.Iterator;
-import java.util.List;
 import java.util.NoSuchElementException;
 
 /**
  * {@link CompletedFetch} represents the result that was returned from the tablet server via a
  * {@link FetchLogRequest}, which can be a {@link LogRecordBatch} or remote log segments path. It
- * contains logic to maintain state between calls to {@link #fetchRecords(int)}.
+ * contains logic to maintain state between calls to {@link #records)}.
  */
 @Internal
 abstract class CompletedFetch {
@@ -92,8 +91,6 @@ abstract class CompletedFetch {
     }
 
     // TODO: optimize this to avoid deep copying the record.
-    //  refactor #fetchRecords to return an iterator which lazily deserialize
-    //  from underlying record stream and arrow buffer.
     ScanRecord toScanRecord(LogRecord record) {
         GenericRow newRow = new GenericRow(selectedFieldGetters.length);
         InternalRow internalRow = record.getRow();
@@ -123,8 +120,8 @@ abstract class CompletedFetch {
     /**
      * Draining a {@link CompletedFetch} will signal that the data has been consumed and the
      * underlying resources are closed. This is somewhat analogous to {@link Closeable#close()
-     * closing}, though no error will result if a caller invokes {@link #fetchRecords(int)}; an
-     * empty {@link List list} will be returned instead.
+     * closing}, subsequent {@link CloseableIterator#hasNext()} call on the closeable iterator
+     * returned by {@link CompletedFetch#records} will return false.
      */
     void drain() {
         if (!isConsumed) {
@@ -139,14 +136,6 @@ abstract class CompletedFetch {
         }
     }
 
-    /**
-     * The {@link LogRecordBatch batch} of {@link LogRecord records} is converted to a {@link List
-     * list} of {@link ScanRecord scan records} and returned.
-     *
-     * @param maxRecords The number of records to return; the number returned may be {@code 0 <=
-     *     maxRecords}
-     * @return {@link ScanRecord scan records}
-     */
     private ScanRecord fetchRecord() {
         if (corruptLastRecord) {
             throw new FetchException(
@@ -249,7 +238,13 @@ abstract class CompletedFetch {
         }
     }
 
-    public CloseableIterator<ScanRecord> records() {
+    /**
+     * The {@link LogRecordBatch batch} of {@link LogRecord records} is converted to a {@link CloseableIterator
+     * closeableIterator} of {@link ScanRecord scan records} and returned.
+     *
+     * @return {@link CloseableIterator CloseableIterator} of {@link ScanRecord scan records}
+     */
+    public CloseableIterator<ScanRecord> toRecords() {
         return new ScanRecordIterator();
     }
 
@@ -258,6 +253,7 @@ abstract class CompletedFetch {
 
         @Override
         public void close() {
+            // TODO: Decide maybeCloseRecordStream() vs drain()
             drain();
         }
 

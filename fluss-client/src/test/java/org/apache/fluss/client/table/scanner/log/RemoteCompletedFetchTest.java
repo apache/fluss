@@ -113,7 +113,7 @@ class RemoteCompletedFetchTest {
                         null,
                         () -> recycleCalled.set(true));
 
-        try (CloseableIterator<ScanRecord> records = completedFetch.records()) {
+        try (CloseableIterator<ScanRecord> records = completedFetch.toRecords()) {
             assertThat(records.hasNext()).isTrue();
             List<ScanRecord> scanRecords =
                     Streams.stream(Iterators.limit(records, 8)).collect(Collectors.toList());
@@ -154,7 +154,7 @@ class RemoteCompletedFetchTest {
                         null,
                         () -> recycleCalled.set(true));
 
-        CloseableIterator<ScanRecord> records = completedFetch.records();
+        CloseableIterator<ScanRecord> records = completedFetch.toRecords();
 
         try (records) {
             assertThat(records.hasNext()).isTrue();
@@ -192,7 +192,7 @@ class RemoteCompletedFetchTest {
                 makeCompletedFetch(
                         tb, fileLogRecords, fetchOffset, null, () -> recycleCalled.set(true));
 
-        try (CloseableIterator<ScanRecord> records = completedFetch.records()) {
+        try (CloseableIterator<ScanRecord> records = completedFetch.toRecords()) {
             assertThat(records.hasNext()).isTrue();
             List<ScanRecord> scanRecords =
                     Streams.stream(Iterators.limit(records, 8)).collect(Collectors.toList());
@@ -230,7 +230,7 @@ class RemoteCompletedFetchTest {
         RemoteCompletedFetch completedFetch =
                 makeCompletedFetch(tableBucket, fileLogRecords, fetchOffset, null);
 
-        try (CloseableIterator<ScanRecord> records = completedFetch.records()) {
+        try (CloseableIterator<ScanRecord> records = completedFetch.toRecords()) {
             assertThat(records.hasNext()).isFalse();
             assertThatExceptionOfType(NoSuchElementException.class).isThrownBy(records::next);
         }
@@ -284,7 +284,7 @@ class RemoteCompletedFetchTest {
                         new Object[] {7, "hello world2"},
                         new Object[] {8, "hi world2"});
 
-        try (CloseableIterator<ScanRecord> records = completedFetch.records()) {
+        try (CloseableIterator<ScanRecord> records = completedFetch.toRecords()) {
             List<ScanRecord> scanRecords =
                     Streams.stream(Iterators.limit(records, 8)).collect(Collectors.toList());
             assertThat(scanRecords.size()).isEqualTo(8);
