@@ -21,7 +21,6 @@ import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.client.metrics.WriterMetricGroup;
 import org.apache.fluss.client.write.RecordAccumulator.ReadyCheckResult;
-import org.apache.fluss.client.write.WriterClient.TableInfoCache;
 import org.apache.fluss.cluster.Cluster;
 import org.apache.fluss.exception.InvalidMetadataException;
 import org.apache.fluss.exception.LeaderNotAvailableException;
@@ -53,6 +52,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeProduceLogRequest;
@@ -107,7 +107,6 @@ public class Sender implements Runnable {
     private final IdempotenceManager idempotenceManager;
 
     private final WriterMetricGroup writerMetricGroup;
-    private final TableInfoCache tableInfoCache;
 
     public Sender(
             RecordAccumulator accumulator,
@@ -117,8 +116,7 @@ public class Sender implements Runnable {
             int retries,
             MetadataUpdater metadataUpdater,
             IdempotenceManager idempotenceManager,
-            WriterMetricGroup writerMetricGroup,
-            TableInfoCache tableInfoCache) {
+            WriterMetricGroup writerMetricGroup) {
         this.accumulator = accumulator;
         this.maxRequestSize = maxRequestSize;
         this.maxRequestTimeoutMs = maxRequestTimeoutMs;
@@ -132,7 +130,6 @@ public class Sender implements Runnable {
 
         this.idempotenceManager = idempotenceManager;
         this.writerMetricGroup = writerMetricGroup;
-        this.tableInfoCache = tableInfoCache;
 
         // TODO add retry logic while send failed. See FLUSS-56364375
     }
@@ -361,14 +358,17 @@ public class Sender implements Runnable {
 
         // group record batch by table id.
         final Map<TableBucket, ReadyWriteBatch> recordsByBucket = new HashMap<>();
-        Map<Long, List<ReadyWriteBatch>> writeBatchByTable = new HashMap<>();
+        Map<TableKey, List<ReadyWriteBatch>> writeBatchByTableKey = new HashMap<>();
         batches.forEach(
                 batch -> {
                     // keep the batch before ack.
                     recordsByBucket.put(batch.tableBucket(), batch);
-                    writeBatchByTable
+                    writeBatchByTableKey
                             .computeIfAbsent(
-                                    batch.tableBucket().getTableId(), k -> new ArrayList<>())
+                                    new TableKey(
+                                            batch.tableBucket().getTableId(),
+                                            batch.writeBatch().tableInfo()),
+                                    k -> new ArrayList<>())
                             .add(batch);
                 });
 
@@ -379,9 +379,10 @@ public class Sender implements Runnable {
                             "Server " + destination + " is not found in metadata cache."),
                     recordsByBucket);
         } else {
-            writeBatchByTable.forEach(
-                    (tableId, writeBatches) -> {
-                        TableInfo tableInfo = tableInfoCache.get(tableId);
+            writeBatchByTableKey.forEach(
+                    (tableKey, writeBatches) -> {
+                        long tableId = tableKey.tableId;
+                        TableInfo tableInfo = tableKey.tableInfo;
                         if (tableInfo.hasPrimaryKey()) {
                             sendPutKvRequestAndHandleResponse(
                                     gateway,
@@ -605,5 +606,32 @@ public class Sender implements Runnable {
         // breaking from the sender loop. Otherwise, we may miss some callbacks when shutting down.
         accumulator.close();
         running = false;
+    }
+
+    private static final class TableKey {
+        private final long tableId;
+        private final TableInfo tableInfo;
+
+        public TableKey(long tableId, TableInfo tableInfo) {
+            this.tableId = tableId;
+            this.tableInfo = tableInfo;
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) {
+                return true;
+            }
+            if (o == null || getClass() != o.getClass()) {
+                return false;
+            }
+            TableKey tableKey = (TableKey) o;
+            return tableId == tableKey.tableId;
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(tableId);
+        }
     }
 }

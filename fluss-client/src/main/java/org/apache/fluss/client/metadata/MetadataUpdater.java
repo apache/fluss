@@ -83,10 +83,6 @@ public class MetadataUpdater {
         return cluster.getCoordinatorServer();
     }
 
-    public long getTableId(TablePath tablePath) {
-        return cluster.getTableId(tablePath);
-    }
-
     public Optional<Long> getPartitionId(PhysicalTablePath physicalTablePath) {
         return cluster.getPartitionId(physicalTablePath);
     }

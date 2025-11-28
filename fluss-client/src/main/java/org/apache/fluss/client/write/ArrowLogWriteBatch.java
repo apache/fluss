@@ -22,6 +22,7 @@ import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.memory.AbstractPagedOutputView;
 import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.metadata.PhysicalTablePath;
+import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.record.ChangeType;
 import org.apache.fluss.record.MemoryLogRecordsArrowBuilder;
 import org.apache.fluss.record.bytesview.BytesView;
@@ -52,14 +53,15 @@ public class ArrowLogWriteBatch extends WriteBatch {
     public ArrowLogWriteBatch(
             int bucketId,
             PhysicalTablePath physicalTablePath,
-            int schemaId,
+            TableInfo tableInfo,
             ArrowWriter arrowWriter,
             AbstractPagedOutputView outputView,
             long createdMs) {
-        super(bucketId, physicalTablePath, createdMs);
+        super(bucketId, physicalTablePath, tableInfo, createdMs);
         this.outputView = outputView;
         this.recordsBuilder =
-                MemoryLogRecordsArrowBuilder.builder(schemaId, arrowWriter, outputView, true);
+                MemoryLogRecordsArrowBuilder.builder(
+                        tableInfo.getSchemaId(), arrowWriter, outputView, true);
     }
 
     @Override

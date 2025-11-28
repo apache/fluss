@@ -158,17 +158,6 @@ public final class Cluster {
         return aliveTabletServers;
     }
 
-    /**
-     * Get the table id for this table.
-     *
-     * @param tablePath the table path
-     * @return the table id, if metadata cache contains the table path, return the table path,
-     *     otherwise return {@link TableInfo#UNKNOWN_TABLE_ID}
-     */
-    public long getTableId(TablePath tablePath) {
-        return tableIdByPath.getOrDefault(tablePath, TableInfo.UNKNOWN_TABLE_ID);
-    }
-
     /** Get the table path for this table id. */
     public Optional<TablePath> getTablePath(long tableId) {
         return Optional.ofNullable(pathByTableId.get(tableId));
@@ -232,18 +221,22 @@ public final class Cluster {
         return Optional.ofNullable(tableInfoByPath.get(tablePath));
     }
 
+    public Optional<Long> getTableId(TablePath tablePath) {
+        return Optional.ofNullable(tableIdByPath.get(tablePath));
+    }
+
     /** Get the partition id for this partition. */
     public Optional<Long> getPartitionId(PhysicalTablePath physicalTablePath) {
         return Optional.ofNullable(partitionsIdByPath.get(physicalTablePath));
     }
 
     public TableBucket getTableBucket(
-            TableInfo tableInfo, PhysicalTablePath physicalTablePath, int bucketId) {
+            long tableId, PhysicalTablePath physicalTablePath, int bucketId) {
         if (physicalTablePath.getPartitionName() != null) {
             Long partitionId = getPartitionIdOrElseThrow(physicalTablePath);
-            return new TableBucket(tableInfo.getTableId(), partitionId, bucketId);
+            return new TableBucket(tableId, partitionId, bucketId);
         } else {
-            return new TableBucket(tableInfo.getTableId(), bucketId);
+            return new TableBucket(tableId, bucketId);
         }
     }
 

@@ -17,7 +17,6 @@
 
 package org.apache.fluss.lake.paimon.tiering;
 
-import org.apache.fluss.client.ConnectionFactory;
 import org.apache.fluss.lake.paimon.testutils.FlinkPaimonTieringTestBase;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
@@ -81,11 +80,6 @@ class ReCreateSameTableAfterTieringTest extends FlinkPaimonTieringTestBase {
         // and create a new table with the same table path
         long t2Id = createPkTable(t1);
         TableBucket t2Bucket = new TableBucket(t2Id, 0);
-
-        // reconnect to fluss.
-        conn = ConnectionFactory.createConnection(clientConf);
-        admin = conn.getAdmin();
-
         // write some new records
         List<InternalRow> newRows = Arrays.asList(row(4, "v4"), row(5, "v5"));
         writeRows(t1, newRows, false);

@@ -18,7 +18,6 @@
 package org.apache.fluss.client.write;
 
 import org.apache.fluss.client.metrics.TestingWriterMetricGroup;
-import org.apache.fluss.client.write.WriterClient.TableInfoCache;
 import org.apache.fluss.cluster.BucketLocation;
 import org.apache.fluss.cluster.Cluster;
 import org.apache.fluss.cluster.ServerNode;
@@ -128,12 +127,10 @@ class RecordAccumulatorTest {
     private final ManualClock clock = new ManualClock(System.currentTimeMillis());
     private Configuration conf;
     private Cluster cluster;
-    private TableInfoCache tableInfoCache;
 
     @BeforeEach
     public void start() {
         conf = new Configuration();
-        tableInfoCache = new TableInfoCache();
         // init cluster.
         cluster = updateCluster(Arrays.asList(bucket1, bucket2, bucket3));
     }
@@ -245,7 +242,7 @@ class RecordAccumulatorTest {
         while (true) {
             GenericRow row = row(1, RandomStringUtils.random(10));
             PhysicalTablePath tablePath = PhysicalTablePath.of(ZSTD_TABLE_INFO.getTablePath());
-            WriteRecord record = WriteRecord.forArrowAppend(tablePath, row, null);
+            WriteRecord record = WriteRecord.forArrowAppend(tablePath, row, null, ZSTD_TABLE_INFO);
             // append until the batch is full
             if (accum.append(record, writeCallback, cluster, bucketId, false).batchIsFull) {
                 break;
@@ -546,7 +543,7 @@ class RecordAccumulatorTest {
      * format , see {@link #updateCluster(List)}.
      */
     private WriteRecord createRecord(IndexedRow row) {
-        return WriteRecord.forIndexedAppend(DATA1_PHYSICAL_TABLE_PATH, row, null);
+        return WriteRecord.forIndexedAppend(DATA1_PHYSICAL_TABLE_PATH, row, null, DATA1_TABLE_INFO);
     }
 
     private Cluster updateCluster(List<BucketLocation> bucketLocations) {
@@ -578,9 +575,6 @@ class RecordAccumulatorTest {
         Map<TablePath, TableInfo> tableInfoByPath = new HashMap<>();
         tableInfoByPath.put(DATA1_TABLE_PATH, data1NonPkTableInfo);
         tableInfoByPath.put(ZSTD_TABLE_INFO.getTablePath(), ZSTD_TABLE_INFO);
-
-        tableInfoCache.put(data1NonPkTableInfo);
-        tableInfoCache.put(ZSTD_TABLE_INFO);
 
         return new Cluster(
                 aliveTabletServersById,
@@ -655,8 +649,7 @@ class RecordAccumulatorTest {
                                         conf, TestingClientMetricGroup.newInstance(), false),
                                 TabletServerGateway.class)),
                 TestingWriterMetricGroup.newInstance(),
-                clock,
-                tableInfoCache);
+                clock);
     }
 
     private long getTestBatchSize(BinaryRow row) {

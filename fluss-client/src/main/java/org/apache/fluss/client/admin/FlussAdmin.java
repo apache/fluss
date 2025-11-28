@@ -420,7 +420,8 @@ public class FlussAdmin implements Admin {
             OffsetSpec offsetSpec) {
         Long partitionId = null;
         metadataUpdater.updateTableOrPartitionMetadata(physicalTablePath.getTablePath(), null);
-        long tableId = metadataUpdater.getTableId(physicalTablePath.getTablePath());
+        TableInfo tableInfo = getTableInfo(physicalTablePath.getTablePath()).join();
+
         // if partition name is not null, we need to check and update partition metadata
         if (physicalTablePath.getPartitionName() != null) {
             metadataUpdater.updatePhysicalTableMetadata(Collections.singleton(physicalTablePath));
@@ -428,7 +429,7 @@ public class FlussAdmin implements Admin {
         }
         Map<Integer, ListOffsetsRequest> requestMap =
                 prepareListOffsetsRequests(
-                        metadataUpdater, tableId, partitionId, buckets, offsetSpec);
+                        metadataUpdater, tableInfo.getTableId(), partitionId, buckets, offsetSpec);
         Map<Integer, CompletableFuture<Long>> bucketToOffsetMap = MapUtils.newConcurrentHashMap();
         for (int bucket : buckets) {
             bucketToOffsetMap.put(bucket, new CompletableFuture<>());

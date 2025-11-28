@@ -124,7 +124,7 @@ public class ArrowLogWriteBatchTest {
                 new ArrowLogWriteBatch(
                         tb.getBucket(),
                         DATA1_PHYSICAL_TABLE_PATH,
-                        DATA1_TABLE_INFO.getSchemaId(),
+                        DATA1_TABLE_INFO,
                         writerProvider.getOrCreateWriter(
                                 tb.getTableId(),
                                 DATA1_TABLE_INFO.getSchemaId(),
@@ -200,7 +200,7 @@ public class ArrowLogWriteBatchTest {
                     new ArrowLogWriteBatch(
                             tb.getBucket(),
                             DATA1_PHYSICAL_TABLE_PATH,
-                            DATA1_TABLE_INFO.getSchemaId(),
+                            DATA1_TABLE_INFO,
                             arrowWriter,
                             new PreAllocatedPagedOutputView(memorySegmentList),
                             System.currentTimeMillis());
@@ -288,14 +288,14 @@ public class ArrowLogWriteBatchTest {
     }
 
     private WriteRecord createWriteRecord(GenericRow row) {
-        return WriteRecord.forArrowAppend(DATA1_PHYSICAL_TABLE_PATH, row, null);
+        return WriteRecord.forArrowAppend(DATA1_PHYSICAL_TABLE_PATH, row, null, DATA1_TABLE_INFO);
     }
 
     private ArrowLogWriteBatch createArrowLogWriteBatch(TableBucket tb, int maxSizeInBytes) {
         return new ArrowLogWriteBatch(
                 tb.getBucket(),
                 DATA1_PHYSICAL_TABLE_PATH,
-                DATA1_TABLE_INFO.getSchemaId(),
+                DATA1_TABLE_INFO,
                 writerProvider.getOrCreateWriter(
                         tb.getTableId(),
                         DATA1_TABLE_INFO.getSchemaId(),

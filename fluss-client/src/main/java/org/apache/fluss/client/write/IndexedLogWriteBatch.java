@@ -22,6 +22,7 @@ import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.memory.AbstractPagedOutputView;
 import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.metadata.PhysicalTablePath;
+import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.record.ChangeType;
 import org.apache.fluss.record.MemoryLogRecordsIndexedBuilder;
 import org.apache.fluss.record.bytesview.BytesView;
@@ -51,14 +52,15 @@ public final class IndexedLogWriteBatch extends WriteBatch {
     public IndexedLogWriteBatch(
             int bucketId,
             PhysicalTablePath physicalTablePath,
-            int schemaId,
+            TableInfo tableInfo,
             int writeLimit,
             AbstractPagedOutputView outputView,
             long createdMs) {
-        super(bucketId, physicalTablePath, createdMs);
+        super(bucketId, physicalTablePath, tableInfo, createdMs);
         this.outputView = outputView;
         this.recordsBuilder =
-                MemoryLogRecordsIndexedBuilder.builder(schemaId, writeLimit, outputView, true);
+                MemoryLogRecordsIndexedBuilder.builder(
+                        tableInfo.getSchemaId(), writeLimit, outputView, true);
     }
 
     @Override
