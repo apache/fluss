@@ -29,6 +29,7 @@ import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.rpc.messages.FetchLogRequest;
 import org.apache.fluss.rpc.protocol.ApiError;
+import org.apache.fluss.utils.AbstractIterator;
 import org.apache.fluss.utils.CloseableIterator;
 
 import org.slf4j.Logger;
@@ -36,7 +37,6 @@ import org.slf4j.LoggerFactory;
 
 import java.io.Closeable;
 import java.util.Iterator;
-import java.util.NoSuchElementException;
 
 /**
  * {@link CompletedFetch} represents the result that was returned from the tablet server via a
@@ -248,46 +248,23 @@ abstract class CompletedFetch {
         return new ScanRecordIterator();
     }
 
-    private class ScanRecordIterator implements CloseableIterator<ScanRecord> {
-        private ScanRecord lastFetchedRecord;
-
+    private class ScanRecordIterator extends AbstractIterator<ScanRecord> implements CloseableIterator<ScanRecord> {
         @Override
         public void close() {
             // TODO: Decide maybeCloseRecordStream() vs drain()
             drain();
+            allDone();
         }
 
         @Override
-        public boolean hasNext() {
-            if (isConsumed) {
-                return false;
+        protected ScanRecord makeNext() {
+            ScanRecord scanRecord = fetchRecord();
+
+            if (scanRecord == null) {
+                close();
             }
 
-            maybeFetch();
-            return lastFetchedRecord != null;
-        }
-
-        @Override
-        public ScanRecord next() {
-            if (isConsumed) {
-                throw new NoSuchElementException();
-            }
-
-            maybeFetch();
-
-            if (lastFetchedRecord == null) {
-                throw new NoSuchElementException();
-            }
-
-            var output = lastFetchedRecord;
-            lastFetchedRecord = null;
-            return output;
-        }
-
-        private void maybeFetch() {
-            if (lastFetchedRecord == null) {
-                lastFetchedRecord = fetchRecord();
-            }
+            return scanRecord;
         }
     }
 }
