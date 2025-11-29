@@ -45,16 +45,14 @@ class FlussTableLakeSnapshotCommitterTest extends FlinkTestBase {
     private FlussTableLakeSnapshotCommitter flussTableLakeSnapshotCommitter;
 
     @BeforeEach
-    public void beforeEach() throws Exception {
-        super.beforeEach();
+    void beforeEach() {
         flussTableLakeSnapshotCommitter =
                 new FlussTableLakeSnapshotCommitter(FLUSS_CLUSTER_EXTENSION.getClientConfig());
         flussTableLakeSnapshotCommitter.open();
     }
 
     @AfterEach
-    public void afterEach() throws Exception {
-        super.afterEach();
+    void afterEach() throws Exception {
         if (flussTableLakeSnapshotCommitter != null) {
             flussTableLakeSnapshotCommitter.close();
         }

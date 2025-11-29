@@ -107,13 +107,13 @@ public abstract class FlinkPaimonTieringTestBase {
 
     public static void beforeAll(Configuration conf) {
         clientConf = conf;
+        conn = ConnectionFactory.createConnection(clientConf);
+        admin = conn.getAdmin();
+        paimonCatalog = getPaimonCatalog();
     }
 
     @BeforeEach
     public void beforeEach() {
-        conn = ConnectionFactory.createConnection(clientConf);
-        admin = conn.getAdmin();
-        paimonCatalog = getPaimonCatalog();
         execEnv = StreamExecutionEnvironment.getExecutionEnvironment();
         execEnv.setRuntimeMode(RuntimeExecutionMode.STREAMING);
         execEnv.setParallelism(2);
