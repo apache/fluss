@@ -18,9 +18,9 @@
 package org.apache.fluss.utils;
 
 import java.io.Closeable;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.Iterator;
-import java.util.List;
 import java.util.NoSuchElementException;
 
 /**
@@ -56,29 +56,47 @@ public interface CloseableIterator<T> extends Iterator<T>, Closeable {
     }
 
     // TODO Test case
-    static <R> CloseableIterator<R> concatenate(List<CloseableIterator<R>> inners) {
-        return new CloseableIterator<R>() {
+    static <R> CloseableIterator<R> concatenate(Collection<CloseableIterator<R>> inners) {
+        return new CloseableIterator<>() {
             Iterator<CloseableIterator<R>> iterator = inners.stream().iterator();
             CloseableIterator<R> current;
 
+            private Exception tryClose(CloseableIterator<R> ci, Exception previousException) {
+                if (ci == null) {
+                    return previousException;
+                }
+
+                try {
+                    ci.close();
+                } catch (Exception e) {
+                    previousException = ExceptionUtils.firstOrSuppressed(e, previousException);
+                }
+
+                return  previousException;
+            }
+
             @Override
             public void close() {
-                if (current != null) {
-                    current.close();
-                }
+                Exception suppressed = tryClose(current, null);
 
                 while (iterator.hasNext()) {
                     current = iterator.next();
+                    suppressed = tryClose(current, suppressed);
+                }
 
-                    if (current != null) {
-                        current.close();
-                    }
+                // TODO
+                if (suppressed != null) {
+                    throw new RuntimeException(suppressed);
                 }
             }
 
             @Override
             public boolean hasNext() {
                 while (current == null || !current.hasNext()) {
+                    if (current != null) {
+                        current.close();
+                    }
+
                     if (!iterator.hasNext()) {
                         return false;
                     }

@@ -38,6 +38,7 @@ import org.slf4j.LoggerFactory;
 import javax.annotation.Nullable;
 import javax.annotation.concurrent.ThreadSafe;
 
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.List;
@@ -85,16 +86,29 @@ public class LogFetchCollector {
         Map<TableBucket, List<CloseableIterator<ScanRecord>>> fetched = new HashMap<>();
 
         while (!logFetchBuffer.isEmpty()) {
-            CompletedFetch completedFetch = logFetchBuffer.poll();
+            CompletedFetch completedFetch = logFetchBuffer.peek();
             logFetchBuffer.setNextInLineFetch(completedFetch);
 
             if (completedFetch == null) {
-                continue;
+                break;
             }
+
+            // On error, return successfully fetched records and let next collect surface error
+            if (completedFetch.error.isFailure() && !fetched.isEmpty()) {
+                break;
+            }
+
+            logFetchBuffer.poll();
 
             // Filters out unsubscribed bucket
             if (logScannerStatus.getBucketOffset(completedFetch.tableBucket) == null) {
                 continue;
+            }
+
+            if (completedFetch.error.isFailure()) {
+                // Initialize to trigger error handling
+                initialize(completedFetch);
+                break;
             }
 
             fetched.computeIfAbsent(completedFetch.tableBucket, tb -> new LinkedList<>())

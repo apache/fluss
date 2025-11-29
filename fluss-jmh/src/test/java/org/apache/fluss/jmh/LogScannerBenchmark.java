@@ -123,7 +123,13 @@ public class LogScannerBenchmark {
         long scanned = 0;
         while (scanned < RECORDS_SIZE) {
             ScanRecords scanRecords = logScanner.poll(Duration.ofSeconds(1));
-            scanned += scanRecords.count();
+
+            var iterator = scanRecords.iterator();
+
+            while (iterator.hasNext() && scanned < RECORDS_SIZE) {
+                iterator.next();
+                scanned++;
+            }
         }
         logScanner.close();
     }

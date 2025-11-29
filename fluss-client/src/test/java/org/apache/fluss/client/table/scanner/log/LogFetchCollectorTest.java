@@ -103,7 +103,7 @@ public class LogFetchCollectorTest {
         assertThat(bucketAndRecords.size()).isEqualTo(1);
 
         CloseableIterator<ScanRecord> records = bucketAndRecords.get(tb);
-        assertThat(Streams.stream(Iterators.limit(records, 10)).count()).isEqualTo(10l);
+        assertThat(Streams.stream(Iterators.limit(records, 10)).count()).isEqualTo(10L);
         boolean actual = records.hasNext();
         assertThat(actual).isFalse();
         assertThatExceptionOfType(NoSuchElementException.class).isThrownBy(records::next);

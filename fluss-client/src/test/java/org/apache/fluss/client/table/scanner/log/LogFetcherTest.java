@@ -31,6 +31,9 @@ import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.PbProduceLogRespForBucket;
 import org.apache.fluss.rpc.messages.ProduceLogResponse;
 
+import org.apache.fluss.shaded.guava32.com.google.common.collect.Iterators;
+import org.apache.fluss.utils.CloseableIterator;
+import org.assertj.core.util.Streams;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -43,6 +46,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
 
 import static org.apache.fluss.record.TestData.DATA1;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
@@ -117,10 +121,22 @@ public class LogFetcherTest extends ClientToServerITCaseBase {
                     assertThat(logFetcher.getCompletedFetchesSize()).isEqualTo(2);
                 });
 
-        Map<TableBucket, List<ScanRecord>> records = logFetcher.collectFetch();
+        Map<TableBucket, CloseableIterator<ScanRecord>> records = logFetcher.collectFetch();
         assertThat(records.size()).isEqualTo(2);
-        assertThat(records.get(tb0).size()).isEqualTo(10);
-        assertThat(records.get(tb1).size()).isEqualTo(10);
+
+        CloseableIterator<ScanRecord> tb0Iterator = records.get(tb0);
+        assertThat(tb0Iterator.hasNext()).isTrue();
+        List<ScanRecord> scanRecords0 =
+                Streams.stream(Iterators.limit(tb0Iterator, 10)).collect(Collectors.toList());
+        assertThat(scanRecords0.size()).isEqualTo(10);
+        assertThat(tb0Iterator.hasNext()).isFalse();
+
+        CloseableIterator<ScanRecord> tb1Iterator = records.get(tb1);
+        assertThat(tb1Iterator.hasNext()).isTrue();
+        List<ScanRecord> scanRecords1 =
+                Streams.stream(Iterators.limit(tb1Iterator, 10)).collect(Collectors.toList());
+        assertThat(scanRecords1.size()).isEqualTo(10);
+        assertThat(tb1Iterator.hasNext()).isFalse();
 
         // after collect fetch, the fetcher is empty.
         assertThat(logFetcher.hasAvailableFetches()).isFalse();
@@ -182,9 +198,15 @@ public class LogFetcherTest extends ClientToServerITCaseBase {
                     assertThat(logFetcher.hasAvailableFetches()).isTrue();
                     assertThat(logFetcher.getCompletedFetchesSize()).isEqualTo(1);
                 });
-        Map<TableBucket, List<ScanRecord>> records = logFetcher.collectFetch();
+
+        Map<TableBucket, CloseableIterator<ScanRecord>> records = logFetcher.collectFetch();
         assertThat(records.size()).isEqualTo(1);
-        assertThat(records.get(tb0).size()).isEqualTo(10);
+        CloseableIterator<ScanRecord> tb0Iterator = records.get(tb0);
+        assertThat(tb0Iterator.hasNext()).isTrue();
+        List<ScanRecord> scanRecords0 =
+                Streams.stream(Iterators.limit(tb0Iterator, 10)).collect(Collectors.toList());
+        assertThat(scanRecords0.size()).isEqualTo(10);
+        assertThat(tb0Iterator.hasNext()).isFalse();
     }
 
     @Test

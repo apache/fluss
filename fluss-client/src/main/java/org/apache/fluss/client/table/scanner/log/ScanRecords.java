@@ -20,11 +20,11 @@ package org.apache.fluss.client.table.scanner.log;
 import org.apache.fluss.annotation.PublicEvolving;
 import org.apache.fluss.client.table.scanner.ScanRecord;
 import org.apache.fluss.metadata.TableBucket;
-import org.apache.fluss.utils.AbstractIterator;
+import org.apache.fluss.utils.CloseableIterator;
+import org.apache.fluss.utils.ExceptionUtils;
 
 import java.util.Collections;
 import java.util.Iterator;
-import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
@@ -36,12 +36,12 @@ import java.util.Set;
  * @since 0.1
  */
 @PublicEvolving
-public class ScanRecords implements Iterable<ScanRecord> {
+public class ScanRecords implements Iterable<ScanRecord>, AutoCloseable {
     public static final ScanRecords EMPTY = new ScanRecords(Collections.emptyMap());
 
-    private final Map<TableBucket, List<ScanRecord>> records;
+    private final Map<TableBucket, CloseableIterator<ScanRecord>> records;
 
-    public ScanRecords(Map<TableBucket, List<ScanRecord>> records) {
+    public ScanRecords(Map<TableBucket, CloseableIterator<ScanRecord>> records) {
         this.records = records;
     }
 
@@ -50,12 +50,11 @@ public class ScanRecords implements Iterable<ScanRecord> {
      *
      * @param scanBucket The bucket to get records for
      */
-    public List<ScanRecord> records(TableBucket scanBucket) {
-        List<ScanRecord> recs = records.get(scanBucket);
-        if (recs == null) {
-            return Collections.emptyList();
+    public Iterator<ScanRecord> records(TableBucket scanBucket) {
+        if (records.containsKey(scanBucket)) {
+            return records.get(scanBucket);
         }
-        return Collections.unmodifiableList(recs);
+        return CloseableIterator.emptyIterator();
     }
 
     /**
@@ -68,49 +67,24 @@ public class ScanRecords implements Iterable<ScanRecord> {
         return Collections.unmodifiableSet(records.keySet());
     }
 
-    /** The number of records for all buckets. */
-    public int count() {
-        int count = 0;
-        for (List<ScanRecord> recs : records.values()) {
-            count += recs.size();
-        }
-        return count;
-    }
-
-    public boolean isEmpty() {
-        return records.isEmpty();
+    @Override
+    public Iterator<ScanRecord> iterator() {
+        return CloseableIterator.concatenate(records.values());
     }
 
     @Override
-    public Iterator<ScanRecord> iterator() {
-        return new ConcatenatedIterable(records.values()).iterator();
-    }
-
-    private static class ConcatenatedIterable implements Iterable<ScanRecord> {
-
-        private final Iterable<? extends Iterable<ScanRecord>> iterables;
-
-        public ConcatenatedIterable(Iterable<? extends Iterable<ScanRecord>> iterables) {
-            this.iterables = iterables;
+    public void close() throws Exception {
+        Exception thrownException = null;
+        for (CloseableIterator<ScanRecord> scanRecord: records.values()) {
+            try {
+                scanRecord.close();
+            } catch (Exception e) {
+                thrownException = ExceptionUtils.firstOrSuppressed(e, thrownException);
+            }
         }
 
-        @Override
-        public Iterator<ScanRecord> iterator() {
-            return new AbstractIterator<ScanRecord>() {
-                final Iterator<? extends Iterable<ScanRecord>> iters = iterables.iterator();
-                Iterator<ScanRecord> current;
-
-                public ScanRecord makeNext() {
-                    while (current == null || !current.hasNext()) {
-                        if (iters.hasNext()) {
-                            current = iters.next().iterator();
-                        } else {
-                            return allDone();
-                        }
-                    }
-                    return current.next();
-                }
-            };
+        if (thrownException != null) {
+            throw thrownException;
         }
     }
 }

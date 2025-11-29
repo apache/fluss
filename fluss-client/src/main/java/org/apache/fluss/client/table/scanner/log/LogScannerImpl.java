@@ -29,6 +29,7 @@ import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.metrics.ClientMetricGroup;
 import org.apache.fluss.types.RowType;
+import org.apache.fluss.utils.CloseableIterator;
 import org.apache.fluss.utils.Projection;
 
 import org.slf4j.Logger;
@@ -40,8 +41,10 @@ import java.io.IOException;
 import java.time.Duration;
 import java.util.Collections;
 import java.util.ConcurrentModificationException;
-import java.util.List;
+import java.util.HashMap;
+import java.util.LinkedList;
 import java.util.Map;
+import java.util.Queue;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -75,6 +78,8 @@ public class LogScannerImpl implements LogScanner {
     private final AtomicInteger refCount = new AtomicInteger(0);
     // metrics
     private final ScannerMetricGroup scannerMetricGroup;
+
+    private final Map<TableBucket, Queue<CloseableIterator<ScanRecord>>> closeables = new HashMap<>();
 
     public LogScannerImpl(
             Configuration conf,
@@ -138,7 +143,9 @@ public class LogScannerImpl implements LogScanner {
             long timeoutNanos = timeout.toNanos();
             long startNanos = System.nanoTime();
             do {
-                Map<TableBucket, List<ScanRecord>> fetchRecords = pollForFetches();
+                Map<TableBucket, CloseableIterator<ScanRecord>> fetchRecords = pollForFetches();
+                trackCloseables(fetchRecords);
+
                 if (fetchRecords.isEmpty()) {
                     try {
                         if (!logFetcher.awaitNotEmpty(startNanos + timeoutNanos)) {
@@ -227,8 +234,9 @@ public class LogScannerImpl implements LogScanner {
         logFetcher.wakeup();
     }
 
-    private Map<TableBucket, List<ScanRecord>> pollForFetches() {
-        Map<TableBucket, List<ScanRecord>> fetchedRecords = logFetcher.collectFetch();
+    private Map<TableBucket, CloseableIterator<ScanRecord>> pollForFetches() {
+        Map<TableBucket, CloseableIterator<ScanRecord>> fetchedRecords = logFetcher.collectFetch();
+
         if (!fetchedRecords.isEmpty()) {
             return fetchedRecords;
         }
@@ -237,6 +245,28 @@ public class LogScannerImpl implements LogScanner {
         logFetcher.sendFetches();
 
         return logFetcher.collectFetch();
+    }
+
+    private void trackCloseables(Map<TableBucket, CloseableIterator<ScanRecord>> fetchedRecords) {
+        for (var fetchedRecord: fetchedRecords.entrySet()) {
+            var tableBucketCloseable = closeables.computeIfAbsent(fetchedRecord.getKey(), k -> new LinkedList<>());
+
+            // Close and stop tracking any existing closeable iterators which have reach end.
+            var iterator = tableBucketCloseable.iterator();
+            while (iterator.hasNext()) {
+                var closeable = iterator.next();
+
+                if (closeable.hasNext()) {
+                    break;
+                }
+
+                closeable.close();
+                iterator.remove();
+            }
+
+            // Track new closeable
+            tableBucketCloseable.add(fetchedRecord.getValue());
+        }
     }
 
     /**
@@ -293,6 +323,11 @@ public class LogScannerImpl implements LogScanner {
                 LOG.trace("Closing log scanner for table: {}", tablePath);
                 scannerMetricGroup.close();
                 logFetcher.close();
+                for (var queue: closeables.values()) {
+                    for (var closeable: queue) {
+                        closeable.close();
+                    }
+                }
             }
             LOG.debug("Log scanner for table: {} has been closed", tablePath);
         } catch (IOException e) {

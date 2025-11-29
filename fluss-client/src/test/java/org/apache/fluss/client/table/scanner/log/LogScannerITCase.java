@@ -199,7 +199,6 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
             LogScanner logScanner = createLogScanner(table);
             subscribeFromBeginning(logScanner, table);
             long scanned = 0;
-            long total = 0;
             while (scanned < recordSize) {
                 ScanRecords scanRecords = logScanner.poll(Duration.ofSeconds(1));
                 for (ScanRecord scanRecord : scanRecords) {
@@ -209,9 +208,8 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
                     assertThat(scanRecord.getRow().getString(2).getSizeInBytes()).isEqualTo(1000);
                     scanned++;
                 }
-                total += scanRecords.count();
             }
-            assertThat(scanned).isEqualTo(recordSize).isEqualTo(total);
+            assertThat(scanned).isEqualTo(recordSize);
             logScanner.close();
         }
     }
@@ -255,7 +253,6 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
             LogScanner logScanner = createLogScanner(table);
             subscribeFromBeginning(logScanner, table);
             long scanned = 0;
-            long total = 0;
             while (scanned < recordSize) {
                 ScanRecords scanRecords = logScanner.poll(Duration.ofSeconds(1));
                 for (ScanRecord scanRecord : scanRecords) {
@@ -265,9 +262,8 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
                     assertThat(scanRecord.getRow().getString(2).getSizeInBytes()).isEqualTo(1000);
                     scanned++;
                 }
-                total += scanRecords.count();
             }
-            assertThat(scanned).isEqualTo(recordSize).isEqualTo(total);
+            assertThat(scanned).isEqualTo(recordSize);
             logScanner.close();
         }
     }
@@ -412,7 +408,7 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
             // try to fetch from the latest offsets. For the first batch, it cannot get any data.
             subscribeFromLatestOffset(
                     tablePath, partitionName, partitionId, table, logScanner, admin);
-            assertThat(logScanner.poll(Duration.ofSeconds(1)).isEmpty()).isTrue();
+            assertThat(logScanner.poll(Duration.ofSeconds(1)).iterator().hasNext()).isFalse();
 
             // 2. write the second batch.
             List<GenericRow> expectedRows = new ArrayList<>();
