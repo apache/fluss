@@ -172,6 +172,8 @@ public final class RecordAccumulator {
             throws Exception {
         PhysicalTablePath physicalTablePath = writeRecord.getPhysicalTablePath();
         TableInfo tableInfo = writeRecord.getTableInfo();
+        // The metadata may return null for the partition id, but it is fine to pass null here,
+        // because we will fill the partitionId in bucketReady() before send the batch.
         Optional<Long> partitionIdOpt = cluster.getPartitionId(physicalTablePath);
         BucketAndWriteBatches bucketAndWriteBatches =
                 writeBatches.computeIfAbsent(
@@ -206,13 +208,7 @@ public final class RecordAccumulator {
             synchronized (dq) {
                 RecordAppendResult appendResult =
                         appendNewBatch(
-                                writeRecord,
-                                callback,
-                                bucketId,
-                                tableInfo,
-                                dq,
-                                memorySegments,
-                                cluster);
+                                writeRecord, callback, bucketId, tableInfo, dq, memorySegments);
                 if (appendResult.newBatchCreated) {
                     memorySegments = Collections.emptyList();
                 }
@@ -572,8 +568,7 @@ public final class RecordAccumulator {
             int bucketId,
             TableInfo tableInfo,
             Deque<WriteBatch> deque,
-            List<MemorySegment> segments,
-            Cluster cluster)
+            List<MemorySegment> segments)
             throws Exception {
         RecordAppendResult appendResult = tryAppend(writeRecord, callback, deque);
         if (appendResult != null) {
@@ -593,7 +588,8 @@ public final class RecordAccumulator {
                     new KvWriteBatch(
                             bucketId,
                             physicalTablePath,
-                            tableInfo,
+                            tableInfo.getSchemaId(),
+                            tableInfo.getTableConfig().getKvFormat(),
                             outputView.getPreAllocatedSize(),
                             outputView,
                             writeRecord.getTargetColumns(),
@@ -610,7 +606,7 @@ public final class RecordAccumulator {
                     new ArrowLogWriteBatch(
                             bucketId,
                             physicalTablePath,
-                            tableInfo,
+                            tableInfo.getSchemaId(),
                             arrowWriter,
                             outputView,
                             clock.milliseconds());
@@ -619,7 +615,7 @@ public final class RecordAccumulator {
                     new IndexedLogWriteBatch(
                             bucketId,
                             physicalTablePath,
-                            tableInfo,
+                            tableInfo.getSchemaId(),
                             outputView.getPreAllocatedSize(),
                             outputView,
                             clock.milliseconds());

@@ -21,8 +21,8 @@ import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.memory.AbstractPagedOutputView;
 import org.apache.fluss.memory.MemorySegment;
+import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
-import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.record.KvRecordBatchBuilder;
 import org.apache.fluss.record.bytesview.BytesView;
 import org.apache.fluss.row.BinaryRow;
@@ -54,20 +54,22 @@ public class KvWriteBatch extends WriteBatch {
     public KvWriteBatch(
             int bucketId,
             PhysicalTablePath physicalTablePath,
-            TableInfo tableInfo,
+            int schemaId,
+            KvFormat kvFormat,
             int writeLimit,
             AbstractPagedOutputView outputView,
             @Nullable int[] targetColumns,
             long createdMs) {
-        super(bucketId, physicalTablePath, tableInfo, createdMs);
+        super(bucketId, physicalTablePath, createdMs);
         this.outputView = outputView;
         this.recordsBuilder =
-                KvRecordBatchBuilder.builder(
-                        tableInfo.getSchemaId(),
-                        writeLimit,
-                        outputView,
-                        tableInfo.getTableConfig().getKvFormat());
+                KvRecordBatchBuilder.builder(schemaId, writeLimit, outputView, kvFormat);
         this.targetColumns = targetColumns;
+    }
+
+    @Override
+    public boolean isLogBatch() {
+        return false;
     }
 
     @Override

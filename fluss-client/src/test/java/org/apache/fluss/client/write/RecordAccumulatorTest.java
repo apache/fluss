@@ -242,7 +242,7 @@ class RecordAccumulatorTest {
         while (true) {
             GenericRow row = row(1, RandomStringUtils.random(10));
             PhysicalTablePath tablePath = PhysicalTablePath.of(ZSTD_TABLE_INFO.getTablePath());
-            WriteRecord record = WriteRecord.forArrowAppend(tablePath, row, null, ZSTD_TABLE_INFO);
+            WriteRecord record = WriteRecord.forArrowAppend(ZSTD_TABLE_INFO, tablePath, row, null);
             // append until the batch is full
             if (accum.append(record, writeCallback, cluster, bucketId, false).batchIsFull) {
                 break;
@@ -543,7 +543,7 @@ class RecordAccumulatorTest {
      * format , see {@link #updateCluster(List)}.
      */
     private WriteRecord createRecord(IndexedRow row) {
-        return WriteRecord.forIndexedAppend(DATA1_PHYSICAL_TABLE_PATH, row, null, DATA1_TABLE_INFO);
+        return WriteRecord.forIndexedAppend(DATA1_TABLE_INFO, DATA1_PHYSICAL_TABLE_PATH, row, null);
     }
 
     private Cluster updateCluster(List<BucketLocation> bucketLocations) {

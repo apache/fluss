@@ -30,7 +30,6 @@ import org.apache.fluss.exception.RetriableException;
 import org.apache.fluss.exception.UnknownTableOrBucketException;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
-import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.PbProduceLogRespForBucket;
 import org.apache.fluss.rpc.messages.PbPutKvRespForBucket;
@@ -52,11 +51,11 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Set;
 
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeProduceLogRequest;
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makePutKvRequest;
+import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /* This file is based on source code of Apache Kafka Project (https://kafka.apache.org/), licensed by the Apache
@@ -358,17 +357,14 @@ public class Sender implements Runnable {
 
         // group record batch by table id.
         final Map<TableBucket, ReadyWriteBatch> recordsByBucket = new HashMap<>();
-        Map<TableKey, List<ReadyWriteBatch>> writeBatchByTableKey = new HashMap<>();
+        Map<Long, List<ReadyWriteBatch>> writeBatchByTable = new HashMap<>();
         batches.forEach(
                 batch -> {
                     // keep the batch before ack.
                     recordsByBucket.put(batch.tableBucket(), batch);
-                    writeBatchByTableKey
+                    writeBatchByTable
                             .computeIfAbsent(
-                                    new TableKey(
-                                            batch.tableBucket().getTableId(),
-                                            batch.writeBatch().tableInfo()),
-                                    k -> new ArrayList<>())
+                                    batch.tableBucket().getTableId(), k -> new ArrayList<>())
                             .add(batch);
                 });
 
@@ -379,27 +375,38 @@ public class Sender implements Runnable {
                             "Server " + destination + " is not found in metadata cache."),
                     recordsByBucket);
         } else {
-            writeBatchByTableKey.forEach(
-                    (tableKey, writeBatches) -> {
-                        long tableId = tableKey.tableId;
-                        TableInfo tableInfo = tableKey.tableInfo;
-                        if (tableInfo.hasPrimaryKey()) {
-                            sendPutKvRequestAndHandleResponse(
-                                    gateway,
-                                    makePutKvRequest(
-                                            tableId, acks, maxRequestTimeoutMs, writeBatches),
-                                    tableId,
-                                    recordsByBucket);
-                        } else {
+            writeBatchByTable.forEach(
+                    (tableId, writeBatches) -> {
+                        if (isLogBatches(writeBatches)) {
                             sendProduceLogRequestAndHandleResponse(
                                     gateway,
                                     makeProduceLogRequest(
                                             tableId, acks, maxRequestTimeoutMs, writeBatches),
                                     tableId,
                                     recordsByBucket);
+                        } else {
+                            sendPutKvRequestAndHandleResponse(
+                                    gateway,
+                                    makePutKvRequest(
+                                            tableId, acks, maxRequestTimeoutMs, writeBatches),
+                                    tableId,
+                                    recordsByBucket);
                         }
                     });
         }
+    }
+
+    /**
+     * Check whether the given batches are log batches. We assume all the batches are of the same
+     * type.
+     *
+     * @param batches the batches to check, must not be empty.
+     * @return true if the given batches are log batches, false if they are kv batches.
+     */
+    private boolean isLogBatches(List<ReadyWriteBatch> batches) {
+        checkArgument(!batches.isEmpty(), "batches must not be empty");
+        ReadyWriteBatch batch = batches.get(0);
+        return batch.writeBatch().isLogBatch();
     }
 
     private void sendProduceLogRequestAndHandleResponse(
@@ -606,32 +613,5 @@ public class Sender implements Runnable {
         // breaking from the sender loop. Otherwise, we may miss some callbacks when shutting down.
         accumulator.close();
         running = false;
-    }
-
-    private static final class TableKey {
-        private final long tableId;
-        private final TableInfo tableInfo;
-
-        public TableKey(long tableId, TableInfo tableInfo) {
-            this.tableId = tableId;
-            this.tableInfo = tableInfo;
-        }
-
-        @Override
-        public boolean equals(Object o) {
-            if (this == o) {
-                return true;
-            }
-            if (o == null || getClass() != o.getClass()) {
-                return false;
-            }
-            TableKey tableKey = (TableKey) o;
-            return tableId == tableKey.tableId;
-        }
-
-        @Override
-        public int hashCode() {
-            return Objects.hash(tableId);
-        }
     }
 }

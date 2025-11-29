@@ -21,7 +21,6 @@ import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.memory.MemorySegmentPool;
 import org.apache.fluss.metadata.PhysicalTablePath;
-import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.record.bytesview.BytesView;
 
 import org.slf4j.Logger;
@@ -47,7 +46,6 @@ public abstract class WriteBatch {
     private final PhysicalTablePath physicalTablePath;
     private final RequestFuture requestFuture;
     private final int bucketId;
-    private final TableInfo tableInfo;
 
     protected final List<WriteCallback> callbacks = new ArrayList<>();
     private final AtomicReference<FinalState> finalState = new AtomicReference<>(null);
@@ -56,18 +54,21 @@ public abstract class WriteBatch {
     protected int recordCount;
     private long drainedMs;
 
-    public WriteBatch(
-            int bucketId,
-            PhysicalTablePath physicalTablePath,
-            TableInfo tableInfo,
-            long createdMs) {
+    public WriteBatch(int bucketId, PhysicalTablePath physicalTablePath, long createdMs) {
         this.physicalTablePath = physicalTablePath;
-        this.tableInfo = tableInfo;
         this.createdMs = createdMs;
         this.bucketId = bucketId;
         this.requestFuture = new RequestFuture();
         this.recordCount = 0;
     }
+
+    /**
+     * Check if the batch is log batch, e.g., ArrowLogBatch or IndexedLogBatch, and should use
+     * ProduceLog request. Otherwise, it is a kv batch, and should use PutKv request.
+     *
+     * @return true if log batch, false if kv batch
+     */
+    public abstract boolean isLogBatch();
 
     /**
      * try to append one write record to the record batch.
@@ -157,10 +158,6 @@ public abstract class WriteBatch {
 
     public PhysicalTablePath physicalTablePath() {
         return physicalTablePath;
-    }
-
-    public TableInfo tableInfo() {
-        return tableInfo;
     }
 
     public RequestFuture getRequestFuture() {

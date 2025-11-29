@@ -173,18 +173,17 @@ public class WriterClient {
         try {
             throwIfWriterClosed();
 
+            TableInfo tableInfo = record.getTableInfo();
             PhysicalTablePath physicalTablePath = record.getPhysicalTablePath();
             dynamicPartitionCreator.checkAndCreatePartitionAsync(
-                    physicalTablePath, record.getTableInfo().getPartitionKeys());
+                    physicalTablePath, tableInfo.getPartitionKeys());
 
             // maybe create bucket assigner.
             Cluster cluster = metadataUpdater.getCluster();
             BucketAssigner bucketAssigner =
                     bucketAssignerMap.computeIfAbsent(
                             physicalTablePath,
-                            k ->
-                                    createBucketAssigner(
-                                            record.getTableInfo(), physicalTablePath, conf));
+                            k -> createBucketAssigner(tableInfo, physicalTablePath, conf));
 
             // Append the record to the accumulator.
             int bucketId = bucketAssigner.assignBucket(record.getBucketKey(), cluster);

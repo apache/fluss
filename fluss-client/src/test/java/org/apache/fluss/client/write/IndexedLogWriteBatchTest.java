@@ -199,7 +199,7 @@ public class IndexedLogWriteBatchTest {
     }
 
     private WriteRecord createWriteRecord() {
-        return WriteRecord.forIndexedAppend(DATA1_PHYSICAL_TABLE_PATH, row, null, DATA1_TABLE_INFO);
+        return WriteRecord.forIndexedAppend(DATA1_TABLE_INFO, DATA1_PHYSICAL_TABLE_PATH, row, null);
     }
 
     private IndexedLogWriteBatch createLogWriteBatch(TableBucket tb, long baseLogOffset)
@@ -213,7 +213,7 @@ public class IndexedLogWriteBatchTest {
         return new IndexedLogWriteBatch(
                 tb.getBucket(),
                 DATA1_PHYSICAL_TABLE_PATH,
-                DATA1_TABLE_INFO,
+                DATA1_TABLE_INFO.getSchemaId(),
                 writeLimit,
                 new PreAllocatedPagedOutputView(Collections.singletonList(memorySegment)),
                 System.currentTimeMillis());
