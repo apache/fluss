@@ -126,13 +126,21 @@ class LookupSender implements Runnable {
         sendLookups(lookups);
     }
 
-    private void sendLookups(List<AbstractLookupQuery<?>> lookups) {
+    private void sendLookups(List<AbstractLookupQuery<?>> lookups) throws Exception {
         if (lookups.isEmpty()) {
             return;
         }
         // group by <leader, lookup type> to lookup batches
         Map<Tuple2<Integer, LookupType>, List<AbstractLookupQuery<?>>> lookupBatches =
                 groupByLeaderAndType(lookups);
+
+        // if no lookup batches, sleep a bit to avoid busy loop. This case will happen when there is
+        // no leader for all the lookup request in queue.
+        if (lookupBatches.isEmpty()) {
+            // TODO Hard code sleep time.
+            Thread.sleep(100);
+        }
+
         // now, send the batches
         lookupBatches.forEach(
                 (destAndType, batch) -> sendLookups(destAndType.f0, destAndType.f1, batch));
@@ -148,11 +156,10 @@ class LookupSender implements Runnable {
             // lookup the leader node
             TableBucket tb = lookup.tableBucket();
             try {
-                // TODO this can be a re-triable operation. We should retry here instead of
-                // throwing exception.
                 leader = metadataUpdater.leaderFor(tb);
             } catch (Exception e) {
-                lookup.future().completeExceptionally(e);
+                // if leader is not found, re-enqueue the lookup to send again.
+                reEnqueueLookup(lookup);
                 continue;
             }
             lookupBatchesByLeader
@@ -165,24 +172,16 @@ class LookupSender implements Runnable {
     @VisibleForTesting
     void sendLookups(
             int destination, LookupType lookupType, List<AbstractLookupQuery<?>> lookupBatches) {
-        TabletServerGateway gateway = metadataUpdater.newTabletServerClientForNode(destination);
-        if (gateway == null) {
-            // TODO handle this exception, like retry.
-            throw new LeaderNotAvailableException(
-                    "Server " + destination + " is not found in metadata cache.");
-        }
-
         if (lookupType == LookupType.LOOKUP) {
-            sendLookupRequest(destination, gateway, lookupBatches);
+            sendLookupRequest(destination, lookupBatches);
         } else if (lookupType == LookupType.PREFIX_LOOKUP) {
-            sendPrefixLookupRequest(destination, gateway, lookupBatches);
+            sendPrefixLookupRequest(destination, lookupBatches);
         } else {
             throw new IllegalArgumentException("Unsupported lookup type: " + lookupType);
         }
     }
 
-    private void sendLookupRequest(
-            int destination, TabletServerGateway gateway, List<AbstractLookupQuery<?>> lookups) {
+    private void sendLookupRequest(int destination, List<AbstractLookupQuery<?>> lookups) {
         // table id -> (bucket -> lookups)
         Map<Long, Map<TableBucket, LookupBatch>> lookupByTableId = new HashMap<>();
         for (AbstractLookupQuery<?> abstractLookupQuery : lookups) {
@@ -193,6 +192,19 @@ class LookupSender implements Runnable {
                     .computeIfAbsent(tableId, k -> new HashMap<>())
                     .computeIfAbsent(tb, k -> new LookupBatch(tb))
                     .addLookup(lookup);
+        }
+
+        TabletServerGateway gateway = metadataUpdater.newTabletServerClientForNode(destination);
+        if (gateway == null) {
+            lookupByTableId.forEach(
+                    (tableId, lookupsByBucket) ->
+                            handleLookupRequestException(
+                                    new LeaderNotAvailableException(
+                                            "Server "
+                                                    + destination
+                                                    + " is not found in metadata cache."),
+                                    destination,
+                                    lookupsByBucket));
         }
 
         lookupByTableId.forEach(
@@ -206,9 +218,7 @@ class LookupSender implements Runnable {
     }
 
     private void sendPrefixLookupRequest(
-            int destination,
-            TabletServerGateway gateway,
-            List<AbstractLookupQuery<?>> prefixLookups) {
+            int destination, List<AbstractLookupQuery<?>> prefixLookups) {
         // table id -> (bucket -> lookups)
         Map<Long, Map<TableBucket, PrefixLookupBatch>> lookupByTableId = new HashMap<>();
         for (AbstractLookupQuery<?> abstractLookupQuery : prefixLookups) {
@@ -219,6 +229,19 @@ class LookupSender implements Runnable {
                     .computeIfAbsent(tableId, k -> new HashMap<>())
                     .computeIfAbsent(tb, k -> new PrefixLookupBatch(tb))
                     .addLookup(prefixLookup);
+        }
+
+        TabletServerGateway gateway = metadataUpdater.newTabletServerClientForNode(destination);
+        if (gateway == null) {
+            lookupByTableId.forEach(
+                    (tableId, lookupsByBucket) ->
+                            handlePrefixLookupException(
+                                    new LeaderNotAvailableException(
+                                            "Server "
+                                                    + destination
+                                                    + " is not found in metadata cache."),
+                                    destination,
+                                    lookupsByBucket));
         }
 
         lookupByTableId.forEach(
@@ -396,7 +419,6 @@ class LookupSender implements Runnable {
     }
 
     private void reEnqueueLookup(AbstractLookupQuery<?> lookup) {
-        lookup.incrementRetries();
         lookupQueue.appendLookup(lookup);
     }
 
@@ -455,6 +477,7 @@ class LookupSender implements Runnable {
                         tableBucket,
                         maxRetries - lookup.retries(),
                         error.formatErrMsg());
+                lookup.incrementRetries();
                 reEnqueueLookup(lookup);
             } else {
                 LOG.warn(

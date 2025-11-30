@@ -135,10 +135,10 @@ public class LookupSenderTest {
         assertThat(result).isNotDone();
         lookupQueue.appendLookup(lookupQuery);
 
-        // Wait for all retries to complete and verify it eventually fails
-        assertThatThrownBy(() -> result.get(5, TimeUnit.SECONDS))
-                .isInstanceOf(ExecutionException.class)
-                .hasMessageContaining("Leader not found after retry");
+        // Wait for all retries to complete and verify it eventually fails. This case will be failed
+        // after timeout.
+        assertThatThrownBy(() -> result.get(2, TimeUnit.SECONDS))
+                .isInstanceOf(java.util.concurrent.TimeoutException.class);
 
         // Verify that retries happened (should be 1, because server meta invalidated)
         assertThat(lookupQuery.retries()).isEqualTo(1);
@@ -173,10 +173,10 @@ public class LookupSenderTest {
         assertThat(future).isNotDone();
         lookupQueue.appendLookup(prefixLookupQuery);
 
-        // Wait for all retries to complete and verify it eventually fails
-        assertThatThrownBy(() -> future.get(5, TimeUnit.SECONDS))
-                .isInstanceOf(ExecutionException.class)
-                .hasMessageContaining("Leader not found after retry");
+        // Wait for all retries to complete and verify it eventually fails. This case will be failed
+        // after timeout.
+        assertThatThrownBy(() -> future.get(2, TimeUnit.SECONDS))
+                .isInstanceOf(java.util.concurrent.TimeoutException.class);
 
         // Verify that retries happened (should be 1, because server meta invalidated)
         assertThat(prefixLookupQuery.retries()).isEqualTo(1);
