@@ -31,10 +31,12 @@ import java.util.concurrent.atomic.AtomicInteger;
 @Internal
 public class RoundRobinBucketAssigner extends DynamicBucketAssigner {
     private final PhysicalTablePath physicalTablePath;
+    private final int bucketNumber;
     private final AtomicInteger counter = new AtomicInteger(new Random().nextInt());
 
-    public RoundRobinBucketAssigner(PhysicalTablePath physicalTablePath) {
+    public RoundRobinBucketAssigner(PhysicalTablePath physicalTablePath, int bucketNumber) {
         this.physicalTablePath = physicalTablePath;
+        this.bucketNumber = bucketNumber;
     }
 
     @Override
@@ -47,8 +49,7 @@ public class RoundRobinBucketAssigner extends DynamicBucketAssigner {
             return bucketsForTable.get(bucket).getBucketId();
         } else {
             // no buckets are available, give a non-available bucket.
-            return MathUtils.toPositive(nextValue)
-                    % cluster.getBucketCount(physicalTablePath.getTablePath());
+            return MathUtils.toPositive(nextValue) % bucketNumber;
         }
     }
 

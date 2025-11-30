@@ -173,10 +173,6 @@ public final class Cluster {
                                                 + " in cluster"));
     }
 
-    public int getBucketCount(TablePath tablePath) {
-        return tableInfoByPath.get(tablePath).getNumBuckets();
-    }
-
     /** Get the bucket location for this table-bucket. */
     public Optional<BucketLocation> getBucketLocation(TableBucket tableBucket) {
         return Optional.ofNullable(availableLocationByBucket.get(tableBucket));

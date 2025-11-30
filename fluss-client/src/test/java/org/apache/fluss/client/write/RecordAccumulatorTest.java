@@ -343,7 +343,8 @@ class RecordAccumulatorTest {
         int batchSize = 100;
         IndexedRow row = indexedRow(DATA1_ROW_TYPE, new Object[] {1, "a"});
 
-        StickyBucketAssigner bucketAssigner = new StickyBucketAssigner(DATA1_PHYSICAL_TABLE_PATH);
+        StickyBucketAssigner bucketAssigner =
+                new StickyBucketAssigner(DATA1_PHYSICAL_TABLE_PATH, 3);
         RecordAccumulator accum =
                 createTestRecordAccumulator(
                         (int) Duration.ofMinutes(1).toMillis(),
