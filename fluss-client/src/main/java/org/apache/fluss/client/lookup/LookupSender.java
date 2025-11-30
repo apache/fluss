@@ -136,8 +136,9 @@ class LookupSender implements Runnable {
 
         // if no lookup batches, sleep a bit to avoid busy loop. This case will happen when there is
         // no leader for all the lookup request in queue.
-        if (lookupBatches.isEmpty()) {
-            // TODO Hard code sleep time.
+        if (lookupBatches.isEmpty() && !lookupQueue.hasUnDrained()) {
+            // TODO: may use wait/notify mechanism to avoid active sleep, and use a dynamic sleep
+            // time based on the request waited time.
             Thread.sleep(100);
         }
 
