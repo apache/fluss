@@ -336,7 +336,9 @@ public class MetadataUpdater {
             } catch (Exception e) {
                 Throwable cause = stripExecutionException(e);
                 // in case of bootstrap is recovering, we should retry to connect.
-                if (!(cause instanceof StaleMetadataException || cause instanceof NetworkException)
+                if (!(cause instanceof StaleMetadataException
+                                || cause instanceof NetworkException
+                                || cause instanceof TimeoutException)
                         || retryCount >= maxRetryTimes) {
                     throw e;
                 }
