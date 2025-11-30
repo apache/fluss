@@ -20,6 +20,7 @@ package org.apache.fluss.server.kv.rowmerger;
 import org.apache.fluss.metadata.DeleteBehavior;
 import org.apache.fluss.metadata.MergeEngineType;
 import org.apache.fluss.metadata.Schema;
+import org.apache.fluss.record.BinaryValue;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
@@ -64,14 +65,14 @@ public class VersionedRowMerger implements RowMerger {
 
     @Nullable
     @Override
-    public InternalRow merge(InternalRow oldRow, InternalRow newRow) {
+    public BinaryValue merge(BinaryValue oldValue, BinaryValue newValue) {
         // return newRow if newRow's version is larger or equal than oldRow's version
-        return versionComparator.compare(oldRow, newRow) <= 0 ? newRow : oldRow;
+        return versionComparator.compare(oldValue.row, newValue.row) <= 0 ? newValue : oldValue;
     }
 
     @Nullable
     @Override
-    public InternalRow delete(InternalRow oldRow) {
+    public BinaryValue delete(BinaryValue oldRow) {
         throw new UnsupportedOperationException(
                 "DELETE is not supported for the versioned merge engine.");
     }

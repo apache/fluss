@@ -40,7 +40,7 @@ public class LogSegmentFiles {
     private final Path offsetIndex;
     private final Path timeIndex;
     private final @Nullable Path writerIdIndex;
-    // TODOadd leader epoch index after introduce leader epoch.
+    // TODO add leader epoch index after introduce leader epoch.
 
     public LogSegmentFiles(
             Path logSegment, Path offsetIndex, Path timeIndex, @Nullable Path writerIdIndex) {

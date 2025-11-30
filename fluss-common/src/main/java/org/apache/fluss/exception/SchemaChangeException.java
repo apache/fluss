@@ -27,4 +27,8 @@ public class SchemaChangeException extends ApiException {
     public SchemaChangeException(String message) {
         this(message, null);
     }
+
+    public SchemaChangeException(String message, boolean stackTraceEnabled) {
+        super(message, null, stackTraceEnabled);
+    }
 }

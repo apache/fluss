@@ -132,6 +132,7 @@ public final class Schema implements Serializable {
         return columns.stream().map(Column::getName).collect(Collectors.toList());
     }
 
+    /** Returns all column ids for top-level columns, the nested field ids are not included. */
     public List<Integer> getColumnIds() {
         return columns.stream().map(Column::getColumnId).collect(Collectors.toList());
     }
@@ -154,6 +155,7 @@ public final class Schema implements Serializable {
         return keyIndexes;
     }
 
+    /** Returns the highest field ID in this schema. */
     public int getHighestFieldId() {
         return highestFieldId;
     }
@@ -249,24 +251,21 @@ public final class Schema implements Serializable {
 
         /** Adopts all columns from the given list. */
         public Builder fromColumns(List<Column> inputColumns) {
-            boolean nonMatchColumnId =
+            boolean nonSetColumnId =
                     inputColumns.stream()
                             .noneMatch(column -> column.columnId != Column.UNKNOWN_COLUMN_ID);
-            boolean allMatchColumnId =
+            boolean allSetColumnId =
                     inputColumns.stream()
                             .allMatch(column -> column.columnId != Column.UNKNOWN_COLUMN_ID);
             checkState(
-                    nonMatchColumnId || allMatchColumnId,
+                    nonSetColumnId || allSetColumnId,
                     "All columns must have columnId or none of them must have columnId.");
 
-            if (allMatchColumnId) {
+            if (allSetColumnId) {
                 columns.addAll(inputColumns);
                 highestFieldId =
                         new AtomicInteger(
-                                inputColumns.stream()
-                                        .mapToInt(Column::getColumnId)
-                                        .max()
-                                        .orElse(-1));
+                                columns.stream().mapToInt(Column::getColumnId).max().orElse(-1));
             } else {
                 // if all columnId is not set, this maybe from old version schema. Just use its
                 // position as columnId.

@@ -183,6 +183,7 @@ class ProjectedRowTest {
                 .isExactlyInstanceOf(SchemaChangeException.class)
                 .hasMessage(
                         "Expected datatype of column(id=0,name=a) is [INT], while the actual datatype is [BIGINT]");
+
         assertThatThrownBy(
                         () ->
                                 ProjectedRow.from(

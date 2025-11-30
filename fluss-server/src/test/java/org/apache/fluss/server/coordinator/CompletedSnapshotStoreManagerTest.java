@@ -99,13 +99,13 @@ class CompletedSnapshotStoreManagerTest {
         CompletedSnapshotStoreManager completedSnapshotStoreManager =
                 createCompletedSnapshotStoreManager(maxNumberOfSnapshotsToRetain);
 
-        // addColumn snapshots for a series of buckets
+        // add snapshots for a series of buckets
         Set<TableBucket> tableBuckets = createTableBuckets(2, 3);
         int snapshotNum = 3;
 
         Map<TableBucket, CompletedSnapshot> tableBucketLatestCompletedSnapshots = new HashMap<>();
         for (TableBucket tableBucket : tableBuckets) {
-            // addColumn some snapshots
+            // add some snapshots
             for (int snapshot = 0; snapshot < snapshotNum; snapshot++) {
                 CompletedSnapshot completedSnapshot =
                         KvTestUtils.mockCompletedSnapshot(tempDir, tableBucket, snapshot);
@@ -137,7 +137,7 @@ class CompletedSnapshotStoreManagerTest {
             assertThat(completedSnapshot)
                     .isEqualTo(tableBucketLatestCompletedSnapshots.get(tableBucket));
 
-            // addColumn a new snapshot
+            // add a new snapshot
             long snapshotId = completedSnapshot.getSnapshotID() + 1;
             completedSnapshot = KvTestUtils.mockCompletedSnapshot(tempDir, tableBucket, snapshotId);
             addCompletedSnapshot(completedSnapshotStoreManager, completedSnapshot);
@@ -169,7 +169,7 @@ class CompletedSnapshotStoreManagerTest {
         Set<TableBucket> tableBuckets = createTableBuckets(1, 2);
         int snapshotNum = 3;
         for (TableBucket tableBucket : tableBuckets) {
-            // addColumn some snapshots
+            // add some snapshots
             for (int snapshot = 0; snapshot < snapshotNum; snapshot++) {
                 CompletedSnapshot completedSnapshot =
                         KvTestUtils.mockCompletedSnapshot(tempDir, tableBucket, snapshot);

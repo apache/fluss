@@ -134,7 +134,7 @@ class KvSnapshotBatchScannerITCase extends ClientToServerITCaseBase {
                         Collections.singletonList(
                                 TableChange.addColumn(
                                         "new_column",
-                                        DataTypes.BIGINT().copy(false).copy(true),
+                                        DataTypes.BIGINT().copy(true),
                                         null,
                                         TableChange.ColumnPosition.last())),
                         false)
@@ -148,7 +148,7 @@ class KvSnapshotBatchScannerITCase extends ClientToServerITCaseBase {
                         .column("name", DataTypes.STRING())
                         .column("new_column", DataTypes.BIGINT())
                         .build();
-        // put into values with old schema.
+        // put into values with new schema.
         List<InternalRow> rows = new ArrayList<>();
         for (int i = 10; i < 20; i++) {
             InternalRow row =

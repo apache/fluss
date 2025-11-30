@@ -92,7 +92,7 @@ final class HighWatermarkPersistenceTest extends ReplicaTestBase {
         assertThat(highWatermark0).isEqualTo(10L);
         assertThat(replica0.getLogTablet().getHighWatermark()).isEqualTo(10L);
 
-        // addColumn another replica and set highWatermark.
+        // add another replica and set highWatermark.
         TableBucket tableBucket1 = new TableBucket(DATA2_TABLE_ID, 0);
         replicaManager.becomeLeaderOrFollower(
                 INITIAL_COORDINATOR_EPOCH,

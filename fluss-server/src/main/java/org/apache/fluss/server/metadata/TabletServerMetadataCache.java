@@ -68,13 +68,12 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
 
     private final MetadataManager metadataManager;
 
-    private final SchemaMetadataManager schemaMetadataManager;
+    private final ServerSchemaCache serverSchemaCache;
 
-    // todo: replace this in test with schemaMetadataManager.
     public TabletServerMetadataCache(MetadataManager metadataManager) {
         this.serverMetadataSnapshot = ServerMetadataSnapshot.empty();
         this.metadataManager = metadataManager;
-        this.schemaMetadataManager = new SchemaMetadataManager(metadataManager);
+        this.serverSchemaCache = new ServerSchemaCache(metadataManager);
     }
 
     @Override
@@ -141,14 +140,14 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
     }
 
     public SchemaGetter subscribeWithInitialSchema(
-            TablePath tablePath, int initialSchemaId, Schema initialSchema) {
-        return schemaMetadataManager.subscribeWithInitialSchema(
-                tablePath, initialSchemaId, initialSchema);
+            TablePath tablePath, long tableId, int initialSchemaId, Schema initialSchema) {
+        return serverSchemaCache.subscribeWithInitialSchema(
+                tableId, tablePath, initialSchemaId, initialSchema);
     }
 
-    public void updateLatestSchema(TablePath tablePath, SchemaInfo schemaInfo) {
-        schemaMetadataManager.updateLatestSchema(
-                tablePath, (short) schemaInfo.getSchemaId(), schemaInfo.getSchema());
+    public void updateLatestSchema(long tableId, SchemaInfo schemaInfo) {
+        serverSchemaCache.updateLatestSchema(
+                tableId, (short) schemaInfo.getSchemaId(), schemaInfo.getSchema());
     }
 
     public Optional<PartitionMetadata> getPartitionMetadata(PhysicalTablePath partitionPath) {
@@ -207,8 +206,7 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
                         // todo: apply schema id and schema info if needs
                         int schemaId = tableInfo.getSchemaId();
                         Schema schema = tableInfo.getSchema();
-                        schemaMetadataManager.updateLatestSchema(
-                                tablePath, (short) schemaId, schema);
+                        serverSchemaCache.updateLatestSchema(tableId, (short) schemaId, schema);
 
                         if (tableId == DELETED_TABLE_ID) {
                             Long removedTableId = tableIdByPath.remove(tablePath);
@@ -437,7 +435,7 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
     }
 
     @VisibleForTesting
-    public SchemaMetadataManager getSchemaMetadataManager() {
-        return schemaMetadataManager;
+    public ServerSchemaCache getServerSchemaCache() {
+        return serverSchemaCache;
     }
 }

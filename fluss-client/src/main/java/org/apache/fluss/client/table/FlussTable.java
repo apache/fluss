@@ -29,7 +29,6 @@ import org.apache.fluss.client.table.writer.TableAppend;
 import org.apache.fluss.client.table.writer.TableUpsert;
 import org.apache.fluss.client.table.writer.Upsert;
 import org.apache.fluss.metadata.SchemaGetter;
-import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 
@@ -55,10 +54,7 @@ public class FlussTable implements Table {
         this.tableInfo = tableInfo;
         this.hasPrimaryKey = tableInfo.hasPrimaryKey();
         this.schemaGetter =
-                new ClientSchemaGetter(
-                        tableInfo.getTablePath(),
-                        new SchemaInfo(tableInfo.getSchema(), tableInfo.getSchemaId()),
-                        conn.getAdmin());
+                new ClientSchemaGetter(tablePath, tableInfo.getSchemaInfo(), conn.getAdmin());
     }
 
     @Override

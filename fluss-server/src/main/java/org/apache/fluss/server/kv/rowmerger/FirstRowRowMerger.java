@@ -20,7 +20,7 @@ package org.apache.fluss.server.kv.rowmerger;
 import org.apache.fluss.metadata.DeleteBehavior;
 import org.apache.fluss.metadata.MergeEngineType;
 import org.apache.fluss.metadata.Schema;
-import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.record.BinaryValue;
 
 import javax.annotation.Nullable;
 
@@ -44,14 +44,14 @@ public class FirstRowRowMerger implements RowMerger {
 
     @Nullable
     @Override
-    public InternalRow merge(InternalRow oldRow, InternalRow newRow) {
+    public BinaryValue merge(BinaryValue oldValue, BinaryValue newValue) {
         // always retain the old row (first row)
-        return oldRow;
+        return oldValue;
     }
 
     @Nullable
     @Override
-    public InternalRow delete(InternalRow oldRow) {
+    public BinaryValue delete(BinaryValue oldRow) {
         throw new UnsupportedOperationException(
                 "DELETE is not supported for the first_row merge engine.");
     }

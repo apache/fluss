@@ -85,12 +85,31 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
                                         clientConf,
                                         tablePath1,
                                         DataTypes.ROW(
-                                                DataTypes.FIELD("name2", DataTypes.STRING()),
-                                                DataTypes.FIELD("id", DataTypes.BIGINT())),
+                                                DataTypes.FIELD(
+                                                        "id", DataTypes.BIGINT().copy(false)),
+                                                DataTypes.FIELD("name", DataTypes.STRING())),
+                                        new int[] {1, 0},
                                         createMockSourceReaderMetrics(),
                                         null))
                 .isInstanceOf(ValidationException.class)
-                .hasMessage("The field name2 is not found in the fluss table.");
+                .hasMessage(
+                        "The Flink query schema is not matched to Fluss table schema. \n"
+                                + "Flink query schema: ROW<`id` BIGINT NOT NULL, `name` STRING>\n"
+                                + "Fluss table schema: ROW<`name` STRING, `id` BIGINT NOT NULL> (projection [1, 0])");
+
+        assertThatThrownBy(
+                        () ->
+                                new FlinkSourceSplitReader(
+                                        clientConf,
+                                        tablePath1,
+                                        DataTypes.ROW(
+                                                DataTypes.FIELD("name2", DataTypes.STRING()),
+                                                DataTypes.FIELD("id", DataTypes.BIGINT())),
+                                        null,
+                                        createMockSourceReaderMetrics(),
+                                        null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("Field name2 does not exist in the row type.");
 
         FlinkSourceSplitReader flinkSourceSplitReader =
                 new FlinkSourceSplitReader(
@@ -99,9 +118,10 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
                         DataTypes.ROW(
                                 DataTypes.FIELD("name", DataTypes.STRING()),
                                 DataTypes.FIELD("id", DataTypes.BIGINT().copy(false))),
+                        null,
                         createMockSourceReaderMetrics(),
                         null);
-        assertThat(flinkSourceSplitReader.getProjectedFields()).isEqualTo(new int[] {1, 0});
+        assertThat(flinkSourceSplitReader.getProjectedFields()).isNull();
     }
 
     @Test
@@ -384,7 +404,7 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
 
     private FlinkSourceSplitReader createSplitReader(TablePath tablePath, RowType rowType) {
         return new FlinkSourceSplitReader(
-                clientConf, tablePath, rowType, createMockSourceReaderMetrics(), null);
+                clientConf, tablePath, rowType, null, createMockSourceReaderMetrics(), null);
     }
 
     private FlinkSourceReaderMetrics createMockSourceReaderMetrics() {

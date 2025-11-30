@@ -65,7 +65,7 @@ public class RpcGatewayManager<T extends RpcGateway> implements AutoCloseable {
     }
 
     /**
-     * Add a server to the manager. It'll create a new gateway for the server andadd it to the
+     * Add a server to the manager. It'll create a new gateway for the server and add it to the
      * manager. If the server has already existed, it'll remove the already existing server before
      * adding the new one.
      */

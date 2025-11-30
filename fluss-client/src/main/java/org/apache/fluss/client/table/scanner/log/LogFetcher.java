@@ -364,8 +364,7 @@ public class LogFetcher implements Closeable {
                             if (!MemoryLogRecords.EMPTY.equals(logRecords)
                                     || fetchResultForBucket.getErrorCode() != Errors.NONE.code()) {
                                 // In oder to not signal notEmptyCondition, add completed
-                                // fetch to
-                                // buffer until log records is not empty.
+                                // fetch to buffer until log records is not empty.
                                 DefaultCompletedFetch completedFetch =
                                         new DefaultCompletedFetch(
                                                 tb,

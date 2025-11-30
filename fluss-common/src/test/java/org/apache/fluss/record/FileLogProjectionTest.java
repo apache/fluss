@@ -78,7 +78,8 @@ class FileLogProjectionTest {
                         TestData.DATA2,
                         TestData.DATA2);
 
-        FileLogProjection projection = new FileLogProjection();
+        ProjectionPushdownCache cache = new ProjectionPushdownCache();
+        FileLogProjection projection = new FileLogProjection(cache);
         // get schema during running.
         doProjection(
                 1L,
@@ -87,16 +88,13 @@ class FileLogProjectionTest {
                 recordsOfData2RowType,
                 new int[] {0, 2},
                 recordsOfData2RowType.sizeInBytes());
-        FileLogProjection.ProjectionInfo info1 = projection.currentProjection;
+        assertThat(cache.projectionCache.size()).isEqualTo(1);
+        FileLogProjection.ProjectionInfo info1 =
+                cache.getProjectionInfo(1L, schemaId, new int[] {0, 2});
         assertThat(info1).isNotNull();
         assertThat(info1.nodesProjection.stream().toArray()).isEqualTo(new int[] {0, 2});
         // a int: [0,1] ; b string: [2,3,4] ; c string: [5,6,7]
         assertThat(info1.buffersProjection.stream().toArray()).isEqualTo(new int[] {0, 1, 5, 6, 7});
-        assertThat(projection.projectionsCache).hasSize(1);
-        assertThat(
-                        projection.projectionsCache.get(
-                                new FileLogProjection.ProjectionKey(1L, schemaId)))
-                .isSameAs(info1);
 
         doProjection(
                 2L,
@@ -105,37 +103,13 @@ class FileLogProjectionTest {
                 recordsOfData2RowType,
                 new int[] {1},
                 recordsOfData2RowType.sizeInBytes());
-        FileLogProjection.ProjectionInfo info2 = projection.currentProjection;
+        assertThat(cache.projectionCache.size()).isEqualTo(2);
+        FileLogProjection.ProjectionInfo info2 =
+                cache.getProjectionInfo(2L, schemaId, new int[] {1});
         assertThat(info2).isNotNull();
         assertThat(info2.nodesProjection.stream().toArray()).isEqualTo(new int[] {1});
         // a int: [0,1] ; b string: [2,3,4] ; c string: [5,6,7]
         assertThat(info2.buffersProjection.stream().toArray()).isEqualTo(new int[] {2, 3, 4});
-        assertThat(projection.projectionsCache).hasSize(2);
-        assertThat(
-                        projection.projectionsCache.get(
-                                new FileLogProjection.ProjectionKey(2L, schemaId)))
-                .isSameAs(info2);
-
-        doProjection(
-                1L,
-                schemaId,
-                projection,
-                recordsOfData2RowType,
-                new int[] {0, 2},
-                recordsOfData2RowType.sizeInBytes());
-        assertThat(projection.currentProjection).isNotNull().isSameAs(info1);
-
-        assertThatThrownBy(
-                        () ->
-                                doProjection(
-                                        1L,
-                                        schemaId,
-                                        projection,
-                                        recordsOfData2RowType,
-                                        new int[] {1},
-                                        recordsOfData2RowType.sizeInBytes()))
-                .isInstanceOf(InvalidColumnProjectionException.class)
-                .hasMessage("The schema and projection should be identical for the same table id.");
     }
 
     @Test
@@ -149,7 +123,7 @@ class FileLogProjectionTest {
                         TestData.DATA2_ROW_TYPE,
                         TestData.DATA2,
                         TestData.DATA2);
-        FileLogProjection projection = new FileLogProjection();
+        FileLogProjection projection = new FileLogProjection(new ProjectionPushdownCache());
         assertThatThrownBy(
                         () ->
                                 doProjection(
@@ -160,7 +134,7 @@ class FileLogProjectionTest {
                                         new int[] {3},
                                         recordsOfData2RowType.sizeInBytes()))
                 .isInstanceOf(InvalidColumnProjectionException.class)
-                .hasMessage("Projected field id 3 is not contains in [0, 1, 2]");
+                .hasMessage("Projected field id 3 is not contained in [0, 1, 2]");
 
         assertThatThrownBy(
                         () ->
@@ -220,7 +194,7 @@ class FileLogProjectionTest {
                 doProjection(
                         1L,
                         schemaId,
-                        new FileLogProjection(),
+                        new FileLogProjection(new ProjectionPushdownCache()),
                         fileLogRecords,
                         projectedFields,
                         Integer.MAX_VALUE);
@@ -248,7 +222,7 @@ class FileLogProjectionTest {
                         TestData.DATA1_ROW_TYPE,
                         TestData.DATA1,
                         TestData.ANOTHER_DATA1);
-        FileLogProjection projection = new FileLogProjection();
+        FileLogProjection projection = new FileLogProjection(new ProjectionPushdownCache());
         // overwrite the wrong decoding byte order endian
         projection.getLogHeaderBuffer().order(ByteOrder.BIG_ENDIAN);
         assertThatThrownBy(
@@ -305,7 +279,10 @@ class FileLogProjectionTest {
             int maxBytes = totalSize / i;
             List<Object[]> results =
                     doProjection(
-                            new FileLogProjection(), fileLogRecords, new int[] {0, 1}, maxBytes);
+                            new FileLogProjection(new ProjectionPushdownCache()),
+                            fileLogRecords,
+                            new int[] {0, 1},
+                            maxBytes);
             if (results.isEmpty()) {
                 hasEmpty = true;
             } else if (results.size() == TestData.DATA1.size()) {

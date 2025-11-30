@@ -25,6 +25,7 @@ import com.github.benmanes.caffeine.cache.Caffeine;
 
 import javax.annotation.concurrent.ThreadSafe;
 
+import java.time.Duration;
 import java.util.Arrays;
 
 /** The cache for {@link PartialUpdater}. */
@@ -37,7 +38,11 @@ public class PartialUpdaterCache {
         // currently, the cache is used per-bucket, so we limit the cache size to 5 to have a
         // maximal 5 parallel partial updaters. This is a temporary solution and should be
         // shared across all buckets in the future.
-        this.rowPartialUpdaters = Caffeine.newBuilder().maximumSize(5).build();
+        this.rowPartialUpdaters =
+                Caffeine.newBuilder()
+                        .maximumSize(5)
+                        .expireAfterAccess(Duration.ofMinutes(5))
+                        .build();
     }
 
     // TODO: extend to tableId and schemaId when the cache is shared across all tables
@@ -45,7 +50,7 @@ public class PartialUpdaterCache {
             KvFormat kvFormat, short schemaId, Schema schema, int[] targetColumns) {
         return rowPartialUpdaters.get(
                 getPartialUpdaterKey(targetColumns, schemaId),
-                k -> new PartialUpdater(kvFormat, schema, targetColumns));
+                k -> new PartialUpdater(kvFormat, schemaId, schema, targetColumns));
     }
 
     private String getPartialUpdaterKey(int[] targetColumns, int schemaId) {

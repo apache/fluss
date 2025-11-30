@@ -71,8 +71,7 @@ public class BatchScanUtils {
                     // If the scanner has more data, add it back to the queue
                     scannerQueue.add(scanner);
                 } else {
-                    // Close the scanner if it has no more data, and not add it back to the
-                    // queue
+                    // Close the scanner if it has no more data, and not add it back to the queue
                     scanner.close();
                 }
             } catch (Exception e) {

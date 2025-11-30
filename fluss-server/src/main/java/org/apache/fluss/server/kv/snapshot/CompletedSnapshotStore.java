@@ -99,7 +99,7 @@ public class CompletedSnapshotStore {
      * Synchronously writes the new snapshots to snapshot handle store and asynchronously removes
      * older ones.
      *
-     * @param snapshot Completed snapshot toadd.
+     * @param snapshot Completed snapshot to add.
      */
     @VisibleForTesting
     CompletedSnapshot addSnapshotAndSubsumeOldestOne(
@@ -116,7 +116,7 @@ public class CompletedSnapshotStore {
         completedSnapshotHandleStore.add(
                 snapshot.getTableBucket(), snapshot.getSnapshotID(), completedSnapshotHandle);
 
-        // Nowadd the new one. If it fails, we don't want to lose existing data.
+        // Now add the new one. If it fails, we don't want to lose existing data.
         completedSnapshots.addLast(snapshot);
 
         // Remove completed snapshot from queue and snapshotStateHandleStore, not discard.

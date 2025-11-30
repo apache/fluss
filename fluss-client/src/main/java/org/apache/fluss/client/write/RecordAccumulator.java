@@ -868,8 +868,7 @@ public final class RecordAccumulator {
             // Either we have reached a point where there are batches without a sequence (i.e. never
             // been drained and are hence in order by default), or the batch at the front of the
             // queue has a sequence greater than the incoming batch. This is the right place to
-            // add
-            // the incoming batch.
+            // add the incoming batch.
             deque.addFirst(batch);
 
             // Now we have to re-insert the previously queued batches in the right order.

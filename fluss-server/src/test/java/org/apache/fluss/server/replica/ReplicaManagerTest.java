@@ -193,7 +193,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
     void testFetchLog() throws Exception {
         SchemaGetter schemaGetter =
                 serverMetadataCache.subscribeWithInitialSchema(
-                        DATA1_TABLE_PATH, DEFAULT_SCHEMA_ID, DATA1_SCHEMA);
+                        DATA1_TABLE_PATH, DATA1_TABLE_ID, DEFAULT_SCHEMA_ID, DATA1_SCHEMA);
         TableBucket tb = new TableBucket(DATA1_TABLE_ID, 1);
         makeLogTableAsLeader(tb.getBucket());
 
@@ -309,7 +309,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
     void testFetchLogWithMaxBytesLimit() throws Exception {
         SchemaGetter schemaGetter =
                 serverMetadataCache.subscribeWithInitialSchema(
-                        DATA1_TABLE_PATH, DEFAULT_SCHEMA_ID, DATA1_SCHEMA);
+                        DATA1_TABLE_PATH, DATA1_TABLE_ID, DEFAULT_SCHEMA_ID, DATA1_SCHEMA);
         TableBucket tb = new TableBucket(DATA1_TABLE_ID, 1);
         makeLogTableAsLeader(tb.getBucket());
 
@@ -432,7 +432,8 @@ class ReplicaManagerTest extends ReplicaTestBase {
         assertThat(records1).isNotNull();
         assertThat(records2).isNotNull();
         SchemaGetter schemaGetter =
-                serverMetadataCache.subscribeWithInitialSchema(DATA1_TABLE_PATH, 1, DATA1_SCHEMA);
+                serverMetadataCache.subscribeWithInitialSchema(
+                        DATA1_TABLE_PATH, DATA1_TABLE_ID, 1, DATA1_SCHEMA);
         if (records1.sizeInBytes() == 0) {
             assertThat(records2.sizeInBytes() > 0).isTrue();
             assertMemoryRecordsEquals(
@@ -498,7 +499,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
         makeKvTableAsLeader(DATA1_TABLE_ID_PK, DATA1_TABLE_PATH_PK, tb.getBucket());
         SchemaGetter schemaGetter =
                 serverMetadataCache.subscribeWithInitialSchema(
-                        DATA1_TABLE_PATH_PK, 1, DATA1_SCHEMA_PK);
+                        DATA1_TABLE_PATH_PK, DATA1_TABLE_ID_PK, 1, DATA1_SCHEMA_PK);
 
         // 1. put kv records to kv store.
         List<Tuple2<Object[], Object[]>> data1 =
@@ -628,7 +629,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
         makeKvTableAsLeader(DATA1_TABLE_ID_PK, DATA1_TABLE_PATH_PK, tb.getBucket());
         SchemaGetter schemaGetter =
                 serverMetadataCache.subscribeWithInitialSchema(
-                        DATA1_TABLE_PATH_PK, 1, DATA1_SCHEMA_PK);
+                        DATA1_TABLE_PATH_PK, DATA1_TABLE_ID_PK, 1, DATA1_SCHEMA_PK);
 
         // put 10 batches delete non-exists key batch to kv store.
         CompletableFuture<List<PutKvResultForBucket>> future;
@@ -906,7 +907,8 @@ class ReplicaManagerTest extends ReplicaTestBase {
         CompletableFuture<LimitScanResultForBucket> limitFuture = new CompletableFuture<>();
         replicaManager.limitScan(tb, 10, limitFuture::complete);
         SchemaGetter schemaGetter =
-                serverMetadataCache.subscribeWithInitialSchema(DATA1_TABLE_PATH, 1, DATA1_SCHEMA);
+                serverMetadataCache.subscribeWithInitialSchema(
+                        DATA1_TABLE_PATH, DATA1_TABLE_ID, 1, DATA1_SCHEMA);
         assertMemoryRecordsEquals(
                 DATA1_ROW_TYPE,
                 schemaGetter,
@@ -1463,7 +1465,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
             FetchLogResultForBucket r = r1.getValue();
             SchemaGetter schemaGetter =
                     serverMetadataCache.subscribeWithInitialSchema(
-                            DATA1_TABLE_PATH, 1, DATA1_SCHEMA);
+                            DATA1_TABLE_PATH, DATA1_TABLE_ID, 1, DATA1_SCHEMA);
             assertLogRecordsEqualsWithRowKind(
                     DEFAULT_SCHEMA_ID,
                     DATA1_ROW_TYPE,
@@ -1591,11 +1593,12 @@ class ReplicaManagerTest extends ReplicaTestBase {
         zkClient.registerTable(
                 nonePartitionTablePath,
                 TableRegistration.newTable(nonePartitionTableId, DATA1_TABLE_DESCRIPTOR));
-        zkClient.registerSchema(nonePartitionTablePath, DATA1_TABLE_DESCRIPTOR.getSchema());
+        zkClient.registerFirstSchema(nonePartitionTablePath, DATA1_TABLE_DESCRIPTOR.getSchema());
         zkClient.registerTable(
                 partitionTablePath,
                 TableRegistration.newTable(partitionTableId, DATA1_PARTITIONED_TABLE_DESCRIPTOR));
-        zkClient.registerSchema(partitionTablePath, DATA1_PARTITIONED_TABLE_DESCRIPTOR.getSchema());
+        zkClient.registerFirstSchema(
+                partitionTablePath, DATA1_PARTITIONED_TABLE_DESCRIPTOR.getSchema());
 
         expectedCoordinatorServer.put(
                 "INTERNAL", new ServerNode(0, "localhost", 1235, ServerType.COORDINATOR));

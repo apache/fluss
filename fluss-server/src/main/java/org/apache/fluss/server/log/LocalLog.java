@@ -405,8 +405,6 @@ public final class LocalLog {
                         (maxOffsetMetadata.getSegmentBaseOffset() == segment.getBaseOffset())
                                 ? maxOffsetMetadata.getRelativePositionInSegment()
                                 : segment.getSizeInBytes();
-
-                // segment需要查询
                 fetchDataInfo =
                         segment.read(readOffset, maxLength, maxPosition, minOneMessage, projection);
                 if (fetchDataInfo == null) {

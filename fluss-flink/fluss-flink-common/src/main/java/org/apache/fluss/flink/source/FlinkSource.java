@@ -60,6 +60,7 @@ public class FlinkSource<OUT>
     private final boolean hasPrimaryKey;
     private final boolean isPartitioned;
     private final RowType sourceOutputType;
+    @Nullable private final int[] projectedFields;
     protected final OffsetsInitializer offsetsInitializer;
     protected final long scanPartitionDiscoveryIntervalMs;
     private final boolean streaming;
@@ -73,6 +74,7 @@ public class FlinkSource<OUT>
             boolean hasPrimaryKey,
             boolean isPartitioned,
             RowType sourceOutputType,
+            @Nullable int[] projectedFields,
             OffsetsInitializer offsetsInitializer,
             long scanPartitionDiscoveryIntervalMs,
             FlussDeserializationSchema<OUT> deserializationSchema,
@@ -84,6 +86,7 @@ public class FlinkSource<OUT>
                 hasPrimaryKey,
                 isPartitioned,
                 sourceOutputType,
+                projectedFields,
                 offsetsInitializer,
                 scanPartitionDiscoveryIntervalMs,
                 deserializationSchema,
@@ -98,6 +101,7 @@ public class FlinkSource<OUT>
             boolean hasPrimaryKey,
             boolean isPartitioned,
             RowType sourceOutputType,
+            @Nullable int[] projectedFields,
             OffsetsInitializer offsetsInitializer,
             long scanPartitionDiscoveryIntervalMs,
             FlussDeserializationSchema<OUT> deserializationSchema,
@@ -109,6 +113,7 @@ public class FlinkSource<OUT>
         this.hasPrimaryKey = hasPrimaryKey;
         this.isPartitioned = isPartitioned;
         this.sourceOutputType = sourceOutputType;
+        this.projectedFields = projectedFields;
         this.offsetsInitializer = offsetsInitializer;
         this.scanPartitionDiscoveryIntervalMs = scanPartitionDiscoveryIntervalMs;
         this.deserializationSchema = deserializationSchema;
@@ -182,7 +187,6 @@ public class FlinkSource<OUT>
                         context.getUserCodeClassLoader(),
                         sourceOutputType));
         FlinkRecordEmitter<OUT> recordEmitter = new FlinkRecordEmitter<>(deserializationSchema);
-        // recall to projectedFields
 
         return new FlinkSourceReader<>(
                 elementsQueue,
@@ -190,6 +194,7 @@ public class FlinkSource<OUT>
                 tablePath,
                 sourceOutputType,
                 context,
+                projectedFields,
                 flinkSourceReaderMetrics,
                 recordEmitter,
                 lakeSource);

@@ -31,6 +31,7 @@ import org.apache.fluss.record.KvRecordTestUtils;
 import org.apache.fluss.record.LogRecordBatch;
 import org.apache.fluss.record.LogRecords;
 import org.apache.fluss.record.MemoryLogRecords;
+import org.apache.fluss.record.ProjectionPushdownCache;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
 import org.apache.fluss.server.kv.KvTablet;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
@@ -94,8 +95,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link Replica}. */
 final class ReplicaTest extends ReplicaTestBase {
-    // TODO addColumn more tests refer to kafka's PartitionTest.
-    // TODO addColumn more tests to cover partition table
+    // TODO add more tests refer to kafka's PartitionTest.
+    // TODO add more tests to cover partition table
 
     @Test
     void testMakeLeader() throws Exception {
@@ -137,15 +138,22 @@ final class ReplicaTest extends ReplicaTestBase {
                         (int)
                                 conf.get(ConfigOptions.CLIENT_SCANNER_LOG_FETCH_MAX_BYTES)
                                         .getBytes());
+        ProjectionPushdownCache projectionCache = new ProjectionPushdownCache();
         fetchParams.setCurrentFetch(
-                DATA1_TABLE_ID, 0, Integer.MAX_VALUE, schemaGetter, DEFAULT_COMPRESSION, null);
+                DATA1_TABLE_ID,
+                0,
+                Integer.MAX_VALUE,
+                schemaGetter,
+                DEFAULT_COMPRESSION,
+                null,
+                projectionCache);
         LogReadInfo logReadInfo = logReplica.fetchRecords(fetchParams);
         assertLogRecordsEquals(
                 DATA1_ROW_TYPE, logReadInfo.getFetchedData().getRecords(), DATA1, schemaGetter);
 
         // schema evolution.
         serverMetadataCache.updateLatestSchema(
-                DATA1_TABLE_PATH, new SchemaInfo(DATA2_SCHEMA, (short) 2));
+                DATA1_TABLE_ID, new SchemaInfo(DATA2_SCHEMA, (short) 2));
         mr =
                 createRecordsWithoutBaseLogOffset(
                         DATA2_ROW_TYPE,
@@ -163,7 +171,8 @@ final class ReplicaTest extends ReplicaTestBase {
                 Integer.MAX_VALUE,
                 schemaGetter,
                 DEFAULT_COMPRESSION,
-                null);
+                null,
+                projectionCache);
         logReadInfo = logReplica.fetchRecords(fetchParams);
         assertLogRecordsEquals(
                 2, DATA2_ROW_TYPE, logReadInfo.getFetchedData().getRecords(), DATA2, schemaGetter);
@@ -393,7 +402,7 @@ final class ReplicaTest extends ReplicaTestBase {
         currentOffset += 2;
         short newSchemaId = 2;
         serverMetadataCache.updateLatestSchema(
-                DATA1_TABLE_PATH_PK, new SchemaInfo(DATA2_SCHEMA, newSchemaId));
+                DATA1_TABLE_ID, new SchemaInfo(DATA2_SCHEMA, newSchemaId));
         KvRecordTestUtils.KvRecordBatchFactory kvRecordBatchFactory2 =
                 KvRecordTestUtils.KvRecordBatchFactory.of(newSchemaId);
         KvRecordTestUtils.KvRecordFactory kvRecordFactory2 =
@@ -718,7 +727,7 @@ final class ReplicaTest extends ReplicaTestBase {
         // update schema.
         zkClient.registerSchema(DATA1_TABLE_PATH_PK, DATA2_SCHEMA, newSchemaId);
         serverMetadataCache.updateLatestSchema(
-                DATA1_TABLE_PATH_PK, new SchemaInfo(DATA2_SCHEMA, newSchemaId));
+                DATA1_TABLE_ID, new SchemaInfo(DATA2_SCHEMA, newSchemaId));
         // write data with new schema
         putRecordsToLeader(
                 kvReplica,
@@ -808,7 +817,8 @@ final class ReplicaTest extends ReplicaTestBase {
                 Integer.MAX_VALUE,
                 replica.getSchemaGetter(),
                 DEFAULT_COMPRESSION,
-                null);
+                null,
+                new ProjectionPushdownCache());
         LogReadInfo logReadInfo = replica.fetchRecords(fetchParams);
         return logReadInfo.getFetchedData().getRecords();
     }

@@ -64,6 +64,7 @@ class FlinkLookupFunctionTest extends FlinkTestBase {
                         tablePath,
                         flinkRowType,
                         createPrimaryKeyLookupNormalizer(new int[] {0}, flinkRowType),
+                        // no projection when job compiling, new column added after that.
                         null);
 
         ListOutputCollector collector = new ListOutputCollector();
@@ -102,6 +103,7 @@ class FlinkLookupFunctionTest extends FlinkTestBase {
                         tablePath,
                         flinkRowType,
                         createPrimaryKeyLookupNormalizer(new int[] {0}, flinkRowType),
+                        // no projection when job compiling, new column added after that.
                         null);
         asyncLookupFunction.open(null);
 
@@ -154,7 +156,7 @@ class FlinkLookupFunctionTest extends FlinkTestBase {
                         tablePath,
                         flinkRowType,
                         createPrimaryKeyLookupNormalizer(new int[] {0}, flinkRowType),
-                        null);
+                        new int[] {1, 0});
 
         ListOutputCollector collector = new ListOutputCollector();
         lookupFunction.setCollector(collector);
@@ -191,7 +193,7 @@ class FlinkLookupFunctionTest extends FlinkTestBase {
                         .sorted()
                         .collect(Collectors.toList());
         assertThat(result)
-                .containsExactly("+I(0,name0)", "+I(1,name1)", "+I(2,name2)", "+I(3,name3)");
+                .containsExactly("+I(name0,0)", "+I(name1,1)", "+I(name2,2)", "+I(name3,3)");
         lookupFunction.close();
 
         // start lookup job after schema change.
@@ -227,8 +229,9 @@ class FlinkLookupFunctionTest extends FlinkTestBase {
                             .schema(
                                     Schema.newBuilder()
                                             .primaryKey("id")
-                                            .column("name", DataTypes.STRING())
                                             .column("id", DataTypes.INT())
+                                            .column("name", DataTypes.STRING())
+                                            // added an extra column 'age'
                                             .column("age", DataTypes.INT())
                                             .build())
                             .distributedBy(DEFAULT_BUCKET_NUM, "id")
@@ -241,7 +244,8 @@ class FlinkLookupFunctionTest extends FlinkTestBase {
         try (Table table = conn.getTable(tablePath)) {
             UpsertWriter upsertWriter = table.newUpsert().createWriter();
             for (int i = 0; i < rows; i++) {
-                upsertWriter.upsert(schemaNotMatch ? row("name" + i, i, i) : row(i, "name" + i));
+                upsertWriter.upsert(
+                        schemaNotMatch ? row(i, "name" + i, i * 2) : row(i, "name" + i));
             }
             upsertWriter.flush();
         }

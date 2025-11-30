@@ -137,6 +137,11 @@ public final class TableInfo {
         return schema;
     }
 
+    /** Returns the schema info of the table, including schema and schema id. */
+    public SchemaInfo getSchemaInfo() {
+        return new SchemaInfo(schema, schemaId);
+    }
+
     /**
      * Returns the row type of the table. The row type is the schema of the table, which defines the
      * columns and types of the table.

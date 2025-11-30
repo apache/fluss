@@ -21,6 +21,7 @@ import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.SchemaGetter;
+import org.apache.fluss.record.BinaryValue;
 import org.apache.fluss.row.BinaryRow;
 import org.apache.fluss.row.decode.RowDecoder;
 import org.apache.fluss.types.DataType;
@@ -47,7 +48,7 @@ public class ValueDecoder {
     }
 
     /** Decode the value bytes and return the schema id and the row encoded in the value bytes. */
-    public Value decodeValue(byte[] valueBytes) {
+    public BinaryValue decodeValue(byte[] valueBytes) {
         MemorySegment memorySegment = MemorySegment.wrap(valueBytes);
         short schemaId = memorySegment.getShort(0);
 
@@ -64,17 +65,6 @@ public class ValueDecoder {
         BinaryRow row =
                 rowDecoder.decode(
                         memorySegment, SCHEMA_ID_LENGTH, valueBytes.length - SCHEMA_ID_LENGTH);
-        return new Value(schemaId, row);
-    }
-
-    /** The schema id and {@link BinaryRow} stored as the value of kv store. */
-    public static class Value {
-        public final short schemaId;
-        public final BinaryRow row;
-
-        private Value(short schemaId, BinaryRow row) {
-            this.schemaId = schemaId;
-            this.row = row;
-        }
+        return new BinaryValue(schemaId, row);
     }
 }

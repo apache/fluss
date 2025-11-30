@@ -73,7 +73,7 @@ final class LogTabletTest extends LogTestBase {
     private FlussScheduler scheduler;
     private File logDir;
 
-    // TODOadd more tests refer to kafka's UnifiedLogTest.
+    // TODO add more tests refer to kafka's UnifiedLogTest.
 
     @BeforeEach
     public void setup() throws Exception {
@@ -374,7 +374,7 @@ final class LogTabletTest extends LogTestBase {
 
         log.updateHighWatermark(log.localLogEndOffset());
 
-        // TODOadd delete log segment logic.
+        // TODO add delete log segment logic.
     }
 
     @Test

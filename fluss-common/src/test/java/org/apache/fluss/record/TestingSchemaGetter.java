@@ -24,11 +24,12 @@ import org.apache.fluss.metadata.SchemaInfo;
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 
 /** A testing schema metadata subscriber. */
 public class TestingSchemaGetter implements SchemaGetter {
     private SchemaInfo schemaInfo;
-    private Map<Integer, Schema> schemaCaches;
+    private final Map<Integer, Schema> schemaCaches;
 
     public TestingSchemaGetter() {
         this.schemaInfo = null;
@@ -54,6 +55,15 @@ public class TestingSchemaGetter implements SchemaGetter {
             throw new SchemaNotExistException("Schema not exist");
         }
         return schemaCaches.get(schemaId);
+    }
+
+    @Override
+    public CompletableFuture<SchemaInfo> getSchemaInfoAsync(int schemaId) {
+        if (!schemaCaches.containsKey(schemaId)) {
+            throw new SchemaNotExistException("Schema not exist");
+        }
+        return CompletableFuture.completedFuture(
+                new SchemaInfo(schemaCaches.get(schemaId), schemaId));
     }
 
     @Override

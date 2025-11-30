@@ -19,6 +19,7 @@ package org.apache.fluss.server.log;
 
 import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.record.FileLogProjection;
+import org.apache.fluss.record.ProjectionPushdownCache;
 import org.apache.fluss.record.TestData;
 import org.apache.fluss.record.TestingSchemaGetter;
 
@@ -33,13 +34,15 @@ class FetchParamsTest {
     @Test
     void testSetCurrentFetch() {
         FetchParams fetchParams = new FetchParams(1, 100);
+        ProjectionPushdownCache projectionCache = new ProjectionPushdownCache();
         fetchParams.setCurrentFetch(
                 1L,
                 20L,
                 1024,
                 new TestingSchemaGetter(new SchemaInfo(TestData.DATA1_SCHEMA, (short) 1)),
                 DEFAULT_COMPRESSION,
-                null);
+                null,
+                projectionCache);
         assertThat(fetchParams.fetchOffset()).isEqualTo(20L);
         assertThat(fetchParams.maxFetchBytes()).isEqualTo(1024);
         assertThat(fetchParams.projection()).isNull();
@@ -50,7 +53,8 @@ class FetchParamsTest {
                 512,
                 new TestingSchemaGetter(new SchemaInfo(TestData.DATA2_SCHEMA, (short) 1)),
                 DEFAULT_COMPRESSION,
-                new int[] {0, 2});
+                new int[] {0, 2},
+                projectionCache);
         assertThat(fetchParams.fetchOffset()).isEqualTo(30L);
         assertThat(fetchParams.maxFetchBytes()).isEqualTo(512);
         assertThat(fetchParams.projection()).isNotNull();
@@ -63,7 +67,8 @@ class FetchParamsTest {
                 256,
                 new TestingSchemaGetter(new SchemaInfo(TestData.DATA1_SCHEMA, (short) 1)),
                 DEFAULT_COMPRESSION,
-                null);
+                null,
+                projectionCache);
         assertThat(fetchParams.projection()).isNull();
 
         fetchParams.setCurrentFetch(
@@ -72,7 +77,8 @@ class FetchParamsTest {
                 512,
                 new TestingSchemaGetter(new SchemaInfo(TestData.DATA2_SCHEMA, (short) 1)),
                 DEFAULT_COMPRESSION,
-                new int[] {0, 2});
+                new int[] {0, 2},
+                projectionCache);
         // the FileLogProjection should be cached
         assertThat(fetchParams.projection()).isNotNull().isSameAs(prevProjection);
     }

@@ -199,6 +199,7 @@ public class LogFetcherTest extends ClientToServerITCaseBase {
         scanRecords = records.get(tb0);
         assertThat(scanRecords.stream().map(ScanRecord::getRow).collect(Collectors.toList()))
                 .isEqualTo(expectedRows);
+        newSchemaLogFetcher.close();
     }
 
     @Test

@@ -387,7 +387,7 @@ class ZooKeeperClientTest {
                         .withComment("c is third column")
                         .primaryKey("a")
                         .build();
-        int registeredSchemaId = zookeeperClient.registerSchema(tablePath, schema);
+        int registeredSchemaId = zookeeperClient.registerFirstSchema(tablePath, schema);
         assertThat(registeredSchemaId).isEqualTo(schemaId);
         assertThat(zookeeperClient.getCurrentSchemaId(tablePath)).isEqualTo(schemaId);
 
@@ -406,7 +406,7 @@ class ZooKeeperClientTest {
                         .withComment("b is second column")
                         .primaryKey("a")
                         .build();
-        registeredSchemaId = zookeeperClient.registerSchema(tablePath, schema2);
+        registeredSchemaId = zookeeperClient.registerSchema(tablePath, schema2, 2);
         assertThat(registeredSchemaId).isEqualTo(2);
         assertThat(zookeeperClient.getCurrentSchemaId(tablePath)).isEqualTo(2);
 

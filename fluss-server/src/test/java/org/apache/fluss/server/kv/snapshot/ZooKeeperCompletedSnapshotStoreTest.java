@@ -94,8 +94,8 @@ class ZooKeeperCompletedSnapshotStoreTest {
     }
 
     /**
-     * Tests that the snapshot does not exist in the store when we fail to addColumn it into the
-     * store (i.e., there exists an exception thrown by the method).
+     * Tests that the snapshot does not exist in the store when we fail to add it into the store
+     * (i.e., there exists an exception thrown by the method).
      */
     @Test
     void testAddSnapshotWithFailedRemove(@TempDir Path tmpDir) throws Exception {

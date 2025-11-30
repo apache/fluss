@@ -31,7 +31,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
-import java.util.stream.IntStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.AssertionsForClassTypes.offset;
@@ -60,7 +59,7 @@ class FlinkAsFlussRowTest {
                         TimestampData.fromEpochMillis(1672531200000L, 3),
                         new byte[] {1, 2, 3},
                         null);
-        row = new FlinkAsFlussRow(IntStream.range(0, 14).toArray()).replace(flinkRow);
+        row = new FlinkAsFlussRow().replace(flinkRow);
     }
 
     @Test

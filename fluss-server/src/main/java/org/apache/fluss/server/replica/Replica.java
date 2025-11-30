@@ -237,6 +237,7 @@ public final class Replica {
         this.schemaGetter =
                 metadataCache.subscribeWithInitialSchema(
                         physicalPath.getTablePath(),
+                        tableInfo.getTableId(),
                         tableInfo.getSchemaId(),
                         tableInfo.getSchema());
         this.tableConfig = tableInfo.getTableConfig();
@@ -1517,7 +1518,7 @@ public final class Replica {
         List<Integer> isrToSend = new ArrayList<>(isrState.isr());
         isrToSend.add(newInSyncReplicaId);
 
-        // TODOadd server epoch to isr.
+        // TODO add server epoch to isr.
 
         LeaderAndIsr newLeaderAndIsr =
                 new LeaderAndIsr(
@@ -1539,7 +1540,7 @@ public final class Replica {
         // erroneously advance the HW if the `AdjustIsr` were to fail. Hence, the "maximal ISR"
         // for `PendingShrinkIsr` is the current ISR.
 
-        // TODOadd server epoch to isr.
+        // TODO add server epoch to isr.
 
         LeaderAndIsr newLeaderAndIsr =
                 new LeaderAndIsr(

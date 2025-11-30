@@ -29,12 +29,20 @@ import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /** Schema update. */
-public class SchemaUpdate implements UpdateSchema {
+public class SchemaUpdate {
+
+    /** Apply schema changes to the given table info and return the updated schema. */
+    public static Schema applySchemaChanges(TableInfo tableInfo, List<TableChange> changes) {
+        SchemaUpdate schemaUpdate = new SchemaUpdate(tableInfo);
+        for (TableChange change : changes) {
+            schemaUpdate = schemaUpdate.applySchemaChange(change);
+        }
+        return schemaUpdate.getSchema();
+    }
+
     private final List<Schema.Column> columns;
     private final AtomicInteger highestFieldId;
     private final List<String> primaryKeys;
-    private final List<String> bucketKeys;
-    private final List<String> partitionKeys;
     private final Map<String, Schema.Column> existedColumns;
 
     public SchemaUpdate(TableInfo tableInfo) {
@@ -42,15 +50,12 @@ public class SchemaUpdate implements UpdateSchema {
         this.existedColumns = new HashMap<>();
         this.highestFieldId = new AtomicInteger(tableInfo.getSchema().getHighestFieldId());
         this.primaryKeys = tableInfo.getPrimaryKeys();
-        this.bucketKeys = tableInfo.getBucketKeys();
-        this.partitionKeys = tableInfo.getPartitionKeys();
         this.columns.addAll(tableInfo.getSchema().getColumns());
         for (Schema.Column column : columns) {
             existedColumns.put(column.getName(), column);
         }
     }
 
-    @Override
     public Schema getSchema() {
         Schema.Builder builder =
                 Schema.newBuilder()
@@ -63,8 +68,7 @@ public class SchemaUpdate implements UpdateSchema {
         return builder.build();
     }
 
-    @Override
-    public UpdateSchema applySchemaChange(TableChange columnChange) {
+    public SchemaUpdate applySchemaChange(TableChange columnChange) {
         if (columnChange instanceof TableChange.AddColumn) {
             return addColumn((TableChange.AddColumn) columnChange);
         } else if (columnChange instanceof TableChange.ModifyColumn) {
@@ -78,7 +82,7 @@ public class SchemaUpdate implements UpdateSchema {
                 "Unknown column change type " + columnChange.getClass().getName());
     }
 
-    private UpdateSchema addColumn(TableChange.AddColumn addColumn) {
+    private SchemaUpdate addColumn(TableChange.AddColumn addColumn) {
         if (existedColumns.containsKey(addColumn.getName())) {
             throw new IllegalArgumentException(
                     "Column " + addColumn.getName() + " already exists.");
@@ -105,15 +109,15 @@ public class SchemaUpdate implements UpdateSchema {
         return this;
     }
 
-    private UpdateSchema dropColumn(TableChange.DropColumn dropColumn) {
+    private SchemaUpdate dropColumn(TableChange.DropColumn dropColumn) {
         throw new SchemaChangeException("Not support drop column now.");
     }
 
-    private UpdateSchema modifiedColumn(TableChange.ModifyColumn modifyColumn) {
+    private SchemaUpdate modifiedColumn(TableChange.ModifyColumn modifyColumn) {
         throw new SchemaChangeException("Not support modify column now.");
     }
 
-    private UpdateSchema renameColumn(TableChange.RenameColumn renameColumn) {
+    private SchemaUpdate renameColumn(TableChange.RenameColumn renameColumn) {
         throw new SchemaChangeException("Not support rename column now.");
     }
 }

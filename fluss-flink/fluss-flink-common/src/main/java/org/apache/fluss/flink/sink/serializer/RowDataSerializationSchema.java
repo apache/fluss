@@ -21,11 +21,49 @@ import org.apache.fluss.flink.row.FlinkAsFlussRow;
 import org.apache.fluss.flink.row.OperationType;
 import org.apache.fluss.flink.row.RowWithOp;
 import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.row.PaddingRow;
+import org.apache.fluss.row.ProjectedRow;
 
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.types.RowKind;
 
-/** Default implementation of RowDataConverter for RowData. */
+import javax.annotation.Nullable;
+
+import java.util.List;
+
+/**
+ * Default implementation of RowDataConverter for RowData.
+ *
+ * <p>Schema Evolution Handling:
+ *
+ * <p>There are three schema in sink case.
+ *
+ * <ul>
+ *   <li>(1) Consumed Row Schema (RowData): the schema of RowData consumed, currently, Flink doesn't
+ *       provide API to fetch it, but we can get the row arity from RowData.getArity().
+ *   <li>(2) Plan Row Schema ({@link InitializationContext#getInputRowSchema()}): the compiled input
+ *       row schema of the sink, but the schema is fetched from catalog, so it is not the consumed
+ *       row schema. This is updated when job is re-compiled.
+ *   <li>(3) Table Latest Row Schema ({@link InitializationContext#getRowSchema()}): the latest
+ *       schema of the sink table, which is fetched at open() during runtime, so it will be updated
+ *       when Flink job restarts.
+ * </ul>
+ *
+ * <p>We always want to use latest schema to write data, so we need to add conversions from consumed
+ * Flink RowData.
+ *
+ * <ul>
+ *   <li>The {@link #converter} is used to wrap Flink {@link RowData} into Fluss {@link InternalRow}
+ *       without any schema transformation.
+ *   <li>The {@link #outputPadding} is used to pad nulls for new columns when new columns are added.
+ *       This may happen when table is added new columns after Flink SQL job restored from
+ *       CompiledPlan that the Consumed Row Schema is old but the Plan Row Schema is new, so the
+ *       Consumed Row Schema has less fields than Plan Row Schema.
+ *   <li>The {@link #outputProjection} is used to re-arrange the fields according to latest schema
+ *       if Plan Row Schema is not match Table Latest Row Schema. This may happen when table is
+ *       added new columns after the Flink job compiled and before job restarts.
+ * </ul>
+ */
 public class RowDataSerializationSchema implements FlussSerializationSchema<RowData> {
     private static final long serialVersionUID = 1L;
 
@@ -43,6 +81,19 @@ public class RowDataSerializationSchema implements FlussSerializationSchema<RowD
      * Initialized in {@link #open(InitializationContext)}.
      */
     private transient FlinkAsFlussRow converter;
+
+    /**
+     * The padding row for output, used when the input row has fewer fields than the target schema.
+     * This may happen when table is added new columns between Flink job restarts.
+     */
+    private transient PaddingRow outputPadding;
+
+    /**
+     * The projected row for output, used when schema evolution occurs, because we want to write
+     * rows using new schema (e.g., fill null for new columns). This may happen when table is *
+     * added new columns after the Flink job compiled and before job restarts.
+     */
+    @Nullable private transient ProjectedRow outputProjection;
 
     /**
      * Constructs a new {@code RowSerializationSchema}.
@@ -63,7 +114,20 @@ public class RowDataSerializationSchema implements FlussSerializationSchema<RowD
      */
     @Override
     public void open(InitializationContext context) throws Exception {
-        this.converter = FlinkAsFlussRow.from(context.getTableRowType(), context.getRowSchema());
+        this.converter = new FlinkAsFlussRow();
+        List<String> targetFieldNames = context.getRowSchema().getFieldNames();
+        List<String> inputFieldNames = context.getInputRowSchema().getFieldNames();
+        this.outputPadding = new PaddingRow(inputFieldNames.size());
+        if (targetFieldNames.size() != inputFieldNames.size()) {
+            // there is a schema evolution happens (e.g., ADD COLUMN), need to build index mapping
+            int[] indexMapping = new int[targetFieldNames.size()];
+            for (int i = 0; i < targetFieldNames.size(); i++) {
+                String fieldName = targetFieldNames.get(i);
+                int fieldIndex = inputFieldNames.indexOf(fieldName);
+                indexMapping[i] = fieldIndex;
+            }
+            outputProjection = ProjectedRow.from(indexMapping);
+        }
     }
 
     /**
@@ -82,6 +146,14 @@ public class RowDataSerializationSchema implements FlussSerializationSchema<RowD
                     "Converter not initialized. The open() method must be called before serializing records.");
         }
         InternalRow row = converter.replace(value);
+        // handling schema evolution for changes before job compilation
+        if (row.getFieldCount() < outputPadding.getFieldCount()) {
+            row = outputPadding.replaceRow(row);
+        }
+        // handling schema evolution for changes after job compilation
+        if (outputProjection != null) {
+            row = outputProjection.replaceRow(row);
+        }
         OperationType opType = toOperationType(value.getRowKind());
 
         return new RowWithOp(row, opType);

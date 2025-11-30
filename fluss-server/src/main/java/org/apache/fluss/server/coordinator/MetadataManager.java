@@ -297,7 +297,7 @@ public class MetadataManager {
         // first register a schema to the zk, if then register the table
         // to zk fails, there's no harm to register a new schema to zk again
         try {
-            zookeeperClient.registerSchema(tablePath, tableToCreate.getSchema());
+            zookeeperClient.registerFirstSchema(tablePath, tableToCreate.getSchema());
         } catch (Exception e) {
             throw new FlussRuntimeException(
                     "Fail to register schema when creating table " + tablePath, e);
@@ -330,13 +330,9 @@ public class MetadataManager {
 
             // validate the table column changes
             if (!schemaChanges.isEmpty()) {
-                UpdateSchema schemaUpdate = new SchemaUpdate(table);
-                for (TableChange schemaChange : schemaChanges) {
-                    schemaUpdate = schemaUpdate.applySchemaChange(schemaChange);
-                }
-                Schema newSchema = schemaUpdate.getSchema();
+                Schema newSchema = SchemaUpdate.applySchemaChanges(table, schemaChanges);
                 // update the schema
-                zookeeperClient.registerSchema(tablePath, newSchema);
+                zookeeperClient.registerSchema(tablePath, newSchema, table.getSchemaId() + 1);
             }
         } catch (Exception e) {
             if (e instanceof TableNotExistException) {
@@ -485,7 +481,7 @@ public class MetadataManager {
 
         if (toEnableDataLake) {
             TableInfo newTableInfo = newTableRegistration.toTableInfo(tablePath, schemaInfo);
-            // if the table is lake table, we need toadd it to lake table tiering manager
+            // if the table is lake table, we need to add it to lake table tiering manager
             lakeTableTieringManager.addNewLakeTable(newTableInfo);
         } else if (toDisableDataLake) {
             lakeTableTieringManager.removeLakeTable(newTableRegistration.tableId);
@@ -580,14 +576,14 @@ public class MetadataManager {
                     zookeeperClient.getTables(tablePaths);
             // currently, we don't support schema evolution, so all schemas are version 1
             Map<TablePath, SchemaInfo> tablePath2SchemaInfos =
-                    zookeeperClient.getV1Schemas(tablePaths);
+                    zookeeperClient.getLatestSchemas(tablePaths);
             for (TablePath tablePath : tablePaths) {
                 if (!tablePath2TableRegistrations.containsKey(tablePath)) {
                     throw new TableNotExistException("Table '" + tablePath + "' does not exist.");
                 }
                 if (!tablePath2SchemaInfos.containsKey(tablePath)) {
                     throw new SchemaNotExistException(
-                            "Schema for '" + tablePath + "' with schema_id=1 does not exist.");
+                            "Schema for '" + tablePath + "' does not exist.");
                 }
                 TableRegistration tableReg = tablePath2TableRegistrations.get(tablePath);
                 SchemaInfo schemaInfo = tablePath2SchemaInfos.get(tablePath);

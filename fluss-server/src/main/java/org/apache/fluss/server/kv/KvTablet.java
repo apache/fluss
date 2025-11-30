@@ -34,16 +34,16 @@ import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.record.BinaryValue;
 import org.apache.fluss.record.ChangeType;
 import org.apache.fluss.record.KvRecord;
 import org.apache.fluss.record.KvRecordBatch;
 import org.apache.fluss.record.KvRecordReadContext;
-import org.apache.fluss.row.InternalRow;
-import org.apache.fluss.row.ProjectedRow;
+import org.apache.fluss.row.BinaryRow;
+import org.apache.fluss.row.PaddingRow;
 import org.apache.fluss.row.arrow.ArrowWriterPool;
 import org.apache.fluss.row.arrow.ArrowWriterProvider;
 import org.apache.fluss.row.encode.ValueDecoder;
-import org.apache.fluss.row.encode.ValueEncoder;
 import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer;
 import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer.TruncateReason;
 import org.apache.fluss.server.kv.rocksdb.RocksDBKv;
@@ -83,7 +83,6 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
-import static org.apache.fluss.utils.SchemaUtil.getTargetColumns;
 import static org.apache.fluss.utils.concurrent.LockUtils.inReadLock;
 import static org.apache.fluss.utils.concurrent.LockUtils.inWriteLock;
 
@@ -255,6 +254,20 @@ public final class KvTablet {
     /**
      * Put the KvRecordBatch into the kv storage, and return the appended wal log info.
      *
+     * <p>Schema Evolution Handling:
+     *
+     * <p>We don't allow shema of input kv records to be larger than the latest schema id known by
+     * the tablet. Besides, we currently only support ADD COLUMN LAST operation, so the input row or
+     * old row must have same or fewer columns than latest schema. This helps to simplify the schema
+     * change handling.
+     *
+     * <p>1. We write the kv records into KvStore without converting it into latest schema for
+     * performance consideration. We have mechanisms that writer client dynamically use latest
+     * schema for writing records.
+     *
+     * <p>2. We always use the latest schema for writing WAL logs, because it anyway happens
+     * deserialization&serialization to convert the compacted format into Arrow format.
+     *
      * @param kvRecords the kv records to put into
      * @param targetColumns the target columns to put, null if put all columns
      */
@@ -267,32 +280,28 @@ public final class KvTablet {
 
                     SchemaInfo schemaInfo = schemaGetter.getLatestSchemaInfo();
                     Schema latestSchema = schemaInfo.getSchema();
-                    // In the following scenario, we need to support schema migration:
-                    // schema1: old data's schema -> valueDecoder
-                    // schema2: new data's schema
-                    // schema3: current schema (also the latest schema)
-                    // schema1 <= schema2 <= current schema id
                     short latestSchemaId = (short) schemaInfo.getSchemaId();
                     short schemaIdOfNewData = kvRecords.schemaId();
                     if (schemaIdOfNewData > latestSchemaId || schemaIdOfNewData < 0) {
+                        // TODO: we may need to support retriable exception here
                         throw new SchemaNotExistException(
                                 "Invalid schema id: "
                                         + schemaIdOfNewData
                                         + ", latest schema id: "
                                         + latestSchemaId);
                     }
-                    Schema schemaOfNewData = schemaGetter.getSchema(schemaIdOfNewData);
+
+                    // we only support ADD COLUMN, so targetColumns is fine to be used directly
                     RowMerger currentMerger =
                             rowMerger.configureTargetColumns(
-                                    schemaIdOfNewData == latestSchemaId
-                                            ? targetColumns
-                                            : getTargetColumns(
-                                                    targetColumns, schemaOfNewData, latestSchema),
-                                    latestSchemaId,
-                                    latestSchema);
-                    RowType currentRowType = latestSchema.getRowType();
-                    WalBuilder walBuilder = createWalBuilder(latestSchemaId, currentRowType);
+                                    targetColumns, latestSchemaId, latestSchema);
+                    RowType latestRowType = latestSchema.getRowType();
+                    WalBuilder walBuilder = createWalBuilder(latestSchemaId, latestRowType);
                     walBuilder.setWriterState(kvRecords.writerId(), kvRecords.batchSequence());
+                    // we only support ADD COLUMN LAST, so the BinaryRow after RowMerger is
+                    // only has fewer ending columns than latest schema, so we pad nulls to
+                    // the end of the BinaryRow to get the latest schema row.
+                    PaddingRow latestSchemaRow = new PaddingRow(latestRowType.getFieldCount());
                     // get offset to track the offset corresponded to the kv record
                     long logEndOffsetOfPrevBatch = logTablet.localLogEndOffset();
                     try {
@@ -301,22 +310,15 @@ public final class KvTablet {
                         // TODO: reuse the read context and decoder
                         KvRecordBatch.ReadContext readContext =
                                 KvRecordReadContext.createReadContext(kvFormat, schemaGetter);
-
-                        // replace new row with current schema if the schema id is older than now
-                        ProjectedRow projectedRow =
-                                ProjectedRow.from(schemaOfNewData, latestSchema);
                         ValueDecoder valueDecoder = new ValueDecoder(schemaGetter, kvFormat);
                         for (KvRecord kvRecord : kvRecords.records(readContext)) {
-
                             byte[] keyBytes = BytesUtils.toArray(kvRecord.getKey());
                             KvPreWriteBuffer.Key key = KvPreWriteBuffer.Key.of(keyBytes);
-                            InternalRow row = kvRecord.getRow();
-                            if (row != null && schemaIdOfNewData < latestSchemaId) {
-                                row = projectedRow.replaceRow(row);
-                            }
-
-                            if (row == null) {
-                                DeleteBehavior deleteBehavior = rowMerger.deleteBehavior();
+                            BinaryRow row = kvRecord.getRow();
+                            BinaryValue currentValue =
+                                    row == null ? null : new BinaryValue(schemaIdOfNewData, row);
+                            if (currentValue == null) {
+                                DeleteBehavior deleteBehavior = currentMerger.deleteBehavior();
                                 if (deleteBehavior == DeleteBehavior.IGNORE) {
                                     // skip delete rows if the merger doesn't support yet
                                     continue;
@@ -326,99 +328,69 @@ public final class KvTablet {
                                                     + "The table.delete.behavior is set to 'disable'.");
                                 }
                                 // it's for deletion
-                                byte[] oldValue = getFromBufferOrKv(key);
+                                byte[] oldValueBytes = getFromBufferOrKv(key);
 
-                                if (oldValue == null) {
+                                if (oldValueBytes == null) {
                                     // there might be large amount of such deletion, so we don't log
                                     LOG.debug(
                                             "The specific key can't be found in kv tablet although the kv record is for deletion, "
                                                     + "ignore it directly as it doesn't exist in the kv tablet yet.");
                                 } else {
-                                    ValueDecoder.Value oldRowAndSchemaId =
-                                            valueDecoder.decodeValue(oldValue);
-                                    InternalRow oldRow = oldRowAndSchemaId.row;
-                                    if (oldRow != null
-                                            && oldRowAndSchemaId.schemaId != latestSchemaId) {
-                                        // todo: 后续想办法复用对应的projected row.
-                                        Schema schemaOfOldData =
-                                                schemaGetter.getSchema(oldRowAndSchemaId.schemaId);
-                                        oldRow =
-                                                ProjectedRow.from(schemaOfOldData, latestSchema)
-                                                        .replaceRow(oldRow);
-                                    }
-                                    InternalRow newRow = currentMerger.delete(oldRow);
+                                    BinaryValue oldValue = valueDecoder.decodeValue(oldValueBytes);
+                                    BinaryValue newValue = currentMerger.delete(oldValue);
                                     // if newRow is null, it means the row should be deleted
-                                    if (newRow == null) {
-                                        walBuilder.append(ChangeType.DELETE, oldRow);
+                                    if (newValue == null) {
+                                        walBuilder.append(
+                                                ChangeType.DELETE,
+                                                latestSchemaRow.replaceRow(oldValue.row));
                                         kvPreWriteBuffer.delete(key, logOffset++);
                                     } else {
                                         // otherwise, it's a partial update, should produce -U,+U
-                                        walBuilder.append(ChangeType.UPDATE_BEFORE, oldRow);
-                                        walBuilder.append(ChangeType.UPDATE_AFTER, newRow);
+                                        walBuilder.append(
+                                                ChangeType.UPDATE_BEFORE,
+                                                latestSchemaRow.replaceRow(oldValue.row));
+                                        walBuilder.append(
+                                                ChangeType.UPDATE_AFTER,
+                                                latestSchemaRow.replaceRow(newValue.row));
                                         kvPreWriteBuffer.put(
-                                                key,
-                                                ValueEncoder.encodeRow(
-                                                        latestSchemaId,
-                                                        kvFormat,
-                                                        currentRowType,
-                                                        newRow),
-                                                logOffset + 1);
+                                                key, newValue.encodeValue(), logOffset + 1);
                                         logOffset += 2;
                                     }
                                 }
                             } else {
                                 // upsert operation
-                                byte[] oldValue = getFromBufferOrKv(key);
+                                byte[] oldValueBytes = getFromBufferOrKv(key);
                                 // it's update
-                                if (oldValue != null) {
-                                    ValueDecoder.Value oldRowAndSchemaId =
-                                            valueDecoder.decodeValue(oldValue);
-                                    InternalRow oldRow = oldRowAndSchemaId.row;
-                                    if (oldRow != null
-                                            && oldRowAndSchemaId.schemaId != latestSchemaId) {
-                                        // todo: 后续想办法复用对应的projected row.
-                                        Schema schemaOfOldData =
-                                                schemaGetter.getSchema(oldRowAndSchemaId.schemaId);
-                                        oldRow =
-                                                ProjectedRow.from(schemaOfOldData, latestSchema)
-                                                        .replaceRow(oldRow);
-                                    }
-
-                                    InternalRow newRow = currentMerger.merge(oldRow, row);
-                                    if (newRow == oldRow) {
-                                        // newRow is the same to oldRow, means nothing
+                                if (oldValueBytes != null) {
+                                    BinaryValue oldValue = valueDecoder.decodeValue(oldValueBytes);
+                                    BinaryValue newValue =
+                                            currentMerger.merge(oldValue, currentValue);
+                                    if (newValue == oldValue) {
+                                        // newValue is the same to oldValue, means nothing
                                         // happens (no update/delete), and input should be ignored
                                         continue;
                                     }
 
-                                    walBuilder.append(ChangeType.UPDATE_BEFORE, oldRow);
-                                    walBuilder.append(ChangeType.UPDATE_AFTER, newRow);
+                                    walBuilder.append(
+                                            ChangeType.UPDATE_BEFORE,
+                                            latestSchemaRow.replaceRow(oldValue.row));
+                                    walBuilder.append(
+                                            ChangeType.UPDATE_AFTER,
+                                            latestSchemaRow.replaceRow(newValue.row));
                                     // logOffset is for -U, logOffset + 1 is for +U, we need to use
                                     // the log offset for +U
                                     kvPreWriteBuffer.put(
-                                            key,
-                                            ValueEncoder.encodeRow(
-                                                    latestSchemaId,
-                                                    kvFormat,
-                                                    currentRowType,
-                                                    newRow),
-                                            logOffset + 1);
+                                            key, newValue.encodeValue(), logOffset + 1);
                                     logOffset += 2;
                                 } else {
                                     // it's insert
-                                    // TODO: we shouldadd guarantees that all non-specified
-                                    // columns
+                                    // TODO: we should add guarantees that all non-specified columns
                                     //  of the input row are set to null.
-                                    InternalRow newRow = row;
-                                    walBuilder.append(ChangeType.INSERT, newRow);
+                                    walBuilder.append(
+                                            ChangeType.INSERT,
+                                            latestSchemaRow.replaceRow(currentValue.row));
                                     kvPreWriteBuffer.put(
-                                            key,
-                                            ValueEncoder.encodeRow(
-                                                    latestSchemaId,
-                                                    kvFormat,
-                                                    currentRowType,
-                                                    newRow),
-                                            logOffset++);
+                                            key, currentValue.encodeValue(), logOffset++);
                                 }
                             }
                         }

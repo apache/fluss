@@ -69,10 +69,11 @@ public interface FlussSerializationSchema<T> extends Serializable {
         RowType getRowSchema();
 
         /**
-         * Returns the Flink table row schema.
+         * Returns the input row schema which is the Flink {@link
+         * org.apache.flink.table.data.RowData}.
          *
-         * @return The schema of the Flink table row.
+         * @return The schema of the input Flink row.
          */
-        org.apache.flink.table.types.logical.RowType getTableRowType();
+        org.apache.flink.table.types.logical.RowType getInputRowSchema();
     }
 }

@@ -227,7 +227,7 @@ public class LogTieringTask implements Runnable {
     }
 
     /**
-     * Copy the given log segments to remote andadd the successfully copied segment to the {@code
+     * Copy the given log segments to remote and add the successfully copied segment to the {@code
      * copiedSegments} parameter.
      *
      * @return the end offset of the last segment copied to remote.
@@ -347,7 +347,7 @@ public class LogTieringTask implements Runnable {
                     // the commit failed, it means the commit snapshot is invalid or register zk
                     // failed, we will revert this commit and delete the remote log manifest
                     // file.
-                    // TODO:add the fail reason in the future.
+                    // TODO: add the fail reason in the future.
                     LOG.error(
                             "Commit remote log manifest failed for table bucket {}. We will delete the"
                                     + " written remote log manifest file",

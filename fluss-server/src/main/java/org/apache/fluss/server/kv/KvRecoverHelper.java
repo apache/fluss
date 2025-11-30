@@ -71,15 +71,6 @@ public class KvRecoverHelper {
             LogTablet logTablet,
             long recoverPointOffset,
             KvRecoverContext recoverContext,
-            KvFormat kvFormat) {
-        throw new UnsupportedOperationException();
-    }
-
-    public KvRecoverHelper(
-            KvTablet kvTablet,
-            LogTablet logTablet,
-            long recoverPointOffset,
-            KvRecoverContext recoverContext,
             KvFormat kvFormat,
             SchemaGetter schemaGetter) {
         this.kvTablet = kvTablet;
@@ -136,64 +127,52 @@ public class KvRecoverHelper {
             FetchIsolation fetchIsolation,
             ThrowingConsumer<KeyValueAndLogOffset, Exception> resumeRecordConsumer)
             throws Exception {
-        long nextFetchOffset = startFetchOffset;
-        while (true) {
-            LogRecords logRecords =
-                    logTablet
-                            .read(
-                                    nextFetchOffset,
-                                    recoverContext.maxFetchLogSizeInRecoverKv,
-                                    fetchIsolation,
-                                    true,
-                                    null)
-                            .getRecords();
-            if (logRecords == MemoryLogRecords.EMPTY) {
-                break;
-            }
+        try (LogRecordReadContext readContext =
+                LogRecordReadContext.createArrowReadContext(
+                        currentRowType, currentSchemaId, schemaGetter)) {
+            long nextFetchOffset = startFetchOffset;
+            while (true) {
+                LogRecords logRecords =
+                        logTablet
+                                .read(
+                                        nextFetchOffset,
+                                        recoverContext.maxFetchLogSizeInRecoverKv,
+                                        fetchIsolation,
+                                        true,
+                                        null)
+                                .getRecords();
+                if (logRecords == MemoryLogRecords.EMPTY) {
+                    break;
+                }
 
-            for (LogRecordBatch logRecordBatch : logRecords.batches()) {
-                //                short schemaId = logRecordBatch.schemaId();
-                //                if (currentSchemaId == null) {
-                //                    initSchema(schemaId);
-                //                } else if (currentSchemaId != schemaId) {
-                //                    throw new KvStorageException(
-                //                            String.format(
-                //                                    "Can't recover kv tablet for table bucket from
-                // log %s since the schema changes from schema id %d to schema id %d. "
-                //                                            + "Currently, schema change is not
-                // supported.",
-                //                                    recoverContext.tableBucket, currentSchemaId,
-                // schemaId));
-                //                }
-
-                // todo: currentRowType和currentSchemaId无法对齐
-                try (LogRecordReadContext readContext =
-                                LogRecordReadContext.createArrowReadContext(
-                                        currentRowType, currentSchemaId, schemaGetter);
-                        CloseableIterator<LogRecord> logRecordIter =
-                                logRecordBatch.records(readContext)) {
-                    while (logRecordIter.hasNext()) {
-                        LogRecord logRecord = logRecordIter.next();
-                        if (logRecord.getChangeType() != ChangeType.UPDATE_BEFORE) {
-                            InternalRow logRow = logRecord.getRow();
-                            byte[] key = keyEncoder.encodeKey(logRow);
-                            byte[] value = null;
-                            if (logRecord.getChangeType() != ChangeType.DELETE) {
-                                // the log row format may not compatible with kv row format,
-                                // e.g, arrow vs. compacted, thus needs a conversion here.
-                                BinaryRow row = toKvRow(logRecord.getRow());
-                                // todo: short value是否会有问题，感觉可以先check一下
-                                value = ValueEncoder.encodeValue(currentSchemaId.shortValue(), row);
+                for (LogRecordBatch logRecordBatch : logRecords.batches()) {
+                    try (CloseableIterator<LogRecord> logRecordIter =
+                            logRecordBatch.records(readContext)) {
+                        while (logRecordIter.hasNext()) {
+                            LogRecord logRecord = logRecordIter.next();
+                            if (logRecord.getChangeType() != ChangeType.UPDATE_BEFORE) {
+                                InternalRow logRow = logRecord.getRow();
+                                byte[] key = keyEncoder.encodeKey(logRow);
+                                byte[] value = null;
+                                if (logRecord.getChangeType() != ChangeType.DELETE) {
+                                    // the log row format may not compatible with kv row format,
+                                    // e.g, arrow vs. compacted, thus needs a conversion here.
+                                    BinaryRow row = toKvRow(logRecord.getRow());
+                                    value =
+                                            ValueEncoder.encodeValue(
+                                                    currentSchemaId.shortValue(), row);
+                                }
+                                resumeRecordConsumer.accept(
+                                        new KeyValueAndLogOffset(
+                                                key, value, logRecord.logOffset()));
                             }
-                            resumeRecordConsumer.accept(
-                                    new KeyValueAndLogOffset(key, value, logRecord.logOffset()));
                         }
                     }
+                    nextFetchOffset = logRecordBatch.nextLogOffset();
                 }
-                nextFetchOffset = logRecordBatch.nextLogOffset();
             }
+            return nextFetchOffset;
         }
-        return nextFetchOffset;
     }
 
     // TODO: this is very in-efficient, because the conversion is CPU heavy. Should be optimized in

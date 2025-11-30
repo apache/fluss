@@ -23,7 +23,7 @@ import org.apache.fluss.metadata.DeleteBehavior;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.MergeEngineType;
 import org.apache.fluss.metadata.Schema;
-import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.record.BinaryValue;
 
 import javax.annotation.Nullable;
 
@@ -33,14 +33,14 @@ import java.util.Optional;
 public interface RowMerger {
 
     /**
-     * Merge the old row with the new row.
+     * Merge the old value with the new value.
      *
-     * @param oldRow the old row
-     * @param newRow the new row
-     * @return the merged row, if the returned row is the same to the old row, then nothing happens
-     *     to the row (no update, no delete).
+     * @param oldValue the old value
+     * @param newValue the new row
+     * @return the merged value, if the returned row is the same to the old row, then nothing
+     *     happens to the row (no update, no delete).
      */
-    InternalRow merge(InternalRow oldRow, InternalRow newRow);
+    BinaryValue merge(BinaryValue oldValue, BinaryValue newValue);
 
     /**
      * Merge the old row with a delete row.
@@ -52,7 +52,7 @@ public interface RowMerger {
      * @return the merged row, or null if the row is deleted.
      */
     @Nullable
-    InternalRow delete(InternalRow oldRow);
+    BinaryValue delete(BinaryValue oldRow);
 
     /**
      * The behavior of delete operations on primary key tables.
@@ -61,7 +61,13 @@ public interface RowMerger {
      */
     DeleteBehavior deleteBehavior();
 
-    /** Dynamically configure the target columns to merge and return the effective merger. */
+    /**
+     * Dynamically configure the target columns to merge and return the effective merger.
+     *
+     * @param targetColumns the partial update target column positions, null means full update
+     * @param schemaId the schema id used to generate new rows
+     * @param schema the schema used to generate new rows
+     */
     RowMerger configureTargetColumns(@Nullable int[] targetColumns, short schemaId, Schema schema);
 
     /** Create a row merger based on the given configuration. */

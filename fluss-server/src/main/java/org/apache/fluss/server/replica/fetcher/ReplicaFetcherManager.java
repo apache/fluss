@@ -225,7 +225,7 @@ public class ReplicaFetcherManager {
                     fetcherThread.getLeader().leaderServerId(),
                     initialFetchStatusMap);
         } catch (InterruptedException e) {
-            LOG.error("Interrupted whileadd buckets to fetcher threads.", e);
+            LOG.error("Interrupted while add buckets to fetcher threads.", e);
         }
     }
 

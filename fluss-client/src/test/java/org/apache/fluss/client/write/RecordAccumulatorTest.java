@@ -137,7 +137,6 @@ class RecordAccumulatorTest {
         conf = new Configuration();
         // init cluster.
         cluster = updateCluster(Arrays.asList(bucket1, bucket2, bucket3));
-        // todo: 从cluster中获取schema getter
         schemaGetter = new TestingSchemaGetter(new SchemaInfo(DATA1_SCHEMA, (short) 1));
     }
 

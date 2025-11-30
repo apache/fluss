@@ -20,7 +20,6 @@ package org.apache.fluss.utils;
 import org.apache.fluss.exception.SchemaChangeException;
 import org.apache.fluss.metadata.Schema;
 
-import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -32,37 +31,17 @@ import static org.apache.fluss.row.ProjectedRow.UNEXIST_MAPPING;
 public class SchemaUtil {
 
     /**
-     * get the target columns in expected schema.
+     * Get the index mapping from origin schema to expected schema. This mapping can be used to
+     * convert the row with origin schema to the row with expected schema via {@code
+     * ProjectedRow.from(getIndexMapping(inputSchema, targetSchema)).replace(inputRow)}.
      *
-     * @param targetColumns
-     * @param originSchema
-     * @param expectedSchema
-     * @return
-     */
-    public static int[] getTargetColumns(
-            int[] targetColumns, Schema originSchema, Schema expectedSchema) {
-        if (targetColumns == null) {
-            return null;
-        }
-
-        // get the mapping from expected schema to origin schema
-        int[] indexMapping = getIndexMapping(expectedSchema, originSchema);
-        ArrayList<Integer> targetColumnsInExpectedSchema = new ArrayList<>();
-        for (int i = 0; i < targetColumns.length; i++) {
-            if (indexMapping[targetColumns[i]] != UNEXIST_MAPPING) {
-                targetColumnsInExpectedSchema.add(indexMapping[targetColumns[i]]);
-            }
-        }
-        return targetColumnsInExpectedSchema.stream().mapToInt(value -> value).toArray();
-    }
-
-    /**
-     * Get the index of each value of expectedSchema from originSchema.
-     *
-     * @param originSchema
-     * @param expectedSchema
-     * @return indexMapping the value of i-th means the expectedSchema's i-th column is the
-     *     originSchema's indexMapping[i]-th column.
+     * @param originSchema The origin schema.
+     * @param expectedSchema The expected schema.
+     * @return The index mapping array. The length of the array is the number of columns in the
+     *     expected schema. Each element in the array is the index of the corresponding column in
+     *     the origin schema. If a column in the expected schema does not exist in the origin
+     *     schema, the corresponding element is UNEXIST_MAPPING (-1).
+     * @throws SchemaChangeException if there is a datatype mismatch between the two schemas.
      */
     public static int[] getIndexMapping(Schema originSchema, Schema expectedSchema) {
         List<Schema.Column> originColumns = originSchema.getColumns();
@@ -84,7 +63,7 @@ public class SchemaUtil {
             if (originColumn != null
                     && !Objects.equals(
                             expectedColumn.getDataType().copy(true),
-                            originColumns.get(indexMapping[i]).getDataType().copy(true))) {
+                            originColumn.getDataType().copy(true))) {
 
                 throw new SchemaChangeException(
                         String.format(
@@ -92,7 +71,8 @@ public class SchemaUtil {
                                 expectedColumn.getColumnId(),
                                 expectedColumn.getName(),
                                 expectedColumn.getDataType(),
-                                originColumn.getDataType()));
+                                originColumn.getDataType()),
+                        true);
             }
         }
 

@@ -140,7 +140,7 @@ public class AdjustIsrITCase {
         isr.add(stopFollower);
         FLUSS_CLUSTER_EXTENSION.notifyLeaderAndIsr(
                 stopFollower, DATA1_TABLE_PATH, tb, newLeaderAndIsr, isr);
-        // retry until the stop follower addColumn back to ISR.
+        // retry until the stop follower add back to ISR.
         retry(
                 Duration.ofMinutes(1),
                 () ->

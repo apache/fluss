@@ -36,11 +36,11 @@ import static org.apache.fluss.utils.SchemaUtil.getIndexMapping;
 public class ProjectedRow implements InternalRow {
     public static final int UNEXIST_MAPPING = -1;
 
-    protected final int[] indexMapping;
+    private final int[] indexMapping;
 
-    protected InternalRow row;
+    private InternalRow row;
 
-    protected ProjectedRow(int[] indexMapping) {
+    private ProjectedRow(int[] indexMapping) {
         this.indexMapping = indexMapping;
     }
 

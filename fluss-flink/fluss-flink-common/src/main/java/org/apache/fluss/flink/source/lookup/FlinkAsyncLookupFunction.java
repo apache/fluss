@@ -27,10 +27,12 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.flink.row.FlinkAsFlussRow;
 import org.apache.fluss.flink.source.lookup.LookupNormalizer.RemainingFilter;
+import org.apache.fluss.flink.utils.FlinkConversions;
 import org.apache.fluss.flink.utils.FlinkUtils;
 import org.apache.fluss.flink.utils.FlussRowToFlinkRowConverter;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.row.ProjectedRow;
 import org.apache.fluss.utils.ExceptionUtils;
 
 import org.apache.flink.table.data.RowData;
@@ -47,6 +49,7 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.stream.IntStream;
 
 /** A flink async lookup function for fluss. */
 public class FlinkAsyncLookupFunction extends AsyncLookupFunction {
@@ -59,7 +62,7 @@ public class FlinkAsyncLookupFunction extends AsyncLookupFunction {
     private final TablePath tablePath;
     private final RowType flinkRowType;
     private final LookupNormalizer lookupNormalizer;
-    @Nullable private final int[] projection;
+    @Nullable private int[] projection;
 
     private transient FlussRowToFlinkRowConverter flussRowToFlinkRowConverter;
     private transient Connection connection;
@@ -85,20 +88,22 @@ public class FlinkAsyncLookupFunction extends AsyncLookupFunction {
         LOG.info("start open ...");
         connection = ConnectionFactory.createConnection(flussConfig);
         table = connection.getTable(tablePath);
-        org.apache.fluss.types.RowType flussRowType = table.getTableInfo().getRowType();
-        LOG.info("Current Fluss Schema is {}, Flink RowType is {}", flussRowType, flinkRowType);
-        // Currently, only primary key and prefix lookup are supported. These keys must be primary
-        // key which cannot modified.
         lookupRow = new FlinkAsFlussRow();
 
         final RowType outputRowType;
         if (projection == null) {
             outputRowType = flinkRowType;
+            // we force to do projection if no projection pushdown, in order to handle schema
+            // changes (ADD COLUMN LAST), this guarantees the input row of
+            // flussRowToFlinkRowConverter is in expected schema even new columns are added.
+            projection = IntStream.range(0, flinkRowType.getFieldCount()).toArray();
         } else {
             outputRowType = FlinkUtils.projectRowType(flinkRowType, projection);
         }
-
-        flussRowToFlinkRowConverter = new FlussRowToFlinkRowConverter(flussRowType, outputRowType);
+        // TODO: currently, we assume only ADD COLUMN LAST schema changes, so the projection
+        //  positions can still work even after such changes.
+        flussRowToFlinkRowConverter =
+                new FlussRowToFlinkRowConverter(FlinkConversions.toFlussRowType(outputRowType));
 
         Lookup lookup = table.newLookup();
         if (lookupNormalizer.getLookupType() == LookupType.PREFIX_LOOKUP) {
@@ -164,13 +169,21 @@ public class FlinkAsyncLookupFunction extends AsyncLookupFunction {
         List<RowData> projectedRow = new ArrayList<>();
         for (InternalRow row : lookupResult) {
             if (row != null) {
-                RowData flinkRow = flussRowToFlinkRowConverter.toFlinkRowData(row);
+                RowData flinkRow = flussRowToFlinkRowConverter.toFlinkRowData(maybeProject(row));
                 if (remainingFilter == null || remainingFilter.isMatch(flinkRow)) {
                     projectedRow.add(flinkRow);
                 }
             }
         }
         resultFuture.complete(projectedRow);
+    }
+
+    private InternalRow maybeProject(InternalRow row) {
+        if (projection == null) {
+            return row;
+        }
+        // should not reuse objects for async operations
+        return ProjectedRow.from(projection).replaceRow(row);
     }
 
     @Override

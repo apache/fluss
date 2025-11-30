@@ -29,8 +29,11 @@ import org.apache.fluss.shaded.guava32.com.google.common.cache.CacheBuilder;
 import org.apache.fluss.shaded.guava32.com.google.common.util.concurrent.UncheckedExecutionException;
 import org.apache.fluss.utils.MapUtils;
 
+import javax.annotation.concurrent.ThreadSafe;
+
 import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 
 /**
@@ -40,74 +43,77 @@ import java.util.concurrent.ExecutionException;
  * 1. latest schema of each subscribed table, updated by UpdateMetadata request. 2. history schemas
  * of each table, updated by lookup from tablet server.
  */
-public class SchemaMetadataManager {
+@ThreadSafe
+public class ServerSchemaCache {
 
-    private MetadataManager metadataManager;
-    private final Map<TablePath, SchemaInfo> latestSchemaByTablePath;
-    private final Map<TablePath, Integer> subscriberCounters;
+    private final MetadataManager metadataManager;
+    private final Map<Long, SchemaInfo> latestSchemaByTableId;
+    // table_id -> subscriber count
+    private final Map<Long, Integer> subscriberCounters;
     private final Cache<TableSchemaKey, Schema> schemaCache;
 
-    public SchemaMetadataManager(MetadataManager metadataManager) {
+    public ServerSchemaCache(MetadataManager metadataManager) {
         this.metadataManager = metadataManager;
         // thread safe is guaranteed by subscriberCounters.
         this.subscriberCounters = MapUtils.newConcurrentHashMap();
-        this.latestSchemaByTablePath = MapUtils.newConcurrentHashMap();
+        this.latestSchemaByTableId = MapUtils.newConcurrentHashMap();
         this.schemaCache = CacheBuilder.newBuilder().maximumSize(100).build();
     }
 
     public SchemaGetter subscribeWithInitialSchema(
-            TablePath tablePath, int initialSchemaId, Schema initialSchema) {
+            long tableId, TablePath tablePath, int initialSchemaId, Schema initialSchema) {
         subscriberCounters.compute(
-                tablePath,
+                tableId,
                 (key, oldValue) -> {
-                    updateSchema(tablePath, initialSchemaId, initialSchema);
+                    updateSchema(tableId, initialSchemaId, initialSchema);
                     if (oldValue == null) {
                         return 1;
                     } else {
                         return oldValue + 1;
                     }
                 });
-        return new SchemaMetadataSubscriberImpl(tablePath);
+        return new SchemaMetadataSubscriberImpl(tableId, tablePath);
     }
 
-    public void updateLatestSchema(TablePath tablePath, short schemaId, Schema schema) {
+    public void updateLatestSchema(long tableId, short schemaId, Schema schema) {
         // only update if tablePath is subscribed.
         subscriberCounters.computeIfPresent(
-                tablePath,
+                tableId,
                 (key, oldValue) -> {
-                    updateSchema(tablePath, schemaId, schema);
+                    updateSchema(tableId, schemaId, schema);
                     return oldValue;
                 });
     }
 
-    private void unsubscribe(TablePath tablePath) {
+    private void unsubscribe(long tableId) {
         subscriberCounters.compute(
-                tablePath,
+                tableId,
                 (key, oldValue) -> {
                     if (oldValue != null && oldValue > 1) {
                         return oldValue - 1;
                     }
-                    latestSchemaByTablePath.remove(tablePath);
+                    latestSchemaByTableId.remove(tableId);
                     return null;
                 });
     }
 
-    private Schema getFlussSchema(TablePath tablePath, int schemaId) throws ExecutionException {
+    private Schema getFlussSchema(long tableId, TablePath tablePath, int schemaId)
+            throws ExecutionException {
         return schemaCache.get(
-                new TableSchemaKey(tablePath, schemaId),
+                new TableSchemaKey(tableId, schemaId),
                 () -> {
-                    SchemaInfo schemaInfo = latestSchemaByTablePath.get(tablePath);
+                    SchemaInfo schemaInfo = latestSchemaByTableId.get(tableId);
                     if (schemaInfo != null && schemaInfo.getSchemaId() == schemaId) {
-                        return latestSchemaByTablePath.get(tablePath).getSchema();
+                        return latestSchemaByTableId.get(tableId).getSchema();
                     } else {
                         return metadataManager.getSchemaById(tablePath, schemaId).getSchema();
                     }
                 });
     }
 
-    private void updateSchema(TablePath tablePath, int schemaId, Schema schema) {
-        latestSchemaByTablePath.compute(
-                tablePath,
+    private void updateSchema(long tableId, int schemaId, Schema schema) {
+        latestSchemaByTableId.compute(
+                tableId,
                 (key, oldValue) -> {
                     if (oldValue == null || oldValue.getSchemaId() < schemaId) {
                         return new SchemaInfo(schema, schemaId);
@@ -116,25 +122,25 @@ public class SchemaMetadataManager {
                     }
                 });
 
-        schemaCache.put(new TableSchemaKey(tablePath, schemaId), schema);
+        schemaCache.put(new TableSchemaKey(tableId, schemaId), schema);
     }
 
     @VisibleForTesting
-    public Map<TablePath, SchemaInfo> getLatestSchemaByTablePath() {
-        return latestSchemaByTablePath;
+    public Map<Long, SchemaInfo> getLatestSchemaByTableId() {
+        return latestSchemaByTableId;
     }
 
     @VisibleForTesting
-    Map<TablePath, Integer> getSubscriberCounters() {
+    Map<Long, Integer> getSubscriberCounters() {
         return subscriberCounters;
     }
 
     private static class TableSchemaKey {
-        private final TablePath tablePath;
+        private final long tableId;
         private final int schemaId;
 
-        TableSchemaKey(TablePath tablePath, int schemaId) {
-            this.tablePath = tablePath;
+        TableSchemaKey(long tableId, int schemaId) {
+            this.tableId = tableId;
             this.schemaId = schemaId;
         }
 
@@ -144,34 +150,35 @@ public class SchemaMetadataManager {
                 return false;
             }
             TableSchemaKey that = (TableSchemaKey) o;
-            return schemaId == that.schemaId && Objects.equals(tablePath, that.tablePath);
+            return schemaId == that.schemaId && Objects.equals(tableId, that.tableId);
         }
 
         @Override
         public int hashCode() {
-            return Objects.hash(tablePath, schemaId);
+            return Objects.hash(tableId, schemaId);
         }
     }
 
     private class SchemaMetadataSubscriberImpl implements SchemaGetter {
+        private final long tableId;
         private final TablePath tablePath;
         private volatile boolean released;
 
-        public SchemaMetadataSubscriberImpl(TablePath tablePath) {
+        public SchemaMetadataSubscriberImpl(long tableId, TablePath tablePath) {
+            this.tableId = tableId;
             this.tablePath = tablePath;
             this.released = false;
         }
 
         @Override
         public SchemaInfo getLatestSchemaInfo() {
-            return latestSchemaByTablePath.get(tablePath);
+            return latestSchemaByTableId.get(tableId);
         }
 
         @Override
         public Schema getSchema(int schemaId) {
-            // todo:  support with get table.
             try {
-                return getFlussSchema(tablePath, schemaId);
+                return getFlussSchema(tableId, tablePath, schemaId);
             } catch (ExecutionException | UncheckedExecutionException executionException) {
                 Throwable cause = executionException.getCause();
                 if (cause instanceof SchemaNotExistException) {
@@ -183,9 +190,15 @@ public class SchemaMetadataManager {
         }
 
         @Override
+        public CompletableFuture<SchemaInfo> getSchemaInfoAsync(int schemaId) {
+            // TODO: make it async using async zookeeper API.
+            return CompletableFuture.completedFuture(new SchemaInfo(getSchema(schemaId), schemaId));
+        }
+
+        @Override
         public void release() {
             if (!released) {
-                unsubscribe(tablePath);
+                unsubscribe(tableId);
                 released = true;
             }
         }

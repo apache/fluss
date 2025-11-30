@@ -93,8 +93,7 @@ public class LogFetchCollectorTest {
         logFetchBuffer.add(completedFetch);
         assertThat(logFetchBuffer.isEmpty()).isFalse();
 
-        // Validate that the completed fetch isn't initialized just because we add it to the
-        // buffer.
+        // Validate that the completed fetch isn't initialized just because we add it to the buffer
         assertThat(completedFetch.isInitialized()).isFalse();
 
         // Fetch the data and validate that we get all the records we want back.

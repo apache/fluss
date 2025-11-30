@@ -44,40 +44,37 @@ import static org.apache.fluss.record.TestData.DATA2_TABLE_DESCRIPTOR;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-/** Test for {@link SchemaMetadataManager}. */
-public class SchemaMetadataManagerTest {
+/** Test for {@link ServerSchemaCache}. */
+public class ServerSchemaCacheTest {
 
     @Test
-    void testPublishAndsubscribeSchemaChange() {
-        SchemaMetadataManager manager =
-                new SchemaMetadataManager(new TestingMetadataManager(Collections.emptyList()));
+    void testPublishAndSubscribeSchemaChange() {
+        ServerSchemaCache manager =
+                new ServerSchemaCache(new TestingMetadataManager(Collections.emptyList()));
 
         SchemaGetter subscriber1 =
                 manager.subscribeWithInitialSchema(
-                        new TablePath("test_tb", "test_table_1"), (short) 1, DATA1_SCHEMA);
+                        1L, new TablePath("test_tb", "test_table_1"), (short) 1, DATA1_SCHEMA);
         SchemaGetter subscriber2 =
                 manager.subscribeWithInitialSchema(
-                        new TablePath("test_tb", "test_table_2"), (short) 1, DATA1_SCHEMA);
+                        2L, new TablePath("test_tb", "test_table_2"), (short) 1, DATA1_SCHEMA);
         assertThat(subscriber1.getLatestSchemaInfo()).isEqualTo(new SchemaInfo(DATA1_SCHEMA, 1));
         assertThat(subscriber1.getLatestSchemaInfo()).isEqualTo(new SchemaInfo(DATA1_SCHEMA, 1));
 
-        manager.updateLatestSchema(
-                new TablePath("test_tb", "test_table_2"), (short) 2, DATA2_SCHEMA);
+        manager.updateLatestSchema(2L, (short) 2, DATA2_SCHEMA);
         assertThat(subscriber1.getLatestSchemaInfo()).isNotNull();
         assertThat(subscriber1.getLatestSchemaInfo()).isEqualTo(new SchemaInfo(DATA1_SCHEMA, 1));
         assertThat(subscriber2.getLatestSchemaInfo()).isNotNull();
         assertThat(subscriber2.getLatestSchemaInfo()).isEqualTo(new SchemaInfo(DATA2_SCHEMA, 2));
 
-        manager.updateLatestSchema(
-                new TablePath("test_tb", "test_table_1"), (short) 2, DATA2_SCHEMA);
+        manager.updateLatestSchema(1L, (short) 2, DATA2_SCHEMA);
         assertThat(subscriber1.getLatestSchemaInfo()).isNotNull();
         assertThat(subscriber1.getLatestSchemaInfo()).isEqualTo(new SchemaInfo(DATA2_SCHEMA, 2));
         assertThat(subscriber2.getLatestSchemaInfo()).isNotNull();
         assertThat(subscriber2.getLatestSchemaInfo()).isEqualTo(new SchemaInfo(DATA2_SCHEMA, 2));
 
         // one more redundant schema change.
-        manager.updateLatestSchema(
-                new TablePath("test_tb", "test_table_1"), (short) 1, DATA2_SCHEMA);
+        manager.updateLatestSchema(1L, (short) 1, DATA2_SCHEMA);
         assertThat(subscriber1.getLatestSchemaInfo()).isNotNull();
         assertThat(subscriber1.getLatestSchemaInfo()).isEqualTo(new SchemaInfo(DATA2_SCHEMA, 2));
         assertThat(subscriber2.getLatestSchemaInfo()).isNotNull();
@@ -94,11 +91,12 @@ public class SchemaMetadataManagerTest {
                         DATA2_TABLE_DESCRIPTOR,
                         System.currentTimeMillis(),
                         System.currentTimeMillis());
-        SchemaMetadataManager manager =
-                new SchemaMetadataManager(
+        ServerSchemaCache manager =
+                new ServerSchemaCache(
                         new TestingMetadataManager(Arrays.asList(DATA1_TABLE_INFO, tableInfo2)));
         SchemaGetter schemaGetter =
-                manager.subscribeWithInitialSchema(DATA1_TABLE_PATH, (short) 2, DATA2_SCHEMA);
+                manager.subscribeWithInitialSchema(
+                        DATA1_TABLE_ID, DATA1_TABLE_PATH, (short) 2, DATA2_SCHEMA);
         assertThat(schemaGetter.getSchema(2)).isEqualTo(DATA2_SCHEMA);
         assertThat(schemaGetter.getSchema(1)).isEqualTo(DATA1_SCHEMA);
         assertThatThrownBy(() -> schemaGetter.getSchema(3))
@@ -107,43 +105,39 @@ public class SchemaMetadataManagerTest {
 
     @Test
     void testUnsubscribeSchemaChange() {
-        SchemaMetadataManager manager =
-                new SchemaMetadataManager(new TestingMetadataManager(Collections.emptyList()));
+        ServerSchemaCache manager =
+                new ServerSchemaCache(new TestingMetadataManager(Collections.emptyList()));
         SchemaGetter subscriber1 =
                 manager.subscribeWithInitialSchema(
-                        new TablePath("test_tb", "test_table_1"), (short) 1, DATA1_SCHEMA);
+                        1L, new TablePath("test_tb", "test_table_1"), (short) 1, DATA1_SCHEMA);
         SchemaGetter subscriber2 =
                 manager.subscribeWithInitialSchema(
-                        new TablePath("test_tb", "test_table_1"), (short) 1, DATA1_SCHEMA);
+                        1L, new TablePath("test_tb", "test_table_1"), (short) 1, DATA1_SCHEMA);
         SchemaGetter subscriber3 =
                 manager.subscribeWithInitialSchema(
-                        new TablePath("test_tb", "test_table_2"), (short) 1, DATA1_SCHEMA);
-        assertThat(manager.getLatestSchemaByTablePath()).hasSize(2);
+                        2L, new TablePath("test_tb", "test_table_2"), (short) 1, DATA1_SCHEMA);
+        assertThat(manager.getLatestSchemaByTableId()).hasSize(2);
         assertThat(manager.getSubscriberCounters()).hasSize(2);
-        assertThat(manager.getSubscriberCounters().get(new TablePath("test_tb", "test_table_1")))
-                .isEqualTo(2);
+        assertThat(manager.getSubscriberCounters().get(1L)).isEqualTo(2);
 
         subscriber1.release();
-        assertThat(manager.getLatestSchemaByTablePath()).hasSize(2);
+        assertThat(manager.getLatestSchemaByTableId()).hasSize(2);
         assertThat(manager.getSubscriberCounters()).hasSize(2);
-        assertThat(manager.getSubscriberCounters().get(new TablePath("test_tb", "test_table_1")))
-                .isEqualTo(1);
+        assertThat(manager.getSubscriberCounters().get(1L)).isEqualTo(1);
 
         // one more redundant unsubscribe.
         subscriber1.release();
-        assertThat(manager.getLatestSchemaByTablePath()).hasSize(2);
+        assertThat(manager.getLatestSchemaByTableId()).hasSize(2);
         assertThat(manager.getSubscriberCounters()).hasSize(2);
-        assertThat(manager.getSubscriberCounters().get(new TablePath("test_tb", "test_table_1")))
-                .isEqualTo(1);
+        assertThat(manager.getSubscriberCounters().get(1L)).isEqualTo(1);
 
         subscriber2.release();
-        assertThat(manager.getLatestSchemaByTablePath()).hasSize(1);
+        assertThat(manager.getLatestSchemaByTableId()).hasSize(1);
         assertThat(manager.getSubscriberCounters()).hasSize(1);
-        assertThat(manager.getSubscriberCounters().get(new TablePath("test_tb", "test_table_1")))
-                .isNull();
+        assertThat(manager.getSubscriberCounters().get(1L)).isNull();
 
         subscriber3.release();
-        assertThat(manager.getLatestSchemaByTablePath()).isEmpty();
+        assertThat(manager.getLatestSchemaByTableId()).isEmpty();
         assertThat(manager.getSubscriberCounters()).isEmpty();
         subscriber3.release();
     }

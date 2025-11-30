@@ -29,6 +29,7 @@ import org.apache.fluss.record.FileLogProjection;
 import org.apache.fluss.record.FileLogRecords;
 import org.apache.fluss.record.LogRecordReadContext;
 import org.apache.fluss.record.MemoryLogRecords;
+import org.apache.fluss.record.ProjectionPushdownCache;
 import org.apache.fluss.record.TestingSchemaGetter;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.rpc.entity.FetchLogResultForBucket;
@@ -265,7 +266,7 @@ public class DefaultCompletedFetchTest {
                         rowType, DEFAULT_SCHEMA_ID, 0L, 1000L, magic, objects, LogFormat.ARROW));
         fileLogRecords.flush();
 
-        FileLogProjection fileLogProjection = new FileLogProjection();
+        FileLogProjection fileLogProjection = new FileLogProjection(new ProjectionPushdownCache());
         fileLogProjection.setCurrentProjection(
                 DATA2_TABLE_ID,
                 testingSchemaGetter,

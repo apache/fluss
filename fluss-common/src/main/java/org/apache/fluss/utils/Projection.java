@@ -112,11 +112,7 @@ public class Projection {
         return projectionPositions;
     }
 
-    /**
-     * The id of the projection, which is used for fluss server scan.
-     *
-     * @return
-     */
+    /** The id of the projection, which is used for fluss server scan. */
     public int[] getProjectionIdInOrder() {
         return projectionIdsInOrder;
     }

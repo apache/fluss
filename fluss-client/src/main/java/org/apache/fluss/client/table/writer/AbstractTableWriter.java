@@ -37,13 +37,11 @@ public abstract class AbstractTableWriter implements TableWriter {
     protected final TablePath tablePath;
     protected final WriterClient writerClient;
     protected final int fieldCount;
-    protected TableInfo tableInfo;
     private final @Nullable PartitionGetter partitionFieldGetter;
 
     protected AbstractTableWriter(
             TablePath tablePath, TableInfo tableInfo, WriterClient writerClient) {
         this.tablePath = tablePath;
-        this.tableInfo = tableInfo;
         this.writerClient = writerClient;
         this.fieldCount = tableInfo.getRowType().getFieldCount();
         this.partitionFieldGetter =

@@ -22,6 +22,7 @@ import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.SchemaGetter;
+import org.apache.fluss.record.BinaryValue;
 import org.apache.fluss.rocksdb.RocksDBHandle;
 import org.apache.fluss.rocksdb.RocksIteratorWrapper;
 import org.apache.fluss.row.InternalRow;
@@ -30,6 +31,7 @@ import org.apache.fluss.row.encode.ValueDecoder;
 import org.apache.fluss.utils.CloseableIterator;
 import org.apache.fluss.utils.CloseableRegistry;
 import org.apache.fluss.utils.IOUtils;
+import org.apache.fluss.utils.SchemaUtil;
 
 import org.rocksdb.ColumnFamilyOptions;
 import org.rocksdb.DBOptions;
@@ -43,6 +45,8 @@ import javax.annotation.concurrent.NotThreadSafe;
 
 import java.io.IOException;
 import java.nio.file.Path;
+import java.util.HashMap;
+import java.util.Map;
 
 /**
  * A reader to read kv snapshot files to {@link ScanRecord}s. It will return the {@link ScanRecord}s
@@ -57,6 +61,12 @@ class SnapshotFilesReader implements CloseableIterator<InternalRow> {
     private final ValueDecoder valueDecoder;
     @Nullable private final int[] projectedFields;
     private RocksIteratorWrapper rocksIteratorWrapper;
+
+    /**
+     * A cache for schema projection mapping from source schema to target. Use HashMap here, because
+     * SnapshotFilesReader is used in single thread only.
+     */
+    private final Map<Short, int[]> schemaProjectionCache = new HashMap<>();
 
     private Snapshot snapshot;
     private RocksDBHandle rocksDBHandle;
@@ -155,12 +165,16 @@ class SnapshotFilesReader implements CloseableIterator<InternalRow> {
         byte[] value = rocksIteratorWrapper.value();
         rocksIteratorWrapper.next();
 
-        ValueDecoder.Value originValue = valueDecoder.decodeValue(value);
+        BinaryValue originValue = valueDecoder.decodeValue(value);
         InternalRow originRow = originValue.row;
         if (targetSchemaId != originValue.schemaId) {
-            originRow =
-                    ProjectedRow.from(schemaGetter.getSchema(originValue.schemaId), targetSchema)
-                            .replaceRow(originRow);
+            int[] indexMapping =
+                    schemaProjectionCache.computeIfAbsent(
+                            originValue.schemaId,
+                            sourceSchemaId ->
+                                    SchemaUtil.getIndexMapping(
+                                            schemaGetter.getSchema(sourceSchemaId), targetSchema));
+            originRow = ProjectedRow.from(indexMapping).replaceRow(originRow);
         }
 
         if (projectedFields != null) {

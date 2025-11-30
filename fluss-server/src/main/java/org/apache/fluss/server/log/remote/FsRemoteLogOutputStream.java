@@ -203,7 +203,7 @@ public class FsRemoteLogOutputStream extends FSDataOutputStream {
         Exception latestException = null;
         for (int attempt = 0; attempt < 10; attempt++) {
             try {
-                // todo: mayadd entropy injection?
+                // todo: may add entropy injection?
                 this.outStream = fs.create(remoteLogFilePath, FileSystem.WriteMode.NO_OVERWRITE);
                 return;
             } catch (Exception e) {

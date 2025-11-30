@@ -339,7 +339,7 @@ public class ServerRpcMessageUtils {
                 .collect(Collectors.toList());
     }
 
-    private static @Nullable TableChange.ColumnPosition toColumnPosition(int columnPositionType) {
+    private static TableChange.ColumnPosition toColumnPosition(int columnPositionType) {
         ColumnPositionType opType = ColumnPositionType.from(columnPositionType);
         switch (opType) {
             case LAST:

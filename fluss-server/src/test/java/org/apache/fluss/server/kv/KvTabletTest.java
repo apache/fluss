@@ -38,6 +38,7 @@ import org.apache.fluss.record.KvRecordTestUtils;
 import org.apache.fluss.record.LogRecords;
 import org.apache.fluss.record.LogTestBase;
 import org.apache.fluss.record.MemoryLogRecords;
+import org.apache.fluss.record.ProjectionPushdownCache;
 import org.apache.fluss.record.TestData;
 import org.apache.fluss.record.TestingSchemaGetter;
 import org.apache.fluss.record.bytesview.MultiBytesView;
@@ -651,9 +652,10 @@ class KvTabletTest {
         TablePath tablePath = TablePath.of("testDb", tableName);
         initLogTabletAndKvTablet(tablePath, DATA1_SCHEMA_PK, config);
         RowType rowType = DATA1_SCHEMA_PK.getRowType();
+        ProjectionPushdownCache projectionCache = new ProjectionPushdownCache();
         FileLogProjection logProjection = null;
         if (doProjection) {
-            logProjection = new FileLogProjection();
+            logProjection = new FileLogProjection(projectionCache);
             logProjection.setCurrentProjection(
                     0L, schemaGetter, DEFAULT_COMPRESSION, new int[] {0});
         }
@@ -749,7 +751,7 @@ class KvTabletTest {
         schemaGetter.updateLatestSchemaInfo(new SchemaInfo(DATA2_SCHEMA, 2));
         readLogRowType = doProjection ? DATA2_ROW_TYPE.project(new int[] {0}) : DATA2_ROW_TYPE;
         if (doProjection) {
-            logProjection = new FileLogProjection();
+            logProjection = new FileLogProjection(projectionCache);
             logProjection.setCurrentProjection(
                     0L, schemaGetter, DEFAULT_COMPRESSION, new int[] {0});
         }
@@ -834,9 +836,10 @@ class KvTabletTest {
         KvRecordTestUtils.KvRecordFactory kvRecordFactory =
                 KvRecordTestUtils.KvRecordFactory.of(rowType);
 
+        ProjectionPushdownCache projectionCache = new ProjectionPushdownCache();
         FileLogProjection logProjection = null;
         if (doProjection) {
-            logProjection = new FileLogProjection();
+            logProjection = new FileLogProjection(projectionCache);
             logProjection.setCurrentProjection(
                     0L, schemaGetter, DEFAULT_COMPRESSION, new int[] {0});
         }
@@ -956,7 +959,7 @@ class KvTabletTest {
                         ? newSchema.getRowType().project(new int[] {0})
                         : newSchema.getRowType();
         if (doProjection) {
-            logProjection = new FileLogProjection();
+            logProjection = new FileLogProjection(projectionCache);
             logProjection.setCurrentProjection(
                     0L, schemaGetter, DEFAULT_COMPRESSION, new int[] {0});
         }

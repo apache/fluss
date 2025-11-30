@@ -211,8 +211,6 @@ class TableManagerTest {
         assertThat(coordinatorContext.getAllReplicasForTable(tableId)).isEmpty();
     }
 
-    void testSchemaChange() throws Exception {}
-
     @Test
     void testResumeDeletionAfterRestart() throws Exception {
         // first, create a table

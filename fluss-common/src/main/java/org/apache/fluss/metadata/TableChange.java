@@ -402,7 +402,7 @@ public interface TableChange {
 
         @Override
         public String toString() {
-            return String.format("AFTER %s", columnName);
+            return String.format("AFTER(%s)", columnName);
         }
     }
 }

@@ -51,8 +51,8 @@ import org.apache.fluss.server.coordinator.MetadataManager;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshotHandle;
-import org.apache.fluss.server.metadata.SchemaMetadataManager;
 import org.apache.fluss.server.metadata.ServerInfo;
+import org.apache.fluss.server.metadata.ServerSchemaCache;
 import org.apache.fluss.server.metadata.TabletServerMetadataCache;
 import org.apache.fluss.server.replica.Replica;
 import org.apache.fluss.server.replica.ReplicaManager;
@@ -286,7 +286,7 @@ public final class FlussClusterExtension
     }
 
     private void startTabletServers() throws Exception {
-        // addColumn tablet server to make generate assignment for table possible
+        // add tablet server to make generate assignment for table possible
         for (int i = 0; i < initialNumOfTabletServers; i++) {
             startTabletServer(i);
         }
@@ -670,20 +670,20 @@ public final class FlussClusterExtension
                 () -> {
                     TableRegistration tableRegistration = zkClient.getTable(tablePath).get();
                     int bucketCount = tableRegistration.bucketCount;
+                    long tableId = tableRegistration.tableId;
                     for (int bucketId = 0; bucketId < bucketCount; bucketId++) {
-                        TableBucket tableBucket =
-                                new TableBucket(tableRegistration.tableId, bucketId);
+                        TableBucket tableBucket = new TableBucket(tableId, bucketId);
                         Optional<LeaderAndIsr> leaderAndIsrOpt =
                                 zkClient.getLeaderAndIsr(tableBucket);
                         assertThat(leaderAndIsrOpt).isPresent();
                         int leader = leaderAndIsrOpt.get().leader();
                         TabletServer tabletServer = getTabletServerById(leader);
-                        SchemaMetadataManager schemaMetadataManager =
-                                tabletServer.getMetadataCache().getSchemaMetadataManager();
-                        Map<TablePath, SchemaInfo> latestSchemaByTablePath =
-                                schemaMetadataManager.getLatestSchemaByTablePath();
-                        assertThat(latestSchemaByTablePath).containsKey(tablePath);
-                        assertThat(latestSchemaByTablePath.get(tablePath).getSchemaId())
+                        ServerSchemaCache serverSchemaCache =
+                                tabletServer.getMetadataCache().getServerSchemaCache();
+                        Map<Long, SchemaInfo> latestSchemaByTablePath =
+                                serverSchemaCache.getLatestSchemaByTableId();
+                        assertThat(latestSchemaByTablePath).containsKey(tableId);
+                        assertThat(latestSchemaByTablePath.get(tableId).getSchemaId())
                                 .isEqualTo(schemaId);
                     }
                 });

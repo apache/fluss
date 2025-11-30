@@ -336,6 +336,44 @@ public class ClientRpcMessageUtils {
         return dropPartitionRequest;
     }
 
+    public static AlterTableRequest makeAlterTableRequest(
+            TablePath tablePath, List<TableChange> tableChanges, boolean ignoreIfNotExists) {
+        AlterTableRequest request = new AlterTableRequest();
+        request.setIgnoreIfNotExists(ignoreIfNotExists)
+                .setTablePath()
+                .setDatabaseName(tablePath.getDatabaseName())
+                .setTableName(tablePath.getTableName());
+
+        List<PbAddColumn> addColumns = new ArrayList<>();
+        List<PbDropColumn> dropColumns = new ArrayList<>();
+        List<PbRenameColumn> renameColumns = new ArrayList<>();
+        List<PbModifyColumn> modifyColumns = new ArrayList<>();
+        List<PbAlterConfig> alterConfigs = new ArrayList<>();
+        for (TableChange tableChange : tableChanges) {
+            if (tableChange instanceof TableChange.AddColumn) {
+                addColumns.add(toPbAddColumn((TableChange.AddColumn) tableChange));
+            } else if (tableChange instanceof TableChange.DropColumn) {
+                dropColumns.add(toPbDropColumn((TableChange.DropColumn) tableChange));
+            } else if (tableChange instanceof TableChange.RenameColumn) {
+                renameColumns.add(toPbRenameColumn((TableChange.RenameColumn) tableChange));
+            } else if (tableChange instanceof TableChange.ModifyColumn) {
+                modifyColumns.add(toPbModifyColumn((TableChange.ModifyColumn) tableChange));
+            } else if (tableChange instanceof TableChange.SetOption
+                    || tableChange instanceof TableChange.ResetOption) {
+                alterConfigs.add(toPbAlterConfigs(tableChange));
+            } else {
+                throw new IllegalArgumentException(
+                        "Unsupported table change: " + tableChange.getClass());
+            }
+        }
+        request.addAllConfigChanges(alterConfigs)
+                .addAllAddColumns(addColumns)
+                .addAllDropColumns(dropColumns)
+                .addAllRenameColumns(renameColumns)
+                .addAllModifyColumns(modifyColumns);
+        return request;
+    }
+
     public static List<PartitionInfo> toPartitionInfos(ListPartitionInfosResponse response) {
         return response.getPartitionsInfosList().stream()
                 .map(
@@ -378,33 +416,6 @@ public class ClientRpcMessageUtils {
                     "Unsupported table change: " + tableChange.getClass());
         }
         return info;
-    }
-
-    public static void addPbAlterSchemas(
-            AlterTableRequest request, List<TableChange> tableChanges) {
-        List<PbAddColumn> addColumns = new ArrayList<>();
-        List<PbDropColumn> dropColumns = new ArrayList<>();
-        List<PbRenameColumn> renameColumns = new ArrayList<>();
-        List<PbModifyColumn> modifyColumns = new ArrayList<>();
-        for (TableChange tableChange : tableChanges) {
-            if (tableChange instanceof TableChange.AddColumn) {
-                addColumns.add(toPbAddColumn((TableChange.AddColumn) tableChange));
-            } else if (tableChange instanceof TableChange.DropColumn) {
-                dropColumns.add(toPbDropColumn((TableChange.DropColumn) tableChange));
-            } else if (tableChange instanceof TableChange.RenameColumn) {
-                renameColumns.add(toPbRenameColumn((TableChange.RenameColumn) tableChange));
-            } else if (tableChange instanceof TableChange.ModifyColumn) {
-                modifyColumns.add(toPbModifyColumn((TableChange.ModifyColumn) tableChange));
-            } else {
-                throw new IllegalArgumentException(
-                        "Unsupported table change: " + tableChange.getClass());
-            }
-        }
-
-        request.addAllAddColumns(addColumns)
-                .addAllDropColumns(dropColumns)
-                .addAllRenameColumns(renameColumns)
-                .addAllModifyColumns(modifyColumns);
     }
 
     public static PbAddColumn toPbAddColumn(TableChange.AddColumn addColumn) {

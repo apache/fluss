@@ -246,16 +246,7 @@ public class TableChangeWatcher {
     private void processSchemaChange(TablePath tablePath, int schemaId) {
 
         try {
-            int currentSchemaId = zooKeeperClient.getCurrentSchemaId(tablePath);
             SchemaInfo schemaInfo;
-            if (schemaId != currentSchemaId) {
-                LOG.warn(
-                        "Schema id {} is not equal to current schema id {}. Skipping schema change processing.",
-                        schemaId,
-                        currentSchemaId);
-                return;
-            }
-
             Optional<SchemaInfo> optSchema = zooKeeperClient.getSchemaById(tablePath, schemaId);
             if (!optSchema.isPresent()) {
                 LOG.error("No schema for table {} in zookeeper.", tablePath);

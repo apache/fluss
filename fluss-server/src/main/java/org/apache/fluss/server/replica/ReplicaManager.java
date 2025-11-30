@@ -39,6 +39,7 @@ import org.apache.fluss.metrics.MetricNames;
 import org.apache.fluss.metrics.groups.MetricGroup;
 import org.apache.fluss.record.KvRecordBatch;
 import org.apache.fluss.record.MemoryLogRecords;
+import org.apache.fluss.record.ProjectionPushdownCache;
 import org.apache.fluss.remote.RemoteLogFetchInfo;
 import org.apache.fluss.remote.RemoteLogSegment;
 import org.apache.fluss.rpc.RpcClient;
@@ -149,6 +150,7 @@ public class ReplicaManager {
     private final Map<TableBucket, HostedReplica> allReplicas = MapUtils.newConcurrentHashMap();
 
     private final TabletServerMetadataCache metadataCache;
+    private final ProjectionPushdownCache projectionsCache = new ProjectionPushdownCache();
     private final Lock replicaStateChangeLock = new ReentrantLock();
 
     /**
@@ -1083,7 +1085,8 @@ public class ReplicaManager {
                         adjustedMaxBytes,
                         replica.getSchemaGetter(),
                         replica.getArrowCompressionInfo(),
-                        fetchReqInfo.getProjectFields());
+                        fetchReqInfo.getProjectFields(),
+                        projectionsCache);
                 LogReadInfo readInfo = replica.fetchRecords(fetchParams);
 
                 // Once we read from a non-empty bucket, we stop ignoring request and bucket

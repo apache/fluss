@@ -384,7 +384,7 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
     @Override
     public CompletableFuture<GetFileSystemSecurityTokenResponse> getFileSystemSecurityToken(
             GetFileSystemSecurityTokenRequest request) {
-        // TODO:add ACL for per-table in https://github.com/apache/fluss/issues/752
+        // TODO: add ACL for per-table in https://github.com/apache/fluss/issues/752
         try {
             // In order to avoid repeatedly obtaining security token, cache it for a while.
             long currentTimeMs = System.currentTimeMillis();

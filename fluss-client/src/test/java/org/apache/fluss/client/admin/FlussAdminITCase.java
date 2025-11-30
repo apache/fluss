@@ -354,13 +354,43 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                                         .get())
                 .hasMessageContaining("Column c1 must be nullable");
 
+        assertThatThrownBy(
+                        () ->
+                                admin.alterTable(
+                                                tablePath,
+                                                Collections.singletonList(
+                                                        TableChange.addColumn(
+                                                                "c1",
+                                                                DataTypes.STRING().copy(false),
+                                                                null,
+                                                                TableChange.ColumnPosition
+                                                                        .first())),
+                                                false)
+                                        .get())
+                .hasMessageContaining("Unsupported ColumnPositionType: FIRST");
+
+        assertThatThrownBy(
+                        () ->
+                                admin.alterTable(
+                                                tablePath,
+                                                Collections.singletonList(
+                                                        TableChange.addColumn(
+                                                                "c1",
+                                                                DataTypes.STRING().copy(false),
+                                                                null,
+                                                                TableChange.ColumnPosition.after(
+                                                                        "name"))),
+                                                false)
+                                        .get())
+                .hasMessageContaining("Unsupported ColumnPositionType: AFTER(name)");
+
         admin.alterTable(
                         tablePath,
                         Collections.singletonList(
                                 TableChange.addColumn(
                                         "c1",
                                         DataTypes.STRING(),
-                                        null,
+                                        "new column c1",
                                         TableChange.ColumnPosition.last())),
                         false)
                 .get();
@@ -380,7 +410,10 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                                         new Schema.Column(
                                                 "age", DataTypes.INT(), "person age", (short) 2),
                                         new Schema.Column(
-                                                "c1", DataTypes.STRING(), null, (short) 3)))
+                                                "c1",
+                                                DataTypes.STRING(),
+                                                "new column c1",
+                                                (short) 3)))
                         .build();
         SchemaInfo schemaInfo = admin.getTableSchema(tablePath).get();
         assertThat(schemaInfo).isEqualTo(new SchemaInfo(expectedSchema, 2));

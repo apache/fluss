@@ -20,7 +20,7 @@ package org.apache.fluss.server.kv.rowmerger;
 import org.apache.fluss.metadata.DeleteBehavior;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.Schema;
-import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.record.BinaryValue;
 import org.apache.fluss.server.kv.partialupdate.PartialUpdater;
 import org.apache.fluss.server.kv.partialupdate.PartialUpdaterCache;
 
@@ -46,14 +46,14 @@ public class DefaultRowMerger implements RowMerger {
 
     @Nullable
     @Override
-    public InternalRow merge(InternalRow oldRow, InternalRow newRow) {
+    public BinaryValue merge(BinaryValue oldValue, BinaryValue newValue) {
         // always retain the new row (latest row)
-        return newRow;
+        return newValue;
     }
 
     @Nullable
     @Override
-    public InternalRow delete(InternalRow oldRow) {
+    public BinaryValue delete(BinaryValue oldRow) {
         // returns null to indicate the row is deleted
         return null;
     }
@@ -98,13 +98,13 @@ public class DefaultRowMerger implements RowMerger {
 
         @Nullable
         @Override
-        public InternalRow merge(InternalRow oldRow, InternalRow newRow) {
-            return partialUpdater.updateRow(oldRow, newRow);
+        public BinaryValue merge(BinaryValue oldValue, BinaryValue newValue) {
+            return partialUpdater.updateRow(oldValue, newValue);
         }
 
         @Nullable
         @Override
-        public InternalRow delete(InternalRow oldRow) {
+        public BinaryValue delete(BinaryValue oldRow) {
             return partialUpdater.deleteRow(oldRow);
         }
 

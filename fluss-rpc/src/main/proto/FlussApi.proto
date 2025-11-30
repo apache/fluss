@@ -918,33 +918,33 @@ message PbAlterConfig {
   required int32 op_type = 3; // SET=0, DELETE=1, APPEND=2, SUBTRACT=3
 }
 
-message PbAddColumn{
+message PbAddColumn {
   required string column_name = 1;
   required bytes data_type_json = 2;
   optional string comment = 3;
   required int32 column_position_type = 4; // LAST=0,FIRST=1,AFTER=3
 }
 
-message PbDropColumn{
+message PbDropColumn {
   required string column_name = 1;
 }
 
-message PbRenameColumn{
+message PbRenameColumn {
   required string old_column_name = 1;
   required string new_column_name = 2;
 }
 
 
-message PbModifyColumn{
+message PbModifyColumn {
   required string column_name = 1;
-  required bytes data_type_json = 2;
+  optional bytes data_type_json = 2;
   optional string comment = 3;
   optional int32 column_position_type = 4; // LAST=0,FIRST=1,AFTER=3
 }
 
 
 
-message PbDescribeConfig{
+message PbDescribeConfig {
   required string config_key = 1;
   optional string config_value = 2;
   required string config_source = 3;

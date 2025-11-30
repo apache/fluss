@@ -47,7 +47,7 @@ public class SerializerInitContextImpl implements FlussSerializationSchema.Initi
     }
 
     @Override
-    public org.apache.flink.table.types.logical.RowType getTableRowType() {
+    public org.apache.flink.table.types.logical.RowType getInputRowSchema() {
         return flinkRowType;
     }
 }

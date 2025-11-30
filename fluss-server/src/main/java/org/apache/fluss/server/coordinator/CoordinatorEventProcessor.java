@@ -556,7 +556,6 @@ public class CoordinatorEventProcessor implements EventProcessor {
 
     private void processCreateTable(CreateTableEvent createTableEvent) {
         long tableId = createTableEvent.getTableInfo().getTableId();
-        int schemaId = createTableEvent.getTableInfo().getSchemaId();
         // skip the table if it already exists
         if (coordinatorContext.containsTableId(tableId)) {
             return;

@@ -69,8 +69,7 @@ final class ServerConnection {
 
     private final ServerNode node;
 
-    // TODO: add max inflight requests limit like Kafka's
-    // "max.in.flight.requests.per.connection"
+    // TODO: add max inflight requests limit like Kafka's "max.in.flight.requests.per.connection"
     private final Map<Integer, InflightRequest> inflightRequests = MapUtils.newConcurrentHashMap();
     private final CompletableFuture<Void> closeFuture = new CompletableFuture<>();
     private final ConnectionMetrics connectionMetrics;

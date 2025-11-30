@@ -20,9 +20,7 @@ package org.apache.fluss.server.kv.rowmerger;
 import org.apache.fluss.metadata.DeleteBehavior;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.Schema;
-import org.apache.fluss.row.BinaryRow;
-import org.apache.fluss.row.InternalRow;
-import org.apache.fluss.row.ProjectedRow;
+import org.apache.fluss.record.BinaryValue;
 import org.apache.fluss.types.DataTypes;
 
 import org.junit.jupiter.params.ParameterizedTest;
@@ -47,18 +45,21 @@ class DefaultRowMergerTest {
             Schema.newBuilder()
                     .fromColumns(
                             Arrays.asList(
-                                    new Schema.Column("age", DataTypes.STRING(), null, (short) 2),
                                     new Schema.Column("id", DataTypes.INT(), null, (short) 0),
-                                    new Schema.Column("name", DataTypes.STRING(), null, (short) 1)))
+                                    new Schema.Column("name", DataTypes.STRING(), null, (short) 1),
+                                    // add new column at end
+                                    new Schema.Column("age", DataTypes.STRING(), null, (short) 2)))
                     .primaryKey("id")
                     .build();
 
-    private BinaryRow createBinaryRow(int id, String name) {
-        return compactedRow(SCHEMA.getRowType(), new Object[] {id, name});
+    private BinaryValue createBinaryValue(int id, String name) {
+        return new BinaryValue(
+                (short) 1, compactedRow(SCHEMA.getRowType(), new Object[] {id, name}));
     }
 
-    private BinaryRow createBinaryRow(String age, int id, String name) {
-        return compactedRow(SCHEMA_2.getRowType(), new Object[] {age, id, name});
+    private BinaryValue createBinaryValue(int id, String name, String age) {
+        return new BinaryValue(
+                (short) 2, compactedRow(SCHEMA_2.getRowType(), new Object[] {id, name, age}));
     }
 
     @ParameterizedTest
@@ -67,26 +68,25 @@ class DefaultRowMergerTest {
         DefaultRowMerger merger = new DefaultRowMerger(KvFormat.COMPACTED, deleteBehavior);
         merger.configureTargetColumns(null, (byte) 1, SCHEMA);
 
-        InternalRow oldRow = createBinaryRow(1, "old");
-        BinaryRow newRow = createBinaryRow(1, "new");
+        BinaryValue oldValue = createBinaryValue(1, "old");
+        BinaryValue newValue = createBinaryValue(1, "new");
 
         // Test merge operation - should return new row
-        InternalRow mergedRow = merger.merge(oldRow, newRow);
-        assertThat(mergedRow).isSameAs(newRow);
+        BinaryValue mergedValue = merger.merge(oldValue, newValue);
+        assertThat(mergedValue).isSameAs(newValue);
 
         // Test delete operation - should return null (deleted)
-        InternalRow deletedRow = merger.delete(oldRow);
-        assertThat(deletedRow).isNull();
+        BinaryValue deletedValue = merger.delete(oldValue);
+        assertThat(deletedValue).isNull();
 
         // Test supportsDelete - should return true
         assertThat(merger.deleteBehavior()).isEqualTo(deleteBehavior);
 
         // Test schema change.
         merger.configureTargetColumns(null, (byte) 2, SCHEMA_2);
-        oldRow = ProjectedRow.from(SCHEMA, SCHEMA_2).replaceRow(oldRow);
-        newRow = createBinaryRow("20", 1, "new2");
-        assertThat(merger.merge(oldRow, newRow)).isSameAs(newRow);
-        assertThat(merger.delete(newRow)).isNull();
+        newValue = createBinaryValue(1, "new2", "20");
+        assertThat(merger.merge(oldValue, newValue)).isSameAs(newValue);
+        assertThat(merger.delete(newValue)).isNull();
     }
 
     @ParameterizedTest
@@ -98,20 +98,19 @@ class DefaultRowMergerTest {
         RowMerger partialMerger =
                 merger.configureTargetColumns(new int[] {0, 1}, (byte) 1, SCHEMA); // id + name
 
-        InternalRow oldRow = createBinaryRow(1, "old");
+        BinaryValue oldValue = createBinaryValue(1, "old");
 
-        InternalRow ignoredRow = partialMerger.delete(oldRow);
-        assertThat(ignoredRow).isNull();
+        BinaryValue ignoredValue = partialMerger.delete(oldValue);
+        assertThat(ignoredValue).isNull();
         assertThat(partialMerger.deleteBehavior()).isEqualTo(deleteBehavior);
 
-        assertThat(partialMerger.merge(null, oldRow)).isEqualTo(oldRow);
+        assertThat(partialMerger.merge(null, oldValue)).isEqualTo(oldValue);
 
         // schema change then partial update (except name column).
-        partialMerger = merger.configureTargetColumns(new int[] {0, 1}, (byte) 2, SCHEMA_2);
-        oldRow = ProjectedRow.from(SCHEMA, SCHEMA_2).replaceRow(oldRow);
-        BinaryRow newRow = createBinaryRow("20", 1, null);
-        BinaryRow mergeRow = createBinaryRow("20", 1, "old");
-        assertThat(partialMerger.merge(oldRow, newRow)).isEqualTo(mergeRow);
-        assertThat(partialMerger.delete(mergeRow)).isEqualTo(createBinaryRow(null, 1, "old"));
+        partialMerger = merger.configureTargetColumns(new int[] {0, 2}, (byte) 2, SCHEMA_2);
+        BinaryValue newValue = createBinaryValue(1, null, "20");
+        BinaryValue mergeValue = createBinaryValue(1, "old", "20");
+        assertThat(partialMerger.merge(oldValue, newValue)).isEqualTo(mergeValue);
+        assertThat(partialMerger.delete(mergeValue)).isEqualTo(createBinaryValue(1, "old", null));
     }
 }

@@ -296,6 +296,7 @@ public class FlussSourceBuilder<OUT> {
                 hasPrimaryKey,
                 isPartitioned,
                 sourceOutputType,
+                projectedFields,
                 offsetsInitializer,
                 scanPartitionDiscoveryIntervalMs,
                 deserializationSchema,

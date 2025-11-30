@@ -72,7 +72,6 @@ public abstract class LogTestBase {
         assertLogRecordsListEquals(expected, actual, baseRowType);
     }
 
-    // todo: 在这个基础上可以加更多最简单的schema evolution测试，非常好
     protected void assertIndexedLogRecordBatchAndRowEquals(
             LogRecordBatch actual,
             LogRecordBatch expected,

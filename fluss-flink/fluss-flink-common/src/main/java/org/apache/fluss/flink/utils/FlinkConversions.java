@@ -86,18 +86,6 @@ public class FlinkConversions {
 
     private FlinkConversions() {}
 
-    public static int[] toFlinkRowTypeIndexMapping(
-            RowType sourceFlussRowType,
-            org.apache.flink.table.types.logical.RowType targetFlinkRowType) {
-        int[] indexMapping = new int[targetFlinkRowType.getFieldCount()];
-        for (int i = 0; i < targetFlinkRowType.getFieldCount(); i++) {
-            String fieldName = targetFlinkRowType.getFieldNames().get(i);
-            int index = sourceFlussRowType.getFieldIndex(fieldName);
-            indexMapping[i] = index;
-        }
-        return indexMapping;
-    }
-
     /** Convert Fluss's type to Flink's type. */
     @VisibleForTesting
     public static org.apache.flink.table.types.DataType toFlinkType(DataType flussDataType) {

@@ -39,6 +39,7 @@ import org.apache.fluss.rpc.messages.LimitScanRequest;
 import org.apache.fluss.rpc.messages.LimitScanResponse;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.CloseableIterator;
+import org.apache.fluss.utils.SchemaUtil;
 
 import javax.annotation.Nullable;
 
@@ -47,7 +48,9 @@ import java.nio.ByteBuffer;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
@@ -63,6 +66,12 @@ public class LimitBatchScanner implements BatchScanner {
     private final SchemaGetter schemaGetter;
     private final KvFormat kvFormat;
     private final int targetSchemaId;
+
+    /**
+     * A cache for schema projection mapping from source schema to target. Use HashMap here, because
+     * LimitBatchScanner is used in single thread only.
+     */
+    private final Map<Short, int[]> schemaProjectionCache = new HashMap<>();
 
     private boolean endOfInput;
 
@@ -142,11 +151,14 @@ public class LimitBatchScanner implements BatchScanner {
             for (ValueRecord record : valueRecords.records(readContext)) {
                 InternalRow row = record.getRow();
                 if (targetSchemaId != record.schemaId()) {
-                    row =
-                            ProjectedRow.from(
-                                            schemaGetter.getSchema(record.schemaId()),
-                                            schemaGetter.getSchema(targetSchemaId))
-                                    .replaceRow(row);
+                    int[] indexMapping =
+                            schemaProjectionCache.computeIfAbsent(
+                                    record.schemaId(),
+                                    sourceSchemaId ->
+                                            SchemaUtil.getIndexMapping(
+                                                    schemaGetter.getSchema(sourceSchemaId),
+                                                    schemaGetter.getSchema(targetSchemaId)));
+                    row = ProjectedRow.from(indexMapping).replaceRow(row);
                 }
                 scanRows.add(maybeProject(row));
             }

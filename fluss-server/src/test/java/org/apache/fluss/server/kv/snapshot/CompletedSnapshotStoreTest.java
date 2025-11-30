@@ -161,7 +161,7 @@ class CompletedSnapshotStoreTest {
         final CompletedSnapshot ckp = getSnapshot(ckpId);
 
         assertThatThrownBy(() -> completedSnapshotStore.add(ckp))
-                .as("We should get an exception when addColumn snapshot to failed..")
+                .as("We should get an exception when add snapshot to failed..")
                 .hasMessageContaining(errMsg)
                 .isInstanceOf(FlussException.class);
 

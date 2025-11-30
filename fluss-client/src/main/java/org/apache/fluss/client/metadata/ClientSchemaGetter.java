@@ -19,6 +19,8 @@ package org.apache.fluss.client.metadata;
 
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.client.admin.Admin;
+import org.apache.fluss.exception.SchemaNotExistException;
+import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.SchemaInfo;
@@ -28,8 +30,10 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
+import static org.apache.fluss.utils.ExceptionUtils.stripExecutionException;
 import static org.apache.fluss.utils.MapUtils.newConcurrentHashMap;
 
 /** Schema getter for client. */
@@ -40,7 +44,7 @@ public class ClientSchemaGetter implements SchemaGetter {
     private final TablePath tablePath;
     private final Map<Integer, Schema> schemasById;
     private final Admin admin;
-    private SchemaInfo latestSchemaInfo;
+    private volatile SchemaInfo latestSchemaInfo;
 
     public ClientSchemaGetter(TablePath tablePath, SchemaInfo latestSchemaInfo, Admin admin) {
         this.tablePath = tablePath;
@@ -52,22 +56,55 @@ public class ClientSchemaGetter implements SchemaGetter {
 
     @Override
     public Schema getSchema(int schemaId) {
-        return schemasById.computeIfAbsent(
-                schemaId,
-                (id) -> {
-                    try {
-                        SchemaInfo schemaInfo =
-                                admin.getTableSchema(tablePath, schemaId).get(1, TimeUnit.MINUTES);
-                        if (id > latestSchemaInfo.getSchemaId()) {
-                            latestSchemaInfo = schemaInfo;
-                        }
-                        return schemaInfo.getSchema();
+        Schema schema = schemasById.get(schemaId);
+        if (schema != null) {
+            return schema;
+        } else {
+            LOG.debug(
+                    "Schema id {} not found in cache, fetching from cluster for table: {}",
+                    schemaId,
+                    tablePath);
+            try {
+                SchemaInfo schemaInfo =
+                        admin.getTableSchema(tablePath, schemaId).get(1, TimeUnit.MINUTES);
+                if (schemaId > latestSchemaInfo.getSchemaId()) {
+                    latestSchemaInfo = schemaInfo;
+                }
+                return schemaInfo.getSchema();
+            } catch (Exception e) {
+                Throwable strippedException = stripExecutionException(e);
+                if (strippedException instanceof SchemaNotExistException) {
+                    throw (SchemaNotExistException) strippedException;
+                } else if (strippedException instanceof TableNotExistException) {
+                    throw (TableNotExistException) strippedException;
+                } else {
+                    LOG.warn("Failed to get schema for table: {}", tablePath);
+                    throw new RuntimeException(e);
+                }
+            }
+        }
+    }
 
-                    } catch (Exception e) {
-                        LOG.warn("Failed to get schema for table: " + tablePath);
-                        throw new RuntimeException(e);
-                    }
-                });
+    @Override
+    public CompletableFuture<SchemaInfo> getSchemaInfoAsync(int schemaId) {
+        Schema schema = schemasById.get(schemaId);
+        if (schema != null) {
+            return CompletableFuture.completedFuture(new SchemaInfo(schema, schemaId));
+        } else {
+            LOG.debug(
+                    "Schema id {} not found in cache, fetching from cluster for table: {}",
+                    schemaId,
+                    tablePath);
+            return admin.getTableSchema(tablePath, schemaId)
+                    .thenApply(
+                            (schemaInfo) -> {
+                                schemasById.put(schemaId, schemaInfo.getSchema());
+                                if (schemaId > latestSchemaInfo.getSchemaId()) {
+                                    latestSchemaInfo = schemaInfo;
+                                }
+                                return schemaInfo;
+                            });
+        }
     }
 
     @Override

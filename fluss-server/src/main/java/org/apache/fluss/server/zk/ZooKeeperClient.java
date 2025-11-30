@@ -536,18 +536,46 @@ public class ZooKeeperClient implements AutoCloseable {
                 "tables registration");
     }
 
-    /** Get the v1 schema for given tables in ZK. */
-    public Map<TablePath, SchemaInfo> getV1Schemas(Collection<TablePath> tablePaths)
+    /** Get the latest schema for given tables in ZK. */
+    public Map<TablePath, SchemaInfo> getLatestSchemas(Collection<TablePath> tablePaths)
             throws Exception {
-        Map<String, TablePath> path2TablePathMap =
-                tablePaths.stream()
-                        .collect(toMap(p -> SchemaZNode.path(p, DEFAULT_SCHEMA_ID), path -> path));
+        Map<String, TablePath> schemaChildren2TablePathMap =
+                tablePaths.stream().collect(toMap(SchemasZNode::path, path -> path));
+        List<ZkGetChildrenResponse> childrenResponses =
+                getChildrenInBackground(schemaChildren2TablePathMap.keySet());
+        // get the schema ids for each table
+        Map<TablePath, List<String>> schemaIdsForTables =
+                processGetChildrenResponses(
+                        childrenResponses,
+                        response -> schemaChildren2TablePathMap.get(response.getPath()),
+                        "schema children for tables");
+
+        // get the schema info for each latest schema id
+        Map<TablePath, Integer> latestSchemaIdMap = new HashMap<>();
+        Map<String, TablePath> path2TablePathMap = new HashMap<>();
+        schemaIdsForTables.forEach(
+                (tp, schemaIds) -> {
+                    int latestSchemaId =
+                            schemaIds.stream().map(Integer::parseInt).reduce(Math::max).orElse(0);
+                    latestSchemaIdMap.put(tp, latestSchemaId);
+                    path2TablePathMap.put(SchemaZNode.path(tp, latestSchemaId), tp);
+                });
+
         List<ZkGetDataResponse> responses = getDataInBackground(path2TablePathMap.keySet());
-        return processGetDataResponses(
-                responses,
-                resp -> path2TablePathMap.get(resp.getPath()),
-                b -> new SchemaInfo(SchemaZNode.decode(b), DEFAULT_SCHEMA_ID),
-                "schema");
+        Map<TablePath, Schema> schemasForTables =
+                processGetDataResponses(
+                        responses,
+                        resp -> path2TablePathMap.get(resp.getPath()),
+                        SchemaZNode::decode,
+                        "schema");
+
+        Map<TablePath, SchemaInfo> result = new HashMap<>();
+        schemasForTables.forEach(
+                (tp, schema) -> {
+                    int schemaId = latestSchemaIdMap.get(tp);
+                    result.put(tp, new SchemaInfo(schema, schemaId));
+                });
+        return result;
     }
 
     /** Update the table in ZK. */
@@ -809,8 +837,8 @@ public class ZooKeeperClient implements AutoCloseable {
     // --------------------------------------------------------------------------------------------
 
     /** Register schema to ZK metadata and return the schema id. */
-    public int registerSchema(TablePath tablePath, Schema schema) throws Exception {
-        return registerSchema(tablePath, schema, getCurrentSchemaId(tablePath) + 1);
+    public int registerFirstSchema(TablePath tablePath, Schema schema) throws Exception {
+        return registerSchema(tablePath, schema, DEFAULT_SCHEMA_ID);
     }
 
     public int registerSchema(TablePath tablePath, Schema schema, int schemaId) throws Exception {

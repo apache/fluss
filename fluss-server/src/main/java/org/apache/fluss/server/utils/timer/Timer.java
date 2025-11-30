@@ -35,7 +35,7 @@ public interface Timer {
      * Add a new task to this executor. It will be executed after the task's delay (beginning from
      * the time of submission).
      *
-     * @param timerTask the task toadd
+     * @param timerTask the task to add
      */
     void add(TimerTask timerTask);
 

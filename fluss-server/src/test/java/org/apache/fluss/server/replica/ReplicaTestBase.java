@@ -254,16 +254,16 @@ public class ReplicaTestBase {
         zkClient.registerTable(
                 DATA1_TABLE_PATH,
                 TableRegistration.newTable(DATA1_TABLE_ID, data1NonPkTableDescriptor));
-        zkClient.registerSchema(DATA1_TABLE_PATH, DATA1_SCHEMA);
+        zkClient.registerFirstSchema(DATA1_TABLE_PATH, DATA1_SCHEMA);
         zkClient.registerTable(
                 DATA1_TABLE_PATH_PK,
                 TableRegistration.newTable(DATA1_TABLE_ID_PK, DATA1_TABLE_DESCRIPTOR_PK));
-        zkClient.registerSchema(DATA1_TABLE_PATH_PK, DATA1_SCHEMA_PK);
+        zkClient.registerFirstSchema(DATA1_TABLE_PATH_PK, DATA1_SCHEMA_PK);
 
         zkClient.registerTable(
                 DATA2_TABLE_PATH,
                 TableRegistration.newTable(DATA2_TABLE_ID, DATA2_TABLE_DESCRIPTOR));
-        zkClient.registerSchema(DATA2_TABLE_PATH, DATA2_SCHEMA);
+        zkClient.registerFirstSchema(DATA2_TABLE_PATH, DATA2_SCHEMA);
     }
 
     protected long registerTableInZkClient(
@@ -282,7 +282,7 @@ public class ReplicaTestBase {
             zkClient.deleteTable(tablePath);
         }
         zkClient.registerTable(tablePath, TableRegistration.newTable(tableId, tableDescriptor));
-        zkClient.registerSchema(tablePath, schema);
+        zkClient.registerFirstSchema(tablePath, schema);
         return tableId;
     }
 
@@ -342,7 +342,7 @@ public class ReplicaTestBase {
     }
 
     // TODO this is only for single tablet server unit test.
-    // TODO addColumn more test cases for partition table which make leader by this method.
+    // TODO add more test cases for partition table which make leader by this method.
     protected void makeLogTableAsLeader(int bucketId) {
         makeLogTableAsLeader(new TableBucket(DATA1_TABLE_ID, bucketId), false);
     }
@@ -375,7 +375,7 @@ public class ReplicaTestBase {
     }
 
     // TODO this is only for single tablet server unit test.
-    // TODO addColumn more test cases for partition table which make leader by this method.
+    // TODO add more test cases for partition table which make leader by this method.
     protected void makeKvTableAsLeader(long tableId, TablePath tablePath, int bucketId) {
         makeKvTableAsLeader(
                 new TableBucket(tableId, bucketId), tablePath, INITIAL_LEADER_EPOCH, false);

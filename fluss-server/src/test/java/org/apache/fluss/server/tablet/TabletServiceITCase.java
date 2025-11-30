@@ -177,7 +177,7 @@ public class TabletServiceITCase {
     }
 
     @Test
-    @Disabled("TODO: addColumn back in https://github.com/apache/fluss/issues/771")
+    @Disabled("TODO: add back in https://github.com/apache/fluss/issues/771")
     void testProduceLogResponseReturnInOrder() throws Exception {
         long tableId =
                 createTable(
@@ -330,11 +330,11 @@ public class TabletServiceITCase {
                 tableId,
                 0,
                 Errors.INVALID_COLUMN_PROJECTION.code(),
-                "Projected field id 2 is not contains in [0, 1]");
+                "Projected field id 2 is not contained in [0, 1]");
     }
 
     @Test
-    @Disabled("TODO: addColumn back in https://github.com/apache/fluss/issues/777")
+    @Disabled("TODO: add back in https://github.com/apache/fluss/issues/777")
     void testFetchLogWithMinFetchSizeAndTimeout() throws Exception {
         long tableId =
                 createTable(FLUSS_CLUSTER_EXTENSION, DATA1_TABLE_PATH, DATA1_TABLE_DESCRIPTOR);

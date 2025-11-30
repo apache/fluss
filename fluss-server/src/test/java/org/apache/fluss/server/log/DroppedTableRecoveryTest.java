@@ -109,7 +109,7 @@ final class DroppedTableRecoveryTest extends LogTestBase {
         ZOO_KEEPER_EXTENSION_WRAPPER.getCustomExtension().cleanupRoot();
         zkClient.registerTable(
                 tablePath, TableRegistration.newTable(DATA1_TABLE_ID, DATA1_TABLE_DESCRIPTOR));
-        zkClient.registerSchema(tablePath, DATA1_SCHEMA);
+        zkClient.registerFirstSchema(tablePath, DATA1_SCHEMA);
     }
 
     @AfterEach

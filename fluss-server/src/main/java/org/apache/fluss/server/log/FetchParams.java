@@ -21,6 +21,7 @@ import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.compression.ArrowCompressionInfo;
 import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.record.FileLogProjection;
+import org.apache.fluss.record.ProjectionPushdownCache;
 import org.apache.fluss.rpc.messages.FetchLogRequest;
 
 import javax.annotation.Nullable;
@@ -66,7 +67,7 @@ public final class FetchParams {
 
     private final int minFetchBytes;
     private final long maxWaitMs;
-    // TODO:add more params like epoch etc.
+    // TODO: add more params like epoch etc.
 
     public FetchParams(int replicaId, int maxFetchBytes) {
         this(replicaId, true, maxFetchBytes, DEFAULT_MIN_FETCH_BYTES, DEFAULT_MAX_WAIT_MS);
@@ -99,13 +100,14 @@ public final class FetchParams {
             int maxFetchBytes,
             SchemaGetter schemaGetter,
             ArrowCompressionInfo compressionInfo,
-            @Nullable int[] projectedFields) {
+            @Nullable int[] projectedFields,
+            ProjectionPushdownCache projectionCache) {
         this.fetchOffset = fetchOffset;
         this.maxFetchBytes = maxFetchBytes;
         if (projectedFields != null) {
             projectionEnabled = true;
             if (fileLogProjection == null) {
-                fileLogProjection = new FileLogProjection();
+                fileLogProjection = new FileLogProjection(projectionCache);
             }
 
             fileLogProjection.setCurrentProjection(
