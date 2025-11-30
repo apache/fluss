@@ -31,6 +31,7 @@ import org.apache.fluss.record.LogRecordBatch;
 import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.rpc.protocol.Errors;
 
+import org.apache.fluss.utils.AbstractIterator;
 import org.apache.fluss.utils.CloseableIterator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -38,12 +39,10 @@ import org.slf4j.LoggerFactory;
 import javax.annotation.Nullable;
 import javax.annotation.concurrent.ThreadSafe;
 
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
-import java.util.NoSuchElementException;
 
 /* This file is based on source code of Apache Kafka Project (https://kafka.apache.org/), licensed by the Apache
  * Software Foundation (ASF) under the Apache License, Version 2.0. See the NOTICE file distributed with this work for
@@ -139,7 +138,7 @@ public class LogFetchCollector {
                         offset,
                         tb);
 
-                return new OffsetUpdatingIterator(nextInLineFetch, logScannerStatus);
+                return new ScanRecordIterator(nextInLineFetch, logScannerStatus);
             } else {
                 // these records aren't next in line based on the last consumed offset, ignore them
                 // they must be from an obsolete request
@@ -155,65 +154,6 @@ public class LogFetchCollector {
         nextInLineFetch.drain();
 
         return CloseableIterator.emptyIterator();
-    }
-
-    private class OffsetUpdatingIterator implements CloseableIterator<ScanRecord> {
-        final CompletedFetch completedFetch;
-        final CloseableIterator<ScanRecord> delegate;
-        final LogScannerStatus logScannerStatus;
-        boolean initializationAttempted;
-
-        OffsetUpdatingIterator(CompletedFetch completedFetch, LogScannerStatus logScannerStatus) {
-            this.completedFetch = completedFetch;
-            this.delegate = completedFetch.toRecords();
-            this.logScannerStatus = logScannerStatus;
-        }
-
-        @Override
-        public void close() {
-            delegate.close();
-        }
-
-        @Override
-        public boolean hasNext() {
-            if (isUnsubscribed() || !isInitializedSuccessfully()) {
-                return false;
-            }
-
-            return delegate.hasNext();
-        }
-
-        @Override
-        public ScanRecord next() {
-            if (isUnsubscribed() || !isInitializedSuccessfully()) {
-                throw new NoSuchElementException();
-            }
-
-            Long offset = logScannerStatus.getBucketOffset(completedFetch.tableBucket);
-            if (completedFetch.nextFetchOffset() > offset) {
-                LOG.trace(
-                        "Updating fetch offset from {} to {} for bucket {} and returning records iterator",
-                        offset,
-                        completedFetch.nextFetchOffset(),
-                        completedFetch.tableBucket);
-                logScannerStatus.updateOffset(completedFetch.tableBucket, completedFetch.nextFetchOffset());
-            }
-
-            return delegate.next();
-        }
-
-        private boolean isUnsubscribed() {
-            return logScannerStatus.getBucketOffset(completedFetch.tableBucket) == null;
-        }
-
-        private boolean isInitializedSuccessfully() {
-            if (!initializationAttempted) {
-                initializationAttempted = true;
-                initialize(completedFetch);
-            }
-
-            return completedFetch.isInitialized();
-        }
     }
 
     /** Initialize a {@link CompletedFetch} object. */
@@ -312,6 +252,62 @@ public class LogFetchCollector {
                     String.format(
                             "Unexpected error code %s while fetching at offset %s from bucket %s: %s",
                             error, fetchOffset, tb, error.exception(errorMessage)));
+        }
+    }
+
+    private class ScanRecordIterator extends AbstractIterator<ScanRecord> implements CloseableIterator<ScanRecord> {
+        final CompletedFetch completedFetch;
+        final LogScannerStatus logScannerStatus;
+
+        ScanRecordIterator(CompletedFetch completedFetch, LogScannerStatus logScannerStatus) {
+            this.completedFetch = completedFetch;
+            this.logScannerStatus = logScannerStatus;
+        }
+
+        @Override
+        public void close() {
+            allDone();
+            completedFetch.drain();
+        }
+
+        @Override
+        public ScanRecord next() {
+            Long offset = logScannerStatus.getBucketOffset(completedFetch.tableBucket);
+            if (completedFetch.nextFetchOffset() > offset) {
+                LOG.trace(
+                        "Updating fetch offset from {} to {} for bucket {} and returning records iterator",
+                        offset,
+                        completedFetch.nextFetchOffset(),
+                        completedFetch.tableBucket);
+                logScannerStatus.updateOffset(completedFetch.tableBucket, completedFetch.nextFetchOffset());
+            }
+
+            return super.next();
+        }
+
+        @Override
+        protected ScanRecord makeNext() {
+            if (isUnsubscribed()) {
+                close();
+                return null;
+            }
+
+            ScanRecord scanRecord = completedFetch.fetchRecord();
+
+            if (scanRecord == null) {
+                close();
+            }
+
+            return scanRecord;
+        }
+
+        @Override
+        protected boolean initialize() {
+            return LogFetchCollector.this.initialize(completedFetch) != null;
+        }
+
+        private boolean isUnsubscribed() {
+            return logScannerStatus.getBucketOffset(completedFetch.tableBucket) == null;
         }
     }
 }

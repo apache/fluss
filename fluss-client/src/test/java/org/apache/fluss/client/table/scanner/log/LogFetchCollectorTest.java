@@ -104,8 +104,7 @@ public class LogFetchCollectorTest {
 
         CloseableIterator<ScanRecord> records = bucketAndRecords.get(tb);
         assertThat(Streams.stream(Iterators.limit(records, 10)).count()).isEqualTo(10L);
-        boolean actual = records.hasNext();
-        assertThat(actual).isFalse();
+        assertThat(records.hasNext()).isFalse();
         assertThatExceptionOfType(NoSuchElementException.class).isThrownBy(records::next);
 
         // When we collected the data from the buffer, this will cause the completed fetch to get

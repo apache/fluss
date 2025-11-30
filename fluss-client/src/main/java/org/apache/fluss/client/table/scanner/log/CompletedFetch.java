@@ -29,7 +29,6 @@ import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.rpc.messages.FetchLogRequest;
 import org.apache.fluss.rpc.protocol.ApiError;
-import org.apache.fluss.utils.AbstractIterator;
 import org.apache.fluss.utils.CloseableIterator;
 
 import org.slf4j.Logger;
@@ -136,7 +135,7 @@ abstract class CompletedFetch {
         }
     }
 
-    private ScanRecord fetchRecord() {
+    public ScanRecord fetchRecord() {
         if (corruptLastRecord) {
             throw new FetchException(
                     "Received exception when fetching the next record from "
@@ -235,36 +234,6 @@ abstract class CompletedFetch {
             // release underlying resources
             records.close();
             records = null;
-        }
-    }
-
-    /**
-     * The {@link LogRecordBatch batch} of {@link LogRecord records} is converted to a {@link CloseableIterator
-     * closeableIterator} of {@link ScanRecord scan records} and returned.
-     *
-     * @return {@link CloseableIterator CloseableIterator} of {@link ScanRecord scan records}
-     */
-    public CloseableIterator<ScanRecord> toRecords() {
-        return new ScanRecordIterator();
-    }
-
-    private class ScanRecordIterator extends AbstractIterator<ScanRecord> implements CloseableIterator<ScanRecord> {
-        @Override
-        public void close() {
-            // TODO: Decide maybeCloseRecordStream() vs drain()
-            drain();
-            allDone();
-        }
-
-        @Override
-        protected ScanRecord makeNext() {
-            ScanRecord scanRecord = fetchRecord();
-
-            if (scanRecord == null) {
-                close();
-            }
-
-            return scanRecord;
         }
     }
 }

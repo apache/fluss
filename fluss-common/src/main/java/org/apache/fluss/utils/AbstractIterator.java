@@ -28,18 +28,25 @@ import java.util.NoSuchElementException;
 public abstract class AbstractIterator<T> implements Iterator<T> {
 
     private enum State {
+        UNINITIALIZED,
+        INITIALIZATION_FAILED,
         READY,
         NOT_READY,
         DONE,
         FAILED
     }
 
-    private State state = State.NOT_READY;
+    private State state = State.UNINITIALIZED;
     private T next;
 
     @Override
     public boolean hasNext() {
+        maybeInitialize();
         switch (state) {
+            case UNINITIALIZED:
+                throw new IllegalArgumentException("Iterator is uninitialized");
+            case INITIALIZATION_FAILED:
+                throw new IllegalArgumentException("Iterator initialization failed");
             case FAILED:
                 throw new IllegalStateException("Iterator is in failed state");
             case DONE:
@@ -90,6 +97,20 @@ public abstract class AbstractIterator<T> implements Iterator<T> {
         } else {
             state = State.READY;
             return true;
+        }
+    }
+
+    protected boolean initialize() {
+        return true;
+    }
+
+    private void maybeInitialize() {
+        if (state == State.UNINITIALIZED) {
+            if (initialize()) {
+                state = State.NOT_READY;
+            } else {
+                state = State.INITIALIZATION_FAILED;
+            }
         }
     }
 }
