@@ -26,6 +26,7 @@ import org.apache.fluss.flink.sink.FlinkTableSink;
 import org.apache.fluss.flink.source.FlinkTableSource;
 import org.apache.fluss.flink.utils.FlinkConnectorOptionsUtils;
 import org.apache.fluss.metadata.DataLakeFormat;
+import org.apache.fluss.metadata.MergeEngineType;
 import org.apache.fluss.metadata.TablePath;
 
 import org.apache.flink.api.common.RuntimeExecutionMode;
@@ -176,6 +177,10 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
 
         RowType rowType = (RowType) context.getPhysicalRowDataType().getLogicalType();
 
+        MergeEngineType mergeEngineType =
+                tableOptions.get(toFlinkOption(ConfigOptions.TABLE_MERGE_ENGINE));
+        boolean sinkIgnoreDelete = tableOptions.get(FlinkConnectorOptions.SINK_IGNORE_DELETE);
+
         return new FlinkTableSink(
                 toFlussTablePath(context.getObjectIdentifier()),
                 toFlussClientConfig(
@@ -184,9 +189,9 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
                 context.getPrimaryKeyIndexes(),
                 partitionKeys,
                 isStreamingMode,
-                tableOptions.get(toFlinkOption(ConfigOptions.TABLE_MERGE_ENGINE)),
+                mergeEngineType,
                 tableOptions.get(toFlinkOption(TABLE_DATALAKE_FORMAT)),
-                tableOptions.get(FlinkConnectorOptions.SINK_IGNORE_DELETE),
+                sinkIgnoreDelete,
                 tableOptions.get(toFlinkOption(TABLE_DELETE_BEHAVIOR)),
                 tableOptions.get(FlinkConnectorOptions.BUCKET_NUMBER),
                 getBucketKeys(tableOptions),

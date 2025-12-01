@@ -192,6 +192,10 @@ public class FlinkTableSink
     }
 
     private FlinkSink<RowData> getFlinkSink(int[] targetColumnIndexes) {
+        // For aggregate merge engine, ignore UPDATE_BEFORE to prevent incorrect zeroing of
+        // aggregated state, while still allowing DELETE operations for intentional clearing
+        boolean ignoreUpdateBefore = mergeEngineType == MergeEngineType.AGGREGATE;
+
         FlinkSink.SinkWriterBuilder<? extends FlinkSinkWriter, RowData> flinkSinkWriterBuilder =
                 (primaryKeyIndexes.length > 0)
                         ? new FlinkSink.UpsertSinkWriterBuilder<>(
@@ -204,7 +208,8 @@ public class FlinkTableSink
                                 partitionKeys,
                                 lakeFormat,
                                 shuffleByBucketId,
-                                new RowDataSerializationSchema(false, sinkIgnoreDelete))
+                                new RowDataSerializationSchema(
+                                        false, sinkIgnoreDelete, ignoreUpdateBefore))
                         : new FlinkSink.AppendSinkWriterBuilder<>(
                                 tablePath,
                                 flussConfig,
@@ -214,7 +219,8 @@ public class FlinkTableSink
                                 partitionKeys,
                                 lakeFormat,
                                 shuffleByBucketId,
-                                new RowDataSerializationSchema(true, sinkIgnoreDelete));
+                                new RowDataSerializationSchema(
+                                        true, sinkIgnoreDelete, ignoreUpdateBefore));
 
         return new FlinkSink<>(flinkSinkWriterBuilder);
     }
