@@ -24,6 +24,10 @@ import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.client.utils.ClientRpcMessageUtils;
 import org.apache.fluss.cluster.Cluster;
 import org.apache.fluss.cluster.ServerNode;
+import org.apache.fluss.cluster.rebalance.GoalType;
+import org.apache.fluss.cluster.rebalance.RebalancePlanForBucket;
+import org.apache.fluss.cluster.rebalance.RebalanceResultForBucket;
+import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.config.cluster.AlterConfig;
 import org.apache.fluss.config.cluster.ConfigEntry;
 import org.apache.fluss.exception.LeaderNotAvailableException;
@@ -44,8 +48,10 @@ import org.apache.fluss.rpc.RpcClient;
 import org.apache.fluss.rpc.gateway.AdminGateway;
 import org.apache.fluss.rpc.gateway.AdminReadOnlyGateway;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
+import org.apache.fluss.rpc.messages.AddServerTagRequest;
 import org.apache.fluss.rpc.messages.AlterClusterConfigsRequest;
 import org.apache.fluss.rpc.messages.AlterTableRequest;
+import org.apache.fluss.rpc.messages.CancelRebalanceRequest;
 import org.apache.fluss.rpc.messages.CreateAclsRequest;
 import org.apache.fluss.rpc.messages.CreateDatabaseRequest;
 import org.apache.fluss.rpc.messages.CreateTableRequest;
@@ -72,6 +78,8 @@ import org.apache.fluss.rpc.messages.PbAlterConfig;
 import org.apache.fluss.rpc.messages.PbListOffsetsRespForBucket;
 import org.apache.fluss.rpc.messages.PbPartitionSpec;
 import org.apache.fluss.rpc.messages.PbTablePath;
+import org.apache.fluss.rpc.messages.RebalanceRequest;
+import org.apache.fluss.rpc.messages.RemoveServerTagRequest;
 import org.apache.fluss.rpc.messages.TableExistsRequest;
 import org.apache.fluss.rpc.messages.TableExistsResponse;
 import org.apache.fluss.rpc.protocol.ApiError;
@@ -534,6 +542,40 @@ public class FlussAdmin implements Admin {
                         });
 
         return future;
+    }
+
+    @Override
+    public CompletableFuture<Void> addServerTag(List<Integer> tabletServers, ServerTag serverTag) {
+        AddServerTagRequest request = new AddServerTagRequest().setServerTag(serverTag.value);
+        tabletServers.forEach(request::addServerId);
+        return gateway.addServerTag(request).thenApply(r -> null);
+    }
+
+    @Override
+    public CompletableFuture<Void> removeServerTag(
+            List<Integer> tabletServers, ServerTag serverTag) {
+        RemoveServerTagRequest request = new RemoveServerTagRequest().setServerTag(serverTag.value);
+        tabletServers.forEach(request::addServerId);
+        return gateway.removeServerTag(request).thenApply(r -> null);
+    }
+
+    @Override
+    public CompletableFuture<Map<TableBucket, RebalancePlanForBucket>> rebalance(
+            List<GoalType> priorityGoals, boolean dryRun) {
+        RebalanceRequest request = new RebalanceRequest().setDryRun(dryRun);
+        priorityGoals.forEach(goal -> request.addGoal(goal.value));
+        return gateway.rebalance(request).thenApply(ClientRpcMessageUtils::toRebalancePlan);
+    }
+
+    @Override
+    public CompletableFuture<Map<TableBucket, RebalanceResultForBucket>> listRebalanceProcess() {
+        throw new UnsupportedOperationException("Support soon");
+    }
+
+    @Override
+    public CompletableFuture<Void> cancelRebalance() {
+        CancelRebalanceRequest request = new CancelRebalanceRequest();
+        return gateway.cancelRebalance(request).thenApply(r -> null);
     }
 
     @Override
