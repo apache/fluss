@@ -52,6 +52,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutionException;
@@ -216,17 +217,19 @@ public abstract class ClientToServerITCaseBase {
                 logScanner.subscribeFromBeginning(partitionId, 0);
             }
             while (scanRecordCount < totalRecords) {
-                ScanRecords scanRecords = logScanner.poll(Duration.ofSeconds(1));
-                for (TableBucket scanBucket : scanRecords.buckets()) {
-                    List<ScanRecord> records = scanRecords.records(scanBucket);
-                    for (ScanRecord scanRecord : records) {
-                        actualRows
-                                .computeIfAbsent(
-                                        scanBucket.getPartitionId(), k -> new ArrayList<>())
-                                .add(scanRecord.getRow());
+                try (ScanRecords scanRecords = logScanner.poll(Duration.ofSeconds(1))) {
+                    for (TableBucket scanBucket : scanRecords.buckets()) {
+                        Iterator<ScanRecord> iterator = scanRecords.records(scanBucket);
+                        while (iterator.hasNext()) {
+                            ScanRecord scanRecord = iterator.next();
+                            actualRows
+                                    .computeIfAbsent(
+                                            scanBucket.getPartitionId(), k -> new ArrayList<>())
+                                    .add(scanRecord.getRow());
+                            scanRecordCount++;
+                        }
                     }
                 }
-                scanRecordCount += scanRecords.count();
             }
         }
         assertThat(scanRecordCount).isEqualTo(totalRecords);

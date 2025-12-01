@@ -20,14 +20,13 @@ package org.apache.fluss.client.table.scanner.log;
 import org.apache.fluss.client.table.scanner.ScanRecord;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.record.ChangeType;
+import org.apache.fluss.utils.CloseableIterator;
 
 import org.junit.jupiter.api.Test;
 
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
-import java.util.List;
 import java.util.Map;
 
 import static org.apache.fluss.testutils.DataTestUtils.row;
@@ -37,15 +36,18 @@ import static org.assertj.core.api.Assertions.assertThat;
 public class ScanRecordsTest {
     @Test
     void iterator() {
-        Map<TableBucket, List<ScanRecord>> records = new LinkedHashMap<>();
+        Map<TableBucket, CloseableIterator<ScanRecord>> records = new LinkedHashMap<>();
         long tableId = 0;
-        records.put(new TableBucket(tableId, 0), new ArrayList<>());
+        records.put(new TableBucket(tableId, 0), CloseableIterator.emptyIterator());
         ScanRecord record1 = new ScanRecord(0L, 1000L, ChangeType.INSERT, row(1, "a"));
         ScanRecord record2 = new ScanRecord(1L, 1000L, ChangeType.UPDATE_BEFORE, row(1, "a"));
         ScanRecord record3 = new ScanRecord(2L, 1000L, ChangeType.UPDATE_AFTER, row(1, "a1"));
         ScanRecord record4 = new ScanRecord(3L, 1000L, ChangeType.DELETE, row(1, "a1"));
-        records.put(new TableBucket(tableId, 1), Arrays.asList(record1, record2, record3, record4));
-        records.put(new TableBucket(tableId, 2), new ArrayList<>());
+        records.put(
+                new TableBucket(tableId, 1),
+                CloseableIterator.wrap(
+                        Arrays.asList(record1, record2, record3, record4).iterator()));
+        records.put(new TableBucket(tableId, 2), CloseableIterator.emptyIterator());
 
         ScanRecords scanRecords = new ScanRecords(records);
         Iterator<ScanRecord> iter = scanRecords.iterator();

@@ -35,15 +35,12 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.Closeable;
-import java.util.ArrayList;
-import java.util.Collections;
 import java.util.Iterator;
-import java.util.List;
 
 /**
  * {@link CompletedFetch} represents the result that was returned from the tablet server via a
  * {@link FetchLogRequest}, which can be a {@link LogRecordBatch} or remote log segments path. It
- * contains logic to maintain state between calls to {@link #fetchRecords(int)}.
+ * contains logic to maintain state between calls to {@link #records}.
  */
 @Internal
 abstract class CompletedFetch {
@@ -93,8 +90,6 @@ abstract class CompletedFetch {
     }
 
     // TODO: optimize this to avoid deep copying the record.
-    //  refactor #fetchRecords to return an iterator which lazily deserialize
-    //  from underlying record stream and arrow buffer.
     ScanRecord toScanRecord(LogRecord record) {
         GenericRow newRow = new GenericRow(selectedFieldGetters.length);
         InternalRow internalRow = record.getRow();
@@ -124,8 +119,8 @@ abstract class CompletedFetch {
     /**
      * Draining a {@link CompletedFetch} will signal that the data has been consumed and the
      * underlying resources are closed. This is somewhat analogous to {@link Closeable#close()
-     * closing}, though no error will result if a caller invokes {@link #fetchRecords(int)}; an
-     * empty {@link List list} will be returned instead.
+     * closing}, subsequent {@link CloseableIterator#hasNext()} call on the closeable iterator
+     * returned by {@link CompletedFetch#records} will return false.
      */
     void drain() {
         if (!isConsumed) {
@@ -140,15 +135,7 @@ abstract class CompletedFetch {
         }
     }
 
-    /**
-     * The {@link LogRecordBatch batch} of {@link LogRecord records} is converted to a {@link List
-     * list} of {@link ScanRecord scan records} and returned.
-     *
-     * @param maxRecords The number of records to return; the number returned may be {@code 0 <=
-     *     maxRecords}
-     * @return {@link ScanRecord scan records}
-     */
-    public List<ScanRecord> fetchRecords(int maxRecords) {
+    public ScanRecord fetchRecord() {
         if (corruptLastRecord) {
             throw new FetchException(
                     "Received exception when fetching the next record from "
@@ -158,41 +145,35 @@ abstract class CompletedFetch {
         }
 
         if (isConsumed) {
-            return Collections.emptyList();
+            return null;
         }
 
-        List<ScanRecord> scanRecords = new ArrayList<>();
         try {
-            for (int i = 0; i < maxRecords; i++) {
-                // Only move to next record if there was no exception in the last fetch.
-                if (cachedRecordException == null) {
-                    corruptLastRecord = true;
-                    lastRecord = nextFetchedRecord();
-                    corruptLastRecord = false;
-                }
-
-                if (lastRecord == null) {
-                    break;
-                }
-
-                ScanRecord record = toScanRecord(lastRecord);
-                scanRecords.add(record);
-                recordsRead++;
-                nextFetchOffset = lastRecord.logOffset() + 1;
-                cachedRecordException = null;
+            // Only move to next record if there was no exception in the last fetch.
+            if (cachedRecordException == null) {
+                corruptLastRecord = true;
+                lastRecord = nextFetchedRecord();
+                corruptLastRecord = false;
             }
+
+            if (lastRecord == null) {
+                return null;
+            }
+
+            ScanRecord record = toScanRecord(lastRecord);
+
+            recordsRead++;
+            nextFetchOffset = lastRecord.logOffset() + 1;
+            cachedRecordException = null;
+            return record;
         } catch (Exception e) {
             cachedRecordException = e;
-            if (scanRecords.isEmpty()) {
-                throw new FetchException(
-                        "Received exception when fetching the next record from "
-                                + tableBucket
-                                + ". If needed, please back to past the record to continue scanning.",
-                        e);
-            }
+            throw new FetchException(
+                    "Received exception when fetching the next record from "
+                            + tableBucket
+                            + ". If needed, please back to past the record to continue scanning.",
+                    e);
         }
-
-        return scanRecords;
     }
 
     private LogRecord nextFetchedRecord() throws Exception {

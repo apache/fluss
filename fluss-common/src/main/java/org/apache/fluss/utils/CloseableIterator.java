@@ -18,8 +18,10 @@
 package org.apache.fluss.utils;
 
 import java.io.Closeable;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.Iterator;
+import java.util.NoSuchElementException;
 
 /**
  * Iterators that need to be closed in order to release resources should implement this interface.
@@ -49,6 +51,68 @@ public interface CloseableIterator<T> extends Iterator<T>, Closeable {
             @Override
             public void remove() {
                 inner.remove();
+            }
+        };
+    }
+
+    // TODO Test case
+    static <R> CloseableIterator<R> concatenate(Collection<CloseableIterator<R>> inners) {
+        return new CloseableIterator<>() {
+            Iterator<CloseableIterator<R>> iterator = inners.stream().iterator();
+            CloseableIterator<R> current;
+
+            private Exception tryClose(CloseableIterator<R> ci, Exception previousException) {
+                if (ci == null) {
+                    return previousException;
+                }
+
+                try {
+                    ci.close();
+                } catch (Exception e) {
+                    previousException = ExceptionUtils.firstOrSuppressed(e, previousException);
+                }
+
+                return previousException;
+            }
+
+            @Override
+            public void close() {
+                Exception suppressed = tryClose(current, null);
+
+                while (iterator.hasNext()) {
+                    current = iterator.next();
+                    suppressed = tryClose(current, suppressed);
+                }
+
+                // TODO
+                if (suppressed != null) {
+                    throw new RuntimeException(suppressed);
+                }
+            }
+
+            @Override
+            public boolean hasNext() {
+                while (current == null || !current.hasNext()) {
+                    if (current != null) {
+                        current.close();
+                    }
+
+                    if (!iterator.hasNext()) {
+                        return false;
+                    }
+
+                    current = iterator.next();
+                }
+                return true;
+            }
+
+            @Override
+            public R next() {
+                if (!hasNext()) {
+                    throw new NoSuchElementException();
+                }
+
+                return current.next();
             }
         };
     }

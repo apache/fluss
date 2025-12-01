@@ -20,7 +20,6 @@ package org.apache.fluss.client.table.scanner.log;
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.client.table.scanner.ScanRecord;
-import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.AuthorizationException;
 import org.apache.fluss.exception.FetchException;
@@ -31,6 +30,8 @@ import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.record.LogRecordBatch;
 import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.rpc.protocol.Errors;
+import org.apache.fluss.utils.AbstractIterator;
+import org.apache.fluss.utils.CloseableIterator;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -38,9 +39,8 @@ import org.slf4j.LoggerFactory;
 import javax.annotation.Nullable;
 import javax.annotation.concurrent.ThreadSafe;
 
-import java.util.ArrayList;
-import java.util.Collections;
 import java.util.HashMap;
+import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 
@@ -60,7 +60,6 @@ public class LogFetchCollector {
 
     private final TablePath tablePath;
     private final LogScannerStatus logScannerStatus;
-    private final int maxPollRecords;
     private final MetadataUpdater metadataUpdater;
 
     public LogFetchCollector(
@@ -70,7 +69,6 @@ public class LogFetchCollector {
             MetadataUpdater metadataUpdater) {
         this.tablePath = tablePath;
         this.logScannerStatus = logScannerStatus;
-        this.maxPollRecords = conf.getInt(ConfigOptions.CLIENT_SCANNER_LOG_MAX_POLL_RECORDS);
         this.metadataUpdater = metadataUpdater;
     }
 
@@ -83,70 +81,50 @@ public class LogFetchCollector {
      * @throws LogOffsetOutOfRangeException If there is OffsetOutOfRange error in fetchResponse and
      *     the defaultResetPolicy is NONE
      */
-    public Map<TableBucket, List<ScanRecord>> collectFetch(final LogFetchBuffer logFetchBuffer) {
-        Map<TableBucket, List<ScanRecord>> fetched = new HashMap<>();
-        int recordsRemaining = maxPollRecords;
+    public Map<TableBucket, CloseableIterator<ScanRecord>> collectFetch(
+            final LogFetchBuffer logFetchBuffer) {
+        Map<TableBucket, List<CloseableIterator<ScanRecord>>> fetched = new HashMap<>();
 
-        try {
-            while (recordsRemaining > 0) {
-                CompletedFetch nextInLineFetch = logFetchBuffer.nextInLineFetch();
-                if (nextInLineFetch == null || nextInLineFetch.isConsumed()) {
-                    CompletedFetch completedFetch = logFetchBuffer.peek();
-                    if (completedFetch == null) {
-                        break;
-                    }
+        while (!logFetchBuffer.isEmpty()) {
+            CompletedFetch completedFetch = logFetchBuffer.peek();
+            logFetchBuffer.setNextInLineFetch(completedFetch);
 
-                    if (!completedFetch.isInitialized()) {
-                        try {
-                            logFetchBuffer.setNextInLineFetch(initialize(completedFetch));
-                        } catch (Exception e) {
-                            // Remove a completedFetch upon a parse with exception if
-                            // (1) it contains no records, and
-                            // (2) there are no fetched records with actual content preceding this
-                            // exception.
-                            if (fetched.isEmpty() && completedFetch.sizeInBytes == 0) {
-                                logFetchBuffer.poll();
-                            }
-                            throw e;
-                        }
-                    } else {
-                        logFetchBuffer.setNextInLineFetch(completedFetch);
-                    }
-
-                    logFetchBuffer.poll();
-                } else {
-                    List<ScanRecord> records = fetchRecords(nextInLineFetch, recordsRemaining);
-                    if (!records.isEmpty()) {
-                        TableBucket tableBucket = nextInLineFetch.tableBucket;
-                        List<ScanRecord> currentRecords = fetched.get(tableBucket);
-                        if (currentRecords == null) {
-                            fetched.put(tableBucket, records);
-                        } else {
-                            // this case shouldn't usually happen because we only send one fetch at
-                            // a time per bucket, but it might conceivably happen in some rare
-                            // cases (such as bucket leader changes). we have to copy to a new list
-                            // because the old one may be immutable
-                            List<ScanRecord> newScanRecords =
-                                    new ArrayList<>(records.size() + currentRecords.size());
-                            newScanRecords.addAll(currentRecords);
-                            newScanRecords.addAll(records);
-                            fetched.put(tableBucket, newScanRecords);
-                        }
-
-                        recordsRemaining -= records.size();
-                    }
-                }
+            if (completedFetch == null) {
+                break;
             }
-        } catch (FetchException e) {
-            if (fetched.isEmpty()) {
-                throw e;
+
+            // On error, return successfully fetched records and let next collect surface error
+            if (completedFetch.error.isFailure() && !fetched.isEmpty()) {
+                break;
             }
+
+            logFetchBuffer.poll();
+
+            // Filters out unsubscribed bucket
+            if (logScannerStatus.getBucketOffset(completedFetch.tableBucket) == null) {
+                continue;
+            }
+
+            if (completedFetch.error.isFailure()) {
+                // Initialize to trigger error handling
+                initialize(completedFetch);
+                break;
+            }
+
+            fetched.computeIfAbsent(completedFetch.tableBucket, tb -> new LinkedList<>())
+                    .add(fetchRecords(completedFetch));
         }
 
-        return fetched;
+        Map<TableBucket, CloseableIterator<ScanRecord>> output = new HashMap<>();
+        for (Map.Entry<TableBucket, List<CloseableIterator<ScanRecord>>> entry :
+                fetched.entrySet()) {
+            output.put(entry.getKey(), CloseableIterator.concatenate(entry.getValue()));
+        }
+
+        return output;
     }
 
-    private List<ScanRecord> fetchRecords(CompletedFetch nextInLineFetch, int maxRecords) {
+    private CloseableIterator<ScanRecord> fetchRecords(CompletedFetch nextInLineFetch) {
         TableBucket tb = nextInLineFetch.tableBucket;
         Long offset = logScannerStatus.getBucketOffset(tb);
         if (offset == null) {
@@ -157,23 +135,12 @@ public class LogFetchCollector {
                     nextInLineFetch.nextFetchOffset());
         } else {
             if (nextInLineFetch.nextFetchOffset() == offset) {
-                List<ScanRecord> records = nextInLineFetch.fetchRecords(maxRecords);
                 LOG.trace(
-                        "Returning {} fetched records at offset {} for assigned bucket {}.",
-                        records.size(),
+                        "Returning fetched records iterator at offset {} for assigned bucket {}.",
                         offset,
                         tb);
 
-                if (nextInLineFetch.nextFetchOffset() > offset) {
-                    LOG.trace(
-                            "Updating fetch offset from {} to {} for bucket {} and returning {} records from poll()",
-                            offset,
-                            nextInLineFetch.nextFetchOffset(),
-                            tb,
-                            records.size());
-                    logScannerStatus.updateOffset(tb, nextInLineFetch.nextFetchOffset());
-                }
-                return records;
+                return new ScanRecordIterator(nextInLineFetch, logScannerStatus);
             } else {
                 // these records aren't next in line based on the last consumed offset, ignore them
                 // they must be from an obsolete request
@@ -188,7 +155,7 @@ public class LogFetchCollector {
         LOG.trace("Draining fetched records for bucket {}", nextInLineFetch.tableBucket);
         nextInLineFetch.drain();
 
-        return Collections.emptyList();
+        return CloseableIterator.emptyIterator();
     }
 
     /** Initialize a {@link CompletedFetch} object. */
@@ -287,6 +254,64 @@ public class LogFetchCollector {
                     String.format(
                             "Unexpected error code %s while fetching at offset %s from bucket %s: %s",
                             error, fetchOffset, tb, error.exception(errorMessage)));
+        }
+    }
+
+    private class ScanRecordIterator extends AbstractIterator<ScanRecord>
+            implements CloseableIterator<ScanRecord> {
+        final CompletedFetch completedFetch;
+        final LogScannerStatus logScannerStatus;
+
+        ScanRecordIterator(CompletedFetch completedFetch, LogScannerStatus logScannerStatus) {
+            this.completedFetch = completedFetch;
+            this.logScannerStatus = logScannerStatus;
+        }
+
+        @Override
+        public void close() {
+            allDone();
+            completedFetch.drain();
+        }
+
+        @Override
+        public ScanRecord next() {
+            Long offset = logScannerStatus.getBucketOffset(completedFetch.tableBucket);
+            if (completedFetch.nextFetchOffset() > offset) {
+                LOG.trace(
+                        "Updating fetch offset from {} to {} for bucket {} and returning records iterator",
+                        offset,
+                        completedFetch.nextFetchOffset(),
+                        completedFetch.tableBucket);
+                logScannerStatus.updateOffset(
+                        completedFetch.tableBucket, completedFetch.nextFetchOffset());
+            }
+
+            return super.next();
+        }
+
+        @Override
+        protected ScanRecord makeNext() {
+            if (isUnsubscribed()) {
+                close();
+                return null;
+            }
+
+            ScanRecord scanRecord = completedFetch.fetchRecord();
+
+            if (scanRecord == null) {
+                close();
+            }
+
+            return scanRecord;
+        }
+
+        @Override
+        protected boolean initialize() {
+            return LogFetchCollector.this.initialize(completedFetch) != null;
+        }
+
+        private boolean isUnsubscribed() {
+            return logScannerStatus.getBucketOffset(completedFetch.tableBucket) == null;
         }
     }
 }

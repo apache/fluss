@@ -46,6 +46,7 @@ import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
 
+import org.assertj.core.util.Streams;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -330,14 +331,16 @@ class FlussLakeTableITCase {
             while (scanCount < totalRows) {
                 ScanRecords scanRecords = logScanner.poll(Duration.ofSeconds(1));
                 for (TableBucket tableBucket : scanRecords.buckets()) {
+                    List<InternalRow> records =
+                            Streams.stream(scanRecords.records(tableBucket))
+                                    .map(ScanRecord::getRow)
+                                    .collect(Collectors.toList());
                     actualRows
                             .computeIfAbsent(tableBucket, (k) -> new ArrayList<>())
-                            .addAll(
-                                    scanRecords.records(tableBucket).stream()
-                                            .map(ScanRecord::getRow)
-                                            .collect(Collectors.toList()));
+                            .addAll(records);
+
+                    scanCount += records.size();
                 }
-                scanCount += scanRecords.count();
             }
         }
         // verify the rows fall back the buckets calculated by lake bucket assigner

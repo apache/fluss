@@ -48,6 +48,7 @@ import org.apache.fluss.rpc.messages.PbFetchLogReqForTable;
 import org.apache.fluss.rpc.messages.PbFetchLogRespForBucket;
 import org.apache.fluss.rpc.messages.PbFetchLogRespForTable;
 import org.apache.fluss.rpc.protocol.Errors;
+import org.apache.fluss.utils.CloseableIterator;
 import org.apache.fluss.utils.IOUtils;
 import org.apache.fluss.utils.Projection;
 
@@ -155,7 +156,7 @@ public class LogFetcher implements Closeable {
         return !logFetchBuffer.isEmpty();
     }
 
-    public Map<TableBucket, List<ScanRecord>> collectFetch() {
+    public Map<TableBucket, CloseableIterator<ScanRecord>> collectFetch() {
         return logFetchCollector.collectFetch(logFetchBuffer);
     }
 

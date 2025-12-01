@@ -181,9 +181,11 @@ class FlussTableITCase extends ClientToServerITCaseBase {
             subscribeFromBeginning(logScanner, table);
             int count = 0;
             while (count < expectedSize) {
-                ScanRecords scanRecords = logScanner.poll(Duration.ofSeconds(1));
-                assertThat(scanRecords.isEmpty()).isFalse();
-                for (ScanRecord scanRecord : scanRecords) {
+                Iterator<ScanRecord> scanRecords =
+                        logScanner.poll(Duration.ofSeconds(1)).iterator();
+                assertThat(scanRecords.hasNext()).isTrue();
+                while (scanRecords.hasNext()) {
+                    ScanRecord scanRecord = scanRecords.next();
                     assertThat(scanRecord.getChangeType()).isEqualTo(ChangeType.APPEND_ONLY);
                     InternalRow row = scanRecord.getRow();
                     assertThat(row.getInt(0)).isEqualTo(1);

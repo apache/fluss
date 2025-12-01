@@ -95,31 +95,36 @@ public class DefaultCompletedFetchTest {
                         tb, createMemoryLogRecords(DATA2, LogFormat.ARROW, recordBatchMagic), 10L);
         DefaultCompletedFetch defaultCompletedFetch =
                 makeCompletedFetch(tb, resultForBucket0, fetchOffset);
-        List<ScanRecord> scanRecords = defaultCompletedFetch.fetchRecords(8);
-        assertThat(scanRecords.size()).isEqualTo(8);
-        assertThat(scanRecords.get(0).logOffset()).isEqualTo(0L);
 
-        scanRecords = defaultCompletedFetch.fetchRecords(8);
-        assertThat(scanRecords.size()).isEqualTo(2);
-        assertThat(scanRecords.get(0).logOffset()).isEqualTo(8L);
-
-        scanRecords = defaultCompletedFetch.fetchRecords(8);
-        assertThat(scanRecords.size()).isEqualTo(0);
+        for (int i = 0; i < 10; i++) {
+            ScanRecord scanRecord = defaultCompletedFetch.fetchRecord();
+            assertThat(scanRecord).isNotNull();
+            assertThat(scanRecord.logOffset()).isEqualTo(i);
+        }
     }
 
-    @ParameterizedTest
-    @ValueSource(bytes = {LOG_MAGIC_VALUE_V0, LOG_MAGIC_VALUE_V1})
-    void testNegativeFetchCount(byte recordBatchMagic) throws Exception {
+    @Test
+    void testDrain() throws Exception {
         long fetchOffset = 0L;
         int bucketId = 0; // records for 0-10.
         TableBucket tb = new TableBucket(DATA2_TABLE_ID, bucketId);
         FetchLogResultForBucket resultForBucket0 =
                 new FetchLogResultForBucket(
-                        tb, createMemoryLogRecords(DATA2, LogFormat.ARROW, recordBatchMagic), 10L);
+                        tb,
+                        createMemoryLogRecords(DATA2, LogFormat.ARROW, LOG_MAGIC_VALUE_V0),
+                        10L);
         DefaultCompletedFetch defaultCompletedFetch =
                 makeCompletedFetch(tb, resultForBucket0, fetchOffset);
-        List<ScanRecord> scanRecords = defaultCompletedFetch.fetchRecords(-10);
-        assertThat(scanRecords.size()).isEqualTo(0);
+
+        for (int i = 0; i < 8; i++) {
+            ScanRecord scanRecord = defaultCompletedFetch.fetchRecord();
+            assertThat(scanRecord).isNotNull();
+            assertThat(scanRecord.logOffset()).isEqualTo(i);
+        }
+
+        defaultCompletedFetch.drain();
+
+        assertThat(defaultCompletedFetch.fetchRecord()).isNull();
     }
 
     @Test
@@ -131,8 +136,8 @@ public class DefaultCompletedFetchTest {
                 new FetchLogResultForBucket(tb, MemoryLogRecords.EMPTY, 0L);
         DefaultCompletedFetch defaultCompletedFetch =
                 makeCompletedFetch(tb, resultForBucket0, fetchOffset);
-        List<ScanRecord> scanRecords = defaultCompletedFetch.fetchRecords(10);
-        assertThat(scanRecords.size()).isEqualTo(0);
+        ScanRecord scanRecord = defaultCompletedFetch.fetchRecord();
+        assertThat(scanRecord).isNull();
     }
 
     @ParameterizedTest
@@ -173,7 +178,6 @@ public class DefaultCompletedFetchTest {
                 new FetchLogResultForBucket(tb, memoryLogRecords, 10L);
         DefaultCompletedFetch defaultCompletedFetch =
                 makeCompletedFetch(tb, resultForBucket0, fetchOffset, projection);
-        List<ScanRecord> scanRecords = defaultCompletedFetch.fetchRecords(8);
         List<Object[]> expectedObjects =
                 Arrays.asList(
                         new Object[] {1, "hello"},
@@ -184,10 +188,11 @@ public class DefaultCompletedFetchTest {
                         new Object[] {6, "nihao world"},
                         new Object[] {7, "hello world2"},
                         new Object[] {8, "hi world2"});
-        assertThat(scanRecords.size()).isEqualTo(8);
-        for (int i = 0; i < scanRecords.size(); i++) {
+
+        for (int i = 0; i < expectedObjects.size(); i++) {
             Object[] expectObject = expectedObjects.get(i);
-            ScanRecord actualRecord = scanRecords.get(i);
+            ScanRecord actualRecord = defaultCompletedFetch.fetchRecord();
+            assertThat(actualRecord).isNotNull();
             assertThat(actualRecord.logOffset()).isEqualTo(i);
             assertThat(actualRecord.getChangeType()).isEqualTo(ChangeType.APPEND_ONLY);
             InternalRow row = actualRecord.getRow();
@@ -195,21 +200,26 @@ public class DefaultCompletedFetchTest {
             assertThat(row.getString(1).toString()).isEqualTo(expectObject[1]);
         }
 
+        defaultCompletedFetch.drain();
+        assertThat(defaultCompletedFetch.fetchRecord()).isNull();
+
         // test projection reorder.
         defaultCompletedFetch =
                 makeCompletedFetch(
                         tb, resultForBucket0, fetchOffset, Projection.of(new int[] {2, 0}));
-        scanRecords = defaultCompletedFetch.fetchRecords(8);
-        assertThat(scanRecords.size()).isEqualTo(8);
-        for (int i = 0; i < scanRecords.size(); i++) {
+
+        for (int i = 0; i < expectedObjects.size(); i++) {
             Object[] expectObject = expectedObjects.get(i);
-            ScanRecord actualRecord = scanRecords.get(i);
+            ScanRecord actualRecord = defaultCompletedFetch.fetchRecord();
             assertThat(actualRecord.logOffset()).isEqualTo(i);
             assertThat(actualRecord.getChangeType()).isEqualTo(ChangeType.APPEND_ONLY);
             InternalRow row = actualRecord.getRow();
             assertThat(row.getString(0).toString()).isEqualTo(expectObject[1]);
             assertThat(row.getInt(1)).isEqualTo(expectObject[0]);
         }
+
+        defaultCompletedFetch.drain();
+        assertThat(defaultCompletedFetch.fetchRecord()).isNull();
     }
 
     private DefaultCompletedFetch makeCompletedFetch(

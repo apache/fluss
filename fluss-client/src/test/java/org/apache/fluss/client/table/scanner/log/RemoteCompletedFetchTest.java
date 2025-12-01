@@ -39,7 +39,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.ValueSource;
+import org.junit.jupiter.params.provider.CsvSource;
 
 import javax.annotation.Nullable;
 
@@ -107,22 +107,54 @@ class RemoteCompletedFetchTest {
                         null,
                         () -> recycleCalled.set(true));
 
-        List<ScanRecord> scanRecords = completedFetch.fetchRecords(8);
-        assertThat(scanRecords.size()).isEqualTo(8);
-        assertThat(scanRecords.get(0).logOffset()).isEqualTo(0L);
+        for (int i = 0; i < 8; i++) {
+            ScanRecord scanRecord = completedFetch.fetchRecord();
+            assertThat(scanRecord).isNotNull();
+            assertThat(scanRecord.logOffset()).isEqualTo(i);
+        }
 
         assertThat(recycleCalled.get()).isFalse();
-        scanRecords = completedFetch.fetchRecords(8);
-        assertThat(scanRecords.size()).isEqualTo(2);
-        assertThat(scanRecords.get(0).logOffset()).isEqualTo(8L);
-        // when read finish, the file channel should be closed.
+
+        for (int i = 8; i < 10; i++) {
+            ScanRecord scanRecord = completedFetch.fetchRecord();
+            assertThat(scanRecord).isNotNull();
+            assertThat(scanRecord.logOffset()).isEqualTo(i);
+        }
+
+        assertThat(completedFetch.fetchRecord()).isNull();
         assertThat(fileLogRecords.channel().isOpen()).isFalse();
         // and recycle should be called.
         assertThat(recycleCalled.get()).isTrue();
+    }
 
-        // no more records can be read
-        scanRecords = completedFetch.fetchRecords(8);
-        assertThat(scanRecords.size()).isEqualTo(0);
+    @Test
+    void testDrain() throws Exception {
+        long fetchOffset = 0L;
+        TableBucket tableBucket = new TableBucket(DATA2_TABLE_ID, 0);
+        AtomicBoolean recycleCalled = new AtomicBoolean(false);
+        FileLogRecords fileLogRecords =
+                createFileLogRecords(
+                        tableBucket, DATA2_PHYSICAL_TABLE_PATH, DATA2, LogFormat.ARROW);
+        RemoteCompletedFetch completedFetch =
+                makeCompletedFetch(
+                        tableBucket,
+                        fileLogRecords,
+                        fetchOffset,
+                        null,
+                        () -> recycleCalled.set(true));
+
+        for (int i = 0; i < 8; i++) {
+            ScanRecord scanRecord = completedFetch.fetchRecord();
+            assertThat(scanRecord).isNotNull();
+            assertThat(scanRecord.logOffset()).isEqualTo(i);
+        }
+
+        completedFetch.drain();
+
+        assertThat(completedFetch.fetchRecord()).isNull();
+        assertThat(fileLogRecords.channel().isOpen()).isFalse();
+        // and recycle should be called.
+        assertThat(recycleCalled.get()).isTrue();
     }
 
     @Test
@@ -140,36 +172,24 @@ class RemoteCompletedFetchTest {
                 makeCompletedFetch(
                         tb, fileLogRecords, fetchOffset, null, () -> recycleCalled.set(true));
 
-        List<ScanRecord> scanRecords = completedFetch.fetchRecords(8);
-        assertThat(scanRecords.size()).isEqualTo(8);
-        assertThat(scanRecords.get(0).logOffset()).isEqualTo(0L);
+        for (int i = 0; i < 8; i++) {
+            ScanRecord scanRecord = completedFetch.fetchRecord();
+            assertThat(scanRecord).isNotNull();
+            assertThat(scanRecord.logOffset()).isEqualTo(i);
+        }
 
         assertThat(recycleCalled.get()).isFalse();
-        scanRecords = completedFetch.fetchRecords(8);
-        assertThat(scanRecords.size()).isEqualTo(2);
-        assertThat(scanRecords.get(0).logOffset()).isEqualTo(8L);
-        // when read finish, the file channel should be closed.
+
+        for (int i = 8; i < 10; i++) {
+            ScanRecord scanRecord = completedFetch.fetchRecord();
+            assertThat(scanRecord).isNotNull();
+            assertThat(scanRecord.logOffset()).isEqualTo(i);
+        }
+
+        assertThat(completedFetch.fetchRecord()).isNull();
         assertThat(fileLogRecords.channel().isOpen()).isFalse();
         // and recycle should be called.
         assertThat(recycleCalled.get()).isTrue();
-
-        // no more records can be read
-        scanRecords = completedFetch.fetchRecords(8);
-        assertThat(scanRecords.size()).isEqualTo(0);
-    }
-
-    @Test
-    void testNegativeFetchCount() throws Exception {
-        long fetchOffset = 0L;
-        TableBucket tableBucket = new TableBucket(DATA2_TABLE_ID, 0);
-        FileLogRecords fileLogRecords =
-                createFileLogRecords(
-                        tableBucket, DATA2_PHYSICAL_TABLE_PATH, DATA2, LogFormat.ARROW);
-        RemoteCompletedFetch completedFetch =
-                makeCompletedFetch(tableBucket, fileLogRecords, fetchOffset, null);
-
-        List<ScanRecord> scanRecords = completedFetch.fetchRecords(-10);
-        assertThat(scanRecords.size()).isEqualTo(0);
     }
 
     @Test
@@ -185,13 +205,13 @@ class RemoteCompletedFetchTest {
         RemoteCompletedFetch completedFetch =
                 makeCompletedFetch(tableBucket, fileLogRecords, fetchOffset, null);
 
-        List<ScanRecord> scanRecords = completedFetch.fetchRecords(10);
-        assertThat(scanRecords.size()).isEqualTo(0);
+        assertThat(completedFetch.fetchRecord()).isNull();
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"INDEXED", "ARROW"})
-    void testProjection(String format) throws Exception {
+    @CsvSource({"'INDEXED', 0, 2", "'INDEXED', 2, 0", "'ARROW', 0, 2", "'ARROW', 2, 0"})
+    void testProjection(String format, int projectionIndex1, int projectionIndex2)
+            throws Exception {
         LogFormat logFormat = LogFormat.fromString(format);
         Schema schema =
                 Schema.newBuilder()
@@ -220,9 +240,11 @@ class RemoteCompletedFetchTest {
                 createFileLogRecords(tableBucket, DATA2_PHYSICAL_TABLE_PATH, DATA2, logFormat);
         RemoteCompletedFetch completedFetch =
                 makeCompletedFetch(
-                        tableBucket, fileLogRecords, fetchOffset, Projection.of(new int[] {0, 2}));
+                        tableBucket,
+                        fileLogRecords,
+                        fetchOffset,
+                        Projection.of(new int[] {projectionIndex1, projectionIndex2}));
 
-        List<ScanRecord> scanRecords = completedFetch.fetchRecords(8);
         List<Object[]> expectedObjects =
                 Arrays.asList(
                         new Object[] {1, "hello"},
@@ -233,30 +255,21 @@ class RemoteCompletedFetchTest {
                         new Object[] {6, "nihao world"},
                         new Object[] {7, "hello world2"},
                         new Object[] {8, "hi world2"});
-        assertThat(scanRecords.size()).isEqualTo(8);
-        for (int i = 0; i < scanRecords.size(); i++) {
-            Object[] expectObject = expectedObjects.get(i);
-            ScanRecord actualRecord = scanRecords.get(i);
-            assertThat(actualRecord.logOffset()).isEqualTo(i);
-            assertThat(actualRecord.getChangeType()).isEqualTo(ChangeType.APPEND_ONLY);
-            InternalRow row = actualRecord.getRow();
-            assertThat(row.getInt(0)).isEqualTo(expectObject[0]);
-            assertThat(row.getString(1).toString()).isEqualTo(expectObject[1]);
-        }
 
-        completedFetch =
-                makeCompletedFetch(
-                        tableBucket, fileLogRecords, fetchOffset, Projection.of(new int[] {2, 0}));
-        scanRecords = completedFetch.fetchRecords(8);
-        assertThat(scanRecords.size()).isEqualTo(8);
-        for (int i = 0; i < scanRecords.size(); i++) {
-            Object[] expectObject = expectedObjects.get(i);
-            ScanRecord actualRecord = scanRecords.get(i);
-            assertThat(actualRecord.logOffset()).isEqualTo(i);
-            assertThat(actualRecord.getChangeType()).isEqualTo(ChangeType.APPEND_ONLY);
-            InternalRow row = actualRecord.getRow();
-            assertThat(row.getString(0).toString()).isEqualTo(expectObject[1]);
-            assertThat(row.getInt(1)).isEqualTo(expectObject[0]);
+        for (int i = 0; i < 8; i++) {
+            ScanRecord scanRecord = completedFetch.fetchRecord();
+            assertThat(scanRecord).isNotNull();
+            assertThat(scanRecord.logOffset()).isEqualTo(i);
+            assertThat(scanRecord.getChangeType()).isEqualTo(ChangeType.APPEND_ONLY);
+            InternalRow row = scanRecord.getRow();
+
+            if (projectionIndex1 < projectionIndex2) {
+                assertThat(row.getInt(0)).isEqualTo(expectedObjects.get(i)[0]);
+                assertThat(row.getString(1).toString()).isEqualTo(expectedObjects.get(i)[1]);
+            } else {
+                assertThat(row.getInt(1)).isEqualTo(expectedObjects.get(i)[0]);
+                assertThat(row.getString(0).toString()).isEqualTo(expectedObjects.get(i)[1]);
+            }
         }
     }
 
