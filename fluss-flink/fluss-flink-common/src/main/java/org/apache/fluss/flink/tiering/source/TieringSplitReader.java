@@ -135,9 +135,6 @@ public class TieringSplitReader<WriteResult>
             if (currentLogScanner != null) {
                 try (ScanRecords scanRecords = currentLogScanner.poll(POLL_TIMEOUT)) {
                     return forLogRecords(scanRecords);
-                } catch (Exception e) {
-                    // TODO
-                    throw new RuntimeException(e);
                 }
             } else {
                 return emptyTableBucketWriteResultWithSplitIds();
@@ -269,7 +266,8 @@ public class TieringSplitReader<WriteResult>
                     getOrCreateLakeWriter(
                             bucket, currentTableSplitsByBucket.get(bucket).getPartitionName());
 
-            // TODO: Find out impact of this change as we are no longer constrained by maxRecords length here
+            // TODO: Find out impact of this change as we are no longer constrained by maxRecords
+            // length here
             ScanRecord lastRecord = null;
             while (bucketScanRecords.hasNext()) {
                 ScanRecord record = bucketScanRecords.next();
