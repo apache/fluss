@@ -60,6 +60,7 @@ import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -165,6 +166,7 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
         assertResultsIgnoreOrder(rowIter, expectedRows, true);
     }
 
+    // TODO Fix issue caught by test case
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
     void testAppendLogWithBucketKey(boolean sinkBucketShuffle) throws Exception {
@@ -258,14 +260,16 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
                 for (TableBucket bucket : scanRecords.buckets()) {
                     List<String> rowsBucket =
                             rows.computeIfAbsent(bucket.getBucket(), k -> new ArrayList<>());
-                    for (ScanRecord record : scanRecords.records(bucket)) {
+                    Iterator<ScanRecord> records = scanRecords.records(bucket);
+                    while (records.hasNext()) {
+                        ScanRecord record = records.next();
                         InternalRow row = record.getRow();
                         rowsBucket.add(
                                 Row.of(row.getInt(0), row.getLong(1), row.getString(2).toString())
                                         .toString());
+                        scanned++;
                     }
                 }
-                scanned += scanRecords.count();
             }
         }
         List<String> expectedRows0 = Arrays.asList("+I[1, 3501, Tim]", "+I[4, 3504, jerry]");

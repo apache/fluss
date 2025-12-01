@@ -30,9 +30,9 @@ import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.record.LogRecordBatch;
 import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.rpc.protocol.Errors;
-
 import org.apache.fluss.utils.AbstractIterator;
 import org.apache.fluss.utils.CloseableIterator;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -81,7 +81,8 @@ public class LogFetchCollector {
      * @throws LogOffsetOutOfRangeException If there is OffsetOutOfRange error in fetchResponse and
      *     the defaultResetPolicy is NONE
      */
-    public Map<TableBucket, CloseableIterator<ScanRecord>> collectFetch(final LogFetchBuffer logFetchBuffer) {
+    public Map<TableBucket, CloseableIterator<ScanRecord>> collectFetch(
+            final LogFetchBuffer logFetchBuffer) {
         Map<TableBucket, List<CloseableIterator<ScanRecord>>> fetched = new HashMap<>();
 
         while (!logFetchBuffer.isEmpty()) {
@@ -115,7 +116,8 @@ public class LogFetchCollector {
         }
 
         Map<TableBucket, CloseableIterator<ScanRecord>> output = new HashMap<>();
-        for (Map.Entry<TableBucket, List<CloseableIterator<ScanRecord>>> entry: fetched.entrySet()) {
+        for (Map.Entry<TableBucket, List<CloseableIterator<ScanRecord>>> entry :
+                fetched.entrySet()) {
             output.put(entry.getKey(), CloseableIterator.concatenate(entry.getValue()));
         }
 
@@ -255,7 +257,8 @@ public class LogFetchCollector {
         }
     }
 
-    private class ScanRecordIterator extends AbstractIterator<ScanRecord> implements CloseableIterator<ScanRecord> {
+    private class ScanRecordIterator extends AbstractIterator<ScanRecord>
+            implements CloseableIterator<ScanRecord> {
         final CompletedFetch completedFetch;
         final LogScannerStatus logScannerStatus;
 
@@ -279,7 +282,8 @@ public class LogFetchCollector {
                         offset,
                         completedFetch.nextFetchOffset(),
                         completedFetch.tableBucket);
-                logScannerStatus.updateOffset(completedFetch.tableBucket, completedFetch.nextFetchOffset());
+                logScannerStatus.updateOffset(
+                        completedFetch.tableBucket, completedFetch.nextFetchOffset());
             }
 
             return super.next();

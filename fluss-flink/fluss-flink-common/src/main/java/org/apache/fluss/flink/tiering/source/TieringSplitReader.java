@@ -50,7 +50,6 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
-import java.util.List;
 import java.util.Map;
 import java.util.Queue;
 import java.util.Set;
@@ -134,8 +133,12 @@ public class TieringSplitReader<WriteResult>
             }
         } else {
             if (currentLogScanner != null) {
-                ScanRecords scanRecords = currentLogScanner.poll(POLL_TIMEOUT);
-                return forLogRecords(scanRecords);
+                try (ScanRecords scanRecords = currentLogScanner.poll(POLL_TIMEOUT)) {
+                    return forLogRecords(scanRecords);
+                } catch (Exception e) {
+                    // TODO
+                    throw new RuntimeException(e);
+                }
             } else {
                 return emptyTableBucketWriteResultWithSplitIds();
             }
@@ -253,8 +256,8 @@ public class TieringSplitReader<WriteResult>
         Map<TableBucket, TableBucketWriteResult<WriteResult>> writeResults = new HashMap<>();
         Map<TableBucket, String> finishedSplitIds = new HashMap<>();
         for (TableBucket bucket : scanRecords.buckets()) {
-            List<ScanRecord> bucketScanRecords = scanRecords.records(bucket);
-            if (bucketScanRecords.isEmpty()) {
+            Iterator<ScanRecord> bucketScanRecords = scanRecords.records(bucket);
+            if (!bucketScanRecords.hasNext()) {
                 continue;
             }
             // no any stopping offset, just skip handle the records for the bucket
@@ -265,13 +268,18 @@ public class TieringSplitReader<WriteResult>
             LakeWriter<WriteResult> lakeWriter =
                     getOrCreateLakeWriter(
                             bucket, currentTableSplitsByBucket.get(bucket).getPartitionName());
-            for (ScanRecord record : bucketScanRecords) {
+
+            // TODO: Find out impact of this change as we are no longer constrained by maxRecords length here
+            ScanRecord lastRecord = null;
+            while (bucketScanRecords.hasNext()) {
+                ScanRecord record = bucketScanRecords.next();
                 // if record is less than stopping offset
                 if (record.logOffset() < stoppingOffset) {
                     lakeWriter.write(record);
                 }
+                lastRecord = record;
             }
-            ScanRecord lastRecord = bucketScanRecords.get(bucketScanRecords.size() - 1);
+
             // has arrived into the end of the split,
             if (lastRecord.logOffset() >= stoppingOffset - 1) {
                 currentTableStoppingOffsets.remove(bucket);

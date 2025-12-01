@@ -49,6 +49,7 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -291,14 +292,16 @@ class AutoPartitionedTableITCase extends ClientToServerITCaseBase {
         while (scanRecordCount < expectRecordsCount) {
             ScanRecords scanRecords = logScanner.poll(Duration.ofSeconds(1));
             for (TableBucket scanBucket : scanRecords.buckets()) {
-                List<ScanRecord> records = scanRecords.records(scanBucket);
-                for (ScanRecord scanRecord : records) {
+                Iterator<ScanRecord> records = scanRecords.records(scanBucket);
+
+                while (records.hasNext()) {
+                    ScanRecord scanRecord = records.next();
                     actualRows
                             .computeIfAbsent(scanBucket.getPartitionId(), k -> new ArrayList<>())
                             .add(scanRecord.getRow());
+                    scanRecordCount++;
                 }
             }
-            scanRecordCount += scanRecords.count();
         }
         return actualRows;
     }

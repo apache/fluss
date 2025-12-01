@@ -30,9 +30,9 @@ import org.apache.fluss.rpc.RpcClient;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.PbProduceLogRespForBucket;
 import org.apache.fluss.rpc.messages.ProduceLogResponse;
-
 import org.apache.fluss.shaded.guava32.com.google.common.collect.Iterators;
 import org.apache.fluss.utils.CloseableIterator;
+
 import org.assertj.core.util.Streams;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;

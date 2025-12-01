@@ -40,7 +40,7 @@ import java.util.Iterator;
 /**
  * {@link CompletedFetch} represents the result that was returned from the tablet server via a
  * {@link FetchLogRequest}, which can be a {@link LogRecordBatch} or remote log segments path. It
- * contains logic to maintain state between calls to {@link #records)}.
+ * contains logic to maintain state between calls to {@link #records}.
  */
 @Internal
 abstract class CompletedFetch {

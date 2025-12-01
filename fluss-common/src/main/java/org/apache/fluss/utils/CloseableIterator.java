@@ -72,7 +72,7 @@ public interface CloseableIterator<T> extends Iterator<T>, Closeable {
                     previousException = ExceptionUtils.firstOrSuppressed(e, previousException);
                 }
 
-                return  previousException;
+                return previousException;
             }
 
             @Override

@@ -23,6 +23,7 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.utils.CloseableIterator;
 import org.apache.fluss.utils.ExceptionUtils;
 
+import java.io.IOException;
 import java.util.Collections;
 import java.util.Iterator;
 import java.util.Map;
@@ -73,9 +74,9 @@ public class ScanRecords implements Iterable<ScanRecord>, AutoCloseable {
     }
 
     @Override
-    public void close() throws Exception {
+    public void close() throws IOException {
         Exception thrownException = null;
-        for (CloseableIterator<ScanRecord> scanRecord: records.values()) {
+        for (CloseableIterator<ScanRecord> scanRecord : records.values()) {
             try {
                 scanRecord.close();
             } catch (Exception e) {
@@ -84,7 +85,7 @@ public class ScanRecords implements Iterable<ScanRecord>, AutoCloseable {
         }
 
         if (thrownException != null) {
-            throw thrownException;
+            throw new IOException(thrownException);
         }
     }
 }

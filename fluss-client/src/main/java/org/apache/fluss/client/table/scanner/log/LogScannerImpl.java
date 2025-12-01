@@ -79,7 +79,8 @@ public class LogScannerImpl implements LogScanner {
     // metrics
     private final ScannerMetricGroup scannerMetricGroup;
 
-    private final Map<TableBucket, Queue<CloseableIterator<ScanRecord>>> closeables = new HashMap<>();
+    private final Map<TableBucket, Queue<CloseableIterator<ScanRecord>>> closeables =
+            new HashMap<>();
 
     public LogScannerImpl(
             Configuration conf,
@@ -248,8 +249,9 @@ public class LogScannerImpl implements LogScanner {
     }
 
     private void trackCloseables(Map<TableBucket, CloseableIterator<ScanRecord>> fetchedRecords) {
-        for (var fetchedRecord: fetchedRecords.entrySet()) {
-            var tableBucketCloseable = closeables.computeIfAbsent(fetchedRecord.getKey(), k -> new LinkedList<>());
+        for (var fetchedRecord : fetchedRecords.entrySet()) {
+            var tableBucketCloseable =
+                    closeables.computeIfAbsent(fetchedRecord.getKey(), k -> new LinkedList<>());
 
             // Close and stop tracking any existing closeable iterators which have reach end.
             var iterator = tableBucketCloseable.iterator();
@@ -323,8 +325,8 @@ public class LogScannerImpl implements LogScanner {
                 LOG.trace("Closing log scanner for table: {}", tablePath);
                 scannerMetricGroup.close();
                 logFetcher.close();
-                for (var queue: closeables.values()) {
-                    for (var closeable: queue) {
+                for (var queue : closeables.values()) {
+                    for (var closeable : queue) {
                         closeable.close();
                     }
                 }

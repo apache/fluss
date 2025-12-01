@@ -115,10 +115,12 @@ class FlussFailServerTableITCase extends ClientToServerITCaseBase {
             appendWriter.append(row).get();
 
             // poll data util we get one record
-            ScanRecords scanRecords;
+            ScanRecords scanRecords = null;
             do {
                 scanRecords = logScanner.poll(Duration.ofSeconds(1));
-            } while (scanRecords.isEmpty());
+            } while (!scanRecords.iterator().hasNext());
+            // Consume first record.
+            scanRecords.iterator().next();
 
             int rowCount = 10;
             // append some rows
@@ -137,8 +139,9 @@ class FlussFailServerTableITCase extends ClientToServerITCaseBase {
                 List<InternalRow> actualRows = new ArrayList<>(rowCount);
                 do {
                     scanRecords = logScanner.poll(Duration.ofSeconds(1));
-                    actualRows.addAll(toRows(scanRecords));
-                    counts += scanRecords.count();
+                    List<InternalRow> rows = toRows(scanRecords);
+                    actualRows.addAll(rows);
+                    counts += rows.size();
                 } while (counts < expectCounts);
                 assertThatRows(actualRows).withSchema(DATA1_ROW_TYPE).isEqualTo(expectRows);
             } finally {

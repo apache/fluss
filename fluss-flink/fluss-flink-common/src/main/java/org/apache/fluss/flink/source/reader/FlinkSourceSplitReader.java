@@ -426,22 +426,32 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
             }
             splitIdByTableBucket.put(scanBucket, splitId);
             tableScanBuckets.add(scanBucket);
-            List<ScanRecord> bucketScanRecords = scanRecords.records(scanBucket);
-            if (!bucketScanRecords.isEmpty()) {
-                final ScanRecord lastRecord = bucketScanRecords.get(bucketScanRecords.size() - 1);
-                // We keep the maximum message timestamp in the fetch for calculating lags
-                maxConsumerRecordTimestampInFetch =
-                        Math.max(maxConsumerRecordTimestampInFetch, lastRecord.timestamp());
-
-                // After processing a record with offset of "stoppingOffset - 1", the split reader
-                // should not continue fetching because the record with stoppingOffset may not
-                // exist. Keep polling will just block forever
-                if (lastRecord.logOffset() >= stoppingOffset - 1) {
-                    stoppingOffsets.put(scanBucket, stoppingOffset);
-                    finishedSplits.add(splitId);
-                }
-            }
-            splitRecords.put(splitId, toRecordAndPos(bucketScanRecords.iterator()));
+            Iterator<ScanRecord> bucketScanRecords = scanRecords.records(scanBucket);
+            // TODO Now that we are initializing lazily, using last record's timestamp to calculate
+            // lag is inaccurate
+            // This needs to change to allow peeking or eagerly consume first record and use first
+            // record's timestamp
+            // to calculate lag
+            //            if (!bucketScanRecords.hasNext()) {
+            //                final ScanRecord lastRecord =
+            // bucketScanRecords.get(bucketScanRecords.size() - 1);
+            //                // We keep the maximum message timestamp in the fetch for calculating
+            // lags
+            //                maxConsumerRecordTimestampInFetch =
+            //                        Math.max(maxConsumerRecordTimestampInFetch,
+            // lastRecord.timestamp());
+            //
+            //                // After processing a record with offset of "stoppingOffset - 1", the
+            // split reader
+            //                // should not continue fetching because the record with stoppingOffset
+            // may not
+            //                // exist. Keep polling will just block forever
+            //                if (lastRecord.logOffset() >= stoppingOffset - 1) {
+            //                    stoppingOffsets.put(scanBucket, stoppingOffset);
+            //                    finishedSplits.add(splitId);
+            //                }
+            //            }
+            splitRecords.put(splitId, toRecordAndPos(bucketScanRecords));
         }
         Iterator<TableBucket> buckets = tableScanBuckets.iterator();
         Iterator<String> splitIterator =
@@ -479,7 +489,13 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
 
     private CloseableIterator<RecordAndPos> toRecordAndPos(
             Iterator<ScanRecord> recordAndPosIterator) {
-        return new CloseableIterator<RecordAndPos>() {
+
+        if (!(recordAndPosIterator instanceof CloseableIterator)) {
+            throw new IllegalArgumentException(
+                    "Expecting closeable iterator but got " + recordAndPosIterator);
+        }
+
+        return new CloseableIterator<>() {
 
             @Override
             public boolean hasNext() {
@@ -493,7 +509,7 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
 
             @Override
             public void close() {
-                // do nothing
+                ((CloseableIterator<ScanRecord>) recordAndPosIterator).close();
             }
         };
     }

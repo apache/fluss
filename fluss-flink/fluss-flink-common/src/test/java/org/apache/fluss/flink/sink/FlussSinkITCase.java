@@ -41,6 +41,7 @@ import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.types.RowKind;
+import org.assertj.core.util.Streams;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -48,8 +49,10 @@ import org.junit.jupiter.api.Test;
 import java.io.Serializable;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Objects;
+import java.util.stream.Collectors;
 
 import static org.apache.fluss.flink.utils.FlinkConversions.toFlinkRowKind;
 import static org.apache.fluss.testutils.DataTestUtils.row;
@@ -161,11 +164,18 @@ public class FlussSinkITCase extends FlinkTestBase {
         while (rows.size() < inputRows.size()) {
             ScanRecords scanRecords = logScanner.poll(Duration.ofSeconds(1));
             for (TableBucket bucket : scanRecords.buckets()) {
-                for (ScanRecord record : scanRecords.records(bucket)) {
-                    RowData row = converter.toFlinkRowData(record.getRow());
-                    row.setRowKind(toFlinkRowKind(record.getChangeType()));
-                    rows.add(row);
-                }
+                List<RowData> records =
+                        Streams.stream(scanRecords.records(bucket))
+                                .map(
+                                        r -> {
+                                            RowData flinkRowData = converter.toFlinkRowData(r);
+                                            flinkRowData.setRowKind(
+                                                    toFlinkRowKind(r.getChangeType()));
+                                            return flinkRowData;
+                                        })
+                                .collect(Collectors.toList());
+
+                rows.addAll(records);
             }
         }
 
@@ -234,7 +244,9 @@ public class FlussSinkITCase extends FlinkTestBase {
         while (rows.size() < inputRows.size()) {
             ScanRecords scanRecords = logScanner.poll(Duration.ofSeconds(1));
             for (TableBucket bucket : scanRecords.buckets()) {
-                for (ScanRecord record : scanRecords.records(bucket)) {
+                Iterator<ScanRecord> records = scanRecords.records(bucket);
+                while (records.hasNext()) {
+                    ScanRecord record = records.next();
                     RowData row = converter.toFlinkRowData(record.getRow());
                     row.setRowKind(toFlinkRowKind(record.getChangeType()));
                     rows.add(row);
@@ -290,7 +302,9 @@ public class FlussSinkITCase extends FlinkTestBase {
         while (rows.size() < orders.size()) {
             ScanRecords scanRecords = logScanner.poll(Duration.ofSeconds(1));
             for (TableBucket bucket : scanRecords.buckets()) {
-                for (ScanRecord record : scanRecords.records(bucket)) {
+                Iterator<ScanRecord> records = scanRecords.records(bucket);
+                while (records.hasNext()) {
+                    ScanRecord record = records.next();
                     InternalRow row = record.getRow();
                     TestOrder order =
                             new TestOrder(
