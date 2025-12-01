@@ -37,6 +37,7 @@ final class PojoType<T> {
     private final Class<T> pojoClass;
     private final Constructor<T> defaultConstructor;
     private final Map<String, Property> properties; // property name -> property
+    private static final Map<Class<?>, Class<?>> PRIMITIVE_TO_BOXED = createPrimitiveToBoxedMap();
 
     private PojoType(Class<T> pojoClass, Constructor<T> ctor, Map<String, Property> props) {
         this.pojoClass = pojoClass;
@@ -73,12 +74,15 @@ final class PojoType<T> {
         for (Map.Entry<String, Field> e : allFields.entrySet()) {
             String name = e.getKey();
             Field field = e.getValue();
+            // Enforce nullable fields: primitives are not allowed in POJO definitions.
             if (field.getType().isPrimitive()) {
                 throw new IllegalArgumentException(
                         String.format(
                                 "POJO class %s has primitive field '%s' of type %s. Primitive types are not allowed; all fields must be nullable (use wrapper types).",
                                 pojoClass.getName(), name, field.getType().getName()));
             }
+            // use boxed type as effective type
+            Class<?> effectiveType = boxIfPrimitive(field.getType());
             boolean publicField = Modifier.isPublic(field.getModifiers());
             Method getter = getters.get(name);
             Method setter = setters.get(name);
@@ -94,8 +98,7 @@ final class PojoType<T> {
             }
             props.put(
                     name,
-                    new Property(
-                            name, field.getType(), publicField ? field : null, getter, setter));
+                    new Property(name, effectiveType, publicField ? field : null, getter, setter));
         }
 
         return new PojoType<>(pojoClass, ctor, props);
@@ -233,6 +236,29 @@ final class PojoType<T> {
             return s;
         }
         return s.substring(0, 1).toLowerCase(Locale.ROOT) + s.substring(1);
+    }
+
+    private static Map<Class<?>, Class<?>> createPrimitiveToBoxedMap() {
+        Map<Class<?>, Class<?>> map = new HashMap<>();
+        map.put(boolean.class, Boolean.class);
+        map.put(byte.class, Byte.class);
+        map.put(short.class, Short.class);
+        map.put(int.class, Integer.class);
+        map.put(long.class, Long.class);
+        map.put(float.class, Float.class);
+        map.put(double.class, Double.class);
+        map.put(char.class, Character.class);
+        // void shouldn't appear as a field type, but handle defensively
+        map.put(void.class, Void.class);
+        return map;
+    }
+
+    private static Class<?> boxIfPrimitive(Class<?> type) {
+        if (!type.isPrimitive()) {
+            return type;
+        }
+        Class<?> boxed = PRIMITIVE_TO_BOXED.get(type);
+        return boxed != null ? boxed : type;
     }
 
     static final class Property {

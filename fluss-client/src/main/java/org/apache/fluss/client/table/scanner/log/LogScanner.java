@@ -27,7 +27,7 @@ import java.time.Duration;
  * @since 0.1
  */
 @PublicEvolving
-public interface LogScanner extends AutoCloseable {
+public interface LogScanner<T> extends AutoCloseable {
 
     /**
      * The earliest offset to fetch from. Fluss uses "-2" to indicate fetching from log start
@@ -48,7 +48,7 @@ public interface LogScanner extends AutoCloseable {
      * @throws java.lang.IllegalStateException if the scanner is not subscribed to any buckets to
      *     read from.
      */
-    ScanRecords poll(Duration timeout);
+    ScanRecords<T> poll(Duration timeout);
 
     /**
      * Subscribe to the given table bucket in given offset dynamically. If the table bucket is

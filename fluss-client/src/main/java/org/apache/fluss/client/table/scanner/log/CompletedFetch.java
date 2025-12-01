@@ -95,7 +95,7 @@ abstract class CompletedFetch {
     // TODO: optimize this to avoid deep copying the record.
     //  refactor #fetchRecords to return an iterator which lazily deserialize
     //  from underlying record stream and arrow buffer.
-    ScanRecord toScanRecord(LogRecord record) {
+    ScanRecord<InternalRow> toScanRecord(LogRecord record) {
         GenericRow newRow = new GenericRow(selectedFieldGetters.length);
         InternalRow internalRow = record.getRow();
         for (int i = 0; i < selectedFieldGetters.length; i++) {
@@ -148,7 +148,7 @@ abstract class CompletedFetch {
      *     maxRecords}
      * @return {@link ScanRecord scan records}
      */
-    public List<ScanRecord> fetchRecords(int maxRecords) {
+    public List<ScanRecord<InternalRow>> fetchRecords(int maxRecords) {
         if (corruptLastRecord) {
             throw new FetchException(
                     "Received exception when fetching the next record from "
@@ -161,7 +161,7 @@ abstract class CompletedFetch {
             return Collections.emptyList();
         }
 
-        List<ScanRecord> scanRecords = new ArrayList<>();
+        List<ScanRecord<InternalRow>> scanRecords = new ArrayList<>();
         try {
             for (int i = 0; i < maxRecords; i++) {
                 // Only move to next record if there was no exception in the last fetch.

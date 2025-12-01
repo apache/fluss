@@ -95,7 +95,7 @@ public class DefaultCompletedFetchTest {
                         tb, createMemoryLogRecords(DATA2, LogFormat.ARROW, recordBatchMagic), 10L);
         DefaultCompletedFetch defaultCompletedFetch =
                 makeCompletedFetch(tb, resultForBucket0, fetchOffset);
-        List<ScanRecord> scanRecords = defaultCompletedFetch.fetchRecords(8);
+        List<ScanRecord<InternalRow>> scanRecords = defaultCompletedFetch.fetchRecords(8);
         assertThat(scanRecords.size()).isEqualTo(8);
         assertThat(scanRecords.get(0).logOffset()).isEqualTo(0L);
 
@@ -118,7 +118,7 @@ public class DefaultCompletedFetchTest {
                         tb, createMemoryLogRecords(DATA2, LogFormat.ARROW, recordBatchMagic), 10L);
         DefaultCompletedFetch defaultCompletedFetch =
                 makeCompletedFetch(tb, resultForBucket0, fetchOffset);
-        List<ScanRecord> scanRecords = defaultCompletedFetch.fetchRecords(-10);
+        List<ScanRecord<InternalRow>> scanRecords = defaultCompletedFetch.fetchRecords(-10);
         assertThat(scanRecords.size()).isEqualTo(0);
     }
 
@@ -131,7 +131,7 @@ public class DefaultCompletedFetchTest {
                 new FetchLogResultForBucket(tb, MemoryLogRecords.EMPTY, 0L);
         DefaultCompletedFetch defaultCompletedFetch =
                 makeCompletedFetch(tb, resultForBucket0, fetchOffset);
-        List<ScanRecord> scanRecords = defaultCompletedFetch.fetchRecords(10);
+        List<ScanRecord<InternalRow>> scanRecords = defaultCompletedFetch.fetchRecords(10);
         assertThat(scanRecords.size()).isEqualTo(0);
     }
 
@@ -173,7 +173,7 @@ public class DefaultCompletedFetchTest {
                 new FetchLogResultForBucket(tb, memoryLogRecords, 10L);
         DefaultCompletedFetch defaultCompletedFetch =
                 makeCompletedFetch(tb, resultForBucket0, fetchOffset, projection);
-        List<ScanRecord> scanRecords = defaultCompletedFetch.fetchRecords(8);
+        List<ScanRecord<InternalRow>> scanRecords = defaultCompletedFetch.fetchRecords(8);
         List<Object[]> expectedObjects =
                 Arrays.asList(
                         new Object[] {1, "hello"},
@@ -187,7 +187,7 @@ public class DefaultCompletedFetchTest {
         assertThat(scanRecords.size()).isEqualTo(8);
         for (int i = 0; i < scanRecords.size(); i++) {
             Object[] expectObject = expectedObjects.get(i);
-            ScanRecord actualRecord = scanRecords.get(i);
+            ScanRecord<InternalRow> actualRecord = scanRecords.get(i);
             assertThat(actualRecord.logOffset()).isEqualTo(i);
             assertThat(actualRecord.getChangeType()).isEqualTo(ChangeType.APPEND_ONLY);
             InternalRow row = actualRecord.getRow();

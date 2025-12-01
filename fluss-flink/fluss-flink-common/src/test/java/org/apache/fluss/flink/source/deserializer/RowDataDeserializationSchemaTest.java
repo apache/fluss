@@ -18,8 +18,11 @@
 package org.apache.fluss.flink.source.deserializer;
 
 import org.apache.fluss.client.table.scanner.ScanRecord;
+import org.apache.fluss.record.ChangeType;
+import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.GenericRow;
+import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.types.DataField;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
@@ -77,16 +80,45 @@ public class RowDataDeserializationSchemaTest {
         row.setField(2, 45);
         row.setField(3, BinaryString.fromString("Test addr"));
 
-        ScanRecord scanRecord = new ScanRecord(row);
+        ScanRecord<InternalRow> scanRecord = new ScanRecord<>(row);
 
         RowDataDeserializationSchema deserializer = getRowDataDeserializationSchema(rowType);
-        RowData result = deserializer.deserialize(scanRecord);
+        RowData result = deserializer.deserialize(new ScanRecordLogRecord(scanRecord));
 
         assertThat(result.getArity()).isEqualTo(4);
         assertThat(result.getLong(0)).isEqualTo(100L);
         assertThat(result.getLong(1)).isEqualTo(10L);
         assertThat(result.getInt(2)).isEqualTo(45);
         assertThat(result.getString(3).toString()).isEqualTo("Test addr");
+    }
+
+    /** Lightweight adapter to view a {@code ScanRecord<InternalRow>} as a {@link LogRecord}. */
+    private static final class ScanRecordLogRecord implements LogRecord {
+        private final ScanRecord<InternalRow> delegate;
+
+        private ScanRecordLogRecord(ScanRecord<InternalRow> delegate) {
+            this.delegate = delegate;
+        }
+
+        @Override
+        public long logOffset() {
+            return delegate.logOffset();
+        }
+
+        @Override
+        public long timestamp() {
+            return delegate.timestamp();
+        }
+
+        @Override
+        public ChangeType getChangeType() {
+            return delegate.getChangeType();
+        }
+
+        @Override
+        public InternalRow getRow() {
+            return delegate.getRow();
+        }
     }
 
     private @NotNull RowDataDeserializationSchema getRowDataDeserializationSchema(RowType rowType)

@@ -26,6 +26,7 @@ import org.apache.fluss.cluster.Cluster;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.record.MemoryLogRecords;
+import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.rpc.RpcClient;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.PbProduceLogRespForBucket;
@@ -117,7 +118,7 @@ public class LogFetcherTest extends ClientToServerITCaseBase {
                     assertThat(logFetcher.getCompletedFetchesSize()).isEqualTo(2);
                 });
 
-        Map<TableBucket, List<ScanRecord>> records = logFetcher.collectFetch();
+        Map<TableBucket, List<ScanRecord<InternalRow>>> records = logFetcher.collectFetch();
         assertThat(records.size()).isEqualTo(2);
         assertThat(records.get(tb0).size()).isEqualTo(10);
         assertThat(records.get(tb1).size()).isEqualTo(10);
@@ -182,7 +183,7 @@ public class LogFetcherTest extends ClientToServerITCaseBase {
                     assertThat(logFetcher.hasAvailableFetches()).isTrue();
                     assertThat(logFetcher.getCompletedFetchesSize()).isEqualTo(1);
                 });
-        Map<TableBucket, List<ScanRecord>> records = logFetcher.collectFetch();
+        Map<TableBucket, List<ScanRecord<InternalRow>>> records = logFetcher.collectFetch();
         assertThat(records.size()).isEqualTo(1);
         assertThat(records.get(tb0).size()).isEqualTo(10);
     }

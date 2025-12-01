@@ -48,7 +48,7 @@ import static org.apache.fluss.client.utils.ClientUtils.getPartitionId;
  * of the primary key.
  */
 @NotThreadSafe
-class PrefixKeyLookuper implements Lookuper {
+class PrefixKeyLookuper implements Lookuper<InternalRow> {
 
     private final TableInfo tableInfo;
 

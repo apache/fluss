@@ -18,24 +18,39 @@
 package org.apache.fluss.client.lookup;
 
 import org.apache.fluss.annotation.PublicEvolving;
-import org.apache.fluss.row.InternalRow;
 
 import javax.annotation.concurrent.NotThreadSafe;
 
 import java.util.concurrent.CompletableFuture;
 
 /**
- * The lookup-er is used to lookup row of a primary key table by primary key or prefix key. The
- * lookuper has retriable ability to handle transient errors during lookup operations which is
- * configured by {@link org.apache.fluss.config.ConfigOptions#CLIENT_LOOKUP_MAX_RETRIES}.
+ * A lookuper performs key-based lookups against a primary key table, using either the full primary
+ * key or a prefix of the primary key (when configured via {@code Lookup#lookupBy}).
  *
- * <p>Note: Lookuper instances are not thread-safe.
+ * <p>This interface is generic on the key type {@code K}: - When used in row mode, implementations
+ * are typically declared as {@code Lookuper<InternalRow>} and accept an {@link
+ * org.apache.fluss.row.InternalRow} containing the key fields in the configured order. - When used
+ * with POJO keys, client-provided lookuper instances can also accept a POJO key type (for example
+ * {@code Lookuper<MyKeyPojo>}) and will transparently convert the POJO to an {@code InternalRow}
+ * using the table schema and active lookup columns.
+ *
+ * <p>Usage examples:
+ *
+ * <pre>{@code
+ * // Row-based key (InternalRow)
+ * Lookuper<InternalRow> lookuper = table.newLookup().createLookuper();
+ * LookupResult res = lookuper.lookup(keyRow).get();
+ *
+ * // POJO key (converted internally)
+ * Lookuper<MyKeyPojo> lookuperPojo = table.newLookup().createLookuper();
+ * LookupResult res2 = lookuperPojo.lookup(new MyKeyPojo(...)).get();
+ * }</pre>
  *
  * @since 0.6
  */
 @PublicEvolving
 @NotThreadSafe
-public interface Lookuper {
+public interface Lookuper<K> {
 
     /**
      * Lookups certain row from the given lookup key.
@@ -44,8 +59,12 @@ public interface Lookuper {
      * {@code table.newLookup().createLookuper()}), or be the prefix key if the lookuper is a Prefix
      * Key Lookuper (created by {@code table.newLookup().lookupBy(prefixKeys).createLookuper()}).
      *
-     * @param lookupKey the lookup key.
+     * <p>The key can be either an {@link org.apache.fluss.row.InternalRow} or a POJO representing
+     * the lookup key. Client-provided implementations returned by the Fluss client handle POJO-to-
+     * row conversion internally when necessary.
+     *
+     * @param lookupKey the lookup key
      * @return the result of lookup.
      */
-    CompletableFuture<LookupResult> lookup(InternalRow lookupKey);
+    CompletableFuture<LookupResult> lookup(K lookupKey);
 }

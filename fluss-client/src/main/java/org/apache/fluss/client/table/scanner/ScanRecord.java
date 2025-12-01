@@ -19,52 +19,51 @@ package org.apache.fluss.client.table.scanner;
 
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.record.ChangeType;
-import org.apache.fluss.record.LogRecord;
-import org.apache.fluss.row.InternalRow;
 
 import java.util.Objects;
 
 /** one scan record. */
-// TODO: replace this with GenericRecord in the future
 @Internal
-public class ScanRecord implements LogRecord {
+public class ScanRecord<T> {
     private static final long INVALID = -1L;
 
     private final long offset;
     private final long timestamp;
     private final ChangeType changeType;
-    private final InternalRow row;
+    private final T value;
 
-    public ScanRecord(InternalRow row) {
-        this(INVALID, INVALID, ChangeType.INSERT, row);
+    public ScanRecord(T value) {
+        this(INVALID, INVALID, ChangeType.INSERT, value);
     }
 
-    public ScanRecord(long offset, long timestamp, ChangeType changeType, InternalRow row) {
+    public ScanRecord(long offset, long timestamp, ChangeType changeType, T value) {
         this.offset = offset;
         this.timestamp = timestamp;
         this.changeType = changeType;
-        this.row = row;
+        this.value = value;
     }
 
     /** The position of this record in the corresponding fluss table bucket. */
-    @Override
     public long logOffset() {
         return offset;
     }
 
-    @Override
     public long timestamp() {
         return timestamp;
     }
 
-    @Override
     public ChangeType getChangeType() {
         return changeType;
     }
 
-    @Override
-    public InternalRow getRow() {
-        return row;
+    /** Returns the carried record as InternalRow for backward compatibility. */
+    public org.apache.fluss.row.InternalRow getRow() {
+        return (org.apache.fluss.row.InternalRow) value;
+    }
+
+    /** Returns the carried record value. */
+    public T getValue() {
+        return value;
     }
 
     @Override
@@ -75,19 +74,19 @@ public class ScanRecord implements LogRecord {
         if (o == null || getClass() != o.getClass()) {
             return false;
         }
-        ScanRecord that = (ScanRecord) o;
+        ScanRecord<?> that = (ScanRecord<?>) o;
         return offset == that.offset
                 && changeType == that.changeType
-                && Objects.equals(row, that.row);
+                && Objects.equals(value, that.value);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(offset, changeType, row);
+        return Objects.hash(offset, changeType, value);
     }
 
     @Override
     public String toString() {
-        return changeType.shortString() + row.toString() + "@" + offset;
+        return changeType.shortString() + value + "@" + offset;
     }
 }

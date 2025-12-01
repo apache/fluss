@@ -149,7 +149,7 @@ public class FlussSinkITCase extends FlinkTestBase {
         env.executeAsync("Test RowData Fluss Sink");
 
         Table table = conn.getTable(new TablePath(DEFAULT_DB, pkTableName));
-        LogScanner logScanner = table.newScan().createLogScanner();
+        LogScanner<InternalRow> logScanner = table.newScan().createLogScanner();
 
         int numBuckets = table.getTableInfo().getNumBuckets();
         for (int i = 0; i < numBuckets; i++) {
@@ -159,9 +159,9 @@ public class FlussSinkITCase extends FlinkTestBase {
         List<RowData> rows = new ArrayList<>();
 
         while (rows.size() < inputRows.size()) {
-            ScanRecords scanRecords = logScanner.poll(Duration.ofSeconds(1));
+            ScanRecords<InternalRow> scanRecords = logScanner.poll(Duration.ofSeconds(1));
             for (TableBucket bucket : scanRecords.buckets()) {
-                for (ScanRecord record : scanRecords.records(bucket)) {
+                for (ScanRecord<InternalRow> record : scanRecords.records(bucket)) {
                     RowData row = converter.toFlinkRowData(record.getRow());
                     row.setRowKind(toFlinkRowKind(record.getChangeType()));
                     rows.add(row);
@@ -222,7 +222,7 @@ public class FlussSinkITCase extends FlinkTestBase {
         env.executeAsync("Test RowData Fluss Sink");
 
         Table table = conn.getTable(new TablePath(DEFAULT_DB, logTableName));
-        LogScanner logScanner = table.newScan().createLogScanner();
+        LogScanner<InternalRow> logScanner = table.newScan().createLogScanner();
 
         int numBuckets = table.getTableInfo().getNumBuckets();
         for (int i = 0; i < numBuckets; i++) {
@@ -232,9 +232,9 @@ public class FlussSinkITCase extends FlinkTestBase {
         List<RowData> rows = new ArrayList<>();
 
         while (rows.size() < inputRows.size()) {
-            ScanRecords scanRecords = logScanner.poll(Duration.ofSeconds(1));
+            ScanRecords<InternalRow> scanRecords = logScanner.poll(Duration.ofSeconds(1));
             for (TableBucket bucket : scanRecords.buckets()) {
-                for (ScanRecord record : scanRecords.records(bucket)) {
+                for (ScanRecord<InternalRow> record : scanRecords.records(bucket)) {
                     RowData row = converter.toFlinkRowData(record.getRow());
                     row.setRowKind(toFlinkRowKind(record.getChangeType()));
                     rows.add(row);
@@ -288,9 +288,9 @@ public class FlussSinkITCase extends FlinkTestBase {
 
         List<TestOrder> rows = new ArrayList<>();
         while (rows.size() < orders.size()) {
-            ScanRecords scanRecords = logScanner.poll(Duration.ofSeconds(1));
+            ScanRecords<InternalRow> scanRecords = logScanner.poll(Duration.ofSeconds(1));
             for (TableBucket bucket : scanRecords.buckets()) {
-                for (ScanRecord record : scanRecords.records(bucket)) {
+                for (ScanRecord<InternalRow> record : scanRecords.records(bucket)) {
                     InternalRow row = record.getRow();
                     TestOrder order =
                             new TestOrder(

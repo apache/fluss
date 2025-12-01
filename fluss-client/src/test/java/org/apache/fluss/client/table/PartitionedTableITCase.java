@@ -90,7 +90,7 @@ class PartitionedTableITCase extends ClientToServerITCaseBase {
 
         upsertWriter.flush();
 
-        Lookuper lookuper = table.newLookup().createLookuper();
+        Lookuper<InternalRow> lookuper = table.newLookup().createLookuper();
         // now, let's lookup the written data by look up.
         for (PartitionInfo partitionInfo : partitionInfos) {
             String partitionName = partitionInfo.getPartitionName();

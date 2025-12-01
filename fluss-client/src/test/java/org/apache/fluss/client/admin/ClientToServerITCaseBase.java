@@ -129,15 +129,15 @@ public abstract class ClientToServerITCaseBase {
         return conf;
     }
 
-    protected static LogScanner createLogScanner(Table table) {
+    protected static LogScanner<InternalRow> createLogScanner(Table table) {
         return table.newScan().createLogScanner();
     }
 
-    protected static LogScanner createLogScanner(Table table, int[] projectFields) {
+    protected static LogScanner<InternalRow> createLogScanner(Table table, int[] projectFields) {
         return table.newScan().project(projectFields).createLogScanner();
     }
 
-    protected static void subscribeFromBeginning(LogScanner logScanner, Table table) {
+    protected static void subscribeFromBeginning(LogScanner<?> logScanner, Table table) {
         int bucketCount = table.getTableInfo().getNumBuckets();
         for (int i = 0; i < bucketCount; i++) {
             logScanner.subscribeFromBeginning(i);
@@ -216,10 +216,10 @@ public abstract class ClientToServerITCaseBase {
                 logScanner.subscribeFromBeginning(partitionId, 0);
             }
             while (scanRecordCount < totalRecords) {
-                ScanRecords scanRecords = logScanner.poll(Duration.ofSeconds(1));
+                ScanRecords<InternalRow> scanRecords = logScanner.poll(Duration.ofSeconds(1));
                 for (TableBucket scanBucket : scanRecords.buckets()) {
-                    List<ScanRecord> records = scanRecords.records(scanBucket);
-                    for (ScanRecord scanRecord : records) {
+                    List<ScanRecord<InternalRow>> records = scanRecords.records(scanBucket);
+                    for (ScanRecord<InternalRow> scanRecord : records) {
                         actualRows
                                 .computeIfAbsent(
                                         scanBucket.getPartitionId(), k -> new ArrayList<>())
@@ -268,13 +268,14 @@ public abstract class ClientToServerITCaseBase {
         upsertWriter.upsert(row);
         upsertWriter.flush();
         // lookup this key.
-        Lookuper lookuper = table.newLookup().createLookuper();
+        Lookuper<InternalRow> lookuper = table.newLookup().createLookuper();
         ProjectedRow keyRow = ProjectedRow.from(schema.getPrimaryKeyIndexes());
         keyRow.replaceRow(row);
         assertThatRow(lookupRow(lookuper, keyRow)).withSchema(schema.getRowType()).isEqualTo(row);
     }
 
-    protected static InternalRow lookupRow(Lookuper lookuper, InternalRow keyRow) throws Exception {
+    protected static InternalRow lookupRow(Lookuper<InternalRow> lookuper, InternalRow keyRow)
+            throws Exception {
         // lookup this key.
         return lookuper.lookup(keyRow).get().getSingletonRow();
     }
