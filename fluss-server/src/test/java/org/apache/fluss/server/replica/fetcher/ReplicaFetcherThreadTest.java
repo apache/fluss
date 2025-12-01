@@ -21,50 +21,62 @@ import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.MemorySize;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.remote.RemoteLogSegment;
 import org.apache.fluss.rpc.RpcClient;
+import org.apache.fluss.rpc.entity.FetchLogResultForBucket;
 import org.apache.fluss.rpc.entity.ProduceLogResultForBucket;
+import org.apache.fluss.rpc.gateway.CoordinatorGateway;
 import org.apache.fluss.rpc.metrics.TestingClientMetricGroup;
 import org.apache.fluss.server.coordinator.LakeCatalogDynamicLoader;
 import org.apache.fluss.server.coordinator.MetadataManager;
 import org.apache.fluss.server.coordinator.TestCoordinatorGateway;
+import org.apache.fluss.server.entity.FetchReqInfo;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrResultForBucket;
+import org.apache.fluss.server.exception.CorruptIndexException;
 import org.apache.fluss.server.kv.KvManager;
 import org.apache.fluss.server.kv.snapshot.TestingCompletedKvSnapshotCommitter;
+import org.apache.fluss.server.log.FetchParams;
 import org.apache.fluss.server.log.LogManager;
+import org.apache.fluss.server.log.LogTablet;
+import org.apache.fluss.server.log.remote.RemoteLogManager;
+import org.apache.fluss.server.log.remote.RemoteLogStorage;
+import org.apache.fluss.server.log.remote.TestingRemoteLogStorage;
 import org.apache.fluss.server.metadata.TabletServerMetadataCache;
 import org.apache.fluss.server.metrics.group.TabletServerMetricGroup;
 import org.apache.fluss.server.metrics.group.TestingMetricGroups;
 import org.apache.fluss.server.replica.Replica;
 import org.apache.fluss.server.replica.ReplicaManager;
+import org.apache.fluss.server.replica.ReplicaTestBase;
 import org.apache.fluss.server.zk.NOPErrorHandler;
 import org.apache.fluss.server.zk.ZooKeeperClient;
-import org.apache.fluss.server.zk.ZooKeeperExtension;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.TableRegistration;
-import org.apache.fluss.testutils.common.AllCallbackWrapper;
+import org.apache.fluss.testutils.common.ManuallyTriggeredScheduledExecutorService;
 import org.apache.fluss.utils.clock.Clock;
-import org.apache.fluss.utils.clock.ManualClock;
 import org.apache.fluss.utils.concurrent.FlussScheduler;
 import org.apache.fluss.utils.concurrent.Scheduler;
 
-import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.RegisterExtension;
-import org.junit.jupiter.api.io.TempDir;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.nio.channels.FileChannel;
+import java.nio.file.StandardOpenOption;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.function.Consumer;
 
 import static org.apache.fluss.record.TestData.DATA1;
@@ -79,16 +91,11 @@ import static org.apache.fluss.testutils.DataTestUtils.genMemoryLogRecordsByObje
 import static org.apache.fluss.testutils.DataTestUtils.genMemoryLogRecordsWithWriterId;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link ReplicaFetcherThread}. */
-public class ReplicaFetcherThreadTest {
-    @RegisterExtension
-    public static final AllCallbackWrapper<ZooKeeperExtension> ZOO_KEEPER_EXTENSION_WRAPPER =
-            new AllCallbackWrapper<>(new ZooKeeperExtension());
+public class ReplicaFetcherThreadTest extends ReplicaTestBase {
 
-    private static ZooKeeperClient zkClient;
-    private ManualClock manualClock;
-    private @TempDir File tempDir;
     private TableBucket tb;
     private final int leaderServerId = 1;
     private final int followerServerId = 2;
@@ -96,23 +103,19 @@ public class ReplicaFetcherThreadTest {
     private ServerNode leader;
     private ReplicaManager followerRM;
     private ReplicaFetcherThread followerFetcher;
-
-    @BeforeAll
-    static void baseBeforeAll() {
-        zkClient =
-                ZOO_KEEPER_EXTENSION_WRAPPER
-                        .getCustomExtension()
-                        .getZooKeeperClient(NOPErrorHandler.INSTANCE);
-    }
+    private ManuallyTriggeredScheduledExecutorService leaderRemoteLogTaskScheduler;
 
     @BeforeEach
     public void setup() throws Exception {
+        super.setup();
         ZOO_KEEPER_EXTENSION_WRAPPER.getCustomExtension().cleanupRoot();
-        manualClock = new ManualClock(System.currentTimeMillis());
         Configuration conf = new Configuration();
         tb = new TableBucket(DATA1_TABLE_ID, 0);
-        leaderRM = createReplicaManager(leaderServerId);
-        followerRM = createReplicaManager(followerServerId);
+        leaderRemoteLogTaskScheduler = new ManuallyTriggeredScheduledExecutorService();
+        leaderRM = createReplicaManager(leaderServerId, leaderRemoteLogTaskScheduler);
+        followerRM =
+                createReplicaManager(
+                        followerServerId, new ManuallyTriggeredScheduledExecutorService());
         // with local test leader end point.
         leader =
                 new ServerNode(
@@ -170,6 +173,59 @@ public class ReplicaFetcherThreadTest {
                 () ->
                         assertThat(followerRM.getReplicaOrException(tb).getLocalLogEndOffset())
                                 .isEqualTo(20L));
+    }
+
+    @Test
+    void testFetchRemoteWithCorruptIndex() throws Exception {
+        LogTablet logTablet = leaderRM.getReplicaOrException(tb).getLogTablet();
+        addMultiSegmentsToLogTablet(logTablet, 5);
+
+        File file = logTablet.getSegments().get(0).timeIndex().file();
+        // mock corrupt index
+        try (FileChannel fileChannel = FileChannel.open(file.toPath(), StandardOpenOption.APPEND)) {
+            for (int i = 0; i < 12; i++) {
+                fileChannel.write(ByteBuffer.wrap(new byte[] {0}));
+            }
+        }
+
+        // trigger RLMTask copy local log segment to remote and update metadata.
+        leaderRemoteLogTaskScheduler.triggerPeriodicScheduledTasks();
+        List<RemoteLogSegment> remoteLogSegmentList =
+                leaderRM.getRemoteLogManager().relevantRemoteLogSegments(tb, 0L);
+        assertThat(remoteLogSegmentList.size()).isEqualTo(4);
+
+        logTablet.updateRemoteLogEndOffset(40L);
+
+        // mock fetch by client, should throw CorruptIndexException, since we have a corrupt index.
+        CompletableFuture<Map<TableBucket, FetchLogResultForBucket>> future =
+                new CompletableFuture<>();
+        assertThatThrownBy(
+                        () ->
+                                leaderRM.fetchLogRecords(
+                                        new FetchParams(-1, Integer.MAX_VALUE),
+                                        Collections.singletonMap(
+                                                tb,
+                                                new FetchReqInfo(tb.getTableId(), 0L, 1024 * 1024)),
+                                        future::complete))
+                .isInstanceOf(CorruptIndexException.class);
+
+        // begin fetcher thread.
+        followerFetcher.addBuckets(
+                Collections.singletonMap(
+                        tb,
+                        new InitialFetchStatus(DATA1_TABLE_ID, DATA1_TABLE_PATH, leader.id(), 0L)));
+        followerFetcher.start();
+        // fetcher should succeed in spite of corrupt index.
+        retry(
+                Duration.ofSeconds(20),
+                () ->
+                        assertThat(followerRM.getReplicaOrException(tb).getLocalLogStartOffset())
+                                .isEqualTo(40L));
+        retry(
+                Duration.ofSeconds(20),
+                () ->
+                        assertThat(followerRM.getReplicaOrException(tb).getLocalLogEndOffset())
+                                .isEqualTo(50L));
     }
 
     @Test
@@ -390,10 +446,15 @@ public class ReplicaFetcherThreadTest {
                 result -> {});
     }
 
-    private ReplicaManager createReplicaManager(int serverId) throws Exception {
+    private ReplicaManager createReplicaManager(
+            int serverId, ScheduledExecutorService remoteLogTaskScheduler) throws Exception {
         Configuration conf = new Configuration();
         conf.setString(ConfigOptions.DATA_DIR, tempDir.getAbsolutePath() + "/server-" + serverId);
+        conf.set(ConfigOptions.REMOTE_DATA_DIR, tempDir.getAbsolutePath() + "/remote_data_dir");
         conf.set(ConfigOptions.WRITER_ID_EXPIRATION_TIME, Duration.ofHours(12));
+        conf.set(ConfigOptions.LOG_SEGMENT_FILE_SIZE, MemorySize.parse("10kb"));
+        conf.set(ConfigOptions.LOG_INDEX_INTERVAL_SIZE, MemorySize.parse("1b"));
+        conf.set(ConfigOptions.REMOTE_LOG_TASK_INTERVAL_DURATION, Duration.ofSeconds(10));
         Scheduler scheduler = new FlussScheduler(2);
         scheduler.startup();
 
@@ -405,6 +466,18 @@ public class ReplicaFetcherThreadTest {
                         manualClock,
                         TestingMetricGroups.TABLET_SERVER_METRICS);
         logManager.startup();
+
+        CoordinatorGateway coordinatorGateway = new TestCoordinatorGateway(zkClient);
+        RemoteLogStorage remoteLogStorage = new TestingRemoteLogStorage(conf);
+        RemoteLogManager remoteLogManager =
+                new RemoteLogManager(
+                        conf,
+                        zkClient,
+                        coordinatorGateway,
+                        remoteLogStorage,
+                        remoteLogTaskScheduler,
+                        manualClock);
+
         ReplicaManager replicaManager =
                 new TestingReplicaManager(
                         conf,
@@ -418,8 +491,10 @@ public class ReplicaFetcherThreadTest {
                                         null,
                                         conf,
                                         new LakeCatalogDynamicLoader(conf, null, true))),
+                        coordinatorGateway,
                         RpcClient.create(conf, TestingClientMetricGroup.newInstance(), false),
                         TestingMetricGroups.TABLET_SERVER_METRICS,
+                        remoteLogManager,
                         manualClock);
         replicaManager.startup();
         return replicaManager;
@@ -438,8 +513,10 @@ public class ReplicaFetcherThreadTest {
                 ZooKeeperClient zkClient,
                 int serverId,
                 TabletServerMetadataCache metadataCache,
+                CoordinatorGateway coordinatorGateway,
                 RpcClient rpcClient,
                 TabletServerMetricGroup serverMetricGroup,
+                RemoteLogManager remoteLogManager,
                 Clock clock)
                 throws IOException {
             super(
@@ -451,10 +528,11 @@ public class ReplicaFetcherThreadTest {
                     serverId,
                     metadataCache,
                     rpcClient,
-                    new TestCoordinatorGateway(),
+                    coordinatorGateway,
                     new TestingCompletedKvSnapshotCommitter(),
                     NOPErrorHandler.INSTANCE,
                     serverMetricGroup,
+                    remoteLogManager,
                     clock);
         }
 
@@ -471,11 +549,13 @@ public class ReplicaFetcherThreadTest {
                     if (leaderId == serverId) {
                         try {
                             replica.makeLeader(data);
-                        } catch (IOException e) {
+                            remoteLogManager.startLogTiering(replica);
+                        } catch (Exception e) {
                             throw new FlussRuntimeException(e);
                         }
                     } else {
                         replica.makeFollower(data);
+                        remoteLogManager.stopLogTiering(replica);
                     }
                 }
             }
