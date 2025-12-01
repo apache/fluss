@@ -36,6 +36,7 @@ import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
 import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.server.zk.data.TableRegistration;
+import org.apache.fluss.server.zk.data.ZkVersion;
 import org.apache.fluss.testutils.common.AllCallbackWrapper;
 
 import org.junit.jupiter.api.AfterAll;
@@ -109,8 +110,10 @@ class ZkBasedMetadataProviderTest {
         LeaderAndIsr leaderAndIsr0 = new LeaderAndIsr(1, 10, Arrays.asList(1, 2, 3), 100, 1000);
         LeaderAndIsr leaderAndIsr1 = new LeaderAndIsr(2, 20, Arrays.asList(2, 3, 4), 200, 2000);
 
-        zookeeperClient.registerLeaderAndIsr(tableBucket0, leaderAndIsr0);
-        zookeeperClient.registerLeaderAndIsr(tableBucket1, leaderAndIsr1);
+        zookeeperClient.registerLeaderAndIsr(
+                tableBucket0, leaderAndIsr0, ZkVersion.MATCH_ANY_VERSION.getVersion());
+        zookeeperClient.registerLeaderAndIsr(
+                tableBucket1, leaderAndIsr1, ZkVersion.MATCH_ANY_VERSION.getVersion());
 
         List<TableMetadata> tablesMetadataFromZK =
                 metadataProvider.getTablesMetadataFromZK(
@@ -170,8 +173,10 @@ class ZkBasedMetadataProviderTest {
         LeaderAndIsr leaderAndIsr0 = new LeaderAndIsr(1, 10, Arrays.asList(1, 2), 100, 1000);
         LeaderAndIsr leaderAndIsr1 = new LeaderAndIsr(2, 20, Arrays.asList(2, 3), 200, 2000);
 
-        zookeeperClient.registerLeaderAndIsr(partitionBucket0, leaderAndIsr0);
-        zookeeperClient.registerLeaderAndIsr(partitionBucket1, leaderAndIsr1);
+        zookeeperClient.registerLeaderAndIsr(
+                partitionBucket0, leaderAndIsr0, ZkVersion.MATCH_ANY_VERSION.getVersion());
+        zookeeperClient.registerLeaderAndIsr(
+                partitionBucket1, leaderAndIsr1, ZkVersion.MATCH_ANY_VERSION.getVersion());
 
         // Test getPartitionMetadataFromZkAsync
         PhysicalTablePath partitionPath = PhysicalTablePath.of(tablePath, partitionName);
@@ -254,11 +259,17 @@ class ZkBasedMetadataProviderTest {
         TableBucket bucket3 = new TableBucket(tableId2, partitionId3, 0);
 
         zookeeperClient.registerLeaderAndIsr(
-                bucket1, new LeaderAndIsr(1, 10, Arrays.asList(1, 2), 100, 1000));
+                bucket1,
+                new LeaderAndIsr(1, 10, Arrays.asList(1, 2), 100, 1000),
+                ZkVersion.MATCH_ANY_VERSION.getVersion());
         zookeeperClient.registerLeaderAndIsr(
-                bucket2, new LeaderAndIsr(2, 20, Arrays.asList(2, 3), 200, 2000));
+                bucket2,
+                new LeaderAndIsr(2, 20, Arrays.asList(2, 3), 200, 2000),
+                ZkVersion.MATCH_ANY_VERSION.getVersion());
         zookeeperClient.registerLeaderAndIsr(
-                bucket3, new LeaderAndIsr(1, 30, Arrays.asList(1, 3), 300, 3000));
+                bucket3,
+                new LeaderAndIsr(1, 30, Arrays.asList(1, 3), 300, 3000),
+                ZkVersion.MATCH_ANY_VERSION.getVersion());
 
         // Test getPartitionsMetadataFromZK
         List<PhysicalTablePath> partitionPaths =

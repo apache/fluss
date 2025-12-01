@@ -36,6 +36,7 @@ import org.apache.fluss.server.zk.ZooKeeperExtension;
 import org.apache.fluss.server.zk.data.BucketAssignment;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
 import org.apache.fluss.server.zk.data.TableAssignment;
+import org.apache.fluss.server.zk.data.ZkVersion;
 import org.apache.fluss.testutils.common.AllCallbackWrapper;
 
 import org.junit.jupiter.api.AfterAll;
@@ -112,7 +113,7 @@ class TableManagerTest {
 
     private void initTableManager() {
         testingEventManager = new TestingEventManager();
-        coordinatorContext = new CoordinatorContext();
+        coordinatorContext = new TestCoordinatorContext();
         testCoordinatorChannelManager = new TestCoordinatorChannelManager();
         Configuration conf = new Configuration();
         conf.setString(ConfigOptions.REMOTE_DATA_DIR, "/tmp/fluss/remote-data");
@@ -169,7 +170,7 @@ class TableManagerTest {
         // all replica should be online
         checkReplicaOnline(tableId, null, assignment);
         // clear the assignment for the table
-        zookeeperClient.deleteTableAssignment(tableId);
+        zookeeperClient.deleteTableAssignment(tableId, ZkVersion.MATCH_ANY_VERSION.getVersion());
     }
 
     @Test
@@ -177,7 +178,8 @@ class TableManagerTest {
         // first, create a table
         long tableId = zookeeperClient.getTableIdAndIncrement();
         TableAssignment assignment = createAssignment();
-        zookeeperClient.registerTableAssignment(tableId, assignment);
+        zookeeperClient.registerTableAssignment(
+                tableId, assignment, ZkVersion.MATCH_ANY_VERSION.getVersion());
 
         coordinatorContext.putTableInfo(
                 TableInfo.of(
@@ -216,7 +218,8 @@ class TableManagerTest {
         // first, create a table
         long tableId = zookeeperClient.getTableIdAndIncrement();
         TableAssignment assignment = createAssignment();
-        zookeeperClient.registerTableAssignment(tableId, assignment);
+        zookeeperClient.registerTableAssignment(
+                tableId, assignment, ZkVersion.MATCH_ANY_VERSION.getVersion());
 
         coordinatorContext.putTableInfo(
                 TableInfo.of(
@@ -263,7 +266,8 @@ class TableManagerTest {
         // create a table
         long tableId = zookeeperClient.getTableIdAndIncrement();
         TableAssignment assignment = TableAssignment.builder().build();
-        zookeeperClient.registerTableAssignment(tableId, assignment);
+        zookeeperClient.registerTableAssignment(
+                tableId, assignment, ZkVersion.MATCH_ANY_VERSION.getVersion());
 
         coordinatorContext.putTableInfo(
                 TableInfo.of(
