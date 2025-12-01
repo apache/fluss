@@ -1513,6 +1513,12 @@ public class ConfigOptions {
                             "The max size of the consumed memory for RocksDB batch write, "
                                     + "will flush just based on item count if this config set to 0.");
 
+    public static final ConfigOption<Boolean> KV_STATISTICS_ENABLED =
+            key("kv.rocksdb.metrics.enabled")
+                    .booleanType()
+                    .defaultValue(true)
+                    .withDescription("Enable RocksDB statistics collection for monitoring metrics");
+
     // --------------------------------------------------------------------------
     // Provided configurable ColumnFamilyOptions within Fluss
     // --------------------------------------------------------------------------

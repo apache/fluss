@@ -140,6 +140,42 @@ public class MetricNames {
     public static final String LOCAL_STORAGE_LOG_SIZE = "logSize";
     public static final String LOCAL_STORAGE_KV_SIZE = "kvSize";
 
+    // for rocksdb metrics
+    // cache metrics
+    public static final String ROCKSDB_BLOCK_CACHE_MISS_COUNT = "rocksdbBlockCacheMissCount";
+    public static final String ROCKSDB_BLOCK_CACHE_HIT_COUNT = "rocksdbBlockCacheHitCount";
+    public static final String ROCKSDB_BLOCK_CACHE_ADD_COUNT = "rocksdbBlockCacheAddCount";
+    public static final String ROCKSDB_BLOCK_CACHE_USAGE = "rocksdbBlockCacheUsage";
+    public static final String ROCKSDB_BLOCK_CACHE_PINNED_USAGE = "rocksdbBlockCachePinnedUsage";
+
+    // compaction metrics
+    public static final String ROCKSDB_COMPACTION_BYTES_READ = "rocksdbCompactionBytesRead";
+    public static final String ROCKSDB_COMPACTION_BYTES_WRITTEN = "rocksdbCompactionBytesWritten";
+    public static final String ROCKSDB_COMPACTION_TIME_MICROS = "rocksdbCompactionTimeMicros";
+    public static final String ROCKSDB_COMPACTION_PENDING = "rocksdbCompactionPending";
+    public static final String ROCKSDB_FLUSH_BYTES_WRITTEN = "rocksdbFlushBytesWritten";
+    public static final String ROCKSDB_FLUSH_PENDING = "rocksdbFlushPending";
+
+    // memory metrics
+    public static final String ROCKSDB_MEMTABLE_MEMORY_USAGE = "rocksdbMemtableMemoryUsage";
+    public static final String ROCKSDB_BLOCK_CACHE_MEMORY_USAGE = "rocksdbBlockCacheMemoryUsage";
+    public static final String ROCKSDB_TABLE_READERS_MEMORY_USAGE =
+            "rocksdbTableReadersMemoryUsage";
+    public static final String ROCKSDB_TOTAL_MEMORY_USAGE = "rocksdbTotalMemoryUsage";
+
+    // I/O metrics
+    public static final String ROCKSDB_BYTES_READ = "rocksdbBytesRead";
+    public static final String ROCKSDB_BYTES_WRITTEN = "rocksdbBytesWritten";
+
+    // SST files metrics
+    public static final String ROCKSDB_TOTAL_SST_FILES_SIZE = "rocksdbTotalSstFilesSize";
+    public static final String ROCKSDB_NUM_FILES_AT_LEVEL_0 = "rocksdbNumFilesAtLevel0";
+
+    // Latency metrics
+    public static final String ROCKSDB_WRITE_STALL_MICROS = "rocksdbWriteStallMicros";
+    public static final String ROCKSDB_DB_GET_LATENCY_MICROS = "rocksdbDbGetLatencyMicros";
+    public static final String ROCKSDB_DB_WRITE_LATENCY_MICROS = "rocksdbDbWriteLatencyMicros";
+
     // --------------------------------------------------------------------------------------------
     // metrics for rpc client
     // --------------------------------------------------------------------------------------------

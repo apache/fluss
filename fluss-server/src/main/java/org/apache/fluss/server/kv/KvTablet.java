@@ -44,6 +44,8 @@ import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer;
 import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer.TruncateReason;
 import org.apache.fluss.server.kv.rocksdb.RocksDBKv;
 import org.apache.fluss.server.kv.rocksdb.RocksDBKvBuilder;
+import org.apache.fluss.server.kv.rocksdb.RocksDBMetricsCollector;
+import org.apache.fluss.server.kv.rocksdb.RocksDBMetricsManager;
 import org.apache.fluss.server.kv.rocksdb.RocksDBResourceContainer;
 import org.apache.fluss.server.kv.rowmerger.RowMerger;
 import org.apache.fluss.server.kv.snapshot.KvFileHandleAndLocalPath;
@@ -77,6 +79,7 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Executor;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
@@ -118,12 +121,15 @@ public final class KvTablet {
     @GuardedBy("kvLock")
     private volatile boolean isClosed = false;
 
+    private volatile RocksDBMetricsCollector rocksDBMetricsCollector;
+
     private KvTablet(
             PhysicalTablePath physicalPath,
             TableBucket tableBucket,
             LogTablet logTablet,
             File kvTabletDir,
             TabletServerMetricGroup serverMetricGroup,
+            RocksDBMetricsManager rocksDBMetricsManager,
             RocksDBKv rocksDBKv,
             long writeBatchSize,
             LogFormat logFormat,
@@ -147,6 +153,28 @@ public final class KvTablet {
         this.schema = schema;
         this.rowMerger = rowMerger;
         this.arrowCompressionInfo = arrowCompressionInfo;
+
+        // Initialize RocksDB metrics collector if statistics is available
+        try {
+            org.rocksdb.Statistics statistics = rocksDBKv.getOptionsContainer().getStatistics();
+            if (statistics != null) {
+                this.rocksDBMetricsCollector =
+                        new RocksDBMetricsCollector(
+                                rocksDBKv.getDb(),
+                                statistics,
+                                tableBucket,
+                                physicalPath.getTablePath(),
+                                physicalPath.getPartitionName(),
+                                rocksDBKv.getOptionsContainer(),
+                                rocksDBMetricsManager);
+            }
+        } catch (Exception e) {
+            LOG.warn(
+                    "Failed to initialize RocksDB metrics reporter for table {} bucket {}",
+                    physicalPath,
+                    tableBucket.getBucket(),
+                    e);
+        }
     }
 
     public static KvTablet create(
@@ -154,6 +182,7 @@ public final class KvTablet {
             File kvTabletDir,
             Configuration serverConf,
             TabletServerMetricGroup serverMetricGroup,
+            RocksDBMetricsManager rocksDBMetricsManager,
             BufferAllocator arrowBufferAllocator,
             MemorySegmentPool memorySegmentPool,
             KvFormat kvFormat,
@@ -170,6 +199,7 @@ public final class KvTablet {
                 kvTabletDir,
                 serverConf,
                 serverMetricGroup,
+                rocksDBMetricsManager,
                 arrowBufferAllocator,
                 memorySegmentPool,
                 kvFormat,
@@ -185,6 +215,7 @@ public final class KvTablet {
             File kvTabletDir,
             Configuration serverConf,
             TabletServerMetricGroup serverMetricGroup,
+            RocksDBMetricsManager rocksDBMetricsManager,
             BufferAllocator arrowBufferAllocator,
             MemorySegmentPool memorySegmentPool,
             KvFormat kvFormat,
@@ -199,6 +230,7 @@ public final class KvTablet {
                 logTablet,
                 kvTabletDir,
                 serverMetricGroup,
+                rocksDBMetricsManager,
                 kv,
                 serverConf.get(ConfigOptions.KV_WRITE_BATCH_SIZE).getBytes(),
                 logTablet.getLogFormat(),
@@ -511,10 +543,44 @@ public final class KvTablet {
                     if (isClosed) {
                         return;
                     }
-                    if (rocksDBKv != null) {
-                        rocksDBKv.close();
-                    }
+
+                    // Set closed flag first to prevent new operations
                     isClosed = true;
+
+                    // Close RocksDB metrics reporter first with proper error handling
+                    if (rocksDBMetricsCollector != null) {
+                        try {
+                            rocksDBMetricsCollector.close();
+                            // Wait for cleanup to complete with timeout
+                            if (!rocksDBMetricsCollector.waitForCleanup(10, TimeUnit.SECONDS)) {
+                                LOG.warn(
+                                        "Timeout waiting for RocksDB metrics collector cleanup for table {} bucket {}",
+                                        physicalPath,
+                                        tableBucket.getBucket());
+                            }
+                        } catch (Exception e) {
+                            LOG.warn(
+                                    "Failed to close RocksDB metrics reporter for table {} bucket {}",
+                                    physicalPath,
+                                    tableBucket.getBucket(),
+                                    e);
+                        } finally {
+                            rocksDBMetricsCollector = null;
+                        }
+                    }
+
+                    // Close RocksDB instance last
+                    if (rocksDBKv != null) {
+                        try {
+                            rocksDBKv.close();
+                        } catch (Exception e) {
+                            LOG.warn(
+                                    "Failed to close RocksDB instance for table {} bucket {}",
+                                    physicalPath,
+                                    tableBucket.getBucket(),
+                                    e);
+                        }
+                    }
                 });
     }
 
