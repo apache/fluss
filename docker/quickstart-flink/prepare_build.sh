@@ -162,10 +162,10 @@ main() {
 
     # Download paimon-flink connector
     download_jar \
-        "https://repo1.maven.org/maven2/org/apache/paimon/paimon-flink-1.20/1.2.0/paimon-flink-1.20-1.2.0.jar" \
-        "./lib/paimon-flink-1.20-1.2.0.jar" \
+        "https://repo1.maven.org/maven2/org/apache/paimon/paimon-flink-1.20/1.3.1/paimon-flink-1.20-1.3.1.jar" \
+        "./lib/paimon-flink-1.20-1.3.1.jar" \
         "b9f8762c6e575f6786f1d156a18d51682ffc975c" \
-        "paimon-flink-1.20-1.2.0"
+        "paimon-flink-1.20-1.3.1"
 
     # Iceberg Support
     log_info "Downloading Iceberg connector JARs..."
