@@ -19,18 +19,13 @@
 package org.apache.fluss.server.zk.data.lake;
 
 import org.apache.fluss.fs.FSDataInputStream;
-import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.server.zk.data.ZkData;
 import org.apache.fluss.utils.IOUtils;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import javax.annotation.Nullable;
 
 import java.io.ByteArrayOutputStream;
-import java.io.IOException;
 
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
@@ -41,19 +36,23 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
  *
  * <ul>
  *   <li>Version 1 (legacy): Contains the full {@link LakeTableSnapshot} data directly
- *   <li>Version 2 (current): Contains only the file path points to the file storing {@link
- *       LakeTableSnapshot}, with actual data in remote file
+ *   <li>Version 2 (current): Contains only the file paths point to the file storing {@link
+ *       LakeTableSnapshot}.
  * </ul>
  *
  * @see LakeTableJsonSerde for JSON serialization and deserialization
  */
 public class LakeTable {
 
-    private static final Logger LOG = LoggerFactory.getLogger(LakeTable.class);
-
-    // Version 2 (current): the pointer to the file stores the LakeTableSnapshot, will be null in
+    // Version 2 (current):
+    // the pointer to the file storing the latest known LakeTableSnapshot, will be null in
     // version1
-    @Nullable private final FsPath lakeTableSnapshotFileHandle;
+    @Nullable private final FsPath lakeTableLatestSnapshotFileHandle;
+
+    // the pointer to the file storing the latest known compacted LakeTableSnapshot, will be null in
+    // version1 or no any known compacted LakeTableSnapshot
+    // todo: support tiering service commit lake table latest compacted snapshot to Fluss
+    @Nullable private final FsPath lakeTableLatestCompactedSnapshotFileHandle = null;
 
     // Version 1 (legacy): the full lake table snapshot info stored in ZK, will be null in version2
     @Nullable private final LakeTableSnapshot lakeTableSnapshot;
@@ -80,12 +79,12 @@ public class LakeTable {
             @Nullable LakeTableSnapshot lakeTableSnapshot,
             @Nullable FsPath lakeTableSnapshotFileHandle) {
         this.lakeTableSnapshot = lakeTableSnapshot;
-        this.lakeTableSnapshotFileHandle = lakeTableSnapshotFileHandle;
+        this.lakeTableLatestSnapshotFileHandle = lakeTableSnapshotFileHandle;
     }
 
     @Nullable
-    public FsPath getLakeTableSnapshotFileHandle() {
-        return lakeTableSnapshotFileHandle;
+    public FsPath getLakeTableLatestSnapshotFileHandle() {
+        return lakeTableLatestSnapshotFileHandle;
     }
 
     /**
@@ -101,31 +100,12 @@ public class LakeTable {
             return lakeTableSnapshot;
         }
         FSDataInputStream inputStream =
-                checkNotNull(lakeTableSnapshotFileHandle)
+                checkNotNull(getLakeTableLatestSnapshotFileHandle())
                         .getFileSystem()
-                        .open(lakeTableSnapshotFileHandle);
+                        .open(getLakeTableLatestSnapshotFileHandle());
         try (ByteArrayOutputStream outputStream = new ByteArrayOutputStream()) {
             IOUtils.copyBytes(inputStream, outputStream, true);
             return LakeTableSnapshotJsonSerde.fromJson(outputStream.toByteArray());
-        }
-    }
-
-    /**
-     * Discards the metadata file if it exists.
-     *
-     * <p>This method deletes the remote metadata file. It is safe to call this method even if the
-     * file does not exist or if this LakeTable was created from a snapshot (version 1 format).
-     */
-    public void discard() {
-        if (lakeTableSnapshotFileHandle != null) {
-            try {
-                FileSystem fileSystem = lakeTableSnapshotFileHandle.getFileSystem();
-                if (fileSystem.exists(lakeTableSnapshotFileHandle)) {
-                    fileSystem.delete(lakeTableSnapshotFileHandle, false);
-                }
-            } catch (IOException e) {
-                LOG.warn("Error deleting metadata at {}", lakeTableSnapshotFileHandle, e);
-            }
         }
     }
 }

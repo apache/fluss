@@ -87,6 +87,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
 import java.util.function.BiFunction;
 import java.util.stream.Collectors;
 
@@ -134,14 +135,16 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
             TabletServerMetadataCache metadataCache,
             MetadataManager metadataManager,
             @Nullable Authorizer authorizer,
-            DynamicConfigManager dynamicConfigManager) {
+            DynamicConfigManager dynamicConfigManager,
+            ExecutorService ioExecutor) {
         super(
                 remoteFileSystem,
                 ServerType.TABLET_SERVER,
                 zkClient,
                 metadataManager,
                 authorizer,
-                dynamicConfigManager);
+                dynamicConfigManager,
+                ioExecutor);
         this.serviceName = "server-" + serverId;
         this.replicaManager = replicaManager;
         this.metadataCache = metadataCache;
