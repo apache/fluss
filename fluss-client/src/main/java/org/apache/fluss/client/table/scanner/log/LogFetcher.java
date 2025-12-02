@@ -26,6 +26,7 @@ import org.apache.fluss.client.table.scanner.ScanRecord;
 import org.apache.fluss.cluster.BucketLocation;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.ApiException;
 import org.apache.fluss.exception.InvalidMetadataException;
 import org.apache.fluss.exception.LeaderNotAvailableException;
 import org.apache.fluss.fs.FsPath;
@@ -47,6 +48,7 @@ import org.apache.fluss.rpc.messages.PbFetchLogReqForBucket;
 import org.apache.fluss.rpc.messages.PbFetchLogReqForTable;
 import org.apache.fluss.rpc.messages.PbFetchLogRespForBucket;
 import org.apache.fluss.rpc.messages.PbFetchLogRespForTable;
+import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.utils.IOUtils;
 import org.apache.fluss.utils.Projection;
@@ -221,7 +223,8 @@ public class LogFetcher implements Closeable {
         }
     }
 
-    private void sendFetchRequest(int destination, FetchLogRequest fetchLogRequest) {
+    @VisibleForTesting
+    void sendFetchRequest(int destination, FetchLogRequest fetchLogRequest) {
         TableOrPartitions tableOrPartitionsInFetchRequest =
                 getTableOrPartitionsInFetchRequest(fetchLogRequest);
         // TODO cache the tablet server gateway.
@@ -342,6 +345,14 @@ public class LogFetcher implements Closeable {
                                     respForBucket.getBucketId());
                     FetchLogResultForBucket fetchResultForBucket =
                             getFetchLogResultForBucket(tb, tablePath, respForBucket);
+
+                    // if error code is not NONE, it means the fetch log request failed, we need to
+                    // clear table bucket meta for InvalidMetadataException.
+                    if (fetchResultForBucket.getErrorCode() != Errors.NONE.code()) {
+                        ApiError error = ApiError.fromErrorMessage(respForBucket);
+                        handleFetchLogExceptionForBucket(tb, destination, error);
+                    }
+
                     Long fetchOffset = logScannerStatus.getBucketOffset(tb);
                     // if the offset is null, it means the bucket has been unsubscribed,
                     // we just set a Long.MAX_VALUE as the next fetch offset
@@ -384,6 +395,29 @@ public class LogFetcher implements Closeable {
         }
     }
 
+    private void handleFetchLogExceptionForBucket(TableBucket tb, int destination, ApiError error) {
+        ApiException exception = error.error().exception();
+        LOG.error("Failed to fetch log from node {} for bucket {}", destination, tb, exception);
+        if (exception instanceof InvalidMetadataException) {
+            LOG.warn(
+                    "Invalid metadata error in fetch log request. "
+                            + "Going to request metadata update.",
+                    exception);
+            long tableId = tb.getTableId();
+            TableOrPartitions tableOrPartitions;
+            if (tb.getPartitionId() == null) {
+                tableOrPartitions = new TableOrPartitions(Collections.singleton(tableId), null);
+            } else {
+                tableOrPartitions =
+                        new TableOrPartitions(
+                                null,
+                                Collections.singleton(
+                                        new TablePartition(tableId, tb.getPartitionId())));
+            }
+            invalidTableOrPartitions(tableOrPartitions);
+        }
+    }
+
     private void pendRemoteFetches(
             RemoteLogFetchInfo remoteLogFetchInfo, long firstFetchOffset, long highWatermark) {
         checkNotNull(remoteLogFetchInfo);
@@ -414,7 +448,8 @@ public class LogFetcher implements Closeable {
         }
     }
 
-    private Map<Integer, FetchLogRequest> prepareFetchLogRequests() {
+    @VisibleForTesting
+    Map<Integer, FetchLogRequest> prepareFetchLogRequests() {
         Map<Integer, List<PbFetchLogReqForBucket>> fetchLogReqForBuckets = new HashMap<>();
         int readyForFetchCount = 0;
         Long tableId = null;
