@@ -43,6 +43,7 @@ public class TableScan implements Scan {
 
     /** The projected fields to do projection. No projection if is null. */
     @Nullable private final int[] projectedColumns;
+
     /** The limited row number to read. No limit if is null. */
     @Nullable private final Integer limit;
 

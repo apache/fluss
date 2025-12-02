@@ -1586,6 +1586,7 @@ public class XmlResponsesSaxParser {
         protected ServerSideEncryptionResult sseResult() {
             return result;
         }
+
         /**
          * @see com.amazonaws.services.s3.model.CompleteMultipartUploadResult#getExpirationTime()
          */
