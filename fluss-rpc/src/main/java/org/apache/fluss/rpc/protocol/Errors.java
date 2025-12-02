@@ -60,6 +60,7 @@ import org.apache.fluss.exception.OperationNotAttemptedException;
 import org.apache.fluss.exception.OutOfOrderSequenceException;
 import org.apache.fluss.exception.PartitionAlreadyExistsException;
 import org.apache.fluss.exception.PartitionNotExistException;
+import org.apache.fluss.exception.PreWriteBufferFullException;
 import org.apache.fluss.exception.RecordTooLargeException;
 import org.apache.fluss.exception.RetriableAuthenticationException;
 import org.apache.fluss.exception.SchemaNotExistException;
@@ -228,7 +229,9 @@ public enum Errors {
     INVALID_ALTER_TABLE_EXCEPTION(
             56, "The alter table is invalid.", InvalidAlterTableException::new),
     DELETION_DISABLED_EXCEPTION(
-            57, "Deletion operations are disabled on this table.", DeletionDisabledException::new);
+            57, "Deletion operations are disabled on this table.", DeletionDisabledException::new),
+    PRE_WRITE_BUFFER_FULL_EXCEPTION(
+            58, "The pre-write buffer is full.", PreWriteBufferFullException::new);
 
     private static final Logger LOG = LoggerFactory.getLogger(Errors.class);
 
