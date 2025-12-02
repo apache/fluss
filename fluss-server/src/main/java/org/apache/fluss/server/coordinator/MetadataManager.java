@@ -562,10 +562,14 @@ public class MetadataManager {
         }
         TableRegistration tableReg = optionalTable.get();
         SchemaInfo schemaInfo = getLatestSchema(tablePath);
-        Map<String, String> tableLakeOptions =
-                lakeCatalogDynamicLoader.getLakeCatalogContainer().getDefaultTableLakeOptions();
-        removeSensitiveTableOptions(tableLakeOptions);
-        return tableReg.toTableInfo(tablePath, schemaInfo, tableLakeOptions);
+        LakeCatalogDynamicLoader.LakeCatalogContainer lakeCatalogContainer =
+                lakeCatalogDynamicLoader.getLakeCatalogContainer();
+        removeSensitiveTableOptions(lakeCatalogContainer.getDefaultTableLakeOptions());
+        return tableReg.toTableInfo(
+                tablePath,
+                schemaInfo,
+                lakeCatalogContainer.getDefaultTableLakeOptions(),
+                lakeCatalogContainer.getDataLakeFormat());
     }
 
     public Map<TablePath, TableInfo> getTables(Collection<TablePath> tablePaths)
@@ -587,15 +591,16 @@ public class MetadataManager {
                 }
                 TableRegistration tableReg = tablePath2TableRegistrations.get(tablePath);
                 SchemaInfo schemaInfo = tablePath2SchemaInfos.get(tablePath);
+                LakeCatalogDynamicLoader.LakeCatalogContainer lakeCatalogContainer =
+                        lakeCatalogDynamicLoader.getLakeCatalogContainer();
 
                 result.put(
                         tablePath,
                         tableReg.toTableInfo(
                                 tablePath,
                                 schemaInfo,
-                                lakeCatalogDynamicLoader
-                                        .getLakeCatalogContainer()
-                                        .getDefaultTableLakeOptions()));
+                                lakeCatalogContainer.getDefaultTableLakeOptions(),
+                                lakeCatalogContainer.getDataLakeFormat()));
             }
         } catch (Exception e) {
             throw new FlussRuntimeException(

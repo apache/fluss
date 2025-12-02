@@ -20,6 +20,7 @@ package org.apache.fluss.server.zk.data;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.TableConfig;
+import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableDescriptor;
@@ -87,18 +88,27 @@ public class TableRegistration {
     }
 
     public TableInfo toTableInfo(TablePath tablePath, SchemaInfo schemaInfo) {
-        return toTableInfo(tablePath, schemaInfo, null);
+        return toTableInfo(tablePath, schemaInfo, null, null);
     }
 
     public TableInfo toTableInfo(
             TablePath tablePath,
             SchemaInfo schemaInfo,
-            @Nullable Map<String, String> defaultTableLakeOptions) {
+            @Nullable Map<String, String> defaultTableLakeOptions,
+            @Nullable DataLakeFormat lakeFormat) {
         Configuration properties = Configuration.fromMap(this.properties);
-        if (defaultTableLakeOptions != null) {
+        if (defaultTableLakeOptions != null || lakeFormat != null) {
             if (properties.get(ConfigOptions.TABLE_DATALAKE_ENABLED)) {
-                // only make the lake options visible when the datalake is enabled on the table
-                defaultTableLakeOptions.forEach(properties::setString);
+                if (defaultTableLakeOptions != null) {
+                    // only make the lake options visible when the datalake is enabled on the table
+                    defaultTableLakeOptions.forEach(properties::setString);
+                }
+                if (lakeFormat != null
+                        && !properties
+                                .getOptional(ConfigOptions.TABLE_DATALAKE_FORMAT)
+                                .isPresent()) {
+                    properties.set(ConfigOptions.TABLE_DATALAKE_FORMAT, lakeFormat);
+                }
             }
         }
         return new TableInfo(
