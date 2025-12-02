@@ -170,12 +170,12 @@ main() {
     # Iceberg Support
     log_info "Downloading Iceberg connector JARs..."
 
-    # Download iceberg-flink-runtime for Flink 1.20 (version 1.9.1)
+    # Download iceberg-flink-runtime for Flink 1.20 (version 1.10.0)
     download_jar \
-        "https://repo1.maven.org/maven2/org/apache/iceberg/iceberg-flink-runtime-1.20/1.9.1/iceberg-flink-runtime-1.20-1.9.1.jar" \
-        "./lib/iceberg-flink-runtime-1.20-1.9.1.jar" \
+        "https://repo1.maven.org/maven2/org/apache/iceberg/iceberg-flink-runtime-1.20/1.10.0/iceberg-flink-runtime-1.20-1.10.0.jar" \
+        "./lib/iceberg-flink-runtime-1.20-1.10.0.jar" \
         "" \
-        "iceberg-flink-runtime-1.20-1.9.1"
+        "iceberg-flink-runtime-1.20-1.10.0"
 
 
     # Prepare lake tiering JAR
@@ -201,7 +201,7 @@ verify_jars() {
         "flink-faker-0.5.3.jar"
         "hadoop-apache-3.3.5-2.jar"
         "paimon-flink-1.20-1.2.0.jar"
-        "iceberg-flink-runtime-1.20-1.9.1.jar"
+        "iceberg-flink-runtime-1.20-1.10.0.jar"
     )
 
     local opt_jars=(
@@ -250,7 +250,7 @@ show_summary() {
     echo "  ✓ Fluss Flink 1.20 connector"
     echo "  ✓ Fluss Lake Paimon connector"
     echo "  ✓ Fluss Lake Iceberg connector"
-    echo "  ✓ Iceberg Flink runtime 1.20 (v1.9.1)"
+    echo "  ✓ Iceberg Flink runtime 1.20 (v1.10.0)"
     echo "  ✓ Paimon Flink 1.20 (v1.2.0)"
     echo "  ✓ Hadoop Apache (v3.3.5-2)"
     echo "  ✓ Flink Faker (v0.5.3)"

@@ -30,6 +30,7 @@ import org.apache.fluss.record.DefaultKvRecord;
 import org.apache.fluss.record.DefaultKvRecordBatch;
 import org.apache.fluss.record.KvRecord;
 import org.apache.fluss.record.KvRecordReadContext;
+import org.apache.fluss.record.TestingSchemaGetter;
 import org.apache.fluss.row.BinaryRow;
 import org.apache.fluss.row.encode.CompactedKeyEncoder;
 import org.apache.fluss.types.DataType;
@@ -44,6 +45,7 @@ import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
 import static org.apache.fluss.record.TestData.DATA1_ROW_TYPE;
+import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA_PK;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_ID_PK;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_INFO_PK;
@@ -200,7 +202,12 @@ class KvWriteBatchTest {
 
     protected WriteRecord createWriteRecord() {
         return WriteRecord.forUpsert(
-                PhysicalTablePath.of(DATA1_TABLE_PATH_PK), row, key, key, null);
+                DATA1_TABLE_INFO_PK,
+                PhysicalTablePath.of(DATA1_TABLE_PATH_PK),
+                row,
+                key,
+                key,
+                null);
     }
 
     private KvWriteBatch createKvWriteBatch(TableBucket tb) throws Exception {
@@ -238,7 +245,8 @@ class KvWriteBatchTest {
                 recordBatch
                         .records(
                                 KvRecordReadContext.createReadContext(
-                                        KvFormat.COMPACTED, dataTypes))
+                                        KvFormat.COMPACTED,
+                                        new TestingSchemaGetter(1, DATA1_SCHEMA)))
                         .iterator();
         assertThat(iterator.hasNext()).isTrue();
         KvRecord kvRecord = iterator.next();

@@ -20,13 +20,14 @@ package org.apache.fluss.row.decode;
 import org.apache.fluss.annotation.PublicEvolving;
 import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.metadata.KvFormat;
+import org.apache.fluss.record.ValueRecord;
 import org.apache.fluss.row.BinaryRow;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.types.DataType;
 
 /**
- * A decoder to read {@link BinaryRow binary format InternalRow} from a byte array or memory
- * segment.
+ * A decoder to read {@link BinaryRow binary format InternalRow} from a byte array or memory segment
+ * of a value record {@link ValueRecord}.
  *
  * @since 0.2
  */

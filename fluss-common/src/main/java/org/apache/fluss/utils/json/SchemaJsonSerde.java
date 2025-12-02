@@ -37,6 +37,7 @@ public class SchemaJsonSerde implements JsonSerializer<Schema>, JsonDeserializer
     private static final String COLUMNS_NAME = "columns";
     private static final String PRIMARY_KEY_NAME = "primary_key";
     private static final String VERSION_KEY = "version";
+    private static final String HIGHEST_FIELD_ID = "highest_field_id";
     private static final int VERSION = 1;
 
     @Override
@@ -62,6 +63,8 @@ public class SchemaJsonSerde implements JsonSerializer<Schema>, JsonDeserializer
             generator.writeEndArray();
         }
 
+        generator.writeNumberField(HIGHEST_FIELD_ID, schema.getHighestFieldId());
+
         generator.writeEndObject();
     }
 
@@ -81,6 +84,10 @@ public class SchemaJsonSerde implements JsonSerializer<Schema>, JsonDeserializer
                 primaryKeys.add(primaryKeyJsons.next().asText());
             }
             builder.primaryKey(primaryKeys);
+        }
+
+        if (node.has(HIGHEST_FIELD_ID)) {
+            builder.highestFieldId(node.get(HIGHEST_FIELD_ID).asInt());
         }
 
         return builder.build();

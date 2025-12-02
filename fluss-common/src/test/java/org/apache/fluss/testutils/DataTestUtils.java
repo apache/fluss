@@ -27,6 +27,7 @@ import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.Schema;
+import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.record.ChangeType;
 import org.apache.fluss.record.DefaultLogRecordBatch;
@@ -43,6 +44,7 @@ import org.apache.fluss.record.MemoryLogRecordsArrowBuilder;
 import org.apache.fluss.record.MemoryLogRecordsIndexedBuilder;
 import org.apache.fluss.remote.RemoteLogSegment;
 import org.apache.fluss.row.BinaryString;
+import org.apache.fluss.row.GenericArray;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.arrow.ArrowWriter;
@@ -81,6 +83,7 @@ import static org.apache.fluss.record.TestData.DATA1_ROW_TYPE;
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA_PK;
 import static org.apache.fluss.record.TestData.DEFAULT_MAGIC;
 import static org.apache.fluss.record.TestData.DEFAULT_SCHEMA_ID;
+import static org.apache.fluss.record.TestData.TEST_SCHEMA_GETTER;
 import static org.apache.fluss.testutils.LogRecordBatchAssert.assertThatLogRecordBatch;
 import static org.apache.fluss.utils.FlussPaths.remoteLogDir;
 import static org.apache.fluss.utils.FlussPaths.remoteLogSegmentDir;
@@ -95,13 +98,30 @@ public class DataTestUtils {
     public static GenericRow row(Object... objects) {
         GenericRow row = new GenericRow(objects.length);
         for (int i = 0; i < objects.length; i++) {
-            if (objects[i] instanceof String) {
-                row.setField(i, BinaryString.fromString((String) objects[i]));
-            } else {
-                row.setField(i, objects[i]);
-            }
+            Object value = toInternalObject(objects[i]);
+            row.setField(i, value);
         }
         return row;
+    }
+
+    private static Object toInternalObject(Object obj) {
+        if (obj == null) {
+            return null;
+        }
+        if (obj instanceof String) {
+            return BinaryString.fromString((String) obj);
+        } else if (obj instanceof Object[]) {
+            Object[] array = (Object[]) obj;
+            Object[] internalArray = new Object[array.length];
+            for (int j = 0; j < array.length; j++) {
+                internalArray[j] = toInternalObject(array[j]);
+            }
+            return new GenericArray(internalArray);
+        } else if (obj instanceof int[]) {
+            return new GenericArray((int[]) obj);
+        } else {
+            return obj;
+        }
     }
 
     public static CompactedRow compactedRow(RowType rowType, Object[] objects) {
@@ -153,14 +173,13 @@ public class DataTestUtils {
 
     public static MemoryLogRecords genMemoryLogRecordsByObject(byte magic, List<Object[]> objects)
             throws Exception {
+        return genMemoryLogRecordsByObject(DATA1_ROW_TYPE, DEFAULT_SCHEMA_ID, magic, objects);
+    }
+
+    public static MemoryLogRecords genMemoryLogRecordsByObject(
+            RowType rowType, int schemaId, byte magic, List<Object[]> objects) throws Exception {
         return createRecordsWithoutBaseLogOffset(
-                DATA1_ROW_TYPE,
-                DEFAULT_SCHEMA_ID,
-                0,
-                System.currentTimeMillis(),
-                magic,
-                objects,
-                LogFormat.ARROW);
+                rowType, schemaId, 0, System.currentTimeMillis(), magic, objects, LogFormat.ARROW);
     }
 
     public static MemoryLogRecords genMemoryLogRecordsByObject(List<Object[]> objects)
@@ -271,9 +290,14 @@ public class DataTestUtils {
      * Generate a KvRecord batch from the values only, whose key will be extracted from the value.
      */
     public static KvRecordBatch genKvRecordBatch(Object[]... values) throws Exception {
+        return genKvRecordBatch(DEFAULT_SCHEMA_ID, DATA1_ROW_TYPE, values);
+    }
+
+    public static KvRecordBatch genKvRecordBatch(
+            short schemaId, RowType rowType, Object[]... values) throws Exception {
         KvRecordTestUtils.KvRecordBatchFactory kvRecordBatchFactory =
-                KvRecordTestUtils.KvRecordBatchFactory.of(DEFAULT_SCHEMA_ID);
-        return kvRecordBatchFactory.ofRecords(genKvRecords(values));
+                KvRecordTestUtils.KvRecordBatchFactory.of(schemaId);
+        return kvRecordBatchFactory.ofRecords(genKvRecords(rowType, values));
     }
 
     public static KvRecordBatch toKvRecordBatch(List<KvRecord> records) throws Exception {
@@ -344,9 +368,13 @@ public class DataTestUtils {
      * the values.
      */
     public static List<KvRecord> genKvRecords(Object[]... values) {
+        return genKvRecords(DATA1_ROW_TYPE, values);
+    }
+
+    public static List<KvRecord> genKvRecords(RowType rowType, Object[]... values) {
         KvRecordTestUtils.PKBasedKvRecordFactory kvRecordFactory =
                 KvRecordTestUtils.PKBasedKvRecordFactory.of(
-                        DATA1_SCHEMA_PK.getRowType(), DATA1_SCHEMA_PK.getPrimaryKeyIndexes());
+                        rowType, DATA1_SCHEMA_PK.getPrimaryKeyIndexes());
         List<KvRecord> records = new ArrayList<>();
         for (Object[] value : values) {
             records.add(kvRecordFactory.ofRecord(value));
@@ -358,13 +386,23 @@ public class DataTestUtils {
         return getKeyValuePairs(kvRecords.toArray(new KvRecord[0]));
     }
 
+    public static List<Tuple2<byte[], byte[]>> getKeyValuePairs(
+            short schemaId, List<KvRecord> kvRecords) {
+        return getKeyValuePairs(schemaId, kvRecords.toArray(new KvRecord[0]));
+    }
+
     public static List<Tuple2<byte[], byte[]>> getKeyValuePairs(KvRecord... kvRecords) {
+        return getKeyValuePairs(DEFAULT_SCHEMA_ID, kvRecords);
+    }
+
+    public static List<Tuple2<byte[], byte[]>> getKeyValuePairs(
+            short schemaId, KvRecord... kvRecords) {
         List<Tuple2<byte[], byte[]>> keyValuePairs = new ArrayList<>();
         for (KvRecord kvRecord : kvRecords) {
             keyValuePairs.add(
                     Tuple2.of(
                             BytesUtils.toArray(kvRecord.getKey()),
-                            ValueEncoder.encodeValue(DEFAULT_SCHEMA_ID, kvRecord.getRow())));
+                            ValueEncoder.encodeValue(schemaId, kvRecord.getRow())));
         }
         return keyValuePairs;
     }
@@ -527,7 +565,10 @@ public class DataTestUtils {
     }
 
     public static void assertMemoryRecordsEquals(
-            RowType rowType, LogRecords records, List<List<Object[]>> expected) {
+            RowType rowType,
+            SchemaGetter schemaGetter,
+            LogRecords records,
+            List<List<Object[]>> expected) {
         List<List<Tuple2<ChangeType, Object[]>>> appendOnlyExpectedValue = new ArrayList<>();
         for (List<Object[]> expectedRecord : expected) {
             List<Tuple2<ChangeType, Object[]>> expectedFieldAndRowKind =
@@ -536,11 +577,13 @@ public class DataTestUtils {
                             .collect(Collectors.toList());
             appendOnlyExpectedValue.add(expectedFieldAndRowKind);
         }
-        assertMemoryRecordsEqualsWithRowKind(rowType, records, appendOnlyExpectedValue);
+        assertMemoryRecordsEqualsWithRowKind(
+                rowType, schemaGetter, records, appendOnlyExpectedValue);
     }
 
     public static void assertMemoryRecordsEqualsWithRowKind(
-            RowType rowType,
+            RowType expectRowType,
+            SchemaGetter schemaGetter,
             LogRecords records,
             List<List<Tuple2<ChangeType, Object[]>>> expected) {
         Iterator<LogRecordBatch> iterator = records.batches().iterator();
@@ -548,12 +591,12 @@ public class DataTestUtils {
             assertThat(iterator.hasNext()).isTrue();
             LogRecordBatch batch = iterator.next();
             try (LogRecordReadContext readContext =
-                            createArrowReadContext(rowType, DEFAULT_SCHEMA_ID);
+                            createArrowReadContext(expectRowType, DEFAULT_SCHEMA_ID, schemaGetter);
                     CloseableIterator<LogRecord> logIterator = batch.records(readContext)) {
                 for (Tuple2<ChangeType, Object[]> expectedFieldAndRowKind : expectedRecord) {
                     assertThat(logIterator.hasNext()).isTrue();
                     assertLogRecordsEqualsWithRowKind(
-                            rowType, logIterator.next(), expectedFieldAndRowKind);
+                            expectRowType, logIterator.next(), expectedFieldAndRowKind);
                 }
                 assertThat(logIterator.hasNext()).isFalse();
             }
@@ -563,9 +606,11 @@ public class DataTestUtils {
 
     public static void assertLogRecordBatchEqualsWithRowKind(
             RowType rowType,
+            SchemaGetter schemaGetter,
             LogRecordBatch logRecordBatch,
             List<Tuple2<ChangeType, Object[]>> expected) {
-        try (LogRecordReadContext readContext = createArrowReadContext(rowType, DEFAULT_SCHEMA_ID);
+        try (LogRecordReadContext readContext =
+                        createArrowReadContext(rowType, DEFAULT_SCHEMA_ID, schemaGetter);
                 CloseableIterator<LogRecord> logIterator = logRecordBatch.records(readContext)) {
             for (Tuple2<ChangeType, Object[]> expectedFieldAndRowKind : expected) {
                 assertThat(logIterator.hasNext()).isTrue();
@@ -615,17 +660,46 @@ public class DataTestUtils {
 
     public static void assertLogRecordsEquals(
             RowType rowType, LogRecords logRecords, List<Object[]> expectedValue) {
+        assertLogRecordsEquals(
+                DEFAULT_SCHEMA_ID, rowType, logRecords, expectedValue, TEST_SCHEMA_GETTER);
+    }
+
+    public static void assertLogRecordsEquals(
+            RowType rowType,
+            LogRecords logRecords,
+            List<Object[]> expectedValue,
+            SchemaGetter schemaGetter) {
+        assertLogRecordsEquals(DEFAULT_SCHEMA_ID, rowType, logRecords, expectedValue, schemaGetter);
+    }
+
+    public static void assertLogRecordsEquals(
+            int schemaId,
+            RowType rowType,
+            LogRecords logRecords,
+            List<Object[]> expectedValue,
+            SchemaGetter schemaGetter) {
         List<Tuple2<ChangeType, Object[]>> expectedValueWithRowKind =
                 expectedValue.stream()
                         .map(val -> Tuple2.of(ChangeType.APPEND_ONLY, val))
                         .collect(Collectors.toList());
-        assertLogRecordsEqualsWithRowKind(rowType, logRecords, expectedValueWithRowKind);
+        assertLogRecordsEqualsWithRowKind(
+                schemaId, rowType, logRecords, expectedValueWithRowKind, schemaGetter);
     }
 
     public static void assertLogRecordsEqualsWithRowKind(
             RowType rowType,
             LogRecords logRecords,
             List<Tuple2<ChangeType, Object[]>> expectedValue) {
+        assertLogRecordsEqualsWithRowKind(
+                DEFAULT_SCHEMA_ID, rowType, logRecords, expectedValue, TEST_SCHEMA_GETTER);
+    }
+
+    public static void assertLogRecordsEqualsWithRowKind(
+            int schemaId,
+            RowType rowType,
+            LogRecords logRecords,
+            List<Tuple2<ChangeType, Object[]>> expectedValue,
+            SchemaGetter schemaGetter) {
         DataType[] dataTypes = rowType.getChildren().toArray(new DataType[0]);
         InternalRow.FieldGetter[] fieldGetter = new InternalRow.FieldGetter[dataTypes.length];
         for (int i = 0; i < dataTypes.length; i++) {
@@ -634,7 +708,7 @@ public class DataTestUtils {
 
         int i = 0;
         try (LogRecordReadContext readContext =
-                LogRecordReadContext.createArrowReadContext(rowType, DEFAULT_SCHEMA_ID)) {
+                LogRecordReadContext.createArrowReadContext(rowType, schemaId, schemaGetter)) {
             for (LogRecordBatch batch : logRecords.batches()) {
                 try (CloseableIterator<LogRecord> iterator = batch.records(readContext)) {
                     while (iterator.hasNext()) {

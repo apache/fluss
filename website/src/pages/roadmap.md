@@ -1,7 +1,5 @@
 # Fluss Roadmap
 This roadmap means to provide users and contributors with a high-level summary of ongoing efforts in the Fluss community. The roadmap contains both efforts working in process as well as completed efforts, so that users may get a better impression of the overall status and direction of those developments.
-## Kafka Protocol Compatibility
-Fluss will support the Kafka network protocol to enable users to use Fluss as a drop-in replacement for Kafka. This will allow users to leverage Fluss's real-time storage capabilities while maintaining compatibility with existing Kafka applications.
 ## Flink Integration
 Fluss will provide deep integration with Apache Flink, enabling users a single engine experience for building real-time analytics applications. The integration will include:
 - Upgrade Flink version to 2.x

@@ -171,17 +171,16 @@ public final class RecordAccumulator {
             boolean abortIfBatchFull)
             throws Exception {
         PhysicalTablePath physicalTablePath = writeRecord.getPhysicalTablePath();
-
-        TableInfo tableInfo = cluster.getTableOrElseThrow(physicalTablePath.getTablePath());
+        TableInfo tableInfo = writeRecord.getTableInfo();
+        // The metadata may return null for the partition id, but it is fine to pass null here,
+        // because we will fill the partitionId in bucketReady() before send the batch.
         Optional<Long> partitionIdOpt = cluster.getPartitionId(physicalTablePath);
         BucketAndWriteBatches bucketAndWriteBatches =
                 writeBatches.computeIfAbsent(
                         physicalTablePath,
                         k ->
                                 new BucketAndWriteBatches(
-                                        tableInfo.getTableId(),
-                                        partitionIdOpt.orElse(null),
-                                        tableInfo.isPartitioned()));
+                                        partitionIdOpt.orElse(null), tableInfo.isPartitioned()));
 
         // We keep track of the number of appending thread to make sure we do not miss batches in
         // abortIncompleteBatches().
@@ -209,13 +208,7 @@ public final class RecordAccumulator {
             synchronized (dq) {
                 RecordAppendResult appendResult =
                         appendNewBatch(
-                                writeRecord,
-                                callback,
-                                bucketId,
-                                tableInfo,
-                                dq,
-                                memorySegments,
-                                cluster);
+                                writeRecord, callback, bucketId, tableInfo, dq, memorySegments);
                 if (appendResult.newBatchCreated) {
                     memorySegments = Collections.emptyList();
                 }
@@ -333,7 +326,6 @@ public final class RecordAccumulator {
                         physicalTablePath,
                         k ->
                                 new BucketAndWriteBatches(
-                                        tableBucket.getTableId(),
                                         tableBucket.getPartitionId(),
                                         physicalTablePath.getPartitionName() != null));
         return bucketAndWriteBatches.batches.computeIfAbsent(
@@ -507,22 +499,28 @@ public final class RecordAccumulator {
             }
 
             int bucketId = entry.getKey();
-            TableBucket tableBucket = cluster.getTableBucket(physicalTablePath, bucketId);
-            Integer leader = cluster.leaderFor(tableBucket);
-            if (leader == null) {
-                // This is a bucket for which leader is not known, but messages are
-                // available to send. Note that entries are currently not removed from
-                // batches when deque is empty.
+            Optional<Long> tableIdOpt = cluster.getTableId(physicalTablePath.getTablePath());
+            if (!tableIdOpt.isPresent()) {
                 unknownLeaderTables.add(physicalTablePath);
             } else {
-                nextReadyCheckDelayMs =
-                        batchReady(
-                                exhausted,
-                                leader,
-                                waitedTimeMs,
-                                full,
-                                readyNodes,
-                                nextReadyCheckDelayMs);
+                TableBucket tableBucket =
+                        cluster.getTableBucket(tableIdOpt.get(), physicalTablePath, bucketId);
+                Integer leader = cluster.leaderFor(tableBucket);
+                if (leader == null) {
+                    // This is a bucket for which leader is not known, but messages are
+                    // available to send. Note that entries are currently not removed from
+                    // batches when deque is empty.
+                    unknownLeaderTables.add(physicalTablePath);
+                } else {
+                    nextReadyCheckDelayMs =
+                            batchReady(
+                                    exhausted,
+                                    leader,
+                                    waitedTimeMs,
+                                    full,
+                                    readyNodes,
+                                    nextReadyCheckDelayMs);
+                }
             }
         }
 
@@ -570,8 +568,7 @@ public final class RecordAccumulator {
             int bucketId,
             TableInfo tableInfo,
             Deque<WriteBatch> deque,
-            List<MemorySegment> segments,
-            Cluster cluster)
+            List<MemorySegment> segments)
             throws Exception {
         RecordAppendResult appendResult = tryAppend(writeRecord, callback, deque);
         if (appendResult != null) {
@@ -591,7 +588,7 @@ public final class RecordAccumulator {
                     new KvWriteBatch(
                             bucketId,
                             physicalTablePath,
-                            schemaId,
+                            tableInfo.getSchemaId(),
                             tableInfo.getTableConfig().getKvFormat(),
                             outputView.getPreAllocatedSize(),
                             outputView,
@@ -609,7 +606,7 @@ public final class RecordAccumulator {
                     new ArrowLogWriteBatch(
                             bucketId,
                             physicalTablePath,
-                            schemaId,
+                            tableInfo.getSchemaId(),
                             arrowWriter,
                             outputView,
                             clock.milliseconds());
@@ -618,7 +615,7 @@ public final class RecordAccumulator {
                     new IndexedLogWriteBatch(
                             bucketId,
                             physicalTablePath,
-                            schemaId,
+                            tableInfo.getSchemaId(),
                             outputView.getPreAllocatedSize(),
                             outputView,
                             clock.milliseconds());
@@ -870,8 +867,8 @@ public final class RecordAccumulator {
                     orderedBatches.size());
             // Either we have reached a point where there are batches without a sequence (i.e. never
             // been drained and are hence in order by default), or the batch at the front of the
-            // queue has a sequence greater than the incoming batch. This is the right place to add
-            // the incoming batch.
+            // queue has a sequence greater than the incoming batch. This is the right place to
+            // add the incoming batch.
             deque.addFirst(batch);
 
             // Now we have to re-insert the previously queued batches in the right order.
@@ -923,20 +920,19 @@ public final class RecordAccumulator {
 
         writerBufferPool.close();
         arrowWriterPool.close();
+        // Release all the memory segments.
+        bufferAllocator.releaseBytes(bufferAllocator.getAllocatedMemory());
         bufferAllocator.close();
     }
 
     /** Per table bucket and write batches. */
     private static class BucketAndWriteBatches {
-        public final long tableId;
         public final boolean isPartitionedTable;
         public volatile @Nullable Long partitionId;
         // Write batches for each bucket in queue.
         public final Map<Integer, Deque<WriteBatch>> batches = new CopyOnWriteMap<>();
 
-        public BucketAndWriteBatches(
-                long tableId, @Nullable Long partitionId, boolean isPartitionedTable) {
-            this.tableId = tableId;
+        public BucketAndWriteBatches(@Nullable Long partitionId, boolean isPartitionedTable) {
             this.partitionId = partitionId;
             this.isPartitionedTable = isPartitionedTable;
         }

@@ -40,6 +40,7 @@ import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.MergeEngineType;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
@@ -241,6 +242,7 @@ class FlussTableITCase extends ClientToServerITCaseBase {
 
         Table table = conn.getTable(tablePath);
         verifyPutAndLookup(table, new Object[] {1, "a"});
+        TableInfo tableInfo = table.getTableInfo();
 
         // test put/lookup data for primary table with pk index is not 0
         Schema schema =
@@ -261,6 +263,30 @@ class FlussTableITCase extends ClientToServerITCaseBase {
         // now, check put/lookup data
         Table table2 = conn.getTable(data1PkTablePath2);
         verifyPutAndLookup(table2, new Object[] {"a", 1});
+
+        // Test schema change: add new column which equals to DATA2_ROW_TYPE
+        admin.alterTable(
+                        tableInfo.getTablePath(),
+                        Collections.singletonList(
+                                TableChange.addColumn(
+                                        "c",
+                                        DataTypes.STRING(),
+                                        null,
+                                        TableChange.ColumnPosition.last())),
+                        false)
+                .get();
+        waitAllSchemaSync(tablePath, 2);
+        Table newSchemaTable = conn.getTable(tableInfo.getTablePath());
+        // schema change case1: read new data with new schema.
+        verifyPutAndLookup(newSchemaTable, new Object[] {2, "b", "bb"});
+        // schema change case2: read new data with old schema.
+        assertThatRow(lookupRow(table.newLookup().createLookuper(), row(2)))
+                .withSchema(tableInfo.getSchema().getRowType())
+                .isEqualTo(row(2, "b"));
+        // schema change case3: read old data with new schema.
+        assertThatRow(lookupRow(newSchemaTable.newLookup().createLookuper(), row(1)))
+                .withSchema(newSchemaTable.getTableInfo().getSchema().getRowType())
+                .isEqualTo(row(1, "a", null));
     }
 
     @Test
@@ -278,6 +304,7 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                 TableDescriptor.builder().schema(schema).distributedBy(3, "a", "b").build();
         createTable(tablePath, descriptor, false);
         Table table = conn.getTable(tablePath);
+        TableInfo tableInfo = table.getTableInfo();
         verifyPutAndLookup(table, new Object[] {1, "a", 1L, "value1"});
         verifyPutAndLookup(table, new Object[] {1, "a", 2L, "value2"});
         verifyPutAndLookup(table, new Object[] {1, "a", 3L, "value3"});
@@ -315,6 +342,64 @@ class FlussTableITCase extends ClientToServerITCaseBase {
         assertThat(prefixLookupResult).isNotNull();
         rowList = prefixLookupResult.getRowList();
         assertThat(rowList.size()).isEqualTo(0);
+
+        // Test schema change: add new column.
+        Schema newSchema =
+                Schema.newBuilder()
+                        .column("a", DataTypes.INT())
+                        .column("b", DataTypes.STRING())
+                        .column("c", DataTypes.BIGINT())
+                        .column("d", DataTypes.STRING())
+                        .column("e", DataTypes.STRING())
+                        .primaryKey("a", "b", "c")
+                        .build();
+        admin.alterTable(
+                        tableInfo.getTablePath(),
+                        Collections.singletonList(
+                                TableChange.addColumn(
+                                        "e",
+                                        DataTypes.STRING(),
+                                        null,
+                                        TableChange.ColumnPosition.last())),
+                        false)
+                .get();
+        waitAllSchemaSync(tablePath, 2);
+        try (Connection connection = ConnectionFactory.createConnection(clientConf);
+                Table newSchemaTable = connection.getTable(tableInfo.getTablePath())) {
+            // schema change case1: read new data with new schema.
+            verifyPutAndLookup(
+                    newSchemaTable, new Object[] {1, "a", 4L, "value4", "add_column_value"});
+            // schema change case2: read new data with old schema.
+            result = prefixLookuper.lookup(row(1, "a"));
+            prefixLookupResult = result.get();
+            assertThat(prefixLookupResult).isNotNull();
+            rowList = prefixLookupResult.getRowList();
+            assertThat(rowList.size()).isEqualTo(4);
+            for (int i = 0; i < rowList.size(); i++) {
+                assertRowValueEquals(
+                        rowType, rowList.get(i), new Object[] {1, "a", i + 1L, "value" + (i + 1)});
+            }
+            admin.getTableSchema(tablePath, 1).get();
+            // schema change case3: read old data with new schema.
+            Lookuper newPrefixLookuper =
+                    newSchemaTable
+                            .newLookup()
+                            .lookupBy(prefixKeyRowType.getFieldNames())
+                            .createLookuper();
+            result = newPrefixLookuper.lookup(row(1, "a"));
+            prefixLookupResult = result.get();
+            assertThat(prefixLookupResult).isNotNull();
+            rowList = prefixLookupResult.getRowList();
+            assertThat(rowList.size()).isEqualTo(4);
+            for (int i = 0; i < rowList.size(); i++) {
+                assertRowValueEquals(
+                        rowType,
+                        rowList.get(i),
+                        new Object[] {
+                            1, "a", i + 1L, "value" + (i + 1), i == 3 ? "add_column_value" : null
+                        });
+            }
+        }
     }
 
     @Test
@@ -905,6 +990,126 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                 }
             }
             assertThat(count).isEqualTo(expectedSize);
+        }
+    }
+
+    @Test
+    void testPutAndProjectDuringAddColumn() throws Exception {
+        Schema schema =
+                Schema.newBuilder()
+                        .column("a", DataTypes.INT())
+                        .column("b", DataTypes.INT())
+                        .column("c", DataTypes.STRING())
+                        .primaryKey("a")
+                        .build();
+        TableDescriptor tableDescriptor = TableDescriptor.builder().schema(schema).build();
+        TablePath tablePath = TablePath.of("test_db_1", "test_pk_table_1");
+        createTable(tablePath, tableDescriptor, false);
+
+        int batches = 3;
+        int keyId = 0;
+        int expectedSize = 0;
+
+        try (Table table = conn.getTable(tablePath)) {
+            // produce data with new schema.
+            // Test schema change: add new column which equals to DATA2_ROW_TYPE
+            admin.alterTable(
+                            tablePath,
+                            Collections.singletonList(
+                                    TableChange.addColumn(
+                                            "d",
+                                            DataTypes.BIGINT(),
+                                            "add new column",
+                                            TableChange.ColumnPosition.last())),
+                            false)
+                    .get();
+            waitAllSchemaSync(tablePath, 2);
+            try (Connection connection = ConnectionFactory.createConnection(clientConf);
+                    Table newSchemaTable = connection.getTable(tablePath)) {
+                UpsertWriter oldSchemaUpsertWriter = table.newUpsert().createWriter();
+                UpsertWriter newSchemaUpsertWriter = newSchemaTable.newUpsert().createWriter();
+                for (int b = 0; b < batches; b++) {
+                    // insert 10 rows with old schema.
+                    for (int i = keyId; i < keyId + 10; i++) {
+                        InternalRow row = row(i, 100, "hello, friend" + i);
+                        oldSchemaUpsertWriter.upsert(row);
+                        expectedSize += 1;
+                        oldSchemaUpsertWriter.flush();
+                    }
+                    // update 5 rows with new schema: [keyId, keyId+4]
+                    for (int i = keyId; i < keyId + 5; i++) {
+                        InternalRow row = row(i, 100, "HELLO, FRIEND" + i, i * 10L);
+                        newSchemaUpsertWriter.upsert(row);
+                        expectedSize += 2;
+                        newSchemaUpsertWriter.flush();
+                    }
+                    // delete 1 row with old schema: [keyId+5]
+                    int deleteKey = keyId + 5;
+                    InternalRow row = row(deleteKey, 100, "hello, friend" + deleteKey);
+                    oldSchemaUpsertWriter.delete(row);
+                    expectedSize += 1;
+                    // flush the mutation batch
+                    oldSchemaUpsertWriter.flush();
+                    keyId += 10;
+                }
+
+                // read with new schema
+                try (LogScanner logScanner = createLogScanner(newSchemaTable, new int[] {2, 0})) {
+                    subscribeFromBeginning(logScanner, table);
+                    int count = 0;
+                    int id = 0;
+                    while (count < expectedSize) {
+                        ScanRecords scanRecords = logScanner.poll(Duration.ofSeconds(1));
+                        Iterator<ScanRecord> iterator = scanRecords.iterator();
+                        while (iterator.hasNext()) {
+                            // 10 inserts
+                            for (int i = 0; i < 10; i++) {
+                                ScanRecord scanRecord = iterator.next();
+                                assertThat(scanRecord.getChangeType()).isEqualTo(ChangeType.INSERT);
+                                assertThat(scanRecord.getRow().getFieldCount()).isEqualTo(2);
+                                assertThat(scanRecord.getRow().getInt(1)).isEqualTo(id);
+                                assertThat(scanRecord.getRow().getString(0).toString())
+                                        .isEqualTo("hello, friend" + id);
+                                count++;
+                                id++;
+                            }
+                            id -= 10;
+                            // 10 updates
+                            for (int i = 0; i < 5; i++) {
+                                ScanRecord beforeRecord = iterator.next();
+                                assertThat(beforeRecord.getChangeType())
+                                        .isEqualTo(ChangeType.UPDATE_BEFORE);
+                                assertThat(beforeRecord.getRow().getFieldCount()).isEqualTo(2);
+                                assertThat(beforeRecord.getRow().getInt(1)).isEqualTo(id);
+                                assertThat(beforeRecord.getRow().getString(0).toString())
+                                        .isEqualTo("hello, friend" + id);
+
+                                ScanRecord afterRecord = iterator.next();
+                                assertThat(afterRecord.getChangeType())
+                                        .isEqualTo(ChangeType.UPDATE_AFTER);
+                                assertThat(afterRecord.getRow().getFieldCount()).isEqualTo(2);
+                                assertThat(afterRecord.getRow().getInt(1)).isEqualTo(id);
+                                assertThat(afterRecord.getRow().getString(0).toString())
+                                        .isEqualTo("HELLO, FRIEND" + id);
+
+                                id++;
+                                count += 2;
+                            }
+
+                            // 1 delete
+                            ScanRecord beforeRecord = iterator.next();
+                            assertThat(beforeRecord.getChangeType()).isEqualTo(ChangeType.DELETE);
+                            assertThat(beforeRecord.getRow().getFieldCount()).isEqualTo(2);
+                            assertThat(beforeRecord.getRow().getInt(1)).isEqualTo(id);
+                            assertThat(beforeRecord.getRow().getString(0).toString())
+                                    .isEqualTo("hello, friend" + id);
+                            count++;
+                            id += 5;
+                        }
+                    }
+                    assertThat(count).isEqualTo(expectedSize);
+                }
+            }
         }
     }
 

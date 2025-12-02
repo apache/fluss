@@ -18,6 +18,7 @@
 package org.apache.fluss.server.testutils;
 
 import org.apache.fluss.metadata.PartitionSpec;
+import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.ChangeType;
@@ -25,6 +26,7 @@ import org.apache.fluss.record.DefaultKvRecordBatch;
 import org.apache.fluss.record.DefaultValueRecordBatch;
 import org.apache.fluss.record.KvRecordBatch;
 import org.apache.fluss.record.MemoryLogRecords;
+import org.apache.fluss.record.TestingSchemaGetter;
 import org.apache.fluss.record.bytesview.MemorySegmentBytesView;
 import org.apache.fluss.rpc.gateway.CoordinatorGateway;
 import org.apache.fluss.rpc.messages.AlterTableRequest;
@@ -75,6 +77,7 @@ import java.util.List;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.record.TestData.DATA1_ROW_TYPE;
+import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
 import static org.apache.fluss.testutils.DataTestUtils.assertMemoryRecordsEqualsWithRowKind;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -380,12 +383,19 @@ public class RpcMessageTestUtils {
             Long highWatermark,
             List<Object[]> expectedRecords) {
         assertFetchLogResponse(
-                response, DATA1_ROW_TYPE, tableId, bucketId, highWatermark, expectedRecords);
+                response,
+                DATA1_ROW_TYPE,
+                new TestingSchemaGetter(1, DATA1_SCHEMA),
+                tableId,
+                bucketId,
+                highWatermark,
+                expectedRecords);
     }
 
     public static void assertFetchLogResponse(
             FetchLogResponse response,
-            RowType rowType,
+            RowType expectedRowType,
+            SchemaGetter schemaGetter,
             long tableId,
             long bucketId,
             Long highWatermark,
@@ -396,7 +406,8 @@ public class RpcMessageTestUtils {
                         .collect(Collectors.toList());
         assertFetchLogResponse(
                 response,
-                rowType,
+                expectedRowType,
+                schemaGetter,
                 tableId,
                 bucketId,
                 highWatermark,
@@ -414,6 +425,7 @@ public class RpcMessageTestUtils {
         assertFetchLogResponse(
                 response,
                 DATA1_ROW_TYPE,
+                new TestingSchemaGetter(1, DATA1_SCHEMA),
                 tableId,
                 bucketId,
                 highWatermark,
@@ -431,6 +443,7 @@ public class RpcMessageTestUtils {
         assertFetchLogResponse(
                 response,
                 DATA1_ROW_TYPE,
+                new TestingSchemaGetter(1, DATA1_SCHEMA),
                 tableId,
                 bucketId,
                 -1L,
@@ -441,7 +454,8 @@ public class RpcMessageTestUtils {
 
     private static void assertFetchLogResponse(
             FetchLogResponse response,
-            RowType rowType,
+            RowType expectedRowType,
+            SchemaGetter schemaGetter,
             long tableId,
             long bucketId,
             Long highWatermark,
@@ -465,12 +479,18 @@ public class RpcMessageTestUtils {
             MemoryLogRecords resultRecords =
                     MemoryLogRecords.pointToBytes(protoFetchedBucket.getRecords());
             assertMemoryRecordsEqualsWithRowKind(
-                    rowType, resultRecords, Collections.singletonList(expectedRecords));
+                    expectedRowType,
+                    schemaGetter,
+                    resultRecords,
+                    Collections.singletonList(expectedRecords));
         }
     }
 
     public static void assertLimitScanResponse(
-            LimitScanResponse limitScanResponse, RowType rowType, List<Object[]> expectedRecords) {
+            LimitScanResponse limitScanResponse,
+            RowType expectedRowType,
+            SchemaGetter schemaGetter,
+            List<Object[]> expectedRecords) {
         List<Tuple2<ChangeType, Object[]>> expectedFieldAndRowKind =
                 expectedRecords.stream()
                         .map(val -> Tuple2.of(ChangeType.APPEND_ONLY, val))
@@ -478,7 +498,10 @@ public class RpcMessageTestUtils {
         MemoryLogRecords resultRecords =
                 MemoryLogRecords.pointToBytes(limitScanResponse.getRecords());
         assertMemoryRecordsEqualsWithRowKind(
-                rowType, resultRecords, Collections.singletonList(expectedFieldAndRowKind));
+                expectedRowType,
+                schemaGetter,
+                resultRecords,
+                Collections.singletonList(expectedFieldAndRowKind));
     }
 
     public static void assertLimitScanResponse(

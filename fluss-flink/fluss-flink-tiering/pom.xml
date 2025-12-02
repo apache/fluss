@@ -33,7 +33,7 @@
     <name>Fluss : Flink : Tiering</name>
 
     <properties>
-        <flink.minor.version>1.20.1</flink.minor.version>
+        <flink.minor.version>1.20.3</flink.minor.version>
     </properties>
 
     <dependencies>

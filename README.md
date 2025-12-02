@@ -61,15 +61,12 @@ Prerequisites for building Apache Fluss:
 - Unix-like environment (we use Linux, Mac OS X, Cygwin, WSL)
 - Git
 - Maven (we require version >= 3.8.6)
-- Java 8 or 11
+- Java 11
 
 ```bash
 git clone https://github.com/apache/fluss.git
 cd fluss
-# in case of java 11
 ./mvnw clean package -DskipTests
-# or in case of java 8
-./mvnw clean package -DskipTests -Pjava8
 ```
 
 Apache Fluss is now installed in `build-target`. The build command uses Maven Wrapper (`mvnw`) which ensures the correct Maven version is used.

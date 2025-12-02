@@ -24,13 +24,14 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.NetworkException;
 import org.apache.fluss.flink.sink.serializer.RowDataSerializationSchema;
-import org.apache.fluss.flink.sink.serializer.SerializerInitContextImpl;
 import org.apache.fluss.flink.utils.FlinkTestBase;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.Schema;
+import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
+import org.apache.fluss.types.DataTypes;
 
 import org.apache.flink.api.common.operators.MailboxExecutor;
 import org.apache.flink.api.connector.sink2.SinkWriter;
@@ -50,9 +51,9 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
+import java.util.Collections;
 import java.util.function.BiConsumer;
 
-import static org.apache.fluss.flink.utils.FlinkConversions.toFlussRowType;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -104,6 +105,52 @@ public class FlinkSinkWriterTest extends FlinkTestBase {
         assertThat(((Counter) numRecordSend).getCount()).isGreaterThan(0);
 
         flinkSinkWriter.close();
+    }
+
+    @Test
+    void testFlussSchemaChange() throws Exception {
+        admin.createDatabase(
+                DEFAULT_SINK_TABLE_PATH.getDatabaseName(), DatabaseDescriptor.EMPTY, true);
+        createTable(DEFAULT_SINK_TABLE_PATH, TABLE_DESCRIPTOR);
+        admin.alterTable(
+                        DEFAULT_SINK_TABLE_PATH,
+                        Collections.singletonList(
+                                TableChange.addColumn(
+                                        "c1",
+                                        DataTypes.STRING(),
+                                        null,
+                                        TableChange.ColumnPosition.last())),
+                        false)
+                .get();
+
+        Configuration clientConfig = FLUSS_CLUSTER_EXTENSION.getClientConfig();
+
+        MockWriterInitContext mockWriterInitContext =
+                new MockWriterInitContext(new InterceptingOperatorMetricGroup());
+        try (FlinkSinkWriter<RowData> writer =
+                createSinkWriter(clientConfig, mockWriterInitContext.getMailboxExecutor())) {
+            writer.initialize(mockWriterInitContext.metricGroup());
+            // case1: write data which is matched flink schema.
+            writer.write(
+                    GenericRowData.of(1, StringData.fromString("a")), new MockSinkWriterContext());
+            writer.flush(false);
+
+            // case2: write data which lacks the last column of flink schema
+            writer.write(GenericRowData.of(1), new MockSinkWriterContext());
+            writer.flush(false);
+
+            // case3: write data which has reorder column of flink schema
+            assertThatThrownBy(
+                            () ->
+                                    writer.write(
+                                            GenericRowData.of(StringData.fromString("a"), 1),
+                                            new MockSinkWriterContext()))
+                    .rootCause()
+                    .isExactlyInstanceOf(ClassCastException.class)
+                    .hasMessageContaining(
+                            "class org.apache.flink.table.data.binary.BinaryStringData cannot be cast to class java.lang.Integer");
+            writer.flush(false);
+        }
     }
 
     @Test
@@ -210,7 +257,6 @@ public class FlinkSinkWriterTest extends FlinkTestBase {
                         new String[] {"id", "name"});
         RowDataSerializationSchema serializationSchema =
                 new RowDataSerializationSchema(true, false);
-        serializationSchema.open(new SerializerInitContextImpl(toFlussRowType(tableRowType)));
         return new AppendSinkWriter<>(
                 DEFAULT_SINK_TABLE_PATH,
                 configuration,

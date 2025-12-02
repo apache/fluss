@@ -19,9 +19,10 @@ package org.apache.fluss.server.log;
 
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.compression.ArrowCompressionInfo;
+import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.record.FileLogProjection;
+import org.apache.fluss.record.ProjectionPushdownCache;
 import org.apache.fluss.rpc.messages.FetchLogRequest;
-import org.apache.fluss.types.RowType;
 
 import javax.annotation.Nullable;
 
@@ -97,18 +98,20 @@ public final class FetchParams {
             long tableId,
             long fetchOffset,
             int maxFetchBytes,
-            RowType schema,
+            SchemaGetter schemaGetter,
             ArrowCompressionInfo compressionInfo,
-            @Nullable int[] projectedFields) {
+            @Nullable int[] projectedFields,
+            ProjectionPushdownCache projectionCache) {
         this.fetchOffset = fetchOffset;
         this.maxFetchBytes = maxFetchBytes;
         if (projectedFields != null) {
             projectionEnabled = true;
             if (fileLogProjection == null) {
-                fileLogProjection = new FileLogProjection();
+                fileLogProjection = new FileLogProjection(projectionCache);
             }
+
             fileLogProjection.setCurrentProjection(
-                    tableId, schema, compressionInfo, projectedFields);
+                    tableId, schemaGetter, compressionInfo, projectedFields);
         } else {
             projectionEnabled = false;
         }

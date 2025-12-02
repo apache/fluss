@@ -73,7 +73,7 @@ You can choose between two views of the table:
 #### Read Data Only in Paimon
 
 ##### Prerequisites
-Download the [paimon-flink.jar](https://paimon.apache.org/docs/1.2/) that matches your Flink version, and place it in the `FLINK_HOME/lib` directory
+Download the [paimon-flink.jar](https://paimon.apache.org/docs/1.3/) that matches your Flink version, and place it in the `FLINK_HOME/lib` directory
 
 ##### Read Paimon Data
 To read only data stored in Paimon, use the `$lake` suffix in the table name. The following example demonstrates this:
@@ -92,7 +92,7 @@ SELECT * FROM orders$lake$snapshots;
 
 When you specify the `$lake` suffix in a query, the table behaves like a standard Paimon table and inherits all its capabilities.  
 This allows you to take full advantage of Flink's query support and optimizations on Paimon, such as querying system tables, time travel, and more.  
-For further information, refer to Paimon’s [SQL Query documentation](https://paimon.apache.org/docs/0.9/flink/sql-query/#sql-query).
+For further information, refer to Paimon’s [SQL Query documentation](https://paimon.apache.org/docs/1.3/flink/sql-query/#sql-query).
 
 #### Union Read of Data in Fluss and Paimon
 
@@ -125,7 +125,7 @@ Key behavior for data retention:
 
 ### Reading with other Engines
 
-Since the data tiered to Paimon from Fluss is stored as a standard Paimon table, you can use any engine that supports Paimon to read it. Below is an example using [StarRocks](https://paimon.apache.org/docs/1.2/ecosystem/starrocks/):
+Since the data tiered to Paimon from Fluss is stored as a standard Paimon table, you can use any engine that supports Paimon to read it. Below is an example using [StarRocks](https://paimon.apache.org/docs/1.3/ecosystem/starrocks/):
 
 First, create a Paimon catalog in StarRocks:
 

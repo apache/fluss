@@ -152,7 +152,7 @@ final class LogLoaderTest extends LogTestBase {
     @Test
     void testCorruptIndexRebuildWithRecoveryPoint() throws Exception {
         // publish the records and close the log
-        int numRecords = 200;
+        int numRecords = 100;
         LogTablet logTablet = createLogTablet(true);
         appendRecords(logTablet, numRecords);
         // collect all the index files
@@ -258,6 +258,9 @@ final class LogLoaderTest extends LogTestBase {
                         ArrowCompressionInfo.DEFAULT_COMPRESSION);
         corruptSegment.getFileLogRecords().append(memoryLogRecords);
         logTablet.close();
+
+        // delete the index file to trigger the recovery
+        corruptSegment.offsetIndex().deleteIfExists();
 
         logTablet = createLogTablet(false);
         // the corrupt segment should be truncated to base offset

@@ -132,7 +132,7 @@ class TieringCommitOperatorTest extends FlinkTestBase {
                         tablePath2, t2b1, 2, 22, 32L, numberOfWriteResults));
         verifyNoLakeSnapshot(tablePath2);
 
-        // add table1, bucket2
+        // addColumn table1, bucket2
         TableBucket t1b2 = new TableBucket(tableId1, 2);
         committerOperator.processElement(
                 createTableBucketWriteResultStreamRecord(
@@ -148,7 +148,7 @@ class TieringCommitOperatorTest extends FlinkTestBase {
         expectedMaxTimestamps.put(t1b2, 23L);
         verifyLakeSnapshot(tablePath1, tableId1, 1, expectedLogEndOffsets, expectedMaxTimestamps);
 
-        // add table2, bucket2
+        // addColumn table2, bucket2
         TableBucket t2b2 = new TableBucket(tableId2, 2);
         committerOperator.processElement(
                 createTableBucketWriteResultStreamRecord(

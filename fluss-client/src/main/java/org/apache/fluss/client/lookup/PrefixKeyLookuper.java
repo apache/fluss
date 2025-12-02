@@ -22,16 +22,15 @@ import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.client.table.getter.PartitionGetter;
 import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.metadata.DataLakeFormat;
+import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.row.InternalRow;
-import org.apache.fluss.row.decode.RowDecoder;
 import org.apache.fluss.row.encode.KeyEncoder;
-import org.apache.fluss.row.encode.ValueDecoder;
-import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.RowType;
 
 import javax.annotation.Nullable;
+import javax.annotation.concurrent.NotThreadSafe;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -46,13 +45,8 @@ import static org.apache.fluss.client.utils.ClientUtils.getPartitionId;
  * An implementation of {@link Lookuper} that lookups by prefix key. A prefix key is a prefix subset
  * of the primary key.
  */
-class PrefixKeyLookuper implements Lookuper {
-
-    private final TableInfo tableInfo;
-
-    private final MetadataUpdater metadataUpdater;
-
-    private final LookupClient lookupClient;
+@NotThreadSafe
+class PrefixKeyLookuper extends AbstractLookuper {
 
     /** Extract bucket key from prefix lookup key row. */
     private final KeyEncoder bucketKeyEncoder;
@@ -65,21 +59,16 @@ class PrefixKeyLookuper implements Lookuper {
      */
     private @Nullable final PartitionGetter partitionGetter;
 
-    /** Decode the lookup bytes to result row. */
-    private final ValueDecoder kvValueDecoder;
-
     public PrefixKeyLookuper(
             TableInfo tableInfo,
+            SchemaGetter schemaGetter,
             MetadataUpdater metadataUpdater,
             LookupClient lookupClient,
             List<String> lookupColumnNames) {
+        super(tableInfo, metadataUpdater, lookupClient, schemaGetter);
         // sanity check
         validatePrefixLookup(tableInfo, lookupColumnNames);
-        // initialization
-        this.tableInfo = tableInfo;
         this.numBuckets = tableInfo.getNumBuckets();
-        this.metadataUpdater = metadataUpdater;
-        this.lookupClient = lookupClient;
         // the row type of the input lookup row
         RowType lookupRowType = tableInfo.getRowType().project(lookupColumnNames);
         DataLakeFormat lakeFormat = tableInfo.getTableConfig().getDataLakeFormat().orElse(null);
@@ -90,11 +79,6 @@ class PrefixKeyLookuper implements Lookuper {
                 tableInfo.isPartitioned()
                         ? new PartitionGetter(lookupRowType, tableInfo.getPartitionKeys())
                         : null;
-        this.kvValueDecoder =
-                new ValueDecoder(
-                        RowDecoder.create(
-                                tableInfo.getTableConfig().getKvFormat(),
-                                tableInfo.getRowType().getChildren().toArray(new DataType[0])));
     }
 
     private void validatePrefixLookup(TableInfo tableInfo, List<String> lookupColumns) {
@@ -164,19 +148,22 @@ class PrefixKeyLookuper implements Lookuper {
             }
         }
 
+        CompletableFuture<LookupResult> lookupFuture = new CompletableFuture<>();
         TableBucket tableBucket = new TableBucket(tableInfo.getTableId(), partitionId, bucketId);
-        return lookupClient
+        lookupClient
                 .prefixLookup(tableBucket, bucketKeyBytes)
-                .thenApply(
-                        result -> {
-                            List<InternalRow> rowList = new ArrayList<>(result.size());
-                            for (byte[] valueBytes : result) {
-                                if (valueBytes == null) {
-                                    continue;
-                                }
-                                rowList.add(kvValueDecoder.decodeValue(valueBytes).row);
+                .whenComplete(
+                        (result, error) -> {
+                            if (error != null) {
+                                lookupFuture.completeExceptionally(
+                                        new RuntimeException(
+                                                "Failed to perform prefix lookup for table: "
+                                                        + tableInfo.getTablePath(),
+                                                error));
+                            } else {
+                                handleLookupResponse(result, lookupFuture);
                             }
-                            return new LookupResult(rowList);
                         });
+        return lookupFuture;
     }
 }

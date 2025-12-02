@@ -163,7 +163,7 @@ public class TieringSourceEnumerator
             // reader may be failed, skip this request.
             return;
         }
-        LOG.info("TiringSourceReader {} requests split.", subtaskId);
+        LOG.info("TieringSourceReader {} requests split.", subtaskId);
         readersAwaitingSplit.add(subtaskId);
         this.context.callAsync(
                 this::requestTieringTableSplitsViaHeartBeat, this::generateAndAssignSplits);

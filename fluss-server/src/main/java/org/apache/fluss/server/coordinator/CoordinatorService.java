@@ -135,7 +135,8 @@ import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getCommitRemot
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getPartitionSpec;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeCreateAclsResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeDropAclsResponse;
-import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toTableChanges;
+import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toAlterTableConfigChanges;
+import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toAlterTableSchemaChanges;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toTablePath;
 import static org.apache.fluss.server.utils.TableAssignmentUtils.generateAssignment;
 import static org.apache.fluss.utils.PartitionUtils.validatePartitionSpec;
@@ -312,19 +313,35 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
             authorizer.authorize(currentSession(), OperationType.ALTER, Resource.table(tablePath));
         }
 
-        List<TableChange> tableChanges = toTableChanges(request.getConfigChangesList());
-        TablePropertyChanges tablePropertyChanges = toTablePropertyChanges(tableChanges);
+        List<TableChange> alterTableConfigChanges =
+                toAlterTableConfigChanges(request.getConfigChangesList());
+        TablePropertyChanges tablePropertyChanges = toTablePropertyChanges(alterTableConfigChanges);
+        List<TableChange> alterSchemaChanges = toAlterTableSchemaChanges(request);
 
-        LakeCatalogDynamicLoader.LakeCatalogContainer lakeCatalogContainer =
-                lakeCatalogDynamicLoader.getLakeCatalogContainer();
-        metadataManager.alterTableProperties(
-                tablePath,
-                tableChanges,
-                tablePropertyChanges,
-                request.isIgnoreIfNotExists(),
-                lakeCatalogContainer.getLakeCatalog(),
-                lakeTableTieringManager,
-                new DefaultLakeCatalogContext(false, currentSession().getPrincipal()));
+        if (!alterSchemaChanges.isEmpty() && !alterTableConfigChanges.isEmpty()) {
+            // Only support one of alterTableConfigChanges and alterSchemaChanges for atomic change.
+            throw new InvalidAlterTableException(
+                    "Table alteration can only be applied to one of the following: "
+                            + "table properties or table schema.");
+        }
+
+        if (!alterSchemaChanges.isEmpty()) {
+            metadataManager.alterTableSchema(
+                    tablePath, alterSchemaChanges, request.isIgnoreIfNotExists());
+        }
+
+        if (!alterTableConfigChanges.isEmpty()) {
+            LakeCatalogDynamicLoader.LakeCatalogContainer lakeCatalogContainer =
+                    lakeCatalogDynamicLoader.getLakeCatalogContainer();
+            metadataManager.alterTableProperties(
+                    tablePath,
+                    alterTableConfigChanges,
+                    tablePropertyChanges,
+                    request.isIgnoreIfNotExists(),
+                    lakeCatalogContainer.getLakeCatalog(),
+                    lakeTableTieringManager,
+                    new DefaultLakeCatalogContext(false, currentSession().getPrincipal()));
+        }
 
         return CompletableFuture.completedFuture(new AlterTableResponse());
     }

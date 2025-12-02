@@ -23,6 +23,7 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.SchemaInfo;
+import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
@@ -33,6 +34,7 @@ import org.apache.fluss.server.coordinator.event.CreatePartitionEvent;
 import org.apache.fluss.server.coordinator.event.CreateTableEvent;
 import org.apache.fluss.server.coordinator.event.DropPartitionEvent;
 import org.apache.fluss.server.coordinator.event.DropTableEvent;
+import org.apache.fluss.server.coordinator.event.SchemaChangeEvent;
 import org.apache.fluss.server.coordinator.event.TestingEventManager;
 import org.apache.fluss.server.zk.NOPErrorHandler;
 import org.apache.fluss.server.zk.ZooKeeperClient;
@@ -50,6 +52,7 @@ import org.junit.jupiter.api.extension.RegisterExtension;
 
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 import static org.apache.fluss.server.utils.TableAssignmentUtils.generateAssignment;
@@ -108,7 +111,7 @@ class TableChangeWatcherTest {
     @Test
     void testTableChanges() {
         // create tables, collect create table events
-        List<CoordinatorEvent> expectedCreateTableEvents = new ArrayList<>();
+        List<CoordinatorEvent> expectedEvents = new ArrayList<>();
         for (int i = 0; i < 10; i++) {
             TablePath tablePath = TablePath.of(DEFAULT_DB, "table_" + i);
             TableAssignment tableAssignment =
@@ -124,7 +127,7 @@ class TableChangeWatcherTest {
                     metadataManager.createTable(tablePath, TEST_TABLE, tableAssignment, false);
             SchemaInfo schemaInfo = metadataManager.getLatestSchema(tablePath);
             long currentMillis = System.currentTimeMillis();
-            expectedCreateTableEvents.add(
+            expectedEvents.add(
                     new CreateTableEvent(
                             TableInfo.of(
                                     tablePath,
@@ -134,17 +137,21 @@ class TableChangeWatcherTest {
                                     currentMillis,
                                     currentMillis),
                             tableAssignment));
+            expectedEvents.add(new SchemaChangeEvent(tablePath, schemaInfo));
         }
 
         retry(
                 Duration.ofMinutes(1),
                 () ->
                         assertThat(eventManager.getEvents())
-                                .containsExactlyInAnyOrderElementsOf(expectedCreateTableEvents));
+                                .containsExactlyInAnyOrderElementsOf(expectedEvents));
 
         // drop tables, collect drop table events
         List<CoordinatorEvent> expectedTableEvents = new ArrayList<>();
-        for (CoordinatorEvent coordinatorEvent : expectedCreateTableEvents) {
+        for (CoordinatorEvent coordinatorEvent : expectedEvents) {
+            if (coordinatorEvent instanceof SchemaChangeEvent) {
+                continue;
+            }
             CreateTableEvent createTableEvent = (CreateTableEvent) coordinatorEvent;
             TableInfo tableInfo = createTableEvent.getTableInfo();
             metadataManager.dropTable(tableInfo.getTablePath(), false);
@@ -152,7 +159,7 @@ class TableChangeWatcherTest {
         }
 
         // collect all events and check the all events
-        List<CoordinatorEvent> allEvents = new ArrayList<>(expectedCreateTableEvents);
+        List<CoordinatorEvent> allEvents = new ArrayList<>(expectedEvents);
         allEvents.addAll(expectedTableEvents);
         retry(
                 Duration.ofMinutes(1),
@@ -192,6 +199,7 @@ class TableChangeWatcherTest {
                                 currentMillis,
                                 currentMillis),
                         TableAssignment.builder().build()));
+        expectedEvents.add(new SchemaChangeEvent(tablePath, schemaInfo));
 
         // register partition
         PartitionAssignment partitionAssignment =
@@ -237,5 +245,79 @@ class TableChangeWatcherTest {
                 () ->
                         assertThat(eventManager.getEvents())
                                 .containsExactlyInAnyOrderElementsOf(expectedEvents));
+    }
+
+    @Test
+    void testSchemaChanges() {
+        // create tables, collect create table events
+        List<CoordinatorEvent> expectedEvents = new ArrayList<>();
+        for (int i = 0; i < 10; i++) {
+            TablePath tablePath = TablePath.of(DEFAULT_DB, "table_" + i);
+            TableAssignment tableAssignment =
+                    generateAssignment(
+                            3,
+                            3,
+                            new TabletServerInfo[] {
+                                new TabletServerInfo(0, "rack0"),
+                                new TabletServerInfo(1, "rack1"),
+                                new TabletServerInfo(2, "rack2")
+                            });
+            long tableId =
+                    metadataManager.createTable(tablePath, TEST_TABLE, tableAssignment, false);
+            SchemaInfo schemaInfo = metadataManager.getLatestSchema(tablePath);
+            long currentMillis = System.currentTimeMillis();
+            expectedEvents.add(
+                    new CreateTableEvent(
+                            TableInfo.of(
+                                    tablePath,
+                                    tableId,
+                                    schemaInfo.getSchemaId(),
+                                    TEST_TABLE,
+                                    currentMillis,
+                                    currentMillis),
+                            tableAssignment));
+            expectedEvents.add(new SchemaChangeEvent(tablePath, schemaInfo));
+        }
+
+        retry(
+                Duration.ofMinutes(1),
+                () ->
+                        assertThat(eventManager.getEvents())
+                                .containsExactlyInAnyOrderElementsOf(expectedEvents));
+
+        // alter schema.
+        List<CoordinatorEvent> expectedTableEvents = new ArrayList<>();
+        for (CoordinatorEvent coordinatorEvent : expectedEvents) {
+            if (coordinatorEvent instanceof SchemaChangeEvent) {
+                continue;
+            }
+            CreateTableEvent createTableEvent = (CreateTableEvent) coordinatorEvent;
+            TableInfo tableInfo = createTableEvent.getTableInfo();
+            metadataManager.alterTableSchema(
+                    tableInfo.getTablePath(),
+                    Collections.singletonList(
+                            TableChange.addColumn(
+                                    "add_column",
+                                    DataTypes.INT(),
+                                    null,
+                                    TableChange.ColumnPosition.last())),
+                    false);
+            Schema newSchema =
+                    Schema.newBuilder()
+                            .fromSchema(tableInfo.getSchema())
+                            .column("add_column", DataTypes.INT())
+                            .build();
+            expectedTableEvents.add(
+                    new SchemaChangeEvent(tableInfo.getTablePath(), new SchemaInfo(newSchema, 2)));
+        }
+
+        // collect all events and check the all events
+        List<CoordinatorEvent> allEvents = new ArrayList<>(expectedEvents);
+        allEvents.addAll(expectedTableEvents);
+        retry(
+                Duration.ofMinutes(1),
+                () ->
+                        assertThat(eventManager.getEvents())
+                                .containsExactlyInAnyOrderElementsOf(allEvents));
     }
 }

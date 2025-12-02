@@ -23,12 +23,15 @@ import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
+import org.apache.fluss.metadata.SchemaGetter;
+import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.KvRecord;
 import org.apache.fluss.record.KvRecordBatch;
 import org.apache.fluss.record.KvRecordTestUtils;
 import org.apache.fluss.record.TestData;
+import org.apache.fluss.record.TestingSchemaGetter;
 import org.apache.fluss.row.encode.ValueEncoder;
 import org.apache.fluss.server.log.LogManager;
 import org.apache.fluss.server.log.LogTablet;
@@ -62,6 +65,7 @@ import java.util.Optional;
 
 import static org.apache.fluss.compression.ArrowCompressionInfo.DEFAULT_COMPRESSION;
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA_PK;
+import static org.apache.fluss.record.TestData.DATA2_SCHEMA;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test for {@link KvManager} . */
@@ -206,6 +210,61 @@ final class KvManagerTest {
 
     @ParameterizedTest
     @MethodSource("partitionProvider")
+    void testRecoveryWithSchemaChange(String partitionName) throws Exception {
+        TestingSchemaGetter testingSchemaGetter =
+                new TestingSchemaGetter(new SchemaInfo(DATA1_SCHEMA_PK, 1));
+        initTableBuckets(partitionName);
+        KvTablet kv1 = getOrCreateKv(tablePath1, partitionName, tableBucket1, testingSchemaGetter);
+        int kvRecordCount = 50;
+
+        // insert before restart.
+        KvRecord[] kvRecords1 = new KvRecord[kvRecordCount];
+        for (int i = 0; i < kvRecordCount; i++) {
+            kvRecords1[i] = kvRecordFactory.ofRecord(("key" + i).getBytes(), new Object[] {i, "a"});
+        }
+        put(kv1, kvRecords1);
+
+        // restart with schema change
+        short newSchemaId = 2;
+        kvManager.shutdown();
+        testingSchemaGetter.updateLatestSchemaInfo(new SchemaInfo(DATA2_SCHEMA, newSchemaId));
+        kvManager =
+                KvManager.create(
+                        conf, zkClient, logManager, TestingMetricGroups.TABLET_SERVER_METRICS);
+        kvManager.startup();
+
+        // insert again after restart.
+        kv1 = getOrCreateKv(tablePath1, partitionName, tableBucket1, testingSchemaGetter);
+        KvRecordTestUtils.KvRecordBatchFactory batchFactoryOfSchema2 =
+                KvRecordTestUtils.KvRecordBatchFactory.of(newSchemaId);
+        KvRecordTestUtils.KvRecordFactory kvRecordFactoryOfSchema2 =
+                KvRecordTestUtils.KvRecordFactory.of(DATA2_SCHEMA.getRowType());
+        KvRecord[] kvRecords2 = new KvRecord[kvRecordCount];
+        for (int i = 0; i < kvRecordCount; i++) {
+            kvRecords2[i] =
+                    kvRecordFactoryOfSchema2.ofRecord(
+                            ("key" + (i + kvRecordCount)).getBytes(),
+                            new Object[] {i + kvRecordCount, "b", "c"});
+        }
+        put(kv1, batchFactoryOfSchema2, kvRecords2);
+
+        // check result.
+        List<byte[]> kvKeys = new ArrayList<>(kvRecordCount);
+        List<byte[]> kvValues = new ArrayList<>(kvRecordCount);
+
+        for (int i = 0; i < kvRecordCount; i++) {
+            kvKeys.add(("key" + i).getBytes());
+            kvValues.add(valueOf(kvRecords1[i]));
+            kvKeys.add(("key" + (i + kvRecordCount)).getBytes());
+            kvValues.add(ValueEncoder.encodeValue(newSchemaId, kvRecords2[i].getRow()));
+        }
+
+        // check kv1
+        assertThat(kv1.multiGet(kvKeys)).containsExactlyElementsOf(kvValues);
+    }
+
+    @ParameterizedTest
+    @MethodSource("partitionProvider")
     void testSameTableNameInDifferentDb(String partitionName) throws Exception {
         initTableBuckets(partitionName);
         KvTablet kv1 = getOrCreateKv(tablePath1, partitionName, tableBucket1);
@@ -258,7 +317,15 @@ final class KvManagerTest {
     }
 
     private void put(KvTablet kvTablet, KvRecord... kvRecords) throws Exception {
-        KvRecordBatch kvRecordBatch = kvRecordBatchFactory.ofRecords(Arrays.asList(kvRecords));
+        put(kvTablet, kvRecordBatchFactory, kvRecords);
+    }
+
+    private void put(
+            KvTablet kvTablet,
+            KvRecordTestUtils.KvRecordBatchFactory factory,
+            KvRecord... kvRecords)
+            throws Exception {
+        KvRecordBatch kvRecordBatch = factory.ofRecords(Arrays.asList(kvRecords));
         kvTablet.putAsLeader(kvRecordBatch, null);
         // flush to make sure data is visible
         kvTablet.flush(Long.MAX_VALUE, NOPErrorHandler.INSTANCE);
@@ -266,6 +333,19 @@ final class KvManagerTest {
 
     private KvTablet getOrCreateKv(
             TablePath tablePath, @Nullable String partitionName, TableBucket tableBucket)
+            throws Exception {
+        return getOrCreateKv(
+                tablePath,
+                partitionName,
+                tableBucket,
+                new TestingSchemaGetter(new SchemaInfo(DATA1_SCHEMA_PK, 1)));
+    }
+
+    private KvTablet getOrCreateKv(
+            TablePath tablePath,
+            @Nullable String partitionName,
+            TableBucket tableBucket,
+            SchemaGetter schemaGetter)
             throws Exception {
         PhysicalTablePath physicalTablePath =
                 PhysicalTablePath.of(
@@ -277,7 +357,7 @@ final class KvManagerTest {
                 tableBucket,
                 logTablet,
                 KvFormat.COMPACTED,
-                DATA1_SCHEMA_PK,
+                schemaGetter,
                 new TableConfig(new Configuration()),
                 DEFAULT_COMPRESSION);
     }

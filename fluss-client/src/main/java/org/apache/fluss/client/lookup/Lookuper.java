@@ -20,14 +20,21 @@ package org.apache.fluss.client.lookup;
 import org.apache.fluss.annotation.PublicEvolving;
 import org.apache.fluss.row.InternalRow;
 
+import javax.annotation.concurrent.NotThreadSafe;
+
 import java.util.concurrent.CompletableFuture;
 
 /**
- * The lookup-er is used to lookup row of a primary key table by primary key or prefix key.
+ * The lookup-er is used to lookup row of a primary key table by primary key or prefix key. The
+ * lookuper has retriable ability to handle transient errors during lookup operations which is
+ * configured by {@link org.apache.fluss.config.ConfigOptions#CLIENT_LOOKUP_MAX_RETRIES}.
+ *
+ * <p>Note: Lookuper instances are not thread-safe.
  *
  * @since 0.6
  */
 @PublicEvolving
+@NotThreadSafe
 public interface Lookuper {
 
     /**

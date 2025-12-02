@@ -26,11 +26,12 @@ import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.FlussRuntimeException;
+import org.apache.fluss.exception.NetworkException;
 import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.exception.RetriableException;
+import org.apache.fluss.exception.StaleMetadataException;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
-import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.GatewayClientProxy;
@@ -38,7 +39,6 @@ import org.apache.fluss.rpc.RpcClient;
 import org.apache.fluss.rpc.gateway.AdminReadOnlyGateway;
 import org.apache.fluss.rpc.gateway.CoordinatorGateway;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
-import org.apache.fluss.utils.ExceptionUtils;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -56,12 +56,14 @@ import java.util.concurrent.TimeoutException;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.client.utils.MetadataUtils.sendMetadataRequestAndRebuildCluster;
+import static org.apache.fluss.utils.ExceptionUtils.stripExecutionException;
 
 /** The updater to initialize and update client metadata. */
 public class MetadataUpdater {
     private static final Logger LOG = LoggerFactory.getLogger(MetadataUpdater.class);
 
-    private static final int MAX_RETRY_TIMES = 5;
+    private static final int MAX_RETRY_TIMES = 3;
+    private static final int RETRY_INTERVAL_MS = 100;
 
     private final RpcClient rpcClient;
     protected volatile Cluster cluster;
@@ -84,10 +86,6 @@ public class MetadataUpdater {
         return cluster.getCoordinatorServer();
     }
 
-    public long getTableId(TablePath tablePath) {
-        return cluster.getTableId(tablePath);
-    }
-
     public Optional<Long> getPartitionId(PhysicalTablePath physicalTablePath) {
         return cluster.getPartitionId(physicalTablePath);
     }
@@ -96,24 +94,8 @@ public class MetadataUpdater {
         return cluster.getPartitionIdOrElseThrow(physicalTablePath);
     }
 
-    public TableInfo getTableInfoOrElseThrow(TablePath tablePath) {
-        return cluster.getTableOrElseThrow(tablePath);
-    }
-
     public Optional<BucketLocation> getBucketLocation(TableBucket tableBucket) {
         return cluster.getBucketLocation(tableBucket);
-    }
-
-    private Optional<TableInfo> getTableInfo(TablePath tablePath) {
-        return cluster.getTable(tablePath);
-    }
-
-    public TableInfo getTableInfoOrElseThrow(long tableId) {
-        return getTableInfo(cluster.getTablePathOrElseThrow(tableId))
-                .orElseThrow(
-                        () ->
-                                new FlussRuntimeException(
-                                        "Table not found for table id: " + tableId));
     }
 
     public int leaderFor(TableBucket tableBucket) {
@@ -270,7 +252,7 @@ public class MetadataUpdater {
                                 tablePartitionIds);
             }
         } catch (Exception e) {
-            Throwable t = ExceptionUtils.stripExecutionException(e);
+            Throwable t = stripExecutionException(e);
             if (t instanceof RetriableException || t instanceof TimeoutException) {
                 LOG.warn("Failed to update metadata, but the exception is re-triable.", t);
             } else if (t instanceof PartitionNotExistException) {
@@ -292,10 +274,33 @@ public class MetadataUpdater {
         Cluster cluster = null;
         Exception lastException = null;
         for (InetSocketAddress address : inetSocketAddresses) {
+            ServerNode serverNode = null;
             try {
-                cluster = tryToInitializeCluster(rpcClient, address);
-                break;
+                serverNode =
+                        new ServerNode(
+                                -1,
+                                address.getHostString(),
+                                address.getPort(),
+                                ServerType.COORDINATOR);
+                ServerNode finalServerNode = serverNode;
+                AdminReadOnlyGateway adminReadOnlyGateway =
+                        GatewayClientProxy.createGatewayProxy(
+                                () -> finalServerNode, rpcClient, AdminReadOnlyGateway.class);
+                if (inetSocketAddresses.size() == 1) {
+                    // if there is only one bootstrap server, we can retry to connect to it.
+                    cluster =
+                            tryToInitializeClusterWithRetries(
+                                    rpcClient, serverNode, adminReadOnlyGateway, MAX_RETRY_TIMES);
+                } else {
+                    cluster = tryToInitializeCluster(adminReadOnlyGateway);
+                    break;
+                }
             } catch (Exception e) {
+                // We should dis-connected with the bootstrap server id to make sure the next
+                // retry can rebuild the connection.
+                if (serverNode != null) {
+                    rpcClient.disconnect(serverNode.uid());
+                }
                 LOG.error(
                         "Failed to initialize fluss client connection to bootstrap server: {}",
                         address,
@@ -306,9 +311,10 @@ public class MetadataUpdater {
 
         if (cluster == null && lastException != null) {
             String errorMsg =
-                    "Failed to initialize fluss client connection to server because no "
-                            + "bootstrap server is validate. bootstrap servers: "
-                            + inetSocketAddresses;
+                    "Failed to initialize fluss client connection to bootstrap servers: "
+                            + inetSocketAddresses
+                            + ". \nReason: "
+                            + lastException.getMessage();
             LOG.error(errorMsg);
             throw new IllegalStateException(errorMsg, lastException);
         }
@@ -316,14 +322,55 @@ public class MetadataUpdater {
         return cluster;
     }
 
-    private static Cluster tryToInitializeCluster(RpcClient rpcClient, InetSocketAddress address)
+    @VisibleForTesting
+    static @Nullable Cluster tryToInitializeClusterWithRetries(
+            RpcClient rpcClient,
+            ServerNode serverNode,
+            AdminReadOnlyGateway gateway,
+            int maxRetryTimes)
             throws Exception {
-        ServerNode serverNode =
-                new ServerNode(
-                        -1, address.getHostString(), address.getPort(), ServerType.COORDINATOR);
-        AdminReadOnlyGateway adminReadOnlyGateway =
-                GatewayClientProxy.createGatewayProxy(
-                        () -> serverNode, rpcClient, AdminReadOnlyGateway.class);
+        int retryCount = 0;
+        while (retryCount <= maxRetryTimes) {
+            try {
+                return tryToInitializeCluster(gateway);
+            } catch (Exception e) {
+                Throwable cause = stripExecutionException(e);
+                // in case of bootstrap is recovering, we should retry to connect.
+                if (!(cause instanceof StaleMetadataException
+                                || cause instanceof NetworkException
+                                || cause instanceof TimeoutException)
+                        || retryCount >= maxRetryTimes) {
+                    throw e;
+                }
+
+                // We should dis-connected with the bootstrap server id to make sure the next
+                // retry can rebuild the connection.
+                rpcClient.disconnect(serverNode.uid());
+
+                long delayMs = (long) (RETRY_INTERVAL_MS * Math.pow(2, retryCount));
+                LOG.warn(
+                        "Failed to connect to bootstrap server: {} (retry {}/{}). Retrying in {} ms.",
+                        serverNode,
+                        retryCount + 1,
+                        maxRetryTimes,
+                        delayMs,
+                        e);
+
+                try {
+                    Thread.sleep(delayMs);
+                } catch (InterruptedException ex) {
+                    Thread.currentThread().interrupt();
+                    throw new RuntimeException("Interrupted during retry sleep", ex);
+                }
+                retryCount++;
+            }
+        }
+
+        return null;
+    }
+
+    private static Cluster tryToInitializeCluster(AdminReadOnlyGateway adminReadOnlyGateway)
+            throws Exception {
         return sendMetadataRequestAndRebuildCluster(adminReadOnlyGateway, Collections.emptySet());
     }
 

@@ -212,13 +212,13 @@ public class IcebergLakeCommitter implements LakeCommitter<IcebergWriteResult, I
     public void abort(IcebergCommittable committable) {
         List<String> dataFilesToDelete =
                 committable.getDataFiles().stream()
-                        .map(file -> file.path().toString())
+                        .map(ContentFile::location)
                         .collect(Collectors.toList());
         CatalogUtil.deleteFiles(icebergTable.io(), dataFilesToDelete, "data file", true);
 
         List<String> deleteFilesToDelete =
                 committable.getDeleteFiles().stream()
-                        .map(file -> file.path().toString())
+                        .map(ContentFile::location)
                         .collect(Collectors.toList());
         CatalogUtil.deleteFiles(icebergTable.io(), deleteFilesToDelete, "delete file", true);
     }

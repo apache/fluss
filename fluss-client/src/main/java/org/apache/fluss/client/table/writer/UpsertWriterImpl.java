@@ -52,6 +52,7 @@ class UpsertWriterImpl extends AbstractTableWriter implements UpsertWriter {
     private final KvFormat kvFormat;
     private final RowEncoder rowEncoder;
     private final FieldGetter[] fieldGetters;
+    private final TableInfo tableInfo;
 
     UpsertWriterImpl(
             TablePath tablePath,
@@ -75,6 +76,7 @@ class UpsertWriterImpl extends AbstractTableWriter implements UpsertWriter {
         this.kvFormat = tableInfo.getTableConfig().getKvFormat();
         this.rowEncoder = RowEncoder.create(kvFormat, rowType);
         this.fieldGetters = InternalRow.createFieldGetters(rowType);
+        this.tableInfo = tableInfo;
     }
 
     private static void sanityCheck(
@@ -129,7 +131,12 @@ class UpsertWriterImpl extends AbstractTableWriter implements UpsertWriter {
                 bucketKeyEncoder == primaryKeyEncoder ? key : bucketKeyEncoder.encodeKey(row);
         WriteRecord record =
                 WriteRecord.forUpsert(
-                        getPhysicalPath(row), encodeRow(row), key, bucketKey, targetColumns);
+                        tableInfo,
+                        getPhysicalPath(row),
+                        encodeRow(row),
+                        key,
+                        bucketKey,
+                        targetColumns);
         return send(record).thenApply(ignored -> UPSERT_SUCCESS);
     }
 
@@ -146,7 +153,8 @@ class UpsertWriterImpl extends AbstractTableWriter implements UpsertWriter {
         byte[] bucketKey =
                 bucketKeyEncoder == primaryKeyEncoder ? key : bucketKeyEncoder.encodeKey(row);
         WriteRecord record =
-                WriteRecord.forDelete(getPhysicalPath(row), key, bucketKey, targetColumns);
+                WriteRecord.forDelete(
+                        tableInfo, getPhysicalPath(row), key, bucketKey, targetColumns);
         return send(record).thenApply(ignored -> DELETE_SUCCESS);
     }
 

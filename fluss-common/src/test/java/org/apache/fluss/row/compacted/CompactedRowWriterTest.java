@@ -18,6 +18,7 @@
 package org.apache.fluss.row.compacted;
 
 import org.apache.fluss.row.BinaryString;
+import org.apache.fluss.row.BinaryWriter;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.TestInternalRowGenerator;
@@ -91,13 +92,12 @@ class CompactedRowWriterTest {
         CompactedRowWriter writer = new CompactedRowWriter(allDataTypes.length);
         CompactedRowReader reader = new CompactedRowReader(allDataTypes.length);
         InternalRow.FieldGetter[] getters = new InternalRow.FieldGetter[allDataTypes.length];
-        CompactedRowWriter.FieldWriter[] writers =
-                new CompactedRowWriter.FieldWriter[allDataTypes.length];
+        BinaryWriter.ValueWriter[] writers = new BinaryWriter.ValueWriter[allDataTypes.length];
         CompactedRowReader.FieldReader[] readers =
                 new CompactedRowReader.FieldReader[allDataTypes.length];
         for (int i = 0; i < allDataTypes.length; i++) {
             getters[i] = InternalRow.createFieldGetter(allDataTypes[i], i);
-            writers[i] = CompactedRowWriter.createFieldWriter(allDataTypes[i]);
+            writers[i] = BinaryWriter.createValueWriter(allDataTypes[i]);
             readers[i] = CompactedRowReader.createFieldReader(allDataTypes[i]);
         }
         for (int i = 0; i < 1000; i++) {
@@ -108,7 +108,7 @@ class CompactedRowWriterTest {
             // writing compacted rows
             writer.reset();
             for (int j = 0; j < allDataTypes.length; j++) {
-                writers[j].writeField(writer, j, getters[j].getFieldOrNull(indexedRow));
+                writers[j].writeValue(writer, j, getters[j].getFieldOrNull(indexedRow));
             }
 
             // reading

@@ -148,7 +148,6 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
                 partitionKeyIndexes,
                 isStreamingMode,
                 startupOptions,
-                tableOptions.get(LookupOptions.MAX_RETRIES),
                 tableOptions.get(FlinkConnectorOptions.LOOKUP_ASYNC),
                 cache,
                 partitionDiscoveryIntervalMs,
@@ -243,6 +242,13 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
                         flussConfig.setString(key, value);
                     }
                 });
+
+        // map flink lookup.max-retries to client.lookup.max-retries
+        if (tableOptions.containsKey(LookupOptions.MAX_RETRIES.key())) {
+            flussConfig.setString(
+                    ConfigOptions.CLIENT_LOOKUP_MAX_RETRIES.key(),
+                    tableOptions.get(LookupOptions.MAX_RETRIES.key()));
+        }
 
         // pass flink io tmp dir to fluss client.
         flussConfig.setString(

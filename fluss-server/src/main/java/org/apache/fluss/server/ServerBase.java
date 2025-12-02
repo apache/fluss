@@ -32,6 +32,7 @@ import org.apache.fluss.server.tablet.TabletServer;
 import org.apache.fluss.server.utils.ConfigurationParserUtils;
 import org.apache.fluss.server.utils.FatalErrorHandler;
 import org.apache.fluss.server.utils.ShutdownHookUtil;
+import org.apache.fluss.server.utils.SignalHandler;
 import org.apache.fluss.utils.AutoCloseableAsync;
 import org.apache.fluss.utils.ExceptionUtils;
 import org.apache.fluss.utils.concurrent.FutureUtils;
@@ -47,6 +48,8 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+
+import static org.apache.fluss.server.utils.LogShutdownUtil.shutdownLogIfPossible;
 
 /** An abstract base server class for {@link CoordinatorServer} & {@link TabletServer}. */
 public abstract class ServerBase implements AutoCloseableAsync, FatalErrorHandler {
@@ -113,6 +116,7 @@ public abstract class ServerBase implements AutoCloseableAsync, FatalErrorHandle
     }
 
     public void start() throws Exception {
+        SignalHandler.register(LOG);
         try {
             addShutDownHook();
 
@@ -144,7 +148,12 @@ public abstract class ServerBase implements AutoCloseableAsync, FatalErrorHandle
     private void addShutDownHook() {
         shutDownHook =
                 ShutdownHookUtil.addShutdownHook(
-                        () -> this.closeAsync(Result.JVM_SHUTDOWN).join(), getServerName(), LOG);
+                        () -> {
+                            this.closeAsync(Result.JVM_SHUTDOWN).join();
+                            shutdownLogIfPossible();
+                        },
+                        getServerName(),
+                        LOG);
     }
 
     @Override

@@ -572,6 +572,16 @@ public class ConfigOptions {
                                     + "This allows each ZooKeeper client instance to load its own configuration file, "
                                     + "instead of relying on shared JVM-level environment settings. "
                                     + "This enables fine-grained control over ZooKeeper client behavior.");
+
+    public static final ConfigOption<Integer> ZOOKEEPER_MAX_BUFFER_SIZE =
+            key("zookeeper.client.max-buffer-size")
+                    .intType()
+                    .defaultValue(100 * 1024 * 1024) // 100MB
+                    .withDescription(
+                            "The maximum buffer size (in bytes) for ZooKeeper client. "
+                                    + "This corresponds to the jute.maxbuffer property. "
+                                    + "Default is 100MB to match the RPC frame length limit.");
+
     // ------------------------------------------------------------------------
     //  ConfigOptions for Log
     // ------------------------------------------------------------------------
@@ -1111,6 +1121,14 @@ public class ConfigOptions {
                     .withDescription(
                             "The maximum time to wait for the lookup batch to full, if this timeout is reached, "
                                     + "the lookup batch will be closed to send.");
+
+    public static final ConfigOption<Integer> CLIENT_LOOKUP_MAX_RETRIES =
+            key("client.lookup.max-retries")
+                    .intType()
+                    .defaultValue(3)
+                    .withDescription(
+                            "Setting a value greater than zero will cause the client to resend any lookup request "
+                                    + "that fails with a potentially transient error.");
 
     public static final ConfigOption<Integer> CLIENT_SCANNER_REMOTE_LOG_PREFETCH_NUM =
             key("client.scanner.remote-log.prefetch-num")

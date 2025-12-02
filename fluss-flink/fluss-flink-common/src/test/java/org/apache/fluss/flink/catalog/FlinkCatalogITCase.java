@@ -203,7 +203,7 @@ abstract class FlinkCatalogITCase {
     }
 
     @Test
-    void testAlterTable() throws Exception {
+    void testAlterTableConfig() throws Exception {
         String ddl =
                 "create table test_alter_table_append_only ("
                         + "a string, "
@@ -284,6 +284,25 @@ abstract class FlinkCatalogITCase {
                 .isInstanceOf(InvalidConfigException.class)
                 .hasMessage(
                         "Property 'paimon.file.format' is not supported to alter which is for datalake table.");
+    }
+
+    @Test
+    void testAlterTableSchema() throws Exception {
+        ObjectPath objectPath = new ObjectPath(DEFAULT_DB, "append_only_table");
+        tEnv.executeSql(
+                        "create table append_only_table(a int, b STRING) with ('bucket.num' = '10')")
+                .await();
+        tEnv.executeSql("alter table append_only_table add c int").await();
+        CatalogTable table = (CatalogTable) catalog.getTable(objectPath);
+
+        Schema.Builder schemaBuilder = Schema.newBuilder();
+        Schema expectedSchema =
+                schemaBuilder
+                        .column("a", DataTypes.INT())
+                        .column("b", DataTypes.STRING())
+                        .column("c", DataTypes.INT())
+                        .build();
+        assertThat(table.getUnresolvedSchema()).isEqualTo(expectedSchema);
     }
 
     @Test

@@ -67,7 +67,8 @@ public class LookupClient {
                 new LookupSender(
                         metadataUpdater,
                         lookupQueue,
-                        conf.getInt(ConfigOptions.CLIENT_LOOKUP_MAX_INFLIGHT_SIZE));
+                        conf.getInt(ConfigOptions.CLIENT_LOOKUP_MAX_INFLIGHT_SIZE),
+                        conf.getInt(ConfigOptions.CLIENT_LOOKUP_MAX_RETRIES));
         lookupSenderThreadPool.submit(lookupSender);
     }
 

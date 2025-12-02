@@ -23,7 +23,6 @@ import org.apache.fluss.types.DataTypes;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test of {@link org.apache.fluss.row.InternalRow}. */
 public class InternalRowTest {
@@ -47,17 +46,11 @@ public class InternalRowTest {
         assertThat(InternalRow.getDataClass(DataTypes.TIMESTAMP())).isEqualTo(TimestampNtz.class);
         assertThat(InternalRow.getDataClass(DataTypes.TIMESTAMP_LTZ()))
                 .isEqualTo(TimestampLtz.class);
-        assertThatThrownBy(() -> InternalRow.getDataClass(DataTypes.ARRAY(DataTypes.TIMESTAMP())))
-                .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(
-                        () ->
-                                InternalRow.getDataClass(
-                                        DataTypes.MAP(DataTypes.INT(), DataTypes.TIMESTAMP())))
-                .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(
-                        () ->
-                                InternalRow.getDataClass(
-                                        DataTypes.ROW(new DataField("a", DataTypes.INT()))))
-                .isInstanceOf(IllegalArgumentException.class);
+        assertThat(InternalRow.getDataClass(DataTypes.ARRAY(DataTypes.TIMESTAMP())))
+                .isEqualTo(InternalArray.class);
+        assertThat(InternalRow.getDataClass(DataTypes.MAP(DataTypes.INT(), DataTypes.TIMESTAMP())))
+                .isEqualTo(InternalMap.class);
+        assertThat(InternalRow.getDataClass(DataTypes.ROW(new DataField("a", DataTypes.INT()))))
+                .isEqualTo(InternalRow.class);
     }
 }

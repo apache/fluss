@@ -203,6 +203,10 @@ public class PaimonConversions {
                 .getCustomProperties()
                 .forEach((k, v) -> setFlussPropertyToPaimon(k, v, options));
         schemaBuilder.options(options.toMap());
+
+        // set comment
+        tableDescriptor.getComment().ifPresent(schemaBuilder::comment);
+
         return schemaBuilder.build();
     }
 

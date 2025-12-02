@@ -163,6 +163,7 @@ class CompactedKeyEncoderTest {
             // get the field from key row and origin row, and then check each field
             for (int i = 0; i < keyDataTypes.length; i++) {
                 assertThat(fieldGetters[i].getFieldOrNull(keyRow))
+                        .as("Field " + i + " of type " + keyDataTypes[i])
                         .isEqualTo(fieldGetters[i].getFieldOrNull(row));
             }
         }

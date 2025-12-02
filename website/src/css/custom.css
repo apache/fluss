@@ -21,6 +21,9 @@
  * work well for content-centric websites.
  */
 
+/* Import Inter font from Google Fonts */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+
 /* You can override the default Infima variables here. */
 :root {
   --ifm-color-primary: #0071e3;
@@ -46,10 +49,13 @@
 
 .navbar__brand {
   font-family: monaco;
+  color: inherit;
 }
 
 .hero__title {
-  font-family: monaco;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  font-weight: 700;
+  letter-spacing: -0.03em;
 }
 
 .hero__subtitle {

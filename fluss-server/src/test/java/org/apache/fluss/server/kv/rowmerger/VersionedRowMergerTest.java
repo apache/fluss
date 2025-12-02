@@ -19,7 +19,7 @@ package org.apache.fluss.server.kv.rowmerger;
 
 import org.apache.fluss.metadata.DeleteBehavior;
 import org.apache.fluss.metadata.Schema;
-import org.apache.fluss.row.BinaryRow;
+import org.apache.fluss.record.BinaryValue;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
 import org.apache.fluss.types.DataType;
@@ -123,22 +123,20 @@ class VersionedRowMergerTest {
     @ParameterizedTest
     @MethodSource("parameters")
     void testAllTypes(DataType type, List<TestSpec> testSpecs) {
-        RowType schema =
-                Schema.newBuilder()
-                        .column("a", type)
-                        .column("b", DataTypes.STRING())
-                        .build()
-                        .getRowType();
-        VersionedRowMerger merger = new VersionedRowMerger(schema, "a", DeleteBehavior.DISABLE);
+        Schema schema =
+                Schema.newBuilder().column("a", type).column("b", DataTypes.STRING()).build();
+        RowType rowType = schema.getRowType();
+        VersionedRowMerger merger = new VersionedRowMerger("a", DeleteBehavior.DISABLE);
+        merger.configureTargetColumns(null, (short) 1, schema);
 
         for (TestSpec testSpec : testSpecs) {
-            BinaryRow oldRow = compactedRow(schema, new Object[] {testSpec.oldValue, "dummy"});
-            BinaryRow newRow = compactedRow(schema, new Object[] {testSpec.newValue, "dummy"});
-            BinaryRow mergedRow = merger.merge(oldRow, newRow);
+            BinaryValue oldValue = binaryValue(rowType, new Object[] {testSpec.oldValue, "dummy"});
+            BinaryValue newValue = binaryValue(rowType, new Object[] {testSpec.newValue, "dummy"});
+            BinaryValue mergedValue = merger.merge(oldValue, newValue);
             if (testSpec.expected.equals("old")) {
-                assertThat(mergedRow).isSameAs(oldRow);
+                assertThat(mergedValue).isSameAs(oldValue);
             } else if (testSpec.expected.equals("new")) {
-                assertThat(mergedRow).isSameAs(newRow);
+                assertThat(mergedValue).isSameAs(newValue);
             } else {
                 throw new IllegalArgumentException("Unknown expected value: " + testSpec.expected);
             }
@@ -147,16 +145,51 @@ class VersionedRowMergerTest {
 
     @Test
     void testNormal() {
-        RowType schema =
+        Schema schema =
                 Schema.newBuilder()
                         .column("a", DataTypes.INT())
                         .column("b", DataTypes.STRING())
-                        .build()
-                        .getRowType();
-        VersionedRowMerger merger = new VersionedRowMerger(schema, "a", DeleteBehavior.DISABLE);
+                        .build();
+        VersionedRowMerger merger = new VersionedRowMerger("a", DeleteBehavior.DISABLE);
+        merger.configureTargetColumns(null, (short) 1, schema);
 
         assertThat(merger.deleteBehavior()).isEqualTo(DeleteBehavior.DISABLE);
-        assertThat(merger.configureTargetColumns(null)).isSameAs(merger);
+        assertThat(merger.configureTargetColumns(null, (short) 1, schema)).isSameAs(merger);
+    }
+
+    @Test
+    void testSchemaChange() {
+        Schema schema =
+                Schema.newBuilder()
+                        .column("a", DataTypes.INT())
+                        .column("b", DataTypes.STRING())
+                        .build();
+        RowType rowType = schema.getRowType();
+        VersionedRowMerger merger = new VersionedRowMerger("a", DeleteBehavior.DISABLE);
+        merger.configureTargetColumns(null, (short) 1, schema);
+        BinaryValue oldValue = binaryValue(rowType, new Object[] {11, "dummy"});
+        BinaryValue newValue = binaryValue(rowType, new Object[] {2, "dummy"});
+        assertThat(merger.merge(oldValue, newValue)).isSameAs(oldValue);
+
+        Schema schema2 =
+                Schema.newBuilder()
+                        .fromColumns(
+                                Arrays.asList(
+                                        new Schema.Column("a", DataTypes.INT(), null, (short) 0),
+                                        new Schema.Column("b", DataTypes.STRING(), null, (short) 1),
+                                        // add new column at end
+                                        new Schema.Column(
+                                                "c", DataTypes.STRING(), null, (short) 2)))
+                        .build();
+        rowType = schema2.getRowType();
+        merger.configureTargetColumns(null, (short) 2, schema2);
+
+        newValue = binaryValue(rowType, new Object[] {2, "dummy", "a"});
+        // version is smaller than old value
+        assertThat(merger.merge(oldValue, newValue)).isSameAs(oldValue);
+        newValue = binaryValue(rowType, new Object[] {20, "dummy", "b"});
+        // version is greater than old value
+        assertThat(merger.merge(oldValue, newValue)).isSameAs(newValue);
     }
 
     private static TimestampNtz timestampNtz(String timestamp) {
@@ -166,6 +199,11 @@ class VersionedRowMergerTest {
     private static TimestampLtz timestampLtz(String timestamp) {
         Instant instant = LocalDateTime.parse(timestamp).toInstant(ZoneOffset.UTC);
         return TimestampLtz.fromInstant(instant);
+    }
+
+    private static BinaryValue binaryValue(RowType rowType, Object[] objects) {
+        int schemaId = rowType.getFieldCount() == 2 ? 1 : 2;
+        return new BinaryValue((short) schemaId, compactedRow(rowType, objects));
     }
 
     /** Test specification for {@link VersionedRowMerger}. */

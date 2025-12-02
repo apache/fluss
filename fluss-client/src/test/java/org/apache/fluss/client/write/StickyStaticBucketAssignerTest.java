@@ -65,7 +65,7 @@ class StickyStaticBucketAssignerTest {
         // init cluster.
         Cluster cluster = updateCluster(Arrays.asList(bucket1, bucket2, bucket3));
         StickyBucketAssigner stickyBucketAssigner =
-                new StickyBucketAssigner(DATA1_PHYSICAL_TABLE_PATH);
+                new StickyBucketAssigner(DATA1_PHYSICAL_TABLE_PATH, 3);
         int bucketId = stickyBucketAssigner.assignBucket(cluster);
         assertThat(bucketId >= 0 && bucketId < 3).isTrue();
 
@@ -94,7 +94,7 @@ class StickyStaticBucketAssignerTest {
         // init cluster.
         Cluster cluster = updateCluster(Arrays.asList(bucket1, bucket2, bucket3));
         StickyBucketAssigner stickyBucketAssigner =
-                new StickyBucketAssigner(DATA1_PHYSICAL_TABLE_PATH);
+                new StickyBucketAssigner(DATA1_PHYSICAL_TABLE_PATH, 3);
         int bucketId = stickyBucketAssigner.assignBucket(cluster);
         for (int i = 0; i < 3; i++) {
             if (i != bucketId) {
@@ -111,7 +111,7 @@ class StickyStaticBucketAssignerTest {
         // init cluster.
         Cluster cluster = updateCluster(Collections.singletonList(bucket1));
         StickyBucketAssigner stickyBucketAssigner =
-                new StickyBucketAssigner(DATA1_PHYSICAL_TABLE_PATH);
+                new StickyBucketAssigner(DATA1_PHYSICAL_TABLE_PATH, 3);
         int bucketId = stickyBucketAssigner.assignBucket(cluster);
 
         for (int i = 0; i < 100; i++) {
@@ -136,7 +136,7 @@ class StickyStaticBucketAssignerTest {
         Cluster cluster = updateCluster(allBuckets);
 
         // Assure we never choose bucket 1 for tp1 because it is unavailable.
-        StickyBucketAssigner stickyBucketAssigner = new StickyBucketAssigner(tp1);
+        StickyBucketAssigner stickyBucketAssigner = new StickyBucketAssigner(tp1, 3);
         int bucketForTp1 = stickyBucketAssigner.assignBucket(cluster);
         assertThat(bucketForTp1).isNotEqualTo(1);
         for (int i = 0; i < 100; i++) {
@@ -145,7 +145,7 @@ class StickyStaticBucketAssignerTest {
         }
 
         // Assure we always choose bucket 1 for tp2.
-        stickyBucketAssigner = new StickyBucketAssigner(tp2);
+        stickyBucketAssigner = new StickyBucketAssigner(tp2, 3);
         int bucketForTp2 = stickyBucketAssigner.assignBucket(cluster);
         assertThat(bucketForTp2).isEqualTo(1);
         for (int i = 0; i < 100; i++) {
@@ -154,7 +154,7 @@ class StickyStaticBucketAssignerTest {
         }
 
         // Assure that we can still choose one bucket even if there are no available buckets.
-        stickyBucketAssigner = new StickyBucketAssigner(tp3);
+        stickyBucketAssigner = new StickyBucketAssigner(tp3, 3);
         int bucketForTp3 = stickyBucketAssigner.assignBucket(cluster);
         assertThat(bucketForTp3).isIn(0, 1, 2);
         stickyBucketAssigner.onNewBatch(cluster, bucketForTp3);
@@ -165,7 +165,7 @@ class StickyStaticBucketAssignerTest {
     void testMultiThreadToCallOnNewBatch() {
         Cluster cluster = updateCluster(Arrays.asList(bucket1, bucket2, bucket3));
         StickyBucketAssigner stickyBucketAssigner =
-                new StickyBucketAssigner(PhysicalTablePath.of(DATA1_TABLE_PATH));
+                new StickyBucketAssigner(PhysicalTablePath.of(DATA1_TABLE_PATH), 3);
         int bucketId = stickyBucketAssigner.assignBucket(cluster);
         Queue<Integer> bucketIds = new ConcurrentLinkedQueue<>();
         Thread[] threads = new Thread[100];

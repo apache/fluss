@@ -170,7 +170,7 @@ class PartitionedTableITCase extends ClientToServerITCaseBase {
         AppendWriter appendWriter = table.newAppend().createWriter();
         int partitionSize = 5;
 
-        // first try to add records add wait partition created.
+        // first try to add records and wait partition created.
         Map<String, List<InternalRow>> expectPartitionNameAndAppendRows = new HashMap<>();
         for (int i = 0; i < partitionSize; i++) {
             String partitionName = String.valueOf(i);

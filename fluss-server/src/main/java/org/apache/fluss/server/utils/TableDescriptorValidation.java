@@ -30,6 +30,7 @@ import org.apache.fluss.metadata.DeleteBehavior;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.MergeEngineType;
+import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.types.DataType;
@@ -66,6 +67,9 @@ public class TableDescriptorValidation {
                                     TIMESTAMP_COLUMN_NAME,
                                     BUCKET_COLUMN_NAME)));
 
+    private static final List<DataTypeRoot> KEY_UNSUPPORTED_TYPES =
+            Arrays.asList(DataTypeRoot.ARRAY, DataTypeRoot.MAP, DataTypeRoot.ROW);
+
     /** Validate table descriptor to create is valid and contain all necessary information. */
     public static void validateTableDescriptor(TableDescriptor tableDescriptor, int maxBucketNum) {
         boolean hasPrimaryKey = tableDescriptor.getSchema().getPrimaryKey().isPresent();
@@ -95,7 +99,7 @@ public class TableDescriptorValidation {
 
         // check distribution
         checkDistribution(tableDescriptor, maxBucketNum);
-
+        checkPrimaryKey(tableDescriptor);
         // check individual options
         checkReplicationFactor(tableConf);
         checkLogFormat(tableConf, hasPrimaryKey);
@@ -161,6 +165,41 @@ public class TableDescriptorValidation {
                     String.format(
                             "Bucket count %s exceeds the maximum limit %s.",
                             bucketCount, maxBucketNum));
+        }
+        List<String> bucketKeys = tableDescriptor.getTableDistribution().get().getBucketKeys();
+        if (!bucketKeys.isEmpty()) {
+            // check bucket key type
+            RowType schema = tableDescriptor.getSchema().getRowType();
+            for (String bkColumn : bucketKeys) {
+                int bkIndex = schema.getFieldIndex(bkColumn);
+                DataType bkDataType = schema.getTypeAt(bkIndex);
+                if (KEY_UNSUPPORTED_TYPES.contains(bkDataType.getTypeRoot())) {
+                    throw new InvalidTableException(
+                            String.format(
+                                    "Bucket key column '%s' has unsupported data type %s. "
+                                            + "Currently, bucket key column does not support types: %s.",
+                                    bkColumn, bkDataType, KEY_UNSUPPORTED_TYPES));
+                }
+            }
+        }
+    }
+
+    private static void checkPrimaryKey(TableDescriptor tableDescriptor) {
+        if (tableDescriptor.hasPrimaryKey()) {
+            // check primary key type
+            RowType schema = tableDescriptor.getSchema().getRowType();
+            Schema.PrimaryKey primaryKey = tableDescriptor.getSchema().getPrimaryKey().get();
+            for (String pkColumn : primaryKey.getColumnNames()) {
+                int pkIndex = schema.getFieldIndex(pkColumn);
+                DataType pkDataType = schema.getTypeAt(pkIndex);
+                if (KEY_UNSUPPORTED_TYPES.contains(pkDataType.getTypeRoot())) {
+                    throw new InvalidTableException(
+                            String.format(
+                                    "Primary key column '%s' has unsupported data type %s. "
+                                            + "Currently, primary key column does not support types: %s.",
+                                    pkColumn, pkDataType, KEY_UNSUPPORTED_TYPES));
+                }
+            }
         }
     }
 

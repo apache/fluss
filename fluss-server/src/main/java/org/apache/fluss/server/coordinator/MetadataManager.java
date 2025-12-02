@@ -38,6 +38,7 @@ import org.apache.fluss.lake.lakestorage.LakeCatalog;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.DatabaseInfo;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
+import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
@@ -296,7 +297,7 @@ public class MetadataManager {
         // first register a schema to the zk, if then register the table
         // to zk fails, there's no harm to register a new schema to zk again
         try {
-            zookeeperClient.registerSchema(tablePath, tableToCreate.getSchema());
+            zookeeperClient.registerFirstSchema(tablePath, tableToCreate.getSchema());
         } catch (Exception e) {
             throw new FlussRuntimeException(
                     "Fail to register schema when creating table " + tablePath, e);
@@ -318,6 +319,33 @@ public class MetadataManager {
                     return tableId;
                 },
                 "Fail to create table " + tablePath);
+    }
+
+    public void alterTableSchema(
+            TablePath tablePath, List<TableChange> schemaChanges, boolean ignoreIfNotExists)
+            throws TableNotExistException, TableNotPartitionedException {
+        try {
+
+            TableInfo table = getTable(tablePath);
+
+            // validate the table column changes
+            if (!schemaChanges.isEmpty()) {
+                Schema newSchema = SchemaUpdate.applySchemaChanges(table, schemaChanges);
+                // update the schema
+                zookeeperClient.registerSchema(tablePath, newSchema, table.getSchemaId() + 1);
+            }
+        } catch (Exception e) {
+            if (e instanceof TableNotExistException) {
+                if (ignoreIfNotExists) {
+                    return;
+                }
+                throw (TableNotExistException) e;
+            } else if (e instanceof RuntimeException) {
+                throw (RuntimeException) e;
+            } else {
+                throw new FlussRuntimeException("Failed to alter table schema: " + tablePath, e);
+            }
+        }
     }
 
     public void alterTableProperties(
@@ -386,7 +414,8 @@ public class MetadataManager {
             } else if (e instanceof RuntimeException) {
                 throw (RuntimeException) e;
             } else {
-                throw new FlussRuntimeException("Failed to alter table: " + tablePath, e);
+                throw new FlussRuntimeException(
+                        "Failed to alter table properties: " + tablePath, e);
             }
         }
     }
@@ -547,14 +576,14 @@ public class MetadataManager {
                     zookeeperClient.getTables(tablePaths);
             // currently, we don't support schema evolution, so all schemas are version 1
             Map<TablePath, SchemaInfo> tablePath2SchemaInfos =
-                    zookeeperClient.getV1Schemas(tablePaths);
+                    zookeeperClient.getLatestSchemas(tablePaths);
             for (TablePath tablePath : tablePaths) {
                 if (!tablePath2TableRegistrations.containsKey(tablePath)) {
                     throw new TableNotExistException("Table '" + tablePath + "' does not exist.");
                 }
                 if (!tablePath2SchemaInfos.containsKey(tablePath)) {
                     throw new SchemaNotExistException(
-                            "Schema for '" + tablePath + "' with schema_id=1 does not exist.");
+                            "Schema for '" + tablePath + "' does not exist.");
                 }
                 TableRegistration tableReg = tablePath2TableRegistrations.get(tablePath);
                 SchemaInfo schemaInfo = tablePath2SchemaInfos.get(tablePath);

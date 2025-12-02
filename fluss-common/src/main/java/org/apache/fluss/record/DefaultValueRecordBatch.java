@@ -163,6 +163,7 @@ public class DefaultValueRecordBatch implements ValueRecordBatch {
             }
             readRecords++;
             ValueRecord rec = readNext();
+
             if (readRecords == numRecords) {
                 // Validate that the actual size of the batch is equal to declared size
                 // by checking that after reading declared number of items, there no items left

@@ -62,6 +62,11 @@ public final class IndexedLogWriteBatch extends WriteBatch {
     }
 
     @Override
+    public boolean isLogBatch() {
+        return true;
+    }
+
+    @Override
     public boolean tryAppend(WriteRecord writeRecord, WriteCallback callback) throws Exception {
         checkNotNull(callback, "write callback must be not null");
         checkNotNull(writeRecord.getRow(), "row must not be null for log record");

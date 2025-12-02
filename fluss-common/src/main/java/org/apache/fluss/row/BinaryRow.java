@@ -32,4 +32,29 @@ public interface BinaryRow extends InternalRow, MemoryAwareGetters {
      * @param dstOffset The copying offset in the destination memory.
      */
     void copyTo(byte[] dst, int dstOffset);
+
+    /**
+     * Copy the bytes of the row to the destination memory, beginning at the given offset.
+     *
+     * @return The copied row.
+     */
+    BinaryRow copy();
+
+    /**
+     * Point to the bytes of the row.
+     *
+     * @param segment The memory segment.
+     * @param offset The offset in the memory segment.
+     * @param sizeInBytes The size of the row.
+     */
+    void pointTo(MemorySegment segment, int offset, int sizeInBytes);
+
+    /**
+     * Point to the bytes of the row.
+     *
+     * @param segments The memory segments.
+     * @param offset The offset in the memory segments.
+     * @param sizeInBytes The size of the row.
+     */
+    void pointTo(MemorySegment[] segments, int offset, int sizeInBytes);
 }

@@ -56,7 +56,7 @@ fluss.hadoop.hadoop.security.kerberos.ticket.cache.path: /tmp/krb5cc_1000
 
 #### Use Machine Hadoop Environment Configuration
 
-Fluss includes bundled Hadoop libraries with version 3.3.4 for deploying Fluss in machine without Hadoop installed. 
+Fluss includes bundled Hadoop libraries with version 3.4.0 for deploying Fluss in machine without Hadoop installed. 
 For most use cases, these work perfectly. However, you should configure your machine's native Hadoop environment if:
 1. Your HDFS uses kerberos security
 2. You need to avoid version conflicts between Fluss's bundled hadoop libraries and your HDFS cluster

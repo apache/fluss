@@ -19,6 +19,9 @@ package org.apache.fluss.row;
 
 import org.apache.fluss.annotation.PublicEvolving;
 import org.apache.fluss.record.ChangeType;
+import org.apache.fluss.row.columnar.ColumnarRow;
+import org.apache.fluss.row.columnar.VectorizedColumnBatch;
+import org.apache.fluss.types.ArrayType;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.RowType;
 
@@ -26,6 +29,7 @@ import javax.annotation.Nullable;
 
 import java.io.Serializable;
 
+import static org.apache.fluss.row.InternalArray.createDeepElementGetter;
 import static org.apache.fluss.types.DataTypeChecks.getLength;
 import static org.apache.fluss.types.DataTypeChecks.getPrecision;
 import static org.apache.fluss.types.DataTypeChecks.getScale;
@@ -68,6 +72,8 @@ import static org.apache.fluss.types.DataTypeChecks.getScale;
  * +--------------------------------+-----------------------------------------+
  * | TIMESTAMP WITH LOCAL TIME ZONE | {@link TimestampLtz}                    |
  * +--------------------------------+-----------------------------------------+
+ * | ARRAY                          | {@link InternalArray}                   |
+ * +--------------------------------+-----------------------------------------+
  * </pre>
  *
  * <p>Nullability is always handled by the container data structure.
@@ -75,77 +81,14 @@ import static org.apache.fluss.types.DataTypeChecks.getScale;
  * @since 0.1
  */
 @PublicEvolving
-public interface InternalRow {
+public interface InternalRow extends DataGetters {
+
     /**
      * Returns the number of fields in this row.
      *
      * <p>The number does not include {@link ChangeType}. It is kept separately.
      */
     int getFieldCount();
-
-    // ------------------------------------------------------------------------------------------
-    // Read-only accessor methods
-    // ------------------------------------------------------------------------------------------
-
-    /** Returns true if the element is null at the given position. */
-    boolean isNullAt(int pos);
-
-    /** Returns the boolean value at the given position. */
-    boolean getBoolean(int pos);
-
-    /** Returns the byte value at the given position. */
-    byte getByte(int pos);
-
-    /** Returns the short value at the given position. */
-    short getShort(int pos);
-
-    /** Returns the integer value at the given position. */
-    int getInt(int pos);
-
-    /** Returns the long value at the given position. */
-    long getLong(int pos);
-
-    /** Returns the float value at the given position. */
-    float getFloat(int pos);
-
-    /** Returns the double value at the given position. */
-    double getDouble(int pos);
-
-    /** Returns the string value at the given position with fixed length. */
-    BinaryString getChar(int pos, int length);
-
-    /** Returns the string value at the given position. */
-    BinaryString getString(int pos);
-
-    /**
-     * Returns the decimal value at the given position.
-     *
-     * <p>The precision and scale are required to determine whether the decimal value was stored in
-     * a compact representation (see {@link Decimal}).
-     */
-    Decimal getDecimal(int pos, int precision, int scale);
-
-    /**
-     * Returns the timestamp value at the given position.
-     *
-     * <p>The precision is required to determine whether the timestamp value was stored in a compact
-     * representation (see {@link TimestampNtz}).
-     */
-    TimestampNtz getTimestampNtz(int pos, int precision);
-
-    /**
-     * Returns the timestamp value at the given position.
-     *
-     * <p>The precision is required to determine whether the timestamp value was stored in a compact
-     * representation (see {@link TimestampLtz}).
-     */
-    TimestampLtz getTimestampLtz(int pos, int precision);
-
-    /** Returns the binary value at the given position with fixed length. */
-    byte[] getBinary(int pos, int length);
-
-    /** Returns the binary value at the given position. */
-    byte[] getBytes(int pos);
 
     // ------------------------------------------------------------------------------------------
     // Access Utilities
@@ -183,6 +126,12 @@ public interface InternalRow {
                 return TimestampNtz.class;
             case TIMESTAMP_WITH_LOCAL_TIME_ZONE:
                 return TimestampLtz.class;
+            case ARRAY:
+                return InternalArray.class;
+            case MAP:
+                return InternalMap.class;
+            case ROW:
+                return InternalRow.class;
             default:
                 throw new IllegalArgumentException("Illegal type: " + type);
         }
@@ -262,9 +211,67 @@ public interface InternalRow {
                 final int timestampLtzPrecision = getPrecision(fieldType);
                 fieldGetter = row -> row.getTimestampLtz(fieldPos, timestampLtzPrecision);
                 break;
+            case ARRAY:
+                fieldGetter = row -> row.getArray(fieldPos);
+                break;
+                // TODO: MAP support will be added in Issue #1973
+                // TODO: ROW support will be added in Issue #1974
+            case MAP:
+            case ROW:
             default:
                 throw new IllegalArgumentException("Illegal type: " + fieldType);
         }
+        if (!fieldType.isNullable()) {
+            return fieldGetter;
+        }
+        return row -> {
+            if (row.isNullAt(fieldPos)) {
+                return null;
+            }
+            return fieldGetter.getFieldOrNull(row);
+        };
+    }
+
+    /**
+     * Creates a deep accessor for getting elements in an internal array data structure at the given
+     * position. It returns new objects (GenericArray/GenericMap/GenericMap) for nested
+     * array/map/row types.
+     *
+     * <p>NOTE: Currently, it is only used for deep copying {@link ColumnarRow} for Arrow which
+     * avoid the arrow buffer is released before accessing elements. It doesn't deep copy STRING and
+     * BYTES types, because {@link ColumnarRow} already deep copies the bytes, see {@link
+     * VectorizedColumnBatch#getString(int, int)}. This can be removed once we supports object reuse
+     * for Arrow {@link ColumnarRow}, see {@code CompletedFetch#toScanRecord(LogRecord)}.
+     */
+    static FieldGetter createDeepFieldGetter(DataType fieldType, int fieldPos) {
+        final FieldGetter fieldGetter;
+        switch (fieldType.getTypeRoot()) {
+            case ARRAY:
+                DataType elementType = ((ArrayType) fieldType).getElementType();
+                InternalArray.ElementGetter nestedGetter = createDeepElementGetter(elementType);
+                fieldGetter =
+                        row -> {
+                            InternalArray array = row.getArray(fieldPos);
+                            Object[] objs = new Object[array.size()];
+                            for (int i = 0; i < array.size(); i++) {
+                                objs[i] = nestedGetter.getElementOrNull(array, i);
+                            }
+                            return new GenericArray(objs);
+                        };
+                break;
+            case MAP:
+            case ROW:
+                String msg =
+                        String.format(
+                                "type %s not support in %s",
+                                fieldType.getTypeRoot().toString(), InternalArray.class.getName());
+                throw new IllegalArgumentException(msg);
+            default:
+                // for primitive types, use the normal field getter
+                fieldGetter = createFieldGetter(fieldType, fieldPos);
+                break;
+        }
+
         if (!fieldType.isNullable()) {
             return fieldGetter;
         }

@@ -18,6 +18,7 @@
 package org.apache.fluss.testutils;
 
 import org.apache.fluss.metadata.LogFormat;
+import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.record.LogRecordBatch;
 import org.apache.fluss.record.LogRecordReadContext;
@@ -35,6 +36,7 @@ public class LogRecordBatchAssert extends AbstractAssert<LogRecordBatchAssert, L
     private RowType rowType;
     private LogFormat logFormat;
     private boolean assertCheckSum = true;
+    private SchemaGetter schemaGetter;
 
     /** Creates assertions for {@link LogRecordBatch}. */
     public static LogRecordBatchAssert assertThatLogRecordBatch(LogRecordBatch actual) {
@@ -57,6 +59,11 @@ public class LogRecordBatchAssert extends AbstractAssert<LogRecordBatchAssert, L
 
     public LogRecordBatchAssert withLogFormat(LogFormat logFormat) {
         this.logFormat = logFormat;
+        return this;
+    }
+
+    public LogRecordBatchAssert withSchemaGetter(SchemaGetter schemaGetter) {
+        this.schemaGetter = schemaGetter;
         return this;
     }
 
@@ -113,9 +120,9 @@ public class LogRecordBatchAssert extends AbstractAssert<LogRecordBatchAssert, L
 
     private LogRecordReadContext createReadContext(int schemaId) {
         if (logFormat != null && logFormat == LogFormat.INDEXED) {
-            return LogRecordReadContext.createIndexedReadContext(rowType, schemaId);
+            return LogRecordReadContext.createIndexedReadContext(rowType, schemaId, schemaGetter);
         } else {
-            return LogRecordReadContext.createArrowReadContext(rowType, schemaId);
+            return LogRecordReadContext.createArrowReadContext(rowType, schemaId, schemaGetter);
         }
     }
 }
