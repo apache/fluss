@@ -31,6 +31,7 @@ import org.apache.fluss.record.LogRecordReadContext;
 import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.record.ProjectionPushdownCache;
 import org.apache.fluss.record.TestingSchemaGetter;
+import org.apache.fluss.row.GenericArray;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.rpc.entity.FetchLogResultForBucket;
 import org.apache.fluss.types.DataTypes;
@@ -216,6 +217,88 @@ public class DefaultCompletedFetchTest {
             InternalRow row = actualRecord.getRow();
             assertThat(row.getString(0).toString()).isEqualTo(expectObject[1]);
             assertThat(row.getInt(1)).isEqualTo(expectObject[0]);
+        }
+    }
+
+    @Test
+    void testComplexTypeFetch() throws Exception {
+        List<Object[]> complexData =
+                Arrays.asList(
+                        new Object[] {
+                            1,
+                            new String[] {"a", "b"},
+                            new Object[] {new int[] {1, 2}, new int[] {3, 4}}
+                        },
+                        new Object[] {
+                            2, new String[] {"c", null}, new Object[] {null, new int[] {3, 4}}
+                        },
+                        new Object[] {
+                            3,
+                            new String[] {"e", "f"},
+                            new Object[] {new int[] {5, 6, 7}, new int[] {8}}
+                        });
+        Schema schema =
+                Schema.newBuilder()
+                        .column("a", DataTypes.INT())
+                        .column("b", DataTypes.ARRAY(DataTypes.STRING()))
+                        .column("c", DataTypes.ARRAY(DataTypes.ARRAY(DataTypes.INT())))
+                        .build();
+        TableInfo tableInfo =
+                TableInfo.of(
+                        DATA2_TABLE_PATH,
+                        DATA2_TABLE_ID,
+                        DEFAULT_SCHEMA_ID,
+                        TableDescriptor.builder()
+                                .schema(schema)
+                                .distributedBy(3)
+                                .logFormat(LogFormat.ARROW)
+                                .build(),
+                        System.currentTimeMillis(),
+                        System.currentTimeMillis());
+        long fetchOffset = 0L;
+        int bucketId = 0;
+        TableBucket tb = new TableBucket(DATA2_TABLE_ID, bucketId);
+        FetchLogResultForBucket resultForBucket =
+                new FetchLogResultForBucket(
+                        tb,
+                        createRecordsWithoutBaseLogOffset(
+                                schema.getRowType(),
+                                DEFAULT_SCHEMA_ID,
+                                0L,
+                                1000L,
+                                LOG_MAGIC_VALUE_V0,
+                                complexData,
+                                LogFormat.ARROW),
+                        3L);
+        DefaultCompletedFetch defaultCompletedFetch =
+                new DefaultCompletedFetch(
+                        tb,
+                        resultForBucket,
+                        LogRecordReadContext.createReadContext(
+                                tableInfo,
+                                false,
+                                null,
+                                new TestingSchemaGetter(
+                                        tableInfo.getSchemaId(), tableInfo.getSchema())),
+                        logScannerStatus,
+                        true,
+                        fetchOffset);
+        List<ScanRecord> scanRecords = defaultCompletedFetch.fetchRecords(3);
+        // close the read context to release arrow root resource,
+        // this is important to test complex types
+        defaultCompletedFetch.readContext.close();
+        assertThat(scanRecords.size()).isEqualTo(3);
+        for (int i = 0; i < scanRecords.size(); i++) {
+            ScanRecord record = scanRecords.get(i);
+            assertThat(record.logOffset()).isEqualTo(i);
+            InternalRow row = record.getRow();
+            assertThat(row.getInt(0)).isEqualTo(complexData.get(i)[0]);
+            assertThat(row.getArray(1)).isInstanceOf(GenericArray.class);
+            GenericArray array = (GenericArray) row.getArray(1);
+            assertThat(array.toString())
+                    .isEqualTo(Arrays.deepToString((Object[]) complexData.get(i)[1]));
+            assertThat(row.getArray(2).toString())
+                    .isEqualTo(Arrays.deepToString((Object[]) complexData.get(i)[2]));
         }
     }
 

@@ -19,6 +19,8 @@
 package org.apache.fluss.row;
 
 import org.apache.fluss.annotation.PublicEvolving;
+import org.apache.fluss.row.columnar.ColumnarRow;
+import org.apache.fluss.row.columnar.VectorizedColumnBatch;
 import org.apache.fluss.types.ArrayType;
 import org.apache.fluss.types.DataType;
 
@@ -140,6 +142,55 @@ public interface InternalArray extends DataGetters {
                                 "type %s not support in %s",
                                 fieldType.getTypeRoot().toString(), InternalArray.class.getName());
                 throw new IllegalArgumentException(msg);
+        }
+        if (!fieldType.isNullable()) {
+            return elementGetter;
+        }
+        return (array, pos) -> {
+            if (array.isNullAt(pos)) {
+                return null;
+            }
+            return elementGetter.getElementOrNull(array, pos);
+        };
+    }
+
+    /**
+     * Creates a deep accessor for getting elements in an internal array data structure at the given
+     * position. It returns new objects (GenericArray/GenericMap/GenericMap) for nested
+     * array/map/row types.
+     *
+     * <p>NOTE: Currently, it is only used for deep copying {@link ColumnarRow} for Arrow which
+     * avoid the arrow buffer is released before accessing elements. It doesn't deep copy STRING and
+     * BYTES types, because {@link ColumnarRow} already deep copies the bytes, see {@link
+     * VectorizedColumnBatch#getString(int, int)}. This can be removed once we supports object reuse
+     * for Arrow {@link ColumnarRow}, see {@code CompletedFetch#toScanRecord(LogRecord)}.
+     */
+    static ElementGetter createDeepElementGetter(DataType fieldType) {
+        final ElementGetter elementGetter;
+        switch (fieldType.getTypeRoot()) {
+            case ARRAY:
+                DataType nestedType = ((ArrayType) fieldType).getElementType();
+                ElementGetter nestedGetter = createDeepElementGetter(nestedType);
+                elementGetter =
+                        (array, pos) -> {
+                            InternalArray inner = array.getArray(pos);
+                            Object[] objs = new Object[inner.size()];
+                            for (int i = 0; i < inner.size(); i++) {
+                                objs[i] = nestedGetter.getElementOrNull(inner, i);
+                            }
+                            return new GenericArray(objs);
+                        };
+                break;
+            case MAP:
+            case ROW:
+                String msg =
+                        String.format(
+                                "type %s not support in %s",
+                                fieldType.getTypeRoot().toString(), InternalArray.class.getName());
+                throw new IllegalArgumentException(msg);
+            default:
+                // for primitive types, we can directly return the element getter
+                elementGetter = createElementGetter(fieldType);
         }
         if (!fieldType.isNullable()) {
             return elementGetter;

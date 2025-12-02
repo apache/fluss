@@ -139,27 +139,6 @@ public final class GenericArray implements InternalArray, Serializable {
         return !isPrimitiveArray && ((Object[]) array)[pos] == null;
     }
 
-    @Override
-    public boolean equals(Object o) {
-        if (this == o) {
-            return true;
-        }
-        if (o == null || getClass() != o.getClass()) {
-            return false;
-        }
-        GenericArray that = (GenericArray) o;
-        return size == that.size
-                && isPrimitiveArray == that.isPrimitiveArray
-                && Objects.deepEquals(array, that.array);
-    }
-
-    @Override
-    public int hashCode() {
-        int result = Objects.hash(size, isPrimitiveArray);
-        result = 31 * result + Arrays.deepHashCode(new Object[] {array});
-        return result;
-    }
-
     // ------------------------------------------------------------------------------------------
     // Read-only accessor methods
     // ------------------------------------------------------------------------------------------
@@ -326,6 +305,32 @@ public final class GenericArray implements InternalArray, Serializable {
         }
         checkNoNull();
         return ArrayUtils.toPrimitiveDouble((Object[]) array);
+    }
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) {
+            return true;
+        }
+        if (o == null || getClass() != o.getClass()) {
+            return false;
+        }
+        GenericArray that = (GenericArray) o;
+        return size == that.size
+                && isPrimitiveArray == that.isPrimitiveArray
+                && Objects.deepEquals(array, that.array);
+    }
+
+    @Override
+    public int hashCode() {
+        int result = Objects.hash(size, isPrimitiveArray);
+        result = 31 * result + Arrays.deepHashCode(new Object[] {array});
+        return result;
+    }
+
+    @Override
+    public String toString() {
+        return Arrays.toString((Object[]) array);
     }
 
     // ----------------------------------------------------------------------------------------

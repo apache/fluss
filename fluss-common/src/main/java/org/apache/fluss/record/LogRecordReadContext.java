@@ -265,8 +265,9 @@ public class LogRecordReadContext implements LogRecordBatch.ReadContext, AutoClo
         List<DataType> dataTypeList = rowType.getChildren();
         FieldGetter[] fieldGetters = new FieldGetter[selectedFields.length];
         for (int i = 0; i < fieldGetters.length; i++) {
+            // build deep field getter to support nested types
             fieldGetters[i] =
-                    InternalRow.createFieldGetter(
+                    InternalRow.createDeepFieldGetter(
                             dataTypeList.get(selectedFields[i]), selectedFields[i]);
         }
         return fieldGetters;

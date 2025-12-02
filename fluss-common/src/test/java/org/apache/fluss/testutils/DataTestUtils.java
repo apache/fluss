@@ -44,6 +44,7 @@ import org.apache.fluss.record.MemoryLogRecordsArrowBuilder;
 import org.apache.fluss.record.MemoryLogRecordsIndexedBuilder;
 import org.apache.fluss.remote.RemoteLogSegment;
 import org.apache.fluss.row.BinaryString;
+import org.apache.fluss.row.GenericArray;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.arrow.ArrowWriter;
@@ -97,13 +98,30 @@ public class DataTestUtils {
     public static GenericRow row(Object... objects) {
         GenericRow row = new GenericRow(objects.length);
         for (int i = 0; i < objects.length; i++) {
-            if (objects[i] instanceof String) {
-                row.setField(i, BinaryString.fromString((String) objects[i]));
-            } else {
-                row.setField(i, objects[i]);
-            }
+            Object value = toInternalObject(objects[i]);
+            row.setField(i, value);
         }
         return row;
+    }
+
+    private static Object toInternalObject(Object obj) {
+        if (obj == null) {
+            return null;
+        }
+        if (obj instanceof String) {
+            return BinaryString.fromString((String) obj);
+        } else if (obj instanceof Object[]) {
+            Object[] array = (Object[]) obj;
+            Object[] internalArray = new Object[array.length];
+            for (int j = 0; j < array.length; j++) {
+                internalArray[j] = toInternalObject(array[j]);
+            }
+            return new GenericArray(internalArray);
+        } else if (obj instanceof int[]) {
+            return new GenericArray((int[]) obj);
+        } else {
+            return obj;
+        }
     }
 
     public static CompactedRow compactedRow(RowType rowType, Object[] objects) {

@@ -19,6 +19,9 @@ package org.apache.fluss.row;
 
 import org.apache.fluss.annotation.PublicEvolving;
 import org.apache.fluss.record.ChangeType;
+import org.apache.fluss.row.columnar.ColumnarRow;
+import org.apache.fluss.row.columnar.VectorizedColumnBatch;
+import org.apache.fluss.types.ArrayType;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.RowType;
 
@@ -26,6 +29,7 @@ import javax.annotation.Nullable;
 
 import java.io.Serializable;
 
+import static org.apache.fluss.row.InternalArray.createDeepElementGetter;
 import static org.apache.fluss.types.DataTypeChecks.getLength;
 import static org.apache.fluss.types.DataTypeChecks.getPrecision;
 import static org.apache.fluss.types.DataTypeChecks.getScale;
@@ -217,6 +221,57 @@ public interface InternalRow extends DataGetters {
             default:
                 throw new IllegalArgumentException("Illegal type: " + fieldType);
         }
+        if (!fieldType.isNullable()) {
+            return fieldGetter;
+        }
+        return row -> {
+            if (row.isNullAt(fieldPos)) {
+                return null;
+            }
+            return fieldGetter.getFieldOrNull(row);
+        };
+    }
+
+    /**
+     * Creates a deep accessor for getting elements in an internal array data structure at the given
+     * position. It returns new objects (GenericArray/GenericMap/GenericMap) for nested
+     * array/map/row types.
+     *
+     * <p>NOTE: Currently, it is only used for deep copying {@link ColumnarRow} for Arrow which
+     * avoid the arrow buffer is released before accessing elements. It doesn't deep copy STRING and
+     * BYTES types, because {@link ColumnarRow} already deep copies the bytes, see {@link
+     * VectorizedColumnBatch#getString(int, int)}. This can be removed once we supports object reuse
+     * for Arrow {@link ColumnarRow}, see {@code CompletedFetch#toScanRecord(LogRecord)}.
+     */
+    static FieldGetter createDeepFieldGetter(DataType fieldType, int fieldPos) {
+        final FieldGetter fieldGetter;
+        switch (fieldType.getTypeRoot()) {
+            case ARRAY:
+                DataType elementType = ((ArrayType) fieldType).getElementType();
+                InternalArray.ElementGetter nestedGetter = createDeepElementGetter(elementType);
+                fieldGetter =
+                        row -> {
+                            InternalArray array = row.getArray(fieldPos);
+                            Object[] objs = new Object[array.size()];
+                            for (int i = 0; i < array.size(); i++) {
+                                objs[i] = nestedGetter.getElementOrNull(array, i);
+                            }
+                            return new GenericArray(objs);
+                        };
+                break;
+            case MAP:
+            case ROW:
+                String msg =
+                        String.format(
+                                "type %s not support in %s",
+                                fieldType.getTypeRoot().toString(), InternalArray.class.getName());
+                throw new IllegalArgumentException(msg);
+            default:
+                // for primitive types, use the normal field getter
+                fieldGetter = createFieldGetter(fieldType, fieldPos);
+                break;
+        }
+
         if (!fieldType.isNullable()) {
             return fieldGetter;
         }
