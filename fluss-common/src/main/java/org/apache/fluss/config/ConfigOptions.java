@@ -394,6 +394,14 @@ public class ConfigOptions {
                             "The rack for the tabletServer. This will be used in rack aware bucket assignment "
                                     + "for fault tolerance. Examples: `RACK1`, `cn-hangzhou-server10`");
 
+    public static final ConfigOption<Integer> TABLET_SERVER_IO_POOL_SIZE =
+            key("tablet-server.io-pool.size")
+                    .intType()
+                    .defaultValue(3)
+                    .withDescription(
+                            "The size of the IO thread pool to run blocking operations for tablet server. "
+                                    + "The default value is 3.");
+
     public static final ConfigOption<String> DATA_DIR =
             key("data.dir")
                     .stringType()

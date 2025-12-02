@@ -28,6 +28,7 @@ import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.IneligibleReplicaException;
 import org.apache.fluss.exception.InvalidCoordinatorException;
 import org.apache.fluss.exception.InvalidUpdateVersionException;
+import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.exception.TabletServerNotAvailableException;
 import org.apache.fluss.exception.UnknownTableOrBucketException;
 import org.apache.fluss.metadata.PhysicalTablePath;
@@ -89,6 +90,7 @@ import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.server.zk.data.TabletServerRegistration;
 import org.apache.fluss.server.zk.data.ZkData.PartitionIdsZNode;
 import org.apache.fluss.server.zk.data.ZkData.TableIdsZNode;
+import org.apache.fluss.server.zk.data.lake.LakeTableHelper;
 import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
 import org.apache.fluss.utils.types.Tuple2;
 
@@ -145,6 +147,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
     private final String internalListenerName;
 
     private final CompletedSnapshotStoreManager completedSnapshotStoreManager;
+    private final LakeTableHelper lakeTableHelper;
 
     public CoordinatorEventProcessor(
             ZooKeeperClient zooKeeperClient,
@@ -205,6 +208,8 @@ public class CoordinatorEventProcessor implements EventProcessor {
         this.coordinatorMetricGroup = coordinatorMetricGroup;
         this.internalListenerName = conf.getString(ConfigOptions.INTERNAL_LISTENER_NAME);
         this.ioExecutor = ioExecutor;
+        this.lakeTableHelper =
+                new LakeTableHelper(zooKeeperClient, conf.getString(ConfigOptions.REMOTE_DATA_DIR));
     }
 
     public CoordinatorEventManager getCoordinatorEventManager() {
@@ -1223,6 +1228,16 @@ public class CoordinatorEventProcessor implements EventProcessor {
                 commitLakeTableSnapshotEvent.getCommitLakeTableSnapshotData();
         Map<Long, LakeTableSnapshot> lakeTableSnapshots =
                 commitLakeTableSnapshotData.getLakeTableSnapshot();
+        Map<Long, TablePath> tablePathById = new HashMap<>();
+        for (Map.Entry<Long, LakeTableSnapshot> lakeTableSnapshotEntry :
+                lakeTableSnapshots.entrySet()) {
+            Long tableId = lakeTableSnapshotEntry.getKey();
+            TablePath tablePath = coordinatorContext.getTablePathById(tableId);
+            if (tablePath != null) {
+                tablePathById.put(tableId, tablePath);
+            }
+        }
+
         ioExecutor.execute(
                 () -> {
                     try {
@@ -1237,15 +1252,16 @@ public class CoordinatorEventProcessor implements EventProcessor {
                             tableResp.setTableId(tableId);
 
                             try {
-                                TablePath tablePath = coordinatorContext.getTablePathById(tableId);
+                                TablePath tablePath = tablePathById.get(tableId);
                                 if (tablePath == null) {
-                                    throw new RuntimeException(
-                                            String.format(
-                                                    "Failed to find table path for table id: %d",
-                                                    tableId));
+                                    throw new TableNotExistException(
+                                            "Table "
+                                                    + tableId
+                                                    + " not found in coordinator context.");
                                 }
+
                                 // this involves IO operation (ZK), so we do it in ioExecutor
-                                zooKeeperClient.upsertLakeTableSnapshot(
+                                lakeTableHelper.upsertLakeTable(
                                         tableId, tablePath, lakeTableSnapshotEntry.getValue());
                             } catch (Exception e) {
                                 ApiError error = ApiError.fromThrowable(e);

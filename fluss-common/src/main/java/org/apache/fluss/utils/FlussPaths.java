@@ -689,15 +689,15 @@ public class FlussPaths {
      * <p>The path contract:
      *
      * <pre>
-     * {$remote.data.dir}/lake/{databaseName}/{tableName}-{tableId}/snapshot/{snapshotId}
+     * {$remote.data.dir}/lake/{databaseName}/{tableName}-{tableId}/snapshot/{snapshotId}.snapshot
      * </pre>
      */
     public static FsPath remoteLakeTableSnapshotPath(
-            Configuration conf, TablePath tablePath, long tableId, long snapshotId) {
+            String remoteDataDir, TablePath tablePath, long tableId, long snapshotId) {
         return new FsPath(
                 String.format(
-                        "%s/%s/%s/%s-%d/snapshot/%d",
-                        conf.get(ConfigOptions.REMOTE_DATA_DIR),
+                        "%s/%s/%s/%s-%d/snapshot/%d.snapshot",
+                        remoteDataDir,
                         REMOTE_LAKE_DIR_NAME,
                         tablePath.getDatabaseName(),
                         tablePath.getTableName(),
