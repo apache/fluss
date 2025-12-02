@@ -5,13 +5,14 @@ date: 2025-12-02
 tags: [streaming-lakehouse, apache-iceberg, real-time-analytics]
 ---
 
-![Banner](assets/fluss-x-iceberg/fluss-lakehouse-iceberg.png)
 
 As software/data engineers, we've witnessed Apache Iceberg revolutionize analytical data lakes with ACID transactions, time travel, and schema evolution. Yet when we try to push Iceberg into real-time workloads—sub-second streaming queries, high-frequency CDC updates, and primary key semantics—we hit fundamental architectural walls. This blog explores how Fluss × Iceberg integration works and delivers a true real-time lakehouse.
 
 Apache Fluss represents a new architectural approach: the **Streamhouse** for real-time lakehouses. Instead of stitching together separate streaming and batch systems, the Streamhouse unifies them under a single architecture. In this model, Apache Iceberg continues to serve exactly the role it was designed for: a highly efficient, scalable cold storage layer for analytics, while Fluss fills the missing piece: a hot streaming storage layer with sub-second latency, columnar storage, and built-in primary-key semantics.
 
 After working on Fluss–Iceberg lakehouse integration and deploying this architecture at a massive scale, including Alibaba's 3 PB production deployment processing 40 GB/s, we're ready to share the architectural lessons learned. Specifically, why existing systems fall short, how Fluss and Iceberg naturally complement each other, and what this means for finally building true real-time lakehouses.
+
+![Banner](assets/fluss-x-iceberg/fluss-realtime-lakehouse.png)
 
 <!-- truncate -->
 
@@ -29,7 +30,7 @@ Four converging forces are driving the need for sub-second data infrastructure:
 
 **4. Agentic AI Requires Real-Time Context:** AI agents need immediate access to the current system state to make decisions. Whether it's autonomous trading systems, intelligent routing agents, or customer service bots, agents can't operate effectively on stale data.
 
-![Use Cases](assets/fluss-x-iceberg/fluss-lakehouse-usecases.png)
+![Use Cases](assets/fluss-x-iceberg/lakehouse_usecases.png)
 
 ### The Evolution of Data Freshness
 
@@ -43,7 +44,7 @@ Four converging forces are driving the need for sub-second data infrastructure:
 
 Yet critical use cases demand sub-second to second-level latency: search and recommendation systems with real-time personalization, advertisement attribution tracking, anomaly detection for fraud and security monitoring, operational intelligence for manufacturing/logistics/ride-sharing, and Gen AI model inference requiring up-to-the-second features. The industry needs a **hot real-time layer** sitting in front of the lakehouse.
 
-![Evolution Timeline](assets/fluss-x-iceberg/evolution-timeline.png)
+![Evolution Timeline](assets/fluss-x-iceberg/evolution.png)
 
 ## What is Fluss × Iceberg?
 
@@ -51,6 +52,7 @@ Yet critical use cases demand sub-second to second-level latency: search and rec
 
 The Fluss architecture delivers millisecond-level end-to-end latency for real-time data writing and reading. Its **Tiering Service** continuously offloads data into standard lakehouse formats like Apache Iceberg, enabling external query engines to analyze data directly. This streaming/lakehouse unification simplifies the ecosystem, ensures data freshness for critical use cases, and combines real-time and historical data seamlessly for comprehensive analytics.
 
+**Unified Data Locality:** Fluss aligns partitions and buckets across both streaming and lakehouse layers, ensuring consistent data layout. This alignment enables direct Arrow-to-Parquet conversion without network shuffling or repartitioning, dramatically reducing I/O overhead and improving pipeline performance.
 Think of your data as having two thermal zones:
 
 **Hot Tier (Fluss):** Last 1 hour of data, NVMe/SSD storage, sub-second latency, primary key indexed (RocksDB), streaming APIs, Apache Arrow columnar format. High-velocity writes, frequent updates, sub-second query latency requirements.
@@ -59,9 +61,10 @@ Think of your data as having two thermal zones:
 
 Traditional architectures force you to maintain **separate systems** for these zones: Kafka/Kinesis for streaming (hot), Iceberg for analytics (cold), complex ETL pipelines to move data between them, and applications writing to both systems (dual-write problem).
 
+![Kappa vs Lambda Architecture](assets/fluss-x-iceberg/kappa-vs-lambda.png)
+
 **Fluss × Iceberg unifies these as tiered storage with Kappa architecture:** Applications write once to Fluss. A stateless Tiering Service (Flink job) automatically moves data from hot to cold storage based on configured freshness (e.g., 30 seconds, 5 minutes). Query engines see a single table that seamlessly spans both tiers—eliminating the dual-write complexity of Lambda architecture.
 
-![Kappa vs Lambda Architecture](assets/fluss-x-iceberg/kappa-vs-lambda-2.png)
 
 ### Why This Architecture Matters
 
@@ -74,6 +77,8 @@ Traditional architectures force you to maintain **separate systems** for these z
 **Auto Table Maintenance:** Enable with a single flag (table.datalake.auto-maintenance=true). The tiering service automatically detects small files during writes, applies bin-packing compaction to merge them into optimal sizes.
 
 **Query flexibility:** Run streaming queries on hot data (Fluss), analytical queries on cold data (Iceberg), or union queries that transparently span both tiers.
+
+![Tiering Service](assets/fluss-x-iceberg/fluss-tiering.png)
 
 ## What Iceberg Misses Today
 
@@ -282,43 +287,31 @@ While tiering data, the service optionally performs bin-packing compaction:
 
 **Result:** Streaming workloads avoid small file proliferation without separate maintenance jobs.
 
-![Tiering Service](assets/fluss-x-iceberg/fluss-tiering.png)
-
 ### Solution 4: Union Read for Seamless Query Across Tiers
 
 **Enables:** Querying hot + cold data as a single logical table
 
 The architectural breakthrough enabling a real-time lakehouse is **client-side stitching with metadata coordination**. This is what makes Fluss truly a **Streaming Lakehouse**—unlocking real-time data to the Lakehouse with union delta log (minutes) on Fluss.
 
-**How Union Read Works:**
+### How Union Read Works
 
-```
-┌─────────────────────────────────────────────────┐
-│ 1. Client queries Fluss CoordinatorServer       │
-│    for table metadata                           │
-│                                                 │
-│ 2. Coordinator responds:                        │
-│    - Iceberg snapshot ID: snap_12345            │
-│    - Fluss offset boundary per bucket:          │
-│      {bucket_0: offset_5000,                    │
-│       bucket_1: offset_5123, ...}               │
-│                                                 │
-│ 3. Client query execution:                      │
-│                                                 │
-│    For streaming queries:                       │
-│    ├─ Read Iceberg (offsets 0 to 5000)          │
-│    │  - Efficient historical catch-up           │
-│    │  - Columnar Parquet scans                  │
-│    └─ Transition to Fluss (offset 5001+)        │
-│       - Real-time streaming                     │
-│       - No overlap, no gaps                     │
-│                                                 │
-│    For batch queries:                           │
-│    ├─ Primary read: Iceberg snapshot            │
-│    └─ Supplement: Last few minutes from Fluss   │
-│       - Second-level freshness                  │
-└─────────────────────────────────────────────────┘
-```
+![Union Read Architecture](assets/fluss-x-iceberg/fluss-unionread.png)
+
+Union Read seamlessly combines hot and cold data through intelligent offset coordination, as illustrated above:
+
+**The Example:** Consider a query that needs records for users Jark, Mehul, and Yuxia:
+
+1. **Offset Coordination:** Fluss CoordinatorServer provides Snapshot 06 as the Iceberg boundary. At this snapshot, Iceberg contains `{Jark: 30, Yuxia: 20}`.
+
+2. **Hot Data Supplement:** Fluss's real-time layer holds the latest updates beyond the snapshot: `{Jark: 30, Mehul: 20, Yuxia: 20}` (including Mehul's new record).
+
+3. **Union Read in Action:** The query engine performs a union read:
+    - Reads `{Jark: 30, Yuxia: 20}` from Iceberg (Snapshot 06)
+    - Supplements with `{Mehul: 20}` from Fluss (new data after the snapshot)
+
+4. **Sort Merge:** Results are merged and deduplicated, producing the final unified view: `{Jark: 30, Mehul: 20}` (Yuxia's update already in Iceberg).
+
+**Key Benefit:** The application queries a single logical table while the system intelligently routes between Iceberg (historical) and Fluss (real-time) with zero gaps or overlaps.
 
 **Union Read Capabilities:**
 
@@ -353,24 +346,19 @@ Fluss coordinator persists this mapping. When clients query, they receive the ex
 - **No gaps:** Fluss handles offsets > boundary
 - **Total ordering preserved** per bucket
 
-![Union Read](assets/fluss-x-iceberg/fluss-union-read.png)
-
-
 
 ## Architecture Benefits
 
-| Capability | How Fluss × Iceberg Delivers |
-|------------|------------------------------|
-| Sub-second enrichment | Lookup joins on PK tables (500K+ QPS) |
-| Real-time flagging | Streaming INSERT with computed risk scores |
-| Historical analysis | Union read combines Fluss (hot) + Iceberg (cold) |
-| Fast investigation | Point queries on dimension tables by PK |
-| Profile updates | UPDATE on PK tables, immediately reflected |
-| Cost-efficient storage | Hot data in Fluss, cold data tiers to Iceberg |
+### Cost-Efficient Storage
+![Historical Analysis](assets/fluss-x-iceberg/fluss-lake-history.png)
 
-![Historical Analysis](assets/fluss-x-iceberg/fluss-lakehouse-historical.png)
+Automatic tiering optimizes storage and analytics: efficient backfill, projection/filter pushdown, high Parquet compression, and S3 throughput.
 
-![Real-time Analytics](assets/fluss-x-iceberg/fluss-lakehouse-realtime.png)
+### Real-Time Analytics
+![Real-time Analytics](assets/fluss-x-iceberg/fluss-lake-realtime.png)
+
+Union Read delivers sub-second lakehouse freshness: union delta log on Fluss, Arrow-native exchange, and seamless integration with Flink, Spark *, Trino, and StarRocks.
+
 
 ### Key Takeaways
 
@@ -388,7 +376,7 @@ This gives you a working streaming lakehouse environment in minutes. Visit: [htt
 
 Apache Fluss and Apache Iceberg represent a fundamental rethinking of real-time lakehouse architecture. Instead of forcing Iceberg to become a streaming platform (which architecturally it was never designed to be), Fluss embraces Iceberg for its strengths—cost-efficient analytical storage with ACID guarantees—while adding the missing hot streaming layer.
 
-The result is a Kappa architecture that delivers:
+The result is a Streamhouse that delivers:
 
 - **Sub-second query latency** for real-time workloads
 - **Second-level freshness** for analytical queries (versus T+1 hour)
