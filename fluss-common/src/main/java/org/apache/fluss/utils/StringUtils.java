@@ -52,4 +52,21 @@ public class StringUtils {
         final String arrayString = Arrays.deepToString(new Object[] {o});
         return arrayString.substring(1, arrayString.length() - 1);
     }
+
+    /**
+     * Masks a sensitive string (e.g., a secret or token) by keeping a small prefix visible and
+     * hiding the rest.
+     *
+     * @param value The sensitive string to mask.
+     * @return The masked string.
+     */
+    public static String maskSecret(String value) {
+        if (value == null || value.isEmpty()) {
+            return "";
+        }
+        // Default: reveal first 3 characters
+        int visible = Math.min(3, value.length());
+        String prefix = value.substring(0, visible);
+        return prefix + "******";
+    }
 }

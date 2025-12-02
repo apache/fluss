@@ -21,7 +21,7 @@ package org.apache.fluss.fs.s3.token;
 import org.apache.fluss.fs.token.Credentials;
 import org.apache.fluss.fs.token.CredentialsJsonSerde;
 import org.apache.fluss.fs.token.ObtainedSecurityToken;
-import org.apache.fluss.utils.MaskedValue;
+import org.apache.fluss.utils.StringUtils;
 import org.junit.jupiter.api.Test;
 
 import java.util.Collections;
@@ -49,7 +49,7 @@ class S3DelegationTokenReceiverMaskingTest {
         Credentials updated = S3DelegationTokenReceiver.getCredentials();
         assertThat(updated.getAccessKeyId()).isEqualTo(accessKeyId);
 
-        String masked = MaskedValue.of(updated.getAccessKeyId()).toString();
-        assertThat(masked).isEqualTo("AS7*********");
+        String masked = StringUtils.maskSecret(updated.getAccessKeyId());
+        assertThat(masked).isEqualTo("AS7******");
     }
 }
