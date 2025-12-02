@@ -37,8 +37,8 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
  *   <li>Version 1 (legacy): ZK node contains full {@link LakeTableSnapshot} data. During
  *       deserialization, it uses {@link LakeTableSnapshotJsonSerde} to deserialize and wraps the
  *       result in a {@link LakeTable}.
- *   <li>Version 2 (current): ZK node contains only the metadata file path. The actual snapshot data
- *       is stored in a remote file.
+ *   <li>Version 2 (current): ZK node contains only the lake table snapshot file paths. The actual
+ *       snapshot data is stored in a remote file pointed by the lake table snapshot file path.
  * </ul>
  */
 public class LakeTableJsonSerde implements JsonSerializer<LakeTable>, JsonDeserializer<LakeTable> {
@@ -46,7 +46,8 @@ public class LakeTableJsonSerde implements JsonSerializer<LakeTable>, JsonDeseri
     public static final LakeTableJsonSerde INSTANCE = new LakeTableJsonSerde();
 
     private static final String VERSION_KEY = "version";
-    private static final String METADATA_PATH_KEY = "metadata_path";
+    private static final String LAKE_TABLE_LATEST_SNAPSHOT_FILE_PATH =
+            "lake_table_latest_snapshot_file_path";
     private static final int VERSION_1 = 1;
     private static final int VERSION_2 = 2;
     private static final int CURRENT_VERSION = VERSION_2;
@@ -56,9 +57,9 @@ public class LakeTableJsonSerde implements JsonSerializer<LakeTable>, JsonDeseri
         generator.writeStartObject();
         generator.writeNumberField(VERSION_KEY, CURRENT_VERSION);
 
-        FsPath lakeTableSnapshotFileHandle = lakeTable.getLakeTableSnapshotFileHandle();
-        checkNotNull(lakeTableSnapshotFileHandle);
-        generator.writeStringField(METADATA_PATH_KEY, lakeTableSnapshotFileHandle.toString());
+        generator.writeStringField(
+                LAKE_TABLE_LATEST_SNAPSHOT_FILE_PATH,
+                checkNotNull(lakeTable.getLakeTableLatestSnapshotFileHandle()).toString());
         generator.writeEndObject();
     }
 
@@ -71,12 +72,14 @@ public class LakeTableJsonSerde implements JsonSerializer<LakeTable>, JsonDeseri
             return new LakeTable(snapshot);
         } else if (version == VERSION_2) {
             // Version 2: ZK node contains only metadata file path
-            if (!node.has(METADATA_PATH_KEY) || node.get(METADATA_PATH_KEY).isNull()) {
+            if (!node.has(LAKE_TABLE_LATEST_SNAPSHOT_FILE_PATH)
+                    || node.get(LAKE_TABLE_LATEST_SNAPSHOT_FILE_PATH).isNull()) {
                 throw new IllegalArgumentException(
-                        "Version 2 ZK node must have non-null 'metadata_path' field");
+                        "Version 2 ZK node must have non-null 'lake_table_latest_snapshot_file_path' field. Got: "
+                                + node);
             }
-            FsPath metadataPath = new FsPath(node.get(METADATA_PATH_KEY).asText());
-            return new LakeTable(metadataPath);
+            return new LakeTable(
+                    new FsPath(node.get(LAKE_TABLE_LATEST_SNAPSHOT_FILE_PATH).asText()));
         } else {
             throw new IllegalArgumentException("Unsupported version: " + version);
         }

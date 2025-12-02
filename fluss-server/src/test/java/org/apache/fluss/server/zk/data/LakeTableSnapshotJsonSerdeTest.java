@@ -21,10 +21,16 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
 import org.apache.fluss.server.zk.data.lake.LakeTableSnapshotJsonSerde;
 import org.apache.fluss.utils.json.JsonSerdeTestBase;
+import org.apache.fluss.utils.json.JsonSerdeUtils;
 
+import org.junit.jupiter.api.Test;
+
+import java.nio.charset.StandardCharsets;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
+
+import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test for {@link LakeTableSnapshotJsonSerde}. */
 class LakeTableSnapshotJsonSerdeTest extends JsonSerdeTestBase<LakeTableSnapshot> {
@@ -96,14 +102,53 @@ class LakeTableSnapshotJsonSerdeTest extends JsonSerdeTestBase<LakeTableSnapshot
 
     @Override
     protected String[] expectedJsons() {
+        // Version 2 format (compact layout): groups buckets by partition_id to avoid repeating
+        // partition_id in each bucket, and extracts partition names to top-level.
+        // Non-partition table uses array format, partition table uses object format.
         return new String[] {
-            "{\"version\":1,\"snapshot_id\":1,\"table_id\":1,\"buckets\":[]}",
-            "{\"version\":1,\"snapshot_id\":2,\"table_id\":4,"
+            "{\"version\":2,\"snapshot_id\":1,\"table_id\":1}",
+            "{\"version\":2,\"snapshot_id\":2,\"table_id\":4,"
                     + "\"buckets\":[{\"bucket_id\":2,\"log_start_offset\":2,\"log_end_offset\":4,\"max_timestamp\":6},"
                     + "{\"bucket_id\":1,\"log_start_offset\":1,\"log_end_offset\":3,\"max_timestamp\":5}]}",
-            "{\"version\":1,\"snapshot_id\":3,\"table_id\":5,"
-                    + "\"buckets\":[{\"partition_id\":1,\"partition_name\":\"partition1\",\"bucket_id\":1,\"log_start_offset\":1,\"log_end_offset\":3,\"max_timestamp\":5},"
-                    + "{\"partition_id\":2,\"partition_name\":\"partition2\",\"bucket_id\":1,\"log_start_offset\":2,\"log_end_offset\":4,\"max_timestamp\":6}]}"
+            "{\"version\":2,\"snapshot_id\":3,\"table_id\":5,"
+                    + "\"partition_names\":{\"1\":\"partition1\",\"2\":\"partition2\"},"
+                    + "\"buckets\":{\"1\":[{\"bucket_id\":1,\"log_start_offset\":1,\"log_end_offset\":3,\"max_timestamp\":5}],"
+                    + "\"2\":[{\"bucket_id\":1,\"log_start_offset\":2,\"log_end_offset\":4,\"max_timestamp\":6}]}}"
         };
+    }
+
+    @Test
+    void testBackwardCompatibility() {
+        // Test that Version 1 format can still be deserialized
+        String version1Json1 = "{\"version\":1,\"snapshot_id\":1,\"table_id\":1,\"buckets\":[]}";
+        LakeTableSnapshot snapshot1 =
+                JsonSerdeUtils.readValue(
+                        version1Json1.getBytes(StandardCharsets.UTF_8),
+                        LakeTableSnapshotJsonSerde.INSTANCE);
+        assertThat(snapshot1.getSnapshotId()).isEqualTo(1);
+        assertThat(snapshot1.getTableId()).isEqualTo(1);
+        assertThat(snapshot1.getBucketLogEndOffset()).isEmpty();
+
+        String version1Json2 =
+                "{\"version\":1,\"snapshot_id\":2,\"table_id\":4,"
+                        + "\"buckets\":[{\"bucket_id\":1,\"log_start_offset\":1,\"log_end_offset\":3,\"max_timestamp\":5}]}";
+        LakeTableSnapshot snapshot2 =
+                JsonSerdeUtils.readValue(
+                        version1Json2.getBytes(StandardCharsets.UTF_8),
+                        LakeTableSnapshotJsonSerde.INSTANCE);
+        assertThat(snapshot2.getSnapshotId()).isEqualTo(2);
+        assertThat(snapshot2.getTableId()).isEqualTo(4);
+        assertThat(snapshot2.getBucketLogEndOffset()).hasSize(1);
+
+        String version1Json3 =
+                "{\"version\":1,\"snapshot_id\":3,\"table_id\":5,"
+                        + "\"buckets\":[{\"partition_id\":1,\"partition_name\":\"partition1\",\"bucket_id\":1,\"log_start_offset\":1,\"log_end_offset\":3,\"max_timestamp\":5}]}";
+        LakeTableSnapshot snapshot3 =
+                JsonSerdeUtils.readValue(
+                        version1Json3.getBytes(StandardCharsets.UTF_8),
+                        LakeTableSnapshotJsonSerde.INSTANCE);
+        assertThat(snapshot3.getSnapshotId()).isEqualTo(3);
+        assertThat(snapshot3.getTableId()).isEqualTo(5);
+        assertThat(snapshot3.getPartitionNameIdByPartitionId()).containsEntry(1L, "partition1");
     }
 }

@@ -53,8 +53,10 @@ import org.apache.fluss.server.zk.ZooKeeperUtils;
 import org.apache.fluss.server.zk.data.TabletServerRegistration;
 import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException;
 import org.apache.fluss.utils.ExceptionUtils;
+import org.apache.fluss.utils.ExecutorUtils;
 import org.apache.fluss.utils.clock.Clock;
 import org.apache.fluss.utils.clock.SystemClock;
+import org.apache.fluss.utils.concurrent.ExecutorThreadFactory;
 import org.apache.fluss.utils.concurrent.FlussScheduler;
 import org.apache.fluss.utils.concurrent.FutureUtils;
 import org.apache.fluss.utils.concurrent.Scheduler;
@@ -70,6 +72,9 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.apache.fluss.config.ConfigOptions.BACKGROUND_THREADS;
@@ -158,6 +163,9 @@ public class TabletServer extends ServerBase {
 
     @GuardedBy("lock")
     private CoordinatorGateway coordinatorGateway;
+
+    @GuardedBy("lock")
+    private ExecutorService ioExecutor;
 
     public TabletServer(Configuration conf) {
         this(conf, SystemClock.getInstance());
@@ -251,6 +259,11 @@ public class TabletServer extends ServerBase {
                             tabletServerMetricGroup,
                             clock);
             replicaManager.startup();
+            int ioExecutorPoolSize = conf.get(ConfigOptions.TABLET_SERVER_IO_POOL_SIZE);
+
+            this.ioExecutor =
+                    Executors.newFixedThreadPool(
+                            ioExecutorPoolSize, new ExecutorThreadFactory("tablet-server-io"));
 
             this.tabletService =
                     new TabletService(
@@ -261,7 +274,8 @@ public class TabletServer extends ServerBase {
                             metadataCache,
                             metadataManager,
                             authorizer,
-                            dynamicConfigManager);
+                            dynamicConfigManager,
+                            ioExecutor);
 
             RequestsMetrics requestsMetrics =
                     RequestsMetrics.createTabletServerRequestMetrics(tabletServerMetricGroup);
@@ -429,6 +443,11 @@ public class TabletServer extends ServerBase {
 
                 if (zkClient != null) {
                     zkClient.close();
+                }
+
+                if (ioExecutor != null) {
+                    // shutdown io executor
+                    ExecutorUtils.gracefulShutdown(5, TimeUnit.SECONDS, ioExecutor);
                 }
             } catch (Throwable t) {
                 exception = ExceptionUtils.firstOrSuppressed(t, exception);

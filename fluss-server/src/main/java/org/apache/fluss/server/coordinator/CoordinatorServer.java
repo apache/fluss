@@ -188,6 +188,11 @@ public class CoordinatorServer extends ServerBase {
 
             MetadataManager metadataManager =
                     new MetadataManager(zkClient, conf, lakeCatalogDynamicLoader);
+
+            int ioExecutorPoolSize = conf.get(ConfigOptions.COORDINATOR_IO_POOL_SIZE);
+            this.ioExecutor =
+                    Executors.newFixedThreadPool(
+                            ioExecutorPoolSize, new ExecutorThreadFactory("coordinator-io"));
             this.coordinatorService =
                     new CoordinatorService(
                             conf,
@@ -199,7 +204,8 @@ public class CoordinatorServer extends ServerBase {
                             authorizer,
                             lakeCatalogDynamicLoader,
                             lakeTableTieringManager,
-                            dynamicConfigManager);
+                            dynamicConfigManager,
+                            ioExecutor);
 
             this.rpcServer =
                     RpcServer.create(
@@ -224,11 +230,6 @@ public class CoordinatorServer extends ServerBase {
             this.autoPartitionManager =
                     new AutoPartitionManager(metadataCache, metadataManager, conf);
             autoPartitionManager.start();
-
-            int ioExecutorPoolSize = conf.get(ConfigOptions.COORDINATOR_IO_POOL_SIZE);
-            this.ioExecutor =
-                    Executors.newFixedThreadPool(
-                            ioExecutorPoolSize, new ExecutorThreadFactory("coordinator-io"));
 
             // start coordinator event processor after we register coordinator leader to zk
             // so that the event processor can get the coordinator leader node from zk during start
@@ -367,15 +368,6 @@ public class CoordinatorServer extends ServerBase {
             }
 
             try {
-                if (ioExecutor != null) {
-                    // shutdown io executor
-                    ExecutorUtils.gracefulShutdown(5, TimeUnit.SECONDS, ioExecutor);
-                }
-            } catch (Throwable t) {
-                exception = ExceptionUtils.firstOrSuppressed(t, exception);
-            }
-
-            try {
                 if (coordinatorEventProcessor != null) {
                     coordinatorEventProcessor.shutdown();
                 }
@@ -405,6 +397,11 @@ public class CoordinatorServer extends ServerBase {
                 }
             } catch (Throwable t) {
                 exception = ExceptionUtils.firstOrSuppressed(t, exception);
+            }
+
+            if (ioExecutor != null) {
+                // shutdown io executor
+                ExecutorUtils.gracefulShutdown(5, TimeUnit.SECONDS, ioExecutor);
             }
 
             try {
