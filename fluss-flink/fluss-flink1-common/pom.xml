@@ -27,62 +27,37 @@
         <version>0.9-SNAPSHOT</version>
     </parent>
 
-    <packaging>jar</packaging>
+    <artifactId>fluss-flink1-common</artifactId>
 
-    <artifactId>fluss-flink-tiering</artifactId>
-    <name>Fluss : Flink : Tiering</name>
+    <name>Fluss : Engine Flink 1.x : Common</name>
 
     <properties>
-        <flink.minor.version>${fluss-flink-common.flink.version}</flink.minor.version>
+        <flink.major.version>1.20</flink.major.version>
+        <flink.minor.version>1.20.3</flink.minor.version>
     </properties>
 
     <dependencies>
-        <dependency>
-            <groupId>org.apache.fluss</groupId>
-            <artifactId>fluss-flink-common</artifactId>
-            <version>${project.version}</version>
-            <scope>provided</scope>
-        </dependency>
-
         <dependency>
             <groupId>org.apache.flink</groupId>
             <artifactId>flink-java</artifactId>
             <version>${flink.minor.version}</version>
             <scope>provided</scope>
         </dependency>
-
-        <dependency>
-            <groupId>org.apache.flink</groupId>
-            <artifactId>flink-streaming-java</artifactId>
-            <version>${flink.minor.version}</version>
-            <scope>provided</scope>
-        </dependency>
     </dependencies>
-
 
     <build>
         <plugins>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-shade-plugin</artifactId>
+                <artifactId>maven-jar-plugin</artifactId>
                 <executions>
                     <execution>
-                        <id>shade-fluss</id>
-                        <phase>package</phase>
                         <goals>
-                            <goal>shade</goal>
+                            <goal>test-jar</goal>
                         </goals>
-                        <configuration>
-                            <transformers>
-                                <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
-                                    <mainClass>org.apache.fluss.flink.tiering.FlussLakeTieringEntrypoint</mainClass>
-                                </transformer>
-                            </transformers>
-                        </configuration>
                     </execution>
                 </executions>
             </plugin>
-
         </plugins>
     </build>
 </project>
