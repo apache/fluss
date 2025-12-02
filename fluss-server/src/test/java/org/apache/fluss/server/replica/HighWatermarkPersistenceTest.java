@@ -105,6 +105,7 @@ final class HighWatermarkPersistenceTest extends ReplicaTestBase {
                                         TABLET_SERVER_ID,
                                         LeaderAndIsr.INITIAL_LEADER_EPOCH,
                                         Collections.singletonList(TABLET_SERVER_ID),
+                                        Collections.emptyList(),
                                         INITIAL_COORDINATOR_EPOCH,
                                         LeaderAndIsr.INITIAL_BUCKET_EPOCH))),
                 result -> {});

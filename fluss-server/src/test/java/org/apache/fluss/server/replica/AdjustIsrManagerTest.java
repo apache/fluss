@@ -25,6 +25,7 @@ import org.apache.fluss.utils.concurrent.FlussScheduler;
 import org.junit.jupiter.api.Test;
 
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -44,16 +45,31 @@ class AdjustIsrManagerTest {
         // shrink isr
         TableBucket tb = new TableBucket(150001L, 0);
         List<Integer> currentIsr = Arrays.asList(1, 2);
-        LeaderAndIsr adjustIsr = new LeaderAndIsr(tabletServerId, 0, currentIsr, 0, 0);
+        LeaderAndIsr adjustIsr =
+                new LeaderAndIsr(tabletServerId, 0, currentIsr, Collections.emptyList(), 0, 0);
         LeaderAndIsr result = adjustIsrManager.submit(tb, adjustIsr).get();
         assertThat(result)
-                .isEqualTo(new LeaderAndIsr(tabletServerId, 0, Arrays.asList(1, 2), 0, 1));
+                .isEqualTo(
+                        new LeaderAndIsr(
+                                tabletServerId,
+                                0,
+                                Arrays.asList(1, 2),
+                                Collections.emptyList(),
+                                0,
+                                1));
 
         // expand isr
         currentIsr = Arrays.asList(1, 2, 3);
-        adjustIsr = new LeaderAndIsr(tabletServerId, 0, currentIsr, 0, 1);
+        adjustIsr = new LeaderAndIsr(tabletServerId, 0, currentIsr, Collections.emptyList(), 0, 1);
         result = adjustIsrManager.submit(tb, adjustIsr).get();
         assertThat(result)
-                .isEqualTo(new LeaderAndIsr(tabletServerId, 0, Arrays.asList(1, 2, 3), 0, 2));
+                .isEqualTo(
+                        new LeaderAndIsr(
+                                tabletServerId,
+                                0,
+                                Arrays.asList(1, 2, 3),
+                                Collections.emptyList(),
+                                0,
+                                2));
     }
 }

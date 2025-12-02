@@ -25,10 +25,12 @@ public class NotifyKvSnapshotOffsetEvent implements CoordinatorEvent {
 
     private final TableBucket tableBucket;
     private final long logOffset;
+    private final long snapshotId;
 
-    public NotifyKvSnapshotOffsetEvent(TableBucket tableBucket, long logOffset) {
+    public NotifyKvSnapshotOffsetEvent(TableBucket tableBucket, long logOffset, long snapshotId) {
         this.tableBucket = tableBucket;
         this.logOffset = logOffset;
+        this.snapshotId = snapshotId;
     }
 
     public TableBucket getTableBucket() {
@@ -37,5 +39,9 @@ public class NotifyKvSnapshotOffsetEvent implements CoordinatorEvent {
 
     public long getLogOffset() {
         return logOffset;
+    }
+
+    public long getSnapshotId() {
+        return snapshotId;
     }
 }

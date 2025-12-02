@@ -130,7 +130,8 @@ public class AdjustIsrTest extends ReplicaTestBase {
         // To mock we prepare an isr shrink in Replica#maybeShrinkIsr();
         IsrState.PendingShrinkIsrState pendingShrinkIsrState =
                 replica.prepareIsrShrink(
-                        new IsrState.CommittedIsrState(Arrays.asList(1, 2, 3)),
+                        new IsrState.CommittedIsrState(
+                                Arrays.asList(1, 2, 3), Collections.emptyList()),
                         Arrays.asList(1, 2),
                         Collections.singletonList(3));
 
@@ -158,7 +159,8 @@ public class AdjustIsrTest extends ReplicaTestBase {
         // To mock we prepare an isr shrink in Replica#maybeShrinkIsr();
         IsrState.PendingShrinkIsrState pendingShrinkIsrState =
                 replica.prepareIsrShrink(
-                        new IsrState.CommittedIsrState(Arrays.asList(1, 2, 3)),
+                        new IsrState.CommittedIsrState(
+                                Arrays.asList(1, 2, 3), Collections.emptyList()),
                         Arrays.asList(1, 2),
                         Collections.singletonList(3));
 

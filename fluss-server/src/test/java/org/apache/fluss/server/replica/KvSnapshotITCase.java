@@ -27,11 +27,10 @@ import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.PutKvRequest;
 import org.apache.fluss.server.coordinator.CoordinatorService;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
+import org.apache.fluss.server.kv.snapshot.KvSnapshotManager;
 import org.apache.fluss.server.kv.snapshot.ZooKeeperCompletedSnapshotHandleStore;
 import org.apache.fluss.server.tablet.TabletServer;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
-import org.apache.fluss.server.testutils.KvTestUtils;
-import org.apache.fluss.server.testutils.RpcMessageTestUtils;
 import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.types.Tuple2;
 
@@ -49,7 +48,10 @@ import java.util.Map;
 import java.util.Set;
 
 import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR_PK;
+import static org.apache.fluss.server.testutils.KvTestUtils.checkSnapshot;
+import static org.apache.fluss.server.testutils.RpcMessageTestUtils.createTable;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newDropTableRequest;
+import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newPutKvRequest;
 import static org.apache.fluss.testutils.DataTestUtils.genKvRecordBatch;
 import static org.apache.fluss.testutils.DataTestUtils.genKvRecords;
 import static org.apache.fluss.testutils.DataTestUtils.getKeyValuePairs;
@@ -92,8 +94,7 @@ class KvSnapshotITCase {
         for (int i = 0; i < tableNum; i++) {
             TablePath tablePath = TablePath.of("test_db", "test_table_" + i);
             long tableId =
-                    RpcMessageTestUtils.createTable(
-                            FLUSS_CLUSTER_EXTENSION, tablePath, DATA1_TABLE_DESCRIPTOR_PK);
+                    createTable(FLUSS_CLUSTER_EXTENSION, tablePath, DATA1_TABLE_DESCRIPTOR_PK);
             tablePathMap.put(tableId, tablePath);
             for (int bucket = 0; bucket < BUCKET_NUM; bucket++) {
                 tableBuckets.add(new TableBucket(tableId, bucket));
@@ -115,8 +116,7 @@ class KvSnapshotITCase {
                             Tuple2.of("k1", new Object[] {1, "k1"}),
                             Tuple2.of("k2", new Object[] {2, "k2"}));
 
-            PutKvRequest putKvRequest =
-                    RpcMessageTestUtils.newPutKvRequest(tableId, bucket, 1, kvRecordBatch);
+            PutKvRequest putKvRequest = newPutKvRequest(tableId, bucket, 1, kvRecordBatch);
 
             TabletServerGateway leaderGateway =
                     FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leaderServer);
@@ -137,7 +137,7 @@ class KvSnapshotITCase {
                             genKvRecords(
                                     Tuple2.of("k1", new Object[] {1, "k1"}),
                                     Tuple2.of("k2", new Object[] {2, "k2"})));
-            KvTestUtils.checkSnapshot(completedSnapshot, expectedKeyValues, 2);
+            checkSnapshot(completedSnapshot, expectedKeyValues, 2);
             bucketKvSnapshotDirs.add(
                     new File(completedSnapshot.getSnapshotLocation().getParent().getPath()));
 
@@ -147,7 +147,7 @@ class KvSnapshotITCase {
                             Tuple2.of("k1", new Object[] {1, "k11"}),
                             Tuple2.of("k2", null),
                             Tuple2.of("k3", new Object[] {3, "k3"}));
-            putKvRequest = RpcMessageTestUtils.newPutKvRequest(tableId, bucket, 1, kvRecordBatch);
+            putKvRequest = newPutKvRequest(tableId, bucket, 1, kvRecordBatch);
             leaderGateway.putKv(putKvRequest).get();
 
             // wait for next snapshot is available
@@ -165,7 +165,7 @@ class KvSnapshotITCase {
                             genKvRecords(
                                     Tuple2.of("k1", new Object[] {1, "k11"}),
                                     Tuple2.of("k3", new Object[] {3, "k3"})));
-            KvTestUtils.checkSnapshot(completedSnapshot, expectedKeyValues, 6);
+            checkSnapshot(completedSnapshot, expectedKeyValues, 6);
 
             // check min retain offset
             for (TabletServer server : FLUSS_CLUSTER_EXTENSION.getTabletServers()) {
@@ -186,6 +186,95 @@ class KvSnapshotITCase {
                             tablePath.getDatabaseName(), tablePath.getTableName(), false));
         }
         checkDirsDeleted(bucketKvSnapshotDirs, tablePathMap);
+    }
+
+    @Test
+    void testStandbyReplicaDownloadLatestSnapshot() throws Exception {
+        TablePath tablePath = TablePath.of("test_db", "test_table_standby");
+        long tableId = createTable(FLUSS_CLUSTER_EXTENSION, tablePath, DATA1_TABLE_DESCRIPTOR_PK);
+        TableBucket tb0 = new TableBucket(tableId, 0);
+
+        FLUSS_CLUSTER_EXTENSION.waitAndGetLeaderReplica(tb0);
+        // get the leader server
+        int leaderServer = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(tb0);
+
+        // put one kv batch
+        KvRecordBatch kvRecordBatch =
+                genKvRecordBatch(
+                        Tuple2.of("k1", new Object[] {1, "k1"}),
+                        Tuple2.of("k2", new Object[] {2, "k2"}));
+        PutKvRequest putKvRequest = newPutKvRequest(tableId, 0, -1, kvRecordBatch);
+
+        TabletServerGateway leaderGateway =
+                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leaderServer);
+        leaderGateway.putKv(putKvRequest).get();
+
+        // wait for snapshot is available
+        final long snapshot1Id = 0;
+        CompletedSnapshot completedSnapshot =
+                waitValue(
+                                () -> completedSnapshotHandleStore.get(tb0, snapshot1Id),
+                                Duration.ofMinutes(2),
+                                "Fail to wait for the snapshot 0 for bucket " + tb0)
+                        .retrieveCompleteSnapshot();
+        // check snapshot
+        List<Tuple2<byte[], byte[]>> expectedKeyValues =
+                getKeyValuePairs(
+                        genKvRecords(
+                                Tuple2.of("k1", new Object[] {1, "k1"}),
+                                Tuple2.of("k2", new Object[] {2, "k2"})));
+        checkSnapshot(completedSnapshot, expectedKeyValues, 2);
+
+        // check the standby replica contains the latest snapshot.
+        int standbyServer = FLUSS_CLUSTER_EXTENSION.waitAndGetStandby(tb0);
+        TabletServer standbyTs = FLUSS_CLUSTER_EXTENSION.getTabletServerById(standbyServer);
+        Replica replica = standbyTs.getReplicaManager().getReplicaOrException(tb0);
+        assertThat(replica.isStandby()).isTrue();
+
+        KvSnapshotManager kvSnapshotManager = replica.kvSnapshotManager();
+        assertThat(kvSnapshotManager).isNotNull();
+        retry(
+                Duration.ofMinutes(1),
+                () -> {
+                    assertThat(kvSnapshotManager.getDownloadedSstFiles()).isNotEmpty();
+                    assertThat(kvSnapshotManager.getDownloadedMiscFiles()).isNotEmpty();
+                });
+
+        // put kv batch again
+        kvRecordBatch =
+                genKvRecordBatch(
+                        Tuple2.of("k1", new Object[] {1, "k11"}),
+                        Tuple2.of("k2", null),
+                        Tuple2.of("k3", new Object[] {3, "k3"}));
+        putKvRequest = newPutKvRequest(tableId, 0, 1, kvRecordBatch);
+        leaderGateway.putKv(putKvRequest).get();
+
+        // wait for next snapshot is available
+        final long snapshot2Id = 1;
+        completedSnapshot =
+                waitValue(
+                                () -> completedSnapshotHandleStore.get(tb0, snapshot2Id),
+                                Duration.ofMinutes(2),
+                                "Fail to wait for the snapshot 0 for bucket " + tb0)
+                        .retrieveCompleteSnapshot();
+
+        // check snapshot
+        expectedKeyValues =
+                getKeyValuePairs(
+                        genKvRecords(
+                                Tuple2.of("k1", new Object[] {1, "k11"}),
+                                Tuple2.of("k3", new Object[] {3, "k3"})));
+        checkSnapshot(completedSnapshot, expectedKeyValues, 6);
+        retry(
+                Duration.ofMinutes(1),
+                () -> {
+                    assertThat(kvSnapshotManager.getDownloadedSstFiles()).isNotEmpty();
+                    assertThat(kvSnapshotManager.getDownloadedMiscFiles()).isNotEmpty();
+                });
+
+        // test leader replica shutdown and standby replica become leader.
+        //        TabletServer leaderTs = FLUSS_CLUSTER_EXTENSION.getTabletServerById(leaderServer);
+        //        leaderTs
     }
 
     private void checkDirsDeleted(Set<File> bucketDirs, Map<Long, TablePath> tablePathMap) {

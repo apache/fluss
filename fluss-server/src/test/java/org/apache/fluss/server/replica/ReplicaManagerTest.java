@@ -1082,6 +1082,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
                                         TABLET_SERVER_ID,
                                         1,
                                         Arrays.asList(1, 2, 3),
+                                        Collections.emptyList(),
                                         INITIAL_COORDINATOR_EPOCH,
                                         INITIAL_BUCKET_EPOCH))),
                 future::complete);
@@ -1102,6 +1103,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
                                         TABLET_SERVER_ID,
                                         INITIAL_LEADER_EPOCH,
                                         Arrays.asList(1, 2, 3),
+                                        Collections.emptyList(),
                                         INITIAL_COORDINATOR_EPOCH,
                                         INITIAL_BUCKET_EPOCH))),
                 future::complete);
@@ -1136,6 +1138,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
                                         TABLET_SERVER_ID,
                                         1,
                                         Arrays.asList(1, 2, 3),
+                                        Collections.emptyList(),
                                         INITIAL_COORDINATOR_EPOCH,
                                         INITIAL_BUCKET_EPOCH))),
                 future::complete);
@@ -1167,6 +1170,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
                                         TABLET_SERVER_ID,
                                         2,
                                         Arrays.asList(1, 2, 3),
+                                        Collections.emptyList(),
                                         INITIAL_COORDINATOR_EPOCH,
                                         INITIAL_BUCKET_EPOCH))),
                 future::complete);
