@@ -119,12 +119,14 @@ import javax.annotation.Nullable;
 
 import java.io.UncheckedIOException;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
+import static org.apache.fluss.config.FlussConfigUtils.SENSITIVE_TABLE_OPTIONS;
 import static org.apache.fluss.config.FlussConfigUtils.isTableStorageConfig;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toAclBindingFilters;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toAclBindings;
@@ -263,7 +265,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                 lakeCatalogDynamicLoader.getLakeCatalogContainer();
 
         // Check table creation permissions based on table type
-        validateTableCreationPermission(tableDescriptor, tablePath);
+        validateTableCreationPermission(tableDescriptor);
 
         // apply system defaults if the config is not set
         tableDescriptor =
@@ -315,14 +317,11 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         List<TableChange> tableChanges = toTableChanges(request.getConfigChangesList());
         TablePropertyChanges tablePropertyChanges = toTablePropertyChanges(tableChanges);
 
-        LakeCatalogDynamicLoader.LakeCatalogContainer lakeCatalogContainer =
-                lakeCatalogDynamicLoader.getLakeCatalogContainer();
         metadataManager.alterTableProperties(
                 tablePath,
                 tableChanges,
                 tablePropertyChanges,
                 request.isIgnoreIfNotExists(),
-                lakeCatalogContainer.getLakeCatalog(),
                 lakeTableTieringManager,
                 new DefaultLakeCatalogContext(false, currentSession().getPrincipal()));
 
@@ -404,6 +403,18 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                             ConfigOptions.TABLE_DATALAKE_ENABLED.key()));
         }
 
+        // add non-sensitive lake properties to the table properties
+        if (dataLakeEnabled) {
+            Map<String, String> tableLakeOptions =
+                    lakeCatalogDynamicLoader.getLakeCatalogContainer().getDefaultTableLakeOptions();
+            removeSensitiveTableOptions(tableLakeOptions);
+            if (tableLakeOptions != null && !tableLakeOptions.isEmpty()) {
+                Map<String, String> newProperties = new HashMap<>(newDescriptor.getProperties());
+                newProperties.putAll(tableLakeOptions);
+                newDescriptor = newDescriptor.withProperties(newProperties);
+            }
+        }
+
         // For tables with first_row or versioned merge engines, automatically set to IGNORE if
         // delete behavior is not set
         Configuration tableConf = Configuration.fromMap(tableDescriptor.getProperties());
@@ -425,6 +436,20 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         String dataLakeEnabledValue =
                 tableDescriptor.getProperties().get(ConfigOptions.TABLE_DATALAKE_ENABLED.key());
         return Boolean.parseBoolean(dataLakeEnabledValue);
+    }
+
+    public void removeSensitiveTableOptions(Map<String, String> tableLakeOptions) {
+        if (tableLakeOptions == null || tableLakeOptions.isEmpty()) {
+            return;
+        }
+
+        Iterator<Map.Entry<String, String>> iterator = tableLakeOptions.entrySet().iterator();
+        while (iterator.hasNext()) {
+            String key = iterator.next().getKey().toLowerCase();
+            if (SENSITIVE_TABLE_OPTIONS.stream().anyMatch(key::contains)) {
+                iterator.remove();
+            }
+        }
     }
 
     @Override
@@ -734,11 +759,9 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
      * Validates whether the table creation is allowed based on the table type and configuration.
      *
      * @param tableDescriptor the table descriptor to validate
-     * @param tablePath the table path for error reporting
      * @throws InvalidTableException if table creation is not allowed
      */
-    private void validateTableCreationPermission(
-            TableDescriptor tableDescriptor, TablePath tablePath) {
+    private void validateTableCreationPermission(TableDescriptor tableDescriptor) {
         boolean hasPrimaryKey = tableDescriptor.hasPrimaryKey();
 
         if (hasPrimaryKey) {
