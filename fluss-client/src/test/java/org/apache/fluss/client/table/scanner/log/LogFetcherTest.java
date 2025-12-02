@@ -260,8 +260,7 @@ public class LogFetcherTest extends ClientToServerITCaseBase {
                         oldCluster.getCoordinatorServer(),
                         oldCluster.getBucketLocationsByPath(),
                         oldCluster.getTableIdByPath(),
-                        oldCluster.getPartitionIdByPath(),
-                        oldCluster.getTableInfoByPath());
+                        oldCluster.getPartitionIdByPath());
         metadataUpdater = new MetadataUpdater(rpcClient, clientConf, newCluster);
 
         LogScannerStatus logScannerStatus = new LogScannerStatus();

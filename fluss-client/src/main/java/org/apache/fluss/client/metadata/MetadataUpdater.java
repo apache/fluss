@@ -166,7 +166,7 @@ public class MetadataUpdater {
     public void checkAndUpdateTableMetadata(Set<TablePath> tablePaths) {
         Set<TablePath> needUpdateTablePaths =
                 tablePaths.stream()
-                        .filter(tablePath -> !cluster.getTable(tablePath).isPresent())
+                        .filter(tablePath -> !cluster.getTableId(tablePath).isPresent())
                         .collect(Collectors.toSet());
         if (!needUpdateTablePaths.isEmpty()) {
             updateMetadata(needUpdateTablePaths, null, null);
@@ -188,8 +188,8 @@ public class MetadataUpdater {
     }
 
     /**
-     * Check the table/partition info for the given table bucket exist in metadata cache, if not,
-     * try to update the metadata cache.
+     * Check the table/partition bucket info for the given table bucket exist in metadata cache, if
+     * not, try to update the metadata cache.
      */
     public void checkAndUpdateMetadata(TablePath tablePath, TableBucket tableBucket) {
         if (tableBucket.getPartitionId() == null) {

@@ -21,7 +21,6 @@ import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
-import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 
 import javax.annotation.Nullable;
@@ -54,22 +53,17 @@ public final class Cluster {
     private final Map<PhysicalTablePath, Long> partitionsIdByPath;
     private final Map<Long, String> partitionNameById;
 
-    /** Only latest schema of table will be put in it. */
-    private final Map<TablePath, TableInfo> tableInfoByPath;
-
     public Cluster(
             Map<Integer, ServerNode> aliveTabletServersById,
             @Nullable ServerNode coordinatorServer,
             Map<PhysicalTablePath, List<BucketLocation>> bucketLocationsByPath,
             Map<TablePath, Long> tableIdByPath,
-            Map<PhysicalTablePath, Long> partitionsIdByPath,
-            Map<TablePath, TableInfo> tableInfoByPath) {
+            Map<PhysicalTablePath, Long> partitionsIdByPath) {
         this.coordinatorServer = coordinatorServer;
         this.aliveTabletServersById = Collections.unmodifiableMap(aliveTabletServersById);
         this.aliveTabletServers =
                 Collections.unmodifiableList(new ArrayList<>(aliveTabletServersById.values()));
         this.tableIdByPath = Collections.unmodifiableMap(tableIdByPath);
-        this.tableInfoByPath = Collections.unmodifiableMap(tableInfoByPath);
         this.partitionsIdByPath = Collections.unmodifiableMap(partitionsIdByPath);
 
         // Index the bucket locations by table path, and index bucket location by bucket.
@@ -138,8 +132,7 @@ public final class Cluster {
                 coordinatorServer,
                 newBucketLocationsByPath,
                 new HashMap<>(tableIdByPath),
-                new HashMap<>(partitionsIdByPath),
-                new HashMap<>(tableInfoByPath));
+                new HashMap<>(partitionsIdByPath));
     }
 
     @Nullable
@@ -208,15 +201,6 @@ public final class Cluster {
         return availableLocationsByPath.getOrDefault(physicalTablePath, Collections.emptyList());
     }
 
-    /**
-     * Get the table info for this table.
-     *
-     * <p>TODO this method need to be remove, use Admin getTableInfo instead.
-     */
-    public Optional<TableInfo> getTable(TablePath tablePath) {
-        return Optional.ofNullable(tableInfoByPath.get(tablePath));
-    }
-
     public Optional<Long> getTableId(TablePath tablePath) {
         return Optional.ofNullable(tableIdByPath.get(tablePath));
     }
@@ -265,11 +249,6 @@ public final class Cluster {
         return tableIdByPath;
     }
 
-    /** Get the table info by table. */
-    public Map<TablePath, TableInfo> getTableInfoByPath() {
-        return tableInfoByPath;
-    }
-
     /** Get the bucket by a physical table path. */
     public Map<PhysicalTablePath, List<BucketLocation>> getBucketLocationsByPath() {
         return availableLocationsByPath;
@@ -284,7 +263,6 @@ public final class Cluster {
         return new Cluster(
                 Collections.emptyMap(),
                 null,
-                Collections.emptyMap(),
                 Collections.emptyMap(),
                 Collections.emptyMap(),
                 Collections.emptyMap());

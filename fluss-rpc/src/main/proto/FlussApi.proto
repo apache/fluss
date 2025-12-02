@@ -609,6 +609,9 @@ message PbTableMetadata {
   required PbTablePath table_path = 1;
   required int64 table_id = 2;
   required int32 schema_id = 3;
+  // TODO Starting from version 0.9, fluss-client no longer get table info from metadata response. However, for backward
+  //  compatibility, we will still retain the field in the request. Once metadataV2 is introduced, table info will be
+  //  officially omitted from the new metadata response.
   required bytes table_json = 4;
   repeated PbBucketMetadata bucket_metadata = 5;
   required int64 created_time = 6;

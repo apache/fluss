@@ -25,7 +25,6 @@ import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.MemorySize;
-import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.SchemaInfo;
@@ -563,32 +562,12 @@ class RecordAccumulatorTest {
 
         Map<TablePath, Long> tableIdByPath = new HashMap<>();
         tableIdByPath.put(DATA1_TABLE_PATH, DATA1_TABLE_ID);
-
-        TableInfo data1NonPkTableInfo =
-                TableInfo.of(
-                        DATA1_TABLE_PATH,
-                        DATA1_TABLE_ID,
-                        1,
-                        TableDescriptor.builder()
-                                // use INDEXED format better memory control
-                                // to test RecordAccumulator
-                                .logFormat(LogFormat.INDEXED)
-                                .schema(DATA1_SCHEMA)
-                                .distributedBy(3)
-                                .build(),
-                        System.currentTimeMillis(),
-                        System.currentTimeMillis());
-        Map<TablePath, TableInfo> tableInfoByPath = new HashMap<>();
-        tableInfoByPath.put(DATA1_TABLE_PATH, data1NonPkTableInfo);
-        tableInfoByPath.put(ZSTD_TABLE_INFO.getTablePath(), ZSTD_TABLE_INFO);
-
         return new Cluster(
                 aliveTabletServersById,
                 new ServerNode(0, "localhost", 89, ServerType.COORDINATOR),
                 bucketsByPath,
                 tableIdByPath,
-                Collections.emptyMap(),
-                tableInfoByPath);
+                Collections.emptyMap());
     }
 
     private void delayedInterrupt(final Thread thread, final long delayMs) {

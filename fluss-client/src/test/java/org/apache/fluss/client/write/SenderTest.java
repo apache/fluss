@@ -671,8 +671,7 @@ final class SenderTest {
                         oldCluster.getCoordinatorServer(),
                         oldCluster.getBucketLocationsByPath(),
                         oldCluster.getTableIdByPath(),
-                        oldCluster.getPartitionIdByPath(),
-                        oldCluster.getTableInfoByPath());
+                        oldCluster.getPartitionIdByPath());
 
         metadataUpdater.updateCluster(newCluster);
 

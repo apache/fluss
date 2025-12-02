@@ -22,8 +22,6 @@ import org.apache.fluss.cluster.Cluster;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.metadata.PhysicalTablePath;
-import org.apache.fluss.metadata.TableDescriptor;
-import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 
 import org.junit.jupiter.api.Test;
@@ -39,7 +37,6 @@ import java.util.Queue;
 import java.util.concurrent.ConcurrentLinkedQueue;
 
 import static org.apache.fluss.record.TestData.DATA1_PHYSICAL_TABLE_PATH;
-import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_ID;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -202,7 +199,6 @@ class StickyStaticBucketAssignerTest {
 
         Map<PhysicalTablePath, List<BucketLocation>> bucketsByPath = new HashMap<>();
         Map<TablePath, Long> tableIdByPath = new HashMap<>();
-        Map<TablePath, TableInfo> tableInfoByPath = new HashMap<>();
         bucketLocations.forEach(
                 bucketLocation -> {
                     PhysicalTablePath physicalTablePath = bucketLocation.getPhysicalTablePath();
@@ -212,18 +208,6 @@ class StickyStaticBucketAssignerTest {
                     tableIdByPath.put(
                             bucketLocation.getPhysicalTablePath().getTablePath(),
                             bucketLocation.getTableBucket().getTableId());
-                    tableInfoByPath.put(
-                            physicalTablePath.getTablePath(),
-                            TableInfo.of(
-                                    physicalTablePath.getTablePath(),
-                                    bucketLocation.getTableBucket().getTableId(),
-                                    1,
-                                    TableDescriptor.builder()
-                                            .schema(DATA1_SCHEMA)
-                                            .distributedBy(3)
-                                            .build(),
-                                    System.currentTimeMillis(),
-                                    System.currentTimeMillis()));
                 });
 
         return new Cluster(
@@ -231,7 +215,6 @@ class StickyStaticBucketAssignerTest {
                 new ServerNode(0, "localhost", 89, ServerType.COORDINATOR),
                 bucketsByPath,
                 tableIdByPath,
-                Collections.emptyMap(),
-                tableInfoByPath);
+                Collections.emptyMap());
     }
 }

@@ -24,8 +24,6 @@ import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.exception.StaleMetadataException;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
-import org.apache.fluss.metadata.TableDescriptor;
-import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.GatewayClientProxy;
 import org.apache.fluss.rpc.RpcClient;
@@ -121,7 +119,6 @@ public class MetadataUtils {
                             ServerNode coordinatorServer = getCoordinatorServer(response);
 
                             Map<TablePath, Long> newTablePathToTableId;
-                            Map<TablePath, TableInfo> newTablePathToTableInfo;
                             Map<PhysicalTablePath, List<BucketLocation>> newBucketLocations;
                             Map<PhysicalTablePath, Long> newPartitionIdByPath;
 
@@ -133,16 +130,12 @@ public class MetadataUtils {
                                 // the origin cluster.
                                 newTablePathToTableId =
                                         new HashMap<>(originCluster.getTableIdByPath());
-                                newTablePathToTableInfo =
-                                        new HashMap<>(originCluster.getTableInfoByPath());
                                 newBucketLocations =
                                         new HashMap<>(originCluster.getBucketLocationsByPath());
                                 newPartitionIdByPath =
                                         new HashMap<>(originCluster.getPartitionIdByPath());
 
                                 newTablePathToTableId.putAll(newTableMetadata.tablePathToTableId);
-                                newTablePathToTableInfo.putAll(
-                                        newTableMetadata.tablePathToTableInfo);
                                 newBucketLocations.putAll(newTableMetadata.bucketLocations);
                                 newPartitionIdByPath.putAll(newTableMetadata.partitionIdByPath);
 
@@ -150,7 +143,6 @@ public class MetadataUtils {
                                 // If full update, we will clear all tables info out ot the origin
                                 // cluster.
                                 newTablePathToTableId = newTableMetadata.tablePathToTableId;
-                                newTablePathToTableInfo = newTableMetadata.tablePathToTableInfo;
                                 newBucketLocations = newTableMetadata.bucketLocations;
                                 newPartitionIdByPath = newTableMetadata.partitionIdByPath;
                             }
@@ -160,8 +152,7 @@ public class MetadataUtils {
                                     coordinatorServer,
                                     newBucketLocations,
                                     newTablePathToTableId,
-                                    newPartitionIdByPath,
-                                    newTablePathToTableInfo);
+                                    newPartitionIdByPath);
                         })
                 .get(30, TimeUnit.SECONDS); // TODO currently, we don't have timeout logic in
         // RpcClient, it will let the get() block forever. So we
@@ -171,7 +162,6 @@ public class MetadataUtils {
     private static NewTableMetadata getTableMetadataToUpdate(
             Cluster cluster, MetadataResponse metadataResponse) {
         Map<TablePath, Long> newTablePathToTableId = new HashMap<>();
-        Map<TablePath, TableInfo> newTablePathToTableInfo = new HashMap<>();
         Map<PhysicalTablePath, List<BucketLocation>> newBucketLocations = new HashMap<>();
         Map<PhysicalTablePath, Long> newPartitionIdByPath = new HashMap<>();
 
@@ -187,17 +177,6 @@ public class MetadataUtils {
                                     protoTablePath.getDatabaseName(),
                                     protoTablePath.getTableName());
                     newTablePathToTableId.put(tablePath, tableId);
-                    TableDescriptor tableDescriptor =
-                            TableDescriptor.fromJsonBytes(pbTableMetadata.getTableJson());
-                    newTablePathToTableInfo.put(
-                            tablePath,
-                            TableInfo.of(
-                                    tablePath,
-                                    pbTableMetadata.getTableId(),
-                                    pbTableMetadata.getSchemaId(),
-                                    tableDescriptor,
-                                    pbTableMetadata.getCreatedTime(),
-                                    pbTableMetadata.getModifiedTime()));
 
                     // Get all buckets for the table.
                     List<PbBucketMetadata> pbBucketMetadataList =
@@ -232,25 +211,19 @@ public class MetadataUtils {
                 });
 
         return new NewTableMetadata(
-                newTablePathToTableId,
-                newTablePathToTableInfo,
-                newBucketLocations,
-                newPartitionIdByPath);
+                newTablePathToTableId, newBucketLocations, newPartitionIdByPath);
     }
 
     private static final class NewTableMetadata {
         private final Map<TablePath, Long> tablePathToTableId;
-        private final Map<TablePath, TableInfo> tablePathToTableInfo;
         private final Map<PhysicalTablePath, List<BucketLocation>> bucketLocations;
         private final Map<PhysicalTablePath, Long> partitionIdByPath;
 
         public NewTableMetadata(
                 Map<TablePath, Long> tablePathToTableId,
-                Map<TablePath, TableInfo> tablePathToTableInfo,
                 Map<PhysicalTablePath, List<BucketLocation>> bucketLocations,
                 Map<PhysicalTablePath, Long> partitionIdByPath) {
             this.tablePathToTableId = tablePathToTableId;
-            this.tablePathToTableInfo = tablePathToTableInfo;
             this.bucketLocations = bucketLocations;
             this.partitionIdByPath = partitionIdByPath;
         }
