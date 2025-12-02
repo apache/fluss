@@ -561,7 +561,7 @@ class LakeEnabledTableCreateITCase {
                 .cause()
                 .isInstanceOf(LakeTableAlreadyExistException.class)
                 .hasMessage(
-                        "The table `fluss`.`log_table_with_non_empty_lake_table` already exists in Paimon catalog, and the table is not empty. Please first drop the table in Paimon catalog or use a new table name.");
+                        "The table fluss.log_table_with_non_empty_lake_table already exists in Paimon catalog, and the table is not empty. Please first drop the table in Paimon catalog or use a new table name.");
     }
 
     @Test

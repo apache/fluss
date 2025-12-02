@@ -84,15 +84,14 @@ public class PaimonLakeCatalog implements LakeCatalog {
     public void createTable(TablePath tablePath, TableDescriptor tableDescriptor, Context context)
             throws TableAlreadyExistException {
         // then, create the table
-        Identifier paimonPath = toPaimon(tablePath);
         Schema paimonSchema = toPaimonSchema(tableDescriptor);
         try {
-            createTable(paimonPath, paimonSchema, context.isCreatingFlussTable());
+            createTable(tablePath, paimonSchema, context.isCreatingFlussTable());
         } catch (Catalog.DatabaseNotExistException e) {
             // create database
             createDatabase(tablePath.getDatabaseName());
             try {
-                createTable(paimonPath, paimonSchema, context.isCreatingFlussTable());
+                createTable(tablePath, paimonSchema, context.isCreatingFlussTable());
             } catch (Catalog.DatabaseNotExistException t) {
                 // shouldn't happen in normal cases
                 throw new RuntimeException(
@@ -117,17 +116,18 @@ public class PaimonLakeCatalog implements LakeCatalog {
         }
     }
 
-    private void createTable(Identifier tablePath, Schema schema, boolean isCreatingFlussTable)
+    private void createTable(TablePath tablePath, Schema schema, boolean isCreatingFlussTable)
             throws Catalog.DatabaseNotExistException {
+        Identifier paimonPath = toPaimon(tablePath);
         try {
             // not ignore if table exists
-            paimonCatalog.createTable(tablePath, schema, false);
+            paimonCatalog.createTable(paimonPath, schema, false);
         } catch (Catalog.TableAlreadyExistException e) {
             try {
-                Table table = paimonCatalog.getTable(tablePath);
+                Table table = paimonCatalog.getTable(paimonPath);
                 FileStoreTable fileStoreTable = (FileStoreTable) table;
                 validatePaimonSchemaCompatible(
-                        tablePath, fileStoreTable.schema().toSchema(), schema);
+                        paimonPath, fileStoreTable.schema().toSchema(), schema);
                 // if creating a new fluss table, we should ensure the lake table is empty
                 if (isCreatingFlussTable) {
                     checkTableIsEmpty(tablePath, fileStoreTable);

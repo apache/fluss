@@ -18,6 +18,7 @@
 package org.apache.fluss.lake.paimon.utils;
 
 import org.apache.fluss.exception.TableAlreadyExistException;
+import org.apache.fluss.metadata.TablePath;
 
 import org.apache.paimon.CoreOptions;
 import org.apache.paimon.catalog.Identifier;
@@ -79,13 +80,13 @@ public class PaimonTableValidation {
                                         && !entry.getKey().startsWith(FLUSS_CONF_PREFIX));
     }
 
-    public static void checkTableIsEmpty(Identifier tablePath, FileStoreTable table) {
+    public static void checkTableIsEmpty(TablePath tablePath, FileStoreTable table) {
         if (table.latestSnapshot().isPresent()) {
             throw new TableAlreadyExistException(
                     String.format(
                             "The table %s already exists in Paimon catalog, and the table is not empty. "
                                     + "Please first drop the table in Paimon catalog or use a new table name.",
-                            tablePath.getEscapedFullName()));
+                            tablePath));
         }
     }
 
