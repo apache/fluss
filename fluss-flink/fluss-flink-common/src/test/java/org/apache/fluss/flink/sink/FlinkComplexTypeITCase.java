@@ -17,11 +17,18 @@
 
 package org.apache.fluss.flink.sink;
 
+import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 
 import org.apache.flink.api.common.RuntimeExecutionMode;
+import org.apache.flink.api.common.typeinfo.TypeInformation;
+import org.apache.flink.api.common.typeinfo.Types;
+import org.apache.flink.api.java.typeutils.RowTypeInfo;
+import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
+import org.apache.flink.table.api.DataTypes;
 import org.apache.flink.table.api.EnvironmentSettings;
+import org.apache.flink.table.api.Schema;
 import org.apache.flink.table.api.TableEnvironment;
 import org.apache.flink.table.api.bridge.java.StreamTableEnvironment;
 import org.apache.flink.table.api.config.ExecutionConfigOptions;
@@ -132,6 +139,47 @@ abstract class FlinkComplexTypeITCase extends AbstractTestBase {
     }
 
     @Test
+    void testArrayTypesInPartitionedLogTable() throws Exception {
+        tEnv.executeSql(
+                "create table array_log_test ("
+                        + "id int, "
+                        + "dt string, "
+                        + "int_array array<int>, "
+                        + "bigint_array array<bigint>, "
+                        + "float_array array<float>, "
+                        + "double_array array<double>, "
+                        + "string_array array<string>, "
+                        + "boolean_array array<boolean>, "
+                        + "nested_int_array array<array<int>>, "
+                        + "nested_string_array array<array<string>>, "
+                        + "deeply_nested_array array<array<array<int>>>"
+                        + ") PARTITIONED BY (dt) "
+                        + "with ('bucket.num' = '3')");
+
+        tEnv.executeSql(
+                        "INSERT INTO array_log_test VALUES "
+                                + "(1, '2014', ARRAY[1, 2, CAST(NULL AS INT)], ARRAY[100, CAST(NULL AS BIGINT), 300], "
+                                + "ARRAY[CAST(1.1 AS FLOAT), CAST(NULL AS FLOAT)], ARRAY[2.2, 3.3, CAST(NULL AS DOUBLE)], "
+                                + "ARRAY['a', CAST(NULL AS STRING), 'c'], ARRAY[true, CAST(NULL AS BOOLEAN), false], "
+                                + "ARRAY[ARRAY[1, 2], CAST(NULL AS ARRAY<INT>), ARRAY[3]], "
+                                + "ARRAY[ARRAY['x'], ARRAY[CAST(NULL AS STRING), 'y']], "
+                                + "ARRAY[ARRAY[ARRAY[1, 2]], ARRAY[ARRAY[3, 4, 5]]]), "
+                                + "(2, '2013', CAST(NULL AS ARRAY<INT>), ARRAY[400, 500], "
+                                + "ARRAY[CAST(4.4 AS FLOAT)], ARRAY[5.5], "
+                                + "ARRAY['d', 'e'], ARRAY[true], "
+                                + "ARRAY[ARRAY[6, 7, 8]], ARRAY[ARRAY['z']], "
+                                + "ARRAY[ARRAY[ARRAY[9]]])")
+                .await();
+
+        CloseableIterator<Row> rowIter = tEnv.executeSql("select * from array_log_test").collect();
+        List<String> expectedRows =
+                Arrays.asList(
+                        "+I[1, 2014, [1, 2, null], [100, null, 300], [1.1, null], [2.2, 3.3, null], [a, null, c], [true, null, false], [[1, 2], null, [3]], [[x], [null, y]], [[[1, 2]], [[3, 4, 5]]]]",
+                        "+I[2, 2013, null, [400, 500], [4.4], [5.5], [d, e], [true], [[6, 7, 8]], [[z]], [[[9]]]]");
+        assertResultsIgnoreOrder(rowIter, expectedRows, true);
+    }
+
+    @Test
     void testArrayTypesInPrimaryKeyTable() throws Exception {
         tEnv.executeSql(
                 "create table array_pk_test ("
@@ -180,11 +228,58 @@ abstract class FlinkComplexTypeITCase extends AbstractTestBase {
                         "-U[1, [1, 2], [100, 300], [1.1], [2.2, 3.3], [a, null, c], [true, false], [[1, 2], null, [3]], [[x], [null, y]]]",
                         "+U[1, [100, 200], [1000], [10.1], [11.1], [updated], [false], [[100]], [[updated]]]",
                         "+I[4, [20, 30], [2000, 3000], [20.2], [30.3], [new], [true], [[200], [300]], [[new1], [new2]]]");
+        assertResultsIgnoreOrder(rowIter, expectedRows, false);
+
+        // insert into with partial update test
+        tEnv.executeSql(
+                        "INSERT INTO array_pk_test (id, string_array, bigint_array) VALUES "
+                                + "(2, ARRAY['partially', 'updated'], ARRAY[9999])")
+                .await();
+
+        expectedRows =
+                Arrays.asList(
+                        "-U[2, null, [400, 500], [4.4], [5.5], [d, e], [true], [[6, 7, 8]], [[z]]]",
+                        "+U[2, null, [9999], [4.4], [5.5], [partially, updated], [true], [[6, 7, 8]], [[z]]]");
         assertResultsIgnoreOrder(rowIter, expectedRows, true);
+
+        // test lookup join with array type, test partitioned table
+        Schema srcSchema =
+                Schema.newBuilder()
+                        .column("a", DataTypes.INT())
+                        .column("name", DataTypes.STRING())
+                        .column("c", DataTypes.INT())
+                        .columnByExpression("proc", "PROCTIME()")
+                        .build();
+        RowTypeInfo srcTestTypeInfo =
+                new RowTypeInfo(
+                        new TypeInformation[] {Types.INT, Types.STRING, Types.INT},
+                        new String[] {"a", "name", "c"});
+        List<Row> testData =
+                Arrays.asList(
+                        Row.of(1, "name1", 11),
+                        Row.of(2, "name2", 2),
+                        Row.of(3, "name33", 33),
+                        Row.of(10, "name0", 44));
+        DataStream<Row> srcDs = env.fromCollection(testData).returns(srcTestTypeInfo);
+        tEnv.dropTemporaryView("src");
+        tEnv.createTemporaryView("src", tEnv.fromDataStream(srcDs, srcSchema));
+        CloseableIterator<Row> collected =
+                tEnv.executeSql(
+                                "SELECT a, name, array_pk_test.* FROM src "
+                                        + "LEFT JOIN array_pk_test FOR SYSTEM_TIME AS OF src.proc "
+                                        + "ON src.a = array_pk_test.id")
+                        .collect();
+        List<String> expected =
+                Arrays.asList(
+                        "+I[1, name1, 1, [100, 200], [1000], [10.1], [11.1], [updated], [false], [[100]], [[updated]]]",
+                        "+I[2, name2, 2, null, [9999], [4.4], [5.5], [partially, updated], [true], [[6, 7, 8]], [[z]]]",
+                        "+I[3, name33, 3, [10], [600], [7.7], [8.8], [f], [false], [[9]], [[w]]]",
+                        "+I[10, name0, null, null, null, null, null, null, null, null, null]");
+        assertResultsIgnoreOrder(collected, expected, true);
     }
 
     @Test
-    void testArrayTypeAsPartitionKeyThrowsException() {
+    void testExceptionsForArrayTypeUsage() {
         assertThatThrownBy(
                         () ->
                                 tEnv.executeSql(
@@ -192,40 +287,24 @@ abstract class FlinkComplexTypeITCase extends AbstractTestBase {
                                                 + "id int, "
                                                 + "data string, "
                                                 + "tags array<string>, "
-                                                + "primary key(id) not enforced"
+                                                + "primary key(id, tags) not enforced"
                                                 + ") partitioned by (tags)"))
-                .cause()
-                .isInstanceOf(UnsupportedOperationException.class)
-                .hasMessageContaining("is not supported");
-    }
+                .hasRootCauseInstanceOf(InvalidTableException.class)
+                .hasRootCauseMessage(
+                        "Primary key column 'tags' has unsupported data type ARRAY<STRING> NOT NULL. "
+                                + "Currently, primary key column does not support types: [ARRAY, MAP, ROW].");
 
-    @Test
-    void testArrayTypeAsPrimaryKeyThrowsException() {
-        assertThatThrownBy(
-                        () ->
-                                tEnv.executeSql(
-                                        "create table array_pk_invalid ("
-                                                + "id int, "
-                                                + "data array<string>, "
-                                                + "primary key(data) not enforced"
-                                                + ")"))
-                .cause()
-                .isInstanceOf(UnsupportedOperationException.class)
-                .hasMessageContaining("is not supported");
-    }
-
-    @Test
-    void testArrayTypeAsBucketKeyThrowsException() {
         assertThatThrownBy(
                         () ->
                                 tEnv.executeSql(
                                         "create table array_bucket_test ("
                                                 + "id int, "
-                                                + "data array<string>, "
-                                                + "primary key(id) not enforced"
-                                                + ") with ('bucket.key' = 'data', 'bucket.num' = '3')"))
-                .cause()
-                .isInstanceOf(UnsupportedOperationException.class)
-                .hasMessageContaining("is not supported");
+                                                + "data string, "
+                                                + "tags array<string> "
+                                                + ") with ('bucket.key' = 'tags')"))
+                .hasRootCauseInstanceOf(InvalidTableException.class)
+                .hasRootCauseMessage(
+                        "Bucket key column 'tags' has unsupported data type ARRAY<STRING>. "
+                                + "Currently, bucket key column does not support types: [ARRAY, MAP, ROW].");
     }
 }
