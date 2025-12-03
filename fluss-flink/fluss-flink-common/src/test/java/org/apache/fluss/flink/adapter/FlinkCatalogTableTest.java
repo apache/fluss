@@ -17,30 +17,23 @@
 
 package org.apache.fluss.flink.adapter;
 
-import org.apache.flink.table.api.Schema;
 import org.apache.flink.table.catalog.CatalogBaseTable;
-import org.apache.flink.table.catalog.CatalogTable;
+import org.junit.jupiter.api.Test;
 
-import javax.annotation.Nullable;
+import static org.assertj.core.api.Assertions.assertThat;
 
-import java.util.List;
-import java.util.Map;
+/** Test for {@link CatalogTableAdapter}. */
+public class FlinkCatalogTableTest {
 
-/**
- * A adapter for {@link CatalogTable} constructor. TODO: remove this class when no longer support
- * flink 1.18 and 1.19.
- */
-public class CatalogTableAdapter {
-    public static CatalogTable toCatalogTable(
-            Schema schema,
-            @Nullable String comment,
-            List<String> partitionKeys,
-            Map<String, String> options) {
-        return CatalogTable.of(schema, comment, partitionKeys, options);
-    }
-
-    public static boolean isMaterializedTable(CatalogBaseTable.TableKind tableKind) {
-        // flink 1.18 not support MaterializedTable
-        return false;
+    @Test
+    public void testIsMaterializedTable() {
+        assertThat(
+                        CatalogTableAdapter.isMaterializedTable(
+                                CatalogBaseTable.TableKind.MATERIALIZED_TABLE))
+                .isEqualTo(true);
+        assertThat(CatalogTableAdapter.isMaterializedTable(CatalogBaseTable.TableKind.VIEW))
+                .isEqualTo(false);
+        assertThat(CatalogTableAdapter.isMaterializedTable(CatalogBaseTable.TableKind.TABLE))
+                .isEqualTo(false);
     }
 }
