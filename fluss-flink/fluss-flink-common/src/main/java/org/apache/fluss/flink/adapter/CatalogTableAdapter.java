@@ -18,6 +18,7 @@
 package org.apache.fluss.flink.adapter;
 
 import org.apache.flink.table.api.Schema;
+import org.apache.flink.table.catalog.CatalogBaseTable;
 import org.apache.flink.table.catalog.CatalogTable;
 
 import javax.annotation.Nullable;
@@ -41,5 +42,9 @@ public class CatalogTableAdapter {
                 .partitionKeys(partitionKeys)
                 .options(options)
                 .build();
+    }
+
+    public static boolean isMaterializedTable(CatalogBaseTable.TableKind tableKind) {
+        return CatalogBaseTable.TableKind.MATERIALIZED_TABLE == tableKind;
     }
 }
