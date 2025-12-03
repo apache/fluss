@@ -32,9 +32,8 @@
     <name>Fluss : Engine Flink : Common</name>
 
     <properties>
-        <flink.major.version>${fluss-flink-common.flink.main.version}</flink.major.version>
-        <paimon-flink.major.version>${paimon-flink-common.flink.main.version}</paimon-flink.major.version>
-        <flink.minor.version>${fluss-flink-common.flink.version}</flink.minor.version>
+        <flink.major.version>1.20</flink.major.version>
+        <flink.minor.version>1.20.3</flink.minor.version>
     </properties>
 
     <dependencies>
@@ -67,12 +66,6 @@
             <scope>provided</scope>
         </dependency>
 
-        <dependency>
-            <groupId>org.apache.fluss</groupId>
-            <artifactId>${fluss-flinkx-common}</artifactId>
-            <version>${project.version}</version>
-        </dependency>
-
         <!-- Connectors -->
         <dependency>
             <groupId>org.apache.flink</groupId>
@@ -84,7 +77,7 @@
         <!-- Paimon -->
         <dependency>
             <groupId>org.apache.paimon</groupId>
-            <artifactId>paimon-flink-${paimon-flink.major.version}</artifactId>
+            <artifactId>paimon-flink-${flink.major.version}</artifactId>
             <version>${paimon.version}</version>
             <!-- make it provided, should be added manually-->
             <scope>provided</scope>
@@ -182,14 +175,6 @@
             <groupId>org.apache.fluss</groupId>
             <artifactId>fluss-common</artifactId>
             <version>${project.version}</version>
-            <scope>test</scope>
-            <type>test-jar</type>
-        </dependency>
-
-        <dependency>
-            <groupId>org.apache.fluss</groupId>
-            <artifactId>fluss-flink1-common</artifactId>
-            <version>0.9-SNAPSHOT</version>
             <scope>test</scope>
             <type>test-jar</type>
         </dependency>

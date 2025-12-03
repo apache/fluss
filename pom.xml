@@ -80,10 +80,6 @@
         <fluss.reuseForks>true</fluss.reuseForks>
         <skip.on.java8>false</skip.on.java8>
 
-        <fluss-flinkx-common>fluss-flink1-common</fluss-flinkx-common>
-        <fluss-flink-common.flink.main.version>1.20</fluss-flink-common.flink.main.version>
-        <fluss-flink-common.flink.version>1.20.3</fluss-flink-common.flink.version>
-
         <!-- library versions in fluss-shaded -->
         <fluss.shaded.version>1.0-incubating</fluss.shaded.version>
         <guava.version>32.1.3-jre</guava.version>
@@ -523,51 +519,6 @@
                     </plugin>
                 </plugins>
             </build>
-        </profile>
-
-        <profile>
-            <id>flink1</id>
-            <properties>
-                <fluss-flinkx-common>fluss-flink1-common</fluss-flinkx-common>
-                <fluss-flink-common.flink.main.version>1.20</fluss-flink-common.flink.main.version>
-                <paimon-flink-common.flink.main.version>1.20</paimon-flink-common.flink.main.version>
-                <fluss-flink-common.flink.version>1.20.3</fluss-flink-common.flink.version>
-                <test.flink.main.version>1.20</test.flink.main.version>
-                <test.flink.version>1.20.3</test.flink.version>
-            </properties>
-            <modules>
-                <module>fluss-flink/fluss-flink-1.18</module>
-                <module>fluss-flink/fluss-flink-1.19</module>
-                <module>fluss-flink/fluss-flink-1.20</module>
-            </modules>
-            <activation>
-                <activeByDefault>true</activeByDefault>
-                <property>
-                    <name>flink1</name>
-                </property>
-            </activation>
-        </profile>
-
-        <profile>
-            <id>flink2</id>
-            <properties>
-                <fluss-flinkx-common>fluss-flink2-common</fluss-flinkx-common>
-                <fluss-flink-common.flink.main.version>2.1</fluss-flink-common.flink.main.version>
-                <paimon-flink-common.flink.main.version>2.0</paimon-flink-common.flink.main.version>
-                <fluss-flink-common.flink.version>2.1.1</fluss-flink-common.flink.version>
-                <test.flink.main.version>2.1</test.flink.main.version>
-                <test.flink.version>2.1.1</test.flink.version>
-                <target.java.version>11</target.java.version>
-            </properties>
-            <modules>
-                <module>fluss-flink/fluss-flink2-common</module>
-                <module>fluss-flink/fluss-flink-2.1</module>
-            </modules>
-            <activation>
-                <property>
-                    <name>flink2</name>
-                </property>
-            </activation>
         </profile>
     </profiles>
 
