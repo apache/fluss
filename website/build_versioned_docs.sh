@@ -106,7 +106,7 @@ for branch in $branches; do
 
   echo "Processing branch: $clean_branch_name"
 
-  # 检出分支
+  # Check out the branch
   git checkout "$clean_branch_name" || { echo "Failed to checkout branch: $clean_branch_name"; continue; }
 
   version_sidebar_file="$VERSIONED_SIDEBARS/version-$version-sidebars.json"
