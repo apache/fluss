@@ -30,6 +30,7 @@ import java.util.Collections;
 import static org.apache.fluss.record.LogRecordBatchFormat.LOG_MAGIC_VALUE_V0;
 import static org.apache.fluss.record.LogRecordBatchFormat.LOG_MAGIC_VALUE_V1;
 import static org.apache.fluss.record.TestData.DATA1_ROW_TYPE;
+import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
 import static org.apache.fluss.record.TestData.DEFAULT_SCHEMA_ID;
 import static org.apache.fluss.testutils.DataTestUtils.createRecordsWithoutBaseLogOffset;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -62,8 +63,10 @@ public class FileLogInputStreamTest extends LogTestBase {
 
             LogRecordBatch recordBatch = batch.loadFullBatch();
 
+            TestingSchemaGetter schemaGetter = new TestingSchemaGetter(schemaId, DATA1_SCHEMA);
             try (LogRecordReadContext readContext =
-                            LogRecordReadContext.createArrowReadContext(DATA1_ROW_TYPE, schemaId);
+                            LogRecordReadContext.createArrowReadContext(
+                                    DATA1_ROW_TYPE, schemaId, schemaGetter);
                     CloseableIterator<LogRecord> iterator = recordBatch.records(readContext)) {
                 assertThat(iterator.hasNext()).isTrue();
                 LogRecord record = iterator.next();

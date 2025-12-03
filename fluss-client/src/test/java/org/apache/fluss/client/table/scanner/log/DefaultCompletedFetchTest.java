@@ -20,6 +20,7 @@ package org.apache.fluss.client.table.scanner.log;
 import org.apache.fluss.client.table.scanner.ScanRecord;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.Schema;
+import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
@@ -28,6 +29,9 @@ import org.apache.fluss.record.FileLogProjection;
 import org.apache.fluss.record.FileLogRecords;
 import org.apache.fluss.record.LogRecordReadContext;
 import org.apache.fluss.record.MemoryLogRecords;
+import org.apache.fluss.record.ProjectionPushdownCache;
+import org.apache.fluss.record.TestingSchemaGetter;
+import org.apache.fluss.row.GenericArray;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.rpc.entity.FetchLogResultForBucket;
 import org.apache.fluss.types.DataTypes;
@@ -71,9 +75,13 @@ public class DefaultCompletedFetchTest {
     private @TempDir File tempDir;
     private TableInfo tableInfo;
     private RowType rowType;
+    private TestingSchemaGetter testingSchemaGetter;
 
     @BeforeEach
     void beforeEach() {
+        testingSchemaGetter =
+                new TestingSchemaGetter(
+                        new SchemaInfo(DATA2_TABLE_INFO.getSchema(), DEFAULT_SCHEMA_ID));
         tableInfo = DATA2_TABLE_INFO;
         rowType = DATA2_ROW_TYPE;
         Map<TableBucket, Long> scanBuckets = new HashMap<>();
@@ -162,7 +170,7 @@ public class DefaultCompletedFetchTest {
         long fetchOffset = 0L;
         int bucketId = 0; // records for 0-10.
         TableBucket tb = new TableBucket(DATA2_TABLE_ID, bucketId);
-        Projection projection = Projection.of(new int[] {0, 2});
+        Projection projection = Projection.of(new int[] {0, 2}, schema);
         MemoryLogRecords memoryLogRecords;
         if (logFormat == LogFormat.ARROW) {
             memoryLogRecords = genRecordsWithProjection(DATA2, projection, magic);
@@ -198,7 +206,7 @@ public class DefaultCompletedFetchTest {
         // test projection reorder.
         defaultCompletedFetch =
                 makeCompletedFetch(
-                        tb, resultForBucket0, fetchOffset, Projection.of(new int[] {2, 0}));
+                        tb, resultForBucket0, fetchOffset, Projection.of(new int[] {2, 0}, schema));
         scanRecords = defaultCompletedFetch.fetchRecords(8);
         assertThat(scanRecords.size()).isEqualTo(8);
         for (int i = 0; i < scanRecords.size(); i++) {
@@ -209,6 +217,88 @@ public class DefaultCompletedFetchTest {
             InternalRow row = actualRecord.getRow();
             assertThat(row.getString(0).toString()).isEqualTo(expectObject[1]);
             assertThat(row.getInt(1)).isEqualTo(expectObject[0]);
+        }
+    }
+
+    @Test
+    void testComplexTypeFetch() throws Exception {
+        List<Object[]> complexData =
+                Arrays.asList(
+                        new Object[] {
+                            1,
+                            new String[] {"a", "b"},
+                            new Object[] {new int[] {1, 2}, new int[] {3, 4}}
+                        },
+                        new Object[] {
+                            2, new String[] {"c", null}, new Object[] {null, new int[] {3, 4}}
+                        },
+                        new Object[] {
+                            3,
+                            new String[] {"e", "f"},
+                            new Object[] {new int[] {5, 6, 7}, new int[] {8}}
+                        });
+        Schema schema =
+                Schema.newBuilder()
+                        .column("a", DataTypes.INT())
+                        .column("b", DataTypes.ARRAY(DataTypes.STRING()))
+                        .column("c", DataTypes.ARRAY(DataTypes.ARRAY(DataTypes.INT())))
+                        .build();
+        TableInfo tableInfo =
+                TableInfo.of(
+                        DATA2_TABLE_PATH,
+                        DATA2_TABLE_ID,
+                        DEFAULT_SCHEMA_ID,
+                        TableDescriptor.builder()
+                                .schema(schema)
+                                .distributedBy(3)
+                                .logFormat(LogFormat.ARROW)
+                                .build(),
+                        System.currentTimeMillis(),
+                        System.currentTimeMillis());
+        long fetchOffset = 0L;
+        int bucketId = 0;
+        TableBucket tb = new TableBucket(DATA2_TABLE_ID, bucketId);
+        FetchLogResultForBucket resultForBucket =
+                new FetchLogResultForBucket(
+                        tb,
+                        createRecordsWithoutBaseLogOffset(
+                                schema.getRowType(),
+                                DEFAULT_SCHEMA_ID,
+                                0L,
+                                1000L,
+                                LOG_MAGIC_VALUE_V0,
+                                complexData,
+                                LogFormat.ARROW),
+                        3L);
+        DefaultCompletedFetch defaultCompletedFetch =
+                new DefaultCompletedFetch(
+                        tb,
+                        resultForBucket,
+                        LogRecordReadContext.createReadContext(
+                                tableInfo,
+                                false,
+                                null,
+                                new TestingSchemaGetter(
+                                        tableInfo.getSchemaId(), tableInfo.getSchema())),
+                        logScannerStatus,
+                        true,
+                        fetchOffset);
+        List<ScanRecord> scanRecords = defaultCompletedFetch.fetchRecords(3);
+        // close the read context to release arrow root resource,
+        // this is important to test complex types
+        defaultCompletedFetch.readContext.close();
+        assertThat(scanRecords.size()).isEqualTo(3);
+        for (int i = 0; i < scanRecords.size(); i++) {
+            ScanRecord record = scanRecords.get(i);
+            assertThat(record.logOffset()).isEqualTo(i);
+            InternalRow row = record.getRow();
+            assertThat(row.getInt(0)).isEqualTo(complexData.get(i)[0]);
+            assertThat(row.getArray(1)).isInstanceOf(GenericArray.class);
+            GenericArray array = (GenericArray) row.getArray(1);
+            assertThat(array.toString())
+                    .isEqualTo(Arrays.deepToString((Object[]) complexData.get(i)[1]));
+            assertThat(row.getArray(2).toString())
+                    .isEqualTo(Arrays.deepToString((Object[]) complexData.get(i)[2]));
         }
     }
 
@@ -225,7 +315,11 @@ public class DefaultCompletedFetchTest {
         return new DefaultCompletedFetch(
                 tableBucket,
                 resultForBucket,
-                LogRecordReadContext.createReadContext(tableInfo, false, projection),
+                LogRecordReadContext.createReadContext(
+                        tableInfo,
+                        false,
+                        projection,
+                        new TestingSchemaGetter(tableInfo.getSchemaId(), tableInfo.getSchema())),
                 logScannerStatus,
                 true,
                 offset);
@@ -255,9 +349,12 @@ public class DefaultCompletedFetchTest {
                         rowType, DEFAULT_SCHEMA_ID, 0L, 1000L, magic, objects, LogFormat.ARROW));
         fileLogRecords.flush();
 
-        FileLogProjection fileLogProjection = new FileLogProjection();
+        FileLogProjection fileLogProjection = new FileLogProjection(new ProjectionPushdownCache());
         fileLogProjection.setCurrentProjection(
-                DATA2_TABLE_ID, rowType, DEFAULT_COMPRESSION, projection.getProjectionInOrder());
+                DATA2_TABLE_ID,
+                testingSchemaGetter,
+                DEFAULT_COMPRESSION,
+                projection.getProjectionIdInOrder());
         ByteBuffer buffer =
                 toByteBuffer(
                         fileLogProjection

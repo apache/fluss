@@ -22,9 +22,10 @@ import org.apache.fluss.client.table.scanner.RemoteFileDownloader;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.fs.FsPathAndFileName;
 import org.apache.fluss.metadata.KvFormat;
+import org.apache.fluss.metadata.Schema;
+import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.row.InternalRow;
-import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.CloseableIterator;
 import org.apache.fluss.utils.CloseableRegistry;
 import org.apache.fluss.utils.FileUtils;
@@ -72,7 +73,10 @@ public class KvSnapshotBatchScanner implements BatchScanner {
     public static final CloseableIterator<InternalRow> NO_DATA_AVAILABLE =
             CloseableIterator.emptyIterator();
 
-    private final RowType tableRowType;
+    private final Schema targetSchema;
+    private final int targetSchemaId;
+    private final SchemaGetter schemaGetter;
+
     private final TableBucket tableBucket;
     private final List<FsPathAndFileName> fsPathAndFileNames;
     @Nullable private final int[] projectedFields;
@@ -93,14 +97,18 @@ public class KvSnapshotBatchScanner implements BatchScanner {
     @Nullable private volatile Throwable initSnapshotFilesReaderException = null;
 
     public KvSnapshotBatchScanner(
-            RowType tableRowType,
+            int targetSchemaId,
+            Schema targetSchema,
+            SchemaGetter schemaGetter,
             TableBucket tableBucket,
             List<FsPathAndFileName> fsPathAndFileNames,
             @Nullable int[] projectedFields,
             String scannerTmpDir,
             KvFormat kvFormat,
             RemoteFileDownloader remoteFileDownloader) {
-        this.tableRowType = tableRowType;
+        this.targetSchema = targetSchema;
+        this.targetSchemaId = targetSchemaId;
+        this.schemaGetter = schemaGetter;
         this.tableBucket = tableBucket;
         this.fsPathAndFileNames = fsPathAndFileNames;
         this.projectedFields = projectedFields;
@@ -209,8 +217,10 @@ public class KvSnapshotBatchScanner implements BatchScanner {
                                                 new SnapshotFilesReader(
                                                         kvFormat,
                                                         snapshotLocalDirectory,
-                                                        tableRowType,
-                                                        projectedFields);
+                                                        projectedFields,
+                                                        targetSchemaId,
+                                                        targetSchema,
+                                                        schemaGetter);
                                         readerIsReady.signalAll();
                                     } catch (Throwable e) {
                                         IOUtils.closeQuietly(closeableRegistry);

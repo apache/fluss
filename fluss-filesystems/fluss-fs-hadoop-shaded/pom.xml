@@ -75,6 +75,10 @@
                     <artifactId>jersey-server</artifactId>
                 </exclusion>
                 <exclusion>
+                    <groupId>com.github.pjfanning</groupId>
+                    <artifactId>jersey-json</artifactId>
+                </exclusion>
+                <exclusion>
                     <groupId>org.apache.avro</groupId>
                     <artifactId>avro</artifactId>
                 </exclusion>

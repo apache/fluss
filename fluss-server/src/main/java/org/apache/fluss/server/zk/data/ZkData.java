@@ -25,6 +25,7 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.security.acl.Resource;
 import org.apache.fluss.security.acl.ResourceType;
 import org.apache.fluss.utils.json.JsonSerdeUtils;
+import org.apache.fluss.utils.types.Tuple2;
 
 import javax.annotation.Nullable;
 
@@ -130,6 +131,7 @@ public final class ZkData {
      * <p>/metadata/databases/[databaseName]/tables/[tableName]/schemas
      */
     public static final class SchemasZNode {
+
         public static String path(TablePath tablePath) {
             return TableZNode.path(tablePath) + "/schemas";
         }
@@ -142,6 +144,32 @@ public final class ZkData {
      * <p>/metadata/databases/[databaseName]/tables/[tableName]/schemas/[schemaId]
      */
     public static final class SchemaZNode {
+
+        @Nullable
+        public static Tuple2<TablePath, Integer> parsePath(String zkPath) {
+            String splitter = "/schemas/";
+            if (!zkPath.contains(splitter)) {
+                return null;
+            }
+
+            String[] split = zkPath.split(splitter);
+            if (split.length != 2) {
+                return null;
+            }
+            TablePath tablePath = TableZNode.parsePath(split[0]);
+            if (tablePath == null) {
+                return null;
+            }
+
+            int schemaId;
+            try {
+                schemaId = Integer.parseInt(split[1]);
+                return Tuple2.of(tablePath, schemaId);
+            } catch (NumberFormatException e) {
+                return null;
+            }
+        }
+
         public static String path(TablePath tablePath, int schemaId) {
             return SchemasZNode.path(tablePath) + "/" + schemaId;
         }

@@ -437,7 +437,7 @@ public class FlinkIcebergTieringTestBase {
 
             for (DataFile file : files) {
                 Iterable<Record> iterable =
-                        Parquet.read(table.io().newInputFile(file.path().toString()))
+                        Parquet.read(table.io().newInputFile(file.location()))
                                 .project(table.schema())
                                 .createReaderFunc(
                                         fileSchema ->
@@ -471,7 +471,7 @@ public class FlinkIcebergTieringTestBase {
     }
 
     protected void checkSnapshotPropertyInIceberg(
-            TablePath tablePath, Map<String, String> expectedProperties) throws Exception {
+            TablePath tablePath, Map<String, String> expectedProperties) {
         org.apache.iceberg.Table table = icebergCatalog.loadTable(toIceberg(tablePath));
         Snapshot snapshot = table.currentSnapshot();
         assertThat(snapshot.summary()).containsAllEntriesOf(expectedProperties);

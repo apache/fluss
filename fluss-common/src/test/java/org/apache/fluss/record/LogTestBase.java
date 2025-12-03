@@ -19,6 +19,7 @@ package org.apache.fluss.record;
 
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.memory.MemorySegmentOutputView;
+import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.row.TestInternalRowGenerator;
 import org.apache.fluss.row.indexed.IndexedRow;
 import org.apache.fluss.testutils.ListLogRecords;
@@ -75,11 +76,13 @@ public abstract class LogTestBase {
             LogRecordBatch actual,
             LogRecordBatch expected,
             RowType rowType,
-            List<IndexedRow> rows) {
+            List<IndexedRow> rows,
+            SchemaGetter schemaGetter) {
         assertRecordBatchHeaderEquals(actual);
 
         LogRecordReadContext readContext =
-                LogRecordReadContext.createIndexedReadContext(rowType, TestData.DEFAULT_SCHEMA_ID);
+                LogRecordReadContext.createIndexedReadContext(
+                        rowType, TestData.DEFAULT_SCHEMA_ID, schemaGetter);
         try (CloseableIterator<LogRecord> actualIter = actual.records(readContext);
                 CloseableIterator<LogRecord> expectIter = expected.records(readContext)) {
             int i = 0;

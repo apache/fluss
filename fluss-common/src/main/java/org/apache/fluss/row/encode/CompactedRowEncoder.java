@@ -18,6 +18,7 @@
 package org.apache.fluss.row.encode;
 
 import org.apache.fluss.annotation.PublicEvolving;
+import org.apache.fluss.row.BinaryWriter;
 import org.apache.fluss.row.compacted.CompactedRow;
 import org.apache.fluss.row.compacted.CompactedRowDeserializer;
 import org.apache.fluss.row.compacted.CompactedRowWriter;
@@ -33,16 +34,16 @@ public class CompactedRowEncoder implements RowEncoder {
 
     private final DataType[] fieldDataTypes;
     private final CompactedRowWriter writer;
-    private final CompactedRowWriter.FieldWriter[] fieldWriters;
+    private final BinaryWriter.ValueWriter[] fieldWriters;
     private final CompactedRowDeserializer compactedRowDeserializer;
 
     public CompactedRowEncoder(DataType[] fieldDataTypes) {
         this.fieldDataTypes = fieldDataTypes;
         // writer for row's fields
         writer = new CompactedRowWriter(fieldDataTypes.length);
-        fieldWriters = new CompactedRowWriter.FieldWriter[fieldDataTypes.length];
+        fieldWriters = new BinaryWriter.ValueWriter[fieldDataTypes.length];
         for (int i = 0; i < fieldDataTypes.length; i++) {
-            fieldWriters[i] = CompactedRowWriter.createFieldWriter(fieldDataTypes[i]);
+            fieldWriters[i] = BinaryWriter.createValueWriter(fieldDataTypes[i]);
         }
         this.compactedRowDeserializer = new CompactedRowDeserializer(fieldDataTypes);
     }
@@ -54,7 +55,7 @@ public class CompactedRowEncoder implements RowEncoder {
 
     @Override
     public void encodeField(int pos, Object value) {
-        fieldWriters[pos].writeField(writer, pos, value);
+        fieldWriters[pos].writeValue(writer, pos, value);
     }
 
     @Override

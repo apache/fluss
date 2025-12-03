@@ -31,6 +31,7 @@ import org.junit.jupiter.api.Test;
 
 import java.util.Random;
 
+import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test for {@link DefaultKvRecord}. */
@@ -39,7 +40,8 @@ class DefaultKvRecordTest extends KvTestBase {
     @Test
     void testBase() throws Exception {
         KvRecordReadContext kvRecordReadContext =
-                KvRecordReadContext.createReadContext(KvFormat.COMPACTED, baseRowFieldTypes);
+                KvRecordReadContext.createReadContext(
+                        KvFormat.COMPACTED, new TestingSchemaGetter(1, DATA1_SCHEMA));
         // create row.
 
         CompactedRow row;
@@ -107,7 +109,8 @@ class DefaultKvRecordTest extends KvTestBase {
                         MemorySegment.wrap(outputView.getCopyOfBuffer()),
                         0,
                         schemaId,
-                        KvRecordReadContext.createReadContext(KvFormat.COMPACTED, colTypes));
+                        KvRecordReadContext.createReadContext(
+                                KvFormat.COMPACTED, new TestingSchemaGetter(1, DATA1_SCHEMA)));
 
         // check key
         assertThat(keyToBytes(kvRecord)).isEqualTo(key);

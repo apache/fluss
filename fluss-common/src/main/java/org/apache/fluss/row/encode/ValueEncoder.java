@@ -23,7 +23,7 @@ import org.apache.fluss.utils.UnsafeUtils;
 /** An encoder to encode {@link BinaryRow} with a schema id as value to be stored in kv store. */
 public class ValueEncoder {
 
-    static final int SCHEMA_ID_LENGTH = 2;
+    public static final int SCHEMA_ID_LENGTH = 2;
 
     /**
      * Encode the {@code row} with a {@code schemaId} to a byte array value to be expected persisted

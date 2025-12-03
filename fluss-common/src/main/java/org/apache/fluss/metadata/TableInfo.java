@@ -137,6 +137,11 @@ public final class TableInfo {
         return schema;
     }
 
+    /** Returns the schema info of the table, including schema and schema id. */
+    public SchemaInfo getSchemaInfo() {
+        return new SchemaInfo(schema, schemaId);
+    }
+
     /**
      * Returns the row type of the table. The row type is the schema of the table, which defines the
      * columns and types of the table.
@@ -331,6 +336,23 @@ public final class TableInfo {
                 Configuration.fromMap(tableDescriptor.getProperties()),
                 Configuration.fromMap(tableDescriptor.getCustomProperties()),
                 tableDescriptor.getComment().orElse(null),
+                createdTime,
+                modifiedTime);
+    }
+
+    /** Replace a TableInfo with a new SchemaInfo. */
+    public TableInfo withNewSchema(SchemaInfo schemaInfo) {
+        return new TableInfo(
+                tablePath,
+                tableId,
+                schemaInfo.getSchemaId(),
+                schemaInfo.getSchema(),
+                bucketKeys,
+                partitionKeys,
+                numBuckets,
+                properties,
+                customProperties,
+                comment,
                 createdTime,
                 modifiedTime);
     }

@@ -217,4 +217,7 @@ public final class TestData {
                     .primaryKey("a")
                     .build();
     // ---------------------------- data3 table info end ------------------------------
+
+    public static final TestingSchemaGetter TEST_SCHEMA_GETTER =
+            new TestingSchemaGetter(DEFAULT_SCHEMA_ID, DATA2_SCHEMA);
 }

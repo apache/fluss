@@ -23,7 +23,9 @@ import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.row.BinaryRow;
 import org.apache.fluss.row.BinarySegmentUtils;
 import org.apache.fluss.row.BinaryString;
+import org.apache.fluss.row.BinaryWriter;
 import org.apache.fluss.row.Decimal;
+import org.apache.fluss.row.InternalArray;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.NullAwareGetters;
 import org.apache.fluss.row.TimestampLtz;
@@ -39,6 +41,7 @@ import org.apache.fluss.utils.MurmurHashUtils;
 import java.util.Arrays;
 
 import static org.apache.fluss.types.DataTypeChecks.getPrecision;
+import static org.apache.fluss.utils.Preconditions.checkArgument;
 
 /**
  * An implementation of {@link InternalRow} which is backed by {@link MemorySegment} instead of
@@ -106,9 +109,20 @@ public class IndexedRow implements BinaryRow, NullAwareGetters {
         segment.get(offset, dst, dstOffset, sizeInBytes);
     }
 
+    @Override
     public void pointTo(MemorySegment segment, int offset, int sizeInBytes) {
         this.segment = segment;
         this.segments = new MemorySegment[] {segment};
+        this.offset = offset;
+        this.sizeInBytes = sizeInBytes;
+        this.columnLengths = calculateColumnLengths();
+    }
+
+    @Override
+    public void pointTo(MemorySegment[] segments, int offset, int sizeInBytes) {
+        checkArgument(segments.length == 1, "IndexedRow only supports single segment now.");
+        this.segment = segments[0];
+        this.segments = segments;
         this.offset = offset;
         this.sizeInBytes = sizeInBytes;
         this.columnLengths = calculateColumnLengths();
@@ -219,93 +233,21 @@ public class IndexedRow implements BinaryRow, NullAwareGetters {
         }
 
         InternalRow.FieldGetter[] fieldGetter = new InternalRow.FieldGetter[newType.length];
-        IndexedRowWriter.FieldWriter[] writers = new IndexedRowWriter.FieldWriter[newType.length];
+        BinaryWriter.ValueWriter[] writers = new BinaryWriter.ValueWriter[newType.length];
         for (int i = 0; i < newType.length; i++) {
             fieldGetter[i] = InternalRow.createFieldGetter(newType[i], fields[i]);
-            writers[i] = IndexedRowWriter.createFieldWriter(newType[i]);
+            writers[i] = BinaryWriter.createValueWriter(newType[i]);
         }
 
         IndexedRow projectRow = new IndexedRow(newType);
         IndexedRowWriter writer = new IndexedRowWriter(newType);
         for (int i = 0; i < newType.length; i++) {
-            writers[i].writeField(writer, i, fieldGetter[i].getFieldOrNull(this));
+            writers[i].writeValue(writer, i, fieldGetter[i].getFieldOrNull(this));
         }
 
         projectRow.pointTo(writer.segment(), 0, writer.position());
 
         return projectRow;
-    }
-
-    public static int calculateBitSetWidthInBytes(int arity) {
-        return (arity + 7) / 8;
-    }
-
-    public static boolean isFixedLength(DataType dataType) {
-        switch (dataType.getTypeRoot()) {
-            case BOOLEAN:
-            case TINYINT:
-            case SMALLINT:
-            case INTEGER:
-            case BIGINT:
-            case FLOAT:
-            case DOUBLE:
-            case DATE:
-            case TIME_WITHOUT_TIME_ZONE:
-            case CHAR:
-            case BINARY:
-            case TIMESTAMP_WITHOUT_TIME_ZONE:
-            case TIMESTAMP_WITH_LOCAL_TIME_ZONE:
-                return true;
-            case STRING:
-            case BYTES:
-                return false;
-            case DECIMAL:
-                return Decimal.isCompact(((DecimalType) dataType).getPrecision());
-            default:
-                throw new IllegalArgumentException(
-                        String.format(
-                                "Currently, Data type '%s' is not supported in indexedRow",
-                                dataType));
-        }
-    }
-
-    private static int getLength(DataType dataType) {
-        switch (dataType.getTypeRoot()) {
-            case BOOLEAN:
-            case TINYINT:
-                return 1;
-            case SMALLINT:
-                return 2;
-            case INTEGER:
-            case FLOAT:
-            case DATE:
-            case TIME_WITHOUT_TIME_ZONE:
-                return 4;
-            case BIGINT:
-            case DOUBLE:
-            case DECIMAL:
-                return 8;
-            case TIMESTAMP_WITHOUT_TIME_ZONE:
-                final int timestampNtzPrecision = getPrecision(dataType);
-                if (TimestampNtz.isCompact(timestampNtzPrecision)) {
-                    return 8;
-                } else {
-                    return 12;
-                }
-            case TIMESTAMP_WITH_LOCAL_TIME_ZONE:
-                final int timestampLtzPrecision = getPrecision(dataType);
-                if (TimestampLtz.isCompact(timestampLtzPrecision)) {
-                    return 8;
-                } else {
-                    return 12;
-                }
-            case CHAR:
-                return ((CharType) dataType).getLength();
-            case BINARY:
-                return ((BinaryType) dataType).getLength();
-            default:
-                throw new IllegalArgumentException(" Data type '%s' is not fixed length type!");
-        }
     }
 
     @Override
@@ -435,6 +377,18 @@ public class IndexedRow implements BinaryRow, NullAwareGetters {
         return bytes;
     }
 
+    @Override
+    public InternalArray getArray(int pos) {
+        assertIndexIsValid(pos);
+        int offset = getFieldOffset(pos);
+        int length = columnLengths[pos];
+        long offsetAndLength = ((long) offset << 32) | length;
+        return BinarySegmentUtils.readBinaryArray(segments, 0, offsetAndLength);
+    }
+
+    // TODO: getMap() will be added in Issue #1973
+    // TODO: getRow() will be added in Issue #1974
+
     private void assertIndexIsValid(int index) {
         assert index >= 0 : "index (" + index + ") should >= 0";
         assert index < arity : "index (" + index + ") should < " + arity;
@@ -454,6 +408,7 @@ public class IndexedRow implements BinaryRow, NullAwareGetters {
         return baseOffset;
     }
 
+    @Override
     public IndexedRow copy() {
         return copy(new IndexedRow(fieldTypes));
     }
@@ -481,5 +436,84 @@ public class IndexedRow implements BinaryRow, NullAwareGetters {
     @Override
     public int hashCode() {
         return MurmurHashUtils.hashBytes(segment, offset, sizeInBytes);
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // Static Utilities
+    // ------------------------------------------------------------------------------------------
+
+    public static int calculateBitSetWidthInBytes(int arity) {
+        return (arity + 7) / 8;
+    }
+
+    public static boolean isFixedLength(DataType dataType) {
+        switch (dataType.getTypeRoot()) {
+            case BOOLEAN:
+            case TINYINT:
+            case SMALLINT:
+            case INTEGER:
+            case BIGINT:
+            case FLOAT:
+            case DOUBLE:
+            case DATE:
+            case TIME_WITHOUT_TIME_ZONE:
+            case CHAR:
+            case BINARY:
+            case TIMESTAMP_WITHOUT_TIME_ZONE:
+            case TIMESTAMP_WITH_LOCAL_TIME_ZONE:
+                return true;
+            case STRING:
+            case BYTES:
+            case ARRAY:
+            case MAP:
+            case ROW:
+                return false;
+            case DECIMAL:
+                return Decimal.isCompact(((DecimalType) dataType).getPrecision());
+            default:
+                throw new IllegalArgumentException(
+                        String.format(
+                                "Currently, Data type '%s' is not supported in indexedRow",
+                                dataType));
+        }
+    }
+
+    private static int getLength(DataType dataType) {
+        switch (dataType.getTypeRoot()) {
+            case BOOLEAN:
+            case TINYINT:
+                return 1;
+            case SMALLINT:
+                return 2;
+            case INTEGER:
+            case FLOAT:
+            case DATE:
+            case TIME_WITHOUT_TIME_ZONE:
+                return 4;
+            case BIGINT:
+            case DOUBLE:
+            case DECIMAL:
+                return 8;
+            case TIMESTAMP_WITHOUT_TIME_ZONE:
+                final int timestampNtzPrecision = getPrecision(dataType);
+                if (TimestampNtz.isCompact(timestampNtzPrecision)) {
+                    return 8;
+                } else {
+                    return 12;
+                }
+            case TIMESTAMP_WITH_LOCAL_TIME_ZONE:
+                final int timestampLtzPrecision = getPrecision(dataType);
+                if (TimestampLtz.isCompact(timestampLtzPrecision)) {
+                    return 8;
+                } else {
+                    return 12;
+                }
+            case CHAR:
+                return ((CharType) dataType).getLength();
+            case BINARY:
+                return ((BinaryType) dataType).getLength();
+            default:
+                throw new IllegalArgumentException(" Data type '%s' is not fixed length type!");
+        }
     }
 }

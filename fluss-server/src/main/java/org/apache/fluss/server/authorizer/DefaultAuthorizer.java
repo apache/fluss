@@ -159,10 +159,6 @@ public class DefaultAuthorizer extends AbstractAuthorizer implements FatalErrorH
 
     @Override
     public void close() {
-        if (zooKeeperClient != null) {
-            zooKeeperClient.close();
-        }
-
         if (aclChangeNotificationWatcher != null) {
             aclChangeNotificationWatcher.stop();
         }

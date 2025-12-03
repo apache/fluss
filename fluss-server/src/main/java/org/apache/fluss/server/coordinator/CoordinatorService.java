@@ -33,6 +33,7 @@ import org.apache.fluss.exception.SecurityDisabledException;
 import org.apache.fluss.exception.TableAlreadyExistException;
 import org.apache.fluss.exception.TableNotPartitionedException;
 import org.apache.fluss.fs.FileSystem;
+import org.apache.fluss.lake.lakestorage.LakeCatalog;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.DeleteBehavior;
@@ -84,6 +85,7 @@ import org.apache.fluss.rpc.netty.server.Session;
 import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.security.acl.AclBinding;
 import org.apache.fluss.security.acl.AclBindingFilter;
+import org.apache.fluss.security.acl.FlussPrincipal;
 import org.apache.fluss.security.acl.OperationType;
 import org.apache.fluss.security.acl.Resource;
 import org.apache.fluss.server.DynamicConfigManager;
@@ -133,7 +135,8 @@ import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getCommitRemot
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getPartitionSpec;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeCreateAclsResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeDropAclsResponse;
-import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toTableChanges;
+import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toAlterTableConfigChanges;
+import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toAlterTableSchemaChanges;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toTablePath;
 import static org.apache.fluss.server.utils.TableAssignmentUtils.generateAssignment;
 import static org.apache.fluss.utils.PartitionUtils.validatePartitionSpec;
@@ -281,21 +284,17 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
             tableAssignment = generateAssignment(bucketCount, replicaFactor, servers);
         }
 
-        // TODO: should tolerate if the lake exist but matches our schema. This ensures eventually
-        //  consistent by idempotently creating the table multiple times. See #846
         // before create table in fluss, we may create in lake
         if (isDataLakeEnabled(tableDescriptor)) {
             try {
                 checkNotNull(lakeCatalogContainer.getLakeCatalog())
-                        .createTable(tablePath, tableDescriptor);
-            } catch (TableAlreadyExistException e) {
-                throw new LakeTableAlreadyExistException(
-                        String.format(
-                                "The table %s already exists in %s catalog, please "
-                                        + "first drop the table in %s catalog or use a new table name.",
+                        .createTable(
                                 tablePath,
-                                lakeCatalogContainer.getDataLakeFormat(),
-                                lakeCatalogContainer.getDataLakeFormat()));
+                                tableDescriptor,
+                                new DefaultLakeCatalogContext(
+                                        true, currentSession().getPrincipal()));
+            } catch (TableAlreadyExistException e) {
+                throw new LakeTableAlreadyExistException(e.getMessage(), e);
             }
         }
 
@@ -314,19 +313,35 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
             authorizer.authorize(currentSession(), OperationType.ALTER, Resource.table(tablePath));
         }
 
-        List<TableChange> tableChanges = toTableChanges(request.getConfigChangesList());
-        TablePropertyChanges tablePropertyChanges = toTablePropertyChanges(tableChanges);
+        List<TableChange> alterTableConfigChanges =
+                toAlterTableConfigChanges(request.getConfigChangesList());
+        TablePropertyChanges tablePropertyChanges = toTablePropertyChanges(alterTableConfigChanges);
+        List<TableChange> alterSchemaChanges = toAlterTableSchemaChanges(request);
 
-        LakeCatalogDynamicLoader.LakeCatalogContainer lakeCatalogContainer =
-                lakeCatalogDynamicLoader.getLakeCatalogContainer();
-        metadataManager.alterTableProperties(
-                tablePath,
-                tableChanges,
-                tablePropertyChanges,
-                request.isIgnoreIfNotExists(),
-                lakeCatalogContainer.getLakeCatalog(),
-                lakeCatalogContainer.getDataLakeFormat(),
-                lakeTableTieringManager);
+        if (!alterSchemaChanges.isEmpty() && !alterTableConfigChanges.isEmpty()) {
+            // Only support one of alterTableConfigChanges and alterSchemaChanges for atomic change.
+            throw new InvalidAlterTableException(
+                    "Table alteration can only be applied to one of the following: "
+                            + "table properties or table schema.");
+        }
+
+        if (!alterSchemaChanges.isEmpty()) {
+            metadataManager.alterTableSchema(
+                    tablePath, alterSchemaChanges, request.isIgnoreIfNotExists());
+        }
+
+        if (!alterTableConfigChanges.isEmpty()) {
+            LakeCatalogDynamicLoader.LakeCatalogContainer lakeCatalogContainer =
+                    lakeCatalogDynamicLoader.getLakeCatalogContainer();
+            metadataManager.alterTableProperties(
+                    tablePath,
+                    alterTableConfigChanges,
+                    tablePropertyChanges,
+                    request.isIgnoreIfNotExists(),
+                    lakeCatalogContainer.getLakeCatalog(),
+                    lakeTableTieringManager,
+                    new DefaultLakeCatalogContext(false, currentSession().getPrincipal()));
+        }
 
         return CompletableFuture.completedFuture(new AlterTableResponse());
     }
@@ -755,6 +770,28 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                 throw new InvalidTableException(
                         "Creation of Log Tables is disallowed in the cluster.");
             }
+        }
+    }
+
+    static class DefaultLakeCatalogContext implements LakeCatalog.Context {
+
+        private final boolean isCreatingFlussTable;
+        private final FlussPrincipal flussPrincipal;
+
+        public DefaultLakeCatalogContext(
+                boolean isCreatingFlussTable, FlussPrincipal flussPrincipal) {
+            this.isCreatingFlussTable = isCreatingFlussTable;
+            this.flussPrincipal = flussPrincipal;
+        }
+
+        @Override
+        public boolean isCreatingFlussTable() {
+            return isCreatingFlussTable;
+        }
+
+        @Override
+        public FlussPrincipal getFlussPrincipal() {
+            return flussPrincipal;
         }
     }
 }

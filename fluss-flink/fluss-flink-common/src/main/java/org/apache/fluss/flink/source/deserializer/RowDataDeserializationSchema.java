@@ -19,7 +19,6 @@ package org.apache.fluss.flink.source.deserializer;
 
 import org.apache.fluss.annotation.PublicEvolving;
 import org.apache.fluss.client.table.scanner.ScanRecord;
-import org.apache.fluss.flink.utils.FlinkConversions;
 import org.apache.fluss.flink.utils.FlussRowToFlinkRowConverter;
 import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.types.RowType;
@@ -27,6 +26,8 @@ import org.apache.fluss.types.RowType;
 import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.runtime.typeutils.InternalTypeInfo;
+
+import static org.apache.fluss.flink.utils.FlinkConversions.toFlinkRowType;
 
 /**
  * A deserialization schema that converts {@link LogRecord} objects to Flink's {@link RowData}
@@ -89,6 +90,6 @@ public class RowDataDeserializationSchema implements FlussDeserializationSchema<
     /** Returns the TypeInformation for the produced {@link RowData} type. */
     @Override
     public TypeInformation<RowData> getProducedType(RowType rowSchema) {
-        return InternalTypeInfo.of(FlinkConversions.toFlinkRowType(rowSchema));
+        return InternalTypeInfo.of(toFlinkRowType(rowSchema));
     }
 }

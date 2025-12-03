@@ -44,7 +44,7 @@ jobs:
         run: ./build_versioned_docs.sh
       - uses: actions/setup-node@v4
         with:
-          node-version: 18
+          node-version: 20
       - name: Install dependencies
         run: npm install
       - name: Test build website

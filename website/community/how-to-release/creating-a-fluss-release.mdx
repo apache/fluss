@@ -118,9 +118,9 @@ $ git push origin release-${SHORT_RELEASE_VERSION}
 ```
 
 Update the version in the Helm Chart in:
-- `docker/helm/Chart.yaml`
-- `docker/helm/values.yaml`
-- `docker/helm/README.md`
+- `helm/Chart.yaml`
+- `helm/values.yaml`
+- `helm/README.md`
 
 For example, if you are releasing a major version `0.8.0-incubating`, you should replace all the previous version `0.7.0-incubating` to the release version `0.8.0-incubating`.
 
@@ -128,7 +128,7 @@ For example, if you are releasing a major version `0.8.0-incubating`, you should
 And commit/push the version bump:
 
 ```bash
-$ git commit -m "[helm] Bump helm version to x.y.z" docker/helm/Chart.yaml docker/helm/values.yaml docker/helm/README.md
+$ git commit -m "[helm] Bump helm version to x.y.z" helm/Chart.yaml helm/values.yaml helm/README.md
 $ git push origin release-${SHORT_RELEASE_VERSION}
 ```
 
@@ -142,9 +142,9 @@ $ git checkout release-$SHORT_RELEASE_VERSION
 ```
 
 Update the version in the Helm Chart in:
-- `docker/helm/Chart.yaml`
-- `docker/helm/values.yaml`
-- `docker/helm/README.md`
+- `helm/Chart.yaml`
+- `helm/values.yaml`
+- `helm/README.md`
 
 For example, if you are releasing a bugfix version `0.8.1-incubating`, you should replace all the previous version `0.8.0-incubating` to the new version `0.8.1-incubating`.
 
@@ -152,7 +152,7 @@ For example, if you are releasing a bugfix version `0.8.1-incubating`, you shoul
 And commit/push the version bump:
 
 ```bash
-$ git commit -m "[helm] Bump helm version to x.y.z" docker/helm/Chart.yaml docker/helm/values.yaml docker/helm/README.md
+$ git commit -m "[helm] Bump helm version to x.y.z" helm/Chart.yaml helm/values.yaml helm/README.md
 $ git push origin release-${SHORT_RELEASE_VERSION}
 ```
 
@@ -225,16 +225,16 @@ $ git push origin main
 **(4) Upgrade Helm Charts version on main branch**
 
 Update the version in the Helm Chart in:
-- `docker/helm/Chart.yaml`
-- `docker/helm/values.yaml`
-- `docker/helm/README.md`
+- `helm/Chart.yaml`
+- `helm/values.yaml`
+- `helm/README.md`
 
 For example, if the next major version is `0.9.0-incubating`, you should replace all the previous version `0.8.0-incubating` to the next release version `0.9.0-incubating`.
 
 And commit/push the version bump:
 
 ```bash
-$ git commit -m "[helm] Bump helm version to x.y.z" docker/helm/Chart.yaml docker/helm/values.yaml docker/helm/README.md
+$ git commit -m "[helm] Bump helm version to x.y.z" helm/Chart.yaml helm/values.yaml helm/README.md
 $ git push origin main
 ```
 
@@ -625,11 +625,14 @@ Vote result thread:
 The release candidate:
 * https://dist.apache.org/repos/dist/dev/incubator/fluss/fluss-0.8.0-incubating-rc1/
 
+The helm chart release package:
+* https://dist.apache.org/repos/dist/dev/incubator/fluss/helm-chart/0.8.0-incubating-rc1/
+
 Git tag for the release:
-* https://github.com/apache/fluss-shaded/releases/tag/v0.8.0-incubating-rc1
+* https://github.com/apache/fluss/releases/tag/v0.8.0-incubating-rc1
 
 Git commit for the release:
-* https://github.com/apache/fluss-shaded/commit/<COMMIT>
+* https://github.com/apache/fluss/commit/<COMMIT>
 
 Maven staging repository:
 * https://repository.apache.org/content/repositories/orgapachefluss-<ID>/
@@ -768,8 +771,9 @@ Make sure that you are authenticated with your Docker ID, and that your Docker I
 :::
 
 ```bash
-docker tag apache/fluss:${RELEASE_VERSION}_RC${RC_NUM} apache/fluss:${RELEASE_VERSION}
-docker push apache/fluss:${RELEASE_VERSION}
+docker buildx imagetools create apache/fluss:${RELEASE_VERSION}-rc${RC_NUM} --tag apache/fluss:${RELEASE_VERSION}
+
+docker buildx imagetools create apache/fluss-quickstart-flink:1.20-${RELEASE_VERSION}-rc${RC_NUM} --tag apache/fluss-quickstart-flink:1.20-${RELEASE_VERSION}
 ```
 
 ### 6. Update `fluss-versions.json`
@@ -821,6 +825,10 @@ Announce on the release on the user@ mailing list, listing major improvements an
 
 Announce the release on the announce@apache.org mailing list.
 
+:::note
+Make sure use the `apache.org` email address associated with your Apache account to send the announcement emails, and use plain text format for the email body. Otherwise, the apache mailing list server may reject the email.
+:::
+
 ```
 From: Release Manager
 To: dev@fluss.apache.org, user@fluss.apache.org, announce@apache.org
@@ -835,7 +843,7 @@ https://downloads.apache.org/incubator/fluss/fluss-0.8.0-incubating/
 
 Maven artifacts for Fluss can be found at:
 
-https://central.sonatype.com/search?q=g%3Aorg.apache.fluss&smo=true
+https://search.maven.org/search?q=g:org.apache.fluss%20AND%20v:0.8.0-incubating
 
 Please check out the release blog post for an overview of this release:
 https://fluss.apache.org/blog/releases/0.8/
@@ -848,17 +856,10 @@ Regards,
 Release Manager
 ```
 
-### Recordkeeping
-
-Use [reporter.apache.org](https://reporter.apache.org/addrelease.html?fluss) to seed the information about the release into future project reports.
-
-(Note: Only PMC members have access report releases. If you do not have access, ask on the mailing list for assistance.)
-
 -------------------------
 
 ***Checklist to declare the process completed***
 - Release announced on the dev@ and user@ mailing list.
-- Release recorded in reporter.apache.org.
 - Completion declared on the dev@ mailing list.
 - Release blog post published.
 - Download page updated.

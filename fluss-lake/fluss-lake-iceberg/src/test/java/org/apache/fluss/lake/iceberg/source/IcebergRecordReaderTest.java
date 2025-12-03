@@ -153,16 +153,16 @@ class IcebergRecordReaderTest extends IcebergSourceTestBase {
         List<Row> projectExpect = new ArrayList<>();
         try (CloseableIterable<FileScanTask> fileScanTasks = tableScan.planFiles()) {
             for (FileScanTask task : fileScanTasks) {
-                org.apache.iceberg.io.CloseableIterator<Record> iterator =
-                        reader.open(task).iterator();
-                IcebergRecordAsFlussRow recordAsFlussRow = new IcebergRecordAsFlussRow();
-                projectExpect.addAll(
-                        convertToFlinkRow(
-                                projectFieldGetters,
-                                TransformingCloseableIterator.transform(
-                                        CloseableIterator.wrap(iterator),
-                                        recordAsFlussRow::replaceIcebergRecord)));
-                iterator.close();
+                try (org.apache.iceberg.io.CloseableIterator<Record> iterator =
+                        reader.open(task).iterator()) {
+                    IcebergRecordAsFlussRow recordAsFlussRow = new IcebergRecordAsFlussRow();
+                    projectExpect.addAll(
+                            convertToFlinkRow(
+                                    projectFieldGetters,
+                                    TransformingCloseableIterator.transform(
+                                            CloseableIterator.wrap(iterator),
+                                            recordAsFlussRow::replaceIcebergRecord)));
+                }
             }
         }
         assertThat(projectActual).containsExactlyInAnyOrderElementsOf(projectExpect);

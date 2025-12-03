@@ -24,6 +24,7 @@ import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.TypeUtils;
 
 import org.apache.flink.table.data.DecimalData;
+import org.apache.flink.table.data.GenericArrayData;
 import org.apache.flink.table.data.GenericRowData;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.data.StringData;
@@ -34,6 +35,7 @@ import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.time.LocalDateTime;
 
+import static org.apache.flink.table.data.binary.BinaryStringData.fromString;
 import static org.apache.fluss.flink.utils.FlinkConversions.toFlinkRowType;
 import static org.apache.fluss.row.TestInternalRowGenerator.createAllRowType;
 import static org.apache.fluss.row.indexed.IndexedRowTest.assertAllTypeEquals;
@@ -50,7 +52,7 @@ public class FlinkRowToFlussRowConverterTest {
         try (FlinkRowToFlussRowConverter converter =
                 FlinkRowToFlussRowConverter.create(toFlinkRowType(flussRowType))) {
             InternalRow internalRow = converter.toInternalRow(genRowDataForAllType());
-            assertThat(internalRow.getFieldCount()).isEqualTo(19);
+            assertThat(internalRow.getFieldCount()).isEqualTo(22);
             assertAllTypeEquals(internalRow);
         }
 
@@ -59,13 +61,13 @@ public class FlinkRowToFlussRowConverterTest {
                 FlinkRowToFlussRowConverter.create(
                         toFlinkRowType(flussRowType), KvFormat.COMPACTED)) {
             InternalRow internalRow = converter.toInternalRow(genRowDataForAllType());
-            assertThat(internalRow.getFieldCount()).isEqualTo(19);
+            assertThat(internalRow.getFieldCount()).isEqualTo(22);
             assertAllTypeEquals(internalRow);
         }
     }
 
     private static RowData genRowDataForAllType() {
-        GenericRowData genericRowData = new GenericRowData(19);
+        GenericRowData genericRowData = new GenericRowData(22);
         genericRowData.setField(0, true);
         genericRowData.setField(1, (byte) 2);
         genericRowData.setField(2, Short.parseShort("10"));
@@ -86,7 +88,25 @@ public class FlinkRowToFlussRowConverterTest {
         genericRowData.setField(
                 17,
                 TimestampData.fromLocalDateTime(LocalDateTime.parse("2023-10-25T12:01:13.182")));
-        genericRowData.setField(18, null);
+        genericRowData.setField(
+                18,
+                TimestampData.fromLocalDateTime(LocalDateTime.parse("2023-10-25T12:01:13.182")));
+        genericRowData.setField(
+                19, new GenericArrayData(new Integer[] {1, 2, 3, 4, 5, -11, null, 444, 102234}));
+        genericRowData.setField(
+                20,
+                new GenericArrayData(
+                        new float[] {0.1f, 1.1f, -0.5f, 6.6f, Float.MAX_VALUE, Float.MIN_VALUE}));
+        genericRowData.setField(
+                21,
+                new GenericArrayData(
+                        new GenericArrayData[] {
+                            new GenericArrayData(
+                                    new StringData[] {fromString("a"), null, fromString("c")}),
+                            null,
+                            new GenericArrayData(
+                                    new StringData[] {fromString("hello"), fromString("world")})
+                        }));
         return genericRowData;
     }
 }

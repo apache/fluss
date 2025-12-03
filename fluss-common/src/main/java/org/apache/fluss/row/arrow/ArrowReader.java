@@ -22,7 +22,6 @@ import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.columnar.ColumnVector;
 import org.apache.fluss.row.columnar.ColumnarRow;
 import org.apache.fluss.row.columnar.VectorizedColumnBatch;
-import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.VectorSchemaRoot;
 
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
@@ -31,21 +30,15 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
 public class ArrowReader {
 
     /**
-     * The arrow root which holds vector resources and should be released when the reader is closed.
-     */
-    private final VectorSchemaRoot root;
-
-    /**
      * An array of vectors which are responsible for the deserialization of each column of the rows.
      */
     private final ColumnVector[] columnVectors;
 
     private final int rowCount;
 
-    public ArrowReader(VectorSchemaRoot root, ColumnVector[] columnVectors) {
-        this.root = root;
+    public ArrowReader(ColumnVector[] columnVectors, int rowCount) {
         this.columnVectors = checkNotNull(columnVectors);
-        this.rowCount = root.getRowCount();
+        this.rowCount = rowCount;
     }
 
     public int getRowCount() {
@@ -55,9 +48,5 @@ public class ArrowReader {
     /** Read the {@link InternalRow} from underlying Arrow format data. */
     public ColumnarRow read(int rowId) {
         return new ColumnarRow(new VectorizedColumnBatch(columnVectors), rowId);
-    }
-
-    public void close() {
-        root.close();
     }
 }

@@ -49,7 +49,7 @@ For Flink's DataStream API, you can see [DataStream API](docs/engine-flink/datas
 Flink runs on all UNIX-like environments, i.e., Linux, Mac OS X, and Cygwin (for Windows).
 If you haven’t downloaded Flink, you can download [the binary release](https://flink.apache.org/downloads.html) of Flink, then extract the archive with the following command.
 ```shell
-tar -xzf flink-1.20.1-bin-scala_2.12.tgz
+tar -xzf flink-1.20.3-bin-scala_2.12.tgz
 ```
 - **Copy Fluss Flink Bundled Jar**
 

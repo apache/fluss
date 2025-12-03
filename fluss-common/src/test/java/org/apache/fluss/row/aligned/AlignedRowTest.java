@@ -19,9 +19,11 @@ package org.apache.fluss.row.aligned;
 
 import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.row.BinaryString;
+import org.apache.fluss.row.BinaryWriter;
 import org.apache.fluss.row.Decimal;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
+import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypes;
 
 import org.junit.jupiter.api.Test;
@@ -334,8 +336,8 @@ class AlignedRowTest {
         AlignedRowWriter writer = new AlignedRowWriter(row);
         byte[] bytes1 = new byte[] {1, -1, 5};
         byte[] bytes2 = new byte[] {1, -1, 5, 5, 1, 5, 1, 5};
-        writer.writeBinary(0, bytes1);
-        writer.writeBinary(1, bytes2);
+        writer.writeBytes(0, bytes1);
+        writer.writeBytes(1, bytes2);
         writer.complete();
 
         assertThat(row.getBinary(0, bytes1.length)).isEqualTo(bytes1);
@@ -353,7 +355,7 @@ class AlignedRowTest {
 
         writer.reset();
         random.nextBytes(bytes);
-        writer.writeBinary(0, bytes);
+        writer.writeBytes(0, bytes);
         writer.reset();
         writer.writeString(0, BinaryString.fromString("wahahah"));
         writer.complete();
@@ -361,7 +363,7 @@ class AlignedRowTest {
 
         writer.reset();
         random.nextBytes(bytes);
-        writer.writeBinary(0, bytes);
+        writer.writeBytes(0, bytes);
         writer.reset();
         writer.writeString(0, BinaryString.fromString("wahahah"));
         writer.complete();
@@ -456,9 +458,9 @@ class AlignedRowTest {
         byte[] largeBytes = new byte[] {1, -1, 5, 10, -10, 127, -128, 0, 50, -50};
         byte[] emptyBytes = new byte[0];
 
-        writer.writeBinary(0, smallBytes);
-        writer.writeBinary(1, largeBytes);
-        writer.writeBinary(2, emptyBytes);
+        writer.writeBytes(0, smallBytes);
+        writer.writeBytes(1, largeBytes);
+        writer.writeBytes(2, emptyBytes);
         writer.complete();
 
         // Test getBytes method
@@ -493,7 +495,7 @@ class AlignedRowTest {
         }
 
         writer.writeString(0, BinaryString.fromString(largeString));
-        writer.writeBinary(1, largeBytes);
+        writer.writeBytes(1, largeBytes);
         writer.writeInt(2, 42);
         writer.complete();
 
@@ -526,25 +528,40 @@ class AlignedRowTest {
     }
 
     @Test
-    public void testStaticWriteMethod() {
+    public void testValueWriter() {
+        DataType[] fieldTypes =
+                new DataType[] {
+                    DataTypes.BOOLEAN(),
+                    DataTypes.TINYINT(),
+                    DataTypes.SMALLINT(),
+                    DataTypes.INT(),
+                    DataTypes.BIGINT(),
+                    DataTypes.FLOAT(),
+                    DataTypes.DOUBLE(),
+                    DataTypes.STRING(),
+                    DataTypes.BINARY(3),
+                    DataTypes.DECIMAL(3, 2)
+                };
         AlignedRow row = new AlignedRow(10);
         AlignedRowWriter writer = new AlignedRowWriter(row);
+        BinaryWriter.ValueWriter[] fieldSetters = new BinaryWriter.ValueWriter[10];
+        for (int i = 0; i < fieldTypes.length; i++) {
+            fieldSetters[i] = BinaryWriter.createValueWriter(fieldTypes[i]);
+        }
 
         // Test static write method for different data types
-        AlignedRowWriter.write(writer, 0, true, DataTypes.BOOLEAN());
-        AlignedRowWriter.write(writer, 1, (byte) 100, DataTypes.TINYINT());
-        AlignedRowWriter.write(writer, 2, (short) 1000, DataTypes.SMALLINT());
-        AlignedRowWriter.write(writer, 3, 100000, DataTypes.INT());
-        AlignedRowWriter.write(writer, 4, 100000000L, DataTypes.BIGINT());
-        AlignedRowWriter.write(writer, 5, 3.14f, DataTypes.FLOAT());
-        AlignedRowWriter.write(writer, 6, 3.14159, DataTypes.DOUBLE());
-        AlignedRowWriter.write(writer, 7, BinaryString.fromString("hello"), DataTypes.STRING());
-        AlignedRowWriter.write(writer, 8, new byte[] {1, 2, 3}, DataTypes.BINARY(3));
-
+        fieldSetters[0].writeValue(writer, 0, true);
+        fieldSetters[1].writeValue(writer, 1, (byte) 100);
+        fieldSetters[2].writeValue(writer, 2, (short) 1000);
+        fieldSetters[3].writeValue(writer, 3, 100000);
+        fieldSetters[4].writeValue(writer, 4, 100000000L);
+        fieldSetters[5].writeValue(writer, 5, 3.14f);
+        fieldSetters[6].writeValue(writer, 6, 3.14159);
+        fieldSetters[7].writeValue(writer, 7, BinaryString.fromString("hello"));
+        fieldSetters[8].writeValue(writer, 8, new byte[] {1, 2, 3});
         // Test decimal
         Decimal decimal = Decimal.fromUnscaledLong(314, 3, 2);
-        AlignedRowWriter.write(writer, 9, decimal, DataTypes.DECIMAL(3, 2));
-
+        fieldSetters[9].writeValue(writer, 9, decimal);
         writer.complete();
 
         // Verify all written data
@@ -580,7 +597,7 @@ class AlignedRowTest {
         AlignedRowWriter maxFixedWriter = new AlignedRowWriter(maxFixedRow);
         byte[] maxFixedBytes = new byte[7];
         Arrays.fill(maxFixedBytes, (byte) 0xFF);
-        maxFixedWriter.writeBinary(0, maxFixedBytes);
+        maxFixedWriter.writeBytes(0, maxFixedBytes);
         maxFixedWriter.complete();
         assertThat(maxFixedRow.getBytes(0)).isEqualTo(maxFixedBytes);
 
@@ -589,7 +606,7 @@ class AlignedRowTest {
         AlignedRowWriter varLenWriter = new AlignedRowWriter(varLenRow);
         byte[] varLenBytes = new byte[8];
         Arrays.fill(varLenBytes, (byte) 0xAA);
-        varLenWriter.writeBinary(0, varLenBytes);
+        varLenWriter.writeBytes(0, varLenBytes);
         varLenWriter.complete();
         assertThat(varLenRow.getBytes(0)).isEqualTo(varLenBytes);
     }
@@ -701,7 +718,7 @@ class AlignedRowTest {
         writer.writeFloat(5, Float.MIN_VALUE);
         writer.writeDouble(6, Double.MAX_VALUE);
         writer.writeString(7, BinaryString.fromString("复杂测试字符串with special chars !@#$%"));
-        writer.writeBinary(8, new byte[] {-1, 0, 1, 127, -128});
+        writer.writeBytes(8, new byte[] {-1, 0, 1, 127, -128});
 
         // Test compact decimal
         writer.writeDecimal(9, Decimal.fromUnscaledLong(12345, 5, 2), 5);

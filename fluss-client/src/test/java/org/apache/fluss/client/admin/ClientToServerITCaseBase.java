@@ -117,6 +117,9 @@ public abstract class ClientToServerITCaseBase {
         // set default datalake format for the cluster and enable datalake tables
         conf.set(ConfigOptions.DATALAKE_FORMAT, DataLakeFormat.PAIMON);
 
+        conf.setString("datalake.paimon.jdbc.user", "admin");
+        conf.setString("datalake.paimon.jdbc.password", "pass");
+
         conf.set(ConfigOptions.CLIENT_WRITER_BUFFER_MEMORY_SIZE, MemorySize.parse("1mb"));
         conf.set(ConfigOptions.CLIENT_WRITER_BATCH_SIZE, MemorySize.parse("1kb"));
         conf.set(ConfigOptions.MAX_PARTITION_NUM, 10);
@@ -235,6 +238,10 @@ public abstract class ClientToServerITCaseBase {
         for (int i = 0; i < expectBucketCount; i++) {
             FLUSS_CLUSTER_EXTENSION.waitUntilAllReplicaReady(new TableBucket(tableId, i));
         }
+    }
+
+    public static void waitAllSchemaSync(TablePath tablePath, int schemaId) {
+        FLUSS_CLUSTER_EXTENSION.waitAllSchemaSync(tablePath, schemaId);
     }
 
     protected static void verifyRows(

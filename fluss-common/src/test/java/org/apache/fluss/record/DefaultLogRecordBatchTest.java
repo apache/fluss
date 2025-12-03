@@ -18,6 +18,9 @@
 package org.apache.fluss.record;
 
 import org.apache.fluss.memory.UnmanagedPagedOutputView;
+import org.apache.fluss.metadata.Schema;
+import org.apache.fluss.metadata.SchemaGetter;
+import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.row.TestInternalRowGenerator;
 import org.apache.fluss.row.indexed.IndexedRow;
 import org.apache.fluss.testutils.DataTestUtils;
@@ -87,10 +90,15 @@ public class DefaultLogRecordBatchTest extends LogTestBase {
         assertThat(logRecordBatch.isValid()).isTrue();
         assertThat(logRecordBatch.schemaId()).isEqualTo(schemaId);
 
+        SchemaGetter schemaGetter =
+                new TestingSchemaGetter(
+                        new SchemaInfo(
+                                Schema.newBuilder().fromRowType(allRowType).build(), schemaId));
         // verify record.
         int i = 0;
         try (LogRecordReadContext readContext =
-                        LogRecordReadContext.createIndexedReadContext(allRowType, schemaId);
+                        LogRecordReadContext.createIndexedReadContext(
+                                allRowType, schemaId, schemaGetter);
                 CloseableIterator<LogRecord> iter = logRecordBatch.records(readContext)) {
             while (iter.hasNext()) {
                 LogRecord record = iter.next();
@@ -125,8 +133,13 @@ public class DefaultLogRecordBatchTest extends LogTestBase {
         assertThat(logRecordBatch.lastLogOffset()).isEqualTo(0);
         assertThat(logRecordBatch.nextLogOffset()).isEqualTo(1);
         assertThat(logRecordBatch.baseLogOffset()).isEqualTo(0);
+        SchemaGetter schemaGetter =
+                new TestingSchemaGetter(
+                        new SchemaInfo(
+                                Schema.newBuilder().fromRowType(baseRowType).build(), schemaId));
         try (LogRecordReadContext readContext =
-                        LogRecordReadContext.createIndexedReadContext(baseRowType, schemaId);
+                        LogRecordReadContext.createIndexedReadContext(
+                                baseRowType, schemaId, schemaGetter);
                 CloseableIterator<LogRecord> iter = logRecordBatch.records(readContext)) {
             assertThat(iter.hasNext()).isFalse();
         }
@@ -153,8 +166,10 @@ public class DefaultLogRecordBatchTest extends LogTestBase {
         assertThat(logRecordBatch.lastLogOffset()).isEqualTo(100);
         assertThat(logRecordBatch.nextLogOffset()).isEqualTo(101);
         assertThat(logRecordBatch.baseLogOffset()).isEqualTo(100);
+
         try (LogRecordReadContext readContext =
-                        LogRecordReadContext.createIndexedReadContext(baseRowType, schemaId);
+                        LogRecordReadContext.createIndexedReadContext(
+                                baseRowType, schemaId, schemaGetter);
                 CloseableIterator<LogRecord> iter = logRecordBatch.records(readContext)) {
             assertThat(iter.hasNext()).isFalse();
         }

@@ -22,12 +22,14 @@ import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.Schema;
+import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.record.ChangeType;
 import org.apache.fluss.record.FileLogRecords;
 import org.apache.fluss.record.LogRecordReadContext;
+import org.apache.fluss.record.TestingSchemaGetter;
 import org.apache.fluss.remote.RemoteLogSegment;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.types.DataTypes;
@@ -55,6 +57,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import static org.apache.fluss.record.TestData.DATA2;
 import static org.apache.fluss.record.TestData.DATA2_PHYSICAL_TABLE_PATH;
 import static org.apache.fluss.record.TestData.DATA2_ROW_TYPE;
+import static org.apache.fluss.record.TestData.DATA2_SCHEMA;
 import static org.apache.fluss.record.TestData.DATA2_TABLE_ID;
 import static org.apache.fluss.record.TestData.DATA2_TABLE_INFO;
 import static org.apache.fluss.record.TestData.DATA2_TABLE_PATH;
@@ -69,6 +72,7 @@ class RemoteCompletedFetchTest {
     private LogRecordReadContext remoteReadContext;
     private @TempDir File tempDir;
     private TableInfo tableInfo;
+    private SchemaGetter schemaGetter;
 
     @BeforeEach
     void beforeEach() {
@@ -79,8 +83,10 @@ class RemoteCompletedFetchTest {
         scanBuckets.put(new TableBucket(DATA2_TABLE_ID, 2), 0L);
         logScannerStatus = new LogScannerStatus();
         logScannerStatus.assignScanBuckets(scanBuckets);
+        schemaGetter = new TestingSchemaGetter(DEFAULT_SCHEMA_ID, DATA2_SCHEMA);
         remoteReadContext =
-                LogRecordReadContext.createArrowReadContext(DATA2_ROW_TYPE, DEFAULT_SCHEMA_ID);
+                LogRecordReadContext.createArrowReadContext(
+                        DATA2_ROW_TYPE, DEFAULT_SCHEMA_ID, schemaGetter);
     }
 
     @AfterEach
@@ -220,7 +226,10 @@ class RemoteCompletedFetchTest {
                 createFileLogRecords(tableBucket, DATA2_PHYSICAL_TABLE_PATH, DATA2, logFormat);
         RemoteCompletedFetch completedFetch =
                 makeCompletedFetch(
-                        tableBucket, fileLogRecords, fetchOffset, Projection.of(new int[] {0, 2}));
+                        tableBucket,
+                        fileLogRecords,
+                        fetchOffset,
+                        Projection.of(new int[] {0, 2}, schema));
 
         List<ScanRecord> scanRecords = completedFetch.fetchRecords(8);
         List<Object[]> expectedObjects =
@@ -246,7 +255,10 @@ class RemoteCompletedFetchTest {
 
         completedFetch =
                 makeCompletedFetch(
-                        tableBucket, fileLogRecords, fetchOffset, Projection.of(new int[] {2, 0}));
+                        tableBucket,
+                        fileLogRecords,
+                        fetchOffset,
+                        Projection.of(new int[] {2, 0}, schema));
         scanRecords = completedFetch.fetchRecords(8);
         assertThat(scanRecords.size()).isEqualTo(8);
         for (int i = 0; i < scanRecords.size(); i++) {
@@ -292,7 +304,7 @@ class RemoteCompletedFetchTest {
                 tableBucket,
                 fileLogRecords,
                 10L,
-                LogRecordReadContext.createReadContext(tableInfo, true, projection),
+                LogRecordReadContext.createReadContext(tableInfo, true, projection, schemaGetter),
                 logScannerStatus,
                 true,
                 fetchOffset,

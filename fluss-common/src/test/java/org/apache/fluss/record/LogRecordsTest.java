@@ -17,6 +17,8 @@
 
 package org.apache.fluss.record;
 
+import org.apache.fluss.metadata.Schema;
+import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.row.TestInternalRowGenerator;
 import org.apache.fluss.row.indexed.IndexedRow;
 import org.apache.fluss.testutils.DataTestUtils;
@@ -75,8 +77,10 @@ final class LogRecordsTest extends LogTestBase {
 
         assertThat(iterator.hasNext()).isTrue();
         assertThat(memoryIterator.hasNext()).isTrue();
+        SchemaGetter schemaGetter =
+                new TestingSchemaGetter(1, Schema.newBuilder().fromRowType(baseRowType).build());
         assertIndexedLogRecordBatchAndRowEquals(
-                iterator.next(), memoryIterator.next(), baseRowType, rows1);
+                iterator.next(), memoryIterator.next(), baseRowType, rows1, schemaGetter);
 
         assertThat(iterator.hasNext()).isFalse();
         assertThat(memoryIterator.hasNext()).isFalse();
@@ -98,8 +102,10 @@ final class LogRecordsTest extends LogTestBase {
 
         assertThat(iterator.hasNext()).isTrue();
         assertThat(memoryIterator.hasNext()).isTrue();
+        SchemaGetter schemaGetter =
+                new TestingSchemaGetter(1, Schema.newBuilder().fromRowType(allRowType).build());
         assertIndexedLogRecordBatchAndRowEquals(
-                iterator.next(), memoryIterator.next(), allRowType, rows1);
+                iterator.next(), memoryIterator.next(), allRowType, rows1, schemaGetter);
 
         assertThat(iterator.hasNext()).isFalse();
         assertThat(memoryIterator.hasNext()).isFalse();

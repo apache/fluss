@@ -28,10 +28,12 @@ public abstract class AbstractLookupQuery<T> {
 
     private final TableBucket tableBucket;
     private final byte[] key;
+    private int retries;
 
     public AbstractLookupQuery(TableBucket tableBucket, byte[] key) {
         this.tableBucket = tableBucket;
         this.key = key;
+        this.retries = 0;
     }
 
     public byte[] key() {
@@ -40,6 +42,14 @@ public abstract class AbstractLookupQuery<T> {
 
     public TableBucket tableBucket() {
         return tableBucket;
+    }
+
+    public int retries() {
+        return retries;
+    }
+
+    public void incrementRetries() {
+        retries++;
     }
 
     public abstract LookupType lookupType();

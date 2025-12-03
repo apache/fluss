@@ -45,6 +45,7 @@ class AppendWriterImpl extends AbstractTableWriter implements AppendWriter {
     private final LogFormat logFormat;
     private final IndexedRowEncoder indexedRowEncoder;
     private final FieldGetter[] fieldGetters;
+    private final TableInfo tableInfo;
 
     AppendWriterImpl(TablePath tablePath, TableInfo tableInfo, WriterClient writerClient) {
         super(tablePath, tableInfo, writerClient);
@@ -60,6 +61,7 @@ class AppendWriterImpl extends AbstractTableWriter implements AppendWriter {
         this.logFormat = tableInfo.getTableConfig().getLogFormat();
         this.indexedRowEncoder = new IndexedRowEncoder(tableInfo.getRowType());
         this.fieldGetters = InternalRow.createFieldGetters(tableInfo.getRowType());
+        this.tableInfo = tableInfo;
     }
 
     /**
@@ -77,10 +79,10 @@ class AppendWriterImpl extends AbstractTableWriter implements AppendWriter {
         final WriteRecord record;
         if (logFormat == LogFormat.INDEXED) {
             IndexedRow indexedRow = encodeIndexedRow(row);
-            record = WriteRecord.forIndexedAppend(physicalPath, indexedRow, bucketKey);
+            record = WriteRecord.forIndexedAppend(tableInfo, physicalPath, indexedRow, bucketKey);
         } else {
             // ARROW format supports general internal row
-            record = WriteRecord.forArrowAppend(physicalPath, row, bucketKey);
+            record = WriteRecord.forArrowAppend(tableInfo, physicalPath, row, bucketKey);
         }
         return send(record).thenApply(ignored -> APPEND_SUCCESS);
     }

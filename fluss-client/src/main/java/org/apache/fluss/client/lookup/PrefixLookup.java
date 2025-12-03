@@ -23,7 +23,8 @@ import org.apache.fluss.row.InternalRow;
 import java.util.List;
 
 /**
- * Used to describe the operation to prefix lookup by {@link PrefixLookuper} to a primary key table.
+ * Used to describe the operation to prefix lookup by {@link PrefixKeyLookuper} to a primary key
+ * table.
  *
  * @since 0.6
  */
@@ -37,7 +38,7 @@ public class PrefixLookup {
      * <p>For partitioned table, the lookupColumnNames exclude partition fields should be a prefix
      * of primary key exclude partition fields.
      *
-     * <p>See {@link PrefixLookuper#prefixLookup(InternalRow)} for more details.
+     * <p>See {@link PrefixKeyLookuper#lookup(InternalRow)} for more details.
      */
     private final List<String> lookupColumnNames;
 

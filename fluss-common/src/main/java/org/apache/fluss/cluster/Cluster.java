@@ -20,7 +20,6 @@ package org.apache.fluss.cluster;
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.metadata.PhysicalTablePath;
-import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
@@ -159,17 +158,6 @@ public final class Cluster {
         return aliveTabletServers;
     }
 
-    /**
-     * Get the table id for this table.
-     *
-     * @param tablePath the table path
-     * @return the table id, if metadata cache contains the table path, return the table path,
-     *     otherwise return {@link TableInfo#UNKNOWN_TABLE_ID}
-     */
-    public long getTableId(TablePath tablePath) {
-        return tableIdByPath.getOrDefault(tablePath, TableInfo.UNKNOWN_TABLE_ID);
-    }
-
     /** Get the table path for this table id. */
     public Optional<TablePath> getTablePath(long tableId) {
         return Optional.ofNullable(pathByTableId.get(tableId));
@@ -183,10 +171,6 @@ public final class Cluster {
                                         "table path not found for tableId "
                                                 + tableId
                                                 + " in cluster"));
-    }
-
-    public int getBucketCount(TablePath tablePath) {
-        return tableInfoByPath.get(tablePath).getNumBuckets();
     }
 
     /** Get the bucket location for this table-bucket. */
@@ -224,9 +208,17 @@ public final class Cluster {
         return availableLocationsByPath.getOrDefault(physicalTablePath, Collections.emptyList());
     }
 
-    /** Get the table info for this table. */
+    /**
+     * Get the table info for this table.
+     *
+     * <p>TODO this method need to be remove, use Admin getTableInfo instead.
+     */
     public Optional<TableInfo> getTable(TablePath tablePath) {
         return Optional.ofNullable(tableInfoByPath.get(tablePath));
+    }
+
+    public Optional<Long> getTableId(TablePath tablePath) {
+        return Optional.ofNullable(tableIdByPath.get(tablePath));
     }
 
     /** Get the partition id for this partition. */
@@ -234,31 +226,13 @@ public final class Cluster {
         return Optional.ofNullable(partitionsIdByPath.get(physicalTablePath));
     }
 
-    /** Return whether the cluster contains the given physical table path or not. */
-    public boolean contains(PhysicalTablePath physicalTablePath) {
-        if (physicalTablePath.getPartitionName() == null) {
-            return getTable(physicalTablePath.getTablePath()).isPresent();
-        } else {
-            return getPartitionId(physicalTablePath).isPresent();
-        }
-    }
-
-    public TableInfo getTableOrElseThrow(TablePath tablePath) {
-        return getTable(tablePath)
-                .orElseThrow(
-                        () ->
-                                new IllegalArgumentException(
-                                        String.format(
-                                                "table: %s not found in cluster", tablePath)));
-    }
-
-    public TableBucket getTableBucket(PhysicalTablePath physicalTablePath, int bucketId) {
-        TableInfo tableInfo = getTableOrElseThrow(physicalTablePath.getTablePath());
+    public TableBucket getTableBucket(
+            long tableId, PhysicalTablePath physicalTablePath, int bucketId) {
         if (physicalTablePath.getPartitionName() != null) {
             Long partitionId = getPartitionIdOrElseThrow(physicalTablePath);
-            return new TableBucket(tableInfo.getTableId(), partitionId, bucketId);
+            return new TableBucket(tableId, partitionId, bucketId);
         } else {
-            return new TableBucket(tableInfo.getTableId(), bucketId);
+            return new TableBucket(tableId, bucketId);
         }
     }
 
@@ -284,12 +258,6 @@ public final class Cluster {
 
     public Optional<String> getPartitionName(long partitionId) {
         return Optional.ofNullable(partitionNameById.get(partitionId));
-    }
-
-    /** Get the latest schema for the given table. */
-    public Optional<SchemaInfo> getSchema(TablePath tablePath) {
-        return getTable(tablePath)
-                .map(tableInfo -> new SchemaInfo(tableInfo.getSchema(), tableInfo.getSchemaId()));
     }
 
     /** Get the table path to table id map. */

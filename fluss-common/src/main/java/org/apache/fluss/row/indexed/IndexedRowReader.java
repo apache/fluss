@@ -22,6 +22,7 @@ import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.row.BinarySegmentUtils;
 import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.Decimal;
+import org.apache.fluss.row.InternalArray;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
 import org.apache.fluss.types.DataType;
@@ -199,6 +200,14 @@ public class IndexedRowReader {
         return Arrays.copyOfRange(bytes, 0, newLen);
     }
 
+    public InternalArray readArray() {
+        int length = readVarLengthFromVarLengthList();
+        MemorySegment[] segments = new MemorySegment[] {segment};
+        InternalArray array = BinarySegmentUtils.readBinaryArray(segments, position, length);
+        position += length;
+        return array;
+    }
+
     /**
      * Creates an accessor for reading elements.
      *
@@ -258,6 +267,17 @@ public class IndexedRowReader {
                 final int timestampLtzPrecision = getPrecision(fieldType);
                 fieldReader = (reader, pos) -> reader.readTimestampLtz(timestampLtzPrecision);
                 break;
+            case ARRAY:
+                fieldReader = (reader, pos) -> reader.readArray();
+                break;
+            case MAP:
+                // TODO: Map type support will be added in Issue #1973
+                throw new UnsupportedOperationException(
+                        "Map type for Indexed row format is not supported yet.");
+            case ROW:
+                // TODO: Row type support will be added in Issue #1974
+                throw new UnsupportedOperationException(
+                        "Row type for Indexed row format is not supported yet.");
             default:
                 throw new IllegalArgumentException("Unsupported type for IndexedRow: " + fieldType);
         }

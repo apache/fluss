@@ -262,7 +262,6 @@ public class PushdownUtils {
             Configuration flussConfig,
             RowType sourceOutputType,
             int[] primaryKeyIndexes,
-            int lookupMaxRetryTimes,
             @Nullable int[] projectedFields) {
         LookupNormalizer lookupNormalizer =
                 createPrimaryKeyLookupNormalizer(primaryKeyIndexes, sourceOutputType);
@@ -271,7 +270,6 @@ public class PushdownUtils {
                         flussConfig,
                         tablePath,
                         sourceOutputType,
-                        lookupMaxRetryTimes,
                         lookupNormalizer,
                         projectedFields);
         try {

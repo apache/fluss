@@ -154,24 +154,23 @@
             <build>
                 <plugins>
                     <plugin>
+                        <artifactId>maven-clean-plugin</artifactId>
+                        <configuration>
+                            <filesets>
+                                <fileset>
+                                    <directory>${project.basedir}/..</directory>
+                                    <includes>
+                                        <include>build-target</include>
+                                    </includes>
+                                </fileset>
+                            </filesets>
+                        </configuration>
+                    </plugin>
+                    <plugin>
                         <groupId>org.codehaus.mojo</groupId>
                         <artifactId>exec-maven-plugin</artifactId>
-                        <version>1.5.0</version>
+                        <version>3.1.0</version>
                         <executions>
-                            <execution>
-                                <id>remove-build-target-link</id>
-                                <phase>clean</phase>
-                                <goals>
-                                    <goal>exec</goal>
-                                </goals>
-                                <configuration>
-                                    <executable>rm</executable>
-                                    <arguments>
-                                        <argument>-f</argument>
-                                        <argument>${project.basedir}/../build-target</argument>
-                                    </arguments>
-                                </configuration>
-                            </execution>
                             <execution>
                                 <id>create-build-target-link</id>
                                 <phase>package</phase>

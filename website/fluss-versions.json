@@ -10,8 +10,8 @@
     "versionName": "version-0.8",
     "fullVersion": "0.8.0-incubating",
     "shortVersion": "0.8",
-    "dockerVersion": "0.8.0-incubating-rc1",
-    "released": false
+    "dockerVersion": "0.8.0-incubating",
+    "released": true
   },
   {
     "versionName": "version-0.7",

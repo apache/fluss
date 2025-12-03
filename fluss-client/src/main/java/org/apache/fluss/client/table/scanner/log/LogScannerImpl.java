@@ -24,6 +24,7 @@ import org.apache.fluss.client.table.scanner.RemoteFileDownloader;
 import org.apache.fluss.client.table.scanner.ScanRecord;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.WakeupException;
+import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
@@ -82,7 +83,8 @@ public class LogScannerImpl implements LogScanner {
             MetadataUpdater metadataUpdater,
             ClientMetricGroup clientMetricGroup,
             RemoteFileDownloader remoteFileDownloader,
-            @Nullable int[] projectedFields) {
+            @Nullable int[] projectedFields,
+            SchemaGetter schemaGetter) {
         this.tablePath = tableInfo.getTablePath();
         this.tableId = tableInfo.getTableId();
         this.isPartitionedTable = tableInfo.isPartitioned();
@@ -100,7 +102,8 @@ public class LogScannerImpl implements LogScanner {
                         conf,
                         metadataUpdater,
                         scannerMetricGroup,
-                        remoteFileDownloader);
+                        remoteFileDownloader,
+                        schemaGetter);
     }
 
     /**
@@ -120,7 +123,7 @@ public class LogScannerImpl implements LogScanner {
                                     + tableRowType);
                 }
             }
-            return Projection.of(projectedFields);
+            return Projection.of(projectedFields, tableInfo.getSchema());
         } else {
             return null;
         }

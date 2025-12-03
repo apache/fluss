@@ -18,6 +18,7 @@
 package org.apache.fluss.client.lookup;
 
 import org.apache.fluss.client.metadata.MetadataUpdater;
+import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.TableInfo;
 
 import javax.annotation.Nullable;
@@ -28,22 +29,28 @@ import java.util.List;
 public class TableLookup implements Lookup {
 
     private final TableInfo tableInfo;
+    private final SchemaGetter schemaGetter;
     private final MetadataUpdater metadataUpdater;
     private final LookupClient lookupClient;
 
     @Nullable private final List<String> lookupColumnNames;
 
     public TableLookup(
-            TableInfo tableInfo, MetadataUpdater metadataUpdater, LookupClient lookupClient) {
-        this(tableInfo, metadataUpdater, lookupClient, null);
+            TableInfo tableInfo,
+            SchemaGetter schemaGetter,
+            MetadataUpdater metadataUpdater,
+            LookupClient lookupClient) {
+        this(tableInfo, schemaGetter, metadataUpdater, lookupClient, null);
     }
 
     private TableLookup(
             TableInfo tableInfo,
+            SchemaGetter schemaGetter,
             MetadataUpdater metadataUpdater,
             LookupClient lookupClient,
             @Nullable List<String> lookupColumnNames) {
         this.tableInfo = tableInfo;
+        this.schemaGetter = schemaGetter;
         this.metadataUpdater = metadataUpdater;
         this.lookupClient = lookupClient;
         this.lookupColumnNames = lookupColumnNames;
@@ -51,16 +58,17 @@ public class TableLookup implements Lookup {
 
     @Override
     public Lookup lookupBy(List<String> lookupColumnNames) {
-        return new TableLookup(tableInfo, metadataUpdater, lookupClient, lookupColumnNames);
+        return new TableLookup(
+                tableInfo, schemaGetter, metadataUpdater, lookupClient, lookupColumnNames);
     }
 
     @Override
     public Lookuper createLookuper() {
         if (lookupColumnNames == null) {
-            return new PrimaryKeyLookuper(tableInfo, metadataUpdater, lookupClient);
+            return new PrimaryKeyLookuper(tableInfo, schemaGetter, metadataUpdater, lookupClient);
         } else {
             return new PrefixKeyLookuper(
-                    tableInfo, metadataUpdater, lookupClient, lookupColumnNames);
+                    tableInfo, schemaGetter, metadataUpdater, lookupClient, lookupColumnNames);
         }
     }
 }

@@ -19,10 +19,13 @@ package org.apache.fluss.record;
 
 import org.apache.fluss.annotation.PublicEvolving;
 import org.apache.fluss.metadata.LogFormat;
+import org.apache.fluss.row.ProjectedRow;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.VectorSchemaRoot;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.CloseableIterator;
+
+import javax.annotation.Nullable;
 
 import java.util.Iterator;
 
@@ -195,5 +198,18 @@ public interface LogRecordBatch {
 
         /** Gets the buffer allocator. */
         BufferAllocator getBufferAllocator();
+
+        /**
+         * If the read context defines an output projection (for example, log records may add new
+         * columns or reorder columns, but reader need a static schema for the output rows), return
+         * a {@link ProjectedRow} that describes the projected output row for the given schemaId.
+         * The returned object is used by readers to transform or materialize rows according to the
+         * output projection. Returns {@code null} if no output projection is configured.
+         *
+         * @param schemaId the current row schema id
+         * @return a {@link ProjectedRow} describing the output projection, or {@code null} if none
+         */
+        @Nullable
+        ProjectedRow getOutputProjectedRow(int schemaId);
     }
 }

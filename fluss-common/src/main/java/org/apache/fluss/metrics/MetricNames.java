@@ -143,12 +143,17 @@ public class MetricNames {
     // --------------------------------------------------------------------------------------------
     // metrics for rpc client
     // --------------------------------------------------------------------------------------------
-    public static final String CLIENT_REQUESTS_RATE = "requestsPerSecond";
-    public static final String CLIENT_RESPONSES_RATE = "responsesPerSecond";
-    public static final String CLIENT_BYTES_IN_RATE = "bytesInPerSecond";
-    public static final String CLIENT_BYTES_OUT_RATE = "bytesOutPerSecond";
-    public static final String CLIENT_REQUEST_LATENCY_MS = "requestLatencyMs";
-    public static final String CLIENT_REQUESTS_IN_FLIGHT = "requestsInFlight";
+    public static final String CLIENT_REQUESTS_RATE_AVG = "requestsPerSecond_avg";
+    public static final String CLIENT_REQUESTS_RATE_TOTAL = "requestsPerSecond_total";
+    public static final String CLIENT_RESPONSES_RATE_AVG = "responsesPerSecond_avg";
+    public static final String CLIENT_RESPONSES_RATE_TOTAL = "responsesPerSecond_total";
+    public static final String CLIENT_BYTES_IN_RATE_AVG = "bytesInPerSecond_avg";
+    public static final String CLIENT_BYTES_IN_RATE_TOTAL = "bytesInPerSecond_total";
+    public static final String CLIENT_BYTES_OUT_RATE_AVG = "bytesOutPerSecond_avg";
+    public static final String CLIENT_BYTES_OUT_RATE_TOTAL = "bytesOutPerSecond_total";
+    public static final String CLIENT_REQUEST_LATENCY_MS_AVG = "requestLatencyMs_avg";
+    public static final String CLIENT_REQUEST_LATENCY_MS_MAX = "requestLatencyMs_max";
+    public static final String CLIENT_REQUESTS_IN_FLIGHT_TOTAL = "requestsInFlight_total";
 
     // --------------------------------------------------------------------------------------------
     // metrics for client

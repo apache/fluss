@@ -18,54 +18,41 @@
 package org.apache.fluss.row.arrow.writers;
 
 import org.apache.fluss.annotation.Internal;
+import org.apache.fluss.row.DataGetters;
 import org.apache.fluss.row.Decimal;
-import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.DecimalVector;
 
 import java.math.BigDecimal;
 
 /** {@link ArrowFieldWriter} for Decimal. */
 @Internal
-public class ArrowDecimalWriter extends ArrowFieldWriter<InternalRow> {
-
-    public static ArrowDecimalWriter forField(
-            DecimalVector decimalVector, int precision, int scale) {
-        return new ArrowDecimalWriter(decimalVector, precision, scale);
-    }
+public class ArrowDecimalWriter extends ArrowFieldWriter {
 
     private final int precision;
     private final int scale;
 
-    private ArrowDecimalWriter(DecimalVector decimalVector, int precision, int scale) {
+    public ArrowDecimalWriter(DecimalVector decimalVector, int precision, int scale) {
         super(decimalVector);
         this.precision = precision;
         this.scale = scale;
     }
 
     @Override
-    public void doWrite(InternalRow row, int ordinal, boolean handleSafe) {
-        DecimalVector vector = (DecimalVector) getValueVector();
-        if (isNullAt(row, ordinal)) {
-            vector.setNull(getCount());
+    public void doWrite(int rowIndex, DataGetters row, int ordinal, boolean handleSafe) {
+        DecimalVector vector = (DecimalVector) fieldVector;
+        BigDecimal bigDecimal = readDecimal(row, ordinal).toBigDecimal();
+        if (bigDecimal == null) {
+            vector.setNull(rowIndex);
         } else {
-            BigDecimal bigDecimal = readDecimal(row, ordinal).toBigDecimal();
-            if (bigDecimal == null) {
-                vector.setNull(getCount());
+            if (handleSafe) {
+                vector.setSafe(rowIndex, bigDecimal);
             } else {
-                if (handleSafe) {
-                    vector.setSafe(getCount(), bigDecimal);
-                } else {
-                    vector.set(getCount(), bigDecimal);
-                }
+                vector.set(rowIndex, bigDecimal);
             }
         }
     }
 
-    private boolean isNullAt(InternalRow row, int ordinal) {
-        return row.isNullAt(ordinal);
-    }
-
-    private Decimal readDecimal(InternalRow row, int ordinal) {
+    private Decimal readDecimal(DataGetters row, int ordinal) {
         return row.getDecimal(ordinal, precision, scale);
     }
 }

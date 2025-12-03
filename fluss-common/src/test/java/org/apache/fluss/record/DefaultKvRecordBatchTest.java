@@ -27,6 +27,7 @@ import org.junit.jupiter.api.Test;
 import java.util.ArrayList;
 import java.util.List;
 
+import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test for {@link DefaultKvRecordBatch}. */
@@ -67,7 +68,7 @@ class DefaultKvRecordBatchTest extends KvTestBase {
         for (KvRecord record :
                 kvRecords.records(
                         KvRecordReadContext.createReadContext(
-                                KvFormat.COMPACTED, baseRowFieldTypes))) {
+                                KvFormat.COMPACTED, new TestingSchemaGetter(1, DATA1_SCHEMA)))) {
             assertThat(keyToBytes(record)).isEqualTo(keys.get(i));
             assertThat(record.getRow()).isEqualTo(rows.get(i));
             i++;

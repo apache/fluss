@@ -40,6 +40,7 @@ import java.util.Arrays;
 import java.util.Optional;
 import java.util.stream.Collectors;
 
+import static org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.common.ZKConfig.JUTE_MAXBUFFER;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /** Class containing helper functions to interact with ZooKeeper. */
@@ -104,11 +105,12 @@ public class ZooKeeperUtils {
                     new SessionConnectionStateErrorPolicy());
         }
 
+        ZKClientConfig zkClientConfig;
         Optional<String> configPath =
                 configuration.getOptional(ConfigOptions.ZOOKEEPER_CONFIG_PATH);
         if (configPath.isPresent()) {
             try {
-                ZKClientConfig zkClientConfig = new ZKClientConfig(configPath.get());
+                zkClientConfig = new ZKClientConfig(configPath.get());
                 curatorFrameworkBuilder.zkClientConfig(zkClientConfig);
             } catch (QuorumPeerConfig.ConfigException e) {
                 LOG.warn("Fail to load zookeeper client config from path {}", configPath.get(), e);
@@ -118,7 +120,14 @@ public class ZooKeeperUtils {
                                 configPath.get()),
                         e);
             }
+        } else {
+            zkClientConfig = new ZKClientConfig();
         }
+        // set jute.max buffer
+        zkClientConfig.setProperty(
+                JUTE_MAXBUFFER,
+                String.valueOf(configuration.getInt(ConfigOptions.ZOOKEEPER_MAX_BUFFER_SIZE)));
+
         return new ZooKeeperClient(
                 startZookeeperClient(curatorFrameworkBuilder, fatalErrorHandler), configuration);
     }

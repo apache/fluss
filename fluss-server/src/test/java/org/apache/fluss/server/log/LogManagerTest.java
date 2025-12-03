@@ -114,10 +114,10 @@ final class LogManagerTest extends LogTestBase {
         ZOO_KEEPER_EXTENSION_WRAPPER.getCustomExtension().cleanupRoot();
         zkClient.registerTable(
                 tablePath1, TableRegistration.newTable(DATA1_TABLE_ID, DATA1_TABLE_DESCRIPTOR));
-        zkClient.registerSchema(tablePath1, DATA1_SCHEMA);
+        zkClient.registerFirstSchema(tablePath1, DATA1_SCHEMA);
         zkClient.registerTable(
                 tablePath2, TableRegistration.newTable(DATA2_TABLE_ID, DATA2_TABLE_DESCRIPTOR));
-        zkClient.registerSchema(tablePath2, DATA2_SCHEMA);
+        zkClient.registerFirstSchema(tablePath2, DATA2_SCHEMA);
     }
 
     static List<String> partitionProvider() {

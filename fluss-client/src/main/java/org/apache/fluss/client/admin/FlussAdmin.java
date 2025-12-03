@@ -88,8 +88,8 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
-import java.util.stream.Collectors;
 
+import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeAlterTableRequest;
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeCreatePartitionRequest;
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeDropPartitionRequest;
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeListOffsetsRequest;
@@ -248,18 +248,8 @@ public class FlussAdmin implements Admin {
     public CompletableFuture<Void> alterTable(
             TablePath tablePath, List<TableChange> tableChanges, boolean ignoreIfNotExists) {
         tablePath.validate();
-        AlterTableRequest request = new AlterTableRequest();
-
-        List<PbAlterConfig> pbFlussTableChanges =
-                tableChanges.stream()
-                        .map(ClientRpcMessageUtils::toPbAlterConfigs)
-                        .collect(Collectors.toList());
-
-        request.addAllConfigChanges(pbFlussTableChanges)
-                .setIgnoreIfNotExists(ignoreIfNotExists)
-                .setTablePath()
-                .setDatabaseName(tablePath.getDatabaseName())
-                .setTableName(tablePath.getTableName());
+        AlterTableRequest request =
+                makeAlterTableRequest(tablePath, tableChanges, ignoreIfNotExists);
         return gateway.alterTable(request).thenApply(r -> null);
     }
 
@@ -420,7 +410,8 @@ public class FlussAdmin implements Admin {
             OffsetSpec offsetSpec) {
         Long partitionId = null;
         metadataUpdater.updateTableOrPartitionMetadata(physicalTablePath.getTablePath(), null);
-        long tableId = metadataUpdater.getTableId(physicalTablePath.getTablePath());
+        TableInfo tableInfo = getTableInfo(physicalTablePath.getTablePath()).join();
+
         // if partition name is not null, we need to check and update partition metadata
         if (physicalTablePath.getPartitionName() != null) {
             metadataUpdater.updatePhysicalTableMetadata(Collections.singleton(physicalTablePath));
@@ -428,7 +419,7 @@ public class FlussAdmin implements Admin {
         }
         Map<Integer, ListOffsetsRequest> requestMap =
                 prepareListOffsetsRequests(
-                        metadataUpdater, tableId, partitionId, buckets, offsetSpec);
+                        metadataUpdater, tableInfo.getTableId(), partitionId, buckets, offsetSpec);
         Map<Integer, CompletableFuture<Long>> bucketToOffsetMap = MapUtils.newConcurrentHashMap();
         for (int bucket : buckets) {
             bucketToOffsetMap.put(bucket, new CompletableFuture<>());

@@ -20,7 +20,9 @@ package org.apache.fluss.server.zk.data;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.zk.data.ZkData.PartitionZNode;
+import org.apache.fluss.server.zk.data.ZkData.SchemaZNode;
 import org.apache.fluss.server.zk.data.ZkData.TableZNode;
+import org.apache.fluss.utils.types.Tuple2;
 
 import org.junit.jupiter.api.Test;
 
@@ -60,5 +62,21 @@ public class ZkDataTest {
         assertThat(TableZNode.parsePath("/metadata/databases/db1/tables/t1/partitions/")).isNull();
         assertThat(TableZNode.parsePath("/metadata/databases/db1/tables/*t1*/partitions/20240911"))
                 .isNull();
+    }
+
+    @Test
+    void testParseSchemaId() {
+        String path = "/metadata/databases/db1/tables/t1/schemas/1";
+        Tuple2<TablePath, Integer> tablePathAndSchemaId = SchemaZNode.parsePath(path);
+        assertThat(tablePathAndSchemaId)
+                .isNotNull()
+                .isEqualTo(Tuple2.of(TablePath.of("db1", "t1"), 1));
+
+        // invalid path
+        assertThat(SchemaZNode.parsePath(path + "/")).isNull();
+        assertThat(SchemaZNode.parsePath(path + "/buckets")).isNull();
+        assertThat(SchemaZNode.parsePath(path + "*")).isNull();
+        assertThat(SchemaZNode.parsePath("/metadata/databases/db1/t1/20240911")).isNull();
+        assertThat(SchemaZNode.parsePath("/metadata/databases/db1/tables/t1/schemas/a")).isNull();
     }
 }

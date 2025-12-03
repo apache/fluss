@@ -20,7 +20,7 @@ package org.apache.fluss.server.kv.partialupdate;
 import org.apache.fluss.exception.InvalidTargetColumnException;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.Schema;
-import org.apache.fluss.row.BinaryRow;
+import org.apache.fluss.record.BinaryValue;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.encode.RowEncoder;
 import org.apache.fluss.types.DataType;
@@ -34,6 +34,7 @@ import java.util.BitSet;
 @NotThreadSafe
 public class PartialUpdater {
 
+    private final short targetSchemaId;
     private final InternalRow.FieldGetter[] flussFieldGetters;
 
     private final RowEncoder rowEncoder;
@@ -42,7 +43,8 @@ public class PartialUpdater {
     private final BitSet primaryKeyCols = new BitSet();
     private final DataType[] fieldDataTypes;
 
-    public PartialUpdater(KvFormat kvFormat, Schema schema, int[] targetColumns) {
+    public PartialUpdater(KvFormat kvFormat, short schemaId, Schema schema, int[] targetColumns) {
+        this.targetSchemaId = schemaId;
         for (int targetColumn : targetColumns) {
             partialUpdateCols.set(targetColumn);
         }
@@ -89,43 +91,44 @@ public class PartialUpdater {
     }
 
     /**
-     * Partial update the {@code oldRow} with the given new row {@code partialRow}. The {@code
-     * oldRow} may be null, in this case, the field don't exist in the {@code partialRow} will be
+     * Partial update the {@code oldValue} with the given new row {@code partialValue}. The {@code
+     * oldValue} may be null, in this case, the field don't exist in the {@code partialRow} will be
      * set to null.
      *
-     * @param oldRow the old row to be updated
-     * @param partialRow the new row to be updated.
-     * @return the updated row
+     * @param oldValue the old value to be updated
+     * @param partialValue the new value to be updated.
+     * @return the updated value (schema id + row bytes)
      */
-    public BinaryRow updateRow(@Nullable InternalRow oldRow, InternalRow partialRow) {
+    public BinaryValue updateRow(@Nullable BinaryValue oldValue, BinaryValue partialValue) {
         rowEncoder.startNewRow();
         // write each field
         for (int i = 0; i < fieldDataTypes.length; i++) {
             // use the partial row value
             if (partialUpdateCols.get(i)) {
-                rowEncoder.encodeField(i, flussFieldGetters[i].getFieldOrNull(partialRow));
+                rowEncoder.encodeField(i, flussFieldGetters[i].getFieldOrNull(partialValue.row));
             } else {
                 // use the old row value
-                if (oldRow == null) {
+                if (oldValue == null) {
                     rowEncoder.encodeField(i, null);
                 } else {
-                    rowEncoder.encodeField(i, flussFieldGetters[i].getFieldOrNull(oldRow));
+                    rowEncoder.encodeField(i, flussFieldGetters[i].getFieldOrNull(oldValue.row));
                 }
             }
         }
-        return rowEncoder.finishRow();
+        return new BinaryValue(targetSchemaId, rowEncoder.finishRow());
     }
 
     /**
-     * Partial delete the given {@code row}. If all the fields except for {@link #partialUpdateCols}
-     * in {@code row} are null, return null. Otherwise, update all the {@link #partialUpdateCols} in
-     * the {@code row} except for the primary key columns to null values, return the updated row.
+     * Partial delete the given {@code value}. If all the fields except for {@link
+     * #partialUpdateCols} in {@code value.row} are null, return null. Otherwise, update all the
+     * {@link #partialUpdateCols} in the {@code value.row} except for the primary key columns to
+     * null values, return the updated value.
      *
-     * @param row the row to be deleted
-     * @return the row after partial deleted
+     * @param value the value to be deleted
+     * @return the value after partial deleted
      */
-    public @Nullable BinaryRow deleteRow(InternalRow row) {
-        if (isFieldsNull(row, partialUpdateCols)) {
+    public @Nullable BinaryValue deleteRow(BinaryValue value) {
+        if (isFieldsNull(value.row, partialUpdateCols)) {
             return null;
         } else {
             rowEncoder.startNewRow();
@@ -137,10 +140,10 @@ public class PartialUpdater {
                     rowEncoder.encodeField(i, null);
                 } else {
                     // use the old row value
-                    rowEncoder.encodeField(i, flussFieldGetters[i].getFieldOrNull(row));
+                    rowEncoder.encodeField(i, flussFieldGetters[i].getFieldOrNull(value.row));
                 }
             }
-            return rowEncoder.finishRow();
+            return new BinaryValue(targetSchemaId, rowEncoder.finishRow());
         }
     }
 

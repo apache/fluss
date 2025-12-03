@@ -21,14 +21,19 @@ import org.apache.fluss.client.table.Table;
 import org.apache.fluss.client.table.writer.UpsertWriter;
 import org.apache.fluss.flink.utils.FlinkConversions;
 import org.apache.fluss.flink.utils.FlinkTestBase;
+import org.apache.fluss.metadata.Schema;
+import org.apache.fluss.metadata.TableChange;
+import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.types.DataTypes;
 
-import org.apache.flink.table.connector.source.lookup.LookupOptions;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.functions.AsyncLookupFunction;
 import org.apache.flink.table.types.logical.RowType;
 import org.apache.flink.util.Collector;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.util.ArrayList;
 import java.util.Collection;
@@ -45,10 +50,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 /** Test for {@link FlinkLookupFunction} and {@link FlinkAsyncLookupFunction}. */
 class FlinkLookupFunctionTest extends FlinkTestBase {
 
-    @Test
-    void testSyncLookupEval() throws Exception {
-        TablePath tablePath = TablePath.of(DEFAULT_DB, "sync-lookup-table");
-        prepareData(tablePath, 3);
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testSyncLookupEval(boolean schemaNotMatch) throws Exception {
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "sync-lookup-table-" + schemaNotMatch);
+        prepareData(tablePath, 3, schemaNotMatch);
 
         RowType flinkRowType =
                 FlinkConversions.toFlinkRowType(DEFAULT_PK_TABLE_SCHEMA.getRowType());
@@ -57,8 +63,8 @@ class FlinkLookupFunctionTest extends FlinkTestBase {
                         clientConf,
                         tablePath,
                         flinkRowType,
-                        LookupOptions.MAX_RETRIES.defaultValue(),
                         createPrimaryKeyLookupNormalizer(new int[] {0}, flinkRowType),
+                        // no projection when job compiling, new column added after that.
                         null);
 
         ListOutputCollector collector = new ListOutputCollector();
@@ -82,11 +88,12 @@ class FlinkLookupFunctionTest extends FlinkTestBase {
         lookupFunction.close();
     }
 
-    @Test
-    void testAsyncLookupEval() throws Exception {
-        TablePath tablePath = TablePath.of(DEFAULT_DB, "async-lookup-table");
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testAsyncLookupEval(boolean schemaNotMatch) throws Exception {
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "async-lookup-table-" + schemaNotMatch);
         int rows = 3;
-        prepareData(tablePath, rows);
+        prepareData(tablePath, rows, schemaNotMatch);
 
         RowType flinkRowType =
                 FlinkConversions.toFlinkRowType(DEFAULT_PK_TABLE_SCHEMA.getRowType());
@@ -95,8 +102,8 @@ class FlinkLookupFunctionTest extends FlinkTestBase {
                         clientConf,
                         tablePath,
                         flinkRowType,
-                        LookupOptions.MAX_RETRIES.defaultValue(),
                         createPrimaryKeyLookupNormalizer(new int[] {0}, flinkRowType),
+                        // no projection when job compiling, new column added after that.
                         null);
         asyncLookupFunction.open(null);
 
@@ -136,14 +143,109 @@ class FlinkLookupFunctionTest extends FlinkTestBase {
                         "4: null");
     }
 
-    private void prepareData(TablePath tablePath, int rows) throws Exception {
-        createTable(tablePath, DEFAULT_PK_TABLE_DESCRIPTOR);
+    @Test
+    void testSchemaChange() throws Exception {
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "sync-add-column");
+        prepareData(tablePath, 3, false);
+
+        RowType flinkRowType =
+                FlinkConversions.toFlinkRowType(DEFAULT_PK_TABLE_SCHEMA.getRowType());
+        FlinkLookupFunction lookupFunction =
+                new FlinkLookupFunction(
+                        clientConf,
+                        tablePath,
+                        flinkRowType,
+                        createPrimaryKeyLookupNormalizer(new int[] {0}, flinkRowType),
+                        new int[] {1, 0});
+
+        ListOutputCollector collector = new ListOutputCollector();
+        lookupFunction.setCollector(collector);
+        lookupFunction.open(null);
+
+        // alter table after lookup function is created.
+        admin.alterTable(
+                        tablePath,
+                        Collections.singletonList(
+                                TableChange.addColumn(
+                                        "new_column",
+                                        DataTypes.INT(),
+                                        null,
+                                        TableChange.ColumnPosition.last())),
+                        false)
+                .get();
+        FLUSS_CLUSTER_EXTENSION.waitAllSchemaSync(tablePath, 2);
+
+        try (Table table = conn.getTable(tablePath)) {
+            UpsertWriter upsertWriter = table.newUpsert().createWriter();
+            upsertWriter.upsert(row(3, "name3", 3));
+            upsertWriter.flush();
+        }
+
+        // look up
+        for (int i = 0; i < 5; i++) {
+            lookupFunction.eval(i);
+        }
+
+        // collect the result and check
+        List<String> result =
+                collector.getOutputs().stream()
+                        .map(RowData::toString)
+                        .sorted()
+                        .collect(Collectors.toList());
+        assertThat(result)
+                .containsExactly("+I(name0,0)", "+I(name1,1)", "+I(name2,2)", "+I(name3,3)");
+        lookupFunction.close();
+
+        // start lookup job after schema change.
+        lookupFunction =
+                new FlinkLookupFunction(
+                        clientConf,
+                        tablePath,
+                        flinkRowType,
+                        createPrimaryKeyLookupNormalizer(new int[] {0}, flinkRowType),
+                        null);
+        collector = new ListOutputCollector();
+        lookupFunction.setCollector(collector);
+        lookupFunction.open(null);
+        for (int i = 0; i < 5; i++) {
+            lookupFunction.eval(i);
+        }
+        result =
+                collector.getOutputs().stream()
+                        .map(RowData::toString)
+                        .sorted()
+                        .collect(Collectors.toList());
+        assertThat(result)
+                .containsExactly("+I(0,name0)", "+I(1,name1)", "+I(2,name2)", "+I(3,name3)");
+        lookupFunction.close();
+    }
+
+    private void prepareData(TablePath tablePath, int rows, boolean schemaNotMatch)
+            throws Exception {
+        TableDescriptor descriptor = DEFAULT_PK_TABLE_DESCRIPTOR;
+        if (schemaNotMatch) {
+            descriptor =
+                    TableDescriptor.builder()
+                            .schema(
+                                    Schema.newBuilder()
+                                            .primaryKey("id")
+                                            .column("id", DataTypes.INT())
+                                            .column("name", DataTypes.STRING())
+                                            // added an extra column 'age'
+                                            .column("age", DataTypes.INT())
+                                            .build())
+                            .distributedBy(DEFAULT_BUCKET_NUM, "id")
+                            .build();
+        }
+
+        createTable(tablePath, descriptor);
 
         // first write some data to the table
         try (Table table = conn.getTable(tablePath)) {
             UpsertWriter upsertWriter = table.newUpsert().createWriter();
             for (int i = 0; i < rows; i++) {
-                upsertWriter.upsert(row(i, "name" + i));
+                upsertWriter.upsert(
+                        schemaNotMatch ? row(i, "name" + i, i * 2) : row(i, "name" + i));
             }
             upsertWriter.flush();
         }

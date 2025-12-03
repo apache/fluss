@@ -23,7 +23,6 @@ import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
-import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.utils.ExceptionUtils;
 
@@ -64,7 +63,8 @@ public class DynamicPartitionCreator {
         this.fatalErrorHandler = fatalErrorHandler;
     }
 
-    public void checkAndCreatePartitionAsync(PhysicalTablePath physicalTablePath) {
+    public void checkAndCreatePartitionAsync(
+            PhysicalTablePath physicalTablePath, List<String> partitionKeys) {
         String partitionName = physicalTablePath.getPartitionName();
         if (partitionName == null) {
             // no need to check and create partition
@@ -89,7 +89,7 @@ public class DynamicPartitionCreator {
                     // if the partition is not in inflightPartitionsToCreate, we should create it.
                     // this means that the partition is not being created by other threads.
                     LOG.info("Dynamically creating partition partition for {}", physicalTablePath);
-                    createPartition(physicalTablePath);
+                    createPartition(physicalTablePath, partitionKeys);
                 } else {
                     // if the partition is already in inflightPartitionsToCreate, we should skip
                     // creating it.
@@ -121,12 +121,10 @@ public class DynamicPartitionCreator {
         return idExist;
     }
 
-    private void createPartition(PhysicalTablePath physicalTablePath) {
+    private void createPartition(PhysicalTablePath physicalTablePath, List<String> partitionKeys) {
         String partitionName = physicalTablePath.getPartitionName();
         TablePath tablePath = physicalTablePath.getTablePath();
         checkArgument(partitionName != null, "Partition name shouldn't be null.");
-        TableInfo tableInfo = metadataUpdater.getTableInfoOrElseThrow(tablePath);
-        List<String> partitionKeys = tableInfo.getPartitionKeys();
         ResolvedPartitionSpec resolvedPartitionSpec =
                 ResolvedPartitionSpec.fromPartitionName(partitionKeys, partitionName);
 

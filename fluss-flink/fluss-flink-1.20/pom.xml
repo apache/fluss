@@ -33,7 +33,7 @@
 
     <properties>
         <flink.major.version>1.20</flink.major.version>
-        <flink.minor.version>1.20.1</flink.minor.version>
+        <flink.minor.version>1.20.3</flink.minor.version>
     </properties>
 
     <dependencies>

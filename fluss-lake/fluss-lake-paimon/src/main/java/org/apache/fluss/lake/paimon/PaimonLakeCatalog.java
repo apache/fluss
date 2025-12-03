@@ -34,6 +34,8 @@ import org.apache.paimon.catalog.Identifier;
 import org.apache.paimon.options.Options;
 import org.apache.paimon.schema.Schema;
 import org.apache.paimon.schema.SchemaChange;
+import org.apache.paimon.table.FileStoreTable;
+import org.apache.paimon.table.Table;
 import org.apache.paimon.types.DataType;
 import org.apache.paimon.types.DataTypes;
 
@@ -43,6 +45,8 @@ import java.util.List;
 import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toPaimon;
 import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toPaimonSchema;
 import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toPaimonSchemaChanges;
+import static org.apache.fluss.lake.paimon.utils.PaimonTableValidation.checkTableIsEmpty;
+import static org.apache.fluss.lake.paimon.utils.PaimonTableValidation.validatePaimonSchemaCompatible;
 import static org.apache.fluss.metadata.TableDescriptor.BUCKET_COLUMN_NAME;
 import static org.apache.fluss.metadata.TableDescriptor.OFFSET_COLUMN_NAME;
 import static org.apache.fluss.metadata.TableDescriptor.TIMESTAMP_COLUMN_NAME;
@@ -77,18 +81,18 @@ public class PaimonLakeCatalog implements LakeCatalog {
     }
 
     @Override
-    public void createTable(TablePath tablePath, TableDescriptor tableDescriptor)
+    public void createTable(TablePath tablePath, TableDescriptor tableDescriptor, Context context)
             throws TableAlreadyExistException {
         // then, create the table
         Identifier paimonPath = toPaimon(tablePath);
         Schema paimonSchema = toPaimonSchema(tableDescriptor);
         try {
-            createTable(paimonPath, paimonSchema);
+            createTable(paimonPath, paimonSchema, context.isCreatingFlussTable());
         } catch (Catalog.DatabaseNotExistException e) {
             // create database
             createDatabase(tablePath.getDatabaseName());
             try {
-                createTable(paimonPath, paimonSchema);
+                createTable(paimonPath, paimonSchema, context.isCreatingFlussTable());
             } catch (Catalog.DatabaseNotExistException t) {
                 // shouldn't happen in normal cases
                 throw new RuntimeException(
@@ -102,7 +106,7 @@ public class PaimonLakeCatalog implements LakeCatalog {
     }
 
     @Override
-    public void alterTable(TablePath tablePath, List<TableChange> tableChanges)
+    public void alterTable(TablePath tablePath, List<TableChange> tableChanges, Context context)
             throws TableNotExistException {
         try {
             Identifier paimonPath = toPaimon(tablePath);
@@ -114,13 +118,31 @@ public class PaimonLakeCatalog implements LakeCatalog {
         }
     }
 
-    private void createTable(Identifier tablePath, Schema schema)
+    private void createTable(Identifier tablePath, Schema schema, boolean isCreatingFlussTable)
             throws Catalog.DatabaseNotExistException {
         try {
             // not ignore if table exists
             paimonCatalog.createTable(tablePath, schema, false);
         } catch (Catalog.TableAlreadyExistException e) {
-            throw new TableAlreadyExistException("Table " + tablePath + " already exists.");
+            try {
+                Table table = paimonCatalog.getTable(tablePath);
+                FileStoreTable fileStoreTable = (FileStoreTable) table;
+                validatePaimonSchemaCompatible(
+                        tablePath, fileStoreTable.schema().toSchema(), schema);
+                // if creating a new fluss table, we should ensure the lake table is empty
+                if (isCreatingFlussTable) {
+                    checkTableIsEmpty(tablePath, fileStoreTable);
+                }
+            } catch (Catalog.TableNotExistException tableNotExistException) {
+                // shouldn't happen in normal cases
+                throw new RuntimeException(
+                        String.format(
+                                "Failed to create table %s in Paimon. The table already existed "
+                                        + "during the initial creation attempt, but subsequently "
+                                        + "could not be found when trying to get it. "
+                                        + "Please check whether the Paimon table was manually deleted, and try again.",
+                                tablePath));
+            }
         }
     }
 

@@ -65,7 +65,7 @@ mkdir -p ${HELM_RELEASE_DIR}
 cd ${HELM_RELEASE_DIR}
 
 # create helm package tgz for fluss
-helm package ${FLUSS_DIR}/docker/helm
+helm package ${FLUSS_DIR}/helm
 # create prov file for helm package
 helm gpg sign fluss-${RELEASE_VERSION}.tgz
 

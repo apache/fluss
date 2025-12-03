@@ -425,14 +425,6 @@ public class CoordinatorServer extends ServerBase {
             }
 
             try {
-                if (zkClient != null) {
-                    zkClient.close();
-                }
-            } catch (Throwable t) {
-                exception = ExceptionUtils.firstOrSuppressed(t, exception);
-            }
-
-            try {
                 if (authorizer != null) {
                     authorizer.close();
                 }
@@ -447,6 +439,14 @@ public class CoordinatorServer extends ServerBase {
 
                 if (lakeCatalogDynamicLoader != null) {
                     lakeCatalogDynamicLoader.close();
+                }
+            } catch (Throwable t) {
+                exception = ExceptionUtils.firstOrSuppressed(t, exception);
+            }
+
+            try {
+                if (zkClient != null) {
+                    zkClient.close();
                 }
             } catch (Throwable t) {
                 exception = ExceptionUtils.firstOrSuppressed(t, exception);

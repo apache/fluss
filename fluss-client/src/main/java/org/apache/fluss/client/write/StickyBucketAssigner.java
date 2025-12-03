@@ -35,10 +35,12 @@ import java.util.concurrent.atomic.AtomicInteger;
 public class StickyBucketAssigner extends DynamicBucketAssigner {
 
     private final PhysicalTablePath physicalTablePath;
+    private final int bucketNumber;
     private final AtomicInteger currentBucketId;
 
-    public StickyBucketAssigner(PhysicalTablePath physicalTablePath) {
+    public StickyBucketAssigner(PhysicalTablePath physicalTablePath, int bucketNumber) {
         this.physicalTablePath = physicalTablePath;
+        this.bucketNumber = bucketNumber;
         this.currentBucketId = new AtomicInteger(-1);
     }
 
@@ -73,7 +75,7 @@ public class StickyBucketAssigner extends DynamicBucketAssigner {
                     cluster.getAvailableBucketsForPhysicalTablePath(physicalTablePath);
             if (availableBuckets.isEmpty()) {
                 int random = MathUtils.toPositive(ThreadLocalRandom.current().nextInt());
-                newBucket = random % cluster.getBucketCount(physicalTablePath.getTablePath());
+                newBucket = random % bucketNumber;
             } else if (availableBuckets.size() == 1) {
                 newBucket = availableBuckets.get(0).getBucketId();
             } else {

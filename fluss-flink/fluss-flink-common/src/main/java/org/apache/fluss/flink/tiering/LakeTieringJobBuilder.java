@@ -108,7 +108,7 @@ public class LakeTieringJobBuilder {
         String jobName =
                 env.getConfiguration()
                         .getOptional(PipelineOptions.NAME)
-                        .orElse(DEFAULT_TIERING_SERVICE_JOB_NAME);
+                        .orElse(DEFAULT_TIERING_SERVICE_JOB_NAME + " - " + dataLakeFormat);
 
         return env.executeAsync(jobName);
     }

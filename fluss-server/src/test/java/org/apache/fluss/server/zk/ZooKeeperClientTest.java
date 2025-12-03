@@ -38,6 +38,7 @@ import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.server.zk.data.TabletServerRegistration;
 import org.apache.fluss.shaded.curator5.org.apache.curator.CuratorZookeeperClient;
 import org.apache.fluss.shaded.curator5.org.apache.curator.framework.CuratorFramework;
+import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException;
 import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.ZooKeeper;
 import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.client.ZKClientConfig;
 import org.apache.fluss.testutils.common.AllCallbackWrapper;
@@ -386,7 +387,7 @@ class ZooKeeperClientTest {
                         .withComment("c is third column")
                         .primaryKey("a")
                         .build();
-        int registeredSchemaId = zookeeperClient.registerSchema(tablePath, schema);
+        int registeredSchemaId = zookeeperClient.registerFirstSchema(tablePath, schema);
         assertThat(registeredSchemaId).isEqualTo(schemaId);
         assertThat(zookeeperClient.getCurrentSchemaId(tablePath)).isEqualTo(schemaId);
 
@@ -405,7 +406,7 @@ class ZooKeeperClientTest {
                         .withComment("b is second column")
                         .primaryKey("a")
                         .build();
-        registeredSchemaId = zookeeperClient.registerSchema(tablePath, schema2);
+        registeredSchemaId = zookeeperClient.registerSchema(tablePath, schema2, 2);
         assertThat(registeredSchemaId).isEqualTo(2);
         assertThat(zookeeperClient.getCurrentSchemaId(tablePath)).isEqualTo(2);
 
@@ -413,6 +414,10 @@ class ZooKeeperClientTest {
         assertThat(schemaInfo.isPresent()).isTrue();
         assertThat(schemaInfo.get().getSchema()).isEqualTo(schema2);
         assertThat(schemaInfo.get().getSchemaId()).isEqualTo(2);
+
+        // test register schema with existed schemaId
+        assertThatThrownBy(() -> zookeeperClient.registerSchema(tablePath, schema2, 2))
+                .isExactlyInstanceOf(KeeperException.NodeExistsException.class);
     }
 
     @Test

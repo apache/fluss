@@ -18,6 +18,7 @@
 package org.apache.fluss.lake.paimon;
 
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.lake.lakestorage.TestingLakeCatalogContext;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
@@ -31,7 +32,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.File;
-import java.util.Arrays;
+import java.util.Collections;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -50,9 +51,9 @@ class PaimonLakeCatalogTest {
     }
 
     @Test
-    void testAlterTableConfigs() throws Exception {
-        String database = "test_alter_table_configs_db";
-        String tableName = "test_alter_table_configs_table";
+    void testAlterTableProperties() throws Exception {
+        String database = "test_alter_table_properties_db";
+        String tableName = "test_alter_table_properties_table";
         TablePath tablePath = TablePath.of(database, tableName);
         Identifier identifier = Identifier.create(database, tableName);
         createTable(database, tableName);
@@ -62,14 +63,20 @@ class PaimonLakeCatalogTest {
         assertThat(table.options().get("key")).isEqualTo(null);
 
         // set the value for key
-        flussPaimonCatalog.alterTable(tablePath, Arrays.asList(TableChange.set("key", "value")));
+        flussPaimonCatalog.alterTable(
+                tablePath,
+                Collections.singletonList(TableChange.set("key", "value")),
+                new TestingLakeCatalogContext());
 
         table = flussPaimonCatalog.getPaimonCatalog().getTable(identifier);
         // we have set the value for key
         assertThat(table.options().get("fluss.key")).isEqualTo("value");
 
         // reset the value for key
-        flussPaimonCatalog.alterTable(tablePath, Arrays.asList(TableChange.reset("key")));
+        flussPaimonCatalog.alterTable(
+                tablePath,
+                Collections.singletonList(TableChange.reset("key")),
+                new TestingLakeCatalogContext());
 
         table = flussPaimonCatalog.getPaimonCatalog().getTable(identifier);
         // we have reset the value for key
@@ -93,6 +100,6 @@ class PaimonLakeCatalogTest {
 
         TablePath tablePath = TablePath.of(database, tableName);
 
-        flussPaimonCatalog.createTable(tablePath, td);
+        flussPaimonCatalog.createTable(tablePath, td, new TestingLakeCatalogContext());
     }
 }

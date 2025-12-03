@@ -18,7 +18,6 @@
 package org.apache.fluss.cluster;
 
 import org.apache.fluss.metadata.PhysicalTablePath;
-import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 
@@ -34,11 +33,9 @@ import java.util.Map;
 import java.util.Set;
 
 import static org.apache.fluss.record.TestData.DATA1_PHYSICAL_TABLE_PATH;
-import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_ID;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_INFO;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
-import static org.apache.fluss.record.TestData.DATA2_SCHEMA;
 import static org.apache.fluss.record.TestData.DATA2_TABLE_ID;
 import static org.apache.fluss.record.TestData.DATA2_TABLE_INFO;
 import static org.apache.fluss.record.TestData.DATA2_TABLE_PATH;
@@ -85,17 +82,6 @@ class ClusterTest {
                                                         NODES_IDS[3],
                                                         NODES_IDS)))
                 .isInstanceOf(UnsupportedOperationException.class);
-    }
-
-    @Test
-    void testGetTable() {
-        Cluster cluster = createCluster(aliveTabletServersById);
-        assertThat(cluster.getTable(DATA1_TABLE_PATH).get()).isEqualTo(DATA1_TABLE_INFO);
-        assertThat(cluster.getTable(DATA2_TABLE_PATH).get()).isEqualTo(DATA2_TABLE_INFO);
-        assertThat(cluster.getSchema(DATA1_TABLE_PATH).get())
-                .isEqualTo(new SchemaInfo(DATA1_SCHEMA, 1));
-        assertThat(cluster.getSchema(DATA2_TABLE_PATH).get())
-                .isEqualTo(new SchemaInfo(DATA2_SCHEMA, 1));
     }
 
     @Test

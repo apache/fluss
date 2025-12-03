@@ -17,6 +17,7 @@
 
 package org.apache.fluss.row.compacted;
 
+import org.apache.fluss.row.BinaryWriter;
 import org.apache.fluss.types.DataType;
 
 /**
@@ -33,7 +34,8 @@ public class CompactedKeyWriter extends CompactedRowWriter {
         super(0);
     }
 
-    public static FieldWriter createFieldWriter(DataType fieldType) {
+    public static ValueWriter createValueWriter(DataType fieldType) {
+        ValueWriter valueWriter = BinaryWriter.createValueWriter(fieldType);
         return (writer, pos, value) -> {
             if (value == null) {
                 throw new IllegalArgumentException(
@@ -41,7 +43,7 @@ public class CompactedKeyWriter extends CompactedRowWriter {
                                 "Null value is not allowed for compacted key encoder in position %d with type %s.",
                                 pos, fieldType));
             } else {
-                CompactedRowWriter.createFieldWriter(fieldType).writeField(writer, pos, value);
+                valueWriter.writeValue(writer, pos, value);
             }
         };
     }

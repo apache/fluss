@@ -45,6 +45,7 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
+import java.util.stream.IntStream;
 
 /** A flink lookup function for fluss. */
 public class FlinkLookupFunction extends LookupFunction {
@@ -54,7 +55,6 @@ public class FlinkLookupFunction extends LookupFunction {
 
     private final Configuration flussConfig;
     private final TablePath tablePath;
-    private final int maxRetryTimes;
     private final RowType flinkRowType;
     private final LookupNormalizer lookupNormalizer;
     @Nullable private final int[] projection;
@@ -70,12 +70,10 @@ public class FlinkLookupFunction extends LookupFunction {
             Configuration flussConfig,
             TablePath tablePath,
             RowType flinkRowType,
-            int maxRetryTimes,
             LookupNormalizer lookupNormalizer,
             @Nullable int[] projection) {
         this.flussConfig = flussConfig;
         this.tablePath = tablePath;
-        this.maxRetryTimes = maxRetryTimes;
         this.flinkRowType = flinkRowType;
         this.lookupNormalizer = lookupNormalizer;
         this.projection = projection;
@@ -91,12 +89,18 @@ public class FlinkLookupFunction extends LookupFunction {
         final RowType outputRowType;
         if (projection == null) {
             outputRowType = flinkRowType;
-            projectedRow = null;
+            // we force to do projection if no projection pushdown, in order to handle schema
+            // changes (ADD COLUMN LAST), this guarantees the input row of
+            // flussRowToFlinkRowConverter is in expected schema even new columns are added.
+            projectedRow =
+                    ProjectedRow.from(IntStream.range(0, flinkRowType.getFieldCount()).toArray());
         } else {
             outputRowType = FlinkUtils.projectRowType(flinkRowType, projection);
             // reuse the projected row
             projectedRow = ProjectedRow.from(projection);
         }
+        // TODO: currently, we assume only ADD COLUMN LAST schema changes, so the projection
+        //  positions can still work even after such changes.
         flussRowToFlinkRowConverter =
                 new FlussRowToFlinkRowConverter(FlinkConversions.toFlussRowType(outputRowType));
 
@@ -124,41 +128,28 @@ public class FlinkLookupFunction extends LookupFunction {
                 lookupNormalizer.createRemainingFilter(keyRow);
         // wrap flink row as fluss row to lookup, the flink row has already been in expected order.
         InternalRow flussKeyRow = lookupRow.replace(normalizedKeyRow);
-        for (int retry = 0; retry <= maxRetryTimes; retry++) {
-            try {
-                List<InternalRow> lookupRows = lookuper.lookup(flussKeyRow).get().getRowList();
-                if (lookupRows.isEmpty()) {
-                    return Collections.emptyList();
-                }
-                List<RowData> projectedRows = new ArrayList<>();
-                for (InternalRow row : lookupRows) {
-                    if (row != null) {
-                        RowData flinkRow =
-                                flussRowToFlinkRowConverter.toFlinkRowData(maybeProject(row));
-                        if (remainingFilter == null || remainingFilter.isMatch(flinkRow)) {
-                            projectedRows.add(flinkRow);
-                        }
+
+        // the retry mechanism will be handled by the underlying LookupClient layer
+        try {
+            List<InternalRow> lookupRows = lookuper.lookup(flussKeyRow).get().getRowList();
+            if (lookupRows.isEmpty()) {
+                return Collections.emptyList();
+            }
+            List<RowData> projectedRows = new ArrayList<>();
+            for (InternalRow row : lookupRows) {
+                if (row != null) {
+                    RowData flinkRow =
+                            flussRowToFlinkRowConverter.toFlinkRowData(maybeProject(row));
+                    if (remainingFilter == null || remainingFilter.isMatch(flinkRow)) {
+                        projectedRows.add(flinkRow);
                     }
                 }
-                return projectedRows;
-            } catch (Exception e) {
-                LOG.error(String.format("Fluss lookup error, retry times = %d", retry), e);
-                if (retry >= maxRetryTimes) {
-                    String exceptionMsg =
-                            String.format(
-                                    "Execution of Fluss lookup failed, retry times = %d.", retry);
-                    throw new RuntimeException(exceptionMsg, e);
-                }
-
-                try {
-                    Thread.sleep(1000L * retry);
-                } catch (InterruptedException interruptedException) {
-                    Thread.currentThread().interrupt();
-                    throw new RuntimeException(interruptedException);
-                }
             }
+            return projectedRows;
+        } catch (Exception e) {
+            LOG.error("Fluss lookup error", e);
+            throw new RuntimeException("Execution of Fluss lookup failed: " + e.getMessage(), e);
         }
-        return Collections.emptyList();
     }
 
     private InternalRow maybeProject(InternalRow row) {

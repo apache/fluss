@@ -21,6 +21,7 @@ import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.FencedLeaderEpochException;
+import org.apache.fluss.exception.InvalidColumnProjectionException;
 import org.apache.fluss.exception.InvalidCoordinatorException;
 import org.apache.fluss.exception.InvalidRequiredAcksException;
 import org.apache.fluss.exception.LogOffsetOutOfRangeException;
@@ -29,6 +30,7 @@ import org.apache.fluss.exception.NotLeaderOrFollowerException;
 import org.apache.fluss.exception.StorageException;
 import org.apache.fluss.exception.UnknownTableOrBucketException;
 import org.apache.fluss.fs.FsPath;
+import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
@@ -37,6 +39,7 @@ import org.apache.fluss.metrics.MetricNames;
 import org.apache.fluss.metrics.groups.MetricGroup;
 import org.apache.fluss.record.KvRecordBatch;
 import org.apache.fluss.record.MemoryLogRecords;
+import org.apache.fluss.record.ProjectionPushdownCache;
 import org.apache.fluss.remote.RemoteLogFetchInfo;
 import org.apache.fluss.remote.RemoteLogSegment;
 import org.apache.fluss.rpc.RpcClient;
@@ -147,6 +150,7 @@ public class ReplicaManager {
     private final Map<TableBucket, HostedReplica> allReplicas = MapUtils.newConcurrentHashMap();
 
     private final TabletServerMetadataCache metadataCache;
+    private final ProjectionPushdownCache projectionsCache = new ProjectionPushdownCache();
     private final Lock replicaStateChangeLock = new ReentrantLock();
 
     /**
@@ -839,7 +843,7 @@ public class ReplicaManager {
      *      2. Stop fetchers for these replicas so that no more data can be added by the replica fetcher threads.
      *      3. Truncate the log and checkpoint offsets for these replicas.
      *      4. Clear the delayed produce in the purgatory.
-     *      5. If the server is not shutting down, add the fetcher to the new leaders.
+     *      5. If the server is not shutting down,add the fetcher to the new leaders.
      * </pre>
      */
     private void makeFollowers(
@@ -1066,14 +1070,23 @@ public class ReplicaManager {
                         "Fetching log record for replica {}, offset {}",
                         tb,
                         fetchReqInfo.getFetchOffset());
-                replica.checkProjection(fetchReqInfo.getProjectFields());
+                // todo: change here to modified project fields.
+                if (fetchReqInfo.getProjectFields() != null
+                        && replica.getLogFormat() != LogFormat.ARROW) {
+                    throw new InvalidColumnProjectionException(
+                            String.format(
+                                    "Column projection is only supported for ARROW format, but the table %s is %s format.",
+                                    replica.getTablePath(), replica.getLogFormat()));
+                }
+
                 fetchParams.setCurrentFetch(
                         tb.getTableId(),
                         fetchOffset,
                         adjustedMaxBytes,
-                        replica.getRowType(),
+                        replica.getSchemaGetter(),
                         replica.getArrowCompressionInfo(),
-                        fetchReqInfo.getProjectFields());
+                        fetchReqInfo.getProjectFields(),
+                        projectionsCache);
                 LogReadInfo readInfo = replica.fetchRecords(fetchParams);
 
                 // Once we read from a non-empty bucket, we stop ignoring request and bucket
@@ -1291,14 +1304,27 @@ public class ReplicaManager {
         boolean errorReadingData = false;
         boolean hasFetchFromLocal = false;
         Map<TableBucket, FetchBucketStatus> fetchBucketStatusMap = new HashMap<>();
+        Map<TableBucket, FetchLogResultForBucket> expectedErrorBuckets = new HashMap<>();
         for (Map.Entry<TableBucket, LogReadResult> logReadResultEntry : logReadResults.entrySet()) {
             TableBucket tb = logReadResultEntry.getKey();
             LogReadResult logReadResult = logReadResultEntry.getValue();
             FetchLogResultForBucket fetchLogResultForBucket =
                     logReadResult.getFetchLogResultForBucket();
             if (fetchLogResultForBucket.failed()) {
-                errorReadingData = true;
-                break;
+                // Check if this is an expected error (like NOT_LEADER_OR_FOLLOWER,
+                // UNKNOWN_TABLE_OR_BUCKET) which should not
+                // short-circuit the entire fetch request.
+                Errors error = fetchLogResultForBucket.getError().error();
+                if (isNonCriticalFetchError(error)) {
+                    // Expected errors should not prevent other buckets from being delayed.
+                    // Save the error bucket to be returned later, and continue processing others.
+                    expectedErrorBuckets.put(tb, fetchLogResultForBucket);
+                    continue;
+                } else {
+                    // Severe/unexpected error - short-circuit and return immediately
+                    errorReadingData = true;
+                    break;
+                }
             }
 
             if (!fetchLogResultForBucket.fetchFromRemote()) {
@@ -1334,7 +1360,11 @@ public class ReplicaManager {
                             params,
                             this,
                             fetchBucketStatusMap,
-                            responseCallback,
+                            delayedResponse -> {
+                                // Merge expected error buckets with delayed response
+                                delayedResponse.putAll(expectedErrorBuckets);
+                                responseCallback.accept(delayedResponse);
+                            },
                             serverMetricGroup);
 
             // try to complete the request immediately, otherwise put it into the
@@ -1346,6 +1376,19 @@ public class ReplicaManager {
                             .map(DelayedTableBucketKey::new)
                             .collect(Collectors.toList()));
         }
+    }
+
+    /**
+     * Check if the error is an expected fetch error that should not short-circuit the entire fetch
+     * request. These errors are common during normal operations (e.g., leader changes, bucket
+     * migrations) and should not prevent other buckets from being delayed.
+     *
+     * @param error the error to check
+     * @return true if the error is expected and should not short-circuit
+     */
+    private boolean isNonCriticalFetchError(Errors error) {
+        return error == Errors.NOT_LEADER_OR_FOLLOWER
+                || error == Errors.UNKNOWN_TABLE_OR_BUCKET_EXCEPTION;
     }
 
     private void completeDelayedOperations(TableBucket tableBucket) {
@@ -1522,6 +1565,7 @@ public class ReplicaManager {
                 PhysicalTablePath physicalTablePath = data.getPhysicalTablePath();
                 TablePath tablePath = physicalTablePath.getTablePath();
                 TableInfo tableInfo = getTableInfo(zkClient, tablePath);
+
                 boolean isKvTable = tableInfo.hasPrimaryKey();
                 BucketMetricGroup bucketMetricGroup =
                         serverMetricGroup.addTableBucketMetricGroup(

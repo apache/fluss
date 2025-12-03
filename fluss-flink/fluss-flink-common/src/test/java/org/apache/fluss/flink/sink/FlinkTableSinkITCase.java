@@ -167,6 +167,52 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
 
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
+    void testAppendLogDuringAddColumn(boolean compressed) throws Exception {
+        String compressedProperties =
+                compressed
+                        ? ",'table.log.format' = 'arrow', 'table.log.arrow.compression.type' = 'zstd'"
+                        : "";
+        tEnv.executeSql(
+                "create table sink_test (a int not null, b bigint, c string) with "
+                        + "('bucket.num' = '3'"
+                        + compressedProperties
+                        + ")");
+        tEnv.executeSql(
+                        "INSERT INTO sink_test "
+                                + "VALUES (1, 3501, 'Tim'), "
+                                + "(2, 3502, 'Fabian'), "
+                                + "(3, 3503, 'coco') ")
+                .await();
+
+        CloseableIterator<Row> rowIter = tEnv.executeSql("select * from sink_test").collect();
+        // add new column
+        tEnv.executeSql("alter table sink_test add add_column int").await();
+        FLUSS_CLUSTER_EXTENSION.waitAllSchemaSync(TablePath.of(DEFAULT_DB, "sink_test"), 2);
+        tEnv.executeSql(
+                        "INSERT INTO sink_test "
+                                + "VALUES (4, 3504, 'jerry', 4), "
+                                + "(5, 3505, 'piggy', 5), "
+                                + "(6, 3506, 'stave', 6)")
+                .await();
+        List<String> expectedRows =
+                Arrays.asList(
+                        "+I[1, 3501, Tim]", "+I[2, 3502, Fabian]",
+                        "+I[3, 3503, coco]", "+I[4, 3504, jerry]",
+                        "+I[5, 3505, piggy]", "+I[6, 3506, stave]");
+        assertResultsIgnoreOrder(rowIter, expectedRows, true);
+
+        // read with new schema.
+        rowIter = tEnv.executeSql("select * from sink_test").collect();
+        expectedRows =
+                Arrays.asList(
+                        "+I[1, 3501, Tim, null]", "+I[2, 3502, Fabian, null]",
+                        "+I[3, 3503, coco, null]", "+I[4, 3504, jerry, 4]",
+                        "+I[5, 3505, piggy, 5]", "+I[6, 3506, stave, 6]");
+        assertResultsIgnoreOrder(rowIter, expectedRows, true);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
     void testAppendLogWithBucketKey(boolean sinkBucketShuffle) throws Exception {
         tEnv.executeSql(
                 String.format(
@@ -357,6 +403,45 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
     }
 
     @Test
+    void testPutDuringAddColumn() throws Exception {
+        tEnv.executeSql(
+                "create table sink_test (a int not null primary key not enforced, b bigint, c string)");
+        tEnv.executeSql(
+                        "INSERT INTO sink_test "
+                                + "VALUES (1, 3501, 'Tim'), "
+                                + "(2, 3502, 'Fabian'), "
+                                + "(3, 3503, 'coco') ")
+                .await();
+
+        CloseableIterator<Row> rowIter = tEnv.executeSql("select * from sink_test").collect();
+        // add new column
+        tEnv.executeSql("alter table sink_test add add_column int").await();
+        FLUSS_CLUSTER_EXTENSION.waitAllSchemaSync(TablePath.of(DEFAULT_DB, "sink_test"), 2);
+        tEnv.executeSql(
+                        "INSERT INTO sink_test "
+                                + "VALUES (4, 3504, 'jerry', 4), "
+                                + "(5, 3505, 'piggy', 5), "
+                                + "(6, 3506, 'stave', 6)")
+                .await();
+        List<String> expectedRows =
+                Arrays.asList(
+                        "+I[1, 3501, Tim]", "+I[2, 3502, Fabian]",
+                        "+I[3, 3503, coco]", "+I[4, 3504, jerry]",
+                        "+I[5, 3505, piggy]", "+I[6, 3506, stave]");
+        // read with old schema
+        assertResultsIgnoreOrder(rowIter, expectedRows, true);
+
+        // read with new schema.
+        rowIter = tEnv.executeSql("select * from sink_test").collect();
+        expectedRows =
+                Arrays.asList(
+                        "+I[1, 3501, Tim, null]", "+I[2, 3502, Fabian, null]",
+                        "+I[3, 3503, coco, null]", "+I[4, 3504, jerry, 4]",
+                        "+I[5, 3505, piggy, 5]", "+I[6, 3506, stave, 6]");
+        assertResultsIgnoreOrder(rowIter, expectedRows, true);
+    }
+
+    @Test
     void testPartialUpsert() throws Exception {
         tEnv.executeSql(
                 "create table sink_test (a int not null primary key not enforced, b bigint, c string) with('bucket.num' = '3')");
@@ -405,6 +490,58 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
         tEnv.executeSql("INSERT INTO sink_test(a, c) SELECT f0, f2 FROM changeLog").await();
         expectedRows = Arrays.asList("-U[1, null, c1]", "+U[1, null, c11]", "-D[1, null, c11]");
         assertResultsIgnoreOrder(rowIter, expectedRows, true);
+    }
+
+    @Test
+    void testPartialUpsertDuringAddColumn() throws Exception {
+        tEnv.executeSql(
+                "create table sink_test (a int not null primary key not enforced, b bigint, c string) with('bucket.num' = '3')");
+
+        // partial insert
+        tEnv.executeSql("INSERT INTO sink_test(a, b) VALUES (1, 111), (2, 222)").await();
+        tEnv.executeSql("INSERT INTO sink_test(c, a) VALUES ('c1', 1), ('c2', 2)").await();
+
+        CloseableIterator<Row> rowIter = tEnv.executeSql("select * from sink_test").collect();
+        // add new column
+        tEnv.executeSql("alter table sink_test add add_column string").await();
+        FLUSS_CLUSTER_EXTENSION.waitAllSchemaSync(TablePath.of(DEFAULT_DB, "sink_test"), 2);
+        tEnv.executeSql(
+                        "INSERT INTO sink_test(add_column, a ) VALUES ('new_value', 1), ('new_value', 2)")
+                .await();
+
+        // read with old schema
+        List<String> expectedRows =
+                Arrays.asList(
+                        "+I[1, 111, null]",
+                        "+I[2, 222, null]",
+                        "-U[1, 111, null]",
+                        "+U[1, 111, c1]",
+                        "-U[2, 222, null]",
+                        "+U[2, 222, c2]",
+                        "-U[1, 111, c1]",
+                        "+U[1, 111, c1]",
+                        "-U[2, 222, c2]",
+                        "+U[2, 222, c2]");
+        assertResultsIgnoreOrder(rowIter, expectedRows, true);
+
+        // read with new schema
+        CloseableIterator<Row> newSchemaRowIter =
+                tEnv.executeSql(
+                                "select * from sink_test /*+ OPTIONS('scan.startup.mode' = 'earliest') */ ")
+                        .collect();
+        expectedRows =
+                Arrays.asList(
+                        "+I[1, 111, null, null]",
+                        "+I[2, 222, null, null]",
+                        "-U[1, 111, null, null]",
+                        "+U[1, 111, c1, null]",
+                        "-U[2, 222, null, null]",
+                        "+U[2, 222, c2, null]",
+                        "-U[1, 111, c1, null]",
+                        "+U[1, 111, c1, new_value]",
+                        "-U[2, 222, c2, null]",
+                        "+U[2, 222, c2, new_value]");
+        assertResultsIgnoreOrder(newSchemaRowIter, expectedRows, true);
     }
 
     @Test
@@ -676,6 +813,21 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
                         "-U[4, 3504, Seattle]",
                         "+U[4, 3504, New York]");
         assertResultsIgnoreOrder(changelogIter, expectedRows, true);
+
+        // test schema evolution.
+        tBatchEnv
+                .executeSql(String.format("alter table %s add new_added_column int", tableName))
+                .await();
+        FLUSS_CLUSTER_EXTENSION.waitAllSchemaSync(TablePath.of(DEFAULT_DB, tableName), 2);
+        tBatchEnv
+                .executeSql("UPDATE " + tableName + " SET new_added_column = 2 WHERE a = 4")
+                .await();
+        CloseableIterator<Row> row5 =
+                tBatchEnv
+                        .executeSql(String.format("select * from %s WHERE a = 4", tableName))
+                        .collect();
+        expected = Collections.singletonList("+I[4, 3504, New York, 2]");
+        assertResultsIgnoreOrder(row5, expected, true);
     }
 
     @Test

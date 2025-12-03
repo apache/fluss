@@ -29,7 +29,7 @@ import org.apache.fluss.rpc.messages.ApiVersionsResponse;
 import org.apache.fluss.rpc.messages.AuthenticateRequest;
 import org.apache.fluss.rpc.messages.AuthenticateResponse;
 import org.apache.fluss.rpc.metrics.ClientMetricGroup;
-import org.apache.fluss.rpc.metrics.ConnectionMetricGroup;
+import org.apache.fluss.rpc.metrics.ConnectionMetrics;
 import org.apache.fluss.rpc.protocol.ApiKeys;
 import org.apache.fluss.rpc.protocol.ApiManager;
 import org.apache.fluss.rpc.protocol.ApiMethod;
@@ -72,7 +72,7 @@ final class ServerConnection {
     // TODO: add max inflight requests limit like Kafka's "max.in.flight.requests.per.connection"
     private final Map<Integer, InflightRequest> inflightRequests = MapUtils.newConcurrentHashMap();
     private final CompletableFuture<Void> closeFuture = new CompletableFuture<>();
-    private final ConnectionMetricGroup connectionMetricGroup;
+    private final ConnectionMetrics connectionMetrics;
     private final ClientAuthenticator authenticator;
     private final ExponentialBackoff backoff;
 
@@ -108,7 +108,7 @@ final class ServerConnection {
             boolean isInnerClient) {
         this.node = node;
         this.state = ConnectionState.CONNECTING;
-        this.connectionMetricGroup = clientMetricGroup.createConnectionMetricGroup(node.uid());
+        this.connectionMetrics = clientMetricGroup.createConnectionMetricGroup(node.uid());
         this.authenticator = authenticator;
         this.backoff = new ExponentialBackoff(100L, 2, 5000L, 0.2);
         whenClose(closeCallback);
@@ -190,7 +190,7 @@ final class ServerConnection {
                 closeFuture.completeExceptionally(cause);
             }
 
-            connectionMetricGroup.close();
+            connectionMetrics.close();
         }
 
         closeQuietly(authenticator);
@@ -220,7 +220,7 @@ final class ServerConnection {
         public void onRequestResult(int requestId, ApiMessage response) {
             InflightRequest request = inflightRequests.remove(requestId);
             if (request != null && !request.responseFuture.isDone()) {
-                connectionMetricGroup.updateMetricsAfterGetResponse(
+                connectionMetrics.updateMetricsAfterGetResponse(
                         ApiKeys.forId(request.apiKey),
                         request.requestStartTime,
                         response.totalSize());
@@ -232,7 +232,7 @@ final class ServerConnection {
         public void onRequestFailure(int requestId, Throwable cause) {
             InflightRequest request = inflightRequests.remove(requestId);
             if (request != null && !request.responseFuture.isDone()) {
-                connectionMetricGroup.updateMetricsAfterGetResponse(
+                connectionMetrics.updateMetricsAfterGetResponse(
                         ApiKeys.forId(request.apiKey), request.requestStartTime, 0);
                 request.responseFuture.completeExceptionally(cause);
             }
@@ -329,14 +329,14 @@ final class ServerConnection {
                 return responseFuture;
             }
 
-            connectionMetricGroup.updateMetricsBeforeSendRequest(apiKey, rawRequest.totalSize());
+            connectionMetrics.updateMetricsBeforeSendRequest(apiKey, rawRequest.totalSize());
 
             channel.writeAndFlush(byteBuf)
                     .addListener(
                             (ChannelFutureListener)
                                     future -> {
                                         if (!future.isSuccess()) {
-                                            connectionMetricGroup.updateMetricsAfterGetResponse(
+                                            connectionMetrics.updateMetricsAfterGetResponse(
                                                     apiKey, inflight.requestStartTime, 0);
                                             Throwable cause = future.cause();
                                             if (cause instanceof IOException) {
@@ -449,8 +449,10 @@ final class ServerConnection {
     }
 
     private void switchState(ConnectionState targetState) {
-        LOG.debug("switch state form {} to {}", state, targetState);
-        state = targetState;
+        if (state != ConnectionState.DISCONNECTED) {
+            LOG.debug("switch state form {} to {}", state, targetState);
+            state = targetState;
+        }
         if (targetState == ConnectionState.READY) {
             // process pending requests
             PendingRequest pending;

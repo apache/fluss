@@ -18,6 +18,7 @@
 package org.apache.fluss.row.encode;
 
 import org.apache.fluss.annotation.PublicEvolving;
+import org.apache.fluss.row.BinaryWriter;
 import org.apache.fluss.row.indexed.IndexedRow;
 import org.apache.fluss.row.indexed.IndexedRowWriter;
 import org.apache.fluss.types.DataType;
@@ -33,7 +34,7 @@ public class IndexedRowEncoder implements RowEncoder {
 
     private final DataType[] fieldDataTypes;
     private final IndexedRowWriter rowWriter;
-    private final IndexedRowWriter.FieldWriter[] fieldWriters;
+    private final BinaryWriter.ValueWriter[] fieldWriters;
 
     public IndexedRowEncoder(RowType rowType) {
         this(rowType.getChildren().toArray(new DataType[0]));
@@ -42,10 +43,10 @@ public class IndexedRowEncoder implements RowEncoder {
     public IndexedRowEncoder(DataType[] fieldDataTypes) {
         this.fieldDataTypes = fieldDataTypes;
         // create writer.
-        this.fieldWriters = new IndexedRowWriter.FieldWriter[fieldDataTypes.length];
+        this.fieldWriters = new BinaryWriter.ValueWriter[fieldDataTypes.length];
         this.rowWriter = new IndexedRowWriter(fieldDataTypes);
         for (int i = 0; i < fieldDataTypes.length; i++) {
-            fieldWriters[i] = IndexedRowWriter.createFieldWriter(fieldDataTypes[i]);
+            fieldWriters[i] = BinaryWriter.createValueWriter(fieldDataTypes[i]);
         }
     }
 
@@ -56,7 +57,7 @@ public class IndexedRowEncoder implements RowEncoder {
 
     @Override
     public void encodeField(int pos, Object value) {
-        fieldWriters[pos].writeField(rowWriter, pos, value);
+        fieldWriters[pos].writeValue(rowWriter, pos, value);
     }
 
     @Override

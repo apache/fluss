@@ -74,6 +74,10 @@ public class UnsafeUtils {
         return MemoryUtils.UNSAFE.getInt(target, BYTE_ARRAY_BASE_OFFSET + offset);
     }
 
+    public static short getShort(byte[] target, long offset) {
+        return MemoryUtils.UNSAFE.getShort(target, BYTE_ARRAY_BASE_OFFSET + offset);
+    }
+
     public static long getLong(byte[] target, long offset) {
         return MemoryUtils.UNSAFE.getLong(target, BYTE_ARRAY_BASE_OFFSET + offset);
     }

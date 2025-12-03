@@ -21,6 +21,7 @@ import org.apache.fluss.cluster.Endpoint;
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
+import org.apache.fluss.rpc.protocol.ApiKeys;
 import org.apache.fluss.server.metadata.ServerInfo;
 import org.apache.fluss.server.tablet.TestTabletServerGateway;
 import org.apache.fluss.server.zk.ZooKeeperClient;
@@ -43,7 +44,9 @@ public class CoordinatorTestUtils {
             TestCoordinatorChannelManager testCoordinatorChannelManager) {
         Map<Integer, TabletServerGateway> gateways =
                 makeTabletServerGateways(
-                        coordinatorContext.liveTabletServerSet(), Collections.emptySet());
+                        coordinatorContext.liveTabletServerSet(),
+                        Collections.emptySet(),
+                        Collections.emptySet());
         testCoordinatorChannelManager.setGateways(gateways);
     }
 
@@ -52,14 +55,19 @@ public class CoordinatorTestUtils {
             TestCoordinatorChannelManager testCoordinatorChannelManager,
             Set<Integer> failServers) {
         Map<Integer, TabletServerGateway> gateways =
-                makeTabletServerGateways(coordinatorContext.liveTabletServerSet(), failServers);
+                makeTabletServerGateways(
+                        coordinatorContext.liveTabletServerSet(),
+                        failServers,
+                        Collections.emptySet());
         testCoordinatorChannelManager.setGateways(gateways);
     }
 
     public static void makeSendLeaderAndStopRequestAlwaysSuccess(
-            TestCoordinatorChannelManager testCoordinatorChannelManager, Set<Integer> servers) {
+            TestCoordinatorChannelManager testCoordinatorChannelManager,
+            Set<Integer> servers,
+            Set<ApiKeys> ignoreApis) {
         Map<Integer, TabletServerGateway> gateways =
-                makeTabletServerGateways(servers, Collections.emptySet());
+                makeTabletServerGateways(servers, Collections.emptySet(), ignoreApis);
         testCoordinatorChannelManager.setGateways(gateways);
     }
 
@@ -67,16 +75,17 @@ public class CoordinatorTestUtils {
             TestCoordinatorChannelManager testCoordinatorChannelManager,
             Set<Integer> servers,
             Set<Integer> failServers) {
-        Map<Integer, TabletServerGateway> gateways = makeTabletServerGateways(servers, failServers);
+        Map<Integer, TabletServerGateway> gateways =
+                makeTabletServerGateways(servers, failServers, Collections.emptySet());
         testCoordinatorChannelManager.setGateways(gateways);
     }
 
     private static Map<Integer, TabletServerGateway> makeTabletServerGateways(
-            Set<Integer> servers, Set<Integer> failedServers) {
+            Set<Integer> servers, Set<Integer> failedServers, Set<ApiKeys> ignoreApis) {
         Map<Integer, TabletServerGateway> gateways = new HashMap<>();
         for (Integer server : servers) {
             TabletServerGateway tabletServerGateway =
-                    new TestTabletServerGateway(failedServers.contains(server));
+                    new TestTabletServerGateway(failedServers.contains(server), ignoreApis);
             gateways.put(server, tabletServerGateway);
         }
         return gateways;

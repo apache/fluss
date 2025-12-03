@@ -29,7 +29,6 @@ import org.apache.fluss.flink.row.OperationType;
 import org.apache.fluss.flink.row.RowWithOp;
 import org.apache.fluss.flink.sink.serializer.FlussSerializationSchema;
 import org.apache.fluss.flink.sink.serializer.SerializerInitContextImpl;
-import org.apache.fluss.flink.utils.FlinkConversions;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.metrics.Gauge;
@@ -110,11 +109,15 @@ public abstract class FlinkSinkWriter<InputT> implements SinkWriter<InputT> {
                         metricGroup, Collections.singleton(MetricNames.WRITER_SEND_LATENCY_MS));
         connection = ConnectionFactory.createConnection(flussConfig, flinkMetricRegistry);
         table = connection.getTable(tablePath);
+        LOG.info(
+                "Current Fluss Schema is {}, input Flink RowType is {}",
+                table.getTableInfo().getSchema(),
+                tableRowType);
         sanityCheck(table.getTableInfo());
 
         try {
             this.serializationSchema.open(
-                    new SerializerInitContextImpl(table.getTableInfo().getRowType()));
+                    new SerializerInitContextImpl(table.getTableInfo().getRowType(), tableRowType));
         } catch (Exception e) {
             throw new FlussRuntimeException(e);
         }
@@ -204,22 +207,6 @@ public abstract class FlinkSinkWriter<InputT> implements SinkWriter<InputT> {
                     String.format(
                             "Primary key constraint is not matched between metadata in Fluss (%s) and Flink (%s).",
                             flussTableInfo.hasPrimaryKey(), hasPrimaryKey));
-        }
-        RowType currentTableRowType = FlinkConversions.toFlinkRowType(flussTableInfo.getRowType());
-        if (!this.tableRowType.copy(false).equals(currentTableRowType.copy(false))) {
-            // The default nullability of Flink row type and Fluss row type might be not the same,
-            // thus we need to compare the row type without nullability here.
-
-            // Throw exception if the schema is the not same, this should rarely happen because we
-            // only allow fluss tables derived from fluss catalog. But this can happen if an ALTER
-            // TABLE command executed on the fluss table, after the job is submitted but before the
-            // SinkFunction is opened.
-            throw new ValidationException(
-                    "The Flink query schema is not matched to current Fluss table schema. "
-                            + "\nFlink query schema: "
-                            + this.tableRowType
-                            + "\nFluss table schema: "
-                            + currentTableRowType);
         }
     }
 

@@ -21,6 +21,9 @@ import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.TabletServerInfo;
 import org.apache.fluss.metadata.PhysicalTablePath;
+import org.apache.fluss.metadata.Schema;
+import org.apache.fluss.metadata.SchemaGetter;
+import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
@@ -65,9 +68,12 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
 
     private final MetadataManager metadataManager;
 
+    private final ServerSchemaCache serverSchemaCache;
+
     public TabletServerMetadataCache(MetadataManager metadataManager) {
         this.serverMetadataSnapshot = ServerMetadataSnapshot.empty();
         this.metadataManager = metadataManager;
+        this.serverSchemaCache = new ServerSchemaCache(metadataManager);
     }
 
     @Override
@@ -133,6 +139,17 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
         }
     }
 
+    public SchemaGetter subscribeWithInitialSchema(
+            TablePath tablePath, long tableId, int initialSchemaId, Schema initialSchema) {
+        return serverSchemaCache.subscribeWithInitialSchema(
+                tableId, tablePath, initialSchemaId, initialSchema);
+    }
+
+    public void updateLatestSchema(long tableId, SchemaInfo schemaInfo) {
+        serverSchemaCache.updateLatestSchema(
+                tableId, (short) schemaInfo.getSchemaId(), schemaInfo.getSchema());
+    }
+
     public Optional<PartitionMetadata> getPartitionMetadata(PhysicalTablePath partitionPath) {
         TablePath tablePath = partitionPath.getTablePath();
         String partitionName = partitionPath.getPartitionName();
@@ -185,6 +202,12 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
                         TableInfo tableInfo = tableMetadata.getTableInfo();
                         TablePath tablePath = tableInfo.getTablePath();
                         long tableId = tableInfo.getTableId();
+                        // Update schema metadata.
+                        // todo: apply schema id and schema info if needs
+                        int schemaId = tableInfo.getSchemaId();
+                        Schema schema = tableInfo.getSchema();
+                        serverSchemaCache.updateLatestSchema(tableId, (short) schemaId, schema);
+
                         if (tableId == DELETED_TABLE_ID) {
                             Long removedTableId = tableIdByPath.remove(tablePath);
                             if (removedTableId != null) {
@@ -409,5 +432,10 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
                                     bucketMetadataMapForTables,
                                     bucketMetadataMapForPartitions);
                 });
+    }
+
+    @VisibleForTesting
+    public ServerSchemaCache getServerSchemaCache() {
+        return serverSchemaCache;
     }
 }

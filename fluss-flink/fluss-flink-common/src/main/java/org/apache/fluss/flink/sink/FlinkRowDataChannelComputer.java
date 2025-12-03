@@ -93,6 +93,8 @@ public class FlinkRowDataChannelComputer<InputT> implements ChannelComputer<Inpu
                 partitionGetter != null && numBucket % numChannels != 0;
 
         try {
+            // no need to read real database, thus assume to deserialize the fluss row as same as
+            // flink table type.
             this.serializationSchema.open(new SerializerInitContextImpl(flussRowType));
         } catch (Exception e) {
             throw new FlussRuntimeException(e);

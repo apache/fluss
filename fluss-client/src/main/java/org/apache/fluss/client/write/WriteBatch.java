@@ -63,6 +63,14 @@ public abstract class WriteBatch {
     }
 
     /**
+     * Check if the batch is log batch, e.g., ArrowLogBatch or IndexedLogBatch, and should use
+     * ProduceLog request. Otherwise, it is a kv batch, and should use PutKv request.
+     *
+     * @return true if log batch, false if kv batch
+     */
+    public abstract boolean isLogBatch();
+
+    /**
      * try to append one write record to the record batch.
      *
      * @param writeRecord the record to write

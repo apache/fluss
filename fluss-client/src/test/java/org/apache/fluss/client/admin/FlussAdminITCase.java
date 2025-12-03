@@ -86,9 +86,12 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import static org.apache.fluss.config.ConfigOptions.DATALAKE_FORMAT;
+import static org.apache.fluss.config.ConfigOptions.TABLE_DATALAKE_ENABLED;
+import static org.apache.fluss.config.ConfigOptions.TABLE_DATALAKE_FORMAT;
 import static org.apache.fluss.metadata.DataLakeFormat.PAIMON;
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
 import static org.apache.fluss.testutils.DataTestUtils.row;
+import static org.apache.fluss.testutils.common.CommonTestUtils.waitUntil;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -126,7 +129,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
     void testMultiClient() throws Exception {
         Admin admin1 = conn.getAdmin();
         Admin admin2 = conn.getAdmin();
-        assertThat(admin1).isNotSameAs(admin2);
+        assertThat(admin1).isEqualTo(admin2);
 
         TableInfo t1 = admin1.getTableInfo(DEFAULT_TABLE_PATH).get();
         TableInfo t2 = admin2.getTableInfo(DEFAULT_TABLE_PATH).get();
@@ -205,10 +208,27 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         // assert created time
         assertThat(tableInfo.getCreatedTime())
                 .isBetween(timestampBeforeCreate, timestampAfterCreate);
+
+        // test sensitive lake catalog properties have been removed
+        tablePath = TablePath.of("test_db", "lake_table");
+        admin.createTable(
+                        tablePath,
+                        DEFAULT_TABLE_DESCRIPTOR.withProperties(
+                                new HashMap<String, String>() {
+                                    {
+                                        put("table.datalake.enabled", "true");
+                                    }
+                                }),
+                        false)
+                .get();
+        Map<String, String> properties =
+                admin.getTableInfo(tablePath).get().getProperties().toMap();
+        assertThat(properties.containsKey("table.datalake.paimon.jdbc.user")).isTrue();
+        assertThat(properties.containsKey("table.datalake.paimon.jdbc.password")).isFalse();
     }
 
     @Test
-    void testAlterTable() throws Exception {
+    void testAlterTableConfig() throws Exception {
         // create table
         TablePath tablePath = TablePath.of("test_db", "alter_table_1");
         admin.createTable(tablePath, DEFAULT_TABLE_DESCRIPTOR, false).get();
@@ -280,6 +300,123 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                         tableChanges,
                         true)
                 .get();
+    }
+
+    @Test
+    void testAlterTableColumn() throws Exception {
+        // create table
+        TablePath tablePath = TablePath.of("test_db", "alter_table_1");
+        admin.createTable(tablePath, DEFAULT_TABLE_DESCRIPTOR, false).get();
+
+        assertThatThrownBy(
+                        () ->
+                                admin.alterTable(
+                                                tablePath,
+                                                Collections.singletonList(
+                                                        TableChange.dropColumn("id")),
+                                                false)
+                                        .get())
+                .hasMessageContaining("Not support drop column now.");
+        assertThatThrownBy(
+                        () ->
+                                admin.alterTable(
+                                                tablePath,
+                                                Collections.singletonList(
+                                                        TableChange.renameColumn("id", "id2")),
+                                                false)
+                                        .get())
+                .hasMessageContaining("Not support rename column now.");
+        assertThatThrownBy(
+                        () ->
+                                admin.alterTable(
+                                                tablePath,
+                                                Collections.singletonList(
+                                                        TableChange.modifyColumn(
+                                                                "id",
+                                                                DataTypes.INT(),
+                                                                "person id",
+                                                                null)),
+                                                false)
+                                        .get())
+                .hasMessageContaining("Not support modify column now.");
+
+        assertThatThrownBy(
+                        () ->
+                                admin.alterTable(
+                                                tablePath,
+                                                Collections.singletonList(
+                                                        TableChange.addColumn(
+                                                                "c1",
+                                                                DataTypes.STRING().copy(false),
+                                                                null,
+                                                                TableChange.ColumnPosition.last())),
+                                                false)
+                                        .get())
+                .hasMessageContaining("Column c1 must be nullable");
+
+        assertThatThrownBy(
+                        () ->
+                                admin.alterTable(
+                                                tablePath,
+                                                Collections.singletonList(
+                                                        TableChange.addColumn(
+                                                                "c1",
+                                                                DataTypes.STRING().copy(false),
+                                                                null,
+                                                                TableChange.ColumnPosition
+                                                                        .first())),
+                                                false)
+                                        .get())
+                .hasMessageContaining("Unsupported ColumnPositionType: FIRST");
+
+        assertThatThrownBy(
+                        () ->
+                                admin.alterTable(
+                                                tablePath,
+                                                Collections.singletonList(
+                                                        TableChange.addColumn(
+                                                                "c1",
+                                                                DataTypes.STRING().copy(false),
+                                                                null,
+                                                                TableChange.ColumnPosition.after(
+                                                                        "name"))),
+                                                false)
+                                        .get())
+                .hasMessageContaining("Unsupported ColumnPositionType: AFTER(name)");
+
+        admin.alterTable(
+                        tablePath,
+                        Collections.singletonList(
+                                TableChange.addColumn(
+                                        "c1",
+                                        DataTypes.STRING(),
+                                        "new column c1",
+                                        TableChange.ColumnPosition.last())),
+                        false)
+                .get();
+
+        Schema expectedSchema =
+                Schema.newBuilder()
+                        .primaryKey("id")
+                        .fromColumns(
+                                Arrays.asList(
+                                        new Schema.Column(
+                                                "id", DataTypes.INT(), "person id", (short) 0),
+                                        new Schema.Column(
+                                                "name",
+                                                DataTypes.STRING(),
+                                                "person name",
+                                                (short) 1),
+                                        new Schema.Column(
+                                                "age", DataTypes.INT(), "person age", (short) 2),
+                                        new Schema.Column(
+                                                "c1",
+                                                DataTypes.STRING(),
+                                                "new column c1",
+                                                (short) 3)))
+                        .build();
+        SchemaInfo schemaInfo = admin.getTableSchema(tablePath).get();
+        assertThat(schemaInfo).isEqualTo(new SchemaInfo(expectedSchema, 2));
     }
 
     @Test
@@ -1070,7 +1207,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
     }
 
     @Test
-    void testDynamicConfigs() throws ExecutionException, InterruptedException {
+    void testDynamicConfigs() throws Exception {
         assertThat(
                         FLUSS_CLUSTER_EXTENSION
                                 .getCoordinatorServer()
@@ -1092,20 +1229,37 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         assertConfigEntry(
                 DATALAKE_FORMAT.key(), null, ConfigEntry.ConfigSource.DYNAMIC_SERVER_CONFIG);
 
-        // Delete dynamic configs to use the initial value(from server.yaml)
         admin.alterClusterConfigs(
-                        Collections.singletonList(
+                        Arrays.asList(
                                 new AlterConfig(
-                                        DATALAKE_FORMAT.key(), null, AlterConfigOpType.DELETE)))
+                                        DATALAKE_FORMAT.key(), "paimon", AlterConfigOpType.SET),
+                                new AlterConfig(
+                                        "datalake.paimon.warehouse",
+                                        "test-warehouse",
+                                        AlterConfigOpType.SET)))
                 .get();
-        assertThat(
-                        FLUSS_CLUSTER_EXTENSION
-                                .getCoordinatorServer()
-                                .getCoordinatorService()
-                                .getDataLakeFormat())
-                .isEqualTo(PAIMON);
-        assertConfigEntry(
-                DATALAKE_FORMAT.key(), "paimon", ConfigEntry.ConfigSource.INITIAL_SERVER_CONFIG);
+        TablePath tablePath = TablePath.of("test_db", "test_table");
+        createTable(
+                tablePath,
+                TableDescriptor.builder()
+                        .schema(DEFAULT_SCHEMA)
+                        .property(TABLE_DATALAKE_ENABLED, true)
+                        .build(),
+                true);
+
+        waitUntil(
+                () -> {
+                    TableInfo tableInfo = admin.getTableInfo(tablePath).get();
+                    Map<String, String> tableProperties = tableInfo.getProperties().toMap();
+                    return tableProperties.containsKey(TABLE_DATALAKE_FORMAT.key())
+                            && tableProperties.containsKey("table.datalake.paimon.warehouse")
+                            && PAIMON.toString()
+                                    .equals(tableProperties.get(TABLE_DATALAKE_FORMAT.key()))
+                            && "test-warehouse"
+                                    .equals(tableProperties.get("table.datalake.paimon.warehouse"));
+                },
+                Duration.ofMinutes(1),
+                "Get lakehouse info");
     }
 
     private void assertConfigEntry(

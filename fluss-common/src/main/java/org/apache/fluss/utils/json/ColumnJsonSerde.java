@@ -25,6 +25,8 @@ import org.apache.fluss.types.DataType;
 
 import java.io.IOException;
 
+import static org.apache.fluss.metadata.Schema.Column.UNKNOWN_COLUMN_ID;
+
 /** Json serializer and deserializer for {@link Schema.Column}. */
 @Internal
 public class ColumnJsonSerde
@@ -32,6 +34,7 @@ public class ColumnJsonSerde
 
     public static final ColumnJsonSerde INSTANCE = new ColumnJsonSerde();
     static final String NAME = "name";
+    static final String ID = "id";
     static final String DATA_TYPE = "data_type";
     static final String COMMENT = "comment";
 
@@ -46,6 +49,7 @@ public class ColumnJsonSerde
         if (column.getComment().isPresent()) {
             generator.writeStringField(COMMENT, column.getComment().get());
         }
+        generator.writeNumberField(ID, column.getColumnId());
 
         generator.writeEndObject();
     }
@@ -55,11 +59,11 @@ public class ColumnJsonSerde
         String columnName = node.required(NAME).asText();
 
         DataType dataType = DataTypeJsonSerde.INSTANCE.deserialize(node.get(DATA_TYPE));
-        Schema.Column column = new Schema.Column(columnName, dataType);
-        if (node.hasNonNull(COMMENT)) {
-            column = column.withComment(node.get(COMMENT).asText());
-        }
 
-        return column;
+        return new Schema.Column(
+                columnName,
+                dataType,
+                node.hasNonNull(COMMENT) ? node.get(COMMENT).asText() : null,
+                node.has(ID) ? node.get(ID).asInt() : UNKNOWN_COLUMN_ID);
     }
 }

@@ -66,8 +66,8 @@ final class PojoType<T> {
         Constructor<T> ctor = requirePublicDefaultConstructor(pojoClass);
 
         Map<String, Field> allFields = discoverAllInstanceFields(pojoClass);
-        Map<String, Method> getters = discoverGetters(pojoClass);
-        Map<String, Method> setters = discoverSetters(pojoClass);
+        Map<String, Method> getters = discoverGetters(pojoClass, allFields);
+        Map<String, Method> setters = discoverSetters(pojoClass, allFields);
 
         Map<String, Property> props = new LinkedHashMap<>();
         for (Map.Entry<String, Field> e : allFields.entrySet()) {
@@ -85,10 +85,11 @@ final class PojoType<T> {
             if (!publicField) {
                 // When not a public field, require both getter and setter
                 if (getter == null || setter == null) {
+                    final String capitalizedName = capitalize(name);
                     throw new IllegalArgumentException(
                             String.format(
                                     "POJO class %s field '%s' must be public or have both getter and setter (get%s/set%s).",
-                                    pojoClass.getName(), name, capitalize(name), capitalize(name)));
+                                    pojoClass.getName(), name, capitalizedName, capitalizedName));
                 }
             }
             props.put(
@@ -108,22 +109,30 @@ final class PojoType<T> {
     }
 
     private static <T> Constructor<T> requirePublicDefaultConstructor(Class<T> pojoClass) {
-        try {
-            Constructor<T> ctor = pojoClass.getDeclaredConstructor();
-            if (!Modifier.isPublic(ctor.getModifiers())) {
-                throw new IllegalArgumentException(
-                        String.format(
-                                "POJO class %s must have a public default constructor.",
-                                pojoClass.getName()));
+        Constructor<T>[] ctors = (Constructor<T>[]) pojoClass.getConstructors();
+        for (Constructor<T> c : ctors) {
+            if (!Modifier.isPublic(c.getModifiers())) {
+                continue;
             }
-            return ctor;
-        } catch (NoSuchMethodException e) {
-            throw new IllegalArgumentException(
-                    String.format(
-                            "POJO class %s must have a public default constructor.",
-                            pojoClass.getName()),
-                    e);
+            if (c.getParameterCount() == 0) {
+
+                return c;
+            }
+            if (c.getParameterCount() == 1
+                    && pojoClass
+                            .getName()
+                            .equals(
+                                    c.getParameterTypes()[0].getName()
+                                            + "$"
+                                            + pojoClass.getSimpleName())) {
+                return c;
+            }
         }
+
+        throw new IllegalArgumentException(
+                String.format(
+                        "POJO class %s must have a public default constructor.",
+                        pojoClass.getName()));
     }
 
     private static Map<String, Field> discoverAllInstanceFields(Class<?> clazz) {
@@ -135,6 +144,13 @@ final class PojoType<T> {
                 if (Modifier.isStatic(mod) || Modifier.isTransient(mod)) {
                     continue;
                 }
+                // Skip references to enclosing class
+                if (f.getName().startsWith("this$")) {
+                    final Class type = f.getType();
+                    if ((type.getName() + "$" + clazz.getSimpleName()).equals(clazz.getName())) {
+                        continue;
+                    }
+                }
                 f.setAccessible(true);
                 fields.putIfAbsent(f.getName(), f);
             }
@@ -143,30 +159,66 @@ final class PojoType<T> {
         return fields;
     }
 
-    private static Map<String, Method> discoverGetters(Class<?> clazz) {
-        Map<String, Method> getters = new HashMap<>();
+    private static Map<String, Method> discoverGetters(
+            Class<?> clazz, Map<String, Field> fieldMap) {
+        final Map<String, Method> getters = new HashMap<>();
         for (Method m : clazz.getMethods()) { // public methods incl. inherited
-            if (m.getParameterCount() == 0
-                    && m.getName().startsWith("get")
-                    && !m.getReturnType().equals(void.class)) {
-                String prop = decapitalize(m.getName().substring(3));
+            final String prop = getGetterProp(m);
+            if (fieldMap.containsKey(prop)) {
                 getters.put(prop, m);
             }
         }
         return getters;
     }
 
-    private static Map<String, Method> discoverSetters(Class<?> clazz) {
-        Map<String, Method> setters = new HashMap<>();
+    private static String getGetterProp(Method m) {
+        if (m.getParameterCount() != 0) {
+            return null;
+        }
+        final Class<?> returnType = m.getReturnType();
+        if (void.class.equals(returnType) || Void.class.equals(returnType)) {
+            return null;
+        }
+        final String name = m.getName();
+        if (name.startsWith("get")) {
+            return decapitalize(name.substring(3));
+        }
+        if (returnType.equals(boolean.class) || returnType.equals(Boolean.class)) {
+            if (name.startsWith("is")) {
+                return decapitalize(name.substring(2));
+            }
+            if (name.startsWith("has")) {
+                return decapitalize(name.substring(3));
+            }
+        }
+        return null;
+    }
+
+    private static Map<String, Method> discoverSetters(
+            Class<?> clazz, Map<String, Field> fieldMap) {
+        final Map<String, Method> setters = new HashMap<>();
         for (Method m : clazz.getMethods()) { // public methods incl. inherited
-            if (m.getParameterCount() == 1
-                    && m.getName().startsWith("set")
-                    && m.getReturnType().equals(void.class)) {
-                String prop = decapitalize(m.getName().substring(3));
+            final String prop = getSetterProp(m);
+            if (fieldMap.containsKey(prop)) {
                 setters.put(prop, m);
             }
         }
         return setters;
+    }
+
+    private static String getSetterProp(Method m) {
+        if (m.getParameterCount() != 1) {
+            return null;
+        }
+        final Class<?> returnType = m.getReturnType();
+        if (!void.class.equals(returnType) && !Void.class.equals(returnType)) {
+            return null;
+        }
+        final String name = m.getName();
+        if (name.startsWith("set")) {
+            return decapitalize(name.substring(3));
+        }
+        return null;
     }
 
     private static String capitalize(String s) {

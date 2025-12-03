@@ -24,12 +24,15 @@ import org.apache.fluss.row.BinarySegmentUtils;
 import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.Decimal;
 import org.apache.fluss.row.GenericRow;
+import org.apache.fluss.row.InternalArray;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
 import org.apache.fluss.row.indexed.IndexedRow;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.utils.MurmurHashUtils;
+
+import static org.apache.fluss.utils.Preconditions.checkArgument;
 
 /**
  * An implementation of {@link InternalRow} which is backed by {@link MemorySegment} instead of
@@ -67,6 +70,10 @@ public class CompactedRow implements BinaryRow {
     private CompactedRowReader reader;
     private final CompactedRowDeserializer deserializer;
 
+    public CompactedRow(DataType[] types) {
+        this(types.length, new CompactedRowDeserializer(types));
+    }
+
     public CompactedRow(int arity, CompactedRowDeserializer deserializer) {
         this.arity = arity;
         this.deserializer = deserializer;
@@ -93,6 +100,19 @@ public class CompactedRow implements BinaryRow {
         segment.get(offset, dst, dstOffset, sizeInBytes);
     }
 
+    @Override
+    public CompactedRow copy() {
+        return copy(new CompactedRow(arity, deserializer));
+    }
+
+    public CompactedRow copy(CompactedRow from) {
+        byte[] newBuffer = new byte[sizeInBytes];
+        segment.get(offset, newBuffer, 0, sizeInBytes);
+        from.pointTo(MemorySegment.wrap(newBuffer), 0, sizeInBytes);
+        return from;
+    }
+
+    @Override
     public void pointTo(MemorySegment segment, int offset, int sizeInBytes) {
         this.segment = segment;
         this.segments = new MemorySegment[] {segment};
@@ -101,9 +121,14 @@ public class CompactedRow implements BinaryRow {
         this.decoded = false;
     }
 
-    public static int calculateBitSetWidthInBytes(int arity) {
-        // need arity bits to store null bits, round up to the nearest byte size
-        return (arity + 7) / 8;
+    @Override
+    public void pointTo(MemorySegment[] segments, int offset, int sizeInBytes) {
+        checkArgument(segments.length == 1, "IndexedRow only supports single segment now.");
+        this.segment = segments[0];
+        this.segments = segments;
+        this.offset = offset;
+        this.sizeInBytes = sizeInBytes;
+        this.decoded = false;
     }
 
     @Override
@@ -226,6 +251,14 @@ public class CompactedRow implements BinaryRow {
     }
 
     @Override
+    public InternalArray getArray(int pos) {
+        return decodedRow().getArray(pos);
+    }
+
+    // TODO: getMap() will be added in Issue #1973
+    // TODO: getRow() will be added in Issue #1974
+
+    @Override
     public boolean equals(Object o) {
         if (this == o) {
             return true;
@@ -241,5 +274,10 @@ public class CompactedRow implements BinaryRow {
     @Override
     public int hashCode() {
         return MurmurHashUtils.hashBytes(segment, offset, sizeInBytes);
+    }
+
+    public static int calculateBitSetWidthInBytes(int arity) {
+        // need arity bits to store null bits, round up to the nearest byte size
+        return (arity + 7) / 8;
     }
 }

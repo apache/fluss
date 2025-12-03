@@ -25,21 +25,35 @@ public class ApiException extends FlussRuntimeException {
 
     private static final long serialVersionUID = 1L;
 
+    private final boolean stackTraceEnabled;
+
+    public ApiException(String message, Throwable cause, boolean stackTraceEnabled) {
+        super(message, cause);
+        this.stackTraceEnabled = stackTraceEnabled;
+    }
+
     public ApiException(String message, Throwable cause) {
         super(message, cause);
+        this.stackTraceEnabled = false;
     }
 
     public ApiException(String message) {
         super(message);
+        this.stackTraceEnabled = false;
     }
 
     public ApiException(Throwable cause) {
         super(cause);
+        this.stackTraceEnabled = false;
     }
 
     /* avoid the expensive and useless stack trace for api exceptions */
     @Override
     public Throwable fillInStackTrace() {
-        return this;
+        if (stackTraceEnabled) {
+            return super.fillInStackTrace();
+        } else {
+            return this;
+        }
     }
 }

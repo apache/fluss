@@ -1,3 +1,21 @@
+<!--
+ Licensed to the Apache Software Foundation (ASF) under one
+ or more contributor license agreements.  See the NOTICE file
+ distributed with this work for additional information
+ regarding copyright ownership.  The ASF licenses this file
+ to you under the Apache License, Version 2.0 (the
+ "License"); you may not use this file except in compliance
+ with the License.  You may obtain a copy of the License at
+
+      http://www.apache.org/licenses/LICENSE-2.0
+
+ Unless required by applicable law or agreed to in writing, software
+ distributed under the License is distributed on an "AS IS" BASIS,
+ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ See the License for the specific language governing permissions and
+ limitations under the License.
+-->
+
 <p align="center">
     <picture>
       <source media="(prefers-color-scheme: dark)" srcset="website/static/img/logo/svg/white_color_logo.svg">
@@ -43,15 +61,12 @@ Prerequisites for building Apache Fluss:
 - Unix-like environment (we use Linux, Mac OS X, Cygwin, WSL)
 - Git
 - Maven (we require version >= 3.8.6)
-- Java 8 or 11
+- Java 11
 
 ```bash
 git clone https://github.com/apache/fluss.git
 cd fluss
-# in case of java 11
 ./mvnw clean package -DskipTests
-# or in case of java 8
-./mvnw clean package -DskipTests -Pjava8
 ```
 
 Apache Fluss is now installed in `build-target`. The build command uses Maven Wrapper (`mvnw`) which ensures the correct Maven version is used.

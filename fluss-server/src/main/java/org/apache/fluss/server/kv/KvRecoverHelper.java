@@ -17,9 +17,9 @@
 
 package org.apache.fluss.server.kv;
 
-import org.apache.fluss.exception.KvStorageException;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.KvFormat;
+import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
@@ -62,6 +62,7 @@ public class KvRecoverHelper {
 
     private KeyEncoder keyEncoder;
     private RowEncoder rowEncoder;
+    private final SchemaGetter schemaGetter;
 
     private InternalRow.FieldGetter[] currentFieldGetters;
 
@@ -70,12 +71,14 @@ public class KvRecoverHelper {
             LogTablet logTablet,
             long recoverPointOffset,
             KvRecoverContext recoverContext,
-            KvFormat kvFormat) {
+            KvFormat kvFormat,
+            SchemaGetter schemaGetter) {
         this.kvTablet = kvTablet;
         this.logTablet = logTablet;
         this.recoverPointOffset = recoverPointOffset;
         this.recoverContext = recoverContext;
         this.kvFormat = kvFormat;
+        this.schemaGetter = schemaGetter;
     }
 
     public void recover() throws Exception {
@@ -88,6 +91,8 @@ public class KvRecoverHelper {
         // the data in pre-write will be flush
         // after the corresponding log offset is acked(when high watermark is advanced to the
         // offset)
+
+        initSchema(schemaGetter.getLatestSchemaInfo().getSchemaId());
 
         long nextLogOffset = recoverPointOffset;
         // read to high watermark
@@ -122,59 +127,52 @@ public class KvRecoverHelper {
             FetchIsolation fetchIsolation,
             ThrowingConsumer<KeyValueAndLogOffset, Exception> resumeRecordConsumer)
             throws Exception {
-        long nextFetchOffset = startFetchOffset;
-        while (true) {
-            LogRecords logRecords =
-                    logTablet
-                            .read(
-                                    nextFetchOffset,
-                                    recoverContext.maxFetchLogSizeInRecoverKv,
-                                    fetchIsolation,
-                                    true,
-                                    null)
-                            .getRecords();
-            if (logRecords == MemoryLogRecords.EMPTY) {
-                break;
-            }
-
-            for (LogRecordBatch logRecordBatch : logRecords.batches()) {
-                short schemaId = logRecordBatch.schemaId();
-                if (currentSchemaId == null) {
-                    initSchema(schemaId);
-                } else if (currentSchemaId != schemaId) {
-                    throw new KvStorageException(
-                            String.format(
-                                    "Can't recover kv tablet for table bucket from log %s since the schema changes from schema id %d to schema id %d. "
-                                            + "Currently, schema change is not supported.",
-                                    recoverContext.tableBucket, currentSchemaId, schemaId));
+        try (LogRecordReadContext readContext =
+                LogRecordReadContext.createArrowReadContext(
+                        currentRowType, currentSchemaId, schemaGetter)) {
+            long nextFetchOffset = startFetchOffset;
+            while (true) {
+                LogRecords logRecords =
+                        logTablet
+                                .read(
+                                        nextFetchOffset,
+                                        recoverContext.maxFetchLogSizeInRecoverKv,
+                                        fetchIsolation,
+                                        true,
+                                        null)
+                                .getRecords();
+                if (logRecords == MemoryLogRecords.EMPTY) {
+                    break;
                 }
 
-                try (LogRecordReadContext readContext =
-                                LogRecordReadContext.createArrowReadContext(
-                                        currentRowType, currentSchemaId);
-                        CloseableIterator<LogRecord> logRecordIter =
-                                logRecordBatch.records(readContext)) {
-                    while (logRecordIter.hasNext()) {
-                        LogRecord logRecord = logRecordIter.next();
-                        if (logRecord.getChangeType() != ChangeType.UPDATE_BEFORE) {
-                            InternalRow logRow = logRecord.getRow();
-                            byte[] key = keyEncoder.encodeKey(logRow);
-                            byte[] value = null;
-                            if (logRecord.getChangeType() != ChangeType.DELETE) {
-                                // the log row format may not compatible with kv row format,
-                                // e.g, arrow vs. compacted, thus needs a conversion here.
-                                BinaryRow row = toKvRow(logRecord.getRow());
-                                value = ValueEncoder.encodeValue(schemaId, row);
+                for (LogRecordBatch logRecordBatch : logRecords.batches()) {
+                    try (CloseableIterator<LogRecord> logRecordIter =
+                            logRecordBatch.records(readContext)) {
+                        while (logRecordIter.hasNext()) {
+                            LogRecord logRecord = logRecordIter.next();
+                            if (logRecord.getChangeType() != ChangeType.UPDATE_BEFORE) {
+                                InternalRow logRow = logRecord.getRow();
+                                byte[] key = keyEncoder.encodeKey(logRow);
+                                byte[] value = null;
+                                if (logRecord.getChangeType() != ChangeType.DELETE) {
+                                    // the log row format may not compatible with kv row format,
+                                    // e.g, arrow vs. compacted, thus needs a conversion here.
+                                    BinaryRow row = toKvRow(logRecord.getRow());
+                                    value =
+                                            ValueEncoder.encodeValue(
+                                                    currentSchemaId.shortValue(), row);
+                                }
+                                resumeRecordConsumer.accept(
+                                        new KeyValueAndLogOffset(
+                                                key, value, logRecord.logOffset()));
                             }
-                            resumeRecordConsumer.accept(
-                                    new KeyValueAndLogOffset(key, value, logRecord.logOffset()));
                         }
                     }
+                    nextFetchOffset = logRecordBatch.nextLogOffset();
                 }
-                nextFetchOffset = logRecordBatch.nextLogOffset();
             }
+            return nextFetchOffset;
         }
-        return nextFetchOffset;
     }
 
     // TODO: this is very in-efficient, because the conversion is CPU heavy. Should be optimized in
@@ -203,7 +201,7 @@ public class KvRecoverHelper {
         // kv tablet's table id or not. If not equal, it means other table with same
         // table path has been created, so the kv tablet's table is consider to be
         // deleted. We can ignore the restore operation
-        currentRowType = tableInfo.getRowType();
+        currentRowType = schemaGetter.getSchema(schemaId).getRowType();
         DataType[] dataTypes = currentRowType.getChildren().toArray(new DataType[0]);
         currentSchemaId = schemaId;
 

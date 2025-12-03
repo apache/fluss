@@ -48,7 +48,6 @@ do
 done
 
 NOTICE="${DST}/NOTICE"
-[ -f "${NOTICE}" ] && rm "${NOTICE}"
 (export LC_ALL=C; find "${TMP}" -name "NOTICE" | sort | xargs cat >> "${NOTICE}")
 
 LICENSES="${DST}/licenses"

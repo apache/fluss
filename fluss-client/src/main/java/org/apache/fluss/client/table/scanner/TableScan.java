@@ -27,6 +27,7 @@ import org.apache.fluss.client.table.scanner.log.LogScanner;
 import org.apache.fluss.client.table.scanner.log.LogScannerImpl;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.exception.FlussRuntimeException;
+import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.types.RowType;
@@ -40,30 +41,33 @@ public class TableScan implements Scan {
 
     private final FlussConnection conn;
     private final TableInfo tableInfo;
+    private final SchemaGetter schemaGetter;
 
     /** The projected fields to do projection. No projection if is null. */
     @Nullable private final int[] projectedColumns;
     /** The limited row number to read. No limit if is null. */
     @Nullable private final Integer limit;
 
-    public TableScan(FlussConnection conn, TableInfo tableInfo) {
-        this(conn, tableInfo, null, null);
+    public TableScan(FlussConnection conn, TableInfo tableInfo, SchemaGetter schemaGetter) {
+        this(conn, tableInfo, schemaGetter, null, null);
     }
 
     private TableScan(
             FlussConnection conn,
             TableInfo tableInfo,
+            SchemaGetter schemaGetter,
             @Nullable int[] projectedColumns,
             @Nullable Integer limit) {
         this.conn = conn;
         this.tableInfo = tableInfo;
         this.projectedColumns = projectedColumns;
         this.limit = limit;
+        this.schemaGetter = schemaGetter;
     }
 
     @Override
     public Scan project(@Nullable int[] projectedColumns) {
-        return new TableScan(conn, tableInfo, projectedColumns, limit);
+        return new TableScan(conn, tableInfo, schemaGetter, projectedColumns, limit);
     }
 
     @Override
@@ -82,12 +86,12 @@ public class TableScan implements Scan {
             }
             columnIndexes[i] = index;
         }
-        return new TableScan(conn, tableInfo, columnIndexes, limit);
+        return new TableScan(conn, tableInfo, schemaGetter, columnIndexes, limit);
     }
 
     @Override
     public Scan limit(int rowNumber) {
-        return new TableScan(conn, tableInfo, projectedColumns, rowNumber);
+        return new TableScan(conn, tableInfo, schemaGetter, projectedColumns, rowNumber);
     }
 
     @Override
@@ -98,13 +102,15 @@ public class TableScan implements Scan {
                             "LogScanner doesn't support limit pushdown. Table: %s, requested limit: %d",
                             tableInfo.getTablePath(), limit));
         }
+
         return new LogScannerImpl(
                 conn.getConfiguration(),
                 tableInfo,
                 conn.getMetadataUpdater(),
                 conn.getClientMetricGroup(),
                 conn.getOrCreateRemoteFileDownloader(),
-                projectedColumns);
+                projectedColumns,
+                schemaGetter);
     }
 
     @Override
@@ -116,7 +122,12 @@ public class TableScan implements Scan {
                             tableInfo.getTablePath(), tableBucket));
         }
         return new LimitBatchScanner(
-                tableInfo, tableBucket, conn.getMetadataUpdater(), projectedColumns, limit);
+                tableInfo,
+                tableBucket,
+                schemaGetter,
+                conn.getMetadataUpdater(),
+                projectedColumns,
+                limit);
     }
 
     @Override
@@ -142,7 +153,9 @@ public class TableScan implements Scan {
         }
 
         return new KvSnapshotBatchScanner(
-                tableInfo.getRowType(),
+                tableInfo.getSchemaId(),
+                tableInfo.getSchema(),
+                schemaGetter,
                 tableBucket,
                 snapshotMeta.getSnapshotFiles(),
                 projectedColumns,

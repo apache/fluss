@@ -17,6 +17,7 @@
 
 package org.apache.fluss.flink.source.reader;
 
+import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.client.Connection;
 import org.apache.fluss.client.ConnectionFactory;
 import org.apache.fluss.client.table.Table;
@@ -130,6 +131,8 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
         this.boundedSplits = new ArrayDeque<>();
         this.subscribedBuckets = new HashMap<>();
         this.projectedFields = projectedFields;
+        if (projectedFields == null) {}
+
         this.flinkSourceReaderMetrics = flinkSourceReaderMetrics;
         sanityCheck(table.getTableInfo().getRowType(), projectedFields);
         this.logScanner = table.newScan().project(projectedFields).createLogScanner();
@@ -564,7 +567,8 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
         RowType tableRowType =
                 projectedFields != null
                         ? flussTableRowType.project(projectedFields)
-                        : flussTableRowType;
+                        // only read the output fields from source
+                        : flussTableRowType.project(sourceOutputType.getFieldNames());
         if (!sourceOutputType.copy(false).equals(tableRowType.copy(false))) {
             // The default nullability of Flink row type and Fluss row type might be not the same,
             // thus we need to compare the row type without nullability here.
@@ -590,5 +594,10 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
                             + sourceOutputType
                             + flussSchemaMsg);
         }
+    }
+
+    @VisibleForTesting
+    int[] getProjectedFields() {
+        return projectedFields;
     }
 }

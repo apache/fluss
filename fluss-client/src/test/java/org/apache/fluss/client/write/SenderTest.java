@@ -707,7 +707,7 @@ final class SenderTest {
     private void appendToAccumulator(TableBucket tb, GenericRow row, WriteCallback writeCallback)
             throws Exception {
         accumulator.append(
-                WriteRecord.forArrowAppend(DATA1_PHYSICAL_TABLE_PATH, row, null),
+                WriteRecord.forArrowAppend(DATA1_TABLE_INFO, DATA1_PHYSICAL_TABLE_PATH, row, null),
                 writeCallback,
                 metadataUpdater.getCluster(),
                 tb.getBucket(),

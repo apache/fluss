@@ -42,6 +42,7 @@ import java.util.stream.Stream;
 
 import static org.apache.fluss.record.TestData.DATA1_ROW_TYPE;
 import static org.apache.fluss.record.TestData.DEFAULT_SCHEMA_ID;
+import static org.apache.fluss.record.TestData.TEST_SCHEMA_GETTER;
 import static org.apache.fluss.testutils.DataTestUtils.assertLogRecordsEquals;
 import static org.apache.fluss.testutils.DataTestUtils.genLogRecordsWithBaseOffsetAndTimestamp;
 import static org.apache.fluss.testutils.DataTestUtils.genMemoryLogRecordsWithBaseOffset;
@@ -341,7 +342,8 @@ final class LogSegmentTest extends LogTestBase {
         segment.recover();
 
         try (LogRecordReadContext readContext =
-                LogRecordReadContext.createArrowReadContext(DATA1_ROW_TYPE, DEFAULT_SCHEMA_ID)) {
+                LogRecordReadContext.createArrowReadContext(
+                        DATA1_ROW_TYPE, DEFAULT_SCHEMA_ID, TEST_SCHEMA_GETTER)) {
             for (int i = 0; i < 100; i++) {
                 FetchDataInfo read = segment.read(i, 100, segment.getSizeInBytes(), true);
                 assertThat(read).isNotNull();

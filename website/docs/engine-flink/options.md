@@ -1,6 +1,6 @@
 ---
 title: Connector Options
-sidebar_position: 7
+sidebar_position: 8
 ---
 
 # Connector Options
@@ -49,14 +49,15 @@ INSERT INTO pk_table2 /*+ OPTIONS('sink.ignore-delete'='true') */ select * from 
 ```
 
 
-### Configure options by altering table
+### Reconfigure options by altering table
 
-This is not supported yet, but is planned in the near future.
-For example, the following SQL statement alters the Fluss table with the `table.log.ttl` set to 7 days:
+Using `ALTER TABLE ... SET` statement to modify the table options. For example, to enable lakehouse storage for an existing table, you can run the following SQL command:
 
 ```sql
-ALTER TABLE log_table SET ('table.log.ttl' = '7d');
+ALTER TABLE log_table SET ('table.datalake.enable' = 'true');
 ```
+
+See more details about [ALTER TABLE ... SET](engine-flink/ddl.md#set-properties) and [ALTER TABLE ... RESET](engine-flink/ddl.md#reset-properties) documentation.
 
 ## Storage Options
 
@@ -85,6 +86,7 @@ ALTER TABLE log_table SET ('table.log.ttl' = '7d');
 | table.merge-engine.versioned.ver-column | String   | (None)                              | The column name of the version column for the `versioned` merge engine. If the merge engine is set to `versioned`, the version column must be set.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | table.delete.behavior                   | Enum     | ALLOW                               | Controls the behavior of delete operations on primary key tables. Three modes are supported: `ALLOW` (default) - allows normal delete operations; `IGNORE` - silently ignores delete requests without errors; `DISABLE` - rejects delete requests and throws explicit errors. This configuration provides system-level guarantees for some downstream pipelines (e.g., Flink Delta Join) that must not receive any delete events in the changelog of the table. For tables with `first_row` or `versioned` merge engines, this option is automatically set to `IGNORE` and cannot be overridden. Only applicable to primary key tables.                                                                                                                                                                                                                                                                                                |
 
+
 ## Read Options
 
 | Option                                              | Type       | Default                                         | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
@@ -107,16 +109,17 @@ ALTER TABLE log_table SET ('table.log.ttl' = '7d');
 | Option                                   | Type       | Default | Description                                                                                                                 |
 |------------------------------------------|------------|---------|-----------------------------------------------------------------------------------------------------------------------------|
 | lookup.async                             | Boolean    | true    | Whether to use asynchronous lookup. Asynchronous lookup has better throughput performance than synchronous lookup.          |
-| lookup.cache                             | Enum       | NONE    | The caching strategy for this lookup table, including NONE, PARTIAL.                                                        |                                                                                                                                                                                                                                                                                    |
-| lookup.max-retries                       | Integer    | 3       | The maximum allowed retries if a lookup operation fails.                                                                    |                                                                                                                                                                                                                                                                                                 |
-| lookup.partial-cache.expire-after-access | Duration   | (None)  | Duration to expire an entry in the cache after accessing.                                                                   |                                                                                                                                                                                                                                                                                               |
-| lookup.partial-cache.expire-after-write  | Duration   | (None)  | Duration to expire an entry in the cache after writing.                                                                     |                                                                                                                                                                                                                                                                                              |
-| lookup.partial-cache.cache-missing-key   | Boolean    | true    | Whether to store an empty value into the cache if the lookup key doesn't match any rows in the table.                       |                                                                                                                                                                                                                                                   |
-| lookup.partial-cache.max-rows            | Long       | (None)  | The maximum number of rows to store in the cache.                                                                           |                                                                                                                                                                                                                                                                                                    |
+| lookup.cache                             | Enum       | NONE    | The caching strategy for this lookup table, including NONE, PARTIAL.                                                        |
+| lookup.max-retries                       | Integer    | 3       | The maximum allowed retries if a lookup operation fails. Setting this value will override option 'client.lookup.max-retries'.|
+| lookup.partial-cache.expire-after-access | Duration   | (None)  | Duration to expire an entry in the cache after accessing.                                                                   |
+| lookup.partial-cache.expire-after-write  | Duration   | (None)  | Duration to expire an entry in the cache after writing.                                                                     |
+| lookup.partial-cache.cache-missing-key   | Boolean    | true    | Whether to store an empty value into the cache if the lookup key doesn't match any rows in the table.                       |
+| lookup.partial-cache.max-rows            | Long       | (None)  | The maximum number of rows to store in the cache.                                                                           |
 | client.lookup.queue-size                 | Integer    | 25600   | The maximum number of pending lookup operations.                                                                            |
 | client.lookup.max-batch-size             | Integer    | 128     | The maximum batch size of merging lookup operations to one lookup request.                                                  |
 | client.lookup.max-inflight-requests      | Integer    | 128     | The maximum number of unacknowledged lookup requests for lookup operations.                                                 |
 | client.lookup.batch-timeout              | Duration   | 100ms   | The maximum time to wait for the lookup batch to full, if this timeout is reached, the lookup batch will be closed to send. |
+| client.lookup.max-retries                | Integer    | 3       | Setting a value greater than zero will cause the client to resend any lookup request that fails with a potentially transient error. |
 
 
 ## Write Options

@@ -21,6 +21,7 @@ import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.row.BinarySegmentUtils;
 import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.Decimal;
+import org.apache.fluss.row.InternalArray;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
@@ -40,7 +41,6 @@ import static org.apache.fluss.types.DataTypeChecks.getScale;
  * <p>See {@link CompactedRowWriter}.
  */
 public class CompactedRowReader {
-
     // Including null bits.
     private final int headerSizeInBytes;
 
@@ -204,6 +204,12 @@ public class CompactedRowReader {
         return string;
     }
 
+    public BinaryString readChar(int length) {
+        BinaryString string = BinaryString.fromAddress(segments, position, length);
+        position += length;
+        return string;
+    }
+
     public Decimal readDecimal(int precision, int scale) {
         return Decimal.isCompact(precision)
                 ? Decimal.fromUnscaledLong(readLong(), precision, scale)
@@ -230,6 +236,10 @@ public class CompactedRowReader {
 
     public byte[] readBytes() {
         int length = readInt();
+        return readBytesInternal(length);
+    }
+
+    public byte[] readBinary(int length) {
         return readBytesInternal(length);
     }
 
@@ -263,6 +273,7 @@ public class CompactedRowReader {
         // ordered by type root definition
         switch (fieldType.getTypeRoot()) {
             case CHAR:
+                // TODO: use readChar(length) in the future, but need to keep compatibility
             case STRING:
                 fieldReader = (reader, pos) -> reader.readString();
                 break;
@@ -270,6 +281,7 @@ public class CompactedRowReader {
                 fieldReader = (reader, pos) -> reader.readBoolean();
                 break;
             case BINARY:
+                // TODO: use readBinary(length) in the future, but need to keep compatibility
             case BYTES:
                 fieldReader = (reader, pos) -> reader.readBytes();
                 break;
@@ -306,6 +318,18 @@ public class CompactedRowReader {
                 final int timestampLtzPrecision = getPrecision(fieldType);
                 fieldReader = (reader, pos) -> reader.readTimestampLtz(timestampLtzPrecision);
                 break;
+            case ARRAY:
+                fieldReader = (reader, pos) -> reader.readArray();
+                break;
+
+            case MAP:
+                // TODO: Map type support will be added in Issue #1973
+                throw new UnsupportedOperationException(
+                        "Map type in KV table is not supported yet. Will be added in Issue #1976.");
+            case ROW:
+                // TODO: Row type support will be added in Issue #1974
+                throw new UnsupportedOperationException(
+                        "Row type in KV table is not supported yet. Will be added in Issue #1977.");
             default:
                 throw new IllegalArgumentException("Unsupported type for IndexedRow: " + fieldType);
         }
@@ -318,6 +342,13 @@ public class CompactedRowReader {
             }
             return fieldReader.readField(reader, pos);
         };
+    }
+
+    public InternalArray readArray() {
+        int length = readInt();
+        InternalArray array = BinarySegmentUtils.readBinaryArray(segments, position, length);
+        position += length;
+        return array;
     }
 
     /**

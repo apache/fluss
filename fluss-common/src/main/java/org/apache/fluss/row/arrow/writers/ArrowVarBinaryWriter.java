@@ -18,36 +18,20 @@
 package org.apache.fluss.row.arrow.writers;
 
 import org.apache.fluss.annotation.Internal;
-import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.row.DataGetters;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.VarBinaryVector;
 
 /** {@link ArrowFieldWriter} for VarBinary. */
 @Internal
-public class ArrowVarBinaryWriter extends ArrowFieldWriter<InternalRow> {
+public class ArrowVarBinaryWriter extends ArrowFieldWriter {
 
-    public static ArrowVarBinaryWriter forField(VarBinaryVector varBinaryVector) {
-        return new ArrowVarBinaryWriter(varBinaryVector);
-    }
-
-    private ArrowVarBinaryWriter(VarBinaryVector varBinaryVector) {
+    public ArrowVarBinaryWriter(VarBinaryVector varBinaryVector) {
         super(varBinaryVector);
     }
 
     @Override
-    public void doWrite(InternalRow row, int ordinal, boolean handleSafe) {
-        VarBinaryVector vector = (VarBinaryVector) getValueVector();
-        if (isNullAt(row, ordinal)) {
-            vector.setNull(getCount());
-        } else {
-            vector.setSafe(getCount(), readBinary(row, ordinal));
-        }
-    }
-
-    private boolean isNullAt(InternalRow row, int ordinal) {
-        return row.isNullAt(ordinal);
-    }
-
-    private byte[] readBinary(InternalRow row, int ordinal) {
-        return row.getBytes(ordinal);
+    public void doWrite(int rowIndex, DataGetters row, int ordinal, boolean handleSafe) {
+        VarBinaryVector vector = (VarBinaryVector) fieldVector;
+        vector.setSafe(rowIndex, row.getBytes(ordinal));
     }
 }

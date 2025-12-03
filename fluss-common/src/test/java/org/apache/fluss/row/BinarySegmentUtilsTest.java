@@ -29,6 +29,7 @@ import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link org.apache.fluss.row.BinarySegmentUtils}. */
 public class BinarySegmentUtilsTest {
@@ -436,7 +437,7 @@ public class BinarySegmentUtilsTest {
         long offsetAndSize = ((long) 4 << 32) | decimalBytes.length;
 
         Decimal readDecimal =
-                BinarySegmentUtils.readDecimalData(decimalSegments, 0, offsetAndSize, 5, 2);
+                BinarySegmentUtils.readDecimal(decimalSegments, 0, offsetAndSize, 5, 2);
         assertThat(readDecimal).isEqualTo(originalDecimal);
 
         // Test readTimestampLtzData
@@ -455,14 +456,14 @@ public class BinarySegmentUtilsTest {
         long offsetAndNanos = ((long) 8 << 32) | nanoOfMillisecond;
 
         TimestampLtz readTimestampLtz =
-                BinarySegmentUtils.readTimestampLtzData(timestampSegments, 0, offsetAndNanos);
+                BinarySegmentUtils.readTimestampLtz(timestampSegments, 0, offsetAndNanos);
         assertThat(readTimestampLtz).isEqualTo(originalTimestampLtz);
 
         // Test readTimestampNtzData
         TimestampNtz originalTimestampNtz = TimestampNtz.fromMillis(testMillis, nanoOfMillisecond);
 
         TimestampNtz readTimestampNtz =
-                BinarySegmentUtils.readTimestampNtzData(timestampSegments, 0, offsetAndNanos);
+                BinarySegmentUtils.readTimestampNtz(timestampSegments, 0, offsetAndNanos);
         assertThat(readTimestampNtz).isEqualTo(originalTimestampNtz);
     }
 
@@ -473,7 +474,7 @@ public class BinarySegmentUtilsTest {
         byte[] smallBinary = {1, 2, 3, 4};
         AlignedRow smallRow = new AlignedRow(1);
         AlignedRowWriter smallWriter = new AlignedRowWriter(smallRow);
-        smallWriter.writeBinary(0, smallBinary);
+        smallWriter.writeBytes(0, smallBinary);
         smallWriter.complete();
 
         // Calculate field offset based on AlignedRow structure
@@ -499,7 +500,7 @@ public class BinarySegmentUtilsTest {
         byte[] largeBinary = {10, 20, 30, 40, 50, 60, 70, 80, 90, 100};
         AlignedRow largeRow = new AlignedRow(1);
         AlignedRowWriter largeWriter = new AlignedRowWriter(largeRow);
-        largeWriter.writeBinary(0, largeBinary);
+        largeWriter.writeBytes(0, largeBinary);
         largeWriter.complete();
 
         // Calculate field offset for the large row
@@ -743,7 +744,7 @@ public class BinarySegmentUtilsTest {
     }
 
     @Test
-    public void testReadDecimalData() {
+    public void testReadDecimal() {
         // Test readDecimalData method
         BigDecimal testDecimal = new BigDecimal("123.456");
         byte[] decimalBytes = testDecimal.unscaledValue().toByteArray();
@@ -758,7 +759,7 @@ public class BinarySegmentUtilsTest {
         // Create offsetAndSize (high 32 bits = offset, low 32 bits = size)
         long offsetAndSize = ((long) 0 << 32) | decimalBytes.length;
 
-        Decimal result = BinarySegmentUtils.readDecimalData(segments, 4, offsetAndSize, 6, 3);
+        Decimal result = BinarySegmentUtils.readDecimal(segments, 4, offsetAndSize, 6, 3);
         assertThat(result.toBigDecimal()).isEqualTo(testDecimal);
 
         // Test with negative decimal
@@ -768,7 +769,7 @@ public class BinarySegmentUtilsTest {
 
         long negativeOffsetAndSize = ((long) 0 << 32) | negativeBytes.length;
         Decimal negativeResult =
-                BinarySegmentUtils.readDecimalData(segments, 10, negativeOffsetAndSize, 6, 3);
+                BinarySegmentUtils.readDecimal(segments, 10, negativeOffsetAndSize, 6, 3);
         assertThat(negativeResult.toBigDecimal()).isEqualTo(negativeDecimal);
     }
 
@@ -838,7 +839,7 @@ public class BinarySegmentUtilsTest {
     }
 
     @Test
-    public void testReadTimestampLtzData() {
+    public void testReadTimestampLtz() {
         // Test readTimestampLtzData method
         long epochMillis = 1609459200000L; // 2021-01-01 00:00:00 UTC
         int nanoOfMillisecond = 123456;
@@ -852,7 +853,7 @@ public class BinarySegmentUtilsTest {
         // Create offsetAndNanos (high 32 bits = offset, low 32 bits = nanos)
         long offsetAndNanos = ((long) 0 << 32) | nanoOfMillisecond;
 
-        TimestampLtz result = BinarySegmentUtils.readTimestampLtzData(segments, 0, offsetAndNanos);
+        TimestampLtz result = BinarySegmentUtils.readTimestampLtz(segments, 0, offsetAndNanos);
         assertThat(result.getEpochMillisecond()).isEqualTo(epochMillis);
         assertThat(result.getNanoOfMillisecond()).isEqualTo(nanoOfMillisecond);
 
@@ -860,14 +861,13 @@ public class BinarySegmentUtilsTest {
         segment.putLong(8, epochMillis);
         long offsetAndNanos2 = ((long) 8 << 32) | nanoOfMillisecond;
 
-        TimestampLtz result2 =
-                BinarySegmentUtils.readTimestampLtzData(segments, 0, offsetAndNanos2);
+        TimestampLtz result2 = BinarySegmentUtils.readTimestampLtz(segments, 0, offsetAndNanos2);
         assertThat(result2.getEpochMillisecond()).isEqualTo(epochMillis);
         assertThat(result2.getNanoOfMillisecond()).isEqualTo(nanoOfMillisecond);
     }
 
     @Test
-    public void testReadTimestampNtzData() {
+    public void testReadTimestampNtz() {
         // Test readTimestampNtzData method
         long epochMillis = 1609459200000L; // 2021-01-01 00:00:00
         int nanoOfMillisecond = 789012;
@@ -881,7 +881,7 @@ public class BinarySegmentUtilsTest {
         // Create offsetAndNanos
         long offsetAndNanos = ((long) 0 << 32) | nanoOfMillisecond;
 
-        TimestampNtz result = BinarySegmentUtils.readTimestampNtzData(segments, 0, offsetAndNanos);
+        TimestampNtz result = BinarySegmentUtils.readTimestampNtz(segments, 0, offsetAndNanos);
         assertThat(result.getMillisecond()).isEqualTo(epochMillis);
         assertThat(result.getNanoOfMillisecond()).isEqualTo(nanoOfMillisecond);
 
@@ -891,7 +891,7 @@ public class BinarySegmentUtilsTest {
 
         long negativeOffsetAndNanos = ((long) 8 << 32) | nanoOfMillisecond;
         TimestampNtz negativeResult =
-                BinarySegmentUtils.readTimestampNtzData(segments, 0, negativeOffsetAndNanos);
+                BinarySegmentUtils.readTimestampNtz(segments, 0, negativeOffsetAndNanos);
         assertThat(negativeResult.getMillisecond()).isEqualTo(negativeMillis);
         assertThat(negativeResult.getNanoOfMillisecond()).isEqualTo(nanoOfMillisecond);
     }
@@ -976,7 +976,7 @@ public class BinarySegmentUtilsTest {
     }
 
     @Test
-    public void testReadDecimalDataMultiSegments() {
+    public void testReadDecimalMultiSegments() {
         // Test readDecimalData with data spanning multiple segments
         BigDecimal testDecimal = new BigDecimal("999999999.123456789");
         byte[] decimalBytes = testDecimal.unscaledValue().toByteArray();
@@ -991,7 +991,7 @@ public class BinarySegmentUtilsTest {
         // Create offsetAndSize
         long offsetAndSize = ((long) 6 << 32) | decimalBytes.length;
 
-        Decimal result = BinarySegmentUtils.readDecimalData(segments, 0, offsetAndSize, 18, 9);
+        Decimal result = BinarySegmentUtils.readDecimal(segments, 0, offsetAndSize, 18, 9);
         assertThat(result.toBigDecimal()).isEqualTo(testDecimal);
     }
 
@@ -1052,13 +1052,11 @@ public class BinarySegmentUtilsTest {
         segment.putLong(0, 0L);
         long zeroOffsetAndNanos = ((long) 0 << 32) | 0;
 
-        TimestampLtz zeroLtz =
-                BinarySegmentUtils.readTimestampLtzData(segments, 0, zeroOffsetAndNanos);
+        TimestampLtz zeroLtz = BinarySegmentUtils.readTimestampLtz(segments, 0, zeroOffsetAndNanos);
         assertThat(zeroLtz.getEpochMillisecond()).isEqualTo(0L);
         assertThat(zeroLtz.getNanoOfMillisecond()).isEqualTo(0);
 
-        TimestampNtz zeroNtz =
-                BinarySegmentUtils.readTimestampNtzData(segments, 0, zeroOffsetAndNanos);
+        TimestampNtz zeroNtz = BinarySegmentUtils.readTimestampNtz(segments, 0, zeroOffsetAndNanos);
         assertThat(zeroNtz.getMillisecond()).isEqualTo(0L);
         assertThat(zeroNtz.getNanoOfMillisecond()).isEqualTo(0);
 
@@ -1066,12 +1064,10 @@ public class BinarySegmentUtilsTest {
         long maxNanos = 999999;
         long maxNanosOffset = ((long) 0 << 32) | maxNanos;
 
-        TimestampLtz maxNanoLtz =
-                BinarySegmentUtils.readTimestampLtzData(segments, 0, maxNanosOffset);
+        TimestampLtz maxNanoLtz = BinarySegmentUtils.readTimestampLtz(segments, 0, maxNanosOffset);
         assertThat(maxNanoLtz.getNanoOfMillisecond()).isEqualTo(maxNanos);
 
-        TimestampNtz maxNanoNtz =
-                BinarySegmentUtils.readTimestampNtzData(segments, 0, maxNanosOffset);
+        TimestampNtz maxNanoNtz = BinarySegmentUtils.readTimestampNtz(segments, 0, maxNanosOffset);
         assertThat(maxNanoNtz.getNanoOfMillisecond()).isEqualTo(maxNanos);
     }
 
@@ -1107,6 +1103,243 @@ public class BinarySegmentUtilsTest {
             // Test across segment boundary (offset 2, spans first and second segment)
             BinarySegmentUtils.setLong(segments, 2, testValue);
             assertThat(BinarySegmentUtils.getLong(segments, 2)).isEqualTo(testValue);
+        }
+    }
+
+    @Test
+    public void testGetIntMultiSegmentsCrossBoundary() {
+        MemorySegment[] segments = new MemorySegment[3];
+        segments[0] = MemorySegment.wrap(new byte[3]);
+        segments[1] = MemorySegment.wrap(new byte[3]);
+        segments[2] = MemorySegment.wrap(new byte[3]);
+
+        int testValue = 0x12345678;
+        BinarySegmentUtils.setInt(segments, 1, testValue);
+        assertThat(BinarySegmentUtils.getInt(segments, 1)).isEqualTo(testValue);
+
+        int testValue2 = Integer.MIN_VALUE;
+        BinarySegmentUtils.setInt(segments, 2, testValue2);
+        assertThat(BinarySegmentUtils.getInt(segments, 2)).isEqualTo(testValue2);
+    }
+
+    @Test
+    public void testGetShortMultiSegmentsCrossBoundary() {
+        MemorySegment[] segments = new MemorySegment[2];
+        segments[0] = MemorySegment.wrap(new byte[3]);
+        segments[1] = MemorySegment.wrap(new byte[3]);
+
+        short testValue = (short) 0x1234;
+        BinarySegmentUtils.setShort(segments, 0, testValue);
+        assertThat(BinarySegmentUtils.getShort(segments, 0)).isEqualTo(testValue);
+
+        short testValue2 = Short.MAX_VALUE;
+        BinarySegmentUtils.setShort(segments, 2, testValue2);
+        assertThat(BinarySegmentUtils.getShort(segments, 2)).isEqualTo(testValue2);
+    }
+
+    @Test
+    public void testEqualsWithDifferentSegmentSizes() {
+        MemorySegment[] segments1 = new MemorySegment[2];
+        segments1[0] = MemorySegment.wrap(new byte[] {1, 2, 3});
+        segments1[1] = MemorySegment.wrap(new byte[] {4, 5, 6});
+
+        MemorySegment[] segments2 = new MemorySegment[3];
+        segments2[0] = MemorySegment.wrap(new byte[] {1, 2});
+        segments2[1] = MemorySegment.wrap(new byte[] {3, 4});
+        segments2[2] = MemorySegment.wrap(new byte[] {5, 6});
+
+        assertThat(BinarySegmentUtils.equals(segments1, 0, segments2, 0, 6)).isTrue();
+        assertThat(BinarySegmentUtils.equals(segments1, 1, segments2, 1, 5)).isTrue();
+    }
+
+    @Test
+    public void testHashConsistencyMultiSegments() {
+        MemorySegment[] segments = new MemorySegment[2];
+        segments[0] = MemorySegment.wrap(new byte[] {1, 2, 3, 4, 5});
+        segments[1] = MemorySegment.wrap(new byte[] {6, 7, 8, 9, 10});
+
+        int hash1 = BinarySegmentUtils.hash(segments, 0, 10);
+        int hash2 = BinarySegmentUtils.hash(segments, 0, 10);
+        assertThat(hash1).isEqualTo(hash2);
+
+        MemorySegment[] segments2 = new MemorySegment[1];
+        segments2[0] = MemorySegment.wrap(new byte[] {1, 2, 3, 4, 5, 6, 7, 8, 9, 10});
+        int hash3 = BinarySegmentUtils.hash(segments2, 0, 10);
+        assertThat(hash1).isEqualTo(hash3);
+    }
+
+    @Test
+    public void testLongCrossingThreeSegments() {
+        MemorySegment[] segments = new MemorySegment[4];
+        segments[0] = MemorySegment.wrap(new byte[3]);
+        segments[1] = MemorySegment.wrap(new byte[3]);
+        segments[2] = MemorySegment.wrap(new byte[3]);
+        segments[3] = MemorySegment.wrap(new byte[3]);
+
+        long testValue = 0x123456789ABCDEF0L;
+        BinarySegmentUtils.setLong(segments, 1, testValue);
+        long retrieved = BinarySegmentUtils.getLong(segments, 1);
+        assertThat(retrieved).isEqualTo(testValue);
+    }
+
+    @Test
+    public void testCopyToViewMultipleSegments() throws IOException {
+        MemorySegment[] segments = new MemorySegment[3];
+        segments[0] = MemorySegment.wrap(new byte[] {1, 2, 3, 4, 5});
+        segments[1] = MemorySegment.wrap(new byte[] {6, 7, 8, 9, 10});
+        segments[2] = MemorySegment.wrap(new byte[] {11, 12, 13, 14, 15});
+
+        MemorySegmentOutputView outputView = new MemorySegmentOutputView(32);
+        BinarySegmentUtils.copyToView(segments, 2, 11, outputView);
+
+        byte[] result = outputView.getCopyOfBuffer();
+        assertThat(result).isEqualTo(new byte[] {3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13});
+    }
+
+    @Test
+    public void testCopyToViewInsufficientData() {
+        MemorySegment[] segments = new MemorySegment[2];
+        segments[0] = MemorySegment.wrap(new byte[3]);
+        segments[1] = MemorySegment.wrap(new byte[2]);
+
+        MemorySegmentOutputView outputView = new MemorySegmentOutputView(32);
+
+        assertThatThrownBy(() -> BinarySegmentUtils.copyToView(segments, 0, 10, outputView))
+                .isInstanceOf(RuntimeException.class)
+                .hasMessageContaining("No copy finished, this should be a bug");
+    }
+
+    @Test
+    public void testFindAcrossSegments() {
+        MemorySegment[] segments1 = new MemorySegment[3];
+        segments1[0] = MemorySegment.wrap(new byte[] {1, 2, 3});
+        segments1[1] = MemorySegment.wrap(new byte[] {4, 5, 6});
+        segments1[2] = MemorySegment.wrap(new byte[] {7, 8, 9});
+
+        MemorySegment[] pattern = new MemorySegment[1];
+        pattern[0] = MemorySegment.wrap(new byte[] {5, 6, 7});
+
+        int foundIndex = BinarySegmentUtils.find(segments1, 0, 9, pattern, 0, 3);
+        assertThat(foundIndex).isEqualTo(4);
+
+        MemorySegment[] notFoundPattern = new MemorySegment[1];
+        notFoundPattern[0] = MemorySegment.wrap(new byte[] {10, 11, 12});
+        int notFoundIndex = BinarySegmentUtils.find(segments1, 0, 9, notFoundPattern, 0, 3);
+        assertThat(notFoundIndex).isEqualTo(-1);
+    }
+
+    @Test
+    public void testReadBinaryStringWithMultipleSegments() {
+        String testString = "This is a test string that spans multiple segments";
+        byte[] testBytes = testString.getBytes(StandardCharsets.UTF_8);
+
+        MemorySegment[] segments = new MemorySegment[3];
+        segments[0] = MemorySegment.wrap(new byte[20]);
+        segments[1] = MemorySegment.wrap(new byte[20]);
+        segments[2] = MemorySegment.wrap(new byte[20]);
+
+        BinarySegmentUtils.copyFromBytes(segments, 5, testBytes, 0, testBytes.length);
+
+        long variablePartOffsetAndLen = ((long) 5 << 32) | testBytes.length;
+        BinaryString result =
+                BinarySegmentUtils.readBinaryString(segments, 0, 0, variablePartOffsetAndLen);
+        assertThat(result.toString()).isEqualTo(testString);
+    }
+
+    @Test
+    public void testFloatDoubleCrossSegments() {
+        MemorySegment[] segments = new MemorySegment[3];
+        segments[0] = MemorySegment.wrap(new byte[3]);
+        segments[1] = MemorySegment.wrap(new byte[3]);
+        segments[2] = MemorySegment.wrap(new byte[3]);
+
+        float testFloat = 3.14159f;
+        BinarySegmentUtils.setFloat(segments, 1, testFloat);
+        assertThat(BinarySegmentUtils.getFloat(segments, 1)).isEqualTo(testFloat);
+
+        MemorySegment[] longSegments = new MemorySegment[3];
+        longSegments[0] = MemorySegment.wrap(new byte[5]);
+        longSegments[1] = MemorySegment.wrap(new byte[5]);
+        longSegments[2] = MemorySegment.wrap(new byte[5]);
+
+        double testDouble = 2.718281828;
+        BinarySegmentUtils.setDouble(longSegments, 2, testDouble);
+        assertThat(BinarySegmentUtils.getDouble(longSegments, 2)).isEqualTo(testDouble);
+    }
+
+    @Test
+    public void testBitOperationsMultiSegments() {
+        MemorySegment[] segments = new MemorySegment[3];
+        segments[0] = MemorySegment.wrap(new byte[4]);
+        segments[1] = MemorySegment.wrap(new byte[4]);
+        segments[2] = MemorySegment.wrap(new byte[4]);
+
+        BinarySegmentUtils.bitSet(segments, 0, 0);
+        BinarySegmentUtils.bitSet(segments, 0, 31);
+        BinarySegmentUtils.bitSet(segments, 0, 32);
+        BinarySegmentUtils.bitSet(segments, 0, 63);
+
+        assertThat(BinarySegmentUtils.bitGet(segments, 0, 0)).isTrue();
+        assertThat(BinarySegmentUtils.bitGet(segments, 0, 31)).isTrue();
+        assertThat(BinarySegmentUtils.bitGet(segments, 0, 32)).isTrue();
+        assertThat(BinarySegmentUtils.bitGet(segments, 0, 63)).isTrue();
+
+        BinarySegmentUtils.bitUnSet(segments, 0, 31);
+        BinarySegmentUtils.bitUnSet(segments, 0, 63);
+
+        assertThat(BinarySegmentUtils.bitGet(segments, 0, 31)).isFalse();
+        assertThat(BinarySegmentUtils.bitGet(segments, 0, 63)).isFalse();
+    }
+
+    @Test
+    public void testByteBooleanArrayOperations() {
+        MemorySegment[] segments = new MemorySegment[2];
+        segments[0] = MemorySegment.wrap(new byte[5]);
+        segments[1] = MemorySegment.wrap(new byte[5]);
+
+        byte[] testBytes = {1, 0, 1, 0, 1, 0, 1, 0};
+        for (int i = 0; i < testBytes.length; i++) {
+            BinarySegmentUtils.setByte(segments, i, testBytes[i]);
+        }
+
+        for (int i = 0; i < testBytes.length; i++) {
+            assertThat(BinarySegmentUtils.getByte(segments, i)).isEqualTo(testBytes[i]);
+            assertThat(BinarySegmentUtils.getBoolean(segments, i)).isEqualTo(testBytes[i] != 0);
+        }
+
+        boolean[] testBooleans = {true, false, true, false};
+        for (int i = 0; i < testBooleans.length; i++) {
+            BinarySegmentUtils.setBoolean(segments, i, testBooleans[i]);
+        }
+
+        for (int i = 0; i < testBooleans.length; i++) {
+            assertThat(BinarySegmentUtils.getBoolean(segments, i)).isEqualTo(testBooleans[i]);
+        }
+    }
+
+    @Test
+    public void testCopyToUnsafeMultiSegments() {
+        MemorySegment[] segments = new MemorySegment[3];
+        segments[0] = MemorySegment.wrap(new byte[8]);
+        segments[1] = MemorySegment.wrap(new byte[8]);
+        segments[2] = MemorySegment.wrap(new byte[8]);
+
+        for (int i = 0; i < 3; i++) {
+            for (int j = 0; j < 8; j++) {
+                segments[i].put(j, (byte) (i * 8 + j));
+            }
+        }
+
+        boolean[] boolResult = new boolean[24];
+        BinarySegmentUtils.copyToUnsafe(segments, 0, boolResult, 0, 24);
+        for (int i = 0; i < 24; i++) {
+            assertThat(boolResult[i]).isEqualTo(i != 0);
+        }
+
+        byte[] byteResult = new byte[24];
+        BinarySegmentUtils.copyToUnsafe(segments, 0, byteResult, 0, 24);
+        for (int i = 0; i < 24; i++) {
+            assertThat(byteResult[i]).isEqualTo((byte) i);
         }
     }
 }
