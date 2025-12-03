@@ -61,14 +61,16 @@ public final class Schema implements Serializable {
 
     private final List<Column> columns;
     private final @Nullable PrimaryKey primaryKey;
+    private final List<String> autoIncrementColumnNames;
     private final RowType rowType;
 
     private Schema(
             List<Column> columns,
             @Nullable PrimaryKey primaryKey,
-            @Nullable String autoIncrementColumn) {
-        this.columns = normalizeColumns(columns, primaryKey, autoIncrementColumn);
+            List<String> autoIncrementColumnNames) {
+        this.columns = normalizeColumns(columns, primaryKey, autoIncrementColumnNames);
         this.primaryKey = primaryKey;
+        this.autoIncrementColumnNames = autoIncrementColumnNames;
         // pre-create the row type as it is the most frequently used part of the schema
         this.rowType =
                 new RowType(
@@ -86,6 +88,10 @@ public final class Schema implements Serializable {
 
     public Optional<PrimaryKey> getPrimaryKey() {
         return Optional.ofNullable(primaryKey);
+    }
+
+    public List<String> getAutoIncrementColumnNames() {
+        return autoIncrementColumnNames;
     }
 
     public RowType getRowType() {
@@ -192,10 +198,11 @@ public final class Schema implements Serializable {
     public static final class Builder {
         private final List<Column> columns;
         private @Nullable PrimaryKey primaryKey;
-        private @Nullable String autoIncrementColumn;
+        private final List<String> autoIncrementColumnNames;
 
         private Builder() {
             columns = new ArrayList<>();
+            autoIncrementColumnNames = new ArrayList<>();
         }
 
         /** Adopts all members from the given schema. */
@@ -329,16 +336,16 @@ public final class Schema implements Serializable {
          */
         public Builder enableAutoIncrement(String columnName) {
             checkState(
-                    autoIncrementColumn == null,
-                    "Multiple auto increment columns are not supported.");
+                    autoIncrementColumnNames.isEmpty(),
+                    "Multiple auto increment columns are not supported yet.");
             checkArgument(columnName != null, "Auto increment column name must not be null.");
-            autoIncrementColumn = columnName;
+            autoIncrementColumnNames.add(columnName);
             return this;
         }
 
         /** Returns an instance of an {@link Schema}. */
         public Schema build() {
-            return new Schema(columns, primaryKey, autoIncrementColumn);
+            return new Schema(columns, primaryKey, autoIncrementColumnNames);
         }
     }
 
@@ -357,37 +364,19 @@ public final class Schema implements Serializable {
         private final String columnName;
         private final DataType dataType;
         private final @Nullable String comment;
-        private final Boolean autoIncrement;
 
         public Column(String columnName, DataType dataType) {
             this(columnName, dataType, null);
         }
 
-        public Column(String columnName, DataType dataType, boolean autoIncrement) {
-            this(columnName, dataType, null, autoIncrement);
-        }
-
         public Column(String columnName, DataType dataType, @Nullable String comment) {
-            this(columnName, dataType, comment, false);
-        }
-
-        public Column(
-                String columnName,
-                DataType dataType,
-                @Nullable String comment,
-                Boolean autoIncrement) {
             this.columnName = columnName;
             this.dataType = dataType;
             this.comment = comment;
-            this.autoIncrement = autoIncrement;
         }
 
         public String getName() {
             return columnName;
-        }
-
-        public Boolean getAutoIncrement() {
-            return autoIncrement;
         }
 
         public Optional<String> getComment() {
@@ -399,16 +388,13 @@ public final class Schema implements Serializable {
         }
 
         public Column withComment(String comment) {
-            return new Column(columnName, dataType, comment, autoIncrement);
+            return new Column(columnName, dataType, comment);
         }
 
         @Override
         public String toString() {
             final StringBuilder sb = new StringBuilder();
             sb.append(columnName).append(" ").append(dataType.toString());
-            if (autoIncrement) {
-                sb.append(" AUTO INCREMENT ");
-            }
             getComment()
                     .ifPresent(
                             c -> {
@@ -430,13 +416,12 @@ public final class Schema implements Serializable {
             Column that = (Column) o;
             return Objects.equals(columnName, that.columnName)
                     && Objects.equals(dataType, that.dataType)
-                    && Objects.equals(comment, that.comment)
-                    && Objects.equals(autoIncrement, that.autoIncrement);
+                    && Objects.equals(comment, that.comment);
         }
 
         @Override
         public int hashCode() {
-            return Objects.hash(columnName, dataType, comment, autoIncrement);
+            return Objects.hash(columnName, dataType, comment);
         }
     }
 
@@ -499,7 +484,7 @@ public final class Schema implements Serializable {
     private static List<Column> normalizeColumns(
             List<Column> columns,
             @Nullable PrimaryKey primaryKey,
-            @Nullable String autoIncrementColumn) {
+            List<String> autoIncrementColumnNames) {
 
         List<String> columnNames =
                 columns.stream().map(Column::getName).collect(Collectors.toList());
@@ -514,7 +499,7 @@ public final class Schema implements Serializable {
 
         if (primaryKey == null) {
             checkState(
-                    autoIncrementColumn == null,
+                    autoIncrementColumnNames.isEmpty(),
                     "Auto increment column can only be used in primary-key table.");
             return Collections.unmodifiableList(columns);
         }
@@ -533,7 +518,7 @@ public final class Schema implements Serializable {
                 primaryKeyNames);
 
         Set<String> pkSet = new HashSet<>(primaryKeyNames);
-        if (autoIncrementColumn != null) {
+        for (String autoIncrementColumn : autoIncrementColumnNames) {
             checkState(
                     allFields.contains(autoIncrementColumn),
                     "Auto increment column %s does not exist in table columns %s.",
@@ -546,6 +531,13 @@ public final class Schema implements Serializable {
         // primary key should not nullable
         List<Column> newColumns = new ArrayList<>();
         for (Column column : columns) {
+            if (autoIncrementColumnNames.contains(column.getName())) {
+                checkState(
+                        column.getDataType().is(DataTypeRoot.INTEGER)
+                                || column.getDataType().is(DataTypeRoot.BIGINT),
+                        "The data type of auto increment column must be INT or BIGINT.");
+            }
+
             if (pkSet.contains(column.getName()) && column.getDataType().isNullable()) {
                 newColumns.add(
                         new Column(
@@ -554,17 +546,6 @@ public final class Schema implements Serializable {
                                 column.getComment().isPresent()
                                         ? column.getComment().get()
                                         : null));
-            } else if (Objects.equals(column.getName(), autoIncrementColumn)) {
-                checkState(
-                        column.getDataType().is(DataTypeRoot.INTEGER)
-                                || column.getDataType().is(DataTypeRoot.BIGINT),
-                        "The data type of auto increment column must be INT or BIGINT.");
-                newColumns.add(
-                        new Column(
-                                column.getName(),
-                                column.getDataType().copy(),
-                                column.getComment().isPresent() ? column.getComment().get() : null,
-                                true));
             } else {
                 newColumns.add(column);
             }

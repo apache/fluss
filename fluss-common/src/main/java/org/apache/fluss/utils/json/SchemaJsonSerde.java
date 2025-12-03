@@ -36,6 +36,7 @@ public class SchemaJsonSerde implements JsonSerializer<Schema>, JsonDeserializer
 
     private static final String COLUMNS_NAME = "columns";
     private static final String PRIMARY_KEY_NAME = "primary_key";
+    private static final String AUTO_INCREMENT_COLUMN_NAME = "auto_increment_column";
     private static final String VERSION_KEY = "version";
     private static final int VERSION = 1;
 
@@ -61,6 +62,14 @@ public class SchemaJsonSerde implements JsonSerializer<Schema>, JsonDeserializer
             }
             generator.writeEndArray();
         }
+        List<String> autoIncrementColumnNames = schema.getAutoIncrementColumnNames();
+        if (!autoIncrementColumnNames.isEmpty()) {
+            generator.writeArrayFieldStart(AUTO_INCREMENT_COLUMN_NAME);
+            for (String columnName : autoIncrementColumnNames) {
+                generator.writeString(columnName);
+            }
+            generator.writeEndArray();
+        }
 
         generator.writeEndObject();
     }
@@ -81,6 +90,14 @@ public class SchemaJsonSerde implements JsonSerializer<Schema>, JsonDeserializer
                 primaryKeys.add(primaryKeyJsons.next().asText());
             }
             builder.primaryKey(primaryKeys);
+        }
+
+        if (node.has(AUTO_INCREMENT_COLUMN_NAME)) {
+            Iterator<JsonNode> autoIncrementColumnJsons =
+                    node.get(AUTO_INCREMENT_COLUMN_NAME).elements();
+            while (autoIncrementColumnJsons.hasNext()) {
+                builder.enableAutoIncrement(autoIncrementColumnJsons.next().asText());
+            }
         }
 
         return builder.build();

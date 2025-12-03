@@ -21,6 +21,9 @@ import org.apache.fluss.types.DataTypes;
 
 import org.junit.jupiter.api.Test;
 
+import java.util.Collections;
+
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Tests for {@link org.apache.fluss.metadata.Schema}. */
@@ -39,6 +42,26 @@ class TableSchemaTest {
                                         .build())
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("Multiple primary keys are not supported.");
+
+        assertThat(
+                        Schema.newBuilder()
+                                .column("f0", DataTypes.STRING())
+                                .column("f1", DataTypes.BIGINT())
+                                .column("f3", DataTypes.STRING())
+                                .enableAutoIncrement("f1")
+                                .primaryKey("f0")
+                                .build()
+                                .getAutoIncrementColumnNames())
+                .isEqualTo(Collections.singletonList("f1"));
+        assertThat(
+                        Schema.newBuilder()
+                                .column("f0", DataTypes.STRING())
+                                .column("f1", DataTypes.BIGINT())
+                                .column("f3", DataTypes.STRING())
+                                .primaryKey("f0")
+                                .build()
+                                .getAutoIncrementColumnNames())
+                .isEmpty();
 
         assertThatThrownBy(
                         () ->
@@ -63,7 +86,7 @@ class TableSchemaTest {
                                         .primaryKey("f0")
                                         .build())
                 .isInstanceOf(IllegalStateException.class)
-                .hasMessage("Multiple auto increment columns are not supported.");
+                .hasMessage("Multiple auto increment columns are not supported yet.");
         assertThatThrownBy(
                         () ->
                                 Schema.newBuilder()
