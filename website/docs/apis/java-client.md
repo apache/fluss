@@ -170,8 +170,6 @@ List<User> users = List.of(
 );
 ```
 
-**Note:** Currently data in Fluss is written in the form of `rows`, so we need to convert our POJO to `GenericRow`, while the Fluss community is working to provide
-a more user-friendly API for writing data.
 ```java
 Table table = connection.getTable(tablePath);
 
@@ -193,7 +191,6 @@ rows.forEach(writer::upsert);
 // call flush() to blocking the thread until all data is written successfully
 writer.flush();
 ```
-
 For a Log table you can use the `AppendWriter` API to write data.
 ```java
 table.newAppend().createWriter().append(row);

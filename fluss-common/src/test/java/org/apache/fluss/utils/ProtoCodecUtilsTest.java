@@ -272,4 +272,150 @@ public class ProtoCodecUtilsTest {
                                 + ProtoCodecUtils.computeStringUTF8Size(s))
                 .isEqualTo(CodedOutputStream.computeStringSizeNoTag(s));
     }
+
+    // ----------------------- IEEE 754 Special Values Binary Serialization Tests
+    // -----------------------
+
+    /**
+     * Tests that Float.NaN survives binary serialization round-trip with exact bit pattern
+     * preservation. This validates FR-006: System MUST preserve Float.NaN through binary
+     * serialization.
+     *
+     * <p>Uses {@code Float.floatToRawIntBits} to verify exact bit-level equality, ensuring no NaN
+     * canonicalization occurs during serialization/deserialization.
+     */
+    @org.junit.jupiter.api.Test
+    public void testFloatNaNRoundTrip() throws Exception {
+        bb.clear();
+        float original = Float.NaN;
+        ProtoCodecUtils.writeFloat(bb, original);
+
+        bb.resetReaderIndex();
+        float deserialized = ProtoCodecUtils.readFloat(bb);
+
+        assertThat(Float.floatToRawIntBits(original))
+                .as("Float.NaN bit pattern should be preserved through serialization round-trip")
+                .isEqualTo(Float.floatToRawIntBits(deserialized));
+    }
+
+    /**
+     * Tests that Double.NaN survives binary serialization round-trip with exact bit pattern
+     * preservation. This validates FR-007: System MUST preserve Double.NaN through binary
+     * serialization.
+     */
+    @org.junit.jupiter.api.Test
+    public void testDoubleNaNRoundTrip() throws Exception {
+        bb.clear();
+        double original = Double.NaN;
+        ProtoCodecUtils.writeDouble(bb, original);
+
+        bb.resetReaderIndex();
+        double deserialized = ProtoCodecUtils.readDouble(bb);
+
+        assertThat(Double.doubleToRawLongBits(original))
+                .as("Double.NaN bit pattern should be preserved through serialization round-trip")
+                .isEqualTo(Double.doubleToRawLongBits(deserialized));
+    }
+
+    /**
+     * Tests that Float.POSITIVE_INFINITY survives binary serialization round-trip. This validates
+     * FR-008: System MUST preserve Float.POSITIVE_INFINITY through binary serialization.
+     */
+    @org.junit.jupiter.api.Test
+    public void testFloatPositiveInfinityRoundTrip() throws Exception {
+        bb.clear();
+        float original = Float.POSITIVE_INFINITY;
+        ProtoCodecUtils.writeFloat(bb, original);
+
+        bb.resetReaderIndex();
+        float deserialized = ProtoCodecUtils.readFloat(bb);
+
+        assertThat(deserialized)
+                .as("Float.POSITIVE_INFINITY should be preserved through serialization")
+                .isEqualTo(Float.POSITIVE_INFINITY);
+    }
+
+    /**
+     * Tests that Float.NEGATIVE_INFINITY survives binary serialization round-trip. This validates
+     * FR-008: System MUST preserve Float.NEGATIVE_INFINITY through binary serialization.
+     */
+    @org.junit.jupiter.api.Test
+    public void testFloatNegativeInfinityRoundTrip() throws Exception {
+        bb.clear();
+        float original = Float.NEGATIVE_INFINITY;
+        ProtoCodecUtils.writeFloat(bb, original);
+
+        bb.resetReaderIndex();
+        float deserialized = ProtoCodecUtils.readFloat(bb);
+
+        assertThat(deserialized)
+                .as("Float.NEGATIVE_INFINITY should be preserved through serialization")
+                .isEqualTo(Float.NEGATIVE_INFINITY);
+    }
+
+    /**
+     * Tests that Double.POSITIVE_INFINITY survives binary serialization round-trip. This validates
+     * FR-009: System MUST preserve Double.POSITIVE_INFINITY through binary serialization.
+     */
+    @org.junit.jupiter.api.Test
+    public void testDoublePositiveInfinityRoundTrip() throws Exception {
+        bb.clear();
+        double original = Double.POSITIVE_INFINITY;
+        ProtoCodecUtils.writeDouble(bb, original);
+
+        bb.resetReaderIndex();
+        double deserialized = ProtoCodecUtils.readDouble(bb);
+
+        assertThat(deserialized)
+                .as("Double.POSITIVE_INFINITY should be preserved through serialization")
+                .isEqualTo(Double.POSITIVE_INFINITY);
+    }
+
+    /**
+     * Tests that Double.NEGATIVE_INFINITY survives binary serialization round-trip. This validates
+     * FR-009: System MUST preserve Double.NEGATIVE_INFINITY through binary serialization.
+     */
+    @org.junit.jupiter.api.Test
+    public void testDoubleNegativeInfinityRoundTrip() throws Exception {
+        bb.clear();
+        double original = Double.NEGATIVE_INFINITY;
+        ProtoCodecUtils.writeDouble(bb, original);
+
+        bb.resetReaderIndex();
+        double deserialized = ProtoCodecUtils.readDouble(bb);
+
+        assertThat(deserialized)
+                .as("Double.NEGATIVE_INFINITY should be preserved through serialization")
+                .isEqualTo(Double.NEGATIVE_INFINITY);
+    }
+
+    /**
+     * Tests that custom NaN bit patterns are preserved without canonicalization. This is an
+     * advanced test verifying bit-level precision for signaling vs quiet NaN variants.
+     *
+     * <p>IEEE 754 allows 2^23-2 distinct NaN bit patterns for Float. This test ensures Fluss
+     * preserves the exact payload bits, not just the "NaN" semantic.
+     */
+    @org.junit.jupiter.api.Test
+    public void testNaNBitPatternPreservation() throws Exception {
+        bb.clear();
+        // Create a custom NaN with specific payload bits (signaling NaN pattern)
+        float customNaN = Float.intBitsToFloat(0x7fc12345);
+        ProtoCodecUtils.writeFloat(bb, customNaN);
+
+        bb.resetReaderIndex();
+        float deserialized = ProtoCodecUtils.readFloat(bb);
+
+        int originalBits = Float.floatToRawIntBits(customNaN);
+        int deserializedBits = Float.floatToRawIntBits(deserialized);
+
+        assertThat(deserializedBits)
+                .as("Custom NaN bit pattern (including payload) should be preserved exactly")
+                .isEqualTo(originalBits);
+
+        // Also verify it's still recognized as NaN
+        assertThat(Float.isNaN(deserialized))
+                .as("Deserialized value should still be recognized as NaN")
+                .isTrue();
+    }
 }
