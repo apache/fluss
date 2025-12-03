@@ -70,7 +70,11 @@ public final class Schema implements Serializable {
      */
     private final int highestFieldId;
 
-    private Schema(List<Column> columns, @Nullable PrimaryKey primaryKey, int highestFieldId, List<String> autoIncrementColumnNames) {
+    private Schema(
+            List<Column> columns,
+            @Nullable PrimaryKey primaryKey,
+            int highestFieldId,
+            List<String> autoIncrementColumnNames) {
         this.columns = normalizeColumns(columns, primaryKey, autoIncrementColumnNames);
         this.primaryKey = primaryKey;
         this.autoIncrementColumnNames = autoIncrementColumnNames;

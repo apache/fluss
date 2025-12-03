@@ -102,7 +102,7 @@ public class SchemaJsonSerde implements JsonSerializer<Schema>, JsonDeserializer
                 builder.enableAutoIncrement(autoIncrementColumnJsons.next().asText());
             }
         }
-      
+
         if (node.has(HIGHEST_FIELD_ID)) {
             builder.highestFieldId(node.get(HIGHEST_FIELD_ID).asInt());
         }
