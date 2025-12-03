@@ -43,7 +43,6 @@ public class ColumnJsonSerde
         generator.writeStringField(NAME, column.getName());
         generator.writeFieldName(DATA_TYPE);
         DataTypeJsonSerde.INSTANCE.serialize(column.getDataType(), generator);
-
         if (column.getComment().isPresent()) {
             generator.writeStringField(COMMENT, column.getComment().get());
         }
@@ -57,7 +56,6 @@ public class ColumnJsonSerde
 
         DataType dataType = DataTypeJsonSerde.INSTANCE.deserialize(node.get(DATA_TYPE));
         Schema.Column column = new Schema.Column(columnName, dataType);
-
         if (node.hasNonNull(COMMENT)) {
             column = column.withComment(node.get(COMMENT).asText());
         }
