@@ -138,7 +138,7 @@ public class TestingMetadataUpdater extends MetadataUpdater {
     public void checkAndUpdateTableMetadata(Set<TablePath> tablePaths) {
         Set<TablePath> needUpdateTablePaths =
                 tablePaths.stream()
-                        .filter(tablePath -> !cluster.getTable(tablePath).isPresent())
+                        .filter(tablePath -> !cluster.getTableId(tablePath).isPresent())
                         .collect(Collectors.toSet());
         if (!needUpdateTablePaths.isEmpty()) {
             throw new IllegalStateException(
@@ -182,7 +182,6 @@ public class TestingMetadataUpdater extends MetadataUpdater {
 
         Map<PhysicalTablePath, List<BucketLocation>> tablePathToBucketLocations = new HashMap<>();
         Map<TablePath, Long> tableIdByPath = new HashMap<>();
-        Map<TablePath, TableInfo> tableInfoByPath = new HashMap<>();
         tableInfos.forEach(
                 (tablePath, tableInfo) -> {
                     long tableId = tableInfo.getTableId();
@@ -209,7 +208,6 @@ public class TestingMetadataUpdater extends MetadataUpdater {
                                             tabletServers.get(2).id(),
                                             replicas)));
                     tableIdByPath.put(tablePath, tableId);
-                    tableInfoByPath.put(tablePath, tableInfo);
                 });
         cluster =
                 new Cluster(
@@ -217,7 +215,6 @@ public class TestingMetadataUpdater extends MetadataUpdater {
                         coordinatorServer,
                         tablePathToBucketLocations,
                         tableIdByPath,
-                        Collections.emptyMap(),
-                        tableInfoByPath);
+                        Collections.emptyMap());
     }
 }
