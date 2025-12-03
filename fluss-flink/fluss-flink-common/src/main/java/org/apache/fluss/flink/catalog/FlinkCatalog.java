@@ -158,6 +158,7 @@ public class FlinkCatalog extends AbstractCatalog {
     public void close() throws CatalogException {
         IOUtils.closeQuietly(admin, "fluss-admin");
         IOUtils.closeQuietly(connection, "fluss-connection");
+        IOUtils.closeQuietly(lakeFlinkCatalog, "fluss-lake-catalog");
     }
 
     @Override

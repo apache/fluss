@@ -27,7 +27,7 @@ import java.util.Objects;
 public interface TableChange {
 
     /**
-     * A table change toadd the column with specified position.
+     * A table change to add the column with specified position.
      *
      * <p>It is equal to the following statement:
      *
