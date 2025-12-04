@@ -57,6 +57,22 @@ public interface LakeCatalog extends AutoCloseable {
     void alterTable(TablePath tablePath, List<TableChange> tableChanges, Context context)
             throws TableNotExistException;
 
+    /**
+     * Rename a table in lake.
+     *
+     * @param fromTablePath path of the table to be renamed
+     * @param toTablePath new path of the table to be renamed
+     * @param tableDescriptor The descriptor of the table to be renamed
+     * @param context contextual information needed for rename table
+     * @throws TableAlreadyExistException if the target table already exists
+     */
+    void renameTable(
+            TablePath fromTablePath,
+            TablePath toTablePath,
+            TableDescriptor tableDescriptor,
+            Context context)
+            throws TableAlreadyExistException;
+
     @Override
     default void close() throws Exception {
         // default do nothing
