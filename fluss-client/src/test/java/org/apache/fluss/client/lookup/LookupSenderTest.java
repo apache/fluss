@@ -112,7 +112,7 @@ public class LookupSenderTest {
     }
 
     @Test
-    void testSendLookupRequestWithNotLeaderOrFollowerException() throws Exception {
+    void testSendLookupRequestWithNotLeaderOrFollowerException() {
         assertThat(metadataUpdater.getBucketLocation(tb1))
                 .hasValue(
                         new BucketLocation(
@@ -131,7 +131,7 @@ public class LookupSenderTest {
                                         "mock not leader or follower exception.")));
 
         // send LookupRequest through the queue so that retry mechanism can work
-        LookupQuery lookupQuery = new LookupQuery(tb1, new byte[0]);
+        LookupQuery lookupQuery = new LookupQuery(DATA1_TABLE_PATH_PK, tb1, new byte[0]);
         CompletableFuture<byte[]> result = lookupQuery.future();
         assertThat(result).isNotDone();
         lookupQueue.appendLookup(lookupQuery);
@@ -150,7 +150,7 @@ public class LookupSenderTest {
     }
 
     @Test
-    void testSendPrefixLookupRequestWithNotLeaderOrFollowerException() throws Exception {
+    void testSendPrefixLookupRequestWithNotLeaderOrFollowerException() {
         assertThat(metadataUpdater.getBucketLocation(tb1))
                 .hasValue(
                         new BucketLocation(
@@ -169,7 +169,8 @@ public class LookupSenderTest {
                                         "mock not leader or follower exception.")));
 
         // send PrefixLookupRequest through the queue so that retry mechanism can work
-        PrefixLookupQuery prefixLookupQuery = new PrefixLookupQuery(tb1, new byte[0]);
+        PrefixLookupQuery prefixLookupQuery =
+                new PrefixLookupQuery(DATA1_TABLE_PATH_PK, tb1, new byte[0]);
         CompletableFuture<List<byte[]>> future = prefixLookupQuery.future();
         assertThat(future).isNotDone();
         lookupQueue.appendLookup(prefixLookupQuery);
@@ -206,7 +207,7 @@ public class LookupSenderTest {
 
         // execute: submit lookup
         byte[] key = "key".getBytes();
-        LookupQuery query = new LookupQuery(TABLE_BUCKET, key);
+        LookupQuery query = new LookupQuery(DATA1_TABLE_PATH_PK, TABLE_BUCKET, key);
         lookupQueue.appendLookup(query);
 
         // verify: eventually succeeds after retries
@@ -217,7 +218,7 @@ public class LookupSenderTest {
     }
 
     @Test
-    void testNonRetriableExceptionDoesNotRetry() throws Exception {
+    void testNonRetriableExceptionDoesNotRetry() {
         // setup: fail with non-retriable exception
         gateway.setLookupHandler(
                 request ->
@@ -226,7 +227,7 @@ public class LookupSenderTest {
 
         // execute: submit lookup
         byte[] key = "key".getBytes();
-        LookupQuery query = new LookupQuery(TABLE_BUCKET, key);
+        LookupQuery query = new LookupQuery(DATA1_TABLE_PATH_PK, TABLE_BUCKET, key);
         lookupQueue.appendLookup(query);
 
         // verify: fails immediately without retry
@@ -237,7 +238,7 @@ public class LookupSenderTest {
     }
 
     @Test
-    void testMaxRetriesEnforced() throws Exception {
+    void testMaxRetriesEnforced() {
         // setup: always fail with retriable exception
         AtomicInteger attemptCount = new AtomicInteger(0);
         gateway.setLookupHandler(
@@ -248,7 +249,7 @@ public class LookupSenderTest {
 
         // execute: submit lookup
         byte[] key = "key".getBytes();
-        LookupQuery query = new LookupQuery(TABLE_BUCKET, key);
+        LookupQuery query = new LookupQuery(DATA1_TABLE_PATH_PK, TABLE_BUCKET, key);
         lookupQueue.appendLookup(query);
 
         // verify: eventually fails after max retries
@@ -286,7 +287,7 @@ public class LookupSenderTest {
 
         // execute: submit lookup
         byte[] key = "key".getBytes();
-        LookupQuery query = new LookupQuery(TABLE_BUCKET, key);
+        LookupQuery query = new LookupQuery(DATA1_TABLE_PATH_PK, TABLE_BUCKET, key);
         lookupQueue.appendLookup(query);
 
         // complete the future externally before retry happens
@@ -328,7 +329,8 @@ public class LookupSenderTest {
 
         // execute: submit prefix lookup
         byte[] prefixKey = "prefix".getBytes();
-        PrefixLookupQuery query = new PrefixLookupQuery(TABLE_BUCKET, prefixKey);
+        PrefixLookupQuery query =
+                new PrefixLookupQuery(DATA1_TABLE_PATH_PK, TABLE_BUCKET, prefixKey);
         lookupQueue.appendLookup(query);
 
         // verify: eventually succeeds after retries
@@ -354,9 +356,9 @@ public class LookupSenderTest {
                 });
 
         // execute: submit multiple lookups
-        LookupQuery query1 = new LookupQuery(TABLE_BUCKET, "key1".getBytes());
-        LookupQuery query2 = new LookupQuery(TABLE_BUCKET, "key2".getBytes());
-        LookupQuery query3 = new LookupQuery(TABLE_BUCKET, "key3".getBytes());
+        LookupQuery query1 = new LookupQuery(DATA1_TABLE_PATH_PK, TABLE_BUCKET, "key1".getBytes());
+        LookupQuery query2 = new LookupQuery(DATA1_TABLE_PATH_PK, TABLE_BUCKET, "key2".getBytes());
+        LookupQuery query3 = new LookupQuery(DATA1_TABLE_PATH_PK, TABLE_BUCKET, "key3".getBytes());
 
         lookupQueue.appendLookup(query1);
         lookupQueue.appendLookup(query2);
@@ -386,7 +388,7 @@ public class LookupSenderTest {
 
         // execute
         byte[] key = ("key-" + exception.getClass().getSimpleName()).getBytes();
-        LookupQuery query = new LookupQuery(TABLE_BUCKET, key);
+        LookupQuery query = new LookupQuery(DATA1_TABLE_PATH_PK, TABLE_BUCKET, key);
         lookupQueue.appendLookup(query);
 
         // verify

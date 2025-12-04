@@ -114,7 +114,7 @@ class PrimaryKeyLookuper extends AbstractLookuper {
         TableBucket tableBucket = new TableBucket(tableInfo.getTableId(), partitionId, bucketId);
         CompletableFuture<LookupResult> lookupFuture = new CompletableFuture<>();
         lookupClient
-                .lookup(tableBucket, pkBytes)
+                .lookup(tableInfo, tableBucket, pkBytes)
                 .whenComplete(
                         (result, error) -> {
                             if (error != null) {

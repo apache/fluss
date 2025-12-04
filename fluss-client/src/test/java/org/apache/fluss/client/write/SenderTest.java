@@ -658,7 +658,7 @@ final class SenderTest {
         CompletableFuture<Exception> future = new CompletableFuture<>();
         appendToAccumulator(tb1, row(1, "a"), future::complete);
 
-        int leaderNode = metadataUpdater.leaderFor(tb1);
+        int leaderNode = metadataUpdater.leaderFor(DATA1_TABLE_PATH, tb1);
         // now, remove leader node ,so that send destination
         // server node is null
         Cluster oldCluster = metadataUpdater.getCluster();
@@ -717,21 +717,24 @@ final class SenderTest {
     private ApiMessage getRequest(TableBucket tb, int index) {
         TestTabletServerGateway gateway =
                 (TestTabletServerGateway)
-                        metadataUpdater.newTabletServerClientForNode(metadataUpdater.leaderFor(tb));
+                        metadataUpdater.newTabletServerClientForNode(
+                                metadataUpdater.leaderFor(DATA1_TABLE_PATH, tb));
         return gateway.getRequest(index);
     }
 
     private void finishProduceLogRequest(TableBucket tb, int index, ProduceLogResponse response) {
         TestTabletServerGateway gateway =
                 (TestTabletServerGateway)
-                        metadataUpdater.newTabletServerClientForNode(metadataUpdater.leaderFor(tb));
+                        metadataUpdater.newTabletServerClientForNode(
+                                metadataUpdater.leaderFor(DATA1_TABLE_PATH, tb));
         gateway.response(index, response);
     }
 
     private int pendingRequestSize(TableBucket tb) {
         TestTabletServerGateway gateway =
                 (TestTabletServerGateway)
-                        metadataUpdater.newTabletServerClientForNode(metadataUpdater.leaderFor(tb));
+                        metadataUpdater.newTabletServerClientForNode(
+                                metadataUpdater.leaderFor(DATA1_TABLE_PATH, tb));
         return gateway.pendingRequestSize();
     }
 
@@ -739,7 +742,8 @@ final class SenderTest {
             int batchSequence, TableBucket tb, int index, ProduceLogResponse response) {
         TestTabletServerGateway gateway =
                 (TestTabletServerGateway)
-                        metadataUpdater.newTabletServerClientForNode(metadataUpdater.leaderFor(tb));
+                        metadataUpdater.newTabletServerClientForNode(
+                                metadataUpdater.leaderFor(DATA1_TABLE_PATH, tb));
         ApiMessage request = getRequest(tb1, index);
         assertThat(request).isInstanceOf(ProduceLogRequest.class);
         assertThat(hasIdempotentRecords(tb1, (ProduceLogRequest) request)).isTrue();

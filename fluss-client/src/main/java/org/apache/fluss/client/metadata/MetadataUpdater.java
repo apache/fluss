@@ -98,11 +98,10 @@ public class MetadataUpdater {
         return cluster.getBucketLocation(tableBucket);
     }
 
-    public int leaderFor(TableBucket tableBucket) {
+    public int leaderFor(TablePath tablePath, TableBucket tableBucket) {
         Integer serverNode = cluster.leaderFor(tableBucket);
         if (serverNode == null) {
             for (int i = 0; i < MAX_RETRY_TIMES; i++) {
-                TablePath tablePath = cluster.getTablePathOrElseThrow(tableBucket.getTableId());
                 // check if bucket is for a partition
                 if (tableBucket.getPartitionId() != null) {
                     updateMetadata(

@@ -151,7 +151,7 @@ class PrefixKeyLookuper extends AbstractLookuper {
         CompletableFuture<LookupResult> lookupFuture = new CompletableFuture<>();
         TableBucket tableBucket = new TableBucket(tableInfo.getTableId(), partitionId, bucketId);
         lookupClient
-                .prefixLookup(tableBucket, bucketKeyBytes)
+                .prefixLookup(tableInfo, tableBucket, bucketKeyBytes)
                 .whenComplete(
                         (result, error) -> {
                             if (error != null) {

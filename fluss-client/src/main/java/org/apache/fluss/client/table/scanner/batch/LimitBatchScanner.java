@@ -105,7 +105,7 @@ public class LimitBatchScanner implements BatchScanner {
         }
 
         // because that rocksdb is not suitable to projection, thus do it in client.
-        int leader = metadataUpdater.leaderFor(tableBucket);
+        int leader = metadataUpdater.leaderFor(tableInfo.getTablePath(), tableBucket);
         TabletServerGateway gateway = metadataUpdater.newTabletServerClientForNode(leader);
         if (gateway == null) {
             // TODO handle this exception, like retry.

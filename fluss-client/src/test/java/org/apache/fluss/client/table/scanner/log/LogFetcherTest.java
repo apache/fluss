@@ -246,7 +246,7 @@ public class LogFetcherTest extends ClientToServerITCaseBase {
         MetadataUpdater metadataUpdater = new MetadataUpdater(clientConf, rpcClient);
         metadataUpdater.checkAndUpdateTableMetadata(Collections.singleton(DATA1_TABLE_PATH));
 
-        int leaderNode = metadataUpdater.leaderFor(tb0);
+        int leaderNode = metadataUpdater.leaderFor(DATA1_TABLE_PATH, tb0);
 
         // now, remove leader nodd ,so that fetch destination
         // server node is null

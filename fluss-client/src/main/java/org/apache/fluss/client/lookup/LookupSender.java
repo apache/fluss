@@ -157,9 +157,10 @@ class LookupSender implements Runnable {
             // lookup the leader node
             TableBucket tb = lookup.tableBucket();
             try {
-                leader = metadataUpdater.leaderFor(tb);
+                leader = metadataUpdater.leaderFor(lookup.tablePath(), tb);
             } catch (Exception e) {
                 // if leader is not found, re-enqueue the lookup to send again.
+                LOG.warn("Failed to lookup the leader for {} when lookup", tb, e);
                 reEnqueueLookup(lookup);
                 continue;
             }

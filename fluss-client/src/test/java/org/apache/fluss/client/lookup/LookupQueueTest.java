@@ -24,6 +24,7 @@ import org.junit.jupiter.api.Test;
 
 import static org.apache.fluss.config.ConfigOptions.CLIENT_LOOKUP_BATCH_TIMEOUT;
 import static org.apache.fluss.config.ConfigOptions.CLIENT_LOOKUP_MAX_BATCH_SIZE;
+import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH_PK;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Tests for {@link LookupQueue}. */
@@ -60,7 +61,8 @@ class LookupQueueTest {
 
     private static void appendLookups(LookupQueue queue, int count) {
         for (int i = 0; i < count; i++) {
-            queue.appendLookup(new LookupQuery(new TableBucket(1, 1), new byte[] {0}));
+            queue.appendLookup(
+                    new LookupQuery(DATA1_TABLE_PATH_PK, new TableBucket(1, 1), new byte[] {0}));
         }
     }
 }

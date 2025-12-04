@@ -19,6 +19,7 @@ package org.apache.fluss.client.lookup;
 
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TablePath;
 
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
@@ -31,8 +32,8 @@ import java.util.concurrent.CompletableFuture;
 public class PrefixLookupQuery extends AbstractLookupQuery<List<byte[]>> {
     private final CompletableFuture<List<byte[]>> future;
 
-    PrefixLookupQuery(TableBucket tableBucket, byte[] prefixKey) {
-        super(tableBucket, prefixKey);
+    PrefixLookupQuery(TablePath tablePath, TableBucket tableBucket, byte[] prefixKey) {
+        super(tablePath, tableBucket, prefixKey);
         this.future = new CompletableFuture<>();
     }
 

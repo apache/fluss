@@ -419,7 +419,12 @@ public class FlussAdmin implements Admin {
         }
         Map<Integer, ListOffsetsRequest> requestMap =
                 prepareListOffsetsRequests(
-                        metadataUpdater, tableInfo.getTableId(), partitionId, buckets, offsetSpec);
+                        metadataUpdater,
+                        tableInfo.getTableId(),
+                        partitionId,
+                        buckets,
+                        offsetSpec,
+                        tableInfo.getTablePath());
         Map<Integer, CompletableFuture<Long>> bucketToOffsetMap = MapUtils.newConcurrentHashMap();
         for (int bucket : buckets) {
             bucketToOffsetMap.put(bucket, new CompletableFuture<>());
@@ -536,10 +541,13 @@ public class FlussAdmin implements Admin {
             long tableId,
             @Nullable Long partitionId,
             Collection<Integer> buckets,
-            OffsetSpec offsetSpec) {
+            OffsetSpec offsetSpec,
+            TablePath tablePath) {
         Map<Integer, List<Integer>> nodeForBucketList = new HashMap<>();
         for (Integer bucketId : buckets) {
-            int leader = metadataUpdater.leaderFor(new TableBucket(tableId, partitionId, bucketId));
+            int leader =
+                    metadataUpdater.leaderFor(
+                            tablePath, new TableBucket(tableId, partitionId, bucketId));
             nodeForBucketList.computeIfAbsent(leader, k -> new ArrayList<>()).add(bucketId);
         }
 

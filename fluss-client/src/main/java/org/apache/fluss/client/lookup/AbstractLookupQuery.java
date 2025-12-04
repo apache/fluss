@@ -19,6 +19,7 @@ package org.apache.fluss.client.lookup;
 
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TablePath;
 
 import java.util.concurrent.CompletableFuture;
 
@@ -26,11 +27,13 @@ import java.util.concurrent.CompletableFuture;
 @Internal
 public abstract class AbstractLookupQuery<T> {
 
+    private final TablePath tablePath;
     private final TableBucket tableBucket;
     private final byte[] key;
     private int retries;
 
-    public AbstractLookupQuery(TableBucket tableBucket, byte[] key) {
+    public AbstractLookupQuery(TablePath tablePath, TableBucket tableBucket, byte[] key) {
+        this.tablePath = tablePath;
         this.tableBucket = tableBucket;
         this.key = key;
         this.retries = 0;
@@ -38,6 +41,10 @@ public abstract class AbstractLookupQuery<T> {
 
     public byte[] key() {
         return key;
+    }
+
+    public TablePath tablePath() {
+        return tablePath;
     }
 
     public TableBucket tableBucket() {
