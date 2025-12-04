@@ -161,6 +161,7 @@ public class DelayedFetchLogTest extends ReplicaTestBase {
                 replicaManager,
                 Collections.singletonMap(tb, prevFetchBucketStatus),
                 responseCallback,
-                TestingMetricGroups.TABLET_SERVER_METRICS);
+                TestingMetricGroups.TABLET_SERVER_METRICS,
+                null);
     }
 }
