@@ -258,9 +258,11 @@ public class MetadataUtils {
 
     public static @Nullable ServerNode getOneAvailableTabletServerNode(
             Cluster cluster, Set<Integer> unavailableTabletServerIds) {
-        List<ServerNode> aliveTabletServers = cluster.getAliveTabletServerList();
-        aliveTabletServers.removeIf(
-                serverNode -> unavailableTabletServerIds.contains(serverNode.id()));
+        List<ServerNode> aliveTabletServers = new ArrayList<>(cluster.getAliveTabletServerList());
+        if (!unavailableTabletServerIds.isEmpty()) {
+            aliveTabletServers.removeIf(
+                    serverNode -> unavailableTabletServerIds.contains(serverNode.id()));
+        }
 
         if (aliveTabletServers.isEmpty()) {
             return null;

@@ -155,7 +155,7 @@ public final class Cluster {
     }
 
     public List<ServerNode> getAliveTabletServerList() {
-        return new ArrayList<>(aliveTabletServers);
+        return aliveTabletServers;
     }
 
     /** Get the table path for this table id. */
