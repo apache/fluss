@@ -90,7 +90,9 @@ class AppendWriterImpl extends AbstractTableWriter implements AppendWriter {
             record = WriteRecord.forIndexedAppend(tableInfo, physicalPath, indexedRow, bucketKey);
         } else if (logFormat == LogFormat.COMPACTED) {
             CompactedRow compactedRow = encodeCompactedRow(row);
-            record = WriteRecord.forCompactedAppend(tableInfo, physicalPath, compactedRow, bucketKey);
+            record =
+                    WriteRecord.forCompactedAppend(
+                            tableInfo, physicalPath, compactedRow, bucketKey);
         } else {
             // ARROW format supports general internal row
             record = WriteRecord.forArrowAppend(tableInfo, physicalPath, row, bucketKey);

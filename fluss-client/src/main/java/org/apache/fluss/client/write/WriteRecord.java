@@ -19,8 +19,8 @@ package org.apache.fluss.client.write;
 
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.metadata.PhysicalTablePath;
-import org.apache.fluss.record.CompactedLogRecord;
 import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.record.CompactedLogRecord;
 import org.apache.fluss.record.DefaultKvRecord;
 import org.apache.fluss.record.IndexedLogRecord;
 import org.apache.fluss.row.BinaryRow;
@@ -53,8 +53,7 @@ public final class WriteRecord {
         checkNotNull(row, "row must not be null");
         checkNotNull(key, "key must not be null");
         checkNotNull(bucketKey, "bucketKey must not be null");
-        int estimatedSizeInBytes =
-                DefaultKvRecord.sizeOf(key, row) + RECORD_BATCH_HEADER_SIZE;
+        int estimatedSizeInBytes = DefaultKvRecord.sizeOf(key, row) + RECORD_BATCH_HEADER_SIZE;
         return new WriteRecord(
                 tableInfo,
                 tablePath,
