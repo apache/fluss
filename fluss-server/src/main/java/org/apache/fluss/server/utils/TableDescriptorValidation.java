@@ -115,15 +115,24 @@ public class TableDescriptorValidation {
 
     public static void validateAlterTableProperties(
             TableInfo currentTable, Set<String> tableKeysToChange, Set<String> customKeysToChange) {
+        TableConfig currentConfig = currentTable.getTableConfig();
         tableKeysToChange.forEach(
                 k -> {
                     if (isTableStorageConfig(k) && !isAlterableTableOption(k)) {
                         throw new InvalidAlterTableException(
                                 "The option '" + k + "' is not supported to alter yet.");
                     }
+
+                    if (!currentConfig.getDataLakeFormat().isPresent()
+                            && ConfigOptions.TABLE_DATALAKE_ENABLED.key().equals(k)) {
+                        throw new InvalidAlterTableException(
+                                String.format(
+                                        "The option '%s' cannot be altered for tables that were"
+                                                + " created before the Fluss cluster enabled datalake.",
+                                        ConfigOptions.TABLE_DATALAKE_ENABLED.key()));
+                    }
                 });
 
-        TableConfig currentConfig = currentTable.getTableConfig();
         if (currentConfig.isDataLakeEnabled() && currentConfig.getDataLakeFormat().isPresent()) {
             String format = currentConfig.getDataLakeFormat().get().toString();
             customKeysToChange.forEach(
