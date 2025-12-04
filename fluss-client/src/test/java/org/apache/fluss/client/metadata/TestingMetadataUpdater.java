@@ -55,17 +55,23 @@ public class TestingMetadataUpdater extends MetadataUpdater {
     private final Map<Integer, TestTabletServerGateway> tabletServerGatewayMap;
 
     public TestingMetadataUpdater(Map<TablePath, TableInfo> tableInfos) {
-        this(COORDINATOR, Arrays.asList(NODE1, NODE2, NODE3), tableInfos, null);
+        this(
+                COORDINATOR,
+                Arrays.asList(NODE1, NODE2, NODE3),
+                tableInfos,
+                null,
+                new Configuration());
     }
 
     private TestingMetadataUpdater(
             ServerNode coordinatorServer,
             List<ServerNode> tabletServers,
             Map<TablePath, TableInfo> tableInfos,
-            Map<Integer, TestTabletServerGateway> customGateways) {
+            Map<Integer, TestTabletServerGateway> customGateways,
+            Configuration conf) {
         super(
-                RpcClient.create(
-                        new Configuration(), TestingClientMetricGroup.newInstance(), false),
+                RpcClient.create(conf, TestingClientMetricGroup.newInstance(), false),
+                conf,
                 Cluster.empty());
         initializeCluster(coordinatorServer, tabletServers, tableInfos);
         coordinatorGateway = new TestCoordinatorGateway();
@@ -122,7 +128,8 @@ public class TestingMetadataUpdater extends MetadataUpdater {
                     COORDINATOR,
                     Arrays.asList(NODE1, NODE2, NODE3),
                     tableInfos,
-                    customGateways.isEmpty() ? null : customGateways);
+                    customGateways.isEmpty() ? null : customGateways,
+                    new Configuration());
         }
     }
 

@@ -29,6 +29,7 @@ import org.apache.fluss.client.token.DefaultSecurityTokenProvider;
 import org.apache.fluss.client.token.SecurityTokenManager;
 import org.apache.fluss.client.token.SecurityTokenProvider;
 import org.apache.fluss.client.write.WriterClient;
+import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.FlussRuntimeException;
@@ -42,6 +43,7 @@ import org.apache.fluss.rpc.metrics.ClientMetricGroup;
 
 import java.time.Duration;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 
 import static org.apache.fluss.client.utils.MetadataUtils.getOneAvailableTabletServerNode;
@@ -162,9 +164,17 @@ public final class FlussConnection implements Connection {
                     // todo: may add retry logic when no any available tablet server?
                     AdminReadOnlyGateway gateway =
                             GatewayClientProxy.createGatewayProxy(
-                                    () ->
-                                            getOneAvailableTabletServerNode(
-                                                    metadataUpdater.getCluster()),
+                                    () -> {
+                                        ServerNode serverNode =
+                                                getOneAvailableTabletServerNode(
+                                                        metadataUpdater.getCluster(),
+                                                        new HashSet<>());
+                                        if (serverNode == null) {
+                                            throw new FlussRuntimeException(
+                                                    "no available tablet server");
+                                        }
+                                        return serverNode;
+                                    },
                                     rpcClient,
                                     AdminReadOnlyGateway.class);
                     SecurityTokenProvider securityTokenProvider =

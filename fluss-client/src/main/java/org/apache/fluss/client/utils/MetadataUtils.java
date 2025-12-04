@@ -21,7 +21,6 @@ import org.apache.fluss.cluster.BucketLocation;
 import org.apache.fluss.cluster.Cluster;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.ServerType;
-import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.StaleMetadataException;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
@@ -39,6 +38,9 @@ import org.apache.fluss.rpc.messages.PbServerNode;
 import org.apache.fluss.rpc.messages.PbTableMetadata;
 import org.apache.fluss.rpc.messages.PbTablePath;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import javax.annotation.Nullable;
 
 import java.util.ArrayList;
@@ -54,6 +56,8 @@ import java.util.concurrent.TimeoutException;
 
 /** Utils for metadata for client. */
 public class MetadataUtils {
+
+    private static final Logger LOG = LoggerFactory.getLogger(MetadataUtils.class);
 
     private static final Random randOffset = new Random();
 
@@ -79,13 +83,12 @@ public class MetadataUtils {
             RpcClient client,
             @Nullable Set<TablePath> tablePaths,
             @Nullable Collection<PhysicalTablePath> tablePartitionNames,
-            @Nullable Collection<Long> tablePartitionIds)
+            @Nullable Collection<Long> tablePartitionIds,
+            ServerNode serverNode)
             throws ExecutionException, InterruptedException, TimeoutException {
         AdminReadOnlyGateway gateway =
                 GatewayClientProxy.createGatewayProxy(
-                        () -> getOneAvailableTabletServerNode(cluster),
-                        client,
-                        AdminReadOnlyGateway.class);
+                        () -> serverNode, client, AdminReadOnlyGateway.class);
         return sendMetadataRequestAndRebuildCluster(
                 gateway, true, cluster, tablePaths, tablePartitionNames, tablePartitionIds);
     }
@@ -253,10 +256,14 @@ public class MetadataUtils {
         }
     }
 
-    public static ServerNode getOneAvailableTabletServerNode(Cluster cluster) {
+    public static @Nullable ServerNode getOneAvailableTabletServerNode(
+            Cluster cluster, Set<Integer> unavailableTabletServerIds) {
         List<ServerNode> aliveTabletServers = cluster.getAliveTabletServerList();
+        aliveTabletServers.removeIf(
+                serverNode -> unavailableTabletServerIds.contains(serverNode.id()));
+
         if (aliveTabletServers.isEmpty()) {
-            throw new FlussRuntimeException("no alive tablet server in cluster");
+            return null;
         }
         // just pick one random server node
         int offset = randOffset.nextInt(aliveTabletServers.size());

@@ -111,7 +111,7 @@ class MetadataUpdaterITCase {
                         Collections.emptyMap(),
                         Collections.emptyMap());
 
-        metadataUpdater = new MetadataUpdater(rpcClient, newCluster);
+        metadataUpdater = new MetadataUpdater(rpcClient, new Configuration(), newCluster);
         // shouldn't update metadata to empty since the empty metadata will be ignored
         metadataUpdater.updateMetadata(null, null, null);
         assertThat(metadataUpdater.getCluster().getAliveTabletServers())
