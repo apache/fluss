@@ -36,7 +36,7 @@ import static org.apache.fluss.metadata.DataLakeFormat.PAIMON;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /** A lake flink catalog to delegate the operations on lake table. */
-public class LakeFlinkCatalog {
+public class LakeFlinkCatalog implements AutoCloseable {
 
     private final String catalogName;
     private final ClassLoader classLoader;
@@ -91,6 +91,13 @@ public class LakeFlinkCatalog {
                 lakeFormat,
                 "DataLake format is null, must call getLakeCatalog first to initialize lake format.");
         return lakeFormat;
+    }
+
+    @Override
+    public void close() throws Exception {
+        if (catalog != null) {
+            catalog.close();
+        }
     }
 
     /**
