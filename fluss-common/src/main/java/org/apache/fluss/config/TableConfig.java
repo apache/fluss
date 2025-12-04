@@ -117,6 +117,15 @@ public class TableConfig {
         return config.getOptional(ConfigOptions.TABLE_DELETE_BEHAVIOR);
     }
 
+    /**
+     * Whether to ignore UPDATE_BEFORE records in changelog for the primary key table. When false
+     * (default), update operations produce both UPDATE_BEFORE and UPDATE_AFTER records. When true,
+     * update operations only produce UPDATE_AFTER records.
+     */
+    public boolean isChangelogIgnoreUpdateBefore() {
+        return config.get(ConfigOptions.TABLE_CHANGELOG_IGNORE_UPDATE_BEFORE);
+    }
+
     /** Gets the Arrow compression type and compression level of the table. */
     public ArrowCompressionInfo getArrowCompressionInfo() {
         return ArrowCompressionInfo.fromConf(config);

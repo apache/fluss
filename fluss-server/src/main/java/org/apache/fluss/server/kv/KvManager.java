@@ -185,7 +185,8 @@ public final class KvManager extends TabletManagerBase {
                                     kvFormat,
                                     merger,
                                     arrowCompressionInfo,
-                                    schemaGetter);
+                                    schemaGetter,
+                                    tableConfig.isChangelogIgnoreUpdateBefore());
                     currentKvs.put(tableBucket, tablet);
 
                     LOG.info(
@@ -277,9 +278,8 @@ public final class KvManager extends TabletManagerBase {
         TablePath tablePath = physicalTablePath.getTablePath();
         TableInfo tableInfo = getTableInfo(zkClient, tablePath);
 
-        RowMerger rowMerger =
-                RowMerger.create(
-                        tableInfo.getTableConfig(), tableInfo.getTableConfig().getKvFormat());
+        TableConfig tableConfig = tableInfo.getTableConfig();
+        RowMerger rowMerger = RowMerger.create(tableConfig, tableConfig.getKvFormat());
         KvTablet kvTablet =
                 KvTablet.create(
                         physicalTablePath,
@@ -290,10 +290,11 @@ public final class KvManager extends TabletManagerBase {
                         serverMetricGroup,
                         arrowBufferAllocator,
                         memorySegmentPool,
-                        tableInfo.getTableConfig().getKvFormat(),
+                        tableConfig.getKvFormat(),
                         rowMerger,
-                        tableInfo.getTableConfig().getArrowCompressionInfo(),
-                        schemaGetter);
+                        tableConfig.getArrowCompressionInfo(),
+                        schemaGetter,
+                        tableConfig.isChangelogIgnoreUpdateBefore());
         if (this.currentKvs.containsKey(tableBucket)) {
             throw new IllegalStateException(
                     String.format(

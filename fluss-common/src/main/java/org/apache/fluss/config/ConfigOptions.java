@@ -1412,6 +1412,17 @@ public class ConfigOptions {
                                     + "The `disable` behavior rejects delete requests with a clear error message. "
                                     + "For tables with FIRST_ROW or VERSIONED merge engines, this option defaults to `ignore`.");
 
+    public static final ConfigOption<Boolean> TABLE_CHANGELOG_IGNORE_UPDATE_BEFORE =
+            key("table.changelog.ignore-update-before")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription(
+                            "Whether to ignore UPDATE_BEFORE records in changelog for the primary key table. "
+                                    + "When disabled (default), update operations produce both UPDATE_BEFORE and UPDATE_AFTER records. "
+                                    + "When enabled, update operations only produce UPDATE_AFTER records, "
+                                    + "which reduces storage and transmission costs but loses the ability to track previous values. "
+                                    + "This option only affects primary key tables.");
+
     // ------------------------------------------------------------------------
     //  ConfigOptions for Kv
     // ------------------------------------------------------------------------
