@@ -60,35 +60,6 @@ public final class IndexedLogWriteBatch extends AbstractRowLogWriteBatch<Indexed
                                     schemaId, writeLimit, outputView, true);
 
                     @Override
-                    public boolean isLogBatch() {
-                        return true;
-                    }
-
-                    @Override
-                    public boolean tryAppend(WriteRecord writeRecord, WriteCallback callback)
-                            throws Exception {
-                        checkNotNull(callback, "write callback must be not null");
-                        checkNotNull(writeRecord.getRow(), "row must not be null for log record");
-                        checkArgument(
-                                writeRecord.getKey() == null, "key must be null for log record");
-                        checkArgument(
-                                writeRecord.getTargetColumns() == null,
-                                "target columns must be null for log record");
-                        checkArgument(
-                                writeRecord.getRow() instanceof IndexedRow,
-                                "row must not be IndexRow for indexed log table");
-                        IndexedRow row = (IndexedRow) writeRecord.getRow();
-                        if (!recordsBuilder.hasRoomFor(row) || isClosed()) {
-                            return false;
-                        } else {
-                            recordsBuilder.append(ChangeType.APPEND_ONLY, row);
-                            recordCount++;
-                            callbacks.add(callback);
-                            return true;
-                        }
-                    }
-
-                    @Override
                     public boolean hasRoomFor(IndexedRow row) {
                         return delegate.hasRoomFor(row);
                     }
@@ -144,6 +115,11 @@ public final class IndexedLogWriteBatch extends AbstractRowLogWriteBatch<Indexed
                     }
                 },
                 "Failed to build indexed log record batch.");
+    }
+
+    @Override
+    public boolean isLogBatch() {
+        return true;
     }
 
     @Override

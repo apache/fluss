@@ -198,7 +198,8 @@ public class CompactedLogWriteBatchTest {
     }
 
     private WriteRecord createWriteRecord() {
-        return WriteRecord.forCompactedAppend(DATA1_PHYSICAL_TABLE_PATH, row, null);
+        return WriteRecord.forCompactedAppend(
+                DATA1_TABLE_INFO, DATA1_PHYSICAL_TABLE_PATH, row, null);
     }
 
     private CompactedLogWriteBatch createLogWriteBatch(TableBucket tb, long baseLogOffset)

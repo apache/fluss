@@ -129,10 +129,14 @@ public final class WriteRecord {
 
     /** Creates a write record for append operation for Compacted format. */
     public static WriteRecord forCompactedAppend(
-            PhysicalTablePath tablePath, CompactedRow row, @Nullable byte[] bucketKey) {
+            TableInfo tableInfo,
+            PhysicalTablePath tablePath,
+            CompactedRow row,
+            @Nullable byte[] bucketKey) {
         checkNotNull(row);
         int estimatedSizeInBytes = CompactedLogRecord.sizeOf(row) + RECORD_BATCH_HEADER_SIZE;
         return new WriteRecord(
+                tableInfo,
                 tablePath,
                 null,
                 bucketKey,

@@ -119,6 +119,11 @@ public final class CompactedLogWriteBatch extends AbstractRowLogWriteBatch<Compa
     }
 
     @Override
+    public boolean isLogBatch() {
+        return true;
+    }
+
+    @Override
     protected CompactedRow requireAndCastRow(InternalRow row) {
         checkArgument(
                 row instanceof CompactedRow, "row must be CompactedRow for compacted log table");
