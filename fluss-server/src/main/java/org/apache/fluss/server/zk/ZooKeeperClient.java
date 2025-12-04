@@ -605,6 +605,16 @@ public class ZooKeeperClient implements AutoCloseable {
         return stat != null && stat.getDataLength() > 0;
     }
 
+    public void renameTable(TablePath fromTablePath, TablePath toTablePath) throws Exception {
+        byte[] tableBytes = zkClient.getData().forPath(TableZNode.path(fromTablePath));
+        zkClient.create()
+                .creatingParentsIfNeeded()
+                .withMode(CreateMode.PERSISTENT)
+                .forPath(TableZNode.path(toTablePath), tableBytes);
+        deleteTable(fromTablePath);
+        LOG.info("Renamed table {} to {}.", fromTablePath, toTablePath);
+    }
+
     /** Get the partitions of a table in ZK. */
     public Set<String> getPartitions(TablePath tablePath) throws Exception {
         String path = PartitionsZNode.path(tablePath);

@@ -37,6 +37,8 @@ import org.apache.fluss.rpc.messages.DropPartitionRequest;
 import org.apache.fluss.rpc.messages.DropPartitionResponse;
 import org.apache.fluss.rpc.messages.DropTableRequest;
 import org.apache.fluss.rpc.messages.DropTableResponse;
+import org.apache.fluss.rpc.messages.RenameTableRequest;
+import org.apache.fluss.rpc.messages.RenameTableResponse;
 import org.apache.fluss.rpc.protocol.ApiKeys;
 import org.apache.fluss.rpc.protocol.RPC;
 
@@ -75,6 +77,14 @@ public interface AdminGateway extends AdminReadOnlyGateway {
      */
     @RPC(api = ApiKeys.ALTER_TABLE)
     CompletableFuture<AlterTableResponse> alterTable(AlterTableRequest request);
+
+    /**
+     * Rename a table.
+     *
+     * @param request Rename table request
+     */
+    @RPC(api = ApiKeys.RENAME_TABLE)
+    CompletableFuture<RenameTableResponse> renameTable(RenameTableRequest request);
 
     /**
      * Drop a table.
@@ -119,7 +129,4 @@ public interface AdminGateway extends AdminReadOnlyGateway {
     @RPC(api = ApiKeys.ALTER_CLUSTER_CONFIGS)
     CompletableFuture<AlterClusterConfigsResponse> alterClusterConfigs(
             AlterClusterConfigsRequest request);
-
-    // todo: rename table & alter table
-
 }

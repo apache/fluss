@@ -72,6 +72,7 @@ import org.apache.fluss.rpc.messages.PbAlterConfig;
 import org.apache.fluss.rpc.messages.PbListOffsetsRespForBucket;
 import org.apache.fluss.rpc.messages.PbPartitionSpec;
 import org.apache.fluss.rpc.messages.PbTablePath;
+import org.apache.fluss.rpc.messages.RenameTableRequest;
 import org.apache.fluss.rpc.messages.TableExistsRequest;
 import org.apache.fluss.rpc.messages.TableExistsResponse;
 import org.apache.fluss.rpc.protocol.ApiError;
@@ -251,6 +252,21 @@ public class FlussAdmin implements Admin {
         AlterTableRequest request =
                 makeAlterTableRequest(tablePath, tableChanges, ignoreIfNotExists);
         return gateway.alterTable(request).thenApply(r -> null);
+    }
+
+    @Override
+    public CompletableFuture<Void> renameTable(
+            TablePath fromTablePath, TablePath toTablePath, boolean ignoreIfNotExists) {
+        RenameTableRequest request = new RenameTableRequest();
+        request.setIgnoreIfNotExists(ignoreIfNotExists)
+                .setFromTablePath(
+                        new PbTablePath()
+                                .setDatabaseName(fromTablePath.getDatabaseName())
+                                .setTableName(fromTablePath.getTableName()))
+                .setToTablePath()
+                .setDatabaseName(toTablePath.getDatabaseName())
+                .setTableName(toTablePath.getTableName());
+        return gateway.renameTable(request).thenApply(r -> null);
     }
 
     @Override
