@@ -92,6 +92,18 @@ public class PluginLakeStorageWrapper implements LakeStoragePlugin {
         }
 
         @Override
+        public void renameTable(
+                TablePath fromTablePath,
+                TablePath toTablePath,
+                TableDescriptor tableDescriptor,
+                Context context)
+                throws TableAlreadyExistException {
+            try (TemporaryClassLoaderContext ignored = TemporaryClassLoaderContext.of(loader)) {
+                inner.renameTable(fromTablePath, toTablePath, tableDescriptor, context);
+            }
+        }
+
+        @Override
         public void close() throws Exception {
             try (TemporaryClassLoaderContext ignored = TemporaryClassLoaderContext.of(loader)) {
                 inner.close();

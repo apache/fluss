@@ -19,6 +19,7 @@ package org.apache.fluss.lake.lance;
 
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.InvalidTableException;
+import org.apache.fluss.exception.TableAlreadyExistException;
 import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.lake.lakestorage.LakeCatalog;
 import org.apache.fluss.lake.lance.utils.LanceArrowUtils;
@@ -75,6 +76,17 @@ public class LanceLakeCatalog implements LakeCatalog {
             throws TableNotExistException {
         throw new UnsupportedOperationException(
                 "Alter table is not supported for Lance at the moment");
+    }
+
+    @Override
+    public void renameTable(
+            TablePath fromTablePath,
+            TablePath toTablePath,
+            TableDescriptor tableDescriptor,
+            Context context)
+            throws TableAlreadyExistException {
+        throw new UnsupportedOperationException(
+                "Rename table is not supported for Lance at the moment");
     }
 
     @Override

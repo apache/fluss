@@ -42,6 +42,7 @@ import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
+import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.gateway.CoordinatorGateway;
 import org.apache.fluss.rpc.messages.AdjustIsrRequest;
@@ -81,6 +82,8 @@ import org.apache.fluss.rpc.messages.MetadataResponse;
 import org.apache.fluss.rpc.messages.PbAlterConfig;
 import org.apache.fluss.rpc.messages.PbHeartbeatReqForTable;
 import org.apache.fluss.rpc.messages.PbHeartbeatRespForTable;
+import org.apache.fluss.rpc.messages.RenameTableRequest;
+import org.apache.fluss.rpc.messages.RenameTableResponse;
 import org.apache.fluss.rpc.netty.server.Session;
 import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.security.acl.AclBinding;
@@ -442,6 +445,48 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         String dataLakeEnabledValue =
                 tableDescriptor.getProperties().get(ConfigOptions.TABLE_DATALAKE_ENABLED.key());
         return Boolean.parseBoolean(dataLakeEnabledValue);
+    }
+
+    @Override
+    public CompletableFuture<RenameTableResponse> renameTable(RenameTableRequest request) {
+        TablePath fromTablePath = toTablePath(request.getFromTablePath());
+        fromTablePath.validate();
+        TablePath toTablePath = toTablePath(request.getToTablePath());
+        toTablePath.validate();
+        if (authorizer != null) {
+            authorizer.authorize(
+                    currentSession(), OperationType.ALTER, Resource.table(fromTablePath));
+            authorizer.authorize(
+                    currentSession(),
+                    OperationType.CREATE,
+                    Resource.database(toTablePath.getDatabaseName()));
+        }
+
+        TableInfo table = metadataManager.getTable(fromTablePath);
+        TableDescriptor tableDescriptor = table.toTableDescriptor();
+        // before rename table in fluss, we may rename in lake
+        if (isDataLakeEnabled(tableDescriptor)) {
+            LakeCatalogDynamicLoader.LakeCatalogContainer lakeCatalogContainer =
+                    lakeCatalogDynamicLoader.getLakeCatalogContainer();
+            try {
+                checkNotNull(lakeCatalogContainer.getLakeCatalog())
+                        .renameTable(
+                                fromTablePath,
+                                toTablePath,
+                                tableDescriptor,
+                                new DefaultLakeCatalogContext(
+                                        true, currentSession().getPrincipal()));
+            } catch (TableAlreadyExistException e) {
+                throw new LakeTableAlreadyExistException(e.getMessage(), e);
+            }
+        }
+
+        // then rename table;
+        metadataManager.renameTable(
+                toTablePath(request.getFromTablePath()),
+                toTablePath(request.getToTablePath()),
+                request.isIgnoreIfNotExists());
+        return CompletableFuture.completedFuture(new RenameTableResponse());
     }
 
     @Override
