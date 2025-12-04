@@ -22,7 +22,7 @@ import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.metadata.TableBucket;
-import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.utils.concurrent.ExecutorThreadFactory;
 
 import org.slf4j.Logger;
@@ -44,7 +44,7 @@ import java.util.concurrent.TimeUnit;
  * that is responsible for turning these lookup operations into network requests and transmitting
  * them to the cluster.
  *
- * <p>The {@link #lookup(TableInfo, TableBucket, byte[])} method is asynchronous, when called, it
+ * <p>The {@link #lookup(TablePath, TableBucket, byte[])} method is asynchronous, when called, it
  * adds the lookup operation to a queue of pending lookup operations and immediately returns. This
  * allows the lookup operations to batch together individual lookup operations for efficiency.
  */
@@ -80,16 +80,15 @@ public class LookupClient {
     }
 
     public CompletableFuture<byte[]> lookup(
-            TableInfo tableInfo, TableBucket tableBucket, byte[] keyBytes) {
-        LookupQuery lookup = new LookupQuery(tableInfo.getTablePath(), tableBucket, keyBytes);
+            TablePath tablePath, TableBucket tableBucket, byte[] keyBytes) {
+        LookupQuery lookup = new LookupQuery(tablePath, tableBucket, keyBytes);
         lookupQueue.appendLookup(lookup);
         return lookup.future();
     }
 
     public CompletableFuture<List<byte[]>> prefixLookup(
-            TableInfo tableInfo, TableBucket tableBucket, byte[] keyBytes) {
-        PrefixLookupQuery prefixLookup =
-                new PrefixLookupQuery(tableInfo.getTablePath(), tableBucket, keyBytes);
+            TablePath tablePath, TableBucket tableBucket, byte[] keyBytes) {
+        PrefixLookupQuery prefixLookup = new PrefixLookupQuery(tablePath, tableBucket, keyBytes);
         lookupQueue.appendLookup(prefixLookup);
         return prefixLookup.future();
     }
