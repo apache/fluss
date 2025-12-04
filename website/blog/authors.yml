@@ -49,3 +49,9 @@ zhangxinyu:
   name: Xinyu Zhang
   title: Senior Data Development Engineer of Taotian Group
   image_url: /img/avatars/zhangxinyu.png
+
+mehulbatra:
+  name: Mehul Batra
+  title: Apache Fluss (Incubating) Committer
+  url: https://github.com/mehulbatra
+  image_url: /img/avatars/mehulbatra.png
