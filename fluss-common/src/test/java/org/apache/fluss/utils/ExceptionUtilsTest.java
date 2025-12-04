@@ -108,7 +108,7 @@ public class ExceptionUtilsTest {
 
     @Test
     void testFirstOrSuppressed() {
-        // tet first exception
+        // test first exception
         Exception exception = new Exception("exception");
         assertThat(ExceptionUtils.firstOrSuppressed(exception, null)).isEqualTo(exception);
 
