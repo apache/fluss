@@ -16,11 +16,25 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.flink.tiering.event;
+package org.apache.fluss.lake.values;
 
-import org.apache.flink.api.connector.source.SourceEvent;
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.lake.lakestorage.LakeStorage;
+import org.apache.fluss.lake.lakestorage.LakeStoragePlugin;
+import org.apache.fluss.metadata.DataLakeFormat;
 
-/** SourceEvent used to represent tiering is failover. */
-public class TieringFailOverEvent implements SourceEvent {
-    private static final long serialVersionUID = 1L;
+/** Implementation of {@link LakeStoragePlugin} for values lake. */
+public class ValuesLakeStoragePlugin implements LakeStoragePlugin {
+
+    private static final String IDENTIFIER = DataLakeFormat.VALUES.toString();
+
+    @Override
+    public String identifier() {
+        return IDENTIFIER;
+    }
+
+    @Override
+    public LakeStorage createLakeStorage(Configuration configuration) {
+        return new ValuesLakeStorage();
+    }
 }
