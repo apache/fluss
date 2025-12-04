@@ -243,12 +243,9 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
                     }
                 });
 
-        // map flink lookup.max-retries to client.lookup.max-retries
-        if (tableOptions.containsKey(LookupOptions.MAX_RETRIES.key())) {
-            flussConfig.setString(
-                    ConfigOptions.CLIENT_LOOKUP_MAX_RETRIES.key(),
-                    tableOptions.get(LookupOptions.MAX_RETRIES.key()));
-        }
+        // Todo support LookupOptions.MAX_RETRIES. Currently, Fluss doesn't support connector level
+        // retry. The option 'client.lookup.max-retries' is only for dealing with the
+        // RetriableException return by server not all exceptions.
 
         // pass flink io tmp dir to fluss client.
         flussConfig.setString(

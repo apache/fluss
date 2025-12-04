@@ -1125,7 +1125,7 @@ public class ConfigOptions {
     public static final ConfigOption<Integer> CLIENT_LOOKUP_MAX_RETRIES =
             key("client.lookup.max-retries")
                     .intType()
-                    .defaultValue(3)
+                    .defaultValue(Integer.MAX_VALUE)
                     .withDescription(
                             "Setting a value greater than zero will cause the client to resend any lookup request "
                                     + "that fails with a potentially transient error.");
