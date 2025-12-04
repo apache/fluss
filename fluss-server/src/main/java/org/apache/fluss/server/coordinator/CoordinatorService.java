@@ -81,6 +81,8 @@ import org.apache.fluss.rpc.messages.MetadataResponse;
 import org.apache.fluss.rpc.messages.PbAlterConfig;
 import org.apache.fluss.rpc.messages.PbHeartbeatReqForTable;
 import org.apache.fluss.rpc.messages.PbHeartbeatRespForTable;
+import org.apache.fluss.rpc.messages.RenameTableRequest;
+import org.apache.fluss.rpc.messages.RenameTableResponse;
 import org.apache.fluss.rpc.netty.server.Session;
 import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.security.acl.AclBinding;
@@ -442,6 +444,16 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         String dataLakeEnabledValue =
                 tableDescriptor.getProperties().get(ConfigOptions.TABLE_DATALAKE_ENABLED.key());
         return Boolean.parseBoolean(dataLakeEnabledValue);
+    }
+
+    @Override
+    public CompletableFuture<RenameTableResponse> renameTable(RenameTableRequest request) {
+        RenameTableResponse response = new RenameTableResponse();
+        metadataManager.renameTable(
+                toTablePath(request.getFromTablePath()),
+                toTablePath(request.getToTablePath()),
+                request.isIgnoreIfNotExists());
+        return CompletableFuture.completedFuture(response);
     }
 
     @Override
