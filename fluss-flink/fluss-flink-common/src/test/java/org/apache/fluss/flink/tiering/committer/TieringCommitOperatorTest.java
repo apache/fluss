@@ -30,7 +30,7 @@ import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.zk.ZooKeeperClient;
-import org.apache.fluss.server.zk.data.LakeTableSnapshot;
+import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
 import org.apache.fluss.utils.types.Tuple2;
 
 import org.apache.flink.configuration.Configuration;
@@ -161,7 +161,7 @@ class TieringCommitOperatorTest extends FlinkTestBase {
         expectedMaxTimestamps.put(t2b0, 31L);
         expectedMaxTimestamps.put(t2b1, 32L);
         expectedMaxTimestamps.put(t2b2, 33L);
-        verifyLakeSnapshot(tablePath2, tableId2, 1, expectedLogEndOffsets, expectedMaxTimestamps);
+        verifyLakeSnapshot(tablePath2, tableId2, 2, expectedLogEndOffsets, expectedMaxTimestamps);
 
         // let's process one round of TableBucketWriteResult again
         expectedLogEndOffsets = new HashMap<>();
@@ -181,7 +181,7 @@ class TieringCommitOperatorTest extends FlinkTestBase {
             expectedLogEndOffsets.put(tableBucket, offset);
             expectedMaxTimestamps.put(tableBucket, timestamp);
         }
-        verifyLakeSnapshot(tablePath1, tableId1, 1, expectedLogEndOffsets, expectedMaxTimestamps);
+        verifyLakeSnapshot(tablePath1, tableId1, 3, expectedLogEndOffsets, expectedMaxTimestamps);
     }
 
     @Test

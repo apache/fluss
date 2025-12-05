@@ -28,6 +28,7 @@ import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.IneligibleReplicaException;
 import org.apache.fluss.exception.InvalidCoordinatorException;
 import org.apache.fluss.exception.InvalidUpdateVersionException;
+import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.exception.TabletServerNotAvailableException;
 import org.apache.fluss.exception.UnknownTableOrBucketException;
 import org.apache.fluss.metadata.PhysicalTablePath;
@@ -62,6 +63,7 @@ import org.apache.fluss.server.coordinator.event.EventProcessor;
 import org.apache.fluss.server.coordinator.event.FencedCoordinatorEvent;
 import org.apache.fluss.server.coordinator.event.NewTabletServerEvent;
 import org.apache.fluss.server.coordinator.event.NotifyKvSnapshotOffsetEvent;
+import org.apache.fluss.server.coordinator.event.NotifyLakeTableOffsetEvent;
 import org.apache.fluss.server.coordinator.event.NotifyLeaderAndIsrResponseReceivedEvent;
 import org.apache.fluss.server.coordinator.event.SchemaChangeEvent;
 import org.apache.fluss.server.coordinator.event.watcher.TableChangeWatcher;
@@ -81,7 +83,6 @@ import org.apache.fluss.server.metrics.group.CoordinatorMetricGroup;
 import org.apache.fluss.server.utils.ServerRpcMessageUtils;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.BucketAssignment;
-import org.apache.fluss.server.zk.data.LakeTableSnapshot;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
 import org.apache.fluss.server.zk.data.RemoteLogManifestHandle;
@@ -89,6 +90,8 @@ import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.server.zk.data.TabletServerRegistration;
 import org.apache.fluss.server.zk.data.ZkData.PartitionIdsZNode;
 import org.apache.fluss.server.zk.data.ZkData.TableIdsZNode;
+import org.apache.fluss.server.zk.data.lake.LakeTableHelper;
+import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
 import org.apache.fluss.utils.types.Tuple2;
 
 import org.slf4j.Logger;
@@ -144,6 +147,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
     private final String internalListenerName;
 
     private final CompletedSnapshotStoreManager completedSnapshotStoreManager;
+    private final LakeTableHelper lakeTableHelper;
 
     public CoordinatorEventProcessor(
             ZooKeeperClient zooKeeperClient,
@@ -204,6 +208,8 @@ public class CoordinatorEventProcessor implements EventProcessor {
         this.coordinatorMetricGroup = coordinatorMetricGroup;
         this.internalListenerName = conf.getString(ConfigOptions.INTERNAL_LISTENER_NAME);
         this.ioExecutor = ioExecutor;
+        this.lakeTableHelper =
+                new LakeTableHelper(zooKeeperClient, conf.getString(ConfigOptions.REMOTE_DATA_DIR));
     }
 
     public CoordinatorEventManager getCoordinatorEventManager() {
@@ -529,6 +535,8 @@ public class CoordinatorEventProcessor implements EventProcessor {
                     commitKvSnapshotEvent, commitKvSnapshotEvent.getRespCallback());
         } else if (event instanceof NotifyKvSnapshotOffsetEvent) {
             processNotifyKvSnapshotOffsetEvent((NotifyKvSnapshotOffsetEvent) event);
+        } else if (event instanceof NotifyLakeTableOffsetEvent) {
+            processNotifyLakeTableOffsetEvent((NotifyLakeTableOffsetEvent) event);
         } else if (event instanceof CommitRemoteLogManifestEvent) {
             CommitRemoteLogManifestEvent commitRemoteLogManifestEvent =
                     (CommitRemoteLogManifestEvent) event;
@@ -538,9 +546,8 @@ public class CoordinatorEventProcessor implements EventProcessor {
         } else if (event instanceof CommitLakeTableSnapshotEvent) {
             CommitLakeTableSnapshotEvent commitLakeTableSnapshotEvent =
                     (CommitLakeTableSnapshotEvent) event;
-            completeFromCallable(
-                    commitLakeTableSnapshotEvent.getRespCallback(),
-                    () -> tryProcessCommitLakeTableSnapshot(commitLakeTableSnapshotEvent));
+            tryProcessCommitLakeTableSnapshot(
+                    commitLakeTableSnapshotEvent, commitLakeTableSnapshotEvent.getRespCallback());
         } else if (event instanceof ControlledShutdownEvent) {
             ControlledShutdownEvent controlledShutdownEvent = (ControlledShutdownEvent) event;
             completeFromCallable(
@@ -1140,6 +1147,30 @@ public class CoordinatorEventProcessor implements EventProcessor {
                 coordinatorContext.getCoordinatorEpoch());
     }
 
+    private void processNotifyLakeTableOffsetEvent(NotifyLakeTableOffsetEvent event) {
+        Map<Long, LakeTableSnapshot> lakeTableSnapshots = event.getLakeTableSnapshots();
+        coordinatorRequestBatch.newBatch();
+        for (Map.Entry<Long, LakeTableSnapshot> lakeTableSnapshotEntry :
+                lakeTableSnapshots.entrySet()) {
+            LakeTableSnapshot lakeTableSnapshot = lakeTableSnapshotEntry.getValue();
+            for (Map.Entry<TableBucket, Long> bucketLogEndOffsetEntry :
+                    lakeTableSnapshot.getBucketLogEndOffset().entrySet()) {
+                TableBucket tb = bucketLogEndOffsetEntry.getKey();
+                coordinatorContext
+                        .getBucketLeaderAndIsr(bucketLogEndOffsetEntry.getKey())
+                        .ifPresent(
+                                leaderAndIsr ->
+                                        coordinatorRequestBatch
+                                                .addNotifyLakeTableOffsetRequestForTableServers(
+                                                        coordinatorContext.getAssignment(tb),
+                                                        tb,
+                                                        lakeTableSnapshot));
+            }
+        }
+        coordinatorRequestBatch.sendNotifyLakeTableOffsetRequest(
+                coordinatorContext.getCoordinatorEpoch());
+    }
+
     private CommitRemoteLogManifestResponse tryProcessCommitRemoteLogManifest(
             CommitRemoteLogManifestEvent event) {
         CommitRemoteLogManifestData manifestData = event.getCommitRemoteLogManifestData();
@@ -1189,50 +1220,63 @@ public class CoordinatorEventProcessor implements EventProcessor {
         }
     }
 
-    private CommitLakeTableSnapshotResponse tryProcessCommitLakeTableSnapshot(
-            CommitLakeTableSnapshotEvent commitLakeTableSnapshotEvent) {
+    private void tryProcessCommitLakeTableSnapshot(
+            CommitLakeTableSnapshotEvent commitLakeTableSnapshotEvent,
+            CompletableFuture<CommitLakeTableSnapshotResponse> callback) {
+        // commit the lake table snapshot asynchronously
         CommitLakeTableSnapshotData commitLakeTableSnapshotData =
                 commitLakeTableSnapshotEvent.getCommitLakeTableSnapshotData();
-        CommitLakeTableSnapshotResponse response = new CommitLakeTableSnapshotResponse();
         Map<Long, LakeTableSnapshot> lakeTableSnapshots =
                 commitLakeTableSnapshotData.getLakeTableSnapshot();
+        Map<Long, TablePath> tablePathById = new HashMap<>();
         for (Map.Entry<Long, LakeTableSnapshot> lakeTableSnapshotEntry :
                 lakeTableSnapshots.entrySet()) {
             Long tableId = lakeTableSnapshotEntry.getKey();
-
-            PbCommitLakeTableSnapshotRespForTable tableResp = response.addTableResp();
-            tableResp.setTableId(tableId);
-
-            try {
-                zooKeeperClient.upsertLakeTableSnapshot(tableId, lakeTableSnapshotEntry.getValue());
-            } catch (Exception e) {
-                ApiError error = ApiError.fromThrowable(e);
-                tableResp.setError(error.error().code(), error.message());
+            TablePath tablePath = coordinatorContext.getTablePathById(tableId);
+            if (tablePath != null) {
+                tablePathById.put(tableId, tablePath);
             }
         }
 
-        // send notify lakehouse data request to all replicas.
-        coordinatorRequestBatch.newBatch();
-        for (Map.Entry<Long, LakeTableSnapshot> lakeTableSnapshotEntry :
-                lakeTableSnapshots.entrySet()) {
-            LakeTableSnapshot lakeTableSnapshot = lakeTableSnapshotEntry.getValue();
-            for (Map.Entry<TableBucket, Long> bucketLogEndOffsetEntry :
-                    lakeTableSnapshot.getBucketLogEndOffset().entrySet()) {
-                TableBucket tb = bucketLogEndOffsetEntry.getKey();
-                coordinatorContext
-                        .getBucketLeaderAndIsr(bucketLogEndOffsetEntry.getKey())
-                        .ifPresent(
-                                leaderAndIsr ->
-                                        coordinatorRequestBatch
-                                                .addNotifyLakeTableOffsetRequestForTableServers(
-                                                        coordinatorContext.getAssignment(tb),
-                                                        tb,
-                                                        lakeTableSnapshot));
-            }
-        }
-        coordinatorRequestBatch.sendNotifyLakeTableOffsetRequest(
-                coordinatorContext.getCoordinatorEpoch());
-        return response;
+        ioExecutor.execute(
+                () -> {
+                    try {
+                        CommitLakeTableSnapshotResponse response =
+                                new CommitLakeTableSnapshotResponse();
+                        for (Map.Entry<Long, LakeTableSnapshot> lakeTableSnapshotEntry :
+                                lakeTableSnapshots.entrySet()) {
+                            Long tableId = lakeTableSnapshotEntry.getKey();
+
+                            PbCommitLakeTableSnapshotRespForTable tableResp =
+                                    response.addTableResp();
+                            tableResp.setTableId(tableId);
+
+                            try {
+                                TablePath tablePath = tablePathById.get(tableId);
+                                if (tablePath == null) {
+                                    throw new TableNotExistException(
+                                            "Table "
+                                                    + tableId
+                                                    + " not found in coordinator context.");
+                                }
+
+                                // this involves IO operation (ZK), so we do it in ioExecutor
+                                lakeTableHelper.upsertLakeTable(
+                                        tableId, tablePath, lakeTableSnapshotEntry.getValue());
+                            } catch (Exception e) {
+                                ApiError error = ApiError.fromThrowable(e);
+                                tableResp.setError(error.error().code(), error.message());
+                            }
+                        }
+
+                        // send notify lakehouse data request to all replicas via coordinator event
+                        coordinatorEventManager.put(
+                                new NotifyLakeTableOffsetEvent(lakeTableSnapshots));
+                        callback.complete(response);
+                    } catch (Exception e) {
+                        callback.completeExceptionally(e);
+                    }
+                });
     }
 
     private ControlledShutdownResponse tryProcessControlledShutdown(

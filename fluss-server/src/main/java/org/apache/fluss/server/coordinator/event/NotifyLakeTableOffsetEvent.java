@@ -15,46 +15,22 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.server.entity;
+package org.apache.fluss.server.coordinator.event;
 
-import org.apache.fluss.rpc.messages.CommitLakeTableSnapshotRequest;
 import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
 
 import java.util.Map;
-import java.util.Objects;
 
-/** The data for request {@link CommitLakeTableSnapshotRequest}. */
-public class CommitLakeTableSnapshotData {
+/** An event for notify lake table offset to local tablet servers. */
+public class NotifyLakeTableOffsetEvent implements CoordinatorEvent {
 
     private final Map<Long, LakeTableSnapshot> lakeTableSnapshots;
 
-    public CommitLakeTableSnapshotData(Map<Long, LakeTableSnapshot> lakeTableSnapshots) {
+    public NotifyLakeTableOffsetEvent(Map<Long, LakeTableSnapshot> lakeTableSnapshots) {
         this.lakeTableSnapshots = lakeTableSnapshots;
     }
 
-    public Map<Long, LakeTableSnapshot> getLakeTableSnapshot() {
+    public Map<Long, LakeTableSnapshot> getLakeTableSnapshots() {
         return lakeTableSnapshots;
-    }
-
-    @Override
-    public boolean equals(Object o) {
-        if (this == o) {
-            return true;
-        }
-        if (!(o instanceof CommitLakeTableSnapshotData)) {
-            return false;
-        }
-        CommitLakeTableSnapshotData that = (CommitLakeTableSnapshotData) o;
-        return Objects.equals(lakeTableSnapshots, that.lakeTableSnapshots);
-    }
-
-    @Override
-    public int hashCode() {
-        return Objects.hashCode(lakeTableSnapshots);
-    }
-
-    @Override
-    public String toString() {
-        return "CommitLakeTableSnapshotData{" + "lakeTableInfos=" + lakeTableSnapshots + '}';
     }
 }
