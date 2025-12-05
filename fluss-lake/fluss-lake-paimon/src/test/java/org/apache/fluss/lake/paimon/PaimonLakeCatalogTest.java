@@ -18,6 +18,7 @@
 package org.apache.fluss.lake.paimon;
 
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.lake.lakestorage.TestingLakeCatalogContext;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableChange;
@@ -35,6 +36,7 @@ import java.io.File;
 import java.util.Collections;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Unit test for {@link PaimonLakeCatalog}. */
 class PaimonLakeCatalogTest {
@@ -81,6 +83,34 @@ class PaimonLakeCatalogTest {
         table = flussPaimonCatalog.getPaimonCatalog().getTable(identifier);
         // we have reset the value for key
         assertThat(table.options().get("fluss.key")).isEqualTo(null);
+    }
+
+    @Test
+    void alterTablePropertiesWithNonExistentTable() {
+        TestingLakeCatalogContext context = new TestingLakeCatalogContext();
+        // db & table don't exist
+        assertThatThrownBy(
+                        () ->
+                                flussPaimonCatalog.alterTable(
+                                        TablePath.of("non_existing_db", "non_existing_table"),
+                                        Collections.singletonList(TableChange.set("key", "value")),
+                                        context))
+                .isInstanceOf(TableNotExistException.class)
+                .hasMessage("Table non_existing_db.non_existing_table does not exist.");
+
+        String database = "alter_props_db";
+        String tableName = "alter_props_table";
+        createTable(database, tableName);
+
+        // database exists but table doesn't
+        assertThatThrownBy(
+                        () ->
+                                flussPaimonCatalog.alterTable(
+                                        TablePath.of(database, "non_existing_table"),
+                                        Collections.singletonList(TableChange.set("key", "value")),
+                                        context))
+                .isInstanceOf(TableNotExistException.class)
+                .hasMessage("Table alter_props_db.non_existing_table does not exist.");
     }
 
     private void createTable(String database, String tableName) {
