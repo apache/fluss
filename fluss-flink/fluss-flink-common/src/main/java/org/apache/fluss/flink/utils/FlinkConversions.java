@@ -66,6 +66,7 @@ import static org.apache.flink.table.utils.EncodingUtils.decodeBase64ToBytes;
 import static org.apache.flink.table.utils.EncodingUtils.encodeBytesToBase64;
 import static org.apache.flink.util.Preconditions.checkNotNull;
 import static org.apache.flink.util.Preconditions.checkState;
+import static org.apache.fluss.config.ConfigOptions.TABLE_AUTO_INCREMENT_FIELDS;
 import static org.apache.fluss.config.FlussConfigUtils.isTableStorageConfig;
 import static org.apache.fluss.flink.FlinkConnectorOptions.BUCKET_KEY;
 import static org.apache.fluss.flink.FlinkConnectorOptions.BUCKET_NUMBER;
@@ -196,20 +197,29 @@ public class FlinkConversions {
         }
 
         // first build schema with physical columns
-        Schema schema =
-                schemBuilder
-                        .fromColumns(
-                                resolvedSchema.getColumns().stream()
-                                        .filter(Column::isPhysical)
-                                        .map(
-                                                column ->
-                                                        new Schema.Column(
-                                                                column.getName(),
-                                                                FlinkConversions.toFlussType(
-                                                                        column.getDataType()),
-                                                                column.getComment().orElse(null)))
-                                        .collect(Collectors.toList()))
-                        .build();
+        schemBuilder.fromColumns(
+                resolvedSchema.getColumns().stream()
+                        .filter(Column::isPhysical)
+                        .map(
+                                column ->
+                                        new Schema.Column(
+                                                column.getName(),
+                                                FlinkConversions.toFlussType(column.getDataType()),
+                                                column.getComment().orElse(null)))
+                        .collect(Collectors.toList()));
+
+        // convert some flink options to fluss table configs.
+        Map<String, String> properties = convertFlinkOptionsToFlussTableProperties(flinkTableConf);
+
+        if (properties.containsKey(TABLE_AUTO_INCREMENT_FIELDS.key())) {
+            for (String autoIncrementColumn :
+                    properties.get(TABLE_AUTO_INCREMENT_FIELDS.key()).split(",")) {
+                schemBuilder.enableAutoIncrement(autoIncrementColumn);
+            }
+        }
+
+        Schema schema = schemBuilder.build();
+
         resolvedSchema.getColumns().stream()
                 .filter(col -> col instanceof Column.MetadataColumn)
                 .findAny()
@@ -244,9 +254,6 @@ public class FlinkConversions {
         }
 
         String comment = catalogBaseTable.getComment();
-
-        // convert some flink options to fluss table configs.
-        Map<String, String> properties = convertFlinkOptionsToFlussTableProperties(flinkTableConf);
 
         // then set distributed by information
         List<String> bucketKey;

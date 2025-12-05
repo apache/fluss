@@ -1412,6 +1412,17 @@ public class ConfigOptions {
                                     + "The `disable` behavior rejects delete requests with a clear error message. "
                                     + "For tables with FIRST_ROW or VERSIONED merge engines, this option defaults to `ignore`.");
 
+    public static final ConfigOption<String> TABLE_AUTO_INCREMENT_FIELDS =
+            key("table.auto-increment.fields")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "Defines the auto increment columns. "
+                                    + "The auto increment column can only be used in primary-key table."
+                                    + "With an auto increment column in the table, whenever a new row is inserted into the table, the new row will be assigned with the next available value from the auto-increment sequence."
+                                    + "The auto increment column can only be used in primary-key table. The data type of the auto increment column must be INT or BIGINT."
+                                    + "Currently a table can have only one auto-increment column.");
+
     // ------------------------------------------------------------------------
     //  ConfigOptions for Kv
     // ------------------------------------------------------------------------
