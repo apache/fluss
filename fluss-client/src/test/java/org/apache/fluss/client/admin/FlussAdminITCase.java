@@ -659,7 +659,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                 .cause()
                 .isInstanceOf(InvalidConfigException.class)
                 .hasMessageContaining(
-                        "Currently, Primary Key Table only supports ARROW log format if kv format is COMPACTED.");
+                        "Currently, Primary Key Table supports ARROW or COMPACTED log format when kv format is COMPACTED.");
     }
 
     @Test
