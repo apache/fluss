@@ -218,8 +218,10 @@ public final class GenericArray implements InternalArray, Serializable {
         return (InternalArray) getObject(pos);
     }
 
-    // TODO: getMap() will be added in Issue #1973
-    // TODO: getRow() will be added in Issue #1974
+    @Override
+    public InternalRow getRow(int pos, int numFields) {
+        return (InternalRow) getObject(pos);
+    }
 
     private Object getObject(int pos) {
         return ((Object[]) array)[pos];

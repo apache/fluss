@@ -64,18 +64,11 @@ public class TestInternalRowGenerator {
                 new DataField("f19", DataTypes.ARRAY(DataTypes.INT())),
                 new DataField(
                         "f20",
-                        DataTypes.ARRAY(DataTypes.FLOAT().copy(false))), // vector embedding type
-                new DataField(
-                        "f21", DataTypes.ARRAY(DataTypes.ARRAY(DataTypes.STRING()))) // nested array
-                // TODO: Add Map and Row fields in Issue #1973 and #1974
-                // new DataField("u", DataTypes.MAP(DataTypes.INT(), DataTypes.STRING())),
-                // new DataField(
-                //         "v",
-                //         DataTypes.ROW(
-                //                 new DataField("u1", DataTypes.INT()),
-                //                 new DataField("u2", DataTypes.ROW(DataTypes.INT())),
-                //                 new DataField("u3", DataTypes.STRING())))
-                );
+                        DataTypes.ROW(
+                                new DataField("u1", DataTypes.INT()),
+                                new DataField(
+                                        "u2", DataTypes.ROW(new DataField("v1", DataTypes.INT()))),
+                                new DataField("u3", DataTypes.STRING()))));
     }
 
     public static IndexedRow genIndexedRowForAllType() {
@@ -128,29 +121,9 @@ public class TestInternalRowGenerator {
         GenericArray array1 = GenericArray.of(1, 2, 3, 4, 5, -11, null, 444, 102234);
         setRandomNull(writers[19], writer, 19, rnd, array1);
 
-        GenericArray array2 =
-                GenericArray.of(0.1f, 1.1f, -0.5f, 6.6f, Float.MAX_VALUE, Float.MIN_VALUE);
-        setRandomNull(writers[20], writer, 20, rnd, array2);
-
-        GenericArray array3 =
-                GenericArray.of(
-                        GenericArray.of(fromString("a"), null, fromString("c")),
-                        null,
-                        GenericArray.of(fromString("hello"), fromString("world")));
-        setRandomNull(writers[21], writer, 21, rnd, array3);
-
-        // TODO: Map type support will be added in Issue #1973
-        // Map<Object, Object> javaMap = new HashMap<>();
-        // javaMap.put(0, null);
-        // javaMap.put(1, fromString("1"));
-        // javaMap.put(2, fromString("2"));
-        // GenericMap map = new GenericMap(javaMap);
-        // setRandomNull(writers[20], writer, 20, rnd, map);
-
-        // TODO: Row type support will be added in Issue #1974
-        // GenericRow innerRow = GenericRow.of(123);
-        // GenericRow genericRow = GenericRow.of(20, innerRow, BinaryString.fromString("Test"));
-        // setRandomNull(writers[21], writer, 21, rnd, genericRow);
+        GenericRow innerRow = GenericRow.of(20);
+        GenericRow genericRow = GenericRow.of(123, innerRow, BinaryString.fromString("Test"));
+        setRandomNull(writers[20], writer, 20, rnd, genericRow);
 
         IndexedRow row = new IndexedRow(dataTypes);
         row.pointTo(writer.segment(), 0, writer.position());

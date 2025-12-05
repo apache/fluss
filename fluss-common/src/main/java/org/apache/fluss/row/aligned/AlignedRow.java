@@ -393,8 +393,13 @@ public final class AlignedRow extends BinarySection
         return BinarySegmentUtils.readBinaryArray(segments, offset, offsetAndSize);
     }
 
-    // TODO: getMap() will be added in Issue #1973
-    // TODO: getRow() will be added in Issue #1974
+    @Override
+    public InternalRow getRow(int pos, int numFields) {
+        assertIndexIsValid(pos);
+        int fieldOffset = getFieldOffset(pos);
+        final long offsetAndSize = segments[0].getLong(fieldOffset);
+        return BinarySegmentUtils.readBinaryRow(segments, offset, numFields, offsetAndSize);
+    }
 
     /** The bit is 1 when the field is null. Default is 0. */
     public boolean anyNull() {

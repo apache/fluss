@@ -20,16 +20,13 @@ package org.apache.fluss.flink.utils;
 import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.Decimal;
-import org.apache.fluss.row.InternalArray;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
-import org.apache.fluss.types.ArrayType;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.RowType;
 
 import org.apache.flink.table.data.DecimalData;
-import org.apache.flink.table.data.GenericArrayData;
 import org.apache.flink.table.data.GenericRowData;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.data.StringData;
@@ -108,7 +105,7 @@ public class FlussRowToFlinkRowConverter {
     }
 
     // TODO: use flink row type
-    private FlussDeserializationConverter createInternalConverter(DataType flussDataType) {
+    static FlussDeserializationConverter createInternalConverter(DataType flussDataType) {
         switch (flussDataType.getTypeRoot()) {
             case BOOLEAN:
             case TINYINT:
@@ -146,21 +143,12 @@ public class FlussRowToFlinkRowConverter {
                             timestampLtz.getNanoOfMillisecond());
                 };
             case ARRAY:
-                ArrayType arrayType = (ArrayType) flussDataType;
-                InternalArray.ElementGetter elementGetter =
-                        InternalArray.createElementGetter(arrayType.getElementType());
-                FlussDeserializationConverter elementConverter =
-                        createNullableInternalConverter(arrayType.getElementType());
-                return (flussField) -> {
-                    InternalArray flussArray = (InternalArray) flussField;
-                    int size = flussArray.size();
-                    Object[] flinkArray = new Object[size];
-                    for (int i = 0; i < size; i++) {
-                        Object flussElement = elementGetter.getElementOrNull(flussArray, i);
-                        flinkArray[i] = elementConverter.deserialize(flussElement);
-                    }
-                    return new GenericArrayData(flinkArray);
-                };
+                return (flussField) -> FlinkArrayConverter.deserialize(flussDataType, flussField);
+            case MAP:
+                // TODO: Add Map type support in future
+                throw new UnsupportedOperationException("Map type not supported yet");
+            case ROW:
+                return (flussField) -> FlinkRowConverter.deserialize(flussDataType, flussField);
             default:
                 throw new UnsupportedOperationException("Unsupported data type: " + flussDataType);
         }
