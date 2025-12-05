@@ -122,6 +122,34 @@ public class ExceptionUtilsTest {
     }
 
     @Test
+    void testFirstOrSuppressedCanCreateCycles() {
+        // create two test exceptions (assuming thrown during shutdown, etc.)
+        Exception exceptionA = new Exception("Exception A");
+        Exception exceptionB = new Exception("Exception B");
+
+        // associate the suppressions (creating a suppression chain)
+        ExceptionUtils.firstOrSuppressed(exceptionB, exceptionA);
+
+        // create a suppression cycle (A -> B; B -> A) which will eventually
+        // trigger a StackOverflowError during serialization
+        ExceptionUtils.firstOrSuppressed(exceptionA, exceptionB);
+
+        // confirm the suppression chain contains both exceptions
+        assertThat(exceptionA.getSuppressed()).contains(exceptionB);
+        assertThat(exceptionB.getSuppressed()).contains(exceptionA);
+
+        // simulate the cascading errors mimicking Flink's SerializedThrowable behavior
+        assertThatThrownBy(() -> recursivelyProcessSuppressedExceptions(exceptionA))
+                .isInstanceOf(StackOverflowError.class);
+    }
+
+    private void recursivelyProcessSuppressedExceptions(Throwable throwable) {
+        for (Throwable suppressed : throwable.getSuppressed()) {
+            recursivelyProcessSuppressedExceptions(suppressed);
+        }
+    }
+
+    @Test
     public void testExceptionStripping() {
         final Exception expectedException = new Exception("test exception");
         Throwable strippedException =
