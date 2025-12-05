@@ -131,6 +131,7 @@ public class FlinkTableSource
     @Nullable private final LookupCache cache;
 
     private final long scanPartitionDiscoveryIntervalMs;
+    private final long scanBucketDiscoveryIntervalMs;
     private final boolean isDataLakeEnabled;
     @Nullable private final MergeEngineType mergeEngineType;
 
@@ -168,6 +169,7 @@ public class FlinkTableSource
             boolean lookupAsync,
             @Nullable LookupCache cache,
             long scanPartitionDiscoveryIntervalMs,
+            long scanBucketDiscoveryIntervalMs,
             boolean isDataLakeEnabled,
             @Nullable MergeEngineType mergeEngineType,
             Map<String, String> tableOptions) {
@@ -185,6 +187,7 @@ public class FlinkTableSource
         this.cache = cache;
 
         this.scanPartitionDiscoveryIntervalMs = scanPartitionDiscoveryIntervalMs;
+        this.scanBucketDiscoveryIntervalMs = scanBucketDiscoveryIntervalMs;
         this.isDataLakeEnabled = isDataLakeEnabled;
         this.mergeEngineType = mergeEngineType;
         this.tableOptions = tableOptions;
@@ -328,6 +331,7 @@ public class FlinkTableSource
                         projectedFields,
                         offsetsInitializer,
                         scanPartitionDiscoveryIntervalMs,
+                        scanBucketDiscoveryIntervalMs,
                         new RowDataDeserializationSchema(),
                         streaming,
                         partitionFilters,
@@ -446,6 +450,7 @@ public class FlinkTableSource
                         lookupAsync,
                         cache,
                         scanPartitionDiscoveryIntervalMs,
+                        scanBucketDiscoveryIntervalMs,
                         isDataLakeEnabled,
                         mergeEngineType,
                         tableOptions);

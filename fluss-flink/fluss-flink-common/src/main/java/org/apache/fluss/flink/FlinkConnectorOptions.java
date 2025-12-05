@@ -107,6 +107,21 @@ public class FlinkConnectorOptions {
                                     + "as a small value would cause frequent requests and increase server load. In the future, "
                                     + "once list partitions is optimized, the default value of this parameter can be reduced.");
 
+    public static final ConfigOption<Duration> SCAN_BUCKET_DISCOVERY_INTERVAL =
+            ConfigOptions.key("scan.bucket.discovery.interval")
+                    .durationType()
+                    .defaultValue(Duration.ofMinutes(1))
+                    .withDescription(
+                            "The time interval for the Fluss source to discover "
+                                    + "the new buckets for table while scanning."
+                                    + " A non-positive value disables the bucket discovery. "
+                                    + "For partitioned tables, if "
+                                    + SCAN_PARTITION_DISCOVERY_INTERVAL.key()
+                                    + " is also set, then the minimum value of "
+                                    + SCAN_PARTITION_DISCOVERY_INTERVAL.key()
+                                    + " and the current value will be used as the time interval for "
+                                    + "discovering partitions and buckets.");
+
     public static final ConfigOption<Boolean> SINK_IGNORE_DELETE =
             ConfigOptions.key("sink.ignore-delete")
                     .booleanType()
@@ -144,7 +159,7 @@ public class FlinkConnectorOptions {
     // --------------------------------------------------------------------------------------------
 
     public static final List<String> ALTER_DISALLOW_OPTIONS =
-            Arrays.asList(BUCKET_NUMBER.key(), BUCKET_KEY.key(), BOOTSTRAP_SERVERS.key());
+            Arrays.asList(BUCKET_KEY.key(), BOOTSTRAP_SERVERS.key());
 
     // -------------------------------------------------------------------------------------------
     // Only used internally to support materialized table

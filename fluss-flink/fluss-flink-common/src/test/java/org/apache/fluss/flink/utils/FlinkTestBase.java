@@ -31,6 +31,7 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
@@ -52,6 +53,7 @@ import org.junit.jupiter.api.extension.RegisterExtension;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -104,6 +106,12 @@ public class FlinkTestBase extends AbstractTestBase {
             TableDescriptor.builder()
                     .schema(DEFAULT_LOG_TABLE_SCHEMA)
                     .distributedBy(DEFAULT_BUCKET_NUM, "id")
+                    .build();
+
+    protected static final TableDescriptor LOG_TABLE_WITHOUT_BK_DESCRIPTOR =
+            TableDescriptor.builder()
+                    .schema(DEFAULT_LOG_TABLE_SCHEMA)
+                    .distributedBy(DEFAULT_BUCKET_NUM)
                     .build();
 
     protected static final TableDescriptor DEFAULT_AUTO_PARTITIONED_LOG_TABLE_DESCRIPTOR =
@@ -259,6 +267,14 @@ public class FlinkTestBase extends AbstractTestBase {
         for (String partition : droppedPartitions) {
             zkClient.deletePartition(tablePath, partition);
         }
+    }
+
+    public static void alterTableBucket(TablePath tablePath, int bucketNum) throws Exception {
+        admin.alterTable(
+                        tablePath,
+                        Collections.singletonList(TableChange.bucketNum(bucketNum)),
+                        false)
+                .get();
     }
 
     public static List<String> writeRowsToPartition(
