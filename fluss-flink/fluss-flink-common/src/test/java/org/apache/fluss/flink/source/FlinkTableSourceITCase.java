@@ -631,7 +631,7 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
         tEnv.executeSql("create table timestamp_table (a int, b varchar) ");
         TablePath tablePath = TablePath.of(DEFAULT_DB, "timestamp_table");
 
-        // write first bath records
+        // write first batch records
         List<InternalRow> rows = Arrays.asList(row(1, "v1"), row(2, "v2"), row(3, "v3"));
 
         writeRows(conn, tablePath, rows, true);
@@ -644,7 +644,9 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
                         () ->
                                 tEnv.executeSql(
                                                 String.format(
-                                                        "select * from timestamp_table /*+ OPTIONS('scan.startup.mode' = 'timestamp', 'scan.startup.timestamp' = '%s') */ ",
+                                                        // disable bucket discovery to throw
+                                                        // exception
+                                                        "select * from timestamp_table /*+ OPTIONS('scan.startup.mode' = 'timestamp', 'scan.startup.timestamp' = '%s', 'scan.bucket.discovery.interval' = '0') */ ",
                                                         currentTimeMillis
                                                                 + Duration.ofMinutes(5).toMillis()))
                                         .await())
