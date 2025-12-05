@@ -244,6 +244,13 @@ public abstract class ClientToServerITCaseBase {
         FLUSS_CLUSTER_EXTENSION.waitAllSchemaSync(tablePath, schemaId);
     }
 
+    public static void waitAllReplicasReady(long tableId, long partitionId, int expectBucketCount) {
+        for (int i = 0; i < expectBucketCount; i++) {
+            FLUSS_CLUSTER_EXTENSION.waitUntilAllReplicaReady(
+                    new TableBucket(tableId, partitionId, i));
+        }
+    }
+
     protected static void verifyRows(
             RowType rowType,
             Map<Long, List<InternalRow>> actualRows,
