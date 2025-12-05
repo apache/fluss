@@ -63,6 +63,7 @@ public class FlinkSource<OUT>
     @Nullable private final int[] projectedFields;
     protected final OffsetsInitializer offsetsInitializer;
     protected final long scanPartitionDiscoveryIntervalMs;
+    protected final long scanBucketDiscoveryIntervalMs;
     private final boolean streaming;
     private final FlussDeserializationSchema<OUT> deserializationSchema;
     @Nullable private final Predicate partitionFilters;
@@ -77,6 +78,7 @@ public class FlinkSource<OUT>
             @Nullable int[] projectedFields,
             OffsetsInitializer offsetsInitializer,
             long scanPartitionDiscoveryIntervalMs,
+            long scanBucketDiscoveryIntervalMs,
             FlussDeserializationSchema<OUT> deserializationSchema,
             boolean streaming,
             @Nullable Predicate partitionFilters) {
@@ -89,6 +91,7 @@ public class FlinkSource<OUT>
                 projectedFields,
                 offsetsInitializer,
                 scanPartitionDiscoveryIntervalMs,
+                scanBucketDiscoveryIntervalMs,
                 deserializationSchema,
                 streaming,
                 partitionFilters,
@@ -104,6 +107,7 @@ public class FlinkSource<OUT>
             @Nullable int[] projectedFields,
             OffsetsInitializer offsetsInitializer,
             long scanPartitionDiscoveryIntervalMs,
+            long scanBucketDiscoveryIntervalMs,
             FlussDeserializationSchema<OUT> deserializationSchema,
             boolean streaming,
             @Nullable Predicate partitionFilters,
@@ -116,6 +120,7 @@ public class FlinkSource<OUT>
         this.projectedFields = projectedFields;
         this.offsetsInitializer = offsetsInitializer;
         this.scanPartitionDiscoveryIntervalMs = scanPartitionDiscoveryIntervalMs;
+        this.scanBucketDiscoveryIntervalMs = scanBucketDiscoveryIntervalMs;
         this.deserializationSchema = deserializationSchema;
         this.streaming = streaming;
         this.partitionFilters = partitionFilters;
@@ -138,6 +143,7 @@ public class FlinkSource<OUT>
                 splitEnumeratorContext,
                 offsetsInitializer,
                 scanPartitionDiscoveryIntervalMs,
+                scanBucketDiscoveryIntervalMs,
                 streaming,
                 partitionFilters,
                 lakeSource);
@@ -158,6 +164,7 @@ public class FlinkSource<OUT>
                 sourceEnumeratorState.getRemainingHybridLakeFlussSplits(),
                 offsetsInitializer,
                 scanPartitionDiscoveryIntervalMs,
+                scanBucketDiscoveryIntervalMs,
                 streaming,
                 partitionFilters,
                 lakeSource);

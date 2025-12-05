@@ -137,6 +137,8 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
                 tableOptions
                         .get(FlinkConnectorOptions.SCAN_PARTITION_DISCOVERY_INTERVAL)
                         .toMillis();
+        long bucketDiscoveryIntervalMs =
+                tableOptions.get(FlinkConnectorOptions.SCAN_BUCKET_DISCOVERY_INTERVAL).toMillis();
 
         return new FlinkTableSource(
                 toFlussTablePath(context.getObjectIdentifier()),
@@ -151,6 +153,7 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
                 tableOptions.get(FlinkConnectorOptions.LOOKUP_ASYNC),
                 cache,
                 partitionDiscoveryIntervalMs,
+                bucketDiscoveryIntervalMs,
                 tableOptions.get(toFlinkOption(ConfigOptions.TABLE_DATALAKE_ENABLED)),
                 tableOptions.get(toFlinkOption(ConfigOptions.TABLE_MERGE_ENGINE)),
                 context.getCatalogTable().getOptions());
