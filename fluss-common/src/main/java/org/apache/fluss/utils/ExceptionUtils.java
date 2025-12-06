@@ -365,10 +365,81 @@ public final class ExceptionUtils {
 
         if (previous == null || previous == newException) {
             return newException;
-        } else {
-            previous.addSuppressed(newException);
+        }
+
+        // If the exceptions already reference each other through the suppressed chain,
+        // return the previous exception to avoid introducing cycles.
+        if (isInSuppressedChain(newException, previous) || isInSuppressedChain(previous, newException)) {
             return previous;
         }
+
+        // Similarly, if they already reference each other through the cause chain,
+        // return the previous exception to avoid creating cycles there as well.
+        if (isInCauseChain(newException, previous) || isInCauseChain(previous, newException)) {
+            return previous;
+        }
+
+        previous.addSuppressed(newException);
+        return previous;
+    }
+
+    /**
+     * Checks if the given exception is present in the suppressed exceptions chain of previous exceptions
+     *
+     * @param exception The throwable exception to search for.
+     * @param previous The previous throwable to search in.
+     * @return True, if the exception is found within the suppressed chain, false otherwise.
+     */
+    private static boolean isInSuppressedChain(Throwable exception, Throwable previous) {
+        if (previous == null || exception == null) {
+            return false;
+        }
+
+        if (previous == exception) {
+            return true;
+        }
+
+        // Recursively check all suppressed exceptions
+        for (Throwable suppressed : previous.getSuppressed()) {
+            if (suppressed == exception || isInSuppressedChain(exception, suppressed)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Checks if the given throwable is present in the cause chain of the root throwable.
+     *
+     * @param exception The throwable to search for
+     * @param previous The previous throwable to search in
+     * @return true if toFind is found in the cause chain, false otherwise
+     */
+    private static boolean isInCauseChain(Throwable exception, Throwable previous) {
+        if (previous == null || exception == null) {
+            return false;
+        }
+
+        if (previous == exception) {
+            return true;
+        }
+
+        // Follow the cause chain
+        Throwable cause = previous.getCause();
+        while (cause != null) {
+            if (cause == exception) {
+                return true;
+            }
+
+            // Also check suppressed exceptions in the cause chain
+            if (isInSuppressedChain(exception, cause)) {
+                return true;
+            }
+            cause = cause.getCause();
+        }
+
+        return false;
     }
 
     /**
