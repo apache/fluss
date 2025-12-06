@@ -384,7 +384,7 @@ public final class ExceptionUtils {
     }
 
     /**
-     * Checks if the given exception is present in the suppressed exceptions chain of previous exceptions
+     * Checks if the given exception is present in the suppressed exceptions chain of previous exceptions.
      *
      * @param exception The throwable exception to search for.
      * @param previous The previous throwable to search in.
@@ -410,11 +410,11 @@ public final class ExceptionUtils {
     }
 
     /**
-     * Checks if the given throwable is present in the cause chain of the root throwable.
+     * Checks if the given exception is present in the cause exceptions chain of previous exceptions.
      *
-     * @param exception The throwable to search for
-     * @param previous The previous throwable to search in
-     * @return true if toFind is found in the cause chain, false otherwise
+     * @param exception The throwable exception to search for.
+     * @param previous The previous throwable to search in.
+     * @return True, if the exception is found within the cause chain, false otherwise.
      */
     private static boolean isInCauseChain(Throwable exception, Throwable previous) {
         if (previous == null || exception == null) {
