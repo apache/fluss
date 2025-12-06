@@ -757,8 +757,8 @@
                         <configuration>
                             <rules>
                                 <requireMavenVersion>
-                                    <!-- enforce at least mvn version 3.8.6 -->
-                                    <version>[3.8.6,)</version>
+                                    <!-- enforce at least mvn version 3.9.11 -->
+                                    <version>[3.9.11,)</version>
                                 </requireMavenVersion>
                                 <requireJavaVersion>
                                     <version>${target.java.version}</version>

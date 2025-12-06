@@ -60,7 +60,7 @@ Prerequisites for building Apache Fluss:
 
 - Unix-like environment (we use Linux, Mac OS X, Cygwin, WSL)
 - Git
-- Maven (we require version >= 3.8.6)
+- Maven (we require version >= 3.9.11)
 - Java 11
 
 ```bash
