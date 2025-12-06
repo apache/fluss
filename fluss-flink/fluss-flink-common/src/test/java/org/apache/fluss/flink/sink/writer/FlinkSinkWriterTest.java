@@ -147,8 +147,16 @@ public class FlinkSinkWriterTest extends FlinkTestBase {
                                             new MockSinkWriterContext()))
                     .rootCause()
                     .isExactlyInstanceOf(ClassCastException.class)
-                    .hasMessageContaining(
-                            "class org.apache.flink.table.data.binary.BinaryStringData cannot be cast to class java.lang.Integer");
+                    .satisfiesAnyOf(
+                            // JDK8 format: no "class" prefix.
+                            e ->
+                                    assertThat(e.getMessage())
+                                            .contains(
+                                                    "org.apache.flink.table.data.binary.BinaryStringData cannot be cast to java.lang.Integer"),
+                            e ->
+                                    assertThat(e.getMessage())
+                                            .contains(
+                                                    "class org.apache.flink.table.data.binary.BinaryStringData cannot be cast to class java.lang.Integer"));
             writer.flush(false);
         }
     }
