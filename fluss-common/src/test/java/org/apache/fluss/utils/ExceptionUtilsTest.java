@@ -17,6 +17,7 @@
 
 package org.apache.fluss.utils;
 
+import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
 import java.util.concurrent.CompletionException;
@@ -122,25 +123,28 @@ public class ExceptionUtilsTest {
     }
 
     @Test
-    void testFirstOrSuppressedCanCreateCycles() {
+    void testFirstOrSuppressedCyclePrevention() {
         // create two test exceptions (assuming thrown during shutdown, etc.)
         Exception exceptionA = new Exception("Exception A");
         Exception exceptionB = new Exception("Exception B");
 
         // associate the suppressions (creating a suppression chain)
         ExceptionUtils.firstOrSuppressed(exceptionB, exceptionA);
-
-        // create a suppression cycle (A -> B; B -> A) which will eventually
-        // trigger a StackOverflowError during serialization
-        ExceptionUtils.firstOrSuppressed(exceptionA, exceptionB);
-
-        // confirm the suppression chain contains both exceptions
         assertThat(exceptionA.getSuppressed()).contains(exceptionB);
-        assertThat(exceptionB.getSuppressed()).contains(exceptionA);
 
-        // simulate the cascading errors mimicking Flink's SerializedThrowable behavior
-        assertThatThrownBy(() -> recursivelyProcessSuppressedExceptions(exceptionA))
-                .isInstanceOf(StackOverflowError.class);
+        // attempt to create a suppression cycle (A -> B; B -> A)
+        Exception result = ExceptionUtils.firstOrSuppressed(exceptionA, exceptionB);
+        assertThat(result).isEqualTo(exceptionB);
+
+        // verify the exception cycle was prevented (no bidirectional reference)
+        assertThat(exceptionA.getSuppressed()).contains(exceptionB);
+        assertThat(exceptionB.getSuppressed()).doesNotContain(exceptionA);
+        assertThat(exceptionB.getSuppressed()).isEmpty();
+
+        // verify that processing suppressed exceptions no longer causes StackOverflowError
+        Assertions.assertDoesNotThrow(() ->
+                recursivelyProcessSuppressedExceptions(exceptionA)
+        );
     }
 
     private void recursivelyProcessSuppressedExceptions(Throwable throwable) {
