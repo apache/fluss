@@ -138,6 +138,17 @@ public final class ZkData {
     }
 
     /**
+     * The znode for auto increment column of a table. The znode path is:
+     *
+     * <p>/metadata/databases/[databaseName]/tables/[tableName]/auto_inc/col_[columnIdx]
+     */
+    public static final class AutoIncZNode {
+        public static String path(TablePath tablePath, int columnIdx) {
+            return TableZNode.path(tablePath) + "/auto_inc/col_" + columnIdx;
+        }
+    }
+
+    /**
      * The znode for a table which stores the schema information of a specific schema. The znode
      * path is:
      *
