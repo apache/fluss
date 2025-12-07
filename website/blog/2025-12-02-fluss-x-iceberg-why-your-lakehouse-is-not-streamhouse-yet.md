@@ -1,5 +1,5 @@
 ---
-title: "Fluss × Iceberg: Why Your Lakehouse Isn't Streamhouse Yet - Part 1"
+title: "Fluss × Iceberg (Part 1): Why Your Lakehouse Isn’t a Streamhouse Yet"
 authors: [mehulbatra, yuxia]
 date: 2025-12-08
 tags: [streaming-lakehouse, apache-iceberg, real-time-analytics, apache-fluss]
