@@ -44,7 +44,7 @@ Four converging forces are driving the need for sub-second data infrastructure:
 
 Yet critical use cases demand sub-second to second-level latency: search and recommendation systems with real-time personalization, advertisement attribution tracking, anomaly detection for fraud and security monitoring, operational intelligence for manufacturing/logistics/ride-sharing, and Gen AI model inference requiring up-to-the-second features. The industry needs a **hot real-time layer** sitting in front of the lakehouse.
 
-![Evolution Timeline](assets/fluss-x-iceberg/untitled.png)
+![Evolution Timeline](assets/fluss-x-iceberg/evolution.png)
 ## What is Fluss × Iceberg?
 
 ### The Core Concept: Hot/Cold Unified Storage
@@ -373,7 +373,7 @@ This gives you a working streaming lakehouse environment in minutes. Visit: [htt
 
 ## Conclusion: The Path Forward
 
-Apache Fluss and Apache Iceberg represent a fundamental rethinking of real-time lakehouse architecture. Instead of forcing Iceberg to become a streaming platform (which architecturally it was never designed to be), Fluss embraces Iceberg for its strengths cost-efficient analytical storage with ACID guarantees, while adding the missing hot streaming layer.
+Apache Fluss and Apache Iceberg represent a fundamental rethinking of real-time lakehouse architecture. Instead of forcing Iceberg to become a streaming platform (which it was never designed to be), Fluss embraces Iceberg for its strengths—cost-efficient analytical storage with ACID guarantees—while adding the missing hot streaming layer.
 
 The result is a Streamhouse that delivers:
 
@@ -383,7 +383,7 @@ The result is a Streamhouse that delivers:
 - **Single write path** ending dual-write consistency problems
 - **Automatic lifecycle management** from hot to cold tiers
 
-For software/data engineers building real-time analytics platforms, the question isn't whether to use Fluss or Iceberg, it's recognizing they solve complementary problems. Fluss handles what happens in the last hour (streaming, updates, real-time queries). Iceberg handles everything before that (historical analytics, ML training, compliance).
+For software/data engineers building real-time analytics platforms, the question isn't whether to use Fluss or Iceberg—it's recognizing they solve complementary problems. Fluss handles what happens in the last hour (streaming, updates, real-time queries). Iceberg handles everything before that (historical analytics, ML training, compliance).
 
 ### When to Adopt
 
@@ -404,6 +404,10 @@ For software/data engineers building real-time analytics platforms, the question
 4. **Join the community:** Apache Fluss mailing lists, Slack, and GitHub
 5. **Evaluate Iceberg integration:** Production-ready today, same architectural patterns
 
-The future of real-time analytics isn't Lambda architecture with separate streaming and batch systems. It's unified lakehouse storage where hot and cold are simply tiers of the same table, with data flowing automatically between them.
+---
 
-**Apache Fluss makes this vision real, it transforms your lakehouse into a streaming lakehouse.**
+We've covered **what** Fluss × Iceberg is and **how** it works the architecture eliminates dual-write complexity, delivers sub-second freshness, and unifies streaming and batch under a single table abstraction.
+
+But here's the elephant in the room: **Apache Kafka dominates event streaming. Tableflow handles Kafka-to-Iceberg materialization. Why introduce another system?**
+
+**Stay tuned for Part 2 as it tackles this question head-on** by comparing Fluss with existing technologies.
