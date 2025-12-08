@@ -207,6 +207,7 @@ class LookupSender implements Runnable {
                                                     + " is not found in metadata cache."),
                                     destination,
                                     lookupsByBucket));
+            return;
         }
 
         lookupByTableId.forEach(
@@ -244,6 +245,7 @@ class LookupSender implements Runnable {
                                                     + " is not found in metadata cache."),
                                     destination,
                                     lookupsByBucket));
+            return;
         }
 
         lookupByTableId.forEach(
