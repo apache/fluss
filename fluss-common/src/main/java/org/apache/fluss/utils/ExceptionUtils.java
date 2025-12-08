@@ -369,7 +369,8 @@ public final class ExceptionUtils {
 
         // If the exceptions already reference each other through the suppressed chain,
         // return the previous exception to avoid introducing cycles.
-        if (isInSuppressedChain(newException, previous) || isInSuppressedChain(previous, newException)) {
+        if (isInSuppressedChain(newException, previous)
+                || isInSuppressedChain(previous, newException)) {
             return previous;
         }
 
@@ -384,7 +385,8 @@ public final class ExceptionUtils {
     }
 
     /**
-     * Checks if the given exception is present in the suppressed exceptions chain of previous exceptions.
+     * Checks if the given exception is present in the suppressed exceptions chain of previous
+     * exceptions.
      *
      * @param exception The throwable exception to search for.
      * @param previous The previous throwable to search in.
@@ -410,7 +412,8 @@ public final class ExceptionUtils {
     }
 
     /**
-     * Checks if the given exception is present in the cause exceptions chain of previous exceptions.
+     * Checks if the given exception is present in the cause exceptions chain of previous
+     * exceptions.
      *
      * @param exception The throwable exception to search for.
      * @param previous The previous throwable to search in.

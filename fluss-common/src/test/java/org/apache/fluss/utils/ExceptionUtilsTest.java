@@ -142,9 +142,7 @@ public class ExceptionUtilsTest {
         assertThat(exceptionB.getSuppressed()).isEmpty();
 
         // verify that processing suppressed exceptions no longer causes StackOverflowError
-        Assertions.assertDoesNotThrow(() ->
-                recursivelyProcessSuppressedExceptions(exceptionA)
-        );
+        Assertions.assertDoesNotThrow(() -> recursivelyProcessSuppressedExceptions(exceptionA));
     }
 
     private void recursivelyProcessSuppressedExceptions(Throwable throwable) {
