@@ -121,7 +121,6 @@ public class LanceLakeCommitter implements LakeCommitter<LanceWriteResult, Lance
             if (bucketOffset.getPartitionId() != null) {
                 committedLakeSnapshot.addPartitionBucket(
                         bucketOffset.getPartitionId(),
-                        bucketOffset.getPartitionQualifiedName(),
                         bucketOffset.getBucket(),
                         bucketOffset.getLogOffset());
             } else {

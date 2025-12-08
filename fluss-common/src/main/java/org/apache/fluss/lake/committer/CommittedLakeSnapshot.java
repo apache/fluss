@@ -34,10 +34,6 @@ public class CommittedLakeSnapshot {
     // partition bucket
     private final Map<Tuple2<Long, Integer>, Long> logEndOffsets = new HashMap<>();
 
-    // partition id -> partition name, will be empty if is not a partitioned table
-    // the partition name is a qualified name in the format: key1=value1/key2=value2
-    private final Map<Long, String> qualifiedPartitionNameById = new HashMap<>();
-
     public CommittedLakeSnapshot(long lakeSnapshotId) {
         this.lakeSnapshotId = lakeSnapshotId;
     }
@@ -50,18 +46,12 @@ public class CommittedLakeSnapshot {
         logEndOffsets.put(Tuple2.of(null, bucketId), offset);
     }
 
-    public void addPartitionBucket(
-            Long partitionId, String partitionQualifiedName, int bucketId, long offset) {
+    public void addPartitionBucket(Long partitionId, int bucketId, long offset) {
         logEndOffsets.put(Tuple2.of(partitionId, bucketId), offset);
-        qualifiedPartitionNameById.put(partitionId, partitionQualifiedName);
     }
 
     public Map<Tuple2<Long, Integer>, Long> getLogEndOffsets() {
         return logEndOffsets;
-    }
-
-    public Map<Long, String> getQualifiedPartitionNameById() {
-        return qualifiedPartitionNameById;
     }
 
     @Override
@@ -71,13 +61,12 @@ public class CommittedLakeSnapshot {
         }
         CommittedLakeSnapshot that = (CommittedLakeSnapshot) o;
         return lakeSnapshotId == that.lakeSnapshotId
-                && Objects.equals(logEndOffsets, that.logEndOffsets)
-                && Objects.equals(qualifiedPartitionNameById, that.qualifiedPartitionNameById);
+                && Objects.equals(logEndOffsets, that.logEndOffsets);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(lakeSnapshotId, logEndOffsets, qualifiedPartitionNameById);
+        return Objects.hash(lakeSnapshotId, logEndOffsets);
     }
 
     @Override
@@ -87,8 +76,6 @@ public class CommittedLakeSnapshot {
                 + lakeSnapshotId
                 + ", logEndOffsets="
                 + logEndOffsets
-                + ", partitionNameById="
-                + qualifiedPartitionNameById
                 + '}';
     }
 }
