@@ -17,6 +17,7 @@
 
 package org.apache.fluss.server.coordinator.event;
 
+import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
 
 import java.util.Map;
@@ -25,12 +26,20 @@ import java.util.Map;
 public class NotifyLakeTableOffsetEvent implements CoordinatorEvent {
 
     private final Map<Long, LakeTableSnapshot> lakeTableSnapshots;
+    private final Map<TableBucket, Long> tableBucketMaxTieredTimestamps;
 
-    public NotifyLakeTableOffsetEvent(Map<Long, LakeTableSnapshot> lakeTableSnapshots) {
+    public NotifyLakeTableOffsetEvent(
+            Map<Long, LakeTableSnapshot> lakeTableSnapshots,
+            Map<TableBucket, Long> tableBucketMaxTieredTimestamps) {
         this.lakeTableSnapshots = lakeTableSnapshots;
+        this.tableBucketMaxTieredTimestamps = tableBucketMaxTieredTimestamps;
     }
 
     public Map<Long, LakeTableSnapshot> getLakeTableSnapshots() {
         return lakeTableSnapshots;
+    }
+
+    public Map<TableBucket, Long> getTableBucketMaxTieredTimestamps() {
+        return tableBucketMaxTieredTimestamps;
     }
 }

@@ -41,59 +41,24 @@ class LakeTableSnapshotJsonSerdeTest extends JsonSerdeTestBase<LakeTableSnapshot
 
     @Override
     protected LakeTableSnapshot[] createObjects() {
-        LakeTableSnapshot lakeTableSnapshot1 =
-                new LakeTableSnapshot(
-                        1,
-                        1L,
-                        Collections.emptyMap(),
-                        Collections.emptyMap(),
-                        Collections.emptyMap(),
-                        Collections.emptyMap());
+        LakeTableSnapshot lakeTableSnapshot1 = new LakeTableSnapshot(1, 1L, Collections.emptyMap());
 
         long tableId = 4;
-        Map<TableBucket, Long> bucketLogStartOffset = new HashMap<>();
-        bucketLogStartOffset.put(new TableBucket(tableId, 1), 1L);
-        bucketLogStartOffset.put(new TableBucket(tableId, 2), 2L);
         Map<TableBucket, Long> bucketLogEndOffset = new HashMap<>();
         bucketLogEndOffset.put(new TableBucket(tableId, 1), 3L);
         bucketLogEndOffset.put(new TableBucket(tableId, 2), 4L);
-        Map<TableBucket, Long> bucketMaxTimestamp = new HashMap<>();
-        bucketMaxTimestamp.put(new TableBucket(tableId, 1), 5L);
-        bucketMaxTimestamp.put(new TableBucket(tableId, 2), 6L);
 
         LakeTableSnapshot lakeTableSnapshot2 =
-                new LakeTableSnapshot(
-                        2,
-                        tableId,
-                        bucketLogStartOffset,
-                        bucketLogEndOffset,
-                        bucketMaxTimestamp,
-                        Collections.emptyMap());
+                new LakeTableSnapshot(2, tableId, bucketLogEndOffset);
 
         tableId = 5;
-        bucketLogStartOffset = new HashMap<>();
-        Map<Long, String> partitionNameIdByPartitionId = new HashMap<>();
-        partitionNameIdByPartitionId.put(1L, "partition1");
-        partitionNameIdByPartitionId.put(2L, "partition2");
-        bucketLogStartOffset.put(new TableBucket(tableId, 1L, 1), 1L);
-        bucketLogStartOffset.put(new TableBucket(tableId, 2L, 1), 2L);
 
         bucketLogEndOffset = new HashMap<>();
         bucketLogEndOffset.put(new TableBucket(tableId, 1L, 1), 3L);
         bucketLogEndOffset.put(new TableBucket(tableId, 2L, 1), 4L);
 
-        bucketMaxTimestamp = new HashMap<>();
-        bucketMaxTimestamp.put(new TableBucket(tableId, 1L, 1), 5L);
-        bucketMaxTimestamp.put(new TableBucket(tableId, 2L, 1), 6L);
-
         LakeTableSnapshot lakeTableSnapshot3 =
-                new LakeTableSnapshot(
-                        3,
-                        tableId,
-                        bucketLogStartOffset,
-                        bucketLogEndOffset,
-                        bucketMaxTimestamp,
-                        partitionNameIdByPartitionId);
+                new LakeTableSnapshot(3, tableId, bucketLogEndOffset);
 
         return new LakeTableSnapshot[] {
             lakeTableSnapshot1, lakeTableSnapshot2, lakeTableSnapshot3,
@@ -108,12 +73,11 @@ class LakeTableSnapshotJsonSerdeTest extends JsonSerdeTestBase<LakeTableSnapshot
         return new String[] {
             "{\"version\":2,\"snapshot_id\":1,\"table_id\":1}",
             "{\"version\":2,\"snapshot_id\":2,\"table_id\":4,"
-                    + "\"buckets\":[{\"bucket_id\":2,\"log_start_offset\":2,\"log_end_offset\":4,\"max_timestamp\":6},"
-                    + "{\"bucket_id\":1,\"log_start_offset\":1,\"log_end_offset\":3,\"max_timestamp\":5}]}",
+                    + "\"buckets\":[{\"bucket_id\":2,\"log_end_offset\":4},"
+                    + "{\"bucket_id\":1,\"log_end_offset\":3}]}",
             "{\"version\":2,\"snapshot_id\":3,\"table_id\":5,"
-                    + "\"partition_names\":{\"1\":\"partition1\",\"2\":\"partition2\"},"
-                    + "\"buckets\":{\"1\":[{\"bucket_id\":1,\"log_start_offset\":1,\"log_end_offset\":3,\"max_timestamp\":5}],"
-                    + "\"2\":[{\"bucket_id\":1,\"log_start_offset\":2,\"log_end_offset\":4,\"max_timestamp\":6}]}}"
+                    + "\"buckets\":{\"1\":[{\"bucket_id\":1,\"log_end_offset\":3}],"
+                    + "\"2\":[{\"bucket_id\":1,\"log_end_offset\":4}]}}"
         };
     }
 
@@ -149,6 +113,5 @@ class LakeTableSnapshotJsonSerdeTest extends JsonSerdeTestBase<LakeTableSnapshot
                         LakeTableSnapshotJsonSerde.INSTANCE);
         assertThat(snapshot3.getSnapshotId()).isEqualTo(3);
         assertThat(snapshot3.getTableId()).isEqualTo(5);
-        assertThat(snapshot3.getPartitionNameIdByPartitionId()).containsEntry(1L, "partition1");
     }
 }

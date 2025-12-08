@@ -32,30 +32,15 @@ public class LakeTableSnapshot {
     private final long tableId;
 
     // the log offset of the bucket
-
-    // mapping from bucket id to log start/end offset or max timestamp,
+    // mapping from bucket id to log end offset or max timestamp,
     // will be null if log offset is unknown such as reading the snapshot of primary key table
-    private final Map<TableBucket, Long> bucketLogStartOffset;
     private final Map<TableBucket, Long> bucketLogEndOffset;
-    private final Map<TableBucket, Long> bucketMaxTimestamp;
-
-    // mapping from partition id to partition name, will be empty if the table is not partitioned
-    // table
-    private final Map<Long, String> partitionNameIdByPartitionId;
 
     public LakeTableSnapshot(
-            long snapshotId,
-            long tableId,
-            Map<TableBucket, Long> bucketLogStartOffset,
-            Map<TableBucket, Long> bucketLogEndOffset,
-            Map<TableBucket, Long> bucketMaxTimestamp,
-            Map<Long, String> partitionNameIdByPartitionId) {
+            long snapshotId, long tableId, Map<TableBucket, Long> bucketLogEndOffset) {
         this.snapshotId = snapshotId;
         this.tableId = tableId;
-        this.bucketLogStartOffset = bucketLogStartOffset;
         this.bucketLogEndOffset = bucketLogEndOffset;
-        this.bucketMaxTimestamp = bucketMaxTimestamp;
-        this.partitionNameIdByPartitionId = partitionNameIdByPartitionId;
     }
 
     public long getSnapshotId() {
@@ -66,40 +51,12 @@ public class LakeTableSnapshot {
         return tableId;
     }
 
-    public void putLogStartOffset(TableBucket tableBucket, Long logStartOffset) {
-        bucketLogStartOffset.put(tableBucket, logStartOffset);
-    }
-
-    public void putLogEndOffset(TableBucket tableBucket, Long logEndOffset) {
-        bucketLogEndOffset.put(tableBucket, logEndOffset);
-    }
-
-    public Optional<Long> getLogStartOffset(TableBucket tableBucket) {
-        return Optional.ofNullable(bucketLogStartOffset.get(tableBucket));
-    }
-
     public Optional<Long> getLogEndOffset(TableBucket tableBucket) {
         return Optional.ofNullable(bucketLogEndOffset.get(tableBucket));
     }
 
-    public Optional<Long> getMaxTimestamp(TableBucket tableBucket) {
-        return Optional.ofNullable(bucketMaxTimestamp.get(tableBucket));
-    }
-
     public Map<TableBucket, Long> getBucketLogEndOffset() {
         return bucketLogEndOffset;
-    }
-
-    public Map<TableBucket, Long> getBucketLogStartOffset() {
-        return bucketLogStartOffset;
-    }
-
-    public Map<TableBucket, Long> getBucketMaxTimestamp() {
-        return bucketMaxTimestamp;
-    }
-
-    public Map<Long, String> getPartitionNameIdByPartitionId() {
-        return partitionNameIdByPartitionId;
     }
 
     @Override
@@ -110,21 +67,12 @@ public class LakeTableSnapshot {
         LakeTableSnapshot that = (LakeTableSnapshot) o;
         return snapshotId == that.snapshotId
                 && tableId == that.tableId
-                && Objects.equals(bucketLogStartOffset, that.bucketLogStartOffset)
-                && Objects.equals(bucketLogEndOffset, that.bucketLogEndOffset)
-                && Objects.equals(bucketMaxTimestamp, that.bucketMaxTimestamp)
-                && Objects.equals(partitionNameIdByPartitionId, that.partitionNameIdByPartitionId);
+                && Objects.equals(bucketLogEndOffset, that.bucketLogEndOffset);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(
-                snapshotId,
-                tableId,
-                bucketLogStartOffset,
-                bucketLogEndOffset,
-                bucketMaxTimestamp,
-                partitionNameIdByPartitionId);
+        return Objects.hash(snapshotId, tableId, bucketLogEndOffset);
     }
 
     @Override
@@ -134,14 +82,8 @@ public class LakeTableSnapshot {
                 + snapshotId
                 + ", tableId="
                 + tableId
-                + ", bucketLogStartOffset="
-                + bucketLogStartOffset
                 + ", bucketLogEndOffset="
                 + bucketLogEndOffset
-                + ", bucketMaxTimestamp="
-                + bucketMaxTimestamp
-                + ", partitionNameIdByPartitionId="
-                + partitionNameIdByPartitionId
                 + '}';
     }
 }

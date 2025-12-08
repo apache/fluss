@@ -65,13 +65,7 @@ public class LakeTableSnapshotJsonSerde
     private static final String PARTITION_ID = "partition_id";
     private static final String BUCKETS = "buckets";
     private static final String BUCKET_ID = "bucket_id";
-    private static final String LOG_START_OFFSET = "log_start_offset";
     private static final String LOG_END_OFFSET = "log_end_offset";
-    private static final String MAX_TIMESTAMP = "max_timestamp";
-    private static final String PARTITION_NAME = "partition_name";
-
-    // introduced in v2
-    private static final String PARTITION_NAMES = "partition_names";
 
     private static final int VERSION_1 = 1;
     private static final int VERSION_2 = 2;
@@ -84,17 +78,6 @@ public class LakeTableSnapshotJsonSerde
         generator.writeNumberField(VERSION_KEY, CURRENT_VERSION);
         generator.writeNumberField(SNAPSHOT_ID, lakeTableSnapshot.getSnapshotId());
         generator.writeNumberField(TABLE_ID, lakeTableSnapshot.getTableId());
-
-        // Extract partition names to top-level map to avoid duplication
-        Map<Long, String> partitionNameIdByPartitionId =
-                lakeTableSnapshot.getPartitionNameIdByPartitionId();
-        if (!partitionNameIdByPartitionId.isEmpty()) {
-            generator.writeObjectFieldStart(PARTITION_NAMES);
-            for (Map.Entry<Long, String> entry : partitionNameIdByPartitionId.entrySet()) {
-                generator.writeStringField(String.valueOf(entry.getKey()), entry.getValue());
-            }
-            generator.writeEndObject();
-        }
 
         // Group buckets by partition_id to avoid repeating partition_id in each bucket
         Map<Long, List<TableBucket>> partitionBuckets = new HashMap<>();
@@ -146,20 +129,9 @@ public class LakeTableSnapshotJsonSerde
 
         generator.writeNumberField(BUCKET_ID, tableBucket.getBucket());
 
-        // Only include non-null values
-        if (lakeTableSnapshot.getLogStartOffset(tableBucket).isPresent()) {
-            generator.writeNumberField(
-                    LOG_START_OFFSET, lakeTableSnapshot.getLogStartOffset(tableBucket).get());
-        }
-
         if (lakeTableSnapshot.getLogEndOffset(tableBucket).isPresent()) {
             generator.writeNumberField(
                     LOG_END_OFFSET, lakeTableSnapshot.getLogEndOffset(tableBucket).get());
-        }
-
-        if (lakeTableSnapshot.getMaxTimestamp(tableBucket).isPresent()) {
-            generator.writeNumberField(
-                    MAX_TIMESTAMP, lakeTableSnapshot.getMaxTimestamp(tableBucket).get());
         }
 
         generator.writeEndObject();
@@ -182,47 +154,20 @@ public class LakeTableSnapshotJsonSerde
         long snapshotId = node.get(SNAPSHOT_ID).asLong();
         long tableId = node.get(TABLE_ID).asLong();
         Iterator<JsonNode> buckets = node.get(BUCKETS).elements();
-        Map<TableBucket, Long> bucketLogStartOffset = new HashMap<>();
         Map<TableBucket, Long> bucketLogEndOffset = new HashMap<>();
-        Map<TableBucket, Long> bucketMaxTimestamp = new HashMap<>();
-        Map<Long, String> partitionNameIdByPartitionId = new HashMap<>();
         while (buckets.hasNext()) {
             JsonNode bucket = buckets.next();
             TableBucket tableBucket;
             Long partitionId =
                     bucket.get(PARTITION_ID) != null ? bucket.get(PARTITION_ID).asLong() : null;
             tableBucket = new TableBucket(tableId, partitionId, bucket.get(BUCKET_ID).asInt());
-
-            if (bucket.get(LOG_START_OFFSET) != null) {
-                bucketLogStartOffset.put(tableBucket, bucket.get(LOG_START_OFFSET).asLong());
-            } else {
-                bucketLogStartOffset.put(tableBucket, null);
-            }
-
             if (bucket.get(LOG_END_OFFSET) != null) {
                 bucketLogEndOffset.put(tableBucket, bucket.get(LOG_END_OFFSET).asLong());
             } else {
                 bucketLogEndOffset.put(tableBucket, null);
             }
-
-            if (bucket.get(MAX_TIMESTAMP) != null) {
-                bucketMaxTimestamp.put(tableBucket, bucket.get(MAX_TIMESTAMP).asLong());
-            } else {
-                bucketMaxTimestamp.put(tableBucket, null);
-            }
-
-            if (partitionId != null && bucket.get(PARTITION_NAME) != null) {
-                partitionNameIdByPartitionId.put(
-                        tableBucket.getPartitionId(), bucket.get(PARTITION_NAME).asText());
-            }
         }
-        return new LakeTableSnapshot(
-                snapshotId,
-                tableId,
-                bucketLogStartOffset,
-                bucketLogEndOffset,
-                bucketMaxTimestamp,
-                partitionNameIdByPartitionId);
+        return new LakeTableSnapshot(snapshotId, tableId, bucketLogEndOffset);
     }
 
     /** Deserialize Version 2 format (compact layout). */
@@ -230,22 +175,7 @@ public class LakeTableSnapshotJsonSerde
         long snapshotId = node.get(SNAPSHOT_ID).asLong();
         long tableId = node.get(TABLE_ID).asLong();
 
-        // Load partition names from top-level map
-        Map<Long, String> partitionNameIdByPartitionId = new HashMap<>();
-        JsonNode partitionsNode = node.get(PARTITION_NAMES);
-        if (partitionsNode != null) {
-            Iterator<Map.Entry<String, JsonNode>> partitions = partitionsNode.fields();
-            while (partitions.hasNext()) {
-                Map.Entry<String, JsonNode> entry = partitions.next();
-                Long partitionId = Long.parseLong(entry.getKey());
-                String partitionName = entry.getValue().asText();
-                partitionNameIdByPartitionId.put(partitionId, partitionName);
-            }
-        }
-
-        Map<TableBucket, Long> bucketLogStartOffset = new HashMap<>();
         Map<TableBucket, Long> bucketLogEndOffset = new HashMap<>();
-        Map<TableBucket, Long> bucketMaxTimestamp = new HashMap<>();
 
         // Deserialize buckets: array format for non-partition table, object format for partition
         // table
@@ -258,12 +188,7 @@ public class LakeTableSnapshotJsonSerde
                     JsonNode bucket = buckets.next();
                     TableBucket tableBucket =
                             new TableBucket(tableId, bucket.get(BUCKET_ID).asInt());
-                    readBucketFields(
-                            bucket,
-                            tableBucket,
-                            bucketLogStartOffset,
-                            bucketLogEndOffset,
-                            bucketMaxTimestamp);
+                    readBucketFields(bucket, tableBucket, bucketLogEndOffset);
                 }
             } else {
                 // Partition table: object format grouped by partition_id
@@ -278,48 +203,21 @@ public class LakeTableSnapshotJsonSerde
                         TableBucket tableBucket =
                                 new TableBucket(
                                         tableId, actualPartitionId, bucket.get(BUCKET_ID).asInt());
-                        readBucketFields(
-                                bucket,
-                                tableBucket,
-                                bucketLogStartOffset,
-                                bucketLogEndOffset,
-                                bucketMaxTimestamp);
+                        readBucketFields(bucket, tableBucket, bucketLogEndOffset);
                     }
                 }
             }
         }
-        return new LakeTableSnapshot(
-                snapshotId,
-                tableId,
-                bucketLogStartOffset,
-                bucketLogEndOffset,
-                bucketMaxTimestamp,
-                partitionNameIdByPartitionId);
+        return new LakeTableSnapshot(snapshotId, tableId, bucketLogEndOffset);
     }
 
     /** Helper method to read bucket fields from JSON. */
     private void readBucketFields(
-            JsonNode bucket,
-            TableBucket tableBucket,
-            Map<TableBucket, Long> bucketLogStartOffset,
-            Map<TableBucket, Long> bucketLogEndOffset,
-            Map<TableBucket, Long> bucketMaxTimestamp) {
-        if (bucket.has(LOG_START_OFFSET) && bucket.get(LOG_START_OFFSET) != null) {
-            bucketLogStartOffset.put(tableBucket, bucket.get(LOG_START_OFFSET).asLong());
-        } else {
-            bucketLogStartOffset.put(tableBucket, null);
-        }
-
+            JsonNode bucket, TableBucket tableBucket, Map<TableBucket, Long> bucketLogEndOffset) {
         if (bucket.has(LOG_END_OFFSET) && bucket.get(LOG_END_OFFSET) != null) {
             bucketLogEndOffset.put(tableBucket, bucket.get(LOG_END_OFFSET).asLong());
         } else {
             bucketLogEndOffset.put(tableBucket, null);
-        }
-
-        if (bucket.has(MAX_TIMESTAMP) && bucket.get(MAX_TIMESTAMP) != null) {
-            bucketMaxTimestamp.put(tableBucket, bucket.get(MAX_TIMESTAMP).asLong());
-        } else {
-            bucketMaxTimestamp.put(tableBucket, null);
         }
     }
 
@@ -352,34 +250,10 @@ public class LakeTableSnapshotJsonSerde
             generator.writeArrayFieldStart(BUCKETS);
             for (TableBucket tableBucket : lakeTableSnapshot.getBucketLogEndOffset().keySet()) {
                 generator.writeStartObject();
-
-                if (tableBucket.getPartitionId() != null) {
-                    generator.writeNumberField(PARTITION_ID, tableBucket.getPartitionId());
-                    // Include partition name in each bucket (Version 1 format)
-                    String partitionName =
-                            lakeTableSnapshot
-                                    .getPartitionNameIdByPartitionId()
-                                    .get(tableBucket.getPartitionId());
-                    if (partitionName != null) {
-                        generator.writeStringField(PARTITION_NAME, partitionName);
-                    }
-                }
                 generator.writeNumberField(BUCKET_ID, tableBucket.getBucket());
-
-                if (lakeTableSnapshot.getLogStartOffset(tableBucket).isPresent()) {
-                    generator.writeNumberField(
-                            LOG_START_OFFSET,
-                            lakeTableSnapshot.getLogStartOffset(tableBucket).get());
-                }
-
                 if (lakeTableSnapshot.getLogEndOffset(tableBucket).isPresent()) {
                     generator.writeNumberField(
                             LOG_END_OFFSET, lakeTableSnapshot.getLogEndOffset(tableBucket).get());
-                }
-
-                if (lakeTableSnapshot.getMaxTimestamp(tableBucket).isPresent()) {
-                    generator.writeNumberField(
-                            MAX_TIMESTAMP, lakeTableSnapshot.getMaxTimestamp(tableBucket).get());
                 }
 
                 generator.writeEndObject();
