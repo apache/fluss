@@ -25,6 +25,9 @@ import org.apache.fluss.utils.json.JsonDeserializer;
 import org.apache.fluss.utils.json.JsonSerializer;
 
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Iterator;
+import java.util.List;
 
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
@@ -46,8 +49,12 @@ public class LakeTableJsonSerde implements JsonSerializer<LakeTable>, JsonDeseri
     public static final LakeTableJsonSerde INSTANCE = new LakeTableJsonSerde();
 
     private static final String VERSION_KEY = "version";
-    private static final String LAKE_TABLE_LATEST_SNAPSHOT_FILE_PATH =
-            "lake_table_latest_snapshot_file_path";
+    private static final String LAKE_SNAPSHOTS = "lake_snapshots";
+
+    private static final String SNAPSHOT_ID_KEY = "snapshot_id";
+    private static final String TIERED_OFFSETS_KEY = "tiered_offsets";
+    private static final String READABLE_OFFSETS_KEY = "readable_offsets";
+
     private static final int VERSION_1 = 1;
     private static final int VERSION_2 = 2;
     private static final int CURRENT_VERSION = VERSION_2;
@@ -57,9 +64,24 @@ public class LakeTableJsonSerde implements JsonSerializer<LakeTable>, JsonDeseri
         generator.writeStartObject();
         generator.writeNumberField(VERSION_KEY, CURRENT_VERSION);
 
-        generator.writeStringField(
-                LAKE_TABLE_LATEST_SNAPSHOT_FILE_PATH,
-                checkNotNull(lakeTable.getLakeTableLatestSnapshotFileHandle()).toString());
+        generator.writeArrayFieldStart(LAKE_SNAPSHOTS);
+        for (LakeTable.LakeSnapshotMetadata lakeSnapshotMetadata :
+                checkNotNull(lakeTable.getLakeSnapshotMetadata())) {
+            generator.writeStartObject();
+
+            generator.writeNumberField(SNAPSHOT_ID_KEY, lakeSnapshotMetadata.getSnapshotId());
+            generator.writeStringField(
+                    TIERED_OFFSETS_KEY, lakeSnapshotMetadata.getTieredOffsetsFilePath().toString());
+            if (lakeSnapshotMetadata.getReadableOffsetsFilePath() != null) {
+                generator.writeStringField(
+                        READABLE_OFFSETS_KEY,
+                        lakeSnapshotMetadata.getReadableOffsetsFilePath().toString());
+            }
+            generator.writeEndObject();
+        }
+
+        generator.writeEndArray();
+
         generator.writeEndObject();
     }
 
@@ -71,15 +93,29 @@ public class LakeTableJsonSerde implements JsonSerializer<LakeTable>, JsonDeseri
             LakeTableSnapshot snapshot = LakeTableSnapshotJsonSerde.INSTANCE.deserialize(node);
             return new LakeTable(snapshot);
         } else if (version == VERSION_2) {
-            // Version 2: ZK node contains only metadata file path
-            if (!node.has(LAKE_TABLE_LATEST_SNAPSHOT_FILE_PATH)
-                    || node.get(LAKE_TABLE_LATEST_SNAPSHOT_FILE_PATH).isNull()) {
+            // Version 2: ZK node contains lake snapshot file paths
+            JsonNode lakeSnapshotsNode = node.get(LAKE_SNAPSHOTS);
+            if (lakeSnapshotsNode == null || !lakeSnapshotsNode.isArray()) {
                 throw new IllegalArgumentException(
-                        "Version 2 ZK node must have non-null 'lake_table_latest_snapshot_file_path' field. Got: "
-                                + node);
+                        "Invalid lake_snapshots field in version 2 format");
             }
-            return new LakeTable(
-                    new FsPath(node.get(LAKE_TABLE_LATEST_SNAPSHOT_FILE_PATH).asText()));
+
+            List<LakeTable.LakeSnapshotMetadata> lakeSnapshotMetadata = new ArrayList<>();
+            Iterator<JsonNode> elements = lakeSnapshotsNode.elements();
+            while (elements.hasNext()) {
+                JsonNode snapshotNode = elements.next();
+                long snapshotId = snapshotNode.get(SNAPSHOT_ID_KEY).asLong();
+                String tieredOffsetsPath = snapshotNode.get(TIERED_OFFSETS_KEY).asText();
+                String readableOffsetsPath = snapshotNode.get(READABLE_OFFSETS_KEY).asText();
+
+                LakeTable.LakeSnapshotMetadata metadata =
+                        new LakeTable.LakeSnapshotMetadata(
+                                snapshotId,
+                                new FsPath(tieredOffsetsPath),
+                                new FsPath(readableOffsetsPath));
+                lakeSnapshotMetadata.add(metadata);
+            }
+            return new LakeTable(lakeSnapshotMetadata);
         } else {
             throw new IllegalArgumentException("Unsupported version: " + version);
         }

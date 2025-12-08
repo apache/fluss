@@ -109,10 +109,11 @@ class LakeTableHelperTest {
             bucketLogEndOffset.put(new TableBucket(tableId, 1), 200L);
 
             LakeTableSnapshot lakeTableSnapshot =
-                    new LakeTableSnapshot(snapshotId, tableId, bucketLogEndOffset);
+                    new LakeTableSnapshot(snapshotId, bucketLogEndOffset);
             // Write version 1 format data directly to ZK (simulating old system behavior)
             String zkPath = ZkData.LakeTableZNode.path(tableId);
-            byte[] version1Data = LakeTableSnapshotJsonSerde.toJsonVersion1(lakeTableSnapshot);
+            byte[] version1Data =
+                    LakeTableSnapshotJsonSerde.toJsonVersion1(lakeTableSnapshot, tableId);
             zooKeeperClient
                     .getCuratorClient()
                     .create()
@@ -123,7 +124,7 @@ class LakeTableHelperTest {
             Optional<LakeTable> optionalLakeTable = zooKeeperClient.getLakeTable(tableId);
             assertThat(optionalLakeTable).isPresent();
             LakeTable lakeTable = optionalLakeTable.get();
-            assertThat(lakeTable.toLakeTableSnapshot()).isEqualTo(lakeTableSnapshot);
+            assertThat(lakeTable.getLatestTableSnapshot()).isEqualTo(lakeTableSnapshot);
 
             // Test: Call upsertLakeTableSnapshot with new snapshot data
             // This should read the old version 1 data, merge it, and write as version 2
@@ -132,19 +133,19 @@ class LakeTableHelperTest {
             newBucketLogEndOffset.put(new TableBucket(tableId, 1), 2000L); // new offset
 
             long snapshot2Id = 2L;
-            LakeTableSnapshot snapshot2 =
-                    new LakeTableSnapshot(snapshot2Id, tableId, newBucketLogEndOffset);
+            LakeTableSnapshot snapshot2 = new LakeTableSnapshot(snapshot2Id, newBucketLogEndOffset);
             lakeTableHelper.upsertLakeTable(tableId, tablePath, snapshot2);
 
             // Verify: New version 2 data can be read
             Optional<LakeTable> optLakeTableAfter = zooKeeperClient.getLakeTable(tableId);
             assertThat(optLakeTableAfter).isPresent();
             LakeTable lakeTableAfter = optLakeTableAfter.get();
-            assertThat(lakeTableAfter.getLakeTableLatestSnapshotFileHandle())
+            assertThat(lakeTableAfter.getLakeTableLatestSnapshot())
                     .isNotNull(); // Version 2 has file path
 
             // Verify: The lake snapshot file exists
-            FsPath snapshot2FileHandle = lakeTableAfter.getLakeTableLatestSnapshotFileHandle();
+            FsPath snapshot2FileHandle =
+                    lakeTableAfter.getLakeTableLatestSnapshot().getReadableOffsetsFilePath();
             FileSystem fileSystem = snapshot2FileHandle.getFileSystem();
             assertThat(fileSystem.exists(snapshot2FileHandle)).isTrue();
 
@@ -155,7 +156,6 @@ class LakeTableHelperTest {
 
             // verify the snapshot should merge previous snapshot
             assertThat(mergedSnapshot.getSnapshotId()).isEqualTo(snapshot2Id);
-            assertThat(mergedSnapshot.getTableId()).isEqualTo(tableId);
             Map<TableBucket, Long> expectedBucketLogEndOffset = new HashMap<>(bucketLogEndOffset);
             expectedBucketLogEndOffset.putAll(newBucketLogEndOffset);
             assertThat(mergedSnapshot.getBucketLogEndOffset())
@@ -163,10 +163,9 @@ class LakeTableHelperTest {
 
             // add a new snapshot 3 again, verify snapshot
             long snapshot3Id = 3L;
-            LakeTableSnapshot snapshot3 =
-                    new LakeTableSnapshot(snapshot3Id, tableId, newBucketLogEndOffset);
+            LakeTableSnapshot snapshot3 = new LakeTableSnapshot(snapshot3Id, newBucketLogEndOffset);
             lakeTableHelper.upsertLakeTable(tableId, tablePath, snapshot3);
-            // verify snapshot 3 is discard
+            // verify snapshot 3 is discarded
             assertThat(fileSystem.exists(snapshot2FileHandle)).isFalse();
         }
     }

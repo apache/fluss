@@ -17,6 +17,7 @@
 
 package org.apache.fluss.server.coordinator;
 
+import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.fs.FileSystem;
@@ -41,6 +42,8 @@ public class RemoteStorageCleaner {
 
     private final FsPath remoteLogDir;
 
+    private final String remoteDataDir;
+
     private final FileSystem remoteFileSystem;
 
     private final ExecutorService ioExecutor;
@@ -48,6 +51,7 @@ public class RemoteStorageCleaner {
     public RemoteStorageCleaner(Configuration configuration, ExecutorService ioExecutor) {
         this.remoteKvDir = FlussPaths.remoteKvDir(configuration);
         this.remoteLogDir = FlussPaths.remoteLogDir(configuration);
+        this.remoteDataDir = configuration.getString(ConfigOptions.REMOTE_DATA_DIR);
         this.ioExecutor = ioExecutor;
         try {
             this.remoteFileSystem = remoteKvDir.getFileSystem();
@@ -57,9 +61,15 @@ public class RemoteStorageCleaner {
         }
     }
 
-    public void asyncDeleteTableRemoteDir(TablePath tablePath, boolean isKvTable, long tableId) {
+    public void asyncDeleteTableRemoteDir(
+            TablePath tablePath, boolean isKvTable, boolean isLakeEnabled, long tableId) {
         if (isKvTable) {
             asyncDeleteDir(FlussPaths.remoteTableDir(remoteKvDir, tablePath, tableId));
+        }
+        if (isLakeEnabled) {
+            asyncDeleteDir(
+                    FlussPaths.remoteLakeTableSnapshotMetadataDir(
+                            remoteDataDir, tablePath, tableId));
         }
         asyncDeleteDir(FlussPaths.remoteTableDir(remoteLogDir, tablePath, tableId));
     }

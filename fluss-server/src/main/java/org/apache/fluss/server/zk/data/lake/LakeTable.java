@@ -19,6 +19,7 @@
 package org.apache.fluss.server.zk.data.lake;
 
 import org.apache.fluss.fs.FSDataInputStream;
+import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.server.zk.data.ZkData;
 import org.apache.fluss.utils.IOUtils;
@@ -26,7 +27,11 @@ import org.apache.fluss.utils.IOUtils;
 import javax.annotation.Nullable;
 
 import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.util.Collections;
+import java.util.List;
 
+import static org.apache.fluss.metrics.registry.MetricRegistry.LOG;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /**
@@ -36,8 +41,8 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
  *
  * <ul>
  *   <li>Version 1 (legacy): Contains the full {@link LakeTableSnapshot} data directly
- *   <li>Version 2 (current): Contains only the file paths point to the file storing {@link
- *       LakeTableSnapshot}.
+ *   <li>Version 2 (current): Contains a list of lake snapshot, recording the metadata file path for
+ *       different lake snapshots, with actual metadata storing in file to reduce zk pressure
  * </ul>
  *
  * @see LakeTableJsonSerde for JSON serialization and deserialization
@@ -45,14 +50,8 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
 public class LakeTable {
 
     // Version 2 (current):
-    // the pointer to the file storing the latest known LakeTableSnapshot, will be null in
-    // version1
-    @Nullable private final FsPath lakeTableLatestSnapshotFileHandle;
-
-    // the pointer to the file storing the latest known compacted LakeTableSnapshot, will be null in
-    // version1 or no any known compacted LakeTableSnapshot
-    // todo: support tiering service commit lake table latest compacted snapshot to Fluss
-    @Nullable private final FsPath lakeTableLatestCompactedSnapshotFileHandle = null;
+    // a list of lake snapshot metadata, record the metadata for different lake snapshots
+    @Nullable private final List<LakeSnapshotMetadata> lakeSnapshotMetadata;
 
     // Version 1 (legacy): the full lake table snapshot info stored in ZK, will be null in version2
     @Nullable private final LakeTableSnapshot lakeTableSnapshot;
@@ -67,45 +66,117 @@ public class LakeTable {
     }
 
     /**
-     * Creates a LakeTable with a metadata file path (version 2 format).
+     * Creates a LakeTable with a lake snapshot metadata (version 2 format).
      *
-     * @param lakeTableSnapshotFileHandle the path to the metadata file containing the snapshot data
+     * @param lakeSnapshotMetadata the metadata containing the file path to the snapshot data
      */
-    public LakeTable(@Nullable FsPath lakeTableSnapshotFileHandle) {
-        this(null, lakeTableSnapshotFileHandle);
+    public LakeTable(LakeSnapshotMetadata lakeSnapshotMetadata) {
+        this(null, Collections.singletonList(lakeSnapshotMetadata));
+    }
+
+    /**
+     * Creates a LakeTable with a list of lake snapshot metadata (version 2 format).
+     *
+     * @param lakeSnapshotMetadata the list of lake snapshot metadata
+     */
+    public LakeTable(List<LakeSnapshotMetadata> lakeSnapshotMetadata) {
+        this(null, lakeSnapshotMetadata);
     }
 
     private LakeTable(
             @Nullable LakeTableSnapshot lakeTableSnapshot,
-            @Nullable FsPath lakeTableSnapshotFileHandle) {
+            List<LakeSnapshotMetadata> lakeSnapshotMetadata) {
         this.lakeTableSnapshot = lakeTableSnapshot;
-        this.lakeTableLatestSnapshotFileHandle = lakeTableSnapshotFileHandle;
+        this.lakeSnapshotMetadata = lakeSnapshotMetadata;
     }
 
     @Nullable
-    public FsPath getLakeTableLatestSnapshotFileHandle() {
-        return lakeTableLatestSnapshotFileHandle;
+    public LakeSnapshotMetadata getLakeTableLatestSnapshot() {
+        if (lakeSnapshotMetadata != null && !lakeSnapshotMetadata.isEmpty()) {
+            return lakeSnapshotMetadata.get(0);
+        }
+        return null;
+    }
+
+    @Nullable
+    public List<LakeSnapshotMetadata> getLakeSnapshotMetadata() {
+        return lakeSnapshotMetadata;
     }
 
     /**
-     * Converts this LakeTable to a LakeTableSnapshot.
+     * Get the latest table snapshot for the lake table.
      *
      * <p>If this LakeTable was created from a LakeTableSnapshot (version 1), returns it directly.
      * Otherwise, reads the snapshot data from the lake snapshot file.
      *
      * @return the LakeTableSnapshot
      */
-    public LakeTableSnapshot toLakeTableSnapshot() throws Exception {
+    public LakeTableSnapshot getLatestTableSnapshot() throws Exception {
         if (lakeTableSnapshot != null) {
             return lakeTableSnapshot;
         }
+        FsPath tieredOffsetsFilePath =
+                checkNotNull(getLakeTableLatestSnapshot()).tieredOffsetsFilePath;
         FSDataInputStream inputStream =
-                checkNotNull(getLakeTableLatestSnapshotFileHandle())
-                        .getFileSystem()
-                        .open(getLakeTableLatestSnapshotFileHandle());
+                tieredOffsetsFilePath.getFileSystem().open(tieredOffsetsFilePath);
         try (ByteArrayOutputStream outputStream = new ByteArrayOutputStream()) {
             IOUtils.copyBytes(inputStream, outputStream, true);
             return LakeTableSnapshotJsonSerde.fromJson(outputStream.toByteArray());
+        }
+    }
+
+    /** The lake snapshot metadata entry stored in zk lake table. */
+    public static class LakeSnapshotMetadata {
+        private final long snapshotId;
+
+        // the file path to file storing the tiered offsets,
+        // it points a file storing LakeTableSnapshot which includes tiered offsets
+        private final FsPath tieredOffsetsFilePath;
+
+        // the file path to file storing the readable offsets,
+        // will be null if we don't now the readable offsets for this snapshot
+        @Nullable private final FsPath readableOffsetsFilePath;
+
+        public LakeSnapshotMetadata(
+                long snapshotId,
+                FsPath tieredOffsetsFilePath,
+                @Nullable FsPath readableOffsetsFilePath) {
+            this.snapshotId = snapshotId;
+            this.tieredOffsetsFilePath = tieredOffsetsFilePath;
+            this.readableOffsetsFilePath = readableOffsetsFilePath;
+        }
+
+        public long getSnapshotId() {
+            return snapshotId;
+        }
+
+        public FsPath getTieredOffsetsFilePath() {
+            return tieredOffsetsFilePath;
+        }
+
+        public FsPath getReadableOffsetsFilePath() {
+            return readableOffsetsFilePath;
+        }
+
+        public void discard() {
+            if (tieredOffsetsFilePath != null) {
+                delete(tieredOffsetsFilePath);
+            }
+            if (readableOffsetsFilePath != null
+                    && readableOffsetsFilePath != tieredOffsetsFilePath) {
+                delete(readableOffsetsFilePath);
+            }
+        }
+
+        private void delete(FsPath fsPath) {
+            try {
+                FileSystem fileSystem = fsPath.getFileSystem();
+                if (fileSystem.exists(fsPath)) {
+                    fileSystem.delete(fsPath, false);
+                }
+            } catch (IOException e) {
+                LOG.warn("Error deleting filePath at {}", fsPath, e);
+            }
         }
     }
 }
