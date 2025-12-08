@@ -610,6 +610,15 @@ public final class RecordAccumulator {
                             arrowWriter,
                             outputView,
                             clock.milliseconds());
+        } else if (writeFormat == WriteFormat.COMPACTED_LOG) {
+            batch =
+                    new CompactedLogWriteBatch(
+                            bucketId,
+                            physicalTablePath,
+                            schemaId,
+                            outputView.getPreAllocatedSize(),
+                            outputView,
+                            clock.milliseconds());
         } else {
             batch =
                     new IndexedLogWriteBatch(
