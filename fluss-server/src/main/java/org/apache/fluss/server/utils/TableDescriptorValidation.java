@@ -71,7 +71,8 @@ public class TableDescriptorValidation {
             Arrays.asList(DataTypeRoot.ARRAY, DataTypeRoot.MAP, DataTypeRoot.ROW);
 
     /** Validate table descriptor to create is valid and contain all necessary information. */
-    public static void validateTableDescriptor(TableDescriptor tableDescriptor, int maxBucketNum) {
+    public static void validateTableDescriptor(
+            TableDescriptor tableDescriptor, int maxBucketNum, int dbLevelMaxBucket) {
         boolean hasPrimaryKey = tableDescriptor.getSchema().getPrimaryKey().isPresent();
         RowType schema = tableDescriptor.getSchema().getRowType();
         Configuration tableConf = Configuration.fromMap(tableDescriptor.getProperties());
@@ -98,7 +99,7 @@ public class TableDescriptorValidation {
         }
 
         // check distribution
-        checkDistribution(tableDescriptor, maxBucketNum);
+        checkDistribution(tableDescriptor, maxBucketNum, dbLevelMaxBucket);
         checkPrimaryKey(tableDescriptor);
         // check individual options
         checkReplicationFactor(tableConf);
@@ -152,7 +153,8 @@ public class TableDescriptorValidation {
         }
     }
 
-    private static void checkDistribution(TableDescriptor tableDescriptor, int maxBucketNum) {
+    private static void checkDistribution(
+            TableDescriptor tableDescriptor, int maxBucketNum, int dbLevelMaxBucket) {
         if (!tableDescriptor.getTableDistribution().isPresent()) {
             throw new InvalidTableException("Table distribution is required.");
         }
@@ -163,8 +165,14 @@ public class TableDescriptorValidation {
         if (bucketCount > maxBucketNum) {
             throw new TooManyBucketsException(
                     String.format(
-                            "Bucket count %s exceeds the maximum limit %s.",
+                            "Bucket count %s exceeds the cluster-level maximum limit %s.",
                             bucketCount, maxBucketNum));
+        }
+        if (bucketCount > dbLevelMaxBucket) {
+            throw new TooManyBucketsException(
+                    String.format(
+                            "Bucket count %s exceeds the database-level maximum limit %s.",
+                            bucketCount, dbLevelMaxBucket));
         }
         List<String> bucketKeys = tableDescriptor.getTableDistribution().get().getBucketKeys();
         if (!bucketKeys.isEmpty()) {

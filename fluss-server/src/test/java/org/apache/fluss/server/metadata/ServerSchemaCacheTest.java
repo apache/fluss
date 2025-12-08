@@ -150,7 +150,8 @@ public class ServerSchemaCacheTest {
             super(
                     null,
                     new Configuration(),
-                    new LakeCatalogDynamicLoader(new Configuration(), null, true));
+                    new LakeCatalogDynamicLoader(new Configuration(), null, true),
+                    null);
             schemaInfoMap = new HashMap<>();
             tableInfos.forEach(
                     tableInfo -> {

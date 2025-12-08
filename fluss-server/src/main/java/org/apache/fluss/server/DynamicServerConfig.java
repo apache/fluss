@@ -45,12 +45,14 @@ import static org.apache.fluss.utils.concurrent.LockUtils.inWriteLock;
  * them to these {@link ServerReconfigurable} instances.
  */
 @Internal
-class DynamicServerConfig {
+public class DynamicServerConfig {
 
     private static final Logger LOG = LoggerFactory.getLogger(DynamicServerConfig.class);
     private static final Set<String> ALLOWED_CONFIG_KEYS =
             Collections.singleton(DATALAKE_FORMAT.key());
-    private static final Set<String> ALLOWED_CONFIG_PREFIXES = Collections.singleton("datalake.");
+    public static final String DATABASE_LIMITS_PREFIX = "database.limits.";
+    private static final Set<String> ALLOWED_CONFIG_PREFIXES =
+            new HashSet<>(java.util.Arrays.asList("datalake.", DATABASE_LIMITS_PREFIX));
 
     private final ReadWriteLock lock = new ReentrantReadWriteLock();
     private final Map<Class<? extends ServerReconfigurable>, ServerReconfigurable>
