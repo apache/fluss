@@ -1149,6 +1149,8 @@ public class CoordinatorEventProcessor implements EventProcessor {
 
     private void processNotifyLakeTableOffsetEvent(NotifyLakeTableOffsetEvent event) {
         Map<Long, LakeTableSnapshot> lakeTableSnapshots = event.getLakeTableSnapshots();
+        Map<TableBucket, Long> tableBucketMaxTieredTimestamps =
+                event.getTableBucketMaxTieredTimestamps();
         coordinatorRequestBatch.newBatch();
         for (Map.Entry<Long, LakeTableSnapshot> lakeTableSnapshotEntry :
                 lakeTableSnapshots.entrySet()) {
@@ -1164,7 +1166,8 @@ public class CoordinatorEventProcessor implements EventProcessor {
                                                 .addNotifyLakeTableOffsetRequestForTableServers(
                                                         coordinatorContext.getAssignment(tb),
                                                         tb,
-                                                        lakeTableSnapshot));
+                                                        lakeTableSnapshot,
+                                                        tableBucketMaxTieredTimestamps.get(tb)));
             }
         }
         coordinatorRequestBatch.sendNotifyLakeTableOffsetRequest(
@@ -1271,7 +1274,10 @@ public class CoordinatorEventProcessor implements EventProcessor {
 
                         // send notify lakehouse data request to all replicas via coordinator event
                         coordinatorEventManager.put(
-                                new NotifyLakeTableOffsetEvent(lakeTableSnapshots));
+                                new NotifyLakeTableOffsetEvent(
+                                        lakeTableSnapshots,
+                                        commitLakeTableSnapshotData
+                                                .getTableBucketsMaxTieredTimestamp()));
                         callback.complete(response);
                     } catch (Exception e) {
                         callback.completeExceptionally(e);

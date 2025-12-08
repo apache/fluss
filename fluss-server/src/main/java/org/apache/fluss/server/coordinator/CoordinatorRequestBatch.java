@@ -378,7 +378,8 @@ public class CoordinatorRequestBatch {
     public void addNotifyLakeTableOffsetRequestForTableServers(
             List<Integer> tabletServers,
             TableBucket tableBucket,
-            LakeTableSnapshot lakeTableSnapshot) {
+            LakeTableSnapshot lakeTableSnapshot,
+            @Nullable Long maxTieredTimestamp) {
         tabletServers.stream()
                 .filter(s -> s >= 0)
                 .forEach(
@@ -390,7 +391,7 @@ public class CoordinatorRequestBatch {
                             notifyLakeTableOffsetReqForBucketMap.put(
                                     tableBucket,
                                     makeNotifyLakeTableOffsetForBucket(
-                                            tableBucket, lakeTableSnapshot));
+                                            tableBucket, lakeTableSnapshot, maxTieredTimestamp));
                         });
     }
 

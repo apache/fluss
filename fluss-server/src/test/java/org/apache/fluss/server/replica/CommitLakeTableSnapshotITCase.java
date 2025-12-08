@@ -38,7 +38,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 
 import java.time.Duration;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -136,13 +135,7 @@ class CommitLakeTableSnapshotITCase {
         }
 
         LakeTableSnapshot expectedDataLakeTieredInfo =
-                new LakeTableSnapshot(
-                        snapshotId,
-                        tableId,
-                        bucketsLogStartOffset,
-                        bucketsLogEndOffset,
-                        bucketsMaxTimestamp,
-                        Collections.emptyMap());
+                new LakeTableSnapshot(snapshotId, tableId, bucketsLogEndOffset);
         checkLakeTableDataInZk(tableId, expectedDataLakeTieredInfo);
     }
 
