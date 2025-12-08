@@ -93,32 +93,15 @@ public class LakeTableHelper {
         // may not carry all buckets for the table. It typically only carries buckets
         // that were written after the previous commit.
 
-        // merge log startup offset, current will override the previous
-        Map<TableBucket, Long> bucketLogStartOffset =
-                new HashMap<>(previousLakeTableSnapshot.getBucketLogStartOffset());
-        bucketLogStartOffset.putAll(newLakeTableSnapshot.getBucketLogStartOffset());
-
         // merge log end offsets, current will override the previous
         Map<TableBucket, Long> bucketLogEndOffset =
                 new HashMap<>(previousLakeTableSnapshot.getBucketLogEndOffset());
         bucketLogEndOffset.putAll(newLakeTableSnapshot.getBucketLogEndOffset());
 
-        // merge max timestamp, current will override the previous
-        Map<TableBucket, Long> bucketMaxTimestamp =
-                new HashMap<>(previousLakeTableSnapshot.getBucketMaxTimestamp());
-        bucketMaxTimestamp.putAll(newLakeTableSnapshot.getBucketMaxTimestamp());
-
-        Map<Long, String> partitionNameById =
-                new HashMap<>(previousLakeTableSnapshot.getPartitionNameIdByPartitionId());
-        partitionNameById.putAll(newLakeTableSnapshot.getPartitionNameIdByPartitionId());
-
         return new LakeTableSnapshot(
                 newLakeTableSnapshot.getSnapshotId(),
                 newLakeTableSnapshot.getTableId(),
-                bucketLogStartOffset,
-                bucketLogEndOffset,
-                bucketMaxTimestamp,
-                partitionNameById);
+                bucketLogEndOffset);
     }
 
     private FsPath storeLakeTableSnapshot(

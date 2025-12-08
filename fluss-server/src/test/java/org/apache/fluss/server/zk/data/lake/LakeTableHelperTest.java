@@ -103,27 +103,13 @@ class LakeTableHelperTest {
 
             // Create a legacy version 1 LakeTableSnapshot (full data in ZK)
             long snapshotId = 1L;
-            Map<TableBucket, Long> bucketLogStartOffset = new HashMap<>();
-            bucketLogStartOffset.put(new TableBucket(tableId, 0), 10L);
-            bucketLogStartOffset.put(new TableBucket(tableId, 1), 20L);
 
             Map<TableBucket, Long> bucketLogEndOffset = new HashMap<>();
             bucketLogEndOffset.put(new TableBucket(tableId, 0), 100L);
             bucketLogEndOffset.put(new TableBucket(tableId, 1), 200L);
 
-            Map<TableBucket, Long> bucketMaxTimestamp = new HashMap<>();
-            bucketMaxTimestamp.put(new TableBucket(tableId, 0), 1000L);
-            bucketMaxTimestamp.put(new TableBucket(tableId, 1), 2000L);
-
-            Map<Long, String> partitionNameIdByPartitionId = new HashMap<>();
             LakeTableSnapshot lakeTableSnapshot =
-                    new LakeTableSnapshot(
-                            snapshotId,
-                            tableId,
-                            bucketLogStartOffset,
-                            bucketLogEndOffset,
-                            bucketMaxTimestamp,
-                            partitionNameIdByPartitionId);
+                    new LakeTableSnapshot(snapshotId, tableId, bucketLogEndOffset);
             // Write version 1 format data directly to ZK (simulating old system behavior)
             String zkPath = ZkData.LakeTableZNode.path(tableId);
             byte[] version1Data = LakeTableSnapshotJsonSerde.toJsonVersion1(lakeTableSnapshot);
@@ -147,13 +133,7 @@ class LakeTableHelperTest {
 
             long snapshot2Id = 2L;
             LakeTableSnapshot snapshot2 =
-                    new LakeTableSnapshot(
-                            snapshot2Id,
-                            tableId,
-                            Collections.emptyMap(),
-                            newBucketLogEndOffset,
-                            Collections.emptyMap(),
-                            Collections.emptyMap());
+                    new LakeTableSnapshot(snapshot2Id, tableId, newBucketLogEndOffset);
             lakeTableHelper.upsertLakeTable(tableId, tablePath, snapshot2);
 
             // Verify: New version 2 data can be read
@@ -176,26 +156,15 @@ class LakeTableHelperTest {
             // verify the snapshot should merge previous snapshot
             assertThat(mergedSnapshot.getSnapshotId()).isEqualTo(snapshot2Id);
             assertThat(mergedSnapshot.getTableId()).isEqualTo(tableId);
-            assertThat(mergedSnapshot.getBucketLogStartOffset()).isEqualTo(bucketLogStartOffset);
-
             Map<TableBucket, Long> expectedBucketLogEndOffset = new HashMap<>(bucketLogEndOffset);
             expectedBucketLogEndOffset.putAll(newBucketLogEndOffset);
             assertThat(mergedSnapshot.getBucketLogEndOffset())
                     .isEqualTo(expectedBucketLogEndOffset);
-            assertThat(mergedSnapshot.getBucketMaxTimestamp()).isEqualTo(bucketMaxTimestamp);
-            assertThat(mergedSnapshot.getPartitionNameIdByPartitionId())
-                    .isEqualTo(partitionNameIdByPartitionId);
 
             // add a new snapshot 3 again, verify snapshot
             long snapshot3Id = 3L;
             LakeTableSnapshot snapshot3 =
-                    new LakeTableSnapshot(
-                            snapshot3Id,
-                            tableId,
-                            Collections.emptyMap(),
-                            newBucketLogEndOffset,
-                            Collections.emptyMap(),
-                            Collections.emptyMap());
+                    new LakeTableSnapshot(snapshot3Id, tableId, newBucketLogEndOffset);
             lakeTableHelper.upsertLakeTable(tableId, tablePath, snapshot3);
             // verify snapshot 3 is discard
             assertThat(fileSystem.exists(snapshot2FileHandle)).isFalse();

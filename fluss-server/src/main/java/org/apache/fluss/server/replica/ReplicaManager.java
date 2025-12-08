@@ -820,18 +820,9 @@ public class ReplicaManager {
             LakeTableSnapshot lakeTableSnapshot = optLakeTableSnapshot.get();
             long snapshotId = optLakeTableSnapshot.get().getSnapshotId();
             replica.getLogTablet().updateLakeTableSnapshotId(snapshotId);
-
-            lakeTableSnapshot
-                    .getLogStartOffset(tb)
-                    .ifPresent(replica.getLogTablet()::updateLakeLogStartOffset);
-
             lakeTableSnapshot
                     .getLogEndOffset(tb)
                     .ifPresent(replica.getLogTablet()::updateLakeLogEndOffset);
-
-            lakeTableSnapshot
-                    .getMaxTimestamp(tb)
-                    .ifPresent(replica.getLogTablet()::updateLakeMaxTimestamp);
         }
     }
 
