@@ -268,7 +268,6 @@ public class IcebergLakeCommitter implements LakeCommitter<IcebergWriteResult, I
             if (bucketOffset.getPartitionId() != null) {
                 committedLakeSnapshot.addPartitionBucket(
                         bucketOffset.getPartitionId(),
-                        bucketOffset.getPartitionQualifiedName(),
                         bucketOffset.getBucket(),
                         bucketOffset.getLogOffset());
             } else {

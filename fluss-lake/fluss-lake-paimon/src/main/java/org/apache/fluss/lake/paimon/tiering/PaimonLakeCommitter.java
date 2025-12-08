@@ -153,7 +153,6 @@ public class PaimonLakeCommitter implements LakeCommitter<PaimonWriteResult, Pai
                 if (bucketOffset.getPartitionId() != null) {
                     committedLakeSnapshot.addPartitionBucket(
                             bucketOffset.getPartitionId(),
-                            bucketOffset.getPartitionQualifiedName(),
                             bucketOffset.getBucket(),
                             bucketOffset.getLogOffset());
                 } else {

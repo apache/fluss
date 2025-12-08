@@ -30,7 +30,6 @@ public class BucketOffsetJsonSerde
     public static final BucketOffsetJsonSerde INSTANCE = new BucketOffsetJsonSerde();
     private static final String PARTITION_ID = "partition_id";
     private static final String BUCKET_ID = "bucket";
-    private static final String PARTITION_NAME = "partition_name";
     private static final String LOG_OFFSET = "offset";
 
     @Override
@@ -39,14 +38,10 @@ public class BucketOffsetJsonSerde
         Long partitionId = partitionIdNode == null ? null : partitionIdNode.asLong();
         int bucketId = node.get(BUCKET_ID).asInt();
 
-        // deserialize partition name
-        JsonNode partitionNameNode = node.get(PARTITION_NAME);
-        String partitionName = partitionNameNode == null ? null : partitionNameNode.asText();
-
         // deserialize log offset
         long logOffset = node.get(LOG_OFFSET).asLong();
 
-        return new BucketOffset(logOffset, bucketId, partitionId, partitionName);
+        return new BucketOffset(logOffset, bucketId, partitionId);
     }
 
     @Override
@@ -58,11 +53,6 @@ public class BucketOffsetJsonSerde
             generator.writeNumberField(PARTITION_ID, bucketOffset.getPartitionId());
         }
         generator.writeNumberField(BUCKET_ID, bucketOffset.getBucket());
-
-        // serialize partition name
-        if (bucketOffset.getPartitionQualifiedName() != null) {
-            generator.writeStringField(PARTITION_NAME, bucketOffset.getPartitionQualifiedName());
-        }
 
         // serialize bucket offset
         generator.writeNumberField(LOG_OFFSET, bucketOffset.getLogOffset());

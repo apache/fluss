@@ -195,11 +195,7 @@ class PaimonTieringTest {
                             committableSerializer.getVersion(), serialized);
             long snapshot =
                     lakeCommitter.commit(
-                            paimonCommittable,
-                            toBucketOffsetsProperty(
-                                    tableBucketOffsets,
-                                    partitionIdAndName,
-                                    getPartitionKeys(tablePath)));
+                            paimonCommittable, toBucketOffsetsProperty(tableBucketOffsets));
             assertThat(snapshot).isEqualTo(1);
         }
 
@@ -299,12 +295,7 @@ class PaimonTieringTest {
                 createLakeCommitter(tablePath)) {
             PaimonCommittable committable = lakeCommitter.toCommittable(paimonWriteResults);
             long snapshot =
-                    lakeCommitter.commit(
-                            committable,
-                            toBucketOffsetsProperty(
-                                    tableBucketOffsets,
-                                    partitionIdAndName,
-                                    getPartitionKeys(tablePath)));
+                    lakeCommitter.commit(committable, toBucketOffsetsProperty(tableBucketOffsets));
             assertThat(snapshot).isEqualTo(1);
         }
 
@@ -376,12 +367,7 @@ class PaimonTieringTest {
                 createLakeCommitter(tablePath)) {
             PaimonCommittable committable = lakeCommitter.toCommittable(paimonWriteResults);
             snapshot =
-                    lakeCommitter.commit(
-                            committable,
-                            toBucketOffsetsProperty(
-                                    tableBucketOffsets,
-                                    partitionIdAndName,
-                                    getPartitionKeys(tablePath)));
+                    lakeCommitter.commit(committable, toBucketOffsetsProperty(tableBucketOffsets));
             assertThat(snapshot).isEqualTo(1);
         }
 
@@ -389,8 +375,8 @@ class PaimonTieringTest {
         String offsetProperty = getSnapshotLogOffsetProperty(tablePath, snapshot);
         assertThat(offsetProperty)
                 .isEqualTo(
-                        "[{\"partition_id\":1,\"bucket\":0,\"partition_name\":\"region=us-east/year=2024/month=01\",\"offset\":2},"
-                                + "{\"partition_id\":2,\"bucket\":0,\"partition_name\":\"region=eu-central/year=2023/month=12\",\"offset\":2}]");
+                        "[{\"partition_id\":1,\"bucket\":0,\"offset\":2},"
+                                + "{\"partition_id\":2,\"bucket\":0,\"offset\":2}]");
 
         // Verify data for each partition
         for (String partition : partitionIdAndName.values()) {
@@ -797,11 +783,5 @@ class PaimonTieringTest {
                 .snapshot(snapshotId)
                 .properties()
                 .get(FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY);
-    }
-
-    private List<String> getPartitionKeys(TablePath tablePath) throws Exception {
-        Identifier identifier = toPaimon(tablePath);
-        FileStoreTable fileStoreTable = (FileStoreTable) paimonCatalog.getTable(identifier);
-        return fileStoreTable.partitionKeys();
     }
 }
