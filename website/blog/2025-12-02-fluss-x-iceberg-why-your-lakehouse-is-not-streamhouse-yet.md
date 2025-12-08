@@ -12,7 +12,7 @@ Apache Fluss represents a new architectural approach: the **Streamhouse** for re
 
 After working on Fluss–Iceberg lakehouse integration and deploying this architecture at a massive scale, including Alibaba's 3 PB production deployment processing 40 GB/s, we're ready to share the architectural lessons learned. Specifically, why existing systems fall short, how Fluss and Iceberg naturally complement each other, and what this means for finally building true real-time lakehouses.
 
-![Banner](assets/fluss-x-iceberg/fluss-lakehouse-streaming.png)
+![Banner](assets/fluss-x-iceberg/fluss-lakehouse-streaming_comp.png)
 
 <!-- truncate -->
 
@@ -44,7 +44,7 @@ Four converging forces are driving the need for sub-second data infrastructure:
 
 Yet critical use cases demand sub-second to second-level latency: search and recommendation systems with real-time personalization, advertisement attribution tracking, anomaly detection for fraud and security monitoring, operational intelligence for manufacturing/logistics/ride-sharing, and Gen AI model inference requiring up-to-the-second features. The industry needs a **hot real-time layer** sitting in front of the lakehouse.
 
-![Evolution Timeline](assets/fluss-x-iceberg/evolution.png)
+![Evolution Timeline](assets/fluss-x-iceberg/evolution_comp.png)
 ## What is Fluss × Iceberg?
 
 ### The Core Concept: Hot/Cold Unified Storage
@@ -60,7 +60,7 @@ Think of your data as having two thermal zones:
 
 Traditional architectures force you to maintain **separate systems** for these zones: Kafka/Kinesis for streaming (hot), Iceberg for analytics (cold), complex ETL pipelines to move data between them, and applications writing to both systems (dual-write problem).
 
-![Kappa vs Lambda Architecture](assets/fluss-x-iceberg/kappa-vs-lambda.png)
+![Kappa vs Lambda Architecture](assets/fluss-x-iceberg/kappa-vs-lambda_comp.png)
 
 **Fluss × Iceberg unifies these as tiered storage with Kappa architecture:** Applications write once to Fluss. A stateless Tiering Service (Flink job) automatically moves data from hot to cold storage based on configured freshness (e.g., 30 seconds, 5 minutes). Query engines see a single table that seamlessly spans both tiers—eliminating the dual-write complexity of Lambda architecture.
 
