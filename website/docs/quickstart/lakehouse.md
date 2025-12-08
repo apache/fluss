@@ -55,8 +55,8 @@ services:
       HDFS-SITE.XML_dfs.permissions.enabled: false
       HDFS-SITE.XML_dfs.datanode.address: datanode:9866
     healthcheck:
-      test: ["CMD", "hdfs dfs -test -d / && exit 0 || exit 1"]
-      interval: 15s
+      test: ["CMD", "nc", "-z", "namenode", "8020"]
+      interval: 5s
       timeout: 10s
       retries: 20
 
@@ -226,8 +226,8 @@ services:
       HDFS-SITE.XML_dfs.permissions.enabled: false
       HDFS-SITE.XML_dfs.datanode.address: datanode:9866
     healthcheck:
-      test: ["CMD", "hdfs dfs -test -d / && exit 0 || exit 1"]
-      interval: 15s
+      test: ["CMD", "nc", "-z", "namenode", "8020"]
+      interval: 5s
       timeout: 10s
       retries: 20
 
@@ -487,7 +487,7 @@ docker compose exec jobmanager \
     --fluss.bootstrap.servers coordinator-server:9123 \
     --datalake.format paimon \
     --datalake.paimon.metastore filesystem \
-    --datalake.paimon.warehouse /tmp/paimon
+    --datalake.paimon.warehouse hdfs://namenode:8020/fluss-lake
 ```
 You should see a Flink Job to tier data from Fluss to Paimon running in the [Flink Web UI](http://localhost:8083/).
 
@@ -504,7 +504,7 @@ docker compose exec jobmanager \
     --fluss.bootstrap.servers coordinator-server:9123 \
     --datalake.format iceberg \
     --datalake.iceberg.type hadoop \
-    --datalake.iceberg.warehouse /tmp/iceberg
+    --datalake.iceberg.warehouse hdfs://namenode:8020/fluss-lake
 ```
 You should see a Flink Job to tier data from Fluss to Iceberg running in the [Flink Web UI](http://localhost:8083/).
 
