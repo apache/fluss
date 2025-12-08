@@ -574,7 +574,8 @@ public final class ZkData {
      *
      * <ul>
      *   <li>Version 1 (legacy): Full snapshot data stored directly in ZK
-     *   <li>Version 2 (current): Only metadata file path stored in ZK, actual data in remote file
+     *   <li>Version 2 (current): A list of snapshot metadata, with metadata file path stored in ZK,
+     *       actual data in remote file
      * </ul>
      */
     public static final class LakeTableZNode {

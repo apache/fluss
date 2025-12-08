@@ -335,7 +335,7 @@ class PaimonTieringITCase extends FlinkPaimonTieringTestBase {
                                 put(
                                         FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY,
                                         String.format(
-                                                "[{\"partition_id\":%d,\"bucket\":0,\"partition_name\":\"c1=true/c2=1/c3=2/c4=3/c5=4/c6=5_0/c7=6_0/c9=v1/c10=v2/c11=7633/c12=0102030405/c13=2025-10-16/c14=10-10-10_123/c15=2025-10-16-10-10-10_123/c16=2025-10-16-10-10-10_123\",\"offset\":1}]",
+                                                "[{\"partition_id\":%d,\"bucket\":0,\"offset\":1}]",
                                                 partitionId));
                             }
                         };
@@ -475,8 +475,7 @@ class PaimonTieringITCase extends FlinkPaimonTieringTestBase {
     }
 
     private String getPartitionOffsetStr(Map<Long, String> partitionNameByIds) {
-        String raw =
-                "{\"partition_id\":%s,\"bucket\":0,\"partition_name\":\"date=%s\",\"offset\":3}";
+        String raw = "{\"partition_id\":%s,\"bucket\":0,\"offset\":3}";
         List<Long> partitionIds = new ArrayList<>(partitionNameByIds.keySet());
         Collections.sort(partitionIds);
         List<String> partitionOffsetStrs = new ArrayList<>();

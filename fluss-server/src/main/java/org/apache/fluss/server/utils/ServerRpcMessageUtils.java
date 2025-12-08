@@ -1572,7 +1572,7 @@ public class ServerRpcMessageUtils {
                 }
             }
             lakeTableInfoByTableId.put(
-                    tableId, new LakeTableSnapshot(snapshotId, tableId, bucketLogEndOffset));
+                    tableId, new LakeTableSnapshot(snapshotId, bucketLogEndOffset));
         }
         return new CommitLakeTableSnapshotData(lakeTableInfoByTableId, tableBucketsMaxTimestamp);
     }

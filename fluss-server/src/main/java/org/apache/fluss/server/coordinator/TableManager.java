@@ -275,7 +275,10 @@ public class TableManager {
         TableInfo tableInfo = coordinatorContext.getTableInfoById(tableId);
         if (tableInfo != null) {
             remoteStorageCleaner.asyncDeleteTableRemoteDir(
-                    tableInfo.getTablePath(), tableInfo.hasPrimaryKey(), tableId);
+                    tableInfo.getTablePath(),
+                    tableInfo.hasPrimaryKey(),
+                    tableInfo.getTableConfig().isDataLakeEnabled(),
+                    tableId);
         }
     }
 

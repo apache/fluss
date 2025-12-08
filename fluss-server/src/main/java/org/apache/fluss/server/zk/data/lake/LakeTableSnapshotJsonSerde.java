@@ -28,10 +28,15 @@ import org.apache.fluss.utils.json.JsonSerializer;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.TreeMap;
+
+import static org.apache.fluss.utils.Preconditions.checkNotNull;
+import static org.apache.fluss.utils.Preconditions.checkState;
 
 /**
  * Json serializer and deserializer for {@link LakeTableSnapshot}.
@@ -41,22 +46,27 @@ import java.util.Map;
  * <ul>
  *   <li>Version 1 (legacy): Each bucket object contains full information including repeated
  *       partition names and partition_id in each bucket entry.
- *   <li>Version 2 (current): Compact format that optimizes layout to avoid duplication:
+ *   <li>Version 2 (current): Compact format that optimizes layout:
  *       <ul>
- *         <li>Extracts partition names to a top-level "partition_names" map
- *         <li>Groups buckets by partition_id in "buckets" to avoid repeating partition_id in each
- *             bucket
- *         <li>Non-partition table uses array format: "buckets": [...]
- *         <li>Partition table uses object format: "buckets": {"1": [...], "2": [...]}, "1", "2" is
- *             for the partition id
+ *         <li>Non-partition table uses array format: "buckets": [100, 200, 300], where array index
+ *             represents bucket id (0, 1, 2) and value represents log_end_offset. For buckets
+ *             without end offset, -1 is written. Missing bucket ids in the sequence are also filled
+ *             with -1.
+ *         <li>Partition table uses object format: "buckets": {"1": [100, 200], "2": [300, 400]},
+ *             where key is partition id, array index represents bucket id (0, 1) and value
+ *             represents log_end_offset. For buckets without end offset, -1 is written. Missing
+ *             bucket ids in the sequence are also filled with -1.
  *       </ul>
- *       Field names remain the same as Version 1, only the layout is optimized.
+ *       During deserialization, values of -1 are ignored and not added to the bucket log end *
+ *       offset map.
  * </ul>
  */
 public class LakeTableSnapshotJsonSerde
         implements JsonSerializer<LakeTableSnapshot>, JsonDeserializer<LakeTableSnapshot> {
 
     public static final LakeTableSnapshotJsonSerde INSTANCE = new LakeTableSnapshotJsonSerde();
+
+    private static final long UNKNOWN_LOG_OFFSET = -1;
 
     private static final String VERSION_KEY = "version";
 
@@ -77,64 +87,74 @@ public class LakeTableSnapshotJsonSerde
         generator.writeStartObject();
         generator.writeNumberField(VERSION_KEY, CURRENT_VERSION);
         generator.writeNumberField(SNAPSHOT_ID, lakeTableSnapshot.getSnapshotId());
-        generator.writeNumberField(TABLE_ID, lakeTableSnapshot.getTableId());
 
-        // Group buckets by partition_id to avoid repeating partition_id in each bucket
-        Map<Long, List<TableBucket>> partitionBuckets = new HashMap<>();
-        List<TableBucket> nonPartitionBuckets = new ArrayList<>();
+        Map<TableBucket, Long> bucketLogEndOffset = lakeTableSnapshot.getBucketLogEndOffset();
 
-        for (TableBucket tableBucket : lakeTableSnapshot.getBucketLogEndOffset().keySet()) {
-            if (tableBucket.getPartitionId() != null) {
-                partitionBuckets
-                        .computeIfAbsent(tableBucket.getPartitionId(), k -> new ArrayList<>())
-                        .add(tableBucket);
-            } else {
-                nonPartitionBuckets.add(tableBucket);
+        if (!bucketLogEndOffset.isEmpty()) {
+            // Get table_id from the first bucket (all buckets should have the same table_id)
+            long tableId = bucketLogEndOffset.keySet().iterator().next().getTableId();
+            generator.writeNumberField(TABLE_ID, tableId);
+
+            // Group buckets by partition_id
+            Map<Long, List<TableBucket>> partitionBuckets = new TreeMap<>();
+            List<TableBucket> nonPartitionBuckets = new ArrayList<>();
+
+            for (TableBucket tableBucket : bucketLogEndOffset.keySet()) {
+                if (tableBucket.getPartitionId() != null) {
+                    partitionBuckets
+                            .computeIfAbsent(tableBucket.getPartitionId(), k -> new ArrayList<>())
+                            .add(tableBucket);
+                } else {
+                    nonPartitionBuckets.add(tableBucket);
+                }
             }
-        }
-
-        // Serialize buckets: use array for non-partition buckets, object for partition buckets
-        if (!nonPartitionBuckets.isEmpty() || !partitionBuckets.isEmpty()) {
             if (!partitionBuckets.isEmpty()) {
+                checkState(
+                        nonPartitionBuckets.isEmpty(),
+                        "nonPartitionBuckets must be empty when partitionBuckets is not empty");
+                // Partition table: object format grouped by partition_id
                 generator.writeObjectFieldStart(BUCKETS);
-                for (Map.Entry<Long, java.util.List<TableBucket>> entry :
-                        partitionBuckets.entrySet()) {
-                    // Partition table:  grouped by partition_id, first write partition_id
-                    generator.writeArrayFieldStart(String.valueOf(entry.getKey()));
-                    for (TableBucket tableBucket : entry.getValue()) {
-                        // write bucket
-                        writeBucketObject(generator, lakeTableSnapshot, tableBucket);
-                    }
+                for (Map.Entry<Long, List<TableBucket>> entry : partitionBuckets.entrySet()) {
+                    Long partitionId = entry.getKey();
+                    List<TableBucket> buckets = entry.getValue();
+                    // Write array of log_end_offset values, array index represents bucket id
+                    generator.writeArrayFieldStart(String.valueOf(partitionId));
+                    serializeBucketLogEndOffset(bucketLogEndOffset, buckets, generator);
                     generator.writeEndArray();
                 }
                 generator.writeEndObject();
             } else {
-                // Non-partition table: use array format directly
+                checkState(
+                        !nonPartitionBuckets.isEmpty(),
+                        "nonPartitionBuckets must be not empty when partitionBuckets is empty");
+                // Non-partition table: array format, array index represents bucket id
                 generator.writeArrayFieldStart(BUCKETS);
-                for (TableBucket tableBucket : nonPartitionBuckets) {
-                    writeBucketObject(generator, lakeTableSnapshot, tableBucket);
-                }
+                serializeBucketLogEndOffset(bucketLogEndOffset, nonPartitionBuckets, generator);
                 generator.writeEndArray();
             }
         }
-
         generator.writeEndObject();
     }
 
-    /** Helper method to write a bucket object. */
-    private void writeBucketObject(
-            JsonGenerator generator, LakeTableSnapshot lakeTableSnapshot, TableBucket tableBucket)
+    private void serializeBucketLogEndOffset(
+            Map<TableBucket, Long> bucketLogEndOffset,
+            List<TableBucket> buckets,
+            JsonGenerator generator)
             throws IOException {
-        generator.writeStartObject();
-
-        generator.writeNumberField(BUCKET_ID, tableBucket.getBucket());
-
-        if (lakeTableSnapshot.getLogEndOffset(tableBucket).isPresent()) {
-            generator.writeNumberField(
-                    LOG_END_OFFSET, lakeTableSnapshot.getLogEndOffset(tableBucket).get());
+        // sort by bucket id
+        buckets.sort(Comparator.comparingInt(TableBucket::getBucket));
+        int currentBucketId = 0;
+        for (TableBucket tableBucket : buckets) {
+            int bucketId = tableBucket.getBucket();
+            // Fill null values for missing bucket ids
+            while (currentBucketId < bucketId) {
+                generator.writeNumber(UNKNOWN_LOG_OFFSET);
+                currentBucketId++;
+            }
+            long logEndOffset = checkNotNull(bucketLogEndOffset.get(tableBucket));
+            generator.writeNumber(logEndOffset);
+            currentBucketId++;
         }
-
-        generator.writeEndObject();
     }
 
     @Override
@@ -167,13 +187,12 @@ public class LakeTableSnapshotJsonSerde
                 bucketLogEndOffset.put(tableBucket, null);
             }
         }
-        return new LakeTableSnapshot(snapshotId, tableId, bucketLogEndOffset);
+        return new LakeTableSnapshot(snapshotId, bucketLogEndOffset);
     }
 
     /** Deserialize Version 2 format (compact layout). */
     private LakeTableSnapshot deserializeVersion2(JsonNode node) {
         long snapshotId = node.get(SNAPSHOT_ID).asLong();
-        long tableId = node.get(TABLE_ID).asLong();
 
         Map<TableBucket, Long> bucketLogEndOffset = new HashMap<>();
 
@@ -181,14 +200,26 @@ public class LakeTableSnapshotJsonSerde
         // table
         JsonNode bucketsNode = node.get(BUCKETS);
         if (bucketsNode != null) {
+            // table_id is only present when there are buckets
+            JsonNode tableIdNode = node.get(TABLE_ID);
+            if (tableIdNode == null) {
+                throw new IllegalArgumentException(
+                        "table_id is required when buckets are present in version 2 format");
+            }
+            long tableId = tableIdNode.asLong();
+
             if (bucketsNode.isArray()) {
-                // Non-partition table: array format
-                Iterator<JsonNode> buckets = bucketsNode.elements();
-                while (buckets.hasNext()) {
-                    JsonNode bucket = buckets.next();
-                    TableBucket tableBucket =
-                            new TableBucket(tableId, bucket.get(BUCKET_ID).asInt());
-                    readBucketFields(bucket, tableBucket, bucketLogEndOffset);
+                // Non-partition table: array format, array index represents bucket id
+                Iterator<JsonNode> elements = bucketsNode.elements();
+                int bucketId = 0;
+                while (elements.hasNext()) {
+                    JsonNode logEndOffsetNode = elements.next();
+                    TableBucket tableBucket = new TableBucket(tableId, bucketId);
+                    long logEndOffset = logEndOffsetNode.asLong();
+                    if (logEndOffset != UNKNOWN_LOG_OFFSET) {
+                        bucketLogEndOffset.put(tableBucket, logEndOffset);
+                    }
+                    bucketId++;
                 }
             } else {
                 // Partition table: object format grouped by partition_id
@@ -196,29 +227,24 @@ public class LakeTableSnapshotJsonSerde
                 while (partitions.hasNext()) {
                     Map.Entry<String, JsonNode> entry = partitions.next();
                     String partitionKey = entry.getKey();
-                    Long actualPartitionId = Long.parseLong(partitionKey);
-                    Iterator<JsonNode> buckets = entry.getValue().elements();
-                    while (buckets.hasNext()) {
-                        JsonNode bucket = buckets.next();
-                        TableBucket tableBucket =
-                                new TableBucket(
-                                        tableId, actualPartitionId, bucket.get(BUCKET_ID).asInt());
-                        readBucketFields(bucket, tableBucket, bucketLogEndOffset);
+                    Long partitionId = Long.parseLong(partitionKey);
+                    JsonNode logEndOffsetsArray = entry.getValue();
+                    // Array index represents bucket id, value represents log_end_offset
+                    Iterator<JsonNode> elements = logEndOffsetsArray.elements();
+                    int bucketId = 0;
+                    while (elements.hasNext()) {
+                        JsonNode logEndOffsetNode = elements.next();
+                        TableBucket tableBucket = new TableBucket(tableId, partitionId, bucketId);
+                        long logEndOffset = logEndOffsetNode.asLong();
+                        if (logEndOffset != UNKNOWN_LOG_OFFSET) {
+                            bucketLogEndOffset.put(tableBucket, logEndOffset);
+                        }
+                        bucketId++;
                     }
                 }
             }
         }
-        return new LakeTableSnapshot(snapshotId, tableId, bucketLogEndOffset);
-    }
-
-    /** Helper method to read bucket fields from JSON. */
-    private void readBucketFields(
-            JsonNode bucket, TableBucket tableBucket, Map<TableBucket, Long> bucketLogEndOffset) {
-        if (bucket.has(LOG_END_OFFSET) && bucket.get(LOG_END_OFFSET) != null) {
-            bucketLogEndOffset.put(tableBucket, bucket.get(LOG_END_OFFSET).asLong());
-        } else {
-            bucketLogEndOffset.put(tableBucket, null);
-        }
+        return new LakeTableSnapshot(snapshotId, bucketLogEndOffset);
     }
 
     /** Serialize the {@link LakeTableSnapshot} to json bytes using current version. */
@@ -228,8 +254,8 @@ public class LakeTableSnapshotJsonSerde
 
     /** Serialize the {@link LakeTableSnapshot} to json bytes using Version 1 format. */
     @VisibleForTesting
-    public static byte[] toJsonVersion1(LakeTableSnapshot lakeTableSnapshot) {
-        return JsonSerdeUtils.writeValueAsBytes(lakeTableSnapshot, new Version1Serializer());
+    public static byte[] toJsonVersion1(LakeTableSnapshot lakeTableSnapshot, long tableId) {
+        return JsonSerdeUtils.writeValueAsBytes(lakeTableSnapshot, new Version1Serializer(tableId));
     }
 
     /** Deserialize the json bytes to {@link LakeTableSnapshot}. */
@@ -239,18 +265,28 @@ public class LakeTableSnapshotJsonSerde
 
     /** Version 1 serializer for backward compatibility testing. */
     private static class Version1Serializer implements JsonSerializer<LakeTableSnapshot> {
+
+        private final long tableId;
+
+        private Version1Serializer(long tableId) {
+            this.tableId = tableId;
+        }
+
         @Override
         public void serialize(LakeTableSnapshot lakeTableSnapshot, JsonGenerator generator)
                 throws IOException {
             generator.writeStartObject();
             generator.writeNumberField(VERSION_KEY, VERSION_1);
             generator.writeNumberField(SNAPSHOT_ID, lakeTableSnapshot.getSnapshotId());
-            generator.writeNumberField(TABLE_ID, lakeTableSnapshot.getTableId());
+            generator.writeNumberField(TABLE_ID, tableId);
 
             generator.writeArrayFieldStart(BUCKETS);
             for (TableBucket tableBucket : lakeTableSnapshot.getBucketLogEndOffset().keySet()) {
                 generator.writeStartObject();
                 generator.writeNumberField(BUCKET_ID, tableBucket.getBucket());
+                if (tableBucket.getPartitionId() != null) {
+                    generator.writeNumberField(PARTITION_ID, tableBucket.getPartitionId());
+                }
                 if (lakeTableSnapshot.getLogEndOffset(tableBucket).isPresent()) {
                     generator.writeNumberField(
                             LOG_END_OFFSET, lakeTableSnapshot.getLogEndOffset(tableBucket).get());
