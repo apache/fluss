@@ -383,9 +383,9 @@ public final class ExceptionUtils {
     }
 
     /**
-     * Checks whether the given {@code target} throwable exists anywhere within the exception chain
-     * of {@code root}. This includes both the cause chain and all suppressed exceptions. A visited
-     * set is used to avoid cycles and redundant traversal.
+     * Checks whether the given {@code exception} throwable exception exists anywhere within the
+     * exception chain of {@code previous}. This includes both the cause chain and all suppressed
+     * exceptions. A visited set is used to avoid cycles and redundant traversal.
      *
      * @param exception The throwable exception to search for.
      * @param previous The previous throwable exception chain to search in.
