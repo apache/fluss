@@ -57,8 +57,6 @@ services:
     healthcheck:
       test: ["CMD", "nc", "-z", "namenode", "8020"]
       interval: 5s
-      timeout: 10s
-      retries: 20
 
   datanode:
     image: apache/hadoop:3.3.6
@@ -92,6 +90,7 @@ services:
         datalake.format: paimon
         datalake.paimon.metastore: filesystem
         datalake.paimon.warehouse: hdfs://namenode:8020/fluss-lake
+        
   tablet-server:
     image: apache/fluss:$FLUSS_DOCKER_VERSION$
     command: tabletServer
@@ -108,6 +107,7 @@ services:
         datalake.format: paimon
         datalake.paimon.metastore: filesystem
         datalake.paimon.warehouse: hdfs://namenode:8020/fluss-lake
+        
   zookeeper:
     restart: always
     image: zookeeper:3.9.2
@@ -122,6 +122,7 @@ services:
       - |
         FLINK_PROPERTIES=
         jobmanager.rpc.address: jobmanager
+        
   taskmanager:
     image: apache/fluss-quickstart-flink:1.20-$FLUSS_DOCKER_VERSION$
     depends_on:
@@ -205,10 +206,7 @@ Any jar placed in the `lib` directory will be automatically loaded by the Fluss 
 
 ```yaml
 services:
-  zookeeper:
-    restart: always
-    image: zookeeper:3.9.2
-    
+  #begin Hadoop cluster
   namenode:
     image: apache/hadoop:3.3.6
     hostname: namenode
@@ -228,23 +226,22 @@ services:
     healthcheck:
       test: ["CMD", "nc", "-z", "namenode", "8020"]
       interval: 5s
-      timeout: 10s
-      retries: 20
-
-    datanode:
-      image: apache/hadoop:3.3.6
-      user: root
-      command: [ "hdfs", "datanode" ]
-      environment:
-        CORE-SITE.XML_fs.defaultFS: hdfs://namenode:8020
-        CORE-SITE.XML_hadoop.tmp.dir: /hadoop/tmp
-        HDFS-SITE.XML_dfs.namenode.rpc-address: namenode:8020
-        HDFS-SITE.XML_dfs.replication: 1
-        HDFS-SITE.XML_dfs.permissions.enabled: false
-        HDFS-SITE.XML_dfs.datanode.address: datanode:9866
-      depends_on:
-        - namenode
-
+      
+  datanode:
+    image: apache/hadoop:3.3.6
+    user: root
+    command: [ "hdfs", "datanode" ]
+    environment:
+      CORE-SITE.XML_fs.defaultFS: hdfs://namenode:8020
+      CORE-SITE.XML_hadoop.tmp.dir: /hadoop/tmp
+      HDFS-SITE.XML_dfs.namenode.rpc-address: namenode:8020
+      HDFS-SITE.XML_dfs.replication: 1
+      HDFS-SITE.XML_dfs.permissions.enabled: false
+      HDFS-SITE.XML_dfs.datanode.address: datanode:9866
+    depends_on:
+      - namenode
+  #end
+  #begin Fluss cluster
   coordinator-server:
     image: apache/fluss:$FLUSS_DOCKER_VERSION$
     depends_on:
@@ -281,7 +278,12 @@ services:
         datalake.format: iceberg
         datalake.iceberg.type: hadoop
         datalake.iceberg.warehouse: hdfs://namenode:8020/fluss-lake
-
+        
+  zookeeper:
+    restart: always
+    image: zookeeper:3.9.2
+  #end
+  #begin Flink cluster
   jobmanager:
     image: apache/fluss-quickstart-flink:1.20-$FLUSS_DOCKER_VERSION$
     ports:
@@ -304,6 +306,7 @@ services:
         taskmanager.numberOfTaskSlots: 10
         taskmanager.memory.process.size: 2048m
         taskmanager.memory.framework.off-heap.size: 256m
+  #end
 ```
 
 The Docker Compose environment consists of the following containers:
