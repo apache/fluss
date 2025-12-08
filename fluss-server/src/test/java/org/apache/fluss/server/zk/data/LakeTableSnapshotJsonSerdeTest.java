@@ -41,43 +41,72 @@ class LakeTableSnapshotJsonSerdeTest extends JsonSerdeTestBase<LakeTableSnapshot
 
     @Override
     protected LakeTableSnapshot[] createObjects() {
-        LakeTableSnapshot lakeTableSnapshot1 = new LakeTableSnapshot(1, 1L, Collections.emptyMap());
+        // Test case 1: Empty snapshot
+        LakeTableSnapshot lakeTableSnapshot1 = new LakeTableSnapshot(1L, Collections.emptyMap());
 
+        // Test case 2: Non-partition table with consecutive bucket ids (0, 1, 2)
         long tableId = 4;
         Map<TableBucket, Long> bucketLogEndOffset = new HashMap<>();
-        bucketLogEndOffset.put(new TableBucket(tableId, 1), 3L);
-        bucketLogEndOffset.put(new TableBucket(tableId, 2), 4L);
+        bucketLogEndOffset.put(new TableBucket(tableId, 0), 100L);
+        bucketLogEndOffset.put(new TableBucket(tableId, 1), 200L);
+        bucketLogEndOffset.put(new TableBucket(tableId, 2), 300L);
+        LakeTableSnapshot lakeTableSnapshot2 = new LakeTableSnapshot(2, bucketLogEndOffset);
 
-        LakeTableSnapshot lakeTableSnapshot2 =
-                new LakeTableSnapshot(2, tableId, bucketLogEndOffset);
-
+        // Test case 3: Non-partition table with missing bucket ids (0, 2, 4 - missing 1 and 3)
         tableId = 5;
-
         bucketLogEndOffset = new HashMap<>();
-        bucketLogEndOffset.put(new TableBucket(tableId, 1L, 1), 3L);
-        bucketLogEndOffset.put(new TableBucket(tableId, 2L, 1), 4L);
+        bucketLogEndOffset.put(new TableBucket(tableId, 0), 100L);
+        bucketLogEndOffset.put(new TableBucket(tableId, 2), 300L);
+        bucketLogEndOffset.put(new TableBucket(tableId, 4), 500L);
+        LakeTableSnapshot lakeTableSnapshot3 = new LakeTableSnapshot(3, bucketLogEndOffset);
 
-        LakeTableSnapshot lakeTableSnapshot3 =
-                new LakeTableSnapshot(3, tableId, bucketLogEndOffset);
+        // Test case 4: Partition table with consecutive bucket ids
+        tableId = 6;
+        bucketLogEndOffset = new HashMap<>();
+        bucketLogEndOffset.put(new TableBucket(tableId, 1L, 0), 100L);
+        bucketLogEndOffset.put(new TableBucket(tableId, 1L, 1), 200L);
+        bucketLogEndOffset.put(new TableBucket(tableId, 2L, 0), 300L);
+        bucketLogEndOffset.put(new TableBucket(tableId, 2L, 1), 400L);
+        LakeTableSnapshot lakeTableSnapshot4 = new LakeTableSnapshot(4, bucketLogEndOffset);
+
+        // Test case 5: Partition table with missing bucket ids
+        tableId = 7;
+        bucketLogEndOffset = new HashMap<>();
+        bucketLogEndOffset.put(new TableBucket(tableId, 1L, 0), 100L);
+        bucketLogEndOffset.put(new TableBucket(tableId, 1L, 2), 300L); // missing bucket 1
+        bucketLogEndOffset.put(new TableBucket(tableId, 2L, 1), 400L);
+        bucketLogEndOffset.put(new TableBucket(tableId, 2L, 3), 600L); // missing bucket 0 and 2
+        LakeTableSnapshot lakeTableSnapshot5 = new LakeTableSnapshot(5, bucketLogEndOffset);
 
         return new LakeTableSnapshot[] {
-            lakeTableSnapshot1, lakeTableSnapshot2, lakeTableSnapshot3,
+            lakeTableSnapshot1,
+            lakeTableSnapshot2,
+            lakeTableSnapshot3,
+            lakeTableSnapshot4,
+            lakeTableSnapshot5,
         };
     }
 
     @Override
     protected String[] expectedJsons() {
-        // Version 2 format (compact layout): groups buckets by partition_id to avoid repeating
-        // partition_id in each bucket, and extracts partition names to top-level.
-        // Non-partition table uses array format, partition table uses object format.
+        // Version 2 format (compact layout):
+        // - Non-partition table: "buckets": [100, 200, 300], array index = bucket id, value =
+        //   log_end_offset. Missing buckets are filled with -1.
+        // - Partition table: "buckets": {"1": [100, 200], "2": [300, 400]}, key = partition id,
+        //   array index = bucket id, value = log_end_offset. Missing buckets are filled with -1.
         return new String[] {
-            "{\"version\":2,\"snapshot_id\":1,\"table_id\":1}",
-            "{\"version\":2,\"snapshot_id\":2,\"table_id\":4,"
-                    + "\"buckets\":[{\"bucket_id\":2,\"log_end_offset\":4},"
-                    + "{\"bucket_id\":1,\"log_end_offset\":3}]}",
-            "{\"version\":2,\"snapshot_id\":3,\"table_id\":5,"
-                    + "\"buckets\":{\"1\":[{\"bucket_id\":1,\"log_end_offset\":3}],"
-                    + "\"2\":[{\"bucket_id\":1,\"log_end_offset\":4}]}}"
+            // Test case 1: Empty snapshot
+            "{\"version\":2,\"snapshot_id\":1}",
+            // Test case 2: Non-partition table with consecutive bucket ids [0, 1, 2]
+            "{\"version\":2,\"snapshot_id\":2,\"table_id\":4,\"buckets\":[100,200,300]}",
+            // Test case 3: Non-partition table with missing bucket ids [0, -1, 2, -1, 4]
+            "{\"version\":2,\"snapshot_id\":3,\"table_id\":5,\"buckets\":[100,-1,300,-1,500]}",
+            // Test case 4: Partition table with consecutive bucket ids
+            "{\"version\":2,\"snapshot_id\":4,\"table_id\":6,"
+                    + "\"buckets\":{\"1\":[100,200],\"2\":[300,400]}}",
+            // Test case 5: Partition table with missing bucket ids
+            "{\"version\":2,\"snapshot_id\":5,\"table_id\":7,"
+                    + "\"buckets\":{\"1\":[100,-1,300],\"2\":[-1,400,-1,600]}}"
         };
     }
 
@@ -90,7 +119,6 @@ class LakeTableSnapshotJsonSerdeTest extends JsonSerdeTestBase<LakeTableSnapshot
                         version1Json1.getBytes(StandardCharsets.UTF_8),
                         LakeTableSnapshotJsonSerde.INSTANCE);
         assertThat(snapshot1.getSnapshotId()).isEqualTo(1);
-        assertThat(snapshot1.getTableId()).isEqualTo(1);
         assertThat(snapshot1.getBucketLogEndOffset()).isEmpty();
 
         String version1Json2 =
@@ -101,7 +129,6 @@ class LakeTableSnapshotJsonSerdeTest extends JsonSerdeTestBase<LakeTableSnapshot
                         version1Json2.getBytes(StandardCharsets.UTF_8),
                         LakeTableSnapshotJsonSerde.INSTANCE);
         assertThat(snapshot2.getSnapshotId()).isEqualTo(2);
-        assertThat(snapshot2.getTableId()).isEqualTo(4);
         assertThat(snapshot2.getBucketLogEndOffset()).hasSize(1);
 
         String version1Json3 =
@@ -112,6 +139,5 @@ class LakeTableSnapshotJsonSerdeTest extends JsonSerdeTestBase<LakeTableSnapshot
                         version1Json3.getBytes(StandardCharsets.UTF_8),
                         LakeTableSnapshotJsonSerde.INSTANCE);
         assertThat(snapshot3.getSnapshotId()).isEqualTo(3);
-        assertThat(snapshot3.getTableId()).isEqualTo(5);
     }
 }

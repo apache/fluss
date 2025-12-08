@@ -689,20 +689,37 @@ public class FlussPaths {
      * <p>The path contract:
      *
      * <pre>
-     * {$remote.data.dir}/lake/{databaseName}/{tableName}-{tableId}/snapshot/{snapshotId}.snapshot
+     * {$remote.data.dir}/lake/{databaseName}/{tableName}-{tableId}
      * </pre>
      */
-    public static FsPath remoteLakeTableSnapshotPath(
-            String remoteDataDir, TablePath tablePath, long tableId, long snapshotId) {
+    public static FsPath remoteLakeTableSnapshotMetadataDir(
+            String remoteDataDir, TablePath tablePath, long tableId) {
         return new FsPath(
                 String.format(
-                        "%s/%s/%s/%s-%d/snapshot/%d.snapshot",
+                        "%s/%s/%s/%s-%d",
                         remoteDataDir,
                         REMOTE_LAKE_DIR_NAME,
                         tablePath.getDatabaseName(),
                         tablePath.getTableName(),
-                        tableId,
-                        snapshotId));
+                        tableId));
+    }
+
+    /**
+     * Returns a remote path for storing lake snapshot metadata required by Fluss for a table.
+     *
+     * <p>The path contract:
+     *
+     * <pre>
+     * {$remoteLakeTableSnapshotMetadataDir}/manifest/{uuid}.manifest
+     * </pre>
+     */
+    public static FsPath remoteLakeTableSnapshotManifestPath(
+            String remoteDataDir, TablePath tablePath, long tableId) {
+        return new FsPath(
+                String.format(
+                        "%s/manifest/%s.manifest",
+                        remoteLakeTableSnapshotMetadataDir(remoteDataDir, tablePath, tableId),
+                        UUID.randomUUID()));
     }
 
     /**

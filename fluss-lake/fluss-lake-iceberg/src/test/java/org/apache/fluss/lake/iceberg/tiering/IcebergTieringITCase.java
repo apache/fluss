@@ -402,8 +402,8 @@ class IcebergTieringITCase extends FlinkIcebergTieringTestBase {
                         put(
                                 FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY,
                                 "["
-                                        + "{\"partition_id\":0,\"bucket\":0,\"partition_name\":\"date=2025\",\"offset\":3},"
-                                        + "{\"partition_id\":1,\"bucket\":0,\"partition_name\":\"date=2026\",\"offset\":3}"
+                                        + "{\"partition_id\":0,\"bucket\":0,\"offset\":3},"
+                                        + "{\"partition_id\":1,\"bucket\":0,\"offset\":3}"
                                         + "]");
                     }
                 };

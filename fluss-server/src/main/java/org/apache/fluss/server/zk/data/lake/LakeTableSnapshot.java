@@ -29,26 +29,19 @@ public class LakeTableSnapshot {
 
     // the last committed snapshot id in lake
     private final long snapshotId;
-    private final long tableId;
 
     // the log offset of the bucket
     // mapping from bucket id to log end offset or max timestamp,
     // will be null if log offset is unknown such as reading the snapshot of primary key table
     private final Map<TableBucket, Long> bucketLogEndOffset;
 
-    public LakeTableSnapshot(
-            long snapshotId, long tableId, Map<TableBucket, Long> bucketLogEndOffset) {
+    public LakeTableSnapshot(long snapshotId, Map<TableBucket, Long> bucketLogEndOffset) {
         this.snapshotId = snapshotId;
-        this.tableId = tableId;
         this.bucketLogEndOffset = bucketLogEndOffset;
     }
 
     public long getSnapshotId() {
         return snapshotId;
-    }
-
-    public long getTableId() {
-        return tableId;
     }
 
     public Optional<Long> getLogEndOffset(TableBucket tableBucket) {
@@ -61,18 +54,20 @@ public class LakeTableSnapshot {
 
     @Override
     public boolean equals(Object o) {
+        if (this == o) {
+            return true;
+        }
         if (o == null || getClass() != o.getClass()) {
             return false;
         }
         LakeTableSnapshot that = (LakeTableSnapshot) o;
         return snapshotId == that.snapshotId
-                && tableId == that.tableId
                 && Objects.equals(bucketLogEndOffset, that.bucketLogEndOffset);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(snapshotId, tableId, bucketLogEndOffset);
+        return Objects.hash(snapshotId, bucketLogEndOffset);
     }
 
     @Override
@@ -80,8 +75,6 @@ public class LakeTableSnapshot {
         return "LakeTableSnapshot{"
                 + "snapshotId="
                 + snapshotId
-                + ", tableId="
-                + tableId
                 + ", bucketLogEndOffset="
                 + bucketLogEndOffset
                 + '}';

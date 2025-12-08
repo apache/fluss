@@ -26,7 +26,6 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.utils.FlussPaths;
 
-import java.io.IOException;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
@@ -63,26 +62,45 @@ public class LakeTableHelper {
         if (optPreviousLakeTable.isPresent()) {
             lakeTableSnapshot =
                     mergeLakeTable(
-                            optPreviousLakeTable.get().toLakeTableSnapshot(), lakeTableSnapshot);
+                            optPreviousLakeTable.get().getLatestTableSnapshot(), lakeTableSnapshot);
         }
 
+        // store the lake table snapshot into a file
         FsPath lakeTableSnapshotFsPath =
                 storeLakeTableSnapshot(tableId, tablePath, lakeTableSnapshot);
-        LakeTable lakeTable = new LakeTable(lakeTableSnapshotFsPath);
+
+        LakeTable.LakeSnapshotMetadata lakeSnapshotMetadata =
+                new LakeTable.LakeSnapshotMetadata(
+                        lakeTableSnapshot.getSnapshotId(),
+                        // use the lake table snapshot file as the tiered offsets file since
+                        // the table snapshot file will contain the tiered log end offsets
+                        lakeTableSnapshotFsPath,
+                        // currently, readableOffsetsFilePath is always same with
+                        // tieredOffsetsFilePath, but in the future we'll commit a readable offsets
+                        // separately to mark what the readable offsets are for a snapshot since
+                        // in paimon dv table, tiered log end offsets is not same with readable
+                        // offsets
+                        lakeTableSnapshotFsPath);
+
+        // currently, we keep only one lake snapshot metadata in zk,
+        // todo: in solve paimon dv union read issue #2121, we'll keep multiple lake snapshot
+        // metadata
+        LakeTable lakeTable = new LakeTable(lakeSnapshotMetadata);
         try {
             zkClient.upsertLakeTable(tableId, lakeTable, optPreviousLakeTable.isPresent());
         } catch (Exception e) {
             LOG.warn("Failed to upsert lake table snapshot to zk.", e);
-            // delete the new lake table snapshot file
-            deleteFile(lakeTableSnapshotFsPath);
+            // discard the new lake snapshot metadata
+            lakeSnapshotMetadata.discard();
             throw e;
         }
 
         if (optPreviousLakeTable.isPresent()) {
-            FsPath previousLakeSnapshotFsPath =
-                    optPreviousLakeTable.get().getLakeTableLatestSnapshotFileHandle();
-            if (previousLakeSnapshotFsPath != null) {
-                deleteFile(previousLakeSnapshotFsPath);
+            // discard previous latest lake snapshot
+            LakeTable.LakeSnapshotMetadata previousLakeSnapshotMetadata =
+                    optPreviousLakeTable.get().getLakeTableLatestSnapshot();
+            if (previousLakeSnapshotMetadata != null) {
+                previousLakeSnapshotMetadata.discard();
             }
         }
     }
@@ -98,41 +116,27 @@ public class LakeTableHelper {
                 new HashMap<>(previousLakeTableSnapshot.getBucketLogEndOffset());
         bucketLogEndOffset.putAll(newLakeTableSnapshot.getBucketLogEndOffset());
 
-        return new LakeTableSnapshot(
-                newLakeTableSnapshot.getSnapshotId(),
-                newLakeTableSnapshot.getTableId(),
-                bucketLogEndOffset);
+        return new LakeTableSnapshot(newLakeTableSnapshot.getSnapshotId(), bucketLogEndOffset);
     }
 
     private FsPath storeLakeTableSnapshot(
             long tableId, TablePath tablePath, LakeTableSnapshot lakeTableSnapshot)
             throws Exception {
         // get the remote file path to store the lake table snapshot information
-        FsPath remoteLakeTableSnapshotPath =
-                FlussPaths.remoteLakeTableSnapshotPath(
-                        remoteDataDir, tablePath, tableId, lakeTableSnapshot.getSnapshotId());
+        FsPath remoteLakeTableSnapshotManifestPath =
+                FlussPaths.remoteLakeTableSnapshotManifestPath(remoteDataDir, tablePath, tableId);
         // check whether the parent directory exists, if not, create the directory
-        FileSystem fileSystem = remoteLakeTableSnapshotPath.getFileSystem();
-        if (!fileSystem.exists(remoteLakeTableSnapshotPath.getParent())) {
-            fileSystem.mkdirs(remoteLakeTableSnapshotPath.getParent());
+        FileSystem fileSystem = remoteLakeTableSnapshotManifestPath.getFileSystem();
+        if (!fileSystem.exists(remoteLakeTableSnapshotManifestPath.getParent())) {
+            fileSystem.mkdirs(remoteLakeTableSnapshotManifestPath.getParent());
         }
         // serialize table snapshot to json bytes, and write to file
         byte[] jsonBytes = LakeTableSnapshotJsonSerde.toJson(lakeTableSnapshot);
         try (FSDataOutputStream outputStream =
-                fileSystem.create(remoteLakeTableSnapshotPath, FileSystem.WriteMode.OVERWRITE)) {
+                fileSystem.create(
+                        remoteLakeTableSnapshotManifestPath, FileSystem.WriteMode.OVERWRITE)) {
             outputStream.write(jsonBytes);
         }
-        return remoteLakeTableSnapshotPath;
-    }
-
-    private void deleteFile(FsPath filePath) {
-        try {
-            FileSystem fileSystem = filePath.getFileSystem();
-            if (fileSystem.exists(filePath)) {
-                fileSystem.delete(filePath, false);
-            }
-        } catch (IOException e) {
-            LOG.warn("Error deleting filePath at {}", filePath, e);
-        }
+        return remoteLakeTableSnapshotManifestPath;
     }
 }
