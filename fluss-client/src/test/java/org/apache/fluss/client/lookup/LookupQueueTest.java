@@ -22,8 +22,12 @@ import org.apache.fluss.metadata.TableBucket;
 
 import org.junit.jupiter.api.Test;
 
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
+
 import static org.apache.fluss.config.ConfigOptions.CLIENT_LOOKUP_BATCH_TIMEOUT;
 import static org.apache.fluss.config.ConfigOptions.CLIENT_LOOKUP_MAX_BATCH_SIZE;
+import static org.apache.fluss.config.ConfigOptions.CLIENT_LOOKUP_QUEUE_SIZE;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH_PK;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -56,6 +60,61 @@ class LookupQueueTest {
         assertThat(queue.drain()).hasSize(10);
         assertThat(queue.hasUnDrained()).isTrue();
         assertThat(queue.drainAll()).hasSize(10);
+        assertThat(queue.hasUnDrained()).isFalse();
+    }
+
+    @Test
+    void testAppendLookupBlocksWhenQueueIsFull() throws Exception {
+        Configuration conf = new Configuration();
+        conf.set(CLIENT_LOOKUP_QUEUE_SIZE, 5);
+        LookupQueue queue = new LookupQueue(conf);
+
+        appendLookups(queue, 5);
+        assertThat(queue.getLookupQueue()).hasSize(5);
+
+        CompletableFuture<Void> future =
+                CompletableFuture.runAsync(
+                        () -> {
+                            appendLookups(queue, 1); // will be blocked.
+                        });
+
+        // appendLookup should block and not complete immediately.
+        assertThat(future.isDone()).isFalse();
+
+        Thread.sleep(100);
+        // Still blocked after 100ms.
+        assertThat(future.isDone()).isFalse();
+
+        queue.drain();
+        future.get(1, TimeUnit.SECONDS);
+        assertThat(future.isDone()).isTrue();
+    }
+
+    @Test
+    void testReEnqueueNotBlock() throws Exception {
+        Configuration conf = new Configuration();
+        conf.set(CLIENT_LOOKUP_QUEUE_SIZE, 5);
+        conf.set(CLIENT_LOOKUP_MAX_BATCH_SIZE, 5);
+        LookupQueue queue = new LookupQueue(conf);
+
+        appendLookups(queue, 5);
+        assertThat(queue.getLookupQueue()).hasSize(5);
+        assertThat(queue.getReEnqueuedLookupQueue()).hasSize(0);
+
+        queue.reEnqueue(
+                new LookupQuery(DATA1_TABLE_PATH_PK, new TableBucket(1, 1), new byte[] {0}));
+        assertThat(queue.getLookupQueue()).hasSize(5);
+        // This batch will be put into re-enqueued lookup queue.
+        assertThat(queue.getReEnqueuedLookupQueue()).hasSize(1);
+        assertThat(queue.hasUnDrained()).isTrue();
+
+        assertThat(queue.drain()).hasSize(5);
+        // drain re-enqueued lookup first.
+        assertThat(queue.getReEnqueuedLookupQueue().isEmpty()).isTrue();
+        assertThat(queue.getLookupQueue()).hasSize(1);
+        assertThat(queue.hasUnDrained()).isTrue();
+
+        assertThat(queue.drain()).hasSize(1);
         assertThat(queue.hasUnDrained()).isFalse();
     }
 

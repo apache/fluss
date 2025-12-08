@@ -157,6 +157,9 @@ class LookupSender implements Runnable {
             // lookup the leader node
             TableBucket tb = lookup.tableBucket();
             try {
+                // TODO Metadata requests are being sent too frequently here. consider first
+                // collecting the tables that need to be updated and then sending them together in
+                // one request.
                 leader = metadataUpdater.leaderFor(lookup.tablePath(), tb);
             } catch (Exception e) {
                 // if leader is not found, re-enqueue the lookup to send again.
@@ -423,7 +426,7 @@ class LookupSender implements Runnable {
     }
 
     private void reEnqueueLookup(AbstractLookupQuery<?> lookup) {
-        lookupQueue.appendLookup(lookup);
+        lookupQueue.reEnqueue(lookup);
     }
 
     private boolean canRetry(AbstractLookupQuery<?> lookup, Exception exception) {
