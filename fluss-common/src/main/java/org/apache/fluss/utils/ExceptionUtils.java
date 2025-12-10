@@ -32,8 +32,12 @@ import javax.annotation.Nullable;
 import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.lang.reflect.Field;
+import java.util.ArrayDeque;
+import java.util.Deque;
+import java.util.HashSet;
 import java.util.Locale;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ExecutionException;
 import java.util.function.Function;
@@ -365,10 +369,65 @@ public final class ExceptionUtils {
 
         if (previous == null || previous == newException) {
             return newException;
-        } else {
-            previous.addSuppressed(newException);
+        }
+
+        // If the exceptions already reference each other through the suppression or cause chains,
+        // return the previous exception to avoid introducing cycles.
+        if (existsInExceptionChain(newException, previous)
+                || existsInExceptionChain(previous, newException)) {
             return previous;
         }
+
+        previous.addSuppressed(newException);
+        return previous;
+    }
+
+    /**
+     * Checks whether the given {@code exception} throwable exception exists anywhere within the
+     * exception chain of {@code previous}. This includes both the cause chain and all suppressed
+     * exceptions. A visited set is used to avoid cycles and redundant traversal.
+     *
+     * @param exception The throwable exception to search for.
+     * @param previous The previous throwable exception chain to search in.
+     * @return True, if the exception is found within the suppressed chain, false otherwise.
+     */
+    private static boolean existsInExceptionChain(Throwable exception, Throwable previous) {
+        if (exception == null || previous == null) {
+            return false;
+        }
+        if (exception == previous) {
+            return true;
+        }
+
+        // Apply cycle prevention through a graph-like traversal of existing
+        // suppressed or cause chain exceptions
+        Set<Throwable> previousExceptions = new HashSet<>();
+        Deque<Throwable> exceptionStack = new ArrayDeque<>();
+        exceptionStack.push(previous);
+
+        while (!exceptionStack.isEmpty()) {
+            Throwable currentException = exceptionStack.pop();
+            if (!previousExceptions.add(currentException)) {
+                continue;
+            }
+
+            if (currentException == exception) {
+                return true;
+            }
+
+            // Traverse suppression chain
+            for (Throwable suppressed : currentException.getSuppressed()) {
+                exceptionStack.push(suppressed);
+            }
+
+            // Traverse cause-chain
+            Throwable cause = currentException.getCause();
+            if (cause != null) {
+                exceptionStack.push(cause);
+            }
+        }
+
+        return false;
     }
 
     /**
