@@ -21,6 +21,8 @@ import org.apache.fluss.lake.iceberg.maintenance.RewriteDataFileResult;
 
 import org.apache.iceberg.DataFile;
 import org.apache.iceberg.DeleteFile;
+import org.apache.iceberg.util.DataFileSet;
+import org.apache.iceberg.util.DeleteFileSet;
 
 import java.io.Serializable;
 import java.util.ArrayList;
@@ -31,25 +33,25 @@ public class IcebergCommittable implements Serializable {
 
     private static final long serialVersionUID = 1L;
 
-    private final List<DataFile> dataFiles;
-    private final List<DeleteFile> deleteFiles;
+    private final DataFileSet dataFiles;
+    private final DeleteFileSet deleteFiles;
 
     private final List<RewriteDataFileResult> rewriteDataFiles;
 
     private IcebergCommittable(
-            List<DataFile> dataFiles,
-            List<DeleteFile> deleteFiles,
+            DataFileSet dataFiles,
+            DeleteFileSet deleteFiles,
             List<RewriteDataFileResult> rewriteDataFiles) {
         this.dataFiles = dataFiles;
         this.deleteFiles = deleteFiles;
         this.rewriteDataFiles = rewriteDataFiles;
     }
 
-    public List<DataFile> getDataFiles() {
+    public DataFileSet getDataFiles() {
         return dataFiles;
     }
 
-    public List<DeleteFile> getDeleteFiles() {
+    public DeleteFileSet getDeleteFiles() {
         return deleteFiles;
     }
 
@@ -66,8 +68,8 @@ public class IcebergCommittable implements Serializable {
      * entries.
      */
     public static class Builder {
-        private final List<DataFile> dataFiles = new ArrayList<>();
-        private final List<DeleteFile> deleteFiles = new ArrayList<>();
+        private final DataFileSet dataFiles = DataFileSet.create();
+        private final DeleteFileSet deleteFiles = DeleteFileSet.create();
 
         private final List<RewriteDataFileResult> rewriteDataFileResults = new ArrayList<>();
 
@@ -87,10 +89,7 @@ public class IcebergCommittable implements Serializable {
         }
 
         public IcebergCommittable build() {
-            return new IcebergCommittable(
-                    new ArrayList<>(dataFiles),
-                    new ArrayList<>(deleteFiles),
-                    rewriteDataFileResults);
+            return new IcebergCommittable(dataFiles, deleteFiles, rewriteDataFileResults);
         }
     }
 

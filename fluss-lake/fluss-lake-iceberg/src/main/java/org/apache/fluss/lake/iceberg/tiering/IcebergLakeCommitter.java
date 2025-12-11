@@ -48,7 +48,6 @@ import org.slf4j.LoggerFactory;
 import javax.annotation.Nullable;
 
 import java.io.IOException;
-import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -115,9 +114,7 @@ public class IcebergLakeCommitter implements LakeCommitter<IcebergWriteResult, I
             if (committable.getDeleteFiles().isEmpty()) {
                 // Simple append-only case: only data files, no delete files or compaction
                 AppendFiles appendFiles = icebergTable.newAppend();
-                for (DataFile dataFile : committable.getDataFiles()) {
-                    appendFiles.appendFile(dataFile);
-                }
+                committable.getDataFiles().forEach(appendFiles::appendFile);
                 snapshotUpdate = appendFiles;
             } else {
                 /*
@@ -131,10 +128,8 @@ public class IcebergLakeCommitter implements LakeCommitter<IcebergWriteResult, I
                  being committed.
                 */
                 RowDelta rowDelta = icebergTable.newRowDelta();
-                Arrays.stream(committable.getDataFiles().stream().toArray(DataFile[]::new))
-                        .forEach(rowDelta::addRows);
-                Arrays.stream(committable.getDeleteFiles().stream().toArray(DeleteFile[]::new))
-                        .forEach(rowDelta::addDeletes);
+                committable.getDataFiles().forEach(rowDelta::addRows);
+                committable.getDeleteFiles().forEach(rowDelta::addDeletes);
                 snapshotUpdate = rowDelta;
             }
 
