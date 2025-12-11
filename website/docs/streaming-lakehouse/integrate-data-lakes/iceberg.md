@@ -418,7 +418,7 @@ You can query a combined view of both layers with second-level latency which is 
 
 ##### Prerequisites
 
-You need to place the JARs required by Iceberg to read data into `${FLINK_HOME}/lib`. For detailed dependencies and JAR preparation instructions, refer to [🚀 Start Tiering Service to Iceberg](#-start-tiering-service-to-iceberg).
+You need to place the JARs required by Iceberg to read data into `${FLINK_HOME}/lib`. For detailed dependencies and JAR preparation instructions, refer to [🚀 Start Tiering Service to Iceberg](#start-tiering-service-to-iceberg).
 
 ##### Union Read
 
