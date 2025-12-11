@@ -23,6 +23,7 @@ import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.FlussRuntimeException;
+import org.apache.fluss.exception.InvalidAlterTableException;
 import org.apache.fluss.exception.InvalidConfigException;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.LakeTableAlreadyExistException;
@@ -855,6 +856,61 @@ class LakeEnabledTableCreateITCase {
 
         // enable lake table again should be ok, even though the table properties have changed
         admin.alterTable(tablePath, Collections.singletonList(enableLake), false).get();
+    }
+
+    @Test
+    void testAlterLakeEnabledTableSchema() throws Exception {
+        // create table
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("c1", DataTypes.INT())
+                                        .column("c2", DataTypes.STRING())
+                                        .build())
+                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
+                        .customProperties(new HashMap<>())
+                        .distributedBy(BUCKET_NUM, "c1", "c2")
+                        .build();
+        TablePath tablePath = TablePath.of(DATABASE, "alter_table_schema");
+        admin.createTable(tablePath, tableDescriptor, false).get();
+        Table paimonTable =
+                paimonCatalog.getTable(Identifier.create(DATABASE, tablePath.getTableName()));
+        verifyPaimonTable(
+                paimonTable,
+                tableDescriptor,
+                RowType.of(
+                        new DataType[] {
+                            org.apache.paimon.types.DataTypes.INT(),
+                            org.apache.paimon.types.DataTypes.STRING(),
+                            // for __bucket, __offset, __timestamp
+                            org.apache.paimon.types.DataTypes.INT(),
+                            org.apache.paimon.types.DataTypes.BIGINT(),
+                            org.apache.paimon.types.DataTypes.TIMESTAMP_WITH_LOCAL_TIME_ZONE()
+                        },
+                        new String[] {
+                            "c1",
+                            "c2",
+                            BUCKET_COLUMN_NAME,
+                            OFFSET_COLUMN_NAME,
+                            TIMESTAMP_COLUMN_NAME
+                        }),
+                "c1,c2",
+                BUCKET_NUM);
+
+        // test alter table schema
+        List<TableChange> tableChanges =
+                Collections.singletonList(
+                        TableChange.addColumn(
+                                "c3",
+                                DataTypes.INT(),
+                                "c3 comment",
+                                TableChange.ColumnPosition.last()));
+        assertThatThrownBy(() -> admin.alterTable(tablePath, tableChanges, false).get())
+                .cause()
+                .isInstanceOf(InvalidAlterTableException.class)
+                .hasMessage(
+                        "Schema evolution is currently not supported for tables with datalake enabled.");
     }
 
     private void verifyPaimonTable(

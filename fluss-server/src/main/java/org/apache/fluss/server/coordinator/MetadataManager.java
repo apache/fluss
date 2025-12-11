@@ -328,6 +328,13 @@ public class MetadataManager {
 
             TableInfo table = getTable(tablePath);
 
+            // TODO: remote this after lake enable table support schema evolution, track by
+            // https://github.com/apache/fluss/issues/2128
+            if (table.getTableConfig().isDataLakeEnabled()) {
+                throw new InvalidAlterTableException(
+                        "Schema evolution is currently not supported for tables with datalake enabled.");
+            }
+
             // validate the table column changes
             if (!schemaChanges.isEmpty()) {
                 Schema newSchema = SchemaUpdate.applySchemaChanges(table, schemaChanges);
