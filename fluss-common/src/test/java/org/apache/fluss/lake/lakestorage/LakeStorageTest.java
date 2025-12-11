@@ -153,5 +153,13 @@ class LakeStorageTest {
         @Override
         public void alterTable(TablePath tablePath, List<TableChange> tableChanges, Context context)
                 throws TableNotExistException {}
+
+        @Override
+        public void renameTable(
+                TablePath fromTablePath,
+                TablePath toTablePath,
+                TableDescriptor tableDescriptor,
+                Context context)
+                throws TableAlreadyExistException {}
     }
 }

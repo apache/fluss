@@ -556,6 +556,25 @@ public class MetadataManager {
         }
     }
 
+    public void renameTable(
+            TablePath fromTablePath, TablePath toTablePath, boolean ignoreIfNotExists)
+            throws TableNotExistException, TableAlreadyExistException {
+        if (!tableExists(fromTablePath)) {
+            if (ignoreIfNotExists) {
+                return;
+            }
+            throw new TableNotExistException("Table " + fromTablePath + " does not exist.");
+        }
+
+        if (tableExists(toTablePath)) {
+            throw new TableAlreadyExistException("Table " + toTablePath + " already exists.");
+        }
+
+        uncheck(
+                () -> zookeeperClient.renameTable(fromTablePath, toTablePath),
+                "Failed to rename table. from: " + fromTablePath + ", to: " + toTablePath);
+    }
+
     public TableInfo getTable(TablePath tablePath) throws TableNotExistException {
         Optional<TableRegistration> optionalTable;
         try {

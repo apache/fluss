@@ -96,7 +96,7 @@ public class PaimonLakeCatalog implements LakeCatalog {
                 // shouldn't happen in normal cases
                 throw new RuntimeException(
                         String.format(
-                                "Fail to create table %s in Paimon, because "
+                                "Failed to create table %s in Paimon, because "
                                         + "Database %s still doesn't exist although create database "
                                         + "successfully, please try again.",
                                 tablePath, tablePath.getDatabaseName()));
@@ -116,6 +116,27 @@ public class PaimonLakeCatalog implements LakeCatalog {
         }
     }
 
+    @Override
+    public void renameTable(
+            TablePath fromTablePath,
+            TablePath toTablePath,
+            TableDescriptor tableDescriptor,
+            Context context)
+            throws TableAlreadyExistException {
+        Identifier fromPaimonPath = toPaimon(fromTablePath);
+        Identifier toPaimonPath = toPaimon(toTablePath);
+        try {
+            paimonCatalog.renameTable(fromPaimonPath, toPaimonPath, false);
+        } catch (Catalog.TableNotExistException e) {
+            // if the source table not exists, we need to create the target table directly.
+            createTable(toTablePath, tableDescriptor, context);
+        } catch (Catalog.TableAlreadyExistException e) {
+            // if the target table already exists, we need to validate the schema compatibility.
+            Schema paimonSchema = toPaimonSchema(tableDescriptor);
+            validateExistingTable(toTablePath, toPaimonPath, paimonSchema, false);
+        }
+    }
+
     private void createTable(TablePath tablePath, Schema schema, boolean isCreatingFlussTable)
             throws Catalog.DatabaseNotExistException {
         Identifier paimonPath = toPaimon(tablePath);
@@ -123,25 +144,7 @@ public class PaimonLakeCatalog implements LakeCatalog {
             // not ignore if table exists
             paimonCatalog.createTable(paimonPath, schema, false);
         } catch (Catalog.TableAlreadyExistException e) {
-            try {
-                Table table = paimonCatalog.getTable(paimonPath);
-                FileStoreTable fileStoreTable = (FileStoreTable) table;
-                validatePaimonSchemaCompatible(
-                        paimonPath, fileStoreTable.schema().toSchema(), schema);
-                // if creating a new fluss table, we should ensure the lake table is empty
-                if (isCreatingFlussTable) {
-                    checkTableIsEmpty(tablePath, fileStoreTable);
-                }
-            } catch (Catalog.TableNotExistException tableNotExistException) {
-                // shouldn't happen in normal cases
-                throw new RuntimeException(
-                        String.format(
-                                "Failed to create table %s in Paimon. The table already existed "
-                                        + "during the initial creation attempt, but subsequently "
-                                        + "could not be found when trying to get it. "
-                                        + "Please check whether the Paimon table was manually deleted, and try again.",
-                                tablePath));
-            }
+            validateExistingTable(tablePath, paimonPath, schema, isCreatingFlussTable);
         }
     }
 
@@ -160,6 +163,31 @@ public class PaimonLakeCatalog implements LakeCatalog {
             paimonCatalog.alterTable(toPaimon(tablePath), tableChanges, false);
         } catch (Catalog.TableNotExistException e) {
             throw new TableNotExistException("Table " + tablePath + " does not exist.");
+        }
+    }
+
+    private void validateExistingTable(
+            TablePath tablePath,
+            Identifier paimonPath,
+            Schema schema,
+            boolean isCreatingFlussTable) {
+        try {
+            Table table = paimonCatalog.getTable(paimonPath);
+            FileStoreTable fileStoreTable = (FileStoreTable) table;
+            validatePaimonSchemaCompatible(paimonPath, fileStoreTable.schema().toSchema(), schema);
+            // if creating a new fluss table, we should ensure the lake table is empty
+            if (isCreatingFlussTable) {
+                checkTableIsEmpty(tablePath, fileStoreTable);
+            }
+        } catch (Catalog.TableNotExistException tableNotExistException) {
+            // shouldn't happen in normal cases
+            throw new RuntimeException(
+                    String.format(
+                            "Failed to create table %s in Paimon. The table already existed "
+                                    + "during the initial creation attempt, but subsequently "
+                                    + "could not be found when trying to get it. "
+                                    + "Please check whether the Paimon table was manually deleted, and try again.",
+                            tablePath));
         }
     }
 

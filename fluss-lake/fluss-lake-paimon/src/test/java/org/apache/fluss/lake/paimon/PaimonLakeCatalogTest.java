@@ -18,6 +18,7 @@
 package org.apache.fluss.lake.paimon;
 
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.TableAlreadyExistException;
 import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.lake.lakestorage.TestingLakeCatalogContext;
 import org.apache.fluss.metadata.Schema;
@@ -26,6 +27,7 @@ import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.types.DataTypes;
 
+import org.apache.paimon.catalog.Catalog;
 import org.apache.paimon.catalog.Identifier;
 import org.apache.paimon.table.Table;
 import org.junit.jupiter.api.BeforeEach;
@@ -36,6 +38,7 @@ import java.io.File;
 import java.util.Collections;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Unit test for {@link PaimonLakeCatalog}. */
@@ -113,7 +116,117 @@ class PaimonLakeCatalogTest {
                 .hasMessage("Table alter_props_db.non_existing_table does not exist.");
     }
 
+    @Test
+    void testRenameTable() {
+        String database = "test_rename_table_db";
+        String tableName = "test_rename_table_table_t1";
+        String renamedTableName = "test_rename_table_table_t2";
+
+        TablePath fromTablePath = TablePath.of(database, tableName);
+        TablePath toTablePath = TablePath.of(database, renamedTableName);
+
+        // create source table
+        createTable(database, tableName);
+
+        // rename table
+        flussPaimonCatalog.renameTable(
+                fromTablePath, toTablePath, null, new TestingLakeCatalogContext());
+
+        Identifier identifier = Identifier.create(database, renamedTableName);
+        assertThatCode(
+                        () -> {
+                            Table paimonTable =
+                                    flussPaimonCatalog.getPaimonCatalog().getTable(identifier);
+                            assertThat(paimonTable.rowType()).isNotNull();
+                        })
+                .doesNotThrowAnyException();
+    }
+
+    @Test
+    void testRenameTableWithSourceTableNotExist() {
+        String database = "test_rename_table_db";
+        String tableName = "test_rename_table_table_t3";
+        String renamedTableName = "test_rename_table_table_t4";
+
+        TablePath fromTablePath = TablePath.of(database, tableName);
+        TablePath toTablePath = TablePath.of(database, renamedTableName);
+
+        assertThatThrownBy(
+                        () ->
+                                flussPaimonCatalog
+                                        .getPaimonCatalog()
+                                        .getTable(Identifier.create(database, tableName)))
+                .isInstanceOf(Catalog.TableNotExistException.class);
+        // rename table
+        flussPaimonCatalog.renameTable(
+                fromTablePath,
+                toTablePath,
+                createTableDescriptor(),
+                new TestingLakeCatalogContext());
+
+        Identifier identifier = Identifier.create(database, renamedTableName);
+
+        assertThatCode(
+                        () -> {
+                            Table paimonTable =
+                                    flussPaimonCatalog.getPaimonCatalog().getTable(identifier);
+                            assertThat(paimonTable.rowType()).isNotNull();
+                        })
+                .doesNotThrowAnyException();
+    }
+
+    @Test
+    void testRenameTableWithTargetTableExists() {
+        String database = "test_rename_table_db";
+        String tableName = "test_rename_table_table_t5";
+        String renamedTableName = "test_rename_table_table_t6";
+
+        TablePath fromTablePath = TablePath.of(database, tableName);
+        TablePath toTablePath = TablePath.of(database, renamedTableName);
+
+        // create source table
+        createTable(database, tableName);
+
+        // create target table
+        createTable(database, renamedTableName);
+
+        // rename table
+        assertThatCode(
+                        () ->
+                                flussPaimonCatalog.renameTable(
+                                        fromTablePath,
+                                        toTablePath,
+                                        createTableDescriptor(),
+                                        new TestingLakeCatalogContext()))
+                .doesNotThrowAnyException();
+
+        // rename table with incompatible schema
+        Schema flussSchema =
+                Schema.newBuilder()
+                        .column("id1", DataTypes.BIGINT())
+                        .column("name2", DataTypes.STRING())
+                        .build();
+
+        TableDescriptor td = TableDescriptor.builder().schema(flussSchema).distributedBy(3).build();
+        assertThatThrownBy(
+                        () ->
+                                flussPaimonCatalog.renameTable(
+                                        fromTablePath,
+                                        toTablePath,
+                                        td,
+                                        new TestingLakeCatalogContext()))
+                .isInstanceOf(TableAlreadyExistException.class);
+    }
+
     private void createTable(String database, String tableName) {
+        TableDescriptor td = createTableDescriptor();
+
+        TablePath tablePath = TablePath.of(database, tableName);
+
+        flussPaimonCatalog.createTable(tablePath, td, new TestingLakeCatalogContext());
+    }
+
+    private TableDescriptor createTableDescriptor() {
         Schema flussSchema =
                 Schema.newBuilder()
                         .column("id", DataTypes.BIGINT())
@@ -122,14 +235,9 @@ class PaimonLakeCatalogTest {
                         .column("address", DataTypes.STRING())
                         .build();
 
-        TableDescriptor td =
-                TableDescriptor.builder()
-                        .schema(flussSchema)
-                        .distributedBy(3) // no bucket key
-                        .build();
-
-        TablePath tablePath = TablePath.of(database, tableName);
-
-        flussPaimonCatalog.createTable(tablePath, td, new TestingLakeCatalogContext());
+        return TableDescriptor.builder()
+                .schema(flussSchema)
+                .distributedBy(3) // no bucket key
+                .build();
     }
 }
