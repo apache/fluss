@@ -30,9 +30,11 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.utils.IOUtils;
 
 import org.apache.iceberg.PartitionSpec;
+import org.apache.iceberg.RowLevelOperationMode;
 import org.apache.iceberg.Schema;
 import org.apache.iceberg.SortOrder;
 import org.apache.iceberg.Table;
+import org.apache.iceberg.TableProperties;
 import org.apache.iceberg.UpdateProperties;
 import org.apache.iceberg.catalog.Catalog;
 import org.apache.iceberg.catalog.Namespace;
@@ -55,10 +57,17 @@ import java.util.Set;
 import static org.apache.fluss.metadata.TableDescriptor.BUCKET_COLUMN_NAME;
 import static org.apache.fluss.metadata.TableDescriptor.OFFSET_COLUMN_NAME;
 import static org.apache.fluss.metadata.TableDescriptor.TIMESTAMP_COLUMN_NAME;
+import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.iceberg.types.Type.TypeID.STRING;
 
 /** An Iceberg implementation of {@link LakeCatalog}. */
 public class IcebergLakeCatalog implements LakeCatalog {
+    @VisibleForTesting
+    static final Set<String> RESERVED_PROPERTIES =
+            Set.of(
+                    TableProperties.MERGE_MODE,
+                    TableProperties.UPDATE_MODE,
+                    TableProperties.DELETE_MODE);
 
     public static final LinkedHashMap<String, Type> SYSTEM_COLUMNS = new LinkedHashMap<>();
 
@@ -128,10 +137,18 @@ public class IcebergLakeCatalog implements LakeCatalog {
             for (TableChange tableChange : tableChanges) {
                 if (tableChange instanceof TableChange.SetOption) {
                     TableChange.SetOption option = (TableChange.SetOption) tableChange;
+                    checkArgument(
+                            !RESERVED_PROPERTIES.contains(option.getKey()),
+                            "Cannot set table property '%s'",
+                            option.getKey());
                     updateProperties.set(
                             convertFlussPropertyKeyToIceberg(option.getKey()), option.getValue());
                 } else if (tableChange instanceof TableChange.ResetOption) {
                     TableChange.ResetOption option = (TableChange.ResetOption) tableChange;
+                    checkArgument(
+                            !RESERVED_PROPERTIES.contains(option.getKey()),
+                            "Cannot reset table property '%s'",
+                            option.getKey());
                     updateProperties.remove(convertFlussPropertyKeyToIceberg(option.getKey()));
                 } else {
                     throw new UnsupportedOperationException(
@@ -305,9 +322,12 @@ public class IcebergLakeCatalog implements LakeCatalog {
 
         if (isPkTable) {
             // MOR table properties for streaming workloads
-            icebergProperties.put("write.delete.mode", "merge-on-read");
-            icebergProperties.put("write.update.mode", "merge-on-read");
-            icebergProperties.put("write.merge.mode", "merge-on-read");
+            icebergProperties.put(
+                    TableProperties.DELETE_MODE, RowLevelOperationMode.MERGE_ON_READ.modeName());
+            icebergProperties.put(
+                    TableProperties.UPDATE_MODE, RowLevelOperationMode.MERGE_ON_READ.modeName());
+            icebergProperties.put(
+                    TableProperties.MERGE_MODE, RowLevelOperationMode.MERGE_ON_READ.modeName());
         }
 
         tableDescriptor

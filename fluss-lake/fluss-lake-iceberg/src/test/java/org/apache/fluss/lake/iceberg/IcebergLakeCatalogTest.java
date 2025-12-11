@@ -29,6 +29,7 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.types.DataTypes;
 
 import org.apache.iceberg.PartitionField;
+import org.apache.iceberg.RowLevelOperationMode;
 import org.apache.iceberg.SortDirection;
 import org.apache.iceberg.SortField;
 import org.apache.iceberg.Table;
@@ -583,5 +584,44 @@ class IcebergLakeCatalogTest {
                                         context))
                 .isInstanceOf(TableNotExistException.class)
                 .hasMessage("Table test_db.non_existing_table does not exist.");
+    }
+
+    @Test
+    void alterReservedTableProperties() {
+        String database = "test_alter_table_with_reserved_properties_db";
+        String tableName = "test_alter_table_with_reserved_properties";
+
+        Schema flussSchema = Schema.newBuilder().column("id", DataTypes.BIGINT()).build();
+
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder().schema(flussSchema).distributedBy(3).build();
+
+        TablePath tablePath = TablePath.of(database, tableName);
+        TestingLakeCatalogContext context = new TestingLakeCatalogContext();
+        flussIcebergCatalog.createTable(tablePath, tableDescriptor, context);
+
+        for (String property : IcebergLakeCatalog.RESERVED_PROPERTIES) {
+            assertThatThrownBy(
+                            () ->
+                                    flussIcebergCatalog.alterTable(
+                                            tablePath,
+                                            List.of(
+                                                    TableChange.set(
+                                                            property,
+                                                            RowLevelOperationMode.COPY_ON_WRITE
+                                                                    .modeName())),
+                                            context))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessage("Cannot set table property '%s'", property);
+
+            assertThatThrownBy(
+                            () ->
+                                    flussIcebergCatalog.alterTable(
+                                            tablePath,
+                                            List.of(TableChange.reset(property)),
+                                            context))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessage("Cannot reset table property '%s'", property);
+        }
     }
 }
