@@ -22,6 +22,7 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.IllegalConfigurationException;
 import org.apache.fluss.exception.InvalidPartitionException;
 import org.apache.fluss.exception.InvalidTableException;
+import org.apache.fluss.flink.lake.LakeFlinkCatalog;
 import org.apache.fluss.flink.utils.FlinkConversionsTest;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.utils.ExceptionUtils;
@@ -36,6 +37,7 @@ import org.apache.flink.table.catalog.CatalogMaterializedTable;
 import org.apache.flink.table.catalog.CatalogPartitionSpec;
 import org.apache.flink.table.catalog.CatalogTable;
 import org.apache.flink.table.catalog.Column;
+import org.apache.flink.table.catalog.GenericInMemoryCatalog;
 import org.apache.flink.table.catalog.IntervalFreshness;
 import org.apache.flink.table.catalog.ObjectPath;
 import org.apache.flink.table.catalog.ResolvedCatalogMaterializedTable;
@@ -58,8 +60,7 @@ import org.apache.flink.table.expressions.ResolvedExpression;
 import org.apache.flink.table.expressions.utils.ResolvedExpressionMock;
 import org.apache.flink.table.factories.Factory;
 import org.apache.flink.table.factories.FactoryUtil;
-import org.junit.jupiter.api.AfterAll;
-import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
@@ -78,6 +79,7 @@ import static org.apache.fluss.config.ConfigOptions.TABLE_DATALAKE_FORMAT;
 import static org.apache.fluss.flink.FlinkConnectorOptions.BUCKET_KEY;
 import static org.apache.fluss.flink.FlinkConnectorOptions.BUCKET_NUMBER;
 import static org.apache.fluss.flink.FlinkConnectorOptions.SCAN_STARTUP_MODE;
+import static org.apache.fluss.flink.adapter.CatalogTableAdapter.toCatalogTable;
 import static org.apache.fluss.flink.utils.CatalogTableTestUtils.addOptions;
 import static org.apache.fluss.flink.utils.CatalogTableTestUtils.checkEqualsIgnoreSchema;
 import static org.apache.fluss.flink.utils.CatalogTableTestUtils.checkEqualsRespectSchema;
@@ -101,7 +103,8 @@ class FlinkCatalogTest {
     private static final FlinkConversionsTest.TestRefreshHandler REFRESH_HANDLER =
             new FlinkConversionsTest.TestRefreshHandler("jobID: xxx, clusterId: yyy");
 
-    static Catalog catalog;
+    private Catalog catalog;
+    private MockLakeFlinkCatalog mockLakeCatalog;
     private final ObjectPath tableInDefaultDb = new ObjectPath(DEFAULT_DB, "t1");
 
     private static Configuration initConfig() {
@@ -110,7 +113,7 @@ class FlinkCatalogTest {
         return configuration;
     }
 
-    private ResolvedSchema createSchema() {
+    protected ResolvedSchema createSchema() {
         return new ResolvedSchema(
                 Arrays.asList(
                         Column.physical("first", DataTypes.STRING().notNull()),
@@ -128,7 +131,7 @@ class FlinkCatalogTest {
     private CatalogTable newCatalogTable(
             ResolvedSchema resolvedSchema, Map<String, String> options) {
         CatalogTable origin =
-                CatalogTable.of(
+                toCatalogTable(
                         Schema.newBuilder().fromResolvedSchema(resolvedSchema).build(),
                         "test comment",
                         Collections.emptyList(),
@@ -158,29 +161,36 @@ class FlinkCatalogTest {
         return new ResolvedCatalogMaterializedTable(origin, resolvedSchema);
     }
 
-    @BeforeAll
-    static void beforeAll() {
-        // set fluss conf
-        Configuration flussConf = FLUSS_CLUSTER_EXTENSION.getClientConfig();
-        catalog =
-                new FlinkCatalog(
-                        CATALOG_NAME,
-                        DEFAULT_DB,
-                        String.join(",", flussConf.get(BOOTSTRAP_SERVERS)),
-                        Thread.currentThread().getContextClassLoader(),
-                        Collections.emptyMap());
-        catalog.open();
-    }
-
-    @AfterAll
-    static void afterAll() {
-        if (catalog != null) {
-            catalog.close();
-        }
+    protected FlinkCatalog initCatalog(
+            String catalogName,
+            String databaseName,
+            String bootstrapServers,
+            LakeFlinkCatalog lakeFlinkCatalog) {
+        return new FlinkCatalog(
+                catalogName,
+                databaseName,
+                bootstrapServers,
+                Thread.currentThread().getContextClassLoader(),
+                Collections.emptyMap(),
+                lakeFlinkCatalog);
     }
 
     @BeforeEach
     void beforeEach() throws Exception {
+        // set fluss conf
+        Configuration flussConf = FLUSS_CLUSTER_EXTENSION.getClientConfig();
+
+        mockLakeCatalog =
+                new MockLakeFlinkCatalog(
+                        CATALOG_NAME, Thread.currentThread().getContextClassLoader());
+        catalog =
+                initCatalog(
+                        CATALOG_NAME,
+                        DEFAULT_DB,
+                        String.join(",", flussConf.get(BOOTSTRAP_SERVERS)),
+                        mockLakeCatalog);
+        catalog.open();
+
         // First check if database exists, and drop it if it does
         if (catalog.databaseExists(DEFAULT_DB)) {
             catalog.dropDatabase(DEFAULT_DB, true, true);
@@ -195,6 +205,13 @@ class FlinkCatalogTest {
                     .isPresent()) {
                 throw e;
             }
+        }
+    }
+
+    @AfterEach
+    void afterEach() {
+        if (catalog != null) {
+            catalog.close();
         }
     }
 
@@ -270,7 +287,7 @@ class FlinkCatalogTest {
         ResolvedSchema resolvedSchema = this.createSchema();
         CatalogTable table2 =
                 new ResolvedCatalogTable(
-                        CatalogTable.of(
+                        toCatalogTable(
                                 Schema.newBuilder().fromResolvedSchema(resolvedSchema).build(),
                                 "test comment",
                                 Collections.singletonList("first"),
@@ -306,6 +323,11 @@ class FlinkCatalogTest {
         CatalogTable table = this.newCatalogTable(options);
         catalog.createTable(lakeTablePath, table, false);
         assertThat(catalog.tableExists(lakeTablePath)).isTrue();
+        // get the lake table from lake catalog.
+        mockLakeCatalog.registerLakeTable(lakeTablePath, table);
+        assertThat((CatalogTable) catalog.getTable(new ObjectPath(DEFAULT_DB, "lake_table$lake")))
+                .isEqualTo(table);
+
         // drop fluss table
         catalog.dropTable(lakeTablePath, false);
         assertThat(catalog.tableExists(lakeTablePath)).isFalse();
@@ -363,7 +385,7 @@ class FlinkCatalogTest {
                         UniqueConstraint.primaryKey(
                                 "PK_first", Collections.singletonList("first")));
         CatalogTable origin =
-                CatalogTable.of(
+                toCatalogTable(
                         Schema.newBuilder().fromResolvedSchema(resolvedSchema).build(),
                         "test comment",
                         Collections.emptyList(),
@@ -648,7 +670,7 @@ class FlinkCatalogTest {
         ResolvedSchema resolvedSchema = this.createSchema();
         CatalogTable table2 =
                 new ResolvedCatalogTable(
-                        CatalogTable.of(
+                        toCatalogTable(
                                 Schema.newBuilder().fromResolvedSchema(resolvedSchema).build(),
                                 "test comment",
                                 Collections.singletonList("first"),
@@ -758,7 +780,7 @@ class FlinkCatalogTest {
         ObjectPath partitionedPath = new ObjectPath(DEFAULT_DB, "partitioned_table1");
         CatalogTable partitionedTable =
                 new ResolvedCatalogTable(
-                        CatalogTable.of(
+                        toCatalogTable(
                                 Schema.newBuilder().fromResolvedSchema(resolvedSchema).build(),
                                 "test comment",
                                 Collections.singletonList("first"),
@@ -845,7 +867,7 @@ class FlinkCatalogTest {
         ResolvedSchema schema = createSchema();
         CatalogTable partTable =
                 new ResolvedCatalogTable(
-                        CatalogTable.of(
+                        toCatalogTable(
                                 Schema.newBuilder().fromResolvedSchema(schema).build(),
                                 "partitioned table for stats",
                                 Collections.singletonList("first"),
@@ -973,5 +995,24 @@ class FlinkCatalogTest {
         CatalogBaseTable tableCreated = catalog.getTable(tablePath);
         checkEqualsRespectSchema((CatalogTable) tableCreated, table);
         catalog.dropTable(tablePath, false);
+    }
+
+    private static class MockLakeFlinkCatalog extends LakeFlinkCatalog {
+        private final GenericInMemoryCatalog catalog;
+
+        public MockLakeFlinkCatalog(String catalogName, ClassLoader classLoader) {
+            super(catalogName, classLoader);
+            catalog = new GenericInMemoryCatalog(catalogName, DEFAULT_DB);
+        }
+
+        @Override
+        public Catalog getLakeCatalog(Configuration tableOptions) {
+            return catalog;
+        }
+
+        void registerLakeTable(ObjectPath tablePath, CatalogTable table)
+                throws TableAlreadyExistException, DatabaseNotExistException {
+            catalog.createTable(tablePath, table, false);
+        }
     }
 }
