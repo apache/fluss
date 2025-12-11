@@ -126,7 +126,10 @@ public class TestingLeaderEndpoint implements LeaderEndpoint {
                         result.put(
                                 tb,
                                 new FetchLogResultForBucket(
-                                        tb, memRecords, value.getHighWatermark()));
+                                        tb,
+                                        memRecords,
+                                        value.getHighWatermark(),
+                                        value.getLogStartOffset()));
                     } else {
                         result.put(tb, value);
                     }

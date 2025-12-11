@@ -53,6 +53,7 @@ final class LogLoader {
     private final Configuration conf;
     private final LogSegments logSegments;
     private final long recoveryPointCheckpoint;
+    private final long logStartOffsetCheckpoint;
     private final LogFormat logFormat;
     private final WriterStateManager writerStateManager;
     private final boolean isCleanShutdown;
@@ -62,6 +63,7 @@ final class LogLoader {
             Configuration conf,
             LogSegments logSegments,
             long recoveryPointCheckpoint,
+            long logStartOffsetCheckpoint,
             LogFormat logFormat,
             WriterStateManager writerStateManager,
             boolean isCleanShutdown) {
@@ -69,6 +71,7 @@ final class LogLoader {
         this.conf = conf;
         this.logSegments = logSegments;
         this.recoveryPointCheckpoint = recoveryPointCheckpoint;
+        this.logStartOffsetCheckpoint = logStartOffsetCheckpoint;
         this.logFormat = logFormat;
         this.writerStateManager = writerStateManager;
         this.isCleanShutdown = isCleanShutdown;
@@ -119,6 +122,7 @@ final class LogLoader {
         LogSegment activeSegment = logSegments.lastSegment().get();
         activeSegment.resizeIndexes((int) conf.get(ConfigOptions.LOG_INDEX_FILE_SIZE).getBytes());
         return new LoadedLogOffsets(
+                logStartOffsetCheckpoint,
                 newRecoveryPoint,
                 new LogOffsetMetadata(
                         nextOffset, activeSegment.getBaseOffset(), activeSegment.getSizeInBytes()));
@@ -193,7 +197,8 @@ final class LogLoader {
 
         // TODO truncate log to recover maybe unflush segments.
         if (logSegments.isEmpty()) {
-            logSegments.add(LogSegment.open(logTabletDir, 0L, conf, logFormat));
+            logSegments.add(
+                    LogSegment.open(logTabletDir, logStartOffsetCheckpoint, conf, logFormat));
         }
         long logEndOffset = logSegments.lastSegment().get().readNextOffset();
         return Tuple2.of(recoveryPointCheckpoint, logEndOffset);

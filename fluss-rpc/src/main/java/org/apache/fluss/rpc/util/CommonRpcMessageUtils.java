@@ -195,7 +195,10 @@ public class CommonRpcMessageUtils {
                                 pbRlfInfo.getFirstStartPos());
                 fetchLogResultForBucket =
                         new FetchLogResultForBucket(
-                                tb, rlFetchInfo, respForBucket.getHighWatermark());
+                                tb,
+                                rlFetchInfo,
+                                respForBucket.getHighWatermark(),
+                                respForBucket.getLogStartOffset());
             } else {
                 ByteBuffer recordsBuffer = toByteBuffer(respForBucket.getRecordsSlice());
                 LogRecords records =
@@ -203,7 +206,11 @@ public class CommonRpcMessageUtils {
                                 ? MemoryLogRecords.pointToByteBuffer(recordsBuffer)
                                 : MemoryLogRecords.EMPTY;
                 fetchLogResultForBucket =
-                        new FetchLogResultForBucket(tb, records, respForBucket.getHighWatermark());
+                        new FetchLogResultForBucket(
+                                tb,
+                                records,
+                                respForBucket.getHighWatermark(),
+                                respForBucket.getLogStartOffset());
             }
         }
 

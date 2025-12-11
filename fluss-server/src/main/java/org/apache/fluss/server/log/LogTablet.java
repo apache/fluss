@@ -104,6 +104,9 @@ public final class LogTablet {
     private final Clock clock;
     private final boolean isChangeLog;
 
+    private volatile long logStartOffset;
+    private volatile long localLogStartOffset;
+
     @GuardedBy("lock")
     private volatile LogOffsetMetadata highWatermarkMetadata;
 
@@ -128,6 +131,7 @@ public final class LogTablet {
     private volatile long lakeMaxTimestamp = -1;
 
     private LogTablet(
+            long logStartOffset,
             PhysicalTablePath physicalPath,
             LocalLog localLog,
             Configuration conf,
@@ -137,6 +141,7 @@ public final class LogTablet {
             int tieredLogLocalSegments,
             boolean isChangelog,
             Clock clock) {
+        this.logStartOffset = logStartOffset;
         this.physicalPath = physicalPath;
         this.localLog = localLog;
         this.maxSegmentFileSize = (int) conf.get(ConfigOptions.LOG_SEGMENT_FILE_SIZE).getBytes();
@@ -166,6 +171,36 @@ public final class LogTablet {
         // updating this value in time. Default value to Long.MAX_VALUE for normal log table,
         // as we don't need to retain logs for kv recovery.
         this.minRetainOffset = isChangelog ? 0L : Long.MAX_VALUE;
+
+        updateLogStartOffset(logStartOffset);
+        updateLocalLogStartOffset(
+                Math.max(
+                        logStartOffset,
+                        localLog.getSegments().firstSegmentBaseOffset().orElse(0L)));
+    }
+
+    private void updateLocalLogStartOffset(long offset) {
+        localLogStartOffset = offset;
+
+        if (getHighWatermark() < offset) {
+            updateHighWatermark(offset);
+        }
+
+        if (getRecoveryPoint() < offset) {
+            localLog.updateRecoveryPoint(offset);
+        }
+    }
+
+    private void updateLogStartOffset(long offset) {
+        logStartOffset = offset;
+
+        if (getHighWatermark() < offset) {
+            updateHighWatermark(offset);
+        }
+
+        if (getRecoveryPoint() < offset) {
+            localLog.updateRecoveryPoint(offset);
+        }
     }
 
     public PhysicalTablePath getPhysicalTablePath() {
@@ -198,11 +233,11 @@ public final class LogTablet {
 
     /** The available start offset of the log tablet, maybe on local log or remote log. */
     public long logStartOffset() {
-        return Math.min(Math.min(localLogStartOffset(), remoteLogStartOffset), lakeLogStartOffset);
+        return logStartOffset;
     }
 
     public long localLogStartOffset() {
-        return localLog.getLocalLogStartOffset();
+        return localLogStartOffset;
     }
 
     public long localLogEndOffset() {
@@ -286,6 +321,7 @@ public final class LogTablet {
             Configuration conf,
             TabletServerMetricGroup serverMetricGroup,
             long recoveryPoint,
+            long logStartOffset,
             Scheduler scheduler,
             LogFormat logFormat,
             int tieredLogLocalSegments,
@@ -312,6 +348,7 @@ public final class LogTablet {
                                 conf,
                                 segments,
                                 recoveryPoint,
+                                logStartOffset,
                                 logFormat,
                                 writerStateManager,
                                 isCleanShutdown)
@@ -329,6 +366,7 @@ public final class LogTablet {
                         logFormat);
 
         return new LogTablet(
+                offsets.getLogStartOffset(),
                 tablePath,
                 log,
                 conf,
@@ -475,6 +513,53 @@ public final class LogTablet {
         }
     }
 
+    private void maybeIncrementLocalLogStartOffset(
+            long newLocalLogStartOffset, LogStartOffsetIncrementReason reason) {
+        synchronized (lock) {
+            if (newLocalLogStartOffset > localLogStartOffset()) {
+                localLogStartOffset = newLocalLogStartOffset;
+                reason.logReason(localLogStartOffset);
+            }
+        }
+    }
+
+    /**
+     * Increment the log start offset if the provided offset is larger.
+     *
+     * @throws LogOffsetOutOfRangeException if the log start offset is greater than the high
+     *     watermark
+     * @return true if the log start offset was updated; otherwise false
+     */
+    public boolean maybeIncrementLogStartOffset(
+            long newLogStartOffset, LogStartOffsetIncrementReason reason)
+            throws LogOffsetOutOfRangeException {
+        // We don't have to write the log start offset to log-start-offset-checkpoint immediately.
+        // The newLogStartOffset may be lost only if all in-sync replicas of this tablet are
+        // shutdown in an unclean manner within log.flush.start-offset.checkpoint-interval. The
+        // chance of this happening is low.
+        boolean updatedLogStartOffset = false;
+        synchronized (lock) {
+            if (newLogStartOffset > getHighWatermark()) {
+                throw new LogOffsetOutOfRangeException(
+                        String.format(
+                                "Cannot increment the log start offset to %s for %s, "
+                                        + "since it is lager than the high watermark %s.",
+                                newLogStartOffset, getTableBucket(), getHighWatermark()));
+            }
+
+            localLogStartOffset = Math.max(newLogStartOffset, localLogStartOffset);
+
+            localLog.checkIfMemoryMappedBufferClosed();
+            if (newLogStartOffset > logStartOffset) {
+                updatedLogStartOffset = true;
+                updateLogStartOffset(newLogStartOffset);
+                reason.logReason(newLogStartOffset);
+                writerStateManager.onLogStartOffsetIncremented(newLogStartOffset);
+            }
+        }
+        return updatedLogStartOffset;
+    }
+
     public long lookupOffsetForTimestamp(long startTimestamp) throws IOException {
         long findOffset = localLog.lookupOffsetForTimestamp(startTimestamp);
         if (findOffset == -1L) {
@@ -489,8 +574,11 @@ public final class LogTablet {
 
     public void updateRemoteLogStartOffset(long remoteLogStartOffset) {
         long prev = this.remoteLogStartOffset;
-        if (prev == Long.MAX_VALUE || remoteLogStartOffset > prev) {
+        if ((prev == Long.MAX_VALUE && remoteLogStartOffset != prev)
+                || remoteLogStartOffset > prev) {
             this.remoteLogStartOffset = remoteLogStartOffset;
+            maybeIncrementLogStartOffset(
+                    remoteLogStartOffset, LogStartOffsetIncrementReason.SEGMENT_DELETION);
         }
     }
 
@@ -893,6 +981,7 @@ public final class LogTablet {
                         List<LogSegment> deletedSegments = localLog.truncateTo(targetOffset);
 
                         deleteWriterSnapshots(deletedSegments, writerStateManager);
+                        logStartOffset = Math.min(targetOffset, logStartOffset);
                         rebuildWriterState(targetOffset, writerStateManager);
 
                         if (getHighWatermark() >= localLog.getLocalLogEndOffset()) {
@@ -912,13 +1001,18 @@ public final class LogTablet {
         }
     }
 
-    /** Delete all data in the log and start at the new offset. */
+    /**
+     * Delete all data in the log and start at the new offset.
+     *
+     * @param newOffset The new offset to start the log with
+     */
     void truncateFullyAndStartAt(long newOffset) throws LogStorageException {
         LOG.debug("Truncate and start at offset {} for bucket {}", newOffset, getTableBucket());
         synchronized (lock) {
             try {
                 localLog.truncateFullyAndStartAt(newOffset);
                 writerStateManager.truncateFullyAndStartAt(newOffset);
+                localLogStartOffset = newOffset;
                 rebuildWriterState(newOffset, writerStateManager);
                 updateHighWatermark(localLog.getLocalLogEndOffset());
             } catch (IOException e) {
@@ -1140,9 +1234,24 @@ public final class LogTablet {
         return deletableSegments;
     }
 
+    private void incrementStartOffset(long startOffset, LogStartOffsetIncrementReason reason) {
+        maybeIncrementLocalLogStartOffset(startOffset, reason);
+    }
+
     private void deleteSegments(List<LogSegment> deletableSegments, SegmentDeletionReason reason)
             throws IOException {
         localLog.checkIfMemoryMappedBufferClosed();
+        // increment the local-log-start-offset or log-start-offset before removing the segment for
+        // lookups
+        long newLocalLogStartOffset =
+                localLog.getSegments()
+                        .higherSegment(
+                                deletableSegments.get(deletableSegments.size() - 1).getBaseOffset())
+                        .get()
+                        .getBaseOffset();
+        incrementStartOffset(
+                newLocalLogStartOffset, LogStartOffsetIncrementReason.SEGMENT_DELETION);
+        // remove the segments for lookups
         localLog.removeAndDeleteSegments(deletableSegments, reason);
         deleteWriterSnapshots(deletableSegments, writerStateManager);
     }

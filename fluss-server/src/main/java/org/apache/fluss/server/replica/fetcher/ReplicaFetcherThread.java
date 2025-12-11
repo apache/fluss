@@ -32,6 +32,7 @@ import org.apache.fluss.remote.RemoteLogSegment;
 import org.apache.fluss.rpc.entity.FetchLogResultForBucket;
 import org.apache.fluss.rpc.messages.FetchLogRequest;
 import org.apache.fluss.server.log.LogAppendInfo;
+import org.apache.fluss.server.log.LogStartOffsetIncrementReason;
 import org.apache.fluss.server.log.LogTablet;
 import org.apache.fluss.server.log.remote.RemoteLogManager;
 import org.apache.fluss.server.log.remote.RemoteLogStorage.IndexType;
@@ -545,6 +546,11 @@ final class ReplicaFetcherThread extends ShutdownableThread {
                 records.sizeInBytes(),
                 tableBucket);
 
+        // may be update log start offset
+        logTablet.maybeIncrementLogStartOffset(
+                replicaData.getLogStartOffset(),
+                LogStartOffsetIncrementReason.LEADER_OFFSET_INCREMENTED);
+
         // For the follower replica, we do not need to keep its segment base offset and physical
         // position. These values will be computed upon becoming leader or handling a preferred read
         // replica fetch.
@@ -588,9 +594,13 @@ final class ReplicaFetcherThread extends ShutdownableThread {
             // Truncate the existing local log before restoring the writer id snapshots.
             replica.truncateFullyAndStartAt(nextFetchOffset);
 
-            // TODO maybe need increase log start offset.
-
             LogTablet log = replica.getLogTablet();
+
+            // may be update log start offset
+            log.maybeIncrementLogStartOffset(
+                    replicaData.getLogStartOffset(),
+                    LogStartOffsetIncrementReason.LEADER_OFFSET_INCREMENTED);
+
             // 1. Perform a truncate before calling buildWriterIdSnapshotFile() to ensure that all
             // historical data is completely cleaned up.
             log.writerStateManager().truncateFullyAndStartAt(0L);
