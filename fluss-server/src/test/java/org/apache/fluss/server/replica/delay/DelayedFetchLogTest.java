@@ -54,7 +54,7 @@ public class DelayedFetchLogTest extends ReplicaTestBase {
         makeLogTableAsLeader(tb.getBucket());
 
         FetchLogResultForBucket preFetchResultForBucket =
-                new FetchLogResultForBucket(tb, MemoryLogRecords.EMPTY, 0L);
+                new FetchLogResultForBucket(tb, MemoryLogRecords.EMPTY, 0L, 0L);
         CompletableFuture<Map<TableBucket, FetchLogResultForBucket>> delayedResponse =
                 new CompletableFuture<>();
         DelayedFetchLog delayedFetchLog =
@@ -112,7 +112,7 @@ public class DelayedFetchLogTest extends ReplicaTestBase {
         makeLogTableAsLeader(tb.getBucket());
 
         FetchLogResultForBucket preFetchResultForBucket =
-                new FetchLogResultForBucket(tb, MemoryLogRecords.EMPTY, 0L);
+                new FetchLogResultForBucket(tb, MemoryLogRecords.EMPTY, 0L, 0L);
         CompletableFuture<Map<TableBucket, FetchLogResultForBucket>> delayedResponse =
                 new CompletableFuture<>();
         DelayedFetchLog delayedFetchLog =

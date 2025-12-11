@@ -35,28 +35,34 @@ public class FetchLogResultForBucket extends ResultForBucket {
     private final @Nullable RemoteLogFetchInfo remoteLogFetchInfo;
     private final @Nullable LogRecords records;
     private final long highWatermark;
+    private final long logStartOffset;
 
     public FetchLogResultForBucket(
-            TableBucket tableBucket, LogRecords records, long highWatermark) {
+            TableBucket tableBucket, LogRecords records, long highWatermark, long logStartOffset) {
         this(
                 tableBucket,
                 null,
                 checkNotNull(records, "records can not be null"),
                 highWatermark,
+                logStartOffset,
                 ApiError.NONE);
     }
 
     public FetchLogResultForBucket(TableBucket tableBucket, ApiError error) {
-        this(tableBucket, null, null, -1L, error);
+        this(tableBucket, null, null, -1L, 0L, error);
     }
 
     public FetchLogResultForBucket(
-            TableBucket tableBucket, RemoteLogFetchInfo remoteLogFetchInfo, long highWatermark) {
+            TableBucket tableBucket,
+            RemoteLogFetchInfo remoteLogFetchInfo,
+            long highWatermark,
+            long logStartOffset) {
         this(
                 tableBucket,
                 checkNotNull(remoteLogFetchInfo, "remote log fetch info can not be null"),
                 null,
                 highWatermark,
+                logStartOffset,
                 ApiError.NONE);
     }
 
@@ -65,11 +71,13 @@ public class FetchLogResultForBucket extends ResultForBucket {
             @Nullable RemoteLogFetchInfo remoteLogFetchInfo,
             @Nullable LogRecords records,
             long highWatermark,
+            long logStartOffset,
             ApiError error) {
         super(tableBucket, error);
         this.remoteLogFetchInfo = remoteLogFetchInfo;
         this.records = records;
         this.highWatermark = highWatermark;
+        this.logStartOffset = logStartOffset;
     }
 
     /**
@@ -101,5 +109,9 @@ public class FetchLogResultForBucket extends ResultForBucket {
 
     public long getHighWatermark() {
         return highWatermark;
+    }
+
+    public long getLogStartOffset() {
+        return logStartOffset;
     }
 }

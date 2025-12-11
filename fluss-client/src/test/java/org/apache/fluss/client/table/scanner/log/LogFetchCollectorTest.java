@@ -85,7 +85,7 @@ public class LogFetchCollectorTest {
         int bucketId = 0; // records for 0-10.
         TableBucket tb = new TableBucket(DATA1_TABLE_ID, bucketId);
         FetchLogResultForBucket resultForBucket0 =
-                new FetchLogResultForBucket(tb, genMemoryLogRecordsByObject(DATA1), 10L);
+                new FetchLogResultForBucket(tb, genMemoryLogRecordsByObject(DATA1), 10L, 0L);
         CompletedFetch completedFetch = makeCompletedFetch(tb, resultForBucket0, fetchOffset);
 
         // Validate that the buffer is empty until after we add the fetch data.
@@ -135,9 +135,9 @@ public class LogFetchCollectorTest {
         logScannerStatus.assignScanBuckets(scanBuckets);
 
         FetchLogResultForBucket resultForBucket1 =
-                new FetchLogResultForBucket(tb1, genMemoryLogRecordsByObject(DATA1), 10L);
+                new FetchLogResultForBucket(tb1, genMemoryLogRecordsByObject(DATA1), 10L, 0L);
         FetchLogResultForBucket resultForBucket2 =
-                new FetchLogResultForBucket(tb2, genMemoryLogRecordsByObject(DATA1), 10L);
+                new FetchLogResultForBucket(tb2, genMemoryLogRecordsByObject(DATA1), 10L, 0L);
         CompletedFetch completedFetch1 = makeCompletedFetch(tb1, resultForBucket1, 0L);
         CompletedFetch completedFetch2 = makeCompletedFetch(tb2, resultForBucket2, 0L);
 

@@ -38,7 +38,7 @@ import java.util.regex.Pattern;
  * additional information regarding copyright ownership. */
 
 /**
- * this class persists a map of (Bucket => Offsets) to a file (for a certain replica).
+ * This class persists a map of (Bucket => Offsets) to a file (for a certain replica).
  *
  * <pre>
  * The format in the offset checkpoint file is like this:

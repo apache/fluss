@@ -24,13 +24,22 @@ import java.util.Objects;
 /** A class to represent the loaded log offsets. */
 @Internal
 final class LoadedLogOffsets {
+    private final long logStartOffset;
     private final long recoveryPoint;
     private final LogOffsetMetadata nextOffsetMetadata;
 
-    public LoadedLogOffsets(final long recoveryPoint, final LogOffsetMetadata nextOffsetMetadata) {
+    public LoadedLogOffsets(
+            final long logStartOffset,
+            final long recoveryPoint,
+            final LogOffsetMetadata nextOffsetMetadata) {
+        this.logStartOffset = logStartOffset;
         this.recoveryPoint = recoveryPoint;
         this.nextOffsetMetadata =
                 Objects.requireNonNull(nextOffsetMetadata, "nextOffsetMetadata should not be null");
+    }
+
+    public long getLogStartOffset() {
+        return logStartOffset;
     }
 
     public long getRecoveryPoint() {
@@ -50,13 +59,15 @@ final class LoadedLogOffsets {
             return false;
         }
         final LoadedLogOffsets that = (LoadedLogOffsets) o;
-        return recoveryPoint == that.recoveryPoint
+        return logStartOffset == that.logStartOffset
+                && recoveryPoint == that.recoveryPoint
                 && nextOffsetMetadata.equals(that.nextOffsetMetadata);
     }
 
     @Override
     public int hashCode() {
-        int result = Long.hashCode(recoveryPoint);
+        int result = Long.hashCode(logStartOffset);
+        result = 31 * result + Long.hashCode(recoveryPoint);
         result = 31 * result + nextOffsetMetadata.hashCode();
         return result;
     }
@@ -64,6 +75,8 @@ final class LoadedLogOffsets {
     @Override
     public String toString() {
         return "LoadedLogOffsets("
+                + "logStartOffset="
+                + logStartOffset
                 + ", recoveryPoint="
                 + recoveryPoint
                 + ", nextOffsetMetadata="

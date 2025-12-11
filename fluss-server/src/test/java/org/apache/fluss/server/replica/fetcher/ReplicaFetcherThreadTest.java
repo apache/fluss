@@ -35,6 +35,7 @@ import org.apache.fluss.server.entity.NotifyLeaderAndIsrResultForBucket;
 import org.apache.fluss.server.kv.KvManager;
 import org.apache.fluss.server.kv.snapshot.TestingCompletedKvSnapshotCommitter;
 import org.apache.fluss.server.log.LogManager;
+import org.apache.fluss.server.log.LogStartOffsetIncrementReason;
 import org.apache.fluss.server.metadata.TabletServerMetadataCache;
 import org.apache.fluss.server.metrics.group.TabletServerMetricGroup;
 import org.apache.fluss.server.metrics.group.TestingMetricGroups;
@@ -349,6 +350,230 @@ public class ReplicaFetcherThreadTest {
         retry(
                 Duration.ofSeconds(20),
                 () -> assertThat(followerReplica.getLocalLogEndOffset()).isEqualTo(30L));
+    }
+
+    @Test
+    void testFollowerLogStartOffsetUpdateFromLeader() throws Exception {
+        Replica leaderReplica = leaderRM.getReplicaOrException(tb);
+        Replica followerReplica = followerRM.getReplicaOrException(tb);
+
+        // 1. Append some records to leader
+        CompletableFuture<List<ProduceLogResultForBucket>> future = new CompletableFuture<>();
+        leaderRM.appendRecordsToLog(
+                1000,
+                1,
+                Collections.singletonMap(tb, genMemoryLogRecordsByObject(DATA1)),
+                future::complete);
+        assertThat(future.get()).containsOnly(new ProduceLogResultForBucket(tb, 0L, 10L));
+
+        // Append more records to leader
+        for (int i = 0; i < 5; i++) {
+            future = new CompletableFuture<>();
+            leaderRM.appendRecordsToLog(
+                    1000,
+                    1,
+                    Collections.singletonMap(tb, genMemoryLogRecordsByObject(DATA1)),
+                    future::complete);
+        }
+
+        // 2. Start fetcher to sync data to follower
+        followerFetcher.addBuckets(
+                Collections.singletonMap(
+                        tb,
+                        new InitialFetchStatus(DATA1_TABLE_ID, DATA1_TABLE_PATH, leader.id(), 0L)));
+        followerFetcher.start();
+
+        // Wait for follower to catch up
+        retry(
+                Duration.ofSeconds(20),
+                () ->
+                        assertThat(followerReplica.getLocalLogEndOffset())
+                                .isEqualTo(leaderReplica.getLocalLogEndOffset()));
+
+        // 3. Update high watermark on leader to allow logStartOffset increment
+        leaderReplica.getLogTablet().updateHighWatermark(leaderReplica.getLocalLogEndOffset());
+
+        // 4. Increment logStartOffset on leader (simulating segment deletion)
+        long newLogStartOffset = 30L;
+        leaderReplica
+                .getLogTablet()
+                .maybeIncrementLogStartOffset(
+                        newLogStartOffset, LogStartOffsetIncrementReason.SEGMENT_DELETION);
+        assertThat(leaderReplica.getLogStartOffset()).isEqualTo(newLogStartOffset);
+
+        // 5. Append new records to leader so follower will fetch and update logStartOffset
+        future = new CompletableFuture<>();
+        leaderRM.appendRecordsToLog(
+                1000,
+                1,
+                Collections.singletonMap(tb, genMemoryLogRecordsByObject(DATA1)),
+                future::complete);
+
+        // Wait for follower to fetch the new records and update logStartOffset
+        retry(
+                Duration.ofSeconds(20),
+                () ->
+                        assertThat(followerReplica.getLogStartOffset())
+                                .isGreaterThanOrEqualTo(newLogStartOffset));
+
+        // Verify follower's logStartOffset has been updated from leader
+        assertThat(followerReplica.getLogStartOffset()).isGreaterThanOrEqualTo(newLogStartOffset);
+    }
+
+    @Test
+    void testFollowerTruncateWhenLeaderLogStartOffsetGreaterThanFollowerEndOffset()
+            throws Exception {
+        Replica leaderReplica = leaderRM.getReplicaOrException(tb);
+        Replica followerReplica = followerRM.getReplicaOrException(tb);
+
+        // 1. Append some records to leader
+        CompletableFuture<List<ProduceLogResultForBucket>> future = new CompletableFuture<>();
+        leaderRM.appendRecordsToLog(
+                1000,
+                1,
+                Collections.singletonMap(tb, genMemoryLogRecordsByObject(DATA1)),
+                future::complete);
+        assertThat(future.get()).containsOnly(new ProduceLogResultForBucket(tb, 0L, 10L));
+
+        // Append more records to leader
+        for (int i = 0; i < 5; i++) {
+            future = new CompletableFuture<>();
+            leaderRM.appendRecordsToLog(
+                    1000,
+                    1,
+                    Collections.singletonMap(tb, genMemoryLogRecordsByObject(DATA1)),
+                    future::complete);
+        }
+
+        // 2. Start fetcher to sync data to follower
+        followerFetcher.addBuckets(
+                Collections.singletonMap(
+                        tb,
+                        new InitialFetchStatus(DATA1_TABLE_ID, DATA1_TABLE_PATH, leader.id(), 0L)));
+        followerFetcher.start();
+
+        // Wait for follower to catch up
+        retry(
+                Duration.ofSeconds(20),
+                () ->
+                        assertThat(followerReplica.getLocalLogEndOffset())
+                                .isEqualTo(leaderReplica.getLocalLogEndOffset()));
+
+        long followerEndOffset = followerReplica.getLocalLogEndOffset();
+        assertThat(followerEndOffset).isGreaterThan(0L);
+
+        // 3. Truncate leader's log to a new offset (simulating log deletion)
+        // This will make leader's logStartOffset greater than follower's end offset
+        long newLeaderStartOffset = followerEndOffset + 10L;
+        leaderReplica.getLogTablet().updateHighWatermark(leaderReplica.getLocalLogEndOffset());
+        leaderReplica.truncateFullyAndStartAt(newLeaderStartOffset);
+        assertThat(leaderReplica.getLocalLogStartOffset()).isEqualTo(newLeaderStartOffset);
+        assertThat(leaderReplica.getLogStartOffset()).isEqualTo(0);
+
+        // 4. Append new records to leader
+        future = new CompletableFuture<>();
+        leaderRM.appendRecordsToLog(
+                1000,
+                1,
+                Collections.singletonMap(tb, genMemoryLogRecordsByObject(DATA1)),
+                future::complete);
+
+        // 5. Wait for follower to detect the offset out of range and truncate
+        retry(
+                Duration.ofSeconds(20),
+                () -> {
+                    // Follower should truncate and start from leader's logStartOffset
+                    assertThat(followerReplica.getLocalLogStartOffset())
+                            .isGreaterThanOrEqualTo(newLeaderStartOffset);
+                    assertThat(followerReplica.getLocalLogEndOffset())
+                            .isGreaterThanOrEqualTo(newLeaderStartOffset);
+                });
+
+        // Verify follower has been truncated and synced with leader
+        assertThat(followerReplica.getLocalLogStartOffset())
+                .isGreaterThanOrEqualTo(newLeaderStartOffset);
+    }
+
+    @Test
+    void testFollowerLogStartOffsetNotDecreased() throws Exception {
+        Replica leaderReplica = leaderRM.getReplicaOrException(tb);
+        Replica followerReplica = followerRM.getReplicaOrException(tb);
+
+        // 1. Append some records to leader
+        CompletableFuture<List<ProduceLogResultForBucket>> future = new CompletableFuture<>();
+        leaderRM.appendRecordsToLog(
+                1000,
+                1,
+                Collections.singletonMap(tb, genMemoryLogRecordsByObject(DATA1)),
+                future::complete);
+        assertThat(future.get()).containsOnly(new ProduceLogResultForBucket(tb, 0L, 10L));
+
+        // 2. Start fetcher to sync data to follower
+        followerFetcher.addBuckets(
+                Collections.singletonMap(
+                        tb,
+                        new InitialFetchStatus(DATA1_TABLE_ID, DATA1_TABLE_PATH, leader.id(), 0L)));
+        followerFetcher.start();
+
+        // Wait for follower to catch up
+        retry(
+                Duration.ofSeconds(20),
+                () ->
+                        assertThat(followerReplica.getLocalLogEndOffset())
+                                .isEqualTo(leaderReplica.getLocalLogEndOffset()));
+
+        // 3. Update high watermark and increment logStartOffset on leader
+        leaderReplica.getLogTablet().updateHighWatermark(leaderReplica.getLocalLogEndOffset());
+        long firstLogStartOffset = 5L;
+        leaderReplica
+                .getLogTablet()
+                .maybeIncrementLogStartOffset(
+                        firstLogStartOffset, LogStartOffsetIncrementReason.SEGMENT_DELETION);
+
+        // 4. Append new records to leader so follower will fetch and update logStartOffset
+        future = new CompletableFuture<>();
+        leaderRM.appendRecordsToLog(
+                1000,
+                1,
+                Collections.singletonMap(tb, genMemoryLogRecordsByObject(DATA1)),
+                future::complete);
+
+        // Wait for follower to update logStartOffset
+        retry(
+                Duration.ofSeconds(20),
+                () ->
+                        assertThat(followerReplica.getLogStartOffset())
+                                .isGreaterThanOrEqualTo(firstLogStartOffset));
+
+        long followerLogStartOffsetAfterFirstUpdate = followerReplica.getLogStartOffset();
+        assertThat(followerLogStartOffsetAfterFirstUpdate)
+                .isGreaterThanOrEqualTo(firstLogStartOffset);
+
+        // 5. Try to set a smaller logStartOffset on leader (should not affect follower)
+        // This simulates the case where leader's logStartOffset is smaller than follower's
+        // (e.g., after a leader change)
+        long smallerLogStartOffset = 2L;
+        // Note: maybeIncrementLogStartOffset only increments, so this won't actually decrease
+        // But we can verify that follower's logStartOffset doesn't decrease
+        leaderReplica
+                .getLogTablet()
+                .maybeIncrementLogStartOffset(
+                        smallerLogStartOffset, LogStartOffsetIncrementReason.SEGMENT_DELETION);
+
+        // Append more records to leader
+        future = new CompletableFuture<>();
+        leaderRM.appendRecordsToLog(
+                1000,
+                1,
+                Collections.singletonMap(tb, genMemoryLogRecordsByObject(DATA1)),
+                future::complete);
+
+        // Wait a bit for any potential fetch
+        Thread.sleep(100);
+
+        // 6. Verify follower's logStartOffset has not decreased
+        assertThat(followerReplica.getLogStartOffset())
+                .isGreaterThanOrEqualTo(followerLogStartOffsetAfterFirstUpdate);
     }
 
     private void registerTableInZkClient() throws Exception {

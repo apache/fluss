@@ -281,6 +281,7 @@ final class LogLoaderTest extends LogTestBase {
                 conf,
                 TestingMetricGroups.TABLET_SERVER_METRICS,
                 recoveryPoint,
+                0,
                 scheduler,
                 LogFormat.ARROW,
                 1,
