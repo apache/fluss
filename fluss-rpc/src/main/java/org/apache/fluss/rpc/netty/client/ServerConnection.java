@@ -166,7 +166,9 @@ final class ServerConnection {
             // notify all the inflight requests
             for (int requestId : inflightRequests.keySet()) {
                 InflightRequest request = inflightRequests.remove(requestId);
-                request.responseFuture.completeExceptionally(requestCause);
+                if (request != null) {
+                    request.responseFuture.completeExceptionally(requestCause);
+                }
             }
 
             // notify all the pending requests
@@ -249,6 +251,12 @@ final class ServerConnection {
     private void establishConnection(ChannelFuture future, boolean isInnerClient) {
         synchronized (lock) {
             if (future.isSuccess()) {
+                if (state.isDisconnected()) {
+                    LOG.debug(
+                            "Connection established to {} but connection is already closed.", node);
+                    future.channel().close();
+                    return;
+                }
                 LOG.debug("Established connection to server {}.", node);
                 channel = future.channel();
                 channel.pipeline()
