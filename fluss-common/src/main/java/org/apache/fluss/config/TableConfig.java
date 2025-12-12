@@ -26,6 +26,8 @@ import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.MergeEngineType;
 import org.apache.fluss.utils.AutoPartitionStrategy;
 
+import javax.annotation.Nullable;
+
 import java.time.Duration;
 import java.util.Optional;
 
@@ -112,6 +114,66 @@ public class TableConfig {
         return config.getOptional(ConfigOptions.TABLE_MERGE_ENGINE_VERSION_COLUMN);
     }
 
+    /**
+     * Gets the aggregate function for a specific field.
+     *
+     * @param fieldName the field name
+     * @return the aggregate function name, or null if not configured
+     */
+    @Nullable
+    public String getFieldAggregateFunction(String fieldName) {
+        String key = ConfigOptions.AGGREGATE_MERGE_ENGINE_PREFIX + "." + fieldName;
+        return config.toMap().get(key);
+    }
+
+    /**
+     * Gets the default aggregate function for all non-primary-key fields.
+     *
+     * @return the default aggregate function name, or null if not configured
+     */
+    @Nullable
+    public String getDefaultAggregateFunction() {
+        return config.get(ConfigOptions.TABLE_AGGREGATE_DEFAULT_FUNCTION);
+    }
+
+    /**
+     * Whether to remove record on delete for aggregate merge engine.
+     *
+     * @return true if record should be removed on delete, false otherwise
+     */
+    public boolean getAggregationRemoveRecordOnDelete() {
+        return config.get(ConfigOptions.TABLE_AGG_REMOVE_RECORD_ON_DELETE);
+    }
+
+    /**
+     * Whether to ignore retract for a specific field in aggregate merge engine.
+     *
+     * @param fieldName the field name
+     * @return true if retract should be ignored, false otherwise
+     */
+    public boolean getFieldIgnoreRetract(String fieldName) {
+        String key =
+                ConfigOptions.AGGREGATE_MERGE_ENGINE_PREFIX + "." + fieldName + ".ignore-retract";
+        String value = config.toMap().get(key);
+        return value != null && Boolean.parseBoolean(value);
+    }
+
+    /**
+     * Gets the listagg delimiter for a specific field in aggregate merge engine.
+     *
+     * @param fieldName the field name
+     * @return the delimiter string, default to comma if not configured
+     */
+    public String getFieldListaggDelimiter(String fieldName) {
+        String key =
+                ConfigOptions.AGGREGATE_MERGE_ENGINE_PREFIX
+                        + "."
+                        + fieldName
+                        + ".listagg-delimiter";
+        String value = config.toMap().get(key);
+        return value != null ? value : ",";
+    }
+
     /** Gets the delete behavior of the table. */
     public Optional<DeleteBehavior> getDeleteBehavior() {
         return config.getOptional(ConfigOptions.TABLE_DELETE_BEHAVIOR);
@@ -125,5 +187,16 @@ public class TableConfig {
     /** Gets the auto partition strategy of the table. */
     public AutoPartitionStrategy getAutoPartitionStrategy() {
         return AutoPartitionStrategy.from(config);
+    }
+
+    /**
+     * Gets the value for a given {@link ConfigOption}.
+     *
+     * @param option the config option
+     * @param <T> the type of the value
+     * @return the value of the config option
+     */
+    public <T> T get(ConfigOption<T> option) {
+        return config.get(option);
     }
 }

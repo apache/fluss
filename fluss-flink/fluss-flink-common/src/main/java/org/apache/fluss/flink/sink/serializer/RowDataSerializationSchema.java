@@ -76,6 +76,9 @@ public class RowDataSerializationSchema implements FlussSerializationSchema<RowD
     /** Whether to ignore DELETE and UPDATE_BEFORE operations. */
     private final boolean ignoreDelete;
 
+    /** Whether to ignore only UPDATE_BEFORE operations. */
+    private final boolean ignoreUpdateBefore;
+
     /**
      * The converter used to transform Flink {@link RowData} to Fluss {@link InternalRow}.
      * Initialized in {@link #open(InitializationContext)}.
@@ -102,8 +105,22 @@ public class RowDataSerializationSchema implements FlussSerializationSchema<RowD
      * @param ignoreDelete whether to ignore DELETE and UPDATE_BEFORE operations
      */
     public RowDataSerializationSchema(boolean isAppendOnly, boolean ignoreDelete) {
+        this(isAppendOnly, ignoreDelete, false);
+    }
+
+    /**
+     * Constructs a new {@code RowSerializationSchema}.
+     *
+     * @param isAppendOnly whether the schema is append-only (only INSERTs allowed)
+     * @param ignoreDelete whether to ignore DELETE and UPDATE_BEFORE operations
+     * @param ignoreUpdateBefore whether to ignore only UPDATE_BEFORE operations (takes precedence
+     *     over ignoreDelete if both are set)
+     */
+    public RowDataSerializationSchema(
+            boolean isAppendOnly, boolean ignoreDelete, boolean ignoreUpdateBefore) {
         this.isAppendOnly = isAppendOnly;
         this.ignoreDelete = ignoreDelete;
+        this.ignoreUpdateBefore = ignoreUpdateBefore;
     }
 
     /**
@@ -168,7 +185,12 @@ public class RowDataSerializationSchema implements FlussSerializationSchema<RowD
      * @throws UnsupportedOperationException if the row kind is not supported in the current mode
      */
     private OperationType toOperationType(RowKind rowKind) {
-        if (ignoreDelete) {
+        // ignoreUpdateBefore takes precedence over ignoreDelete
+        if (ignoreUpdateBefore) {
+            if (rowKind == RowKind.UPDATE_BEFORE) {
+                return OperationType.IGNORE;
+            }
+        } else if (ignoreDelete) {
             if (rowKind == RowKind.DELETE || rowKind == RowKind.UPDATE_BEFORE) {
                 return OperationType.IGNORE;
             }

@@ -26,6 +26,7 @@ import org.apache.fluss.flink.sink.FlinkTableSink;
 import org.apache.fluss.flink.source.FlinkTableSource;
 import org.apache.fluss.flink.utils.FlinkConnectorOptionsUtils;
 import org.apache.fluss.metadata.DataLakeFormat;
+import org.apache.fluss.metadata.MergeEngineType;
 import org.apache.fluss.metadata.TablePath;
 
 import org.apache.flink.api.common.RuntimeExecutionMode;
@@ -176,21 +177,39 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
 
         RowType rowType = (RowType) context.getPhysicalRowDataType().getLogicalType();
 
+        MergeEngineType mergeEngineType =
+                tableOptions.get(toFlinkOption(ConfigOptions.TABLE_MERGE_ENGINE));
+        boolean sinkIgnoreDelete = tableOptions.get(FlinkConnectorOptions.SINK_IGNORE_DELETE);
+
+        // For primary key tables with aggregate merge engine, keyed shuffle must be enabled
+        // to ensure state redistribution on rescale. This is required for exactly-once
+        // semantics because aggregate merge engine maintains stateful aggregations.
+        int[] primaryKeyIndexes = context.getPrimaryKeyIndexes();
+        boolean shuffleByBucket = tableOptions.get(FlinkConnectorOptions.SINK_BUCKET_SHUFFLE);
+        if (primaryKeyIndexes.length > 0
+                && mergeEngineType == MergeEngineType.AGGREGATE
+                && !shuffleByBucket) {
+            throw new IllegalArgumentException(
+                    "For primary key tables with 'AGGREGATE' merge engine, 'sink.bucket-shuffle' must be enabled (default: true). "
+                            + "Disabling keyed shuffle breaks exactly-once guarantees because aggregate state cannot "
+                            + "be correctly redistributed on rescale.");
+        }
+
         return new FlinkTableSink(
                 toFlussTablePath(context.getObjectIdentifier()),
                 toFlussClientConfig(
                         context.getCatalogTable().getOptions(), context.getConfiguration()),
                 rowType,
-                context.getPrimaryKeyIndexes(),
+                primaryKeyIndexes,
                 partitionKeys,
                 isStreamingMode,
-                tableOptions.get(toFlinkOption(ConfigOptions.TABLE_MERGE_ENGINE)),
+                mergeEngineType,
                 tableOptions.get(toFlinkOption(TABLE_DATALAKE_FORMAT)),
-                tableOptions.get(FlinkConnectorOptions.SINK_IGNORE_DELETE),
+                sinkIgnoreDelete,
                 tableOptions.get(toFlinkOption(TABLE_DELETE_BEHAVIOR)),
                 tableOptions.get(FlinkConnectorOptions.BUCKET_NUMBER),
                 getBucketKeys(tableOptions),
-                tableOptions.get(FlinkConnectorOptions.SINK_BUCKET_SHUFFLE));
+                shuffleByBucket);
     }
 
     @Override

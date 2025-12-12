@@ -851,7 +851,7 @@ final class ReplicaTest extends ReplicaTestBase {
 
     private LogAppendInfo putRecordsToLeader(
             Replica replica, KvRecordBatch kvRecords, int[] targetColumns) throws Exception {
-        LogAppendInfo logAppendInfo = replica.putRecordsToLeader(kvRecords, targetColumns, 0);
+        LogAppendInfo logAppendInfo = replica.putRecordsToLeader(kvRecords, targetColumns, 0, null);
         KvTablet kvTablet = checkNotNull(replica.getKvTablet());
         // flush to make data visible
         kvTablet.flush(replica.getLocalLogEndOffset(), NOPErrorHandler.INSTANCE);

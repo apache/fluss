@@ -88,7 +88,11 @@ public class FlussTable implements Table {
                 hasPrimaryKey,
                 "Table %s is not a Primary Key Table and doesn't support UpsertWriter.",
                 tablePath);
-        return new TableUpsert(tablePath, tableInfo, conn.getOrCreateWriterClient());
+        return new TableUpsert(
+                tablePath,
+                tableInfo,
+                conn.getOrCreateWriterClient(),
+                conn.getOrCreateColumnLockManager());
     }
 
     @Override

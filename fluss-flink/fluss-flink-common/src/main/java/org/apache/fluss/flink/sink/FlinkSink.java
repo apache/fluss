@@ -26,7 +26,6 @@ import org.apache.fluss.flink.sink.writer.UpsertSinkWriter;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.TablePath;
 
-import org.apache.flink.api.common.operators.MailboxExecutor;
 import org.apache.flink.api.connector.sink2.Sink;
 import org.apache.flink.api.connector.sink2.SinkWriter;
 import org.apache.flink.api.connector.sink2.WriterInitContext;
@@ -58,16 +57,14 @@ class FlinkSink<InputT> implements Sink<InputT>, SupportsPreWriteTopology<InputT
     @Deprecated
     @Override
     public SinkWriter<InputT> createWriter(InitContext context) throws IOException {
-        FlinkSinkWriter<InputT> flinkSinkWriter =
-                builder.createWriter(context.getMailboxExecutor());
+        FlinkSinkWriter<InputT> flinkSinkWriter = builder.createWriter(context);
         flinkSinkWriter.initialize(InternalSinkWriterMetricGroup.wrap(context.metricGroup()));
         return flinkSinkWriter;
     }
 
     @Override
     public SinkWriter<InputT> createWriter(WriterInitContext context) throws IOException {
-        FlinkSinkWriter<InputT> flinkSinkWriter =
-                builder.createWriter(context.getMailboxExecutor());
+        FlinkSinkWriter<InputT> flinkSinkWriter = builder.createWriter(context);
         flinkSinkWriter.initialize(InternalSinkWriterMetricGroup.wrap(context.metricGroup()));
         return flinkSinkWriter;
     }
@@ -79,7 +76,9 @@ class FlinkSink<InputT> implements Sink<InputT>, SupportsPreWriteTopology<InputT
 
     @Internal
     interface SinkWriterBuilder<W extends FlinkSinkWriter<InputT>, InputT> extends Serializable {
-        W createWriter(MailboxExecutor mailboxExecutor);
+        W createWriter(WriterInitContext context);
+
+        W createWriter(InitContext context);
 
         DataStream<InputT> addPreWriteTopology(DataStream<InputT> input);
     }
@@ -122,12 +121,22 @@ class FlinkSink<InputT> implements Sink<InputT>, SupportsPreWriteTopology<InputT
         }
 
         @Override
-        public AppendSinkWriter<InputT> createWriter(MailboxExecutor mailboxExecutor) {
+        public AppendSinkWriter<InputT> createWriter(WriterInitContext context) {
             return new AppendSinkWriter<>(
                     tablePath,
                     flussConfig,
                     tableRowType,
-                    mailboxExecutor,
+                    context.getMailboxExecutor(),
+                    flussSerializationSchema);
+        }
+
+        @Override
+        public AppendSinkWriter<InputT> createWriter(InitContext context) {
+            return new AppendSinkWriter<>(
+                    tablePath,
+                    flussConfig,
+                    tableRowType,
+                    context.getMailboxExecutor(),
                     flussSerializationSchema);
         }
 
@@ -192,14 +201,49 @@ class FlinkSink<InputT> implements Sink<InputT>, SupportsPreWriteTopology<InputT
         }
 
         @Override
-        public UpsertSinkWriter<InputT> createWriter(MailboxExecutor mailboxExecutor) {
+        public UpsertSinkWriter<InputT> createWriter(WriterInitContext context) {
+            // Get subtask information for state filtering
+            int subtaskIndex = context.getTaskInfo().getIndexOfThisSubtask();
+            int parallelism = context.getTaskInfo().getNumberOfParallelSubtasks();
+
+            // Get Flink job ID as lock owner ID for column lock coordination
+            // This ensures all subtasks of the same job share the same lock owner ID
+            String lockOwnerId = context.getJobInfo().getJobId().toString();
+
             return new UpsertSinkWriter<>(
                     tablePath,
                     flussConfig,
                     tableRowType,
                     targetColumnIndexes,
-                    mailboxExecutor,
-                    flussSerializationSchema);
+                    context.getMailboxExecutor(),
+                    flussSerializationSchema,
+                    subtaskIndex,
+                    parallelism,
+                    lockOwnerId);
+        }
+
+        @Override
+        public UpsertSinkWriter<InputT> createWriter(InitContext context) {
+            // Get subtask information for state filtering
+            // Note: In Flink 1.18, InitContext doesn't have getTaskInfo() method,
+            // so we use getSubtaskId() and getNumberOfParallelSubtasks() directly for compatibility
+            int subtaskIndex = context.getSubtaskId();
+            int parallelism = context.getNumberOfParallelSubtasks();
+
+            // Get Flink job ID as lock owner ID for column lock coordination
+            // This ensures all subtasks of the same job share the same lock owner ID
+            String lockOwnerId = context.getJobId().toString();
+
+            return new UpsertSinkWriter<>(
+                    tablePath,
+                    flussConfig,
+                    tableRowType,
+                    targetColumnIndexes,
+                    context.getMailboxExecutor(),
+                    flussSerializationSchema,
+                    subtaskIndex,
+                    parallelism,
+                    lockOwnerId);
         }
 
         @Override

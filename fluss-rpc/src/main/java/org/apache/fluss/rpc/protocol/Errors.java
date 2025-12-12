@@ -20,6 +20,8 @@ package org.apache.fluss.rpc.protocol;
 import org.apache.fluss.exception.ApiException;
 import org.apache.fluss.exception.AuthenticationException;
 import org.apache.fluss.exception.AuthorizationException;
+import org.apache.fluss.exception.ColumnLockConflictException;
+import org.apache.fluss.exception.ColumnLockNotFoundException;
 import org.apache.fluss.exception.CorruptMessageException;
 import org.apache.fluss.exception.CorruptRecordException;
 import org.apache.fluss.exception.DatabaseAlreadyExistException;
@@ -228,7 +230,11 @@ public enum Errors {
     INVALID_ALTER_TABLE_EXCEPTION(
             56, "The alter table is invalid.", InvalidAlterTableException::new),
     DELETION_DISABLED_EXCEPTION(
-            57, "Deletion operations are disabled on this table.", DeletionDisabledException::new);
+            57, "Deletion operations are disabled on this table.", DeletionDisabledException::new),
+    COLUMN_LOCK_CONFLICT(
+            58, "Column lock conflict with existing lock.", ColumnLockConflictException::new),
+    COLUMN_LOCK_NOT_FOUND(
+            59, "Column lock not found or expired.", ColumnLockNotFoundException::new);
 
     private static final Logger LOG = LoggerFactory.getLogger(Errors.class);
 

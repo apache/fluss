@@ -473,6 +473,7 @@ public class ReplicaTestBase {
                 NOPErrorHandler.INSTANCE,
                 metricGroup,
                 DATA1_TABLE_INFO,
+                replicaManager,
                 manualClock);
     }
 

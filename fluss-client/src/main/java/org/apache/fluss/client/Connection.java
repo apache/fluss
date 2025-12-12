@@ -56,6 +56,36 @@ public interface Connection extends AutoCloseable {
     /** Retrieve a new Table client to operate data in table. */
     Table getTable(TablePath tablePath);
 
+    /**
+     * Switch the connection from recovery mode to normal mode.
+     *
+     * <p>This is a one-way transition that can only be called once. After calling this method, all
+     * subsequent writes through this connection will use normal merge engine semantics instead of
+     * recovery mode (overwrite mode).
+     *
+     * <p>This method is typically used in undo recovery scenarios where you need to replay
+     * historical state using recovery mode (overwrite mode) and then switch back to normal mode for
+     * ongoing operations.
+     *
+     * <p>IMPORTANT: This method can only be called on connections created with {@link
+     * ConnectionFactory#createRecoveryConnection(Configuration)}. Calling it on normal connections
+     * has no effect.
+     *
+     * @throws IllegalStateException if this method is called more than once
+     */
+    void switchToNormalMode();
+
+    /**
+     * Check whether this connection is in recovery mode.
+     *
+     * <p>When in recovery mode, all write operations bypass the merge engine and write directly to
+     * the KV store (overwrite mode). This is used for undo recovery to ensure data consistency
+     * during state restoration.
+     *
+     * @return true if the connection is in recovery mode, false otherwise
+     */
+    boolean isRecoveryMode();
+
     /** Close the connection and release all resources. */
     @Override
     void close() throws Exception;

@@ -120,6 +120,15 @@ public abstract class WriteBatch {
 
     public abstract void abortRecordAppends();
 
+    /**
+     * Whether this batch bypasses the merge engine (only applicable to KV batches).
+     *
+     * @return true if this batch bypasses the merge engine, false otherwise
+     */
+    public boolean isOverwrite() {
+        return false;
+    }
+
     public boolean hasBatchSequence() {
         return batchSequence() != NO_BATCH_SEQUENCE;
     }

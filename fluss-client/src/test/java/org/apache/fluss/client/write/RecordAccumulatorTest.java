@@ -67,6 +67,7 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.record.LogRecordBatch.CURRENT_LOG_MAGIC_VALUE;
@@ -655,7 +656,8 @@ class RecordAccumulatorTest {
                                         conf, TestingClientMetricGroup.newInstance(), false),
                                 TabletServerGateway.class)),
                 TestingWriterMetricGroup.newInstance(),
-                clock);
+                clock,
+                new AtomicBoolean(false));
     }
 
     private long getTestBatchSize(BinaryRow row) {

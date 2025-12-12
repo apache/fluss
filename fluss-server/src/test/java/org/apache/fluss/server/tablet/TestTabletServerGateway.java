@@ -24,6 +24,8 @@ import org.apache.fluss.rpc.entity.FetchLogResultForBucket;
 import org.apache.fluss.rpc.entity.LookupResultForBucket;
 import org.apache.fluss.rpc.entity.PrefixLookupResultForBucket;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
+import org.apache.fluss.rpc.messages.AcquireColumnLockRequest;
+import org.apache.fluss.rpc.messages.AcquireColumnLockResponse;
 import org.apache.fluss.rpc.messages.ApiMessage;
 import org.apache.fluss.rpc.messages.ApiVersionsRequest;
 import org.apache.fluss.rpc.messages.ApiVersionsResponse;
@@ -84,6 +86,10 @@ import org.apache.fluss.rpc.messages.ProduceLogRequest;
 import org.apache.fluss.rpc.messages.ProduceLogResponse;
 import org.apache.fluss.rpc.messages.PutKvRequest;
 import org.apache.fluss.rpc.messages.PutKvResponse;
+import org.apache.fluss.rpc.messages.ReleaseColumnLockRequest;
+import org.apache.fluss.rpc.messages.ReleaseColumnLockResponse;
+import org.apache.fluss.rpc.messages.RenewColumnLockRequest;
+import org.apache.fluss.rpc.messages.RenewColumnLockResponse;
 import org.apache.fluss.rpc.messages.StopReplicaRequest;
 import org.apache.fluss.rpc.messages.StopReplicaResponse;
 import org.apache.fluss.rpc.messages.TableExistsRequest;
@@ -378,6 +384,24 @@ public class TestTabletServerGateway implements TabletServerGateway {
     @Override
     public CompletableFuture<DescribeClusterConfigsResponse> describeClusterConfigs(
             DescribeClusterConfigsRequest request) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public CompletableFuture<AcquireColumnLockResponse> acquireColumnLock(
+            AcquireColumnLockRequest request) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public CompletableFuture<RenewColumnLockResponse> renewColumnLock(
+            RenewColumnLockRequest request) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public CompletableFuture<ReleaseColumnLockResponse> releaseColumnLock(
+            ReleaseColumnLockRequest request) {
         throw new UnsupportedOperationException();
     }
 

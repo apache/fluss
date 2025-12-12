@@ -19,6 +19,8 @@ package org.apache.fluss.rpc;
 
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
+import org.apache.fluss.rpc.messages.AcquireColumnLockRequest;
+import org.apache.fluss.rpc.messages.AcquireColumnLockResponse;
 import org.apache.fluss.rpc.messages.DatabaseExistsRequest;
 import org.apache.fluss.rpc.messages.DatabaseExistsResponse;
 import org.apache.fluss.rpc.messages.DescribeClusterConfigsRequest;
@@ -71,6 +73,10 @@ import org.apache.fluss.rpc.messages.ProduceLogRequest;
 import org.apache.fluss.rpc.messages.ProduceLogResponse;
 import org.apache.fluss.rpc.messages.PutKvRequest;
 import org.apache.fluss.rpc.messages.PutKvResponse;
+import org.apache.fluss.rpc.messages.ReleaseColumnLockRequest;
+import org.apache.fluss.rpc.messages.ReleaseColumnLockResponse;
+import org.apache.fluss.rpc.messages.RenewColumnLockRequest;
+import org.apache.fluss.rpc.messages.RenewColumnLockResponse;
 import org.apache.fluss.rpc.messages.StopReplicaRequest;
 import org.apache.fluss.rpc.messages.StopReplicaResponse;
 import org.apache.fluss.rpc.messages.TableExistsRequest;
@@ -247,6 +253,24 @@ public class TestingTabletGatewayService extends TestingGatewayService
     @Override
     public CompletableFuture<DescribeClusterConfigsResponse> describeClusterConfigs(
             DescribeClusterConfigsRequest request) {
+        return null;
+    }
+
+    @Override
+    public CompletableFuture<AcquireColumnLockResponse> acquireColumnLock(
+            AcquireColumnLockRequest request) {
+        return null;
+    }
+
+    @Override
+    public CompletableFuture<RenewColumnLockResponse> renewColumnLock(
+            RenewColumnLockRequest request) {
+        return null;
+    }
+
+    @Override
+    public CompletableFuture<ReleaseColumnLockResponse> releaseColumnLock(
+            ReleaseColumnLockRequest request) {
         return null;
     }
 }

@@ -49,6 +49,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.apache.fluss.record.LogRecordBatchFormat.NO_WRITER_ID;
 import static org.apache.fluss.record.TestData.DATA1_PHYSICAL_TABLE_PATH;
@@ -780,7 +781,11 @@ final class SenderTest {
         conf.set(ConfigOptions.CLIENT_WRITER_BATCH_TIMEOUT, Duration.ofMillis(batchTimeoutMs));
         accumulator =
                 new RecordAccumulator(
-                        conf, idempotenceManager, writerMetricGroup, SystemClock.getInstance());
+                        conf,
+                        idempotenceManager,
+                        writerMetricGroup,
+                        SystemClock.getInstance(),
+                        new AtomicBoolean(false));
         return new Sender(
                 accumulator,
                 REQUEST_TIMEOUT,
@@ -789,7 +794,9 @@ final class SenderTest {
                 reties,
                 metadataUpdater,
                 idempotenceManager,
-                writerMetricGroup);
+                writerMetricGroup,
+                new BucketOffsetTracker(),
+                null); // WriterClient not needed in test
     }
 
     private IdempotenceManager createIdempotenceManager(boolean idempotenceEnabled) {

@@ -33,11 +33,15 @@ import org.apache.fluss.metadata.MergeEngineType;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.server.kv.rowmerger.aggregate.factory.FieldAggregatorFactory;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypeRoot;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.AutoPartitionStrategy;
 import org.apache.fluss.utils.StringUtils;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.Arrays;
 import java.util.Collections;
@@ -59,6 +63,8 @@ import static org.apache.fluss.utils.PartitionUtils.PARTITION_KEY_SUPPORTED_TYPE
 /** Validator of {@link TableDescriptor}. */
 public class TableDescriptorValidation {
 
+    private static final Logger LOG = LoggerFactory.getLogger(TableDescriptorValidation.class);
+
     private static final Set<String> SYSTEM_COLUMNS =
             Collections.unmodifiableSet(
                     new LinkedHashSet<>(
@@ -79,6 +85,14 @@ public class TableDescriptorValidation {
         // check properties should only contain table.* options,
         // and this cluster know it, and value is valid
         for (String key : tableConf.keySet()) {
+            // Allow aggregate merge engine configuration options (e.g.,
+            // table.merge-engine.aggregate.<field-name>)
+            if (key.startsWith(ConfigOptions.AGGREGATE_MERGE_ENGINE_PREFIX + ".")) {
+                // Validate aggregate merge engine configurations
+                validateAggregateMergeEngineConfiguration(key, tableConf.toMap().get(key), schema);
+                continue;
+            }
+
             if (!TABLE_OPTIONS.containsKey(key)) {
                 if (isTableStorageConfig(key)) {
                     throw new InvalidConfigException(
@@ -279,6 +293,13 @@ public class TableDescriptorValidation {
                                             + ", but got %s.",
                                     versionColumn.get(), columnType));
                 }
+            } else if (mergeEngine == MergeEngineType.AGGREGATE) {
+                // Log a warning about consistency guarantees for aggregate merge engine
+                LOG.warn(
+                        "Aggregate Merge Engine currently provides at-least-once semantics in Flink integration scenarios. "
+                                + "Flink job restarts may cause duplicate data to be aggregated, leading to inconsistent results. "
+                                + "For scenarios requiring exact aggregation results, consider using Flink's built-in aggregation "
+                                + "or wait for future transaction support to provide exactly-once semantics.");
             }
         }
     }
@@ -389,6 +410,124 @@ public class TableDescriptorValidation {
                     String.format(
                             "Invalid value for config '%s'. Reason: %s",
                             option.key(), t.getMessage()));
+        }
+    }
+
+    /**
+     * Validates aggregate merge engine configuration options.
+     *
+     * <p>Aggregate merge engine options follow the pattern: {@code
+     * table.merge-engine.aggregate.<field-name>[.<option>]}
+     *
+     * @param configKey the configuration key
+     * @param configValue the configuration value
+     * @param schema the table schema
+     * @throws InvalidConfigException if the configuration is invalid
+     */
+    private static void validateAggregateMergeEngineConfiguration(
+            String configKey, String configValue, RowType schema) {
+        // Parse: table.merge-engine.aggregate.<field-name>[.<option>]
+        // Remove the "table.merge-engine.aggregate." prefix
+        String remainder =
+                configKey.substring(ConfigOptions.AGGREGATE_MERGE_ENGINE_PREFIX.length() + 1);
+        String[] parts = remainder.split("\\.", 2);
+
+        String fieldName = parts[0];
+
+        // Handle special case: default-function
+        if (fieldName.equals("default-function")) {
+            validateAggregateFunction(configKey, configValue, null);
+            return;
+        }
+
+        // Validate field exists in schema
+        List<String> fieldNames = schema.getFieldNames();
+        if (!fieldNames.contains(fieldName)) {
+            throw new InvalidConfigException(
+                    String.format(
+                            "Field '%s' specified in configuration '%s' does not exist in the table schema. "
+                                    + "Available fields are: %s",
+                            fieldName, configKey, String.join(", ", fieldNames)));
+        }
+
+        // If no sub-option, this is the aggregate function itself
+        if (parts.length == 1) {
+            validateAggregateFunction(configKey, configValue, fieldName);
+            return;
+        }
+
+        // Validate specific sub-options
+        String option = parts[1];
+        switch (option) {
+            case "ignore-retract":
+                validateIgnoreRetract(configKey, configValue);
+                break;
+            case "listagg-delimiter":
+                // Listagg delimiter is a string, no specific validation needed beyond null check
+                if (configValue == null || configValue.isEmpty()) {
+                    throw new InvalidConfigException(
+                            String.format(
+                                    "Configuration '%s' must have a non-empty value", configKey));
+                }
+                break;
+            default:
+                throw new InvalidConfigException(
+                        String.format(
+                                "Unknown aggregate merge engine option '%s' in configuration '%s'. "
+                                        + "Supported options are: 'ignore-retract', 'listagg-delimiter'",
+                                option, configKey));
+        }
+    }
+
+    /**
+     * Validates the aggregate function configuration.
+     *
+     * @param configKey the configuration key
+     * @param aggFuncName the aggregate function name
+     * @param fieldName the field name
+     * @throws InvalidConfigException if the aggregate function is invalid
+     */
+    private static void validateAggregateFunction(
+            String configKey, String aggFuncName, String fieldName) {
+        if (aggFuncName == null || aggFuncName.trim().isEmpty()) {
+            throw new InvalidConfigException(
+                    String.format(
+                            "Configuration '%s' must have a non-empty aggregate function name",
+                            configKey));
+        }
+
+        // Check if the aggregate function is registered via SPI
+        if (FieldAggregatorFactory.getFactory(aggFuncName) == null) {
+            throw new InvalidConfigException(
+                    String.format(
+                            "Unknown aggregate function '%s' specified in configuration '%s'. "
+                                    + "Please check if the function name is spelled correctly. "
+                                    + "Supported functions include: sum, product, max, min, first_value, last_value, "
+                                    + "first_non_null_value, last_non_null_value, bool_and, bool_or, listagg, primary-key",
+                            aggFuncName, configKey));
+        }
+    }
+
+    /**
+     * Validates the ignore-retract configuration.
+     *
+     * @param configKey the configuration key
+     * @param value the configuration value
+     * @throws InvalidConfigException if the configuration value is invalid
+     */
+    private static void validateIgnoreRetract(String configKey, String value) {
+        if (value == null || value.trim().isEmpty()) {
+            throw new InvalidConfigException(
+                    String.format("Configuration '%s' must have a boolean value", configKey));
+        }
+
+        // Validate it's a proper boolean value
+        String normalizedValue = value.trim().toLowerCase();
+        if (!normalizedValue.equals("true") && !normalizedValue.equals("false")) {
+            throw new InvalidConfigException(
+                    String.format(
+                            "Configuration '%s' must be either 'true' or 'false', but got '%s'",
+                            configKey, value));
         }
     }
 }

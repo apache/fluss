@@ -97,6 +97,16 @@ public interface KvRecordBatch {
     int getRecordCount();
 
     /**
+     * Check if this batch is in overwrite mode.
+     *
+     * <p>In overwrite mode, target columns are updated directly without merging, essentially
+     * implementing last_value aggregation.
+     *
+     * @return true if overwrite mode is enabled, false otherwise
+     */
+    boolean isOverwrite();
+
+    /**
      * Get the iterable of {@link KvRecord} in this batch.
      *
      * @param readContext The context to read records from the record batch

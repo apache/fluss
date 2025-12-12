@@ -39,6 +39,7 @@ import org.apache.fluss.utils.concurrent.ExecutorThreadFactory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.annotation.Nullable;
 import javax.annotation.concurrent.ThreadSafe;
 
 import java.time.Duration;
@@ -47,6 +48,7 @@ import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.apache.fluss.config.ConfigOptions.NoKeyAssigner.ROUND_ROBIN;
 import static org.apache.fluss.config.ConfigOptions.NoKeyAssigner.STICKY;
@@ -86,17 +88,26 @@ public class WriterClient {
     private final IdempotenceManager idempotenceManager;
     private final WriterMetricGroup writerMetricGroup;
     private final DynamicPartitionCreator dynamicPartitionCreator;
+    private final BucketOffsetTracker bucketOffsetTracker;
+
+    // Lock owner ID for server-side column lock validation on KV writes
+    // Note: This is only used by Sender to include in PutKv requests for server-side validation.
+    // Client-side lock management is handled by UpsertWriterImpl independently.
+    private final String lockOwnerId;
 
     public WriterClient(
             Configuration conf,
             MetadataUpdater metadataUpdater,
             ClientMetricGroup clientMetricGroup,
-            Admin admin) {
+            Admin admin,
+            @Nullable String lockOwnerId,
+            AtomicBoolean recoveryMode) {
         int maxRequestSizeLocal = -1;
         IdempotenceManager idempotenceManagerLocal = null;
         try {
             this.conf = conf;
             this.metadataUpdater = metadataUpdater;
+            this.lockOwnerId = lockOwnerId;
             maxRequestSizeLocal =
                     (int) conf.get(ConfigOptions.CLIENT_WRITER_REQUEST_MAX_SIZE).getBytes();
             this.maxRequestSize = maxRequestSizeLocal;
@@ -108,7 +119,12 @@ public class WriterClient {
             int retries = configureRetries(idempotenceManager.idempotenceEnabled());
             this.accumulator =
                     new RecordAccumulator(
-                            conf, idempotenceManager, writerMetricGroup, SystemClock.getInstance());
+                            conf,
+                            idempotenceManager,
+                            writerMetricGroup,
+                            SystemClock.getInstance(),
+                            recoveryMode);
+            this.bucketOffsetTracker = new BucketOffsetTracker();
             this.sender = newSender(acks, retries);
             this.ioThreadPool = createThreadPool();
             ioThreadPool.submit(sender);
@@ -138,6 +154,22 @@ public class WriterClient {
      */
     public void send(WriteRecord record, WriteCallback callback) {
         doSend(record, callback);
+    }
+
+    /**
+     * Get the lock owner ID for this writer client.
+     *
+     * <p>The lock owner ID is used for server-side column lock validation on KV write operations.
+     * When set, all PutKv requests will include this ID for server-side validation.
+     *
+     * <p>Note: This is NOT used for client-side lock management. Client-side lock management (e.g.,
+     * during undo recovery) is handled independently by UpsertWriterImpl.
+     *
+     * @return the lock owner ID, or null if not set
+     */
+    @Nullable
+    public String getLockOwnerId() {
+        return lockOwnerId;
     }
 
     /**
@@ -202,6 +234,7 @@ public class WriterClient {
                         physicalTablePath,
                         bucketId,
                         prevBucketId);
+                // Column lock already acquired for this table/partition
                 result = accumulator.append(record, callback, cluster, bucketId, false);
             }
 
@@ -302,7 +335,18 @@ public class WriterClient {
                 retries,
                 metadataUpdater,
                 idempotenceManager,
-                writerMetricGroup);
+                writerMetricGroup,
+                bucketOffsetTracker,
+                this);
+    }
+
+    /**
+     * Get the bucket offset tracker for this writer client.
+     *
+     * @return the bucket offset tracker
+     */
+    public BucketOffsetTracker getBucketOffsetTracker() {
+        return bucketOffsetTracker;
     }
 
     public void close(Duration timeout) {

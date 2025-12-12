@@ -56,14 +56,14 @@ public abstract class FlinkSinkWriter<InputT> implements SinkWriter<InputT> {
 
     protected static final Logger LOG = LoggerFactory.getLogger(FlinkSinkWriter.class);
 
-    private final TablePath tablePath;
-    private final Configuration flussConfig;
+    protected final TablePath tablePath;
+    protected final Configuration flussConfig;
     protected final RowType tableRowType;
     protected final @Nullable int[] targetColumnIndexes;
     private final MailboxExecutor mailboxExecutor;
     private final FlussSerializationSchema<InputT> serializationSchema;
 
-    private transient Connection connection;
+    protected transient Connection connection;
     protected transient Table table;
     protected transient FlinkMetricRegistry flinkMetricRegistry;
 

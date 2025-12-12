@@ -28,6 +28,7 @@ import org.apache.fluss.client.token.DefaultSecurityTokenManager;
 import org.apache.fluss.client.token.DefaultSecurityTokenProvider;
 import org.apache.fluss.client.token.SecurityTokenManager;
 import org.apache.fluss.client.token.SecurityTokenProvider;
+import org.apache.fluss.client.write.ClientColumnLockManager;
 import org.apache.fluss.client.write.WriterClient;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.config.ConfigOptions;
@@ -41,10 +42,14 @@ import org.apache.fluss.rpc.RpcClient;
 import org.apache.fluss.rpc.gateway.AdminReadOnlyGateway;
 import org.apache.fluss.rpc.metrics.ClientMetricGroup;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.time.Duration;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.apache.fluss.client.utils.MetadataUtils.getOneAvailableTabletServerNode;
 import static org.apache.fluss.config.FlussConfigUtils.CLIENT_PREFIX;
@@ -52,24 +57,49 @@ import static org.apache.fluss.utils.PropertiesUtils.extractPrefix;
 
 /** A connection to Fluss cluster, and holds the client session resources. */
 public final class FlussConnection implements Connection {
+    private static final Logger LOG = LoggerFactory.getLogger(FlussConnection.class);
+
     private final Configuration conf;
     private final RpcClient rpcClient;
     private final MetadataUpdater metadataUpdater;
     private final MetricRegistry metricRegistry;
     private final ClientMetricGroup clientMetricGroup;
 
+    /**
+     * The recovery mode for this connection. When true, all writes bypass the merge engine and
+     * write directly to the KV store (overwrite mode). This flag is set at connection creation time
+     * and can be switched to false (normal mode) via {@link #switchToNormalMode()}.
+     */
+    private final AtomicBoolean recoveryMode;
+
+    /**
+     * Flag to track whether switchToNormalMode has been called. This ensures that the method can
+     * only be called once to prevent accidental mode switching.
+     */
+    private final AtomicBoolean normalModeSwitched = new AtomicBoolean(false);
+
     private volatile WriterClient writerClient;
     private volatile LookupClient lookupClient;
     private volatile RemoteFileDownloader remoteFileDownloader;
     private volatile SecurityTokenManager securityTokenManager;
     private volatile Admin admin;
+    private volatile ClientColumnLockManager columnLockManager;
 
     FlussConnection(Configuration conf) {
-        this(conf, MetricRegistry.create(conf, null));
+        this(conf, false);
+    }
+
+    FlussConnection(Configuration conf, boolean recoveryMode) {
+        this(conf, MetricRegistry.create(conf, null), recoveryMode);
     }
 
     FlussConnection(Configuration conf, MetricRegistry metricRegistry) {
+        this(conf, metricRegistry, false);
+    }
+
+    FlussConnection(Configuration conf, MetricRegistry metricRegistry, boolean recoveryMode) {
         this.conf = conf;
+        this.recoveryMode = new AtomicBoolean(recoveryMode);
         // init Filesystem with configuration from FlussConnection,
         // only pass options with 'client.fs.' prefix
         FileSystem.initialize(
@@ -118,13 +148,61 @@ public final class FlussConnection implements Connection {
         if (writerClient == null) {
             synchronized (this) {
                 if (writerClient == null) {
+                    // Read lock owner ID from configuration if provided
+                    String lockOwnerId =
+                            conf.getOptional(ConfigOptions.CLIENT_WRITER_LOCK_OWNER_ID)
+                                    .orElse(null);
                     writerClient =
                             new WriterClient(
-                                    conf, metadataUpdater, clientMetricGroup, this.getAdmin());
+                                    conf,
+                                    metadataUpdater,
+                                    clientMetricGroup,
+                                    this.getAdmin(),
+                                    lockOwnerId,
+                                    recoveryMode);
                 }
             }
         }
         return writerClient;
+    }
+
+    @Override
+    public void switchToNormalMode() {
+        // Check if this is a recovery connection that was already switched
+        if (normalModeSwitched.get() && !recoveryMode.get()) {
+            throw new IllegalStateException(
+                    "switchToNormalMode() can only be called once per connection");
+        }
+
+        // If already in normal mode (normal connection), this is a no-op (idempotent for normal
+        // connections)
+        if (!recoveryMode.get()) {
+            return;
+        }
+
+        // Check if switchToNormalMode has already been called
+        if (!normalModeSwitched.compareAndSet(false, true)) {
+            throw new IllegalStateException(
+                    "switchToNormalMode() can only be called once per connection");
+        }
+
+        // Switch from recovery mode to normal mode
+        if (recoveryMode.compareAndSet(true, false)) {
+            // If WriterClient exists, flush all pending writes to ensure
+            // batches with recovery mode (overwrite mode) are sent before any normal mode batches
+            if (writerClient != null) {
+                writerClient.flush();
+            }
+        } else {
+            // This should not happen if the logic is correct
+            // Reset the flag to allow future attempts
+            normalModeSwitched.set(false);
+        }
+    }
+
+    @Override
+    public boolean isRecoveryMode() {
+        return recoveryMode.get();
     }
 
     public LookupClient getOrCreateLookupClient() {
@@ -192,6 +270,26 @@ public final class FlussConnection implements Connection {
         return remoteFileDownloader;
     }
 
+    /**
+     * Get or create the column lock manager for this connection.
+     *
+     * <p>The column lock manager is shared across all writers created from this connection. This
+     * ensures unified management of column locks for the same table, including lock acquisition,
+     * release, and renewal.
+     *
+     * @return the column lock manager
+     */
+    public ClientColumnLockManager getOrCreateColumnLockManager() {
+        if (columnLockManager == null) {
+            synchronized (this) {
+                if (columnLockManager == null) {
+                    columnLockManager = new ClientColumnLockManager(metadataUpdater);
+                }
+            }
+        }
+        return columnLockManager;
+    }
+
     @Override
     public void close() throws Exception {
         if (writerClient != null) {
@@ -206,6 +304,15 @@ public final class FlussConnection implements Connection {
 
         if (remoteFileDownloader != null) {
             remoteFileDownloader.close();
+        }
+
+        if (columnLockManager != null) {
+            try {
+                columnLockManager.close();
+            } catch (Exception e) {
+                LOG.warn("Failed to close column lock manager", e);
+                // Continue closing other resources to ensure all resources are properly cleaned up
+            }
         }
 
         if (securityTokenManager != null) {

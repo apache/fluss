@@ -114,12 +114,18 @@ public class ClientRpcMessageUtils {
             long tableId,
             int acks,
             int maxRequestTimeoutMs,
-            List<ReadyWriteBatch> readyWriteBatches) {
+            List<ReadyWriteBatch> readyWriteBatches,
+            @Nullable String lockOwnerId) {
         PutKvRequest request =
                 new PutKvRequest()
                         .setTableId(tableId)
                         .setAcks(acks)
                         .setTimeoutMs(maxRequestTimeoutMs);
+
+        // Set lock owner ID if provided for column lock validation
+        if (lockOwnerId != null) {
+            request.setLockOwnerId(lockOwnerId);
+        }
         // check the target columns in the batch list should be the same. If not same,
         // we throw exception directly currently.
         int[] targetColumns =

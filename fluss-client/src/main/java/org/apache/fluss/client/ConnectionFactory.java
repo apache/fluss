@@ -52,7 +52,7 @@ public class ConnectionFactory {
      * }</pre>
      */
     public static Connection createConnection(Configuration conf) {
-        return new FlussConnection(conf);
+        return new FlussConnection(conf, false);
     }
 
     /**
@@ -63,6 +63,50 @@ public class ConnectionFactory {
      * <p>See more comments in method {@link #createConnection(Configuration)}
      */
     public static Connection createConnection(Configuration conf, MetricRegistry metricRegistry) {
-        return new FlussConnection(conf, metricRegistry);
+        return new FlussConnection(conf, metricRegistry, false);
+    }
+
+    /**
+     * Creates a new {@link Connection} to the Fluss cluster in recovery mode.
+     *
+     * <p>In recovery mode, all write operations bypass the merge engine and write directly to the
+     * KV store (overwrite mode). This is typically used for undo recovery scenarios where you need
+     * to restore historical state and then switch back to normal mode using {@link
+     * Connection#switchToNormalMode()}.
+     *
+     * <p>Example usage:
+     *
+     * <pre>{@code
+     * Configuration conf = new Configuration();
+     * conf.setString("bootstrap.servers", "localhost:9092");
+     * try (Connection recoveryConn = ConnectionFactory.createRecoveryConnection(conf)) {
+     *     UpsertWriter writer = recoveryConn.getTable(tablePath).newUpsert().createWriter();
+     *     // Apply undo operations in recovery mode (overwrite mode)
+     *     writer.upsert(undoRow1);
+     *     writer.upsert(undoRow2);
+     *     writer.flush();
+     *     // Switch to normal mode after undo recovery is complete
+     *     recoveryConn.switchToNormalMode();
+     *     // Continue with normal writes
+     *     writer.upsert(normalRow);
+     * }
+     * }</pre>
+     *
+     * @param conf the configuration to use
+     * @return a new Connection in recovery mode
+     */
+    public static Connection createRecoveryConnection(Configuration conf) {
+        return new FlussConnection(conf, true);
+    }
+
+    /**
+     * Create a new {@link Connection} to the Fluss cluster in recovery mode with registering
+     * metrics to the given {@code metricRegistry}.
+     *
+     * <p>See more comments in method {@link #createRecoveryConnection(Configuration)}
+     */
+    public static Connection createRecoveryConnection(
+            Configuration conf, MetricRegistry metricRegistry) {
+        return new FlussConnection(conf, metricRegistry, true);
     }
 }

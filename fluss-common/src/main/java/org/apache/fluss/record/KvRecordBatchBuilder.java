@@ -59,6 +59,7 @@ public class KvRecordBatchBuilder implements AutoCloseable {
     private volatile boolean isClosed;
     private final KvFormat kvFormat;
     private boolean aborted = false;
+    private boolean overwrite = false;
 
     private KvRecordBatchBuilder(
             int schemaId,
@@ -138,6 +139,15 @@ public class KvRecordBatchBuilder implements AutoCloseable {
         this.batchSequence = batchSequence;
     }
 
+    /**
+     * Set whether this batch should use overwrite mode.
+     *
+     * @param overwrite true to enable overwrite mode, false otherwise
+     */
+    public void setOverwrite(boolean overwrite) {
+        this.overwrite = overwrite;
+    }
+
     public BytesView build() throws IOException {
         if (aborted) {
             throw new IllegalStateException("Attempting to build an aborted record batch");
@@ -208,7 +218,11 @@ public class KvRecordBatchBuilder implements AutoCloseable {
     }
 
     private byte computeAttributes() {
-        return 0;
+        byte attributes = 0;
+        if (overwrite) {
+            attributes |= 0x01; // Set bit 0 for overwrite flag
+        }
+        return attributes;
     }
 
     /** Validate the row instance according to the kv format. */

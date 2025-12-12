@@ -18,8 +18,10 @@
 package org.apache.fluss.client.table.writer;
 
 import org.apache.fluss.annotation.PublicEvolving;
+import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.row.InternalRow;
 
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 
 /**
@@ -28,7 +30,7 @@ import java.util.concurrent.CompletableFuture;
  * @since 0.2
  */
 @PublicEvolving
-public interface UpsertWriter extends TableWriter {
+public interface UpsertWriter extends TableWriter, AutoCloseable {
 
     /**
      * Inserts row into Fluss table if they do not already exist, or updates them if they do exist.
@@ -46,4 +48,18 @@ public interface UpsertWriter extends TableWriter {
      * @return A {@link CompletableFuture} that always delete result when complete normally.
      */
     CompletableFuture<DeleteResult> delete(InternalRow row);
+
+    /**
+     * Get the acknowledged status for all buckets that have been written by this writer.
+     *
+     * <p>This method returns a map from TableBucket to the latest acknowledged offset for each
+     * bucket. The offsets represent the last successfully acknowledged write offset for each bucket
+     * that this writer has written to.
+     *
+     * <p>The returned map only contains buckets that have been written by this writer instance. If
+     * no writes have been performed, the map will be empty.
+     *
+     * @return a map from TableBucket to the latest acknowledged offset for each bucket
+     */
+    Map<TableBucket, Long> bucketsAckStatus();
 }

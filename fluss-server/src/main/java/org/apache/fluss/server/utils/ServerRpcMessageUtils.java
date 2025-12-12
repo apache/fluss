@@ -51,6 +51,8 @@ import org.apache.fluss.rpc.entity.LookupResultForBucket;
 import org.apache.fluss.rpc.entity.PrefixLookupResultForBucket;
 import org.apache.fluss.rpc.entity.ProduceLogResultForBucket;
 import org.apache.fluss.rpc.entity.PutKvResultForBucket;
+import org.apache.fluss.rpc.messages.AcquireColumnLockRequest;
+import org.apache.fluss.rpc.messages.AcquireColumnLockResponse;
 import org.apache.fluss.rpc.messages.AdjustIsrRequest;
 import org.apache.fluss.rpc.messages.AdjustIsrResponse;
 import org.apache.fluss.rpc.messages.AlterTableRequest;
@@ -135,6 +137,10 @@ import org.apache.fluss.rpc.messages.ProduceLogRequest;
 import org.apache.fluss.rpc.messages.ProduceLogResponse;
 import org.apache.fluss.rpc.messages.PutKvRequest;
 import org.apache.fluss.rpc.messages.PutKvResponse;
+import org.apache.fluss.rpc.messages.ReleaseColumnLockRequest;
+import org.apache.fluss.rpc.messages.ReleaseColumnLockResponse;
+import org.apache.fluss.rpc.messages.RenewColumnLockRequest;
+import org.apache.fluss.rpc.messages.RenewColumnLockResponse;
 import org.apache.fluss.rpc.messages.StopReplicaRequest;
 import org.apache.fluss.rpc.messages.StopReplicaResponse;
 import org.apache.fluss.rpc.messages.UpdateMetadataRequest;
@@ -1012,6 +1018,13 @@ public class ServerRpcMessageUtils {
 
             if (bucketResult.failed()) {
                 putKvBucket.setError(bucketResult.getErrorCode(), bucketResult.getErrorMessage());
+            } else {
+                // set high watermark for successful writes
+                // this is used for exactly-once semantics to track checkpoint offsets
+                long highWatermark = bucketResult.getWriteLogEndOffset();
+                if (highWatermark >= 0) {
+                    putKvBucket.setHighWatermark(highWatermark);
+                }
             }
             putKvRespForBucketList.add(putKvBucket);
         }
@@ -1793,5 +1806,75 @@ public class ServerRpcMessageUtils {
         result.addAll(response);
         result.addAll(errors);
         return result;
+    }
+
+    public static AcquireColumnLockResponse makeAcquireColumnLockResponse(
+            AcquireColumnLockRequest request,
+            org.apache.fluss.server.lock.ServerColumnLockService serverColumnLockService) {
+        // Build lock request for table level
+        long tableId = request.getTableId();
+        String ownerId = request.getOwnerId();
+        int schemaId = request.getSchemaId();
+        long ttlMs = request.getTtlMs();
+
+        int[] columnIndexes = null;
+        if (request.getColumnIndexesCount() > 0) {
+            columnIndexes = new int[request.getColumnIndexesCount()];
+            for (int i = 0; i < request.getColumnIndexesCount(); i++) {
+                columnIndexes[i] = request.getColumnIndexeAt(i);
+            }
+        }
+
+        org.apache.fluss.server.lock.ServerColumnLockService.TableLockRequest lockRequest =
+                new org.apache.fluss.server.lock.ServerColumnLockService.TableLockRequest(
+                        tableId, ownerId, schemaId, columnIndexes, ttlMs);
+
+        // Acquire lock at table level
+        org.apache.fluss.server.lock.ServerColumnLockService.TableLockResult result =
+                serverColumnLockService.acquireLock(lockRequest);
+
+        // Build response
+        AcquireColumnLockResponse response = new AcquireColumnLockResponse();
+        if (result.isSuccess()) {
+            response.setAcquiredTimeMs(result.getAcquiredTime());
+        } else {
+            response.setErrorCode(Errors.COLUMN_LOCK_CONFLICT.code());
+            response.setErrorMessage(result.getErrorMessage());
+        }
+        return response;
+    }
+
+    public static RenewColumnLockResponse makeRenewColumnLockResponse(
+            RenewColumnLockRequest request,
+            org.apache.fluss.server.lock.ServerColumnLockService serverColumnLockService) {
+        long tableId = request.getTableId();
+        String ownerId = request.getOwnerId();
+
+        org.apache.fluss.server.lock.ServerColumnLockService.TableLockResult result =
+                serverColumnLockService.renewLockForTable(tableId, ownerId);
+
+        RenewColumnLockResponse response = new RenewColumnLockResponse();
+        if (result.isSuccess()) {
+            response.setRenewedTimeMs(result.getAcquiredTime());
+        } else {
+            response.setErrorCode(Errors.COLUMN_LOCK_NOT_FOUND.code());
+            response.setErrorMessage(result.getErrorMessage());
+        }
+        return response;
+    }
+
+    public static ReleaseColumnLockResponse makeReleaseColumnLockResponse(
+            ReleaseColumnLockRequest request,
+            org.apache.fluss.server.lock.ServerColumnLockService serverColumnLockService) {
+        long tableId = request.getTableId();
+        String ownerId = request.getOwnerId();
+
+        // Release lock at table level
+        serverColumnLockService.releaseLockForTable(tableId, ownerId);
+
+        // Build response (all releases are considered successful per design)
+        ReleaseColumnLockResponse response = new ReleaseColumnLockResponse();
+        // No error code set - all releases are considered successful
+        return response;
     }
 }

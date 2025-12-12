@@ -71,7 +71,7 @@ public interface RowMerger {
     RowMerger configureTargetColumns(@Nullable int[] targetColumns, short schemaId, Schema schema);
 
     /** Create a row merger based on the given configuration. */
-    static RowMerger create(TableConfig tableConf, KvFormat kvFormat) {
+    static RowMerger create(TableConfig tableConf, Schema schema, KvFormat kvFormat) {
         Optional<MergeEngineType> mergeEngineType = tableConf.getMergeEngineType();
         @Nullable DeleteBehavior deleteBehavior = tableConf.getDeleteBehavior().orElse(null);
 
@@ -88,6 +88,19 @@ public interface RowMerger {
                                         ConfigOptions.TABLE_MERGE_ENGINE_VERSION_COLUMN.key()));
                     }
                     return new VersionedRowMerger(versionColumn.get(), deleteBehavior);
+                case AGGREGATE:
+                    boolean removeRecordOnDelete = tableConf.getAggregationRemoveRecordOnDelete();
+                    org.apache.fluss.server.kv.rowmerger.aggregate.FieldAggregator[] aggregators =
+                            AggregatorHelper.createAggregators(
+                                    schema.getRowType(),
+                                    schema.getPrimaryKeyColumnNames(),
+                                    tableConf);
+                    return new AggregateRowMerger(
+                            schema.getRowType(),
+                            aggregators,
+                            removeRecordOnDelete,
+                            deleteBehavior,
+                            kvFormat);
                 default:
                     throw new IllegalArgumentException(
                             "Unsupported merge engine type: " + mergeEngineType.get());

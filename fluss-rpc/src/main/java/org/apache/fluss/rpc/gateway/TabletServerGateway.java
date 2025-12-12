@@ -18,6 +18,8 @@
 package org.apache.fluss.rpc.gateway;
 
 import org.apache.fluss.rpc.RpcGateway;
+import org.apache.fluss.rpc.messages.AcquireColumnLockRequest;
+import org.apache.fluss.rpc.messages.AcquireColumnLockResponse;
 import org.apache.fluss.rpc.messages.FetchLogRequest;
 import org.apache.fluss.rpc.messages.FetchLogResponse;
 import org.apache.fluss.rpc.messages.InitWriterRequest;
@@ -42,6 +44,10 @@ import org.apache.fluss.rpc.messages.ProduceLogRequest;
 import org.apache.fluss.rpc.messages.ProduceLogResponse;
 import org.apache.fluss.rpc.messages.PutKvRequest;
 import org.apache.fluss.rpc.messages.PutKvResponse;
+import org.apache.fluss.rpc.messages.ReleaseColumnLockRequest;
+import org.apache.fluss.rpc.messages.ReleaseColumnLockResponse;
+import org.apache.fluss.rpc.messages.RenewColumnLockRequest;
+import org.apache.fluss.rpc.messages.RenewColumnLockResponse;
 import org.apache.fluss.rpc.messages.StopReplicaRequest;
 import org.apache.fluss.rpc.messages.StopReplicaResponse;
 import org.apache.fluss.rpc.messages.UpdateMetadataRequest;
@@ -172,4 +178,30 @@ public interface TabletServerGateway extends RpcGateway, AdminReadOnlyGateway {
     @RPC(api = ApiKeys.NOTIFY_LAKE_TABLE_OFFSET)
     CompletableFuture<NotifyLakeTableOffsetResponse> notifyLakeTableOffset(
             NotifyLakeTableOffsetRequest request);
+
+    /**
+     * Acquire column lock for write operations.
+     *
+     * @return acquire column lock response
+     */
+    @RPC(api = ApiKeys.ACQUIRE_COLUMN_LOCK)
+    CompletableFuture<AcquireColumnLockResponse> acquireColumnLock(
+            AcquireColumnLockRequest request);
+
+    /**
+     * Renew column lock to extend its TTL.
+     *
+     * @return renew column lock response
+     */
+    @RPC(api = ApiKeys.RENEW_COLUMN_LOCK)
+    CompletableFuture<RenewColumnLockResponse> renewColumnLock(RenewColumnLockRequest request);
+
+    /**
+     * Release column lock after write operations complete.
+     *
+     * @return release column lock response
+     */
+    @RPC(api = ApiKeys.RELEASE_COLUMN_LOCK)
+    CompletableFuture<ReleaseColumnLockResponse> releaseColumnLock(
+            ReleaseColumnLockRequest request);
 }

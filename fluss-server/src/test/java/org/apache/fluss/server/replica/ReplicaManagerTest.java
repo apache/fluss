@@ -457,6 +457,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
                 1,
                 Collections.singletonMap(tb, genKvRecordBatch(DATA_1_WITH_KEY_AND_VALUE)),
                 null,
+                null,
                 future::complete);
         assertThat(future.get()).containsOnly(new PutKvResultForBucket(tb, 8));
 
@@ -468,6 +469,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
                                         100,
                                         Collections.singletonMap(
                                                 tb, genKvRecordBatch(DATA_1_WITH_KEY_AND_VALUE)),
+                                        null,
                                         null,
                                         (result) -> {
                                             // do nothing.
@@ -482,6 +484,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
                 20000,
                 1,
                 Collections.singletonMap(unknownTb, genKvRecordBatch(DATA_1_WITH_KEY_AND_VALUE)),
+                null,
                 null,
                 future::complete);
         assertThat(future.get())
@@ -516,6 +519,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
                         tb,
                         genKvRecordBatchWithWriterId(
                                 data1, DATA1_KEY_TYPE, DATA1_ROW_TYPE, 100L, 0)),
+                null,
                 null,
                 future::complete);
         assertThat(future.get()).containsOnly(new PutKvResultForBucket(tb, 5));
@@ -560,6 +564,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
                         genKvRecordBatchWithWriterId(
                                 data2, DATA1_KEY_TYPE, DATA1_ROW_TYPE, 100L, 3)),
                 null,
+                null,
                 future::complete);
         PutKvResultForBucket putKvResultForBucket = future.get().get(0);
         assertThat(putKvResultForBucket.getErrorCode())
@@ -598,6 +603,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
                         tb,
                         genKvRecordBatchWithWriterId(
                                 data3, DATA1_KEY_TYPE, DATA1_ROW_TYPE, 100L, 1)),
+                null,
                 null,
                 future::complete);
         assertThat(future.get()).containsOnly(new PutKvResultForBucket(tb, 8));
@@ -646,6 +652,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
                     1,
                     Collections.singletonMap(tb, genKvRecordBatch(deleteList)),
                     null,
+                    null,
                     future::complete);
             assertThat(future.get()).containsOnly(new PutKvResultForBucket(tb, i + 1));
         }
@@ -656,6 +663,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
                 20000,
                 1,
                 Collections.singletonMap(tb, genKvRecordBatch(DATA_1_WITH_KEY_AND_VALUE)),
+                null,
                 null,
                 future::complete);
         assertThat(future.get()).containsOnly(new PutKvResultForBucket(tb, 18));
@@ -715,6 +723,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
                 20000,
                 1,
                 Collections.singletonMap(tb, genKvRecordBatch(DATA_1_WITH_KEY_AND_VALUE)),
+                null,
                 null,
                 future1::complete);
         assertThat(future1.get()).containsOnly(new PutKvResultForBucket(tb, 8));
@@ -785,6 +794,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
                 20000,
                 1,
                 Collections.singletonMap(tb, genKvRecordBatch(keyType, rowType, data1)),
+                null,
                 null,
                 future::complete);
         assertThat(future.get()).containsOnly(new PutKvResultForBucket(tb, 4));
@@ -863,6 +873,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
                 20000,
                 1,
                 Collections.singletonMap(tb, genKvRecordBatch(DATA_1_WITH_KEY_AND_VALUE)),
+                null,
                 null,
                 future1::complete);
         assertThat(future1.get()).containsOnly(new PutKvResultForBucket(tb, 8));
@@ -1098,6 +1109,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
                 -1,
                 Collections.singletonMap(tb, genKvRecordBatch(DATA_1_WITH_KEY_AND_VALUE)),
                 null,
+                null,
                 future::complete);
         assertThat(future.get()).containsOnly(new PutKvResultForBucket(tb, 8));
     }
@@ -1266,6 +1278,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
                                                             Collections.singletonList(
                                                                     Tuple2.of(key, value)))),
                                             null,
+                                            null,
                                             future::complete);
                                 } catch (Exception e) {
                                     throw new RuntimeException(e);
@@ -1346,6 +1359,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
                 -1,
                 entriesPerBucket,
                 null,
+                null,
                 writeResultForBuckets -> {
                     // do nothing
                 });
@@ -1383,6 +1397,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
                 300000,
                 -1,
                 entriesPerBucket,
+                null,
                 null,
                 writeResultForBuckets -> {
                     // do nothing
@@ -1796,7 +1811,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
         CompletableFuture<List<PutKvResultForBucket>> writeFuture = new CompletableFuture<>();
         // put kv record batch for every bucket
         replicaManager.putRecordsToKv(
-                300000, -1, kvRecordBatchPerBucket, null, writeFuture::complete);
+                300000, -1, kvRecordBatchPerBucket, null, null, writeFuture::complete);
         // wait the write ack
         writeFuture.get();
     }

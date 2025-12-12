@@ -21,6 +21,7 @@ import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.compression.ArrowCompressionInfo;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.TableConfig;
+import org.apache.fluss.exception.ColumnLockConflictException;
 import org.apache.fluss.exception.FencedLeaderEpochException;
 import org.apache.fluss.exception.InvalidColumnProjectionException;
 import org.apache.fluss.exception.InvalidTimestampException;
@@ -33,6 +34,7 @@ import org.apache.fluss.exception.NotLeaderOrFollowerException;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
+import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
@@ -61,6 +63,7 @@ import org.apache.fluss.server.kv.snapshot.KvTabletSnapshotTarget;
 import org.apache.fluss.server.kv.snapshot.PeriodicSnapshotManager;
 import org.apache.fluss.server.kv.snapshot.RocksIncrementalSnapshot;
 import org.apache.fluss.server.kv.snapshot.SnapshotContext;
+import org.apache.fluss.server.lock.ServerColumnLockService;
 import org.apache.fluss.server.log.FetchDataInfo;
 import org.apache.fluss.server.log.FetchIsolation;
 import org.apache.fluss.server.log.FetchParams;
@@ -195,6 +198,9 @@ public final class Replica {
     private volatile @Nullable CloseableRegistry closeableRegistryForKv;
     private @Nullable PeriodicSnapshotManager kvSnapshotManager;
 
+    // ReplicaManager to access server-level column lock service
+    private final ReplicaManager replicaManager;
+
     // ------- metrics
     private Counter isrShrinks;
     private Counter isrExpands;
@@ -219,6 +225,7 @@ public final class Replica {
             FatalErrorHandler fatalErrorHandler,
             BucketMetricGroup bucketMetricGroup,
             TableInfo tableInfo,
+            ReplicaManager replicaManager,
             Clock clock)
             throws Exception {
         this.physicalPath = physicalPath;
@@ -244,6 +251,7 @@ public final class Replica {
         this.logFormat = tableConfig.getLogFormat();
         this.arrowCompressionInfo = tableConfig.getArrowCompressionInfo();
         this.snapshotContext = snapshotContext;
+        this.replicaManager = replicaManager;
         // create a closeable registry for the replica
         this.closeableRegistry = new CloseableRegistry();
 
@@ -552,6 +560,109 @@ public final class Replica {
         if (lakeTieringMetricGroup != null) {
             lakeTieringMetricGroup.close();
         }
+    }
+
+    /**
+     * Validate column lock ownership for KV write operations.
+     *
+     * <p>This method validates that:
+     *
+     * <ul>
+     *   <li>The provided lockOwnerId has a valid lock
+     *   <li>The lock's schema ID matches the current schema ID
+     *   <li>The lock covers all columns being written (excluding primary key columns)
+     * </ul>
+     *
+     * <p>This validation ensures that only lock holders can perform KV writes when locks are
+     * active, preventing conflicting concurrent partial updates.
+     *
+     * <p>Note: Primary key columns are filtered out before validation because they are always
+     * required for partial updates (to locate the row) but don't participate in lock conflict
+     * detection since they cannot be updated.
+     *
+     * @param lockOwnerId the lock owner ID to validate, null if no lock validation is needed
+     * @param schemaId the schema ID of the write operation
+     * @param targetColumns the columns being written, null means all columns
+     * @throws ColumnLockConflictException if validation fails (non-retriable exception)
+     */
+    private void validateColumnLockOwner(
+            @Nullable String lockOwnerId, int schemaId, @Nullable int[] targetColumns) {
+        ServerColumnLockService lockService = replicaManager.getColumnLockService();
+        if (lockService.hasActiveLocks(tableBucket)) {
+            // Filter out primary key columns from targetColumns for validation
+            // This ensures consistency with client-side lock acquisition logic
+            int[] columnsToValidate = filterOutPrimaryKeyColumns(targetColumns);
+
+            if (!lockService.validateWritePermission(
+                    tableBucket, lockOwnerId, schemaId, columnsToValidate)) {
+                throw new ColumnLockConflictException(
+                        String.format(
+                                "Column lock conflict for bucket %s. Provided lock owner '%s' does not hold "
+                                        + "the required column lock for schema %d and columns %s. "
+                                        + "This is a non-retriable error. "
+                                        + "Please acquire the appropriate column lock before writing.",
+                                tableBucket,
+                                lockOwnerId == null ? "null" : lockOwnerId,
+                                schemaId,
+                                targetColumns == null
+                                        ? "all"
+                                        : java.util.Arrays.toString(targetColumns)));
+            }
+        }
+    }
+
+    /**
+     * Filter out primary key columns from target columns for lock validation.
+     *
+     * <p>Primary key columns are always required for partial updates (to locate the row) but don't
+     * need to participate in lock conflict detection since they cannot be updated.
+     *
+     * @param targetColumns the columns being written, null means all columns
+     * @return filtered column indexes excluding primary keys, or null if targetColumns is null
+     */
+    private @Nullable int[] filterOutPrimaryKeyColumns(@Nullable int[] targetColumns) {
+        if (targetColumns == null) {
+            // null means all columns, keep as null
+            return null;
+        }
+
+        // Get primary key indexes from schema
+        Schema schema = schemaGetter.getLatestSchemaInfo().getSchema();
+        int[] primaryKeyIndexes = schema.getPrimaryKeyIndexes();
+        if (primaryKeyIndexes.length == 0) {
+            // No primary keys, return targetColumns as is
+            return targetColumns;
+        }
+
+        // Create a BitSet for quick lookup of primary key columns
+        java.util.BitSet pkSet = new java.util.BitSet();
+        for (int pkIdx : primaryKeyIndexes) {
+            pkSet.set(pkIdx);
+        }
+
+        // Count non-primary-key columns
+        int nonPkCount = 0;
+        for (int col : targetColumns) {
+            if (!pkSet.get(col)) {
+                nonPkCount++;
+            }
+        }
+
+        // If all columns are primary keys, return null (lock all non-PK columns)
+        if (nonPkCount == 0) {
+            return null;
+        }
+
+        // Build result array with non-primary-key columns only
+        int[] result = new int[nonPkCount];
+        int idx = 0;
+        for (int col : targetColumns) {
+            if (!pkSet.get(col)) {
+                result[idx++] = col;
+            }
+        }
+
+        return result;
     }
 
     @VisibleForTesting
@@ -902,7 +1013,10 @@ public final class Replica {
     }
 
     public LogAppendInfo putRecordsToLeader(
-            KvRecordBatch kvRecords, @Nullable int[] targetColumns, int requiredAcks)
+            KvRecordBatch kvRecords,
+            @Nullable int[] targetColumns,
+            int requiredAcks,
+            @Nullable String lockOwnerId)
             throws Exception {
         return inReadLock(
                 leaderIsrUpdateLock,
@@ -913,6 +1027,11 @@ public final class Replica {
                                         "Leader not local for bucket %s on tabletServer %d",
                                         tableBucket, localTabletServerId));
                     }
+
+                    // Validate column lock owner if lock manager is present and has active locks
+                    // Pass schema ID from kvRecords and target columns for proper column-level
+                    // validation
+                    validateColumnLockOwner(lockOwnerId, kvRecords.schemaId(), targetColumns);
 
                     validateInSyncReplicaSize(requiredAcks);
                     KvTablet kv = this.kvTablet;

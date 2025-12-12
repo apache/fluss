@@ -49,7 +49,9 @@ import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer.TruncateReason;
 import org.apache.fluss.server.kv.rocksdb.RocksDBKv;
 import org.apache.fluss.server.kv.rocksdb.RocksDBKvBuilder;
 import org.apache.fluss.server.kv.rocksdb.RocksDBResourceContainer;
+import org.apache.fluss.server.kv.rowmerger.AggregateRowMerger;
 import org.apache.fluss.server.kv.rowmerger.RowMerger;
+import org.apache.fluss.server.kv.rowmerger.aggregate.FieldAggregator;
 import org.apache.fluss.server.kv.snapshot.KvFileHandleAndLocalPath;
 import org.apache.fluss.server.kv.snapshot.KvSnapshotDataUploader;
 import org.apache.fluss.server.kv.snapshot.RocksIncrementalSnapshot;
@@ -61,6 +63,7 @@ import org.apache.fluss.server.log.LogTablet;
 import org.apache.fluss.server.metrics.group.TabletServerMetricGroup;
 import org.apache.fluss.server.utils.FatalErrorHandler;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
+import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.BytesUtils;
 import org.apache.fluss.utils.FileUtils;
@@ -291,10 +294,17 @@ public final class KvTablet {
                                         + latestSchemaId);
                     }
 
+                    // Use overwrite merger if overwrite mode is enabled, otherwise use normal
+                    // merger
                     // we only support ADD COLUMN, so targetColumns is fine to be used directly
+                    boolean overwrite = kvRecords.isOverwrite();
                     RowMerger currentMerger =
-                            rowMerger.configureTargetColumns(
-                                    targetColumns, latestSchemaId, latestSchema);
+                            overwrite
+                                    ? createOverwriteMerger(latestSchema)
+                                            .configureTargetColumns(
+                                                    targetColumns, latestSchemaId, latestSchema)
+                                    : rowMerger.configureTargetColumns(
+                                            targetColumns, latestSchemaId, latestSchema);
                     RowType latestRowType = latestSchema.getRowType();
                     WalBuilder walBuilder = createWalBuilder(latestSchemaId, latestRowType);
                     walBuilder.setWriterState(kvRecords.writerId(), kvRecords.batchSequence());
@@ -599,5 +609,47 @@ public final class KvTablet {
     @VisibleForTesting
     public RocksDBKv getRocksDBKv() {
         return rocksDBKv;
+    }
+
+    /**
+     * Creates a row merger for overwrite mode. The merger uses last_value aggregation for all
+     * non-primary key columns and primary-key aggregation for primary key columns. This enables
+     * partial update and partial delete semantics.
+     *
+     * @param schema the schema to use for creating the merger
+     * @return a configured {@link RowMerger} for overwrite mode
+     */
+    private RowMerger createOverwriteMerger(Schema schema) {
+        RowType rowType = schema.getRowType();
+        int fieldCount = rowType.getFieldCount();
+
+        // Create aggregators: last_value for all columns (primary keys will use primary-key)
+        FieldAggregator[] aggregators = new FieldAggregator[fieldCount];
+
+        // Set primary key columns to use FieldPrimaryKeyAgg
+        java.util.Set<Integer> primaryKeySet = new java.util.HashSet<>();
+        for (int pkIndex : schema.getPrimaryKeyIndexes()) {
+            primaryKeySet.add(pkIndex);
+        }
+
+        for (int i = 0; i < fieldCount; i++) {
+            DataType fieldType = rowType.getChildren().get(i);
+
+            if (primaryKeySet.contains(i)) {
+                // Use FieldPrimaryKeyAgg for primary key columns
+                aggregators[i] =
+                        new org.apache.fluss.server.kv.rowmerger.aggregate.FieldPrimaryKeyAgg(
+                                "primary-key", fieldType);
+            } else {
+                // Use FieldLastValueAgg for non-primary key columns
+                aggregators[i] =
+                        new org.apache.fluss.server.kv.rowmerger.aggregate.FieldLastValueAgg(
+                                "last_value", fieldType);
+            }
+        }
+
+        // Create AggregateRowMerger with removeRecordOnDelete=true to allow DELETE operations
+        // in overwrite mode (needed for undo recovery to remove post-checkpoint writes)
+        return new AggregateRowMerger(rowType, aggregators, true, DeleteBehavior.ALLOW, kvFormat);
     }
 }

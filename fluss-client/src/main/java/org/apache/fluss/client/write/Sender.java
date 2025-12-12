@@ -107,6 +107,10 @@ public class Sender implements Runnable {
 
     private final WriterMetricGroup writerMetricGroup;
 
+    private final BucketOffsetTracker bucketOffsetTracker;
+
+    private final WriterClient writerClient;
+
     public Sender(
             RecordAccumulator accumulator,
             int maxRequestTimeoutMs,
@@ -115,7 +119,9 @@ public class Sender implements Runnable {
             int retries,
             MetadataUpdater metadataUpdater,
             IdempotenceManager idempotenceManager,
-            WriterMetricGroup writerMetricGroup) {
+            WriterMetricGroup writerMetricGroup,
+            BucketOffsetTracker bucketOffsetTracker,
+            WriterClient writerClient) {
         this.accumulator = accumulator;
         this.maxRequestSize = maxRequestSize;
         this.maxRequestTimeoutMs = maxRequestTimeoutMs;
@@ -128,7 +134,9 @@ public class Sender implements Runnable {
         checkNotNull(metadataUpdater.getCoordinatorServer());
 
         this.idempotenceManager = idempotenceManager;
+        this.writerClient = writerClient;
         this.writerMetricGroup = writerMetricGroup;
+        this.bucketOffsetTracker = bucketOffsetTracker;
 
         // TODO add retry logic while send failed. See FLUSS-56364375
     }
@@ -388,7 +396,11 @@ public class Sender implements Runnable {
                             sendPutKvRequestAndHandleResponse(
                                     gateway,
                                     makePutKvRequest(
-                                            tableId, acks, maxRequestTimeoutMs, writeBatches),
+                                            tableId,
+                                            acks,
+                                            maxRequestTimeoutMs,
+                                            writeBatches,
+                                            writerClient.getLockOwnerId()),
                                     tableId,
                                     recordsByBucket);
                         }
@@ -468,6 +480,11 @@ public class Sender implements Runnable {
                                 writeBatch, ApiError.fromErrorMessage(logRespForBucket));
                 invalidMetadataTablesSet.addAll(invalidMetadataTables);
             } else {
+                // Update bucket offset tracker with the high watermark
+                if (logRespForBucket.hasHighWatermark()) {
+                    long highWatermark = logRespForBucket.getHighWatermark();
+                    bucketOffsetTracker.updateOffset(tb, highWatermark);
+                }
                 completeBatch(writeBatch);
             }
         }
@@ -492,6 +509,11 @@ public class Sender implements Runnable {
                                 writeBatch, ApiError.fromErrorMessage(respForBucket));
                 invalidMetadataTablesSet.addAll(invalidMetadataTables);
             } else {
+                // Update bucket offset tracker with the high watermark (changelog end offset)
+                if (respForBucket.hasHighWatermark()) {
+                    long highWatermark = respForBucket.getHighWatermark();
+                    bucketOffsetTracker.updateOffset(tb, highWatermark);
+                }
                 completeBatch(writeBatch);
             }
         }

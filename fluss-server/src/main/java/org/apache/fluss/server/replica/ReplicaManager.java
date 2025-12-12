@@ -72,6 +72,7 @@ import org.apache.fluss.server.kv.KvSnapshotResource;
 import org.apache.fluss.server.kv.snapshot.CompletedKvSnapshotCommitter;
 import org.apache.fluss.server.kv.snapshot.DefaultSnapshotContext;
 import org.apache.fluss.server.kv.snapshot.SnapshotContext;
+import org.apache.fluss.server.lock.ServerColumnLockService;
 import org.apache.fluss.server.log.FetchDataInfo;
 import org.apache.fluss.server.log.FetchParams;
 import org.apache.fluss.server.log.ListOffsetsParam;
@@ -188,6 +189,9 @@ public class ReplicaManager {
 
     private final Clock clock;
 
+    // Column lock service
+    private final ServerColumnLockService columnLockService;
+
     public ReplicaManager(
             Configuration conf,
             Scheduler scheduler,
@@ -280,6 +284,10 @@ public class ReplicaManager {
         this.remoteLogManager = remoteLogManager;
         this.serverMetricGroup = serverMetricGroup;
         this.clock = clock;
+
+        // Initialize column lock service
+        this.columnLockService = new ServerColumnLockService(this);
+
         registerMetrics();
     }
 
@@ -296,6 +304,19 @@ public class ReplicaManager {
 
     public RemoteLogManager getRemoteLogManager() {
         return remoteLogManager;
+    }
+
+    /**
+     * Get the column lock service.
+     *
+     * @return the column lock service
+     */
+    public int getServerId() {
+        return serverId;
+    }
+
+    public ServerColumnLockService getColumnLockService() {
+        return columnLockService;
     }
 
     private void registerMetrics() {
@@ -496,6 +517,7 @@ public class ReplicaManager {
             int requiredAcks,
             Map<TableBucket, KvRecordBatch> entriesPerBucket,
             @Nullable int[] targetColumns,
+            @Nullable String lockOwnerId,
             Consumer<List<PutKvResultForBucket>> responseCallback) {
         if (isRequiredAcksInvalid(requiredAcks)) {
             throw new InvalidRequiredAcksException("Invalid required acks: " + requiredAcks);
@@ -503,7 +525,7 @@ public class ReplicaManager {
 
         long startTime = System.currentTimeMillis();
         Map<TableBucket, PutKvResultForBucket> kvPutResult =
-                putToLocalKv(entriesPerBucket, targetColumns, requiredAcks);
+                putToLocalKv(entriesPerBucket, targetColumns, requiredAcks, lockOwnerId);
         LOG.debug(
                 "Put records to local kv storage and wait generate cdc log in {} ms",
                 System.currentTimeMillis() - startTime);
@@ -973,7 +995,8 @@ public class ReplicaManager {
     private Map<TableBucket, PutKvResultForBucket> putToLocalKv(
             Map<TableBucket, KvRecordBatch> entriesPerBucket,
             @Nullable int[] targetColumns,
-            int requiredAcks) {
+            int requiredAcks,
+            @Nullable String lockOwnerId) {
         Map<TableBucket, PutKvResultForBucket> putResultForBucketMap = new HashMap<>();
         for (Map.Entry<TableBucket, KvRecordBatch> entry : entriesPerBucket.entrySet()) {
             TableBucket tb = entry.getKey();
@@ -984,7 +1007,8 @@ public class ReplicaManager {
                 tableMetrics = replica.tableMetrics();
                 tableMetrics.totalPutKvRequests().inc();
                 LogAppendInfo appendInfo =
-                        replica.putRecordsToLeader(entry.getValue(), targetColumns, requiredAcks);
+                        replica.putRecordsToLeader(
+                                entry.getValue(), targetColumns, requiredAcks, lockOwnerId);
                 LOG.trace(
                         "Written to local kv for {}, and the cdc log beginning at offset {} and ending at offset {}",
                         tb,
@@ -1589,6 +1613,7 @@ public class ReplicaManager {
                                 fatalErrorHandler,
                                 bucketMetricGroup,
                                 tableInfo,
+                                this,
                                 clock);
                 allReplicas.put(tb, new OnlineReplica(replica));
                 replicaOpt = Optional.of(replica);
@@ -1677,6 +1702,11 @@ public class ReplicaManager {
     public static final class OfflineReplica implements HostedReplica {}
 
     public void shutdown() throws InterruptedException {
+        // Close column lock service
+        if (columnLockService != null) {
+            columnLockService.close();
+        }
+
         // Close the resources for snapshot kv
         kvSnapshotResource.close();
         replicaFetcherManager.shutdown();

@@ -30,6 +30,8 @@ import org.apache.fluss.rpc.entity.LookupResultForBucket;
 import org.apache.fluss.rpc.entity.PrefixLookupResultForBucket;
 import org.apache.fluss.rpc.entity.ResultForBucket;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
+import org.apache.fluss.rpc.messages.AcquireColumnLockRequest;
+import org.apache.fluss.rpc.messages.AcquireColumnLockResponse;
 import org.apache.fluss.rpc.messages.FetchLogRequest;
 import org.apache.fluss.rpc.messages.FetchLogResponse;
 import org.apache.fluss.rpc.messages.InitWriterRequest;
@@ -56,6 +58,10 @@ import org.apache.fluss.rpc.messages.ProduceLogRequest;
 import org.apache.fluss.rpc.messages.ProduceLogResponse;
 import org.apache.fluss.rpc.messages.PutKvRequest;
 import org.apache.fluss.rpc.messages.PutKvResponse;
+import org.apache.fluss.rpc.messages.ReleaseColumnLockRequest;
+import org.apache.fluss.rpc.messages.ReleaseColumnLockResponse;
+import org.apache.fluss.rpc.messages.RenewColumnLockRequest;
+import org.apache.fluss.rpc.messages.RenewColumnLockResponse;
 import org.apache.fluss.rpc.messages.StopReplicaRequest;
 import org.apache.fluss.rpc.messages.StopReplicaResponse;
 import org.apache.fluss.rpc.messages.UpdateMetadataRequest;
@@ -77,6 +83,7 @@ import org.apache.fluss.server.metadata.TabletServerMetadataProvider;
 import org.apache.fluss.server.replica.ReplicaManager;
 import org.apache.fluss.server.utils.ServerRpcMessageUtils;
 import org.apache.fluss.server.zk.ZooKeeperClient;
+import org.apache.fluss.utils.concurrent.Scheduler;
 
 import javax.annotation.Nullable;
 
@@ -134,7 +141,8 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
             TabletServerMetadataCache metadataCache,
             MetadataManager metadataManager,
             @Nullable Authorizer authorizer,
-            DynamicConfigManager dynamicConfigManager) {
+            DynamicConfigManager dynamicConfigManager,
+            Scheduler scheduler) {
         super(
                 remoteFileSystem,
                 ServerType.TABLET_SERVER,
@@ -155,7 +163,9 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
     }
 
     @Override
-    public void shutdown() {}
+    public void shutdown() {
+        // Column lock service will be closed by ReplicaManager
+    }
 
     @Override
     public CompletableFuture<ProduceLogResponse> produceLog(ProduceLogRequest request) {
@@ -218,12 +228,14 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
         authorizeTable(WRITE, request.getTableId());
 
         Map<TableBucket, KvRecordBatch> putKvData = getPutKvData(request);
+        String lockOwnerId = request.hasLockOwnerId() ? request.getLockOwnerId() : null;
         CompletableFuture<PutKvResponse> response = new CompletableFuture<>();
         replicaManager.putRecordsToKv(
                 request.getTimeoutMs(),
                 request.getAcks(),
                 putKvData,
                 getTargetColumns(request),
+                lockOwnerId,
                 bucketResponse -> response.complete(makePutKvResponse(bucketResponse)));
         return response;
     }
@@ -490,5 +502,35 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
                                             Resource.table(tablePathOpt.get()));
                         })
                 .collect(Collectors.toSet());
+    }
+
+    @Override
+    public CompletableFuture<AcquireColumnLockResponse> acquireColumnLock(
+            AcquireColumnLockRequest request) {
+        authorizeTable(WRITE, request.getTableId());
+        return CompletableFuture.supplyAsync(
+                () ->
+                        ServerRpcMessageUtils.makeAcquireColumnLockResponse(
+                                request, replicaManager.getColumnLockService()));
+    }
+
+    @Override
+    public CompletableFuture<RenewColumnLockResponse> renewColumnLock(
+            RenewColumnLockRequest request) {
+        authorizeTable(WRITE, request.getTableId());
+        return CompletableFuture.supplyAsync(
+                () ->
+                        ServerRpcMessageUtils.makeRenewColumnLockResponse(
+                                request, replicaManager.getColumnLockService()));
+    }
+
+    @Override
+    public CompletableFuture<ReleaseColumnLockResponse> releaseColumnLock(
+            ReleaseColumnLockRequest request) {
+        authorizeTable(WRITE, request.getTableId());
+        return CompletableFuture.supplyAsync(
+                () ->
+                        ServerRpcMessageUtils.makeReleaseColumnLockResponse(
+                                request, replicaManager.getColumnLockService()));
     }
 }

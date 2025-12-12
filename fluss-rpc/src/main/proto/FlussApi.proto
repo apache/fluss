@@ -228,6 +228,9 @@ message PutKvRequest {
   // if empty, means write all columns
   repeated int32 target_columns = 4 [packed = true];
   repeated PbPutKvReqForBucket buckets_req = 5;
+  // optional lock owner id for column lock validation
+  // if present, server will validate the owner holds the necessary locks for kv write
+  optional string lock_owner_id = 6;
 }
 
 message PutKvResponse {
@@ -647,6 +650,7 @@ message PbProduceLogRespForBucket {
   optional int32 error_code = 3;
   optional string error_message = 4;
   optional int64 base_offset = 5;
+  optional int64 high_watermark = 6;
 }
 
 message PbFetchLogReqForTable {
@@ -690,6 +694,9 @@ message PbPutKvRespForBucket {
   required int32 bucket_id = 2;
   optional int32 error_code = 3;
   optional string error_message = 4;
+  // the high watermark of the changelog after this write
+  // this is used for exactly-once semantics to track checkpoint offsets
+  optional int64 high_watermark = 5;
 }
 
 message PbLookupReqForBucket {
@@ -713,6 +720,46 @@ message PbValue {
 
 message PbValueList {
   repeated bytes values = 1;
+}
+
+// column lock request and response
+// Column locks are table/partition-scoped, not bucket-scoped
+message AcquireColumnLockRequest {
+  required int64 table_id = 1;
+  required string owner_id = 2;
+  // column indexes to lock, if empty means lock all columns
+  repeated int32 column_indexes = 3 [packed = true];
+  required int64 ttl_ms = 4;
+  required int32 schema_id = 5;
+}
+
+message AcquireColumnLockResponse {
+  optional int32 error_code = 1;
+  optional string error_message = 2;
+  optional int64 acquired_time_ms = 3;
+}
+
+// renew column lock request and response
+message RenewColumnLockRequest {
+  required int64 table_id = 1;
+  required string owner_id = 2;
+}
+
+message RenewColumnLockResponse {
+  optional int32 error_code = 1;
+  optional string error_message = 2;
+  optional int64 renewed_time_ms = 3;
+}
+
+// release column lock request and response
+message ReleaseColumnLockRequest {
+  required int64 table_id = 1;
+  required string owner_id = 2;
+}
+
+message ReleaseColumnLockResponse {
+  optional int32 error_code = 1;
+  optional string error_message = 2;
 }
 
 message PbPrefixLookupReqForBucket {

@@ -28,7 +28,9 @@ import org.apache.fluss.memory.LazyMemorySegmentPool;
 import org.apache.fluss.memory.MemorySegmentPool;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
+import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.SchemaGetter;
+import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
@@ -173,7 +175,9 @@ public final class KvManager extends TabletManagerBase {
                     }
 
                     File tabletDir = getOrCreateTabletDir(tablePath, tableBucket);
-                    RowMerger merger = RowMerger.create(tableConfig, kvFormat);
+                    SchemaInfo schemaInfo = schemaGetter.getLatestSchemaInfo();
+                    Schema schema = schemaInfo.getSchema();
+                    RowMerger merger = RowMerger.create(tableConfig, schema, kvFormat);
                     KvTablet tablet =
                             KvTablet.create(
                                     logTablet,
@@ -279,7 +283,9 @@ public final class KvManager extends TabletManagerBase {
 
         RowMerger rowMerger =
                 RowMerger.create(
-                        tableInfo.getTableConfig(), tableInfo.getTableConfig().getKvFormat());
+                        tableInfo.getTableConfig(),
+                        tableInfo.getSchema(),
+                        tableInfo.getTableConfig().getKvFormat());
         KvTablet kvTablet =
                 KvTablet.create(
                         physicalTablePath,

@@ -56,7 +56,7 @@ import java.util.NoSuchElementException;
  *
  * <pre>
  * -----------------------------------------------------------------------------------------------
- * | Unused (0-8)
+ * | Unused (1-7)   |  Overwrite Flag (0) |
  * -----------------------------------------------------------------------------------------------
  * </pre>
  *
@@ -64,6 +64,8 @@ import java.util.NoSuchElementException;
  */
 @PublicEvolving
 public class DefaultKvRecordBatch implements KvRecordBatch {
+
+    private static final byte OVERWRITE_FLAG_MASK = 0x01;
 
     static final int LENGTH_LENGTH = 4;
     static final int MAGIC_LENGTH = 1;
@@ -154,6 +156,11 @@ public class DefaultKvRecordBatch implements KvRecordBatch {
     @Override
     public int getRecordCount() {
         return segment.getInt(position + RECORDS_COUNT_OFFSET);
+    }
+
+    @Override
+    public boolean isOverwrite() {
+        return (segment.get(position + ATTRIBUTES_OFFSET) & OVERWRITE_FLAG_MASK) != 0;
     }
 
     public MemorySegment getMemorySegment() {

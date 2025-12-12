@@ -17,6 +17,7 @@
 
 package org.apache.fluss.client.table.writer;
 
+import org.apache.fluss.client.write.ClientColumnLockManager;
 import org.apache.fluss.client.write.WriterClient;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
@@ -32,21 +33,28 @@ public class TableUpsert implements Upsert {
     private final TablePath tablePath;
     private final TableInfo tableInfo;
     private final WriterClient writerClient;
+    private final @Nullable ClientColumnLockManager columnLockManager;
 
     private final @Nullable int[] targetColumns;
 
-    public TableUpsert(TablePath tablePath, TableInfo tableInfo, WriterClient writerClient) {
-        this(tablePath, tableInfo, writerClient, null);
+    public TableUpsert(
+            TablePath tablePath,
+            TableInfo tableInfo,
+            WriterClient writerClient,
+            @Nullable ClientColumnLockManager columnLockManager) {
+        this(tablePath, tableInfo, writerClient, columnLockManager, null);
     }
 
     private TableUpsert(
             TablePath tablePath,
             TableInfo tableInfo,
             WriterClient writerClient,
+            @Nullable ClientColumnLockManager columnLockManager,
             @Nullable int[] targetColumns) {
         this.tablePath = tablePath;
         this.tableInfo = tableInfo;
         this.writerClient = writerClient;
+        this.columnLockManager = columnLockManager;
         this.targetColumns = targetColumns;
     }
 
@@ -68,7 +76,8 @@ public class TableUpsert implements Upsert {
                 }
             }
         }
-        return new TableUpsert(tablePath, tableInfo, writerClient, targetColumns);
+        return new TableUpsert(
+                tablePath, tableInfo, writerClient, columnLockManager, targetColumns);
     }
 
     @Override
@@ -93,6 +102,7 @@ public class TableUpsert implements Upsert {
 
     @Override
     public UpsertWriter createWriter() {
-        return new UpsertWriterImpl(tablePath, tableInfo, targetColumns, writerClient);
+        return new UpsertWriterImpl(
+                tablePath, tableInfo, targetColumns, writerClient, columnLockManager);
     }
 }

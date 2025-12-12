@@ -58,6 +58,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.apache.fluss.record.LogRecordBatchFormat.NO_BATCH_SEQUENCE;
@@ -80,6 +81,13 @@ public final class RecordAccumulator {
     private final AtomicInteger flushesInProgress;
     private final AtomicInteger appendsInProgress;
     private final int batchSize;
+
+    /**
+     * Connection-level recovery mode flag. When true, all writes bypass the merge engine and write
+     * directly to the KV store (overwrite mode). This is set at connection creation time and can be
+     * switched to false via {@link org.apache.fluss.client.Connection#switchToNormalMode()}.
+     */
+    private final AtomicBoolean recoveryMode;
 
     /**
      * An artificial delay time to add before declaring a records instance that isn't full ready for
@@ -120,10 +128,12 @@ public final class RecordAccumulator {
             Configuration conf,
             IdempotenceManager idempotenceManager,
             WriterMetricGroup writerMetricGroup,
-            Clock clock) {
+            Clock clock,
+            AtomicBoolean recoveryMode) {
         this.closed = false;
         this.flushesInProgress = new AtomicInteger(0);
         this.appendsInProgress = new AtomicInteger(0);
+        this.recoveryMode = recoveryMode;
 
         this.batchTimeoutMs =
                 Math.min(
@@ -581,6 +591,10 @@ public final class RecordAccumulator {
         PreAllocatedPagedOutputView outputView = new PreAllocatedPagedOutputView(segments);
         int schemaId = tableInfo.getSchemaId();
         WriteFormat writeFormat = writeRecord.getWriteFormat();
+
+        // Read the connection-level recovery mode (overwrite mode)
+        boolean currentOverwriteMode = recoveryMode.get();
+
         // If the table is kv table we need to create a kv batch, otherwise we create a log batch.
         final WriteBatch batch;
         if (writeFormat == WriteFormat.KV) {
@@ -593,6 +607,7 @@ public final class RecordAccumulator {
                             outputView.getPreAllocatedSize(),
                             outputView,
                             writeRecord.getTargetColumns(),
+                            currentOverwriteMode,
                             clock.milliseconds());
         } else if (writeFormat == WriteFormat.ARROW_LOG) {
             ArrowWriter arrowWriter =
