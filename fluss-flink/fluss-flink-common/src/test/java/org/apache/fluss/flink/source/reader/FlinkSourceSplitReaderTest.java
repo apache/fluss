@@ -158,6 +158,25 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
         }
     }
 
+    @Test
+    void testTableIdChange() throws Exception {
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "test-only-snapshot-table");
+        long tableId = createTable(tablePath, DEFAULT_PK_TABLE_DESCRIPTOR);
+        try (FlinkSourceSplitReader splitReader =
+                createSplitReader(tablePath, DEFAULT_PK_TABLE_SCHEMA.getRowType())) {
+            assertThatThrownBy(
+                            () ->
+                                    splitReader.handleSplitsChanges(
+                                            new SplitsAddition<>(
+                                                    Collections.singletonList(
+                                                            new LogSplit(
+                                                                    new TableBucket(tableId + 1, 0),
+                                                                    null,
+                                                                    0)))))
+                    .hasMessageContaining("table id not equal across splits");
+        }
+    }
+
     private Map<String, List<RecordAndPos>> constructRecords(
             Map<TableBucket, List<InternalRow>> rows) {
         Map<String, List<RecordAndPos>> expectedRecords = new HashMap<>();
