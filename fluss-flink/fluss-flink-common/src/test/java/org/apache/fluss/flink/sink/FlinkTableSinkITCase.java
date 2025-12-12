@@ -1151,32 +1151,35 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
     @Test
     void testVersionMergeEngineWithTypeTimestamp() throws Exception {
         tEnv.executeSql(
-                "create table merge_engine_with_version (a int not null primary key not enforced,"
-                        + " b string, ts TIMESTAMP(3)) with('table.merge-engine' = 'versioned',"
-                        + "'table.merge-engine.versioned.ver-column' = 'ts')");
-
+                        "create table merge_engine_with_version (a int not null primary key not enforced,"
+                                + " b string, ts TIMESTAMP(3)) with('table.merge-engine' = 'versioned',"
+                                + "'table.merge-engine.versioned.ver-column' = 'ts')")
+                .await();
         // insert once
         tEnv.executeSql(
                         "INSERT INTO merge_engine_with_version (a, b, ts) VALUES "
                                 + "(1, 'v1', TIMESTAMP '2024-12-27 12:00:00.123'), "
                                 + "(2, 'v2', TIMESTAMP '2024-12-27 12:00:00.123'), "
-                                + "(1, 'v11', TIMESTAMP '2024-12-27 11:59:59.123'), "
-                                + "(3, 'v3', TIMESTAMP '2024-12-27 12:00:00.123'),"
-                                + "(3, 'v33', TIMESTAMP '2024-12-27 12:00:00.123');")
+                                + "(3, 'v3', TIMESTAMP '2024-12-27 12:00:00.123');")
                 .await();
-
         CloseableIterator<Row> rowIter =
                 tEnv.executeSql("select * from merge_engine_with_version").collect();
-
-        // id=1 not update, but id=3 updated
         List<String> expectedRows =
                 Arrays.asList(
                         "+I[1, v1, 2024-12-27T12:00:00.123]",
                         "+I[2, v2, 2024-12-27T12:00:00.123]",
-                        "+I[3, v3, 2024-12-27T12:00:00.123]",
+                        "+I[3, v3, 2024-12-27T12:00:00.123]");
+        assertResultsIgnoreOrder(rowIter, expectedRows, false);
+
+        // insert again. id=1 not update, but id=3 updated
+        tEnv.executeSql(
+                "INSERT INTO merge_engine_with_version (a, b, ts) VALUES "
+                        + "(1, 'v11', TIMESTAMP '2024-12-27 11:59:59.123'), "
+                        + "(3, 'v33', TIMESTAMP '2024-12-27 12:00:00.123');");
+        expectedRows =
+                Arrays.asList(
                         "-U[3, v3, 2024-12-27T12:00:00.123]",
                         "+U[3, v33, 2024-12-27T12:00:00.123]");
-
         assertResultsIgnoreOrder(rowIter, expectedRows, true);
     }
 
@@ -1185,30 +1188,36 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
 
         tEnv.getConfig().set("table.local-time-zone", "UTC");
         tEnv.executeSql(
-                "create table merge_engine_with_version (a int not null primary key not enforced,"
-                        + " b string, ts TIMESTAMP(9) WITH LOCAL TIME ZONE ) with("
-                        + "'table.merge-engine' = 'versioned',"
-                        + "'table.merge-engine.versioned.ver-column' = 'ts')");
+                        "create table merge_engine_with_version (a int not null primary key not enforced,"
+                                + " b string, ts TIMESTAMP(9) WITH LOCAL TIME ZONE ) with("
+                                + "'table.merge-engine' = 'versioned',"
+                                + "'table.merge-engine.versioned.ver-column' = 'ts')")
+                .await();
 
         // insert once
         tEnv.executeSql(
                         "INSERT INTO merge_engine_with_version (a, b, ts) VALUES "
                                 + "(1, 'v1', CAST(TIMESTAMP '2024-12-27 12:00:00.123456789' AS TIMESTAMP(9) WITH LOCAL TIME ZONE)), "
                                 + "(2, 'v2', CAST(TIMESTAMP '2024-12-27 12:00:00.123456789' AS TIMESTAMP(9) WITH LOCAL TIME ZONE)), "
-                                + "(1, 'v11', CAST(TIMESTAMP '2024-12-27 12:00:00.123456788' AS TIMESTAMP(9) WITH LOCAL TIME ZONE)), "
-                                + "(3, 'v3', CAST(TIMESTAMP '2024-12-27 12:00:00.123456789' AS TIMESTAMP(9) WITH LOCAL TIME ZONE)), "
-                                + "(3, 'v33', CAST(TIMESTAMP '2024-12-27 12:00:00.123456789' AS TIMESTAMP(9) WITH LOCAL TIME ZONE));")
+                                + "(3, 'v3', CAST(TIMESTAMP '2024-12-27 12:00:00.123456789' AS TIMESTAMP(9) WITH LOCAL TIME ZONE));")
                 .await();
-
         CloseableIterator<Row> rowIter =
                 tEnv.executeSql("select * from merge_engine_with_version").collect();
-
-        // id=1 not update, but id=3 updated
         List<String> expectedRows =
                 Arrays.asList(
                         "+I[1, v1, 2024-12-27T12:00:00.123456789Z]",
                         "+I[2, v2, 2024-12-27T12:00:00.123456789Z]",
-                        "+I[3, v3, 2024-12-27T12:00:00.123456789Z]",
+                        "+I[3, v3, 2024-12-27T12:00:00.123456789Z]");
+        assertResultsIgnoreOrder(rowIter, expectedRows, false);
+
+        // insert again. id=1 not update, but id=3 updated
+        tEnv.executeSql(
+                        "INSERT INTO merge_engine_with_version (a, b, ts) VALUES "
+                                + "(1, 'v11', CAST(TIMESTAMP '2024-12-27 12:00:00.123456788' AS TIMESTAMP(9) WITH LOCAL TIME ZONE)), "
+                                + "(3, 'v33', CAST(TIMESTAMP '2024-12-27 12:00:00.123456789' AS TIMESTAMP(9) WITH LOCAL TIME ZONE));")
+                .await();
+        expectedRows =
+                Arrays.asList(
                         "-U[3, v3, 2024-12-27T12:00:00.123456789Z]",
                         "+U[3, v33, 2024-12-27T12:00:00.123456789Z]");
 
