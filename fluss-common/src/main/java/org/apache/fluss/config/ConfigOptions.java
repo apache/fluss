@@ -1391,6 +1391,20 @@ public class ConfigOptions {
                                     + "The `first_row` merge engine will keep the first row of the same primary key. "
                                     + "The `versioned` merge engine will keep the row with the largest version of the same primary key.");
 
+    public static final ConfigOption<Double> TABLE_AUTO_INC_PREFETCH_LOW_WATER_MARK_RATIO =
+            key("table.auto-inc.prefetch.low-water-ratio")
+                    .doubleType()
+                    .defaultValue(0.9)
+                    .withDescription(
+                            "Controls the auto increment column IDs prefetch threshold. The prefetch task is asynchronously launched when the number local cached IDs is less than "
+                                    + "the low water mark ratio of the prefetch batch size.");
+
+    public static final ConfigOption<Long> TABLE_AUTO_INC_BATCH_SIZE =
+            key("table.auto-inc.batch-size")
+                    .longType()
+                    .defaultValue(100000L)
+                    .withDescription("The auto increment column IDs batch size.");
+
     public static final ConfigOption<String> TABLE_MERGE_ENGINE_VERSION_COLUMN =
             // we may need to introduce "del-column" in the future to support delete operation
             key("table.merge-engine.versioned.ver-column")

@@ -33,6 +33,7 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.TabletManagerBase;
+import org.apache.fluss.server.kv.autoinc.AutoIncProcessor;
 import org.apache.fluss.server.kv.rowmerger.RowMerger;
 import org.apache.fluss.server.log.LogManager;
 import org.apache.fluss.server.log.LogTablet;
@@ -43,6 +44,7 @@ import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.RootAllocator;
 import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.MapUtils;
+import org.apache.fluss.utils.concurrent.Scheduler;
 import org.apache.fluss.utils.types.Tuple2;
 
 import org.slf4j.Logger;
@@ -89,13 +91,16 @@ public final class KvManager extends TabletManagerBase {
 
     private final FileSystem remoteFileSystem;
 
+    private final Scheduler scheduler;
+
     private KvManager(
             File dataDir,
             Configuration conf,
             ZooKeeperClient zkClient,
             int recoveryThreadsPerDataDir,
             LogManager logManager,
-            TabletServerMetricGroup tabletServerMetricGroup)
+            TabletServerMetricGroup tabletServerMetricGroup,
+            Scheduler scheduler)
             throws IOException {
         super(TabletType.KV, dataDir, conf, recoveryThreadsPerDataDir);
         this.logManager = logManager;
@@ -105,13 +110,15 @@ public final class KvManager extends TabletManagerBase {
         this.remoteKvDir = FlussPaths.remoteKvDir(conf);
         this.remoteFileSystem = remoteKvDir.getFileSystem();
         this.serverMetricGroup = tabletServerMetricGroup;
+        this.scheduler = scheduler;
     }
 
     public static KvManager create(
             Configuration conf,
             ZooKeeperClient zkClient,
             LogManager logManager,
-            TabletServerMetricGroup tabletServerMetricGroup)
+            TabletServerMetricGroup tabletServerMetricGroup,
+            Scheduler scheduler)
             throws IOException {
         String dataDirString = conf.getString(ConfigOptions.DATA_DIR);
         File dataDir = new File(dataDirString).getAbsoluteFile();
@@ -121,7 +128,8 @@ public final class KvManager extends TabletManagerBase {
                 zkClient,
                 conf.getInt(ConfigOptions.NETTY_SERVER_NUM_WORKER_THREADS),
                 logManager,
-                tabletServerMetricGroup);
+                tabletServerMetricGroup,
+                scheduler);
     }
 
     public void startup() {
@@ -174,6 +182,15 @@ public final class KvManager extends TabletManagerBase {
 
                     File tabletDir = getOrCreateTabletDir(tablePath, tableBucket);
                     RowMerger merger = RowMerger.create(tableConfig, kvFormat);
+                    AutoIncProcessor autoIncProcessor =
+                            AutoIncProcessor.create(
+                                    tablePath.getTablePath(),
+                                    schemaGetter.getLatestSchemaInfo().getSchemaId(),
+                                    conf,
+                                    tableConfig,
+                                    schemaGetter.getLatestSchemaInfo().getSchema(),
+                                    zkClient,
+                                    scheduler);
                     KvTablet tablet =
                             KvTablet.create(
                                     logTablet,
@@ -185,7 +202,8 @@ public final class KvManager extends TabletManagerBase {
                                     kvFormat,
                                     merger,
                                     arrowCompressionInfo,
-                                    schemaGetter);
+                                    schemaGetter,
+                                    autoIncProcessor);
                     currentKvs.put(tableBucket, tablet);
 
                     LOG.info(
@@ -280,6 +298,15 @@ public final class KvManager extends TabletManagerBase {
         RowMerger rowMerger =
                 RowMerger.create(
                         tableInfo.getTableConfig(), tableInfo.getTableConfig().getKvFormat());
+        AutoIncProcessor autoIncProcessor =
+                AutoIncProcessor.create(
+                        tablePath,
+                        tableInfo.getSchemaId(),
+                        tableInfo.getProperties(),
+                        tableInfo.getTableConfig(),
+                        tableInfo.getSchema(),
+                        zkClient,
+                        scheduler);
         KvTablet kvTablet =
                 KvTablet.create(
                         physicalTablePath,
@@ -293,7 +320,8 @@ public final class KvManager extends TabletManagerBase {
                         tableInfo.getTableConfig().getKvFormat(),
                         rowMerger,
                         tableInfo.getTableConfig().getArrowCompressionInfo(),
-                        schemaGetter);
+                        schemaGetter,
+                        autoIncProcessor);
         if (this.currentKvs.containsKey(tableBucket)) {
             throw new IllegalStateException(
                     String.format(

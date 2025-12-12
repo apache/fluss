@@ -290,6 +290,71 @@ class FlussTableITCase extends ClientToServerITCaseBase {
     }
 
     @Test
+    void testPutAndLookupWithAutoIncColumn() throws Exception {
+        // TODO: add test case for auto inc column.
+        Schema schema =
+                Schema.newBuilder()
+                        .column("a", DataTypes.STRING())
+                        .withComment("a is first column")
+                        .column("b", DataTypes.BIGINT())
+                        .withComment("b is second column")
+                        .setAutoIncrement(true)
+                        .primaryKey("a")
+                        .build();
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder().schema(schema).distributedBy(3, "a").build();
+        // create the table
+        TablePath data1PkTablePath =
+                TablePath.of(DATA1_TABLE_PATH_PK.getDatabaseName(), "test_pk_table_auto_inc");
+        createTable(data1PkTablePath, tableDescriptor, true);
+        Table table2 = conn.getTable(data1PkTablePath);
+        UpsertWriter upsertWriter = table2.newUpsert().createWriter();
+        InternalRow row = row(new Object[] {"a", null});
+        // put data.
+        upsertWriter.upsert(row);
+        row = row(new Object[] {"b", null});
+        upsertWriter.upsert(row);
+        row = row(new Object[] {"c", null});
+        upsertWriter.upsert(row);
+        upsertWriter.flush();
+
+        Lookuper lookuper = table2.newLookup().createLookuper();
+        CompletableFuture<LookupResult> resultFuture =
+                lookuper.lookup(GenericRow.of(BinaryString.fromString("a")));
+        resultFuture
+                .get()
+                .getRowList()
+                .forEach(
+                        lrow -> {
+                            System.out.println(lrow.getString(0));
+                            System.out.println(lrow.getLong(1));
+                        });
+
+        resultFuture = lookuper.lookup(GenericRow.of(BinaryString.fromString("b")));
+        resultFuture
+                .get()
+                .getRowList()
+                .forEach(
+                        lrow -> {
+                            System.out.println(lrow.getString(0));
+                            System.out.println(lrow.getLong(1));
+                        });
+
+        // note that the increments might not be contiguous because rows might go to different
+        // buckets
+        resultFuture = lookuper.lookup(GenericRow.of(BinaryString.fromString("c")));
+        resultFuture
+                .get()
+                .getRowList()
+                .forEach(
+                        lrow -> {
+                            System.out.println(lrow.getString(0));
+                            System.out.println(lrow.getLong(1));
+                        });
+        verifyPutAndLookup(table2, new Object[] {"a", 1L});
+    }
+
+    @Test
     void testPutAndPrefixLookup() throws Exception {
         TablePath tablePath = TablePath.of("test_db_1", "test_put_and_prefix_lookup_table");
         Schema schema =

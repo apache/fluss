@@ -43,6 +43,7 @@ import org.apache.fluss.testutils.common.AllCallbackWrapper;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.clock.SystemClock;
 import org.apache.fluss.utils.concurrent.FlussScheduler;
+import org.apache.fluss.utils.concurrent.Scheduler;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
@@ -87,6 +88,7 @@ final class KvManagerTest {
     private @TempDir File tempDir;
     private TablePath tablePath1;
     private TablePath tablePath2;
+    private Scheduler scheduler;
 
     private TableBucket tableBucket1;
     private TableBucket tableBucket2;
@@ -113,17 +115,21 @@ final class KvManagerTest {
         tablePath2 = TablePath.of(dbName, "t2");
 
         // we need a log manager for kv manager
-
+        this.scheduler = new FlussScheduler(1);
         logManager =
                 LogManager.create(
                         conf,
                         zkClient,
-                        new FlussScheduler(1),
+                        scheduler,
                         SystemClock.getInstance(),
                         TestingMetricGroups.TABLET_SERVER_METRICS);
         kvManager =
                 KvManager.create(
-                        conf, zkClient, logManager, TestingMetricGroups.TABLET_SERVER_METRICS);
+                        conf,
+                        zkClient,
+                        logManager,
+                        TestingMetricGroups.TABLET_SERVER_METRICS,
+                        scheduler);
         kvManager.startup();
     }
 
@@ -185,7 +191,11 @@ final class KvManagerTest {
         kvManager.shutdown();
         kvManager =
                 KvManager.create(
-                        conf, zkClient, logManager, TestingMetricGroups.TABLET_SERVER_METRICS);
+                        conf,
+                        zkClient,
+                        logManager,
+                        TestingMetricGroups.TABLET_SERVER_METRICS,
+                        scheduler);
         kvManager.startup();
         kv1 = getOrCreateKv(tablePath1, partitionName, tableBucket1);
         kv2 = getOrCreateKv(tablePath2, partitionName, tableBucket2);
@@ -230,7 +240,11 @@ final class KvManagerTest {
         testingSchemaGetter.updateLatestSchemaInfo(new SchemaInfo(DATA2_SCHEMA, newSchemaId));
         kvManager =
                 KvManager.create(
-                        conf, zkClient, logManager, TestingMetricGroups.TABLET_SERVER_METRICS);
+                        conf,
+                        zkClient,
+                        logManager,
+                        TestingMetricGroups.TABLET_SERVER_METRICS,
+                        scheduler);
         kvManager.startup();
 
         // insert again after restart.

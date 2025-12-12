@@ -44,6 +44,7 @@ import org.apache.fluss.record.TestingSchemaGetter;
 import org.apache.fluss.record.bytesview.MultiBytesView;
 import org.apache.fluss.row.BinaryRow;
 import org.apache.fluss.row.encode.ValueEncoder;
+import org.apache.fluss.server.kv.autoinc.AutoIncProcessor;
 import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer.Key;
 import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer.KvEntry;
 import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer.Value;
@@ -179,6 +180,15 @@ class KvTabletTest {
         RowMerger rowMerger =
                 RowMerger.create(
                         new TableConfig(Configuration.fromMap(tableConfig)), KvFormat.COMPACTED);
+        AutoIncProcessor autoIncProcessor =
+                AutoIncProcessor.create(
+                        tablePath.getTablePath(),
+                        schemaId,
+                        new Configuration(),
+                        new TableConfig(Configuration.fromMap(tableConfig)),
+                        schemaGetter.getLatestSchemaInfo().getSchema(),
+                        null,
+                        null);
         return KvTablet.create(
                 tablePath,
                 tableBucket,
@@ -191,7 +201,8 @@ class KvTabletTest {
                 KvFormat.COMPACTED,
                 rowMerger,
                 DEFAULT_COMPRESSION,
-                schemaGetter);
+                schemaGetter,
+                autoIncProcessor);
     }
 
     @Test

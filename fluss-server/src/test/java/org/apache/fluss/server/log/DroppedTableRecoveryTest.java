@@ -101,7 +101,11 @@ final class DroppedTableRecoveryTest extends LogTestBase {
 
         kvManager =
                 KvManager.create(
-                        conf, zkClient, logManager, TestingMetricGroups.TABLET_SERVER_METRICS);
+                        conf,
+                        zkClient,
+                        logManager,
+                        TestingMetricGroups.TABLET_SERVER_METRICS,
+                        new FlussScheduler(1));
         kvManager.startup();
     }
 
@@ -276,7 +280,11 @@ final class DroppedTableRecoveryTest extends LogTestBase {
 
         KvManager newKvManager =
                 KvManager.create(
-                        conf, zkClient, newLogManager, TestingMetricGroups.TABLET_SERVER_METRICS);
+                        conf,
+                        zkClient,
+                        newLogManager,
+                        TestingMetricGroups.TABLET_SERVER_METRICS,
+                        new FlussScheduler(1));
         newKvManager.startup();
 
         // KV tablet directories should be cleaned up by LogManager automatically
@@ -342,7 +350,11 @@ final class DroppedTableRecoveryTest extends LogTestBase {
 
         KvManager newKvManager =
                 KvManager.create(
-                        conf, zkClient, newLogManager, TestingMetricGroups.TABLET_SERVER_METRICS);
+                        conf,
+                        zkClient,
+                        newLogManager,
+                        TestingMetricGroups.TABLET_SERVER_METRICS,
+                        new FlussScheduler(1));
         newKvManager.startup();
 
         // KV tablet directory should be cleaned up by LogManager automatically
