@@ -1178,16 +1178,8 @@ public final class LogTablet {
             throws IOException {
         synchronized (lock) {
             localLog.checkIfMemoryMappedBufferClosed();
-            // TODO, Here, we use 0 as the logStartOffset passed into rebuildWriterState. The reason
-            // is that the current implementation of logStartOffset in Fluss is not yet fully
-            // refined, and there may be cases where logStartOffset is not updated. As a result,
-            // logStartOffset is not yet reliable. Once the issue with correctly updating
-            // logStartOffset is resolved in issue https://github.com/apache/fluss/issues/744, we
-            // can use logStartOffset here.
-            // Additionally, using 0 versus using logStartOffset does not affect correctness—they
-            // both can restore the complete WriterState. The only difference is that using
-            // logStartOffset can potentially skip over more segments.
-            rebuildWriterState(writerStateManager, localLog.getSegments(), 0, lastOffset, false);
+            rebuildWriterState(
+                    writerStateManager, localLog.getSegments(), logStartOffset, lastOffset, false);
         }
     }
 
@@ -1302,7 +1294,7 @@ public final class LogTablet {
         // 1. The tablet server has been upgraded, the table is on the new message format, and we
         // had a clean shutdown.
         //
-        // If we hit either of these cases, we skip writer state loading and write a new
+        // If we hit all of these cases, we skip writer state loading and write a new
         // snapshot at the log end offset (see below). The next time the log is reloaded, we will
         // load writer state using this snapshot (or later snapshots). Otherwise, if there is
         // no snapshot file, then we have to rebuild writer state from the first segment.
@@ -1386,7 +1378,7 @@ public final class LogTablet {
         Map<Long, WriterAppendInfo> loadedWriters = new HashMap<>();
         for (LogRecordBatch batch : records.batches()) {
             if (batch.hasWriterId()) {
-                updateWriterAppendInfo(writerStateManager, batch, loadedWriters, true);
+                updateWriterAppendInfo(writerStateManager, batch, loadedWriters, false);
             }
         }
         loadedWriters.values().forEach(writerStateManager::update);
