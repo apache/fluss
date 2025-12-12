@@ -27,11 +27,15 @@ import org.apache.fluss.metrics.NoOpCounter;
 import org.apache.fluss.metrics.ThreadSafeSimpleCounter;
 import org.apache.fluss.metrics.groups.AbstractMetricGroup;
 import org.apache.fluss.metrics.registry.MetricRegistry;
+import org.apache.fluss.security.acl.FlussPrincipal;
+import org.apache.fluss.server.entity.UserContext;
+import org.apache.fluss.utils.MapUtils;
 
 import javax.annotation.Nullable;
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Optional;
 
 import static org.apache.fluss.metrics.utils.MetricGroupUtils.makeScope;
 
@@ -42,6 +46,8 @@ import static org.apache.fluss.metrics.utils.MetricGroupUtils.makeScope;
 public class TableMetricGroup extends AbstractMetricGroup {
 
     private final Map<TableBucket, BucketMetricGroup> buckets = new HashMap<>();
+
+    private final Map<String, UserMetricGroup> userMetricGroups = MapUtils.newConcurrentHashMap();
 
     private final TablePath tablePath;
 
@@ -94,14 +100,28 @@ public class TableMetricGroup extends AbstractMetricGroup {
         serverMetrics.messageIn().inc(n);
     }
 
-    public void incLogBytesIn(long n) {
+    public void incLogBytesIn(long n, UserContext userContext) {
         logMetrics.bytesIn.inc(n);
         serverMetrics.bytesIn().inc(n);
+
+        // user level metric
+        Optional.ofNullable(userContext)
+                .map(UserContext::getPrincipal)
+                .map(FlussPrincipal::getName)
+                .filter(name -> !name.isEmpty())
+                .ifPresent(name -> getOrCreateUserMetricGroup(name).bytesIn.inc(n));
     }
 
-    public void incLogBytesOut(long n) {
+    public void incLogBytesOut(long n, UserContext userContext) {
         logMetrics.bytesOut.inc(n);
         serverMetrics.bytesOut().inc(n);
+
+        // user level metric
+        Optional.ofNullable(userContext)
+                .map(UserContext::getPrincipal)
+                .map(FlussPrincipal::getName)
+                .filter(name -> !name.isEmpty())
+                .ifPresent(name -> getOrCreateUserMetricGroup(name).bytesOut.inc(n));
     }
 
     public Counter totalFetchLogRequests() {
@@ -219,6 +239,42 @@ public class TableMetricGroup extends AbstractMetricGroup {
             return NoOpCounter.INSTANCE;
         } else {
             return kvMetrics.failedPrefixLookupRequests;
+        }
+    }
+
+    // ------------------------------------------------------------------------
+    //  user groups
+    // ------------------------------------------------------------------------
+    private UserMetricGroup getOrCreateUserMetricGroup(String principalName) {
+        return userMetricGroups.computeIfAbsent(
+                principalName, name -> new UserMetricGroup(this, principalName));
+    }
+
+    private static class UserMetricGroup extends AbstractMetricGroup {
+        private final String principalName;
+        protected final Counter bytesIn;
+        protected final Counter bytesOut;
+
+        private UserMetricGroup(TableMetricGroup tableMetricGroup, String principalName) {
+            super(
+                    tableMetricGroup.registry,
+                    makeScope(tableMetricGroup, principalName),
+                    tableMetricGroup);
+            this.principalName = principalName;
+            bytesIn = new ThreadSafeSimpleCounter();
+            meter(MetricNames.BYTES_IN_RATE, new MeterView(bytesIn));
+            bytesOut = new ThreadSafeSimpleCounter();
+            meter(MetricNames.BYTES_OUT_RATE, new MeterView(bytesOut));
+        }
+
+        @Override
+        protected String getGroupName(CharacterFilter filter) {
+            return "user";
+        }
+
+        @Override
+        protected void putVariables(Map<String, String> variables) {
+            variables.put("name", principalName);
         }
     }
 

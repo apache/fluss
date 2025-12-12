@@ -90,6 +90,7 @@ public class DelayedFetchLogTest extends ReplicaTestBase {
                 20000,
                 -1,
                 Collections.singletonMap(tb, genMemoryLogRecordsByObject(DATA1)),
+                null,
                 future::complete);
         assertThat(future.get()).containsOnly(new ProduceLogResultForBucket(tb, 0, 10L));
 
@@ -161,6 +162,7 @@ public class DelayedFetchLogTest extends ReplicaTestBase {
                 replicaManager,
                 Collections.singletonMap(tb, prevFetchBucketStatus),
                 responseCallback,
-                TestingMetricGroups.TABLET_SERVER_METRICS);
+                TestingMetricGroups.TABLET_SERVER_METRICS,
+                null);
     }
 }

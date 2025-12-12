@@ -157,6 +157,7 @@ public class ReplicaFetcherITCase {
             replicaManager.fetchLogRecords(
                     new FetchParams(-1, false, Integer.MAX_VALUE, -1, -1),
                     Collections.singletonMap(tb, new FetchReqInfo(tableId, 0L, 1024 * 1024)),
+                    null,
                     future::complete);
             Map<TableBucket, FetchLogResultForBucket> result = future.get();
             assertThat(result.size()).isEqualTo(1);
@@ -233,6 +234,7 @@ public class ReplicaFetcherITCase {
             replicaManager.fetchLogRecords(
                     new FetchParams(-1, false, Integer.MAX_VALUE, -1, -1),
                     Collections.singletonMap(tb, new FetchReqInfo(tableId, 0L, 1024 * 1024)),
+                    null,
                     future::complete);
             Map<TableBucket, FetchLogResultForBucket> result = future.get();
             assertThat(result.size()).isEqualTo(1);
