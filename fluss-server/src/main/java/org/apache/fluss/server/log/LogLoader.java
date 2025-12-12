@@ -107,17 +107,12 @@ final class LogLoader {
         // WriterStateManager used during log recovery may have deleted some files without the
         // LogLoader.writerStateManager instance witnessing the deletion.
         writerStateManager.removeStraySnapshots(logSegments.baseOffsets());
-
-        // TODO, Here, we use 0 as the logStartOffset passed into rebuildWriterState. The reason is
-        // that the current implementation of logStartOffset in Fluss is not yet fully refined, and
-        // there may be cases where logStartOffset is not updated. As a result, logStartOffset is
-        // not yet reliable. Once the issue with correctly updating logStartOffset is resolved in
-        // issue https://github.com/apache/fluss/issues/744, we can use logStartOffset here.
-        // Additionally, using 0 versus using logStartOffset does not affect correctness—they both
-        // can restore the complete WriterState. The only difference is that using logStartOffset
-        // can potentially skip over more segments.
         LogTablet.rebuildWriterState(
-                writerStateManager, logSegments, 0, nextOffset, isCleanShutdown);
+                writerStateManager,
+                logSegments,
+                logStartOffsetCheckpoint,
+                nextOffset,
+                isCleanShutdown);
 
         LogSegment activeSegment = logSegments.lastSegment().get();
         activeSegment.resizeIndexes((int) conf.get(ConfigOptions.LOG_INDEX_FILE_SIZE).getBytes());
@@ -261,16 +256,12 @@ final class LogLoader {
                         logSegments.getTableBucket(),
                         logTabletDir,
                         this.writerStateManager.writerExpirationMs());
-        // TODO, Here, we use 0 as the logStartOffset passed into rebuildWriterState. The reason is
-        // that the current implementation of logStartOffset in Fluss is not yet fully refined, and
-        // there may be cases where logStartOffset is not updated. As a result, logStartOffset is
-        // not yet reliable. Once the issue with correctly updating logStartOffset is resolved in
-        // issue https://github.com/apache/fluss/issues/744, we can use logStartOffset here.
-        // Additionally, using 0 versus using logStartOffset does not affect correctness—they both
-        // can restore the complete WriterState. The only difference is that using logStartOffset
-        // can potentially skip over more segments.
         LogTablet.rebuildWriterState(
-                writerStateManager, logSegments, 0, segment.getBaseOffset(), false);
+                writerStateManager,
+                logSegments,
+                logStartOffsetCheckpoint,
+                segment.getBaseOffset(),
+                false);
         int bytesTruncated = segment.recover();
         // once we have recovered the segment's data, take a snapshot to ensure that we won't
         // need to reload the same segment again while recovering another segment.

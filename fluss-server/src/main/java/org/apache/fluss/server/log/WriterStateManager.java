@@ -228,6 +228,16 @@ public class WriterStateManager {
         }
     }
 
+    /**
+     * Deletes the writer snapshot files after the given offset (exclusive) in a thread safe manner.
+     */
+    @VisibleForTesting
+    public void deleteSnapshotAfter(long offset) throws IOException {
+        for (SnapshotFile snapshot : snapshots.tailMap(offset, false).values()) {
+            removeAndDeleteSnapshot(snapshot.offset);
+        }
+    }
+
     /** Fetch the snapshot file for the end offset of the log segment. */
     public Optional<File> fetchSnapshot(long offset) {
         return Optional.ofNullable(snapshots.get(offset)).map(SnapshotFile::file);

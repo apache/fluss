@@ -21,6 +21,7 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.MemorySize;
 import org.apache.fluss.exception.LogSegmentOffsetOverflowException;
 import org.apache.fluss.metadata.LogFormat;
+import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.record.LogRecordBatch;
 import org.apache.fluss.record.LogRecordReadContext;
@@ -53,6 +54,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 final class LogSegmentTest extends LogTestBase {
 
     private @TempDir File tempDir;
+    private TableBucket tableBucket = new TableBucket(0, 0);
 
     static Stream<Arguments> offsetParameters() {
         return Stream.of(
