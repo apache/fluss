@@ -83,12 +83,12 @@ public class MetadataManager {
     private final int maxBucketNum;
     private final LakeCatalogDynamicLoader lakeCatalogDynamicLoader;
 
-    public static final Set<String> SENSITIVE_TABLE_OPTIOINS = new HashSet<>();
+    public static final Set<String> SENSITIVE_TABLE_OPTIONS = new HashSet<>();
 
     static {
-        SENSITIVE_TABLE_OPTIOINS.add("password");
-        SENSITIVE_TABLE_OPTIOINS.add("secret");
-        SENSITIVE_TABLE_OPTIOINS.add("key");
+        SENSITIVE_TABLE_OPTIONS.add("password");
+        SENSITIVE_TABLE_OPTIONS.add("secret");
+        SENSITIVE_TABLE_OPTIONS.add("key");
     }
 
     /**
@@ -550,7 +550,7 @@ public class MetadataManager {
         Iterator<Map.Entry<String, String>> iterator = tableLakeOptions.entrySet().iterator();
         while (iterator.hasNext()) {
             String key = iterator.next().getKey().toLowerCase();
-            if (SENSITIVE_TABLE_OPTIOINS.stream().anyMatch(key::contains)) {
+            if (SENSITIVE_TABLE_OPTIONS.stream().anyMatch(key::contains)) {
                 iterator.remove();
             }
         }
