@@ -1387,9 +1387,10 @@ public class ConfigOptions {
                     .noDefaultValue()
                     .withDescription(
                             "Defines the merge engine for the primary key table. By default, primary key table doesn't have merge engine. "
-                                    + "The supported merge engines are `first_row` and `versioned`. "
+                                    + "The supported merge engines are `first_row`, `versioned`, and `aggregate`. "
                                     + "The `first_row` merge engine will keep the first row of the same primary key. "
-                                    + "The `versioned` merge engine will keep the row with the largest version of the same primary key.");
+                                    + "The `versioned` merge engine will keep the row with the largest version of the same primary key. "
+                                    + "The `aggregate` merge engine will aggregate rows with the same primary key using field-level aggregate functions.");
 
     public static final ConfigOption<String> TABLE_MERGE_ENGINE_VERSION_COLUMN =
             // we may need to introduce "del-column" in the future to support delete operation
@@ -1399,6 +1400,31 @@ public class ConfigOptions {
                     .withDescription(
                             "The column name of the version column for the `versioned` merge engine. "
                                     + "If the merge engine is set to `versioned`, the version column must be set.");
+
+    /**
+     * Prefix for aggregate merge engine configuration options.
+     *
+     * <p>Aggregate-specific options use the pattern: {@code
+     * table.merge-engine.aggregate.<field-name>}
+     */
+    public static final String AGGREGATE_MERGE_ENGINE_PREFIX = "table.merge-engine.aggregate";
+
+    public static final ConfigOption<String> TABLE_AGGREGATE_DEFAULT_FUNCTION =
+            key("table.merge-engine.aggregate.default-function")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "Default aggregate function for all non-primary-key fields when using aggregate merge engine. "
+                                    + "If not set, 'last_non_null_value' will be used as default. "
+                                    + "Field-specific aggregate functions can be configured using 'table.merge-engine.aggregate.<field-name>'.");
+
+    public static final ConfigOption<Boolean> TABLE_AGG_REMOVE_RECORD_ON_DELETE =
+            key("table.aggregation.remove-record-on-delete")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription(
+                            "Whether to remove the entire record when receiving a DELETE operation in aggregate merge engine. "
+                                    + "By default, DELETE operations are not supported in aggregate merge engine.");
 
     public static final ConfigOption<DeleteBehavior> TABLE_DELETE_BEHAVIOR =
             key("table.delete.behavior")

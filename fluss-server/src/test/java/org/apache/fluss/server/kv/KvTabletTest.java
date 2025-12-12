@@ -176,9 +176,12 @@ class KvTabletTest {
             SchemaGetter schemaGetter,
             Map<String, String> tableConfig)
             throws Exception {
+        Schema schema = schemaGetter.getLatestSchemaInfo().getSchema();
         RowMerger rowMerger =
                 RowMerger.create(
-                        new TableConfig(Configuration.fromMap(tableConfig)), KvFormat.COMPACTED);
+                        new TableConfig(Configuration.fromMap(tableConfig)),
+                        schema,
+                        KvFormat.COMPACTED);
         return KvTablet.create(
                 tablePath,
                 tableBucket,
@@ -1011,6 +1014,110 @@ class KvTabletTest {
         assertThatLogRecords(actualLogRecords)
                 .withSchema(newSchemaLogRowType)
                 .assertCheckSum(!doProjection)
+                .isEqualTo(expectedLogs);
+    }
+
+    @Test
+    void testAggregateMergeEngine() throws Exception {
+        // Create schema with aggregate-able fields
+        Schema schema =
+                Schema.newBuilder()
+                        .column("a", DataTypes.INT())
+                        .column("count", DataTypes.BIGINT())
+                        .column("max_val", DataTypes.INT())
+                        .column("name", DataTypes.STRING())
+                        .primaryKey("a")
+                        .build();
+
+        Map<String, String> config = new HashMap<>();
+        config.put("table.merge-engine", "aggregate");
+        config.put("table.merge-engine.aggregate.count", "sum");
+        config.put("table.merge-engine.aggregate.max_val", "max");
+        config.put("table.merge-engine.aggregate.name", "last_value");
+
+        TablePath tablePath = TablePath.of("testDb", "test_aggregate_merge_engine");
+        initLogTabletAndKvTablet(tablePath, schema, config);
+        RowType rowType = schema.getRowType();
+        KvRecordTestUtils.KvRecordFactory kvRecordFactory =
+                KvRecordTestUtils.KvRecordFactory.of(rowType);
+
+        // First batch: insert two records
+        List<KvRecord> kvData1 =
+                Arrays.asList(
+                        kvRecordFactory.ofRecord(
+                                "k1".getBytes(), new Object[] {1, 10L, 100, "Alice"}),
+                        kvRecordFactory.ofRecord(
+                                "k2".getBytes(), new Object[] {2, 20L, 200, "Bob"}));
+        KvRecordBatch kvRecordBatch1 = kvRecordBatchFactory.ofRecords(kvData1);
+        kvTablet.putAsLeader(kvRecordBatch1, null);
+
+        long endOffset = logTablet.localLogEndOffset();
+        LogRecords actualLogRecords = readLogRecords(logTablet, 0L, null);
+        MemoryLogRecords expectedLogs =
+                logRecords(
+                        rowType,
+                        0,
+                        Arrays.asList(ChangeType.INSERT, ChangeType.INSERT),
+                        Arrays.asList(
+                                new Object[] {1, 10L, 100, "Alice"},
+                                new Object[] {2, 20L, 200, "Bob"}));
+        assertThatLogRecords(actualLogRecords)
+                .withSchema(rowType)
+                .assertCheckSum(true)
+                .isEqualTo(expectedLogs);
+
+        // Second batch: update same keys with aggregation
+        // k1: count 10+15=25, max_val max(100,150)=150, name="Alice2"
+        // k2: count 20+25=45, max_val max(200,180)=200, name="Bob2"
+        List<KvRecord> kvData2 =
+                Arrays.asList(
+                        kvRecordFactory.ofRecord(
+                                "k1".getBytes(), new Object[] {1, 15L, 150, "Alice2"}),
+                        kvRecordFactory.ofRecord(
+                                "k2".getBytes(), new Object[] {2, 25L, 180, "Bob2"}));
+        KvRecordBatch kvRecordBatch2 = kvRecordBatchFactory.ofRecords(kvData2);
+        kvTablet.putAsLeader(kvRecordBatch2, null);
+
+        // Aggregate merge engine produces UPDATE_BEFORE and UPDATE_AFTER
+        expectedLogs =
+                logRecords(
+                        rowType,
+                        endOffset,
+                        Arrays.asList(
+                                ChangeType.UPDATE_BEFORE,
+                                ChangeType.UPDATE_AFTER,
+                                ChangeType.UPDATE_BEFORE,
+                                ChangeType.UPDATE_AFTER),
+                        Arrays.asList(
+                                new Object[] {1, 10L, 100, "Alice"},
+                                new Object[] {1, 25L, 150, "Alice2"},
+                                new Object[] {2, 20L, 200, "Bob"},
+                                new Object[] {2, 45L, 200, "Bob2"}));
+        actualLogRecords = readLogRecords(logTablet, endOffset, null);
+        assertThatLogRecords(actualLogRecords)
+                .withSchema(rowType)
+                .assertCheckSum(true)
+                .isEqualTo(expectedLogs);
+
+        // Third batch: insert new k3 only
+        endOffset = logTablet.localLogEndOffset();
+        List<KvRecord> kvData3 =
+                Arrays.asList(
+                        kvRecordFactory.ofRecord(
+                                "k3".getBytes(), new Object[] {3, 30L, 300, "Charlie"}));
+        KvRecordBatch kvRecordBatch3 = kvRecordBatchFactory.ofRecords(kvData3);
+        kvTablet.putAsLeader(kvRecordBatch3, null);
+
+        expectedLogs =
+                logRecords(
+                        rowType,
+                        endOffset,
+                        Collections.singletonList(ChangeType.INSERT),
+                        Collections.singletonList(new Object[] {3, 30L, 300, "Charlie"}));
+        actualLogRecords = readLogRecords(logTablet, endOffset, null);
+        assertThatLogRecords(actualLogRecords)
+                .withSchema(rowType)
+                .assertCheckSum(true)
                 .isEqualTo(expectedLogs);
     }
 
