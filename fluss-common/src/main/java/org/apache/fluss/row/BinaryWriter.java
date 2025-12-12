@@ -19,8 +19,10 @@ package org.apache.fluss.row;
 
 import org.apache.fluss.annotation.PublicEvolving;
 import org.apache.fluss.row.serializer.ArraySerializer;
+import org.apache.fluss.row.serializer.RowSerializer;
 import org.apache.fluss.types.ArrayType;
 import org.apache.fluss.types.DataType;
+import org.apache.fluss.types.RowType;
 
 import java.io.Serializable;
 
@@ -73,9 +75,7 @@ public interface BinaryWriter {
 
     void writeArray(int pos, InternalArray value, ArraySerializer serializer);
 
-    // TODO: Map and Row write methods will be added in Issue #1973 and #1974
-    // void writeMap(int pos, InternalMap value, InternalMapSerializer serializer);
-    // void writeRow(int pos, InternalRow value, InternalRowSerializer serializer);
+    void writeRow(int pos, InternalRow value, RowSerializer serializer);
 
     /** Finally, complete write to set real size to binary. */
     void complete();
@@ -161,9 +161,11 @@ public interface BinaryWriter {
                 throw new UnsupportedOperationException(
                         "Map type is not supported yet. Will be added in Issue #1973.");
             case ROW:
-                // TODO: Row type support will be added in Issue #1974
-                throw new UnsupportedOperationException(
-                        "Row type is not supported yet. Will be added in Issue #1974.");
+                final RowType rowType = (RowType) elementType;
+                final RowSerializer rowSerializer =
+                        new RowSerializer(rowType.getFieldTypes().toArray(new DataType[0]));
+                return (writer, pos, value) ->
+                        writer.writeRow(pos, (InternalRow) value, rowSerializer);
             default:
                 String msg =
                         String.format(

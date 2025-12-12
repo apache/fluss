@@ -89,11 +89,12 @@ class ArrowReaderWriterTest {
                     DataTypes.TIMESTAMP_LTZ(9),
                     DataTypes.ARRAY(DataTypes.INT()),
                     DataTypes.ARRAY(DataTypes.FLOAT().copy(false)), // vector embedding type
-                    DataTypes.ARRAY(DataTypes.ARRAY(DataTypes.STRING()))) // nested array
-            // TODO: Add Map and Row types in Issue #1973 and #1974
-            // DataTypes.MAP(DataTypes.INT(), DataTypes.STRING()),
-            // DataTypes.ROW(...)
-            ;
+                    DataTypes.ARRAY(DataTypes.ARRAY(DataTypes.STRING())), // nested array
+                    // TODO: Add Map and Row types in Issue #1973
+                    DataTypes.ROW(
+                            DataTypes.FIELD("i", DataTypes.INT()),
+                            DataTypes.FIELD("r", NESTED_DATA_TYPE),
+                            DataTypes.FIELD("s", DataTypes.STRING())));
 
     private static final List<InternalRow> TEST_DATA =
             Arrays.asList(
@@ -124,10 +125,11 @@ class ArrowReaderWriterTest {
                             GenericArray.of(0.1f, 1.1f, 2.2f, 3.3f, 4.4f, -0.5f, 6.6f),
                             GenericArray.of(
                                     GenericArray.of(fromString("a"), fromString("b")),
-                                    GenericArray.of(fromString("c"), fromString("d")))),
-                    // TODO: Add Map and Row test data in Issue #1973 and #1974
-                    // GenericMap.of(...),
-                    // GenericRow.of(...)),
+                                    GenericArray.of(fromString("c"), fromString("d"))),
+                            GenericRow.of(
+                                    12,
+                                    GenericRow.of(34, fromString("56"), 78L),
+                                    fromString("910"))),
                     GenericRow.of(
                             false,
                             (byte) 1,
@@ -163,10 +165,11 @@ class ArrowReaderWriterTest {
                             GenericArray.of(
                                     GenericArray.of(fromString("a"), null, fromString("c")),
                                     null,
-                                    GenericArray.of(fromString("hello"), fromString("world")))));
-    // TODO: Add Map and Row test data in Issue #1973 and #1974
-    // GenericMap.of(...),
-    // GenericRow.of(...)));
+                                    GenericArray.of(fromString("hello"), fromString("world"))),
+                            GenericRow.of(
+                                    12,
+                                    GenericRow.of(34, fromString("56"), 78L),
+                                    fromString("910"))));
 
     @Test
     void testReaderWriter() throws IOException {

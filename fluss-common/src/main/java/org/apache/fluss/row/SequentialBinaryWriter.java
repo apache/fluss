@@ -21,6 +21,7 @@ package org.apache.fluss.row;
 import org.apache.fluss.annotation.PublicEvolving;
 import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.row.serializer.ArraySerializer;
+import org.apache.fluss.row.serializer.RowSerializer;
 
 /**
  * Writer for binary format in a sequential way. The write column position must be advanced in order
@@ -69,7 +70,8 @@ public interface SequentialBinaryWriter extends BinaryWriter {
 
     // TODO: Map and Row write methods will be added in Issue #1973 and #1974
     // void writeMap(InternalMap value, InternalMapSerializer serializer);
-    // void writeRow(InternalRow value, InternalRowSerializer serializer);
+
+    void writeRow(InternalRow value, RowSerializer serializer);
 
     /** Finally, complete write to set real size to binary. */
     void complete();
@@ -155,5 +157,10 @@ public interface SequentialBinaryWriter extends BinaryWriter {
     @Override
     default void writeArray(int pos, InternalArray value, ArraySerializer serializer) {
         writeArray(value, serializer);
+    }
+
+    @Override
+    default void writeRow(int pos, InternalRow value, RowSerializer serializer) {
+        writeRow(value, serializer);
     }
 }

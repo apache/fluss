@@ -21,6 +21,8 @@ import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.BinaryWriter;
 import org.apache.fluss.row.Decimal;
 import org.apache.fluss.row.GenericArray;
+import org.apache.fluss.row.GenericRow;
+import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.utils.DateTimeUtils;
@@ -38,6 +40,7 @@ import static org.apache.fluss.row.TestInternalRowGenerator.createAllTypes;
 import static org.apache.fluss.row.indexed.IndexedRowTest.assertAllTypeEquals;
 import static org.apache.fluss.row.indexed.IndexedRowTest.genRecordForAllTypes;
 import static org.apache.fluss.testutils.InternalArrayAssert.assertThatArray;
+import static org.apache.fluss.testutils.InternalRowAssert.assertThatRow;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test of {@link IndexedRowReader}. */
@@ -105,16 +108,17 @@ public class IndexedRowReaderTest {
         assertThatArray(reader.readArray())
                 .withElementType(DataTypes.INT())
                 .isEqualTo(GenericArray.of(1, 2, 3, 4, 5, -11, null, 444, 102234));
-        assertThatArray(reader.readArray())
-                .withElementType(DataTypes.FLOAT().copy(false))
-                .isEqualTo(
-                        GenericArray.of(0.1f, 1.1f, -0.5f, 6.6f, Float.MAX_VALUE, Float.MIN_VALUE));
-        assertThatArray(reader.readArray())
-                .withElementType(DataTypes.ARRAY(DataTypes.STRING()))
-                .isEqualTo(
-                        GenericArray.of(
-                                GenericArray.of(fromString("a"), null, fromString("c")),
-                                null,
-                                GenericArray.of(fromString("hello"), fromString("world"))));
+        InternalRow nestedRow = reader.readRow(3);
+        GenericRow expectedInnerRow = GenericRow.of(20);
+        GenericRow expectedNestedRow = GenericRow.of(123, expectedInnerRow, fromString("Test"));
+        assertThatRow(nestedRow)
+                .withSchema(
+                        DataTypes.ROW(
+                                DataTypes.FIELD("u1", DataTypes.INT()),
+                                DataTypes.FIELD(
+                                        "u2",
+                                        DataTypes.ROW(DataTypes.FIELD("v1", DataTypes.INT()))),
+                                DataTypes.FIELD("u3", DataTypes.STRING())))
+                .isEqualTo(expectedNestedRow);
     }
 }

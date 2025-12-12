@@ -62,7 +62,14 @@
             <artifactId>fluss-shaded-arrow</artifactId>
         </dependency>
 
-        <!-- TODO: these two dependencies need to be shaded. -->
+        <!-- TODO: these three dependencies need to be shaded. -->
+        <!-- Use the Arrow compatible version -->
+        <dependency>
+            <groupId>org.eclipse.collections</groupId>
+            <artifactId>eclipse-collections</artifactId>
+            <version>11.1.0</version>
+        </dependency>
+
         <dependency>
             <groupId>org.lz4</groupId>
             <artifactId>lz4-java</artifactId>

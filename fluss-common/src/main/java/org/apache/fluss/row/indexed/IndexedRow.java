@@ -33,6 +33,7 @@ import org.apache.fluss.row.TimestampNtz;
 import org.apache.fluss.types.BinaryType;
 import org.apache.fluss.types.CharType;
 import org.apache.fluss.types.DataType;
+import org.apache.fluss.types.DataTypeRoot;
 import org.apache.fluss.types.DecimalType;
 import org.apache.fluss.types.IntType;
 import org.apache.fluss.types.StringType;
@@ -387,7 +388,21 @@ public class IndexedRow implements BinaryRow, NullAwareGetters {
     }
 
     // TODO: getMap() will be added in Issue #1973
-    // TODO: getRow() will be added in Issue #1974
+
+    @Override
+    public InternalRow getRow(int pos, int numFields) {
+        assertIndexIsValid(pos);
+        int index = getFieldOffset(pos);
+        int length = columnLengths[pos];
+        long offsetAndLength = ((long) index << 32) | length;
+        return BinarySegmentUtils.readBinaryRow(segments, 0, numFields, offsetAndLength);
+    }
+
+    private DataType[] getDataTypes(int pos) {
+        return (fieldTypes[pos].getTypeRoot() == DataTypeRoot.ROW)
+                ? fieldTypes[pos].getChildren().toArray(new DataType[0])
+                : fieldTypes;
+    }
 
     private void assertIndexIsValid(int index) {
         assert index >= 0 : "index (" + index + ") should >= 0";
