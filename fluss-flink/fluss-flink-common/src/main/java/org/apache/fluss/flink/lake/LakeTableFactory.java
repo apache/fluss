@@ -25,6 +25,8 @@ import org.apache.flink.table.factories.DynamicTableFactory;
 import org.apache.flink.table.factories.DynamicTableSourceFactory;
 import org.apache.flink.table.factories.FactoryUtil;
 
+import java.util.Collections;
+
 /** A factory to create {@link DynamicTableSource} for lake table. */
 public class LakeTableFactory {
     private final LakeFlinkCatalog lakeFlinkCatalog;
@@ -83,7 +85,7 @@ public class LakeTableFactory {
                     lakeFlinkCatalog.getLakeCatalog(
                             // we can pass empty configuration to get catalog
                             // since the catalog should already be initialized
-                            new Configuration());
+                            new Configuration(), Collections.emptyMap());
 
             // Create FlinkDynamicTableFactory with the catalog
             Class<?> icebergFactoryClass =

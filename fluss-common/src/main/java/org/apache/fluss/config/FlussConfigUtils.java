@@ -23,8 +23,10 @@ import org.apache.fluss.annotation.VisibleForTesting;
 import java.lang.reflect.Field;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /** Utilities of Fluss {@link ConfigOptions}. */
 @Internal
@@ -43,6 +45,14 @@ public class FlussConfigUtils {
         CLIENT_OPTIONS = extractConfigOptions("client.");
         ALTERABLE_TABLE_OPTIONS =
                 Collections.singletonList(ConfigOptions.TABLE_DATALAKE_ENABLED.key());
+    }
+
+    public static final Set<String> SENSITIVE_TABLE_OPTIONS = new HashSet<>();
+
+    static {
+        SENSITIVE_TABLE_OPTIONS.add("password");
+        SENSITIVE_TABLE_OPTIONS.add("secret");
+        SENSITIVE_TABLE_OPTIONS.add("key");
     }
 
     public static boolean isTableStorageConfig(String key) {

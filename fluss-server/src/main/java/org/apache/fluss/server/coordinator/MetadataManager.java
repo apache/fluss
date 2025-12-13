@@ -62,7 +62,6 @@ import javax.annotation.Nullable;
 
 import java.util.Collection;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
@@ -70,6 +69,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.Callable;
 
+import static org.apache.fluss.config.FlussConfigUtils.SENSITIVE_TABLE_OPTIONS;
 import static org.apache.fluss.server.utils.TableDescriptorValidation.validateAlterTableProperties;
 import static org.apache.fluss.server.utils.TableDescriptorValidation.validateTableDescriptor;
 
@@ -82,14 +82,6 @@ public class MetadataManager {
     private final int maxPartitionNum;
     private final int maxBucketNum;
     private final LakeCatalogDynamicLoader lakeCatalogDynamicLoader;
-
-    public static final Set<String> SENSITIVE_TABLE_OPTIONS = new HashSet<>();
-
-    static {
-        SENSITIVE_TABLE_OPTIONS.add("password");
-        SENSITIVE_TABLE_OPTIONS.add("secret");
-        SENSITIVE_TABLE_OPTIONS.add("key");
-    }
 
     /**
      * Creates a new metadata manager.

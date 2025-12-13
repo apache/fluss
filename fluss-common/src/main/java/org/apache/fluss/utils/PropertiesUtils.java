@@ -17,7 +17,9 @@
 
 package org.apache.fluss.utils;
 
+import java.util.Arrays;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 /** Utility class for properties related helper functions. */
@@ -54,6 +56,21 @@ public class PropertiesUtils {
     public static <V> Map<String, V> extractPrefix(Map<String, V> originalMap, String prefix) {
         return originalMap.entrySet().stream()
                 .filter(entry -> entry.getKey().startsWith(prefix))
+                .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
+    }
+
+    public static <V> Map<String, V> extractPrefix(
+            Map<String, V> originalMap, Class<? extends Enum<?>> enumClass) {
+        Set<String> prefixes =
+                Arrays.stream(enumClass.getEnumConstants())
+                        .map(Enum::toString)
+                        .collect(Collectors.toSet());
+
+        return originalMap.entrySet().stream()
+                .filter(
+                        entry ->
+                                prefixes.stream()
+                                        .anyMatch(prefix -> entry.getKey().startsWith(prefix)))
                 .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
     }
 
