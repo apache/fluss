@@ -124,13 +124,30 @@ public class FlinkCatalog extends AbstractCatalog {
             String bootstrapServers,
             ClassLoader classLoader,
             Map<String, String> securityConfigs) {
+        this(
+                name,
+                defaultDatabase,
+                bootstrapServers,
+                classLoader,
+                securityConfigs,
+                new LakeFlinkCatalog(name, classLoader));
+    }
+
+    @VisibleForTesting
+    public FlinkCatalog(
+            String name,
+            String defaultDatabase,
+            String bootstrapServers,
+            ClassLoader classLoader,
+            Map<String, String> securityConfigs,
+            LakeFlinkCatalog lakeFlinkCatalog) {
         super(name, defaultDatabase);
         this.catalogName = name;
         this.defaultDatabase = defaultDatabase;
         this.bootstrapServers = bootstrapServers;
         this.classLoader = classLoader;
         this.securityConfigs = securityConfigs;
-        this.lakeFlinkCatalog = new LakeFlinkCatalog(catalogName, classLoader);
+        this.lakeFlinkCatalog = lakeFlinkCatalog;
     }
 
     @Override

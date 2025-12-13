@@ -18,8 +18,10 @@
 
 package org.apache.fluss.flink.catalog;
 
+import org.apache.fluss.flink.lake.LakeFlinkCatalog;
 import org.apache.fluss.metadata.TableInfo;
 
+import org.apache.flink.annotation.VisibleForTesting;
 import org.apache.flink.table.api.Schema;
 import org.apache.flink.table.catalog.CatalogBaseTable;
 import org.apache.flink.table.catalog.CatalogTable;
@@ -44,11 +46,29 @@ public class Flink21Catalog extends FlinkCatalog {
         super(name, defaultDatabase, bootstrapServers, classLoader, securityConfigs);
     }
 
+    @VisibleForTesting
+    public Flink21Catalog(
+            String name,
+            String defaultDatabase,
+            String bootstrapServers,
+            ClassLoader classLoader,
+            Map<String, String> securityConfigs,
+            LakeFlinkCatalog lakeFlinkCatalog) {
+        super(
+                name,
+                defaultDatabase,
+                bootstrapServers,
+                classLoader,
+                securityConfigs,
+                lakeFlinkCatalog);
+    }
+
     @Override
     public CatalogBaseTable getTable(ObjectPath objectPath)
             throws TableNotExistException, CatalogException {
         CatalogBaseTable catalogBaseTable = super.getTable(objectPath);
-        if (!(catalogBaseTable instanceof CatalogTable)) {
+        if (!(catalogBaseTable instanceof CatalogTable)
+                || objectPath.getObjectName().contains(LAKE_TABLE_SPLITTER)) {
             return catalogBaseTable;
         }
 
