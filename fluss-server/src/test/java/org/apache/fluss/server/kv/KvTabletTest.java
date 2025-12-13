@@ -176,9 +176,8 @@ class KvTabletTest {
             SchemaGetter schemaGetter,
             Map<String, String> tableConfig)
             throws Exception {
-        RowMerger rowMerger =
-                RowMerger.create(
-                        new TableConfig(Configuration.fromMap(tableConfig)), KvFormat.COMPACTED);
+        TableConfig tableConf = new TableConfig(Configuration.fromMap(tableConfig));
+        RowMerger rowMerger = RowMerger.create(tableConf, KvFormat.COMPACTED);
         return KvTablet.create(
                 tablePath,
                 tableBucket,
@@ -191,7 +190,8 @@ class KvTabletTest {
                 KvFormat.COMPACTED,
                 rowMerger,
                 DEFAULT_COMPRESSION,
-                schemaGetter);
+                schemaGetter,
+                tableConf.isChangelogIgnoreUpdateBefore());
     }
 
     @Test
@@ -1042,6 +1042,117 @@ class KvTabletTest {
         KvRecordBatch kvRecordBatch2 = kvRecordBatchFactory.ofRecords(kvData1, writeId, 1);
         kvTablet.putAsLeader(kvRecordBatch2, null);
         assertThat(kvTablet.getKvPreWriteBuffer().getMaxLSN()).isEqualTo(9);
+    }
+
+    @Test
+    void testIgnoreUpdateBefore() throws Exception {
+        // Ignore UPDATE_BEFORE - should not be produced
+        Map<String, String> config = new HashMap<>();
+        config.put("table.changelog.ignore-update-before", "true");
+        initLogTabletAndKvTablet(DATA1_SCHEMA_PK, config);
+        RowType rowType = DATA1_SCHEMA_PK.getRowType();
+
+        // Insert two records
+        List<KvRecord> kvData1 =
+                Arrays.asList(
+                        kvRecordFactory.ofRecord("k1".getBytes(), new Object[] {1, "v11"}),
+                        kvRecordFactory.ofRecord("k2".getBytes(), new Object[] {2, "v21"}));
+        KvRecordBatch kvRecordBatch1 = kvRecordBatchFactory.ofRecords(kvData1);
+        kvTablet.putAsLeader(kvRecordBatch1, null);
+        long endOffset = logTablet.localLogEndOffset();
+
+        // Verify inserts produce +U (since we skip oldValue check, all are UPDATE_AFTER)
+        LogRecords actualLogRecords = readLogRecords();
+        MemoryLogRecords expectedLogs =
+                logRecords(
+                        0L,
+                        Arrays.asList(ChangeType.UPDATE_AFTER, ChangeType.UPDATE_AFTER),
+                        Arrays.asList(new Object[] {1, "v11"}, new Object[] {2, "v21"}));
+        checkEqual(actualLogRecords, Collections.singletonList(expectedLogs));
+
+        // Update the records - should only produce UPDATE_AFTER, no UPDATE_BEFORE
+        List<KvRecord> kvData2 =
+                Arrays.asList(
+                        kvRecordFactory.ofRecord("k1".getBytes(), new Object[] {1, "v12"}),
+                        kvRecordFactory.ofRecord("k2".getBytes(), new Object[] {2, "v22"}));
+        KvRecordBatch kvRecordBatch2 = kvRecordBatchFactory.ofRecords(kvData2);
+        kvTablet.putAsLeader(kvRecordBatch2, null);
+
+        // Verify updates only produce +U, not -U
+        actualLogRecords = readLogRecords(endOffset);
+        expectedLogs =
+                logRecords(
+                        endOffset,
+                        Arrays.asList(ChangeType.UPDATE_AFTER, ChangeType.UPDATE_AFTER),
+                        Arrays.asList(new Object[] {1, "v12"}, new Object[] {2, "v22"}));
+        checkEqual(actualLogRecords, Collections.singletonList(expectedLogs));
+        endOffset = logTablet.localLogEndOffset();
+
+        // Delete one record - should still produce DELETE
+        List<KvRecord> kvData3 =
+                Collections.singletonList(kvRecordFactory.ofRecord("k1".getBytes(), null));
+        KvRecordBatch kvRecordBatch3 = kvRecordBatchFactory.ofRecords(kvData3);
+        kvTablet.putAsLeader(kvRecordBatch3, null);
+
+        // Verify delete produces -D
+        actualLogRecords = readLogRecords(endOffset);
+        expectedLogs =
+                logRecords(
+                        endOffset,
+                        Collections.singletonList(ChangeType.DELETE),
+                        Collections.singletonList(new Object[] {1, "v12"}));
+        checkEqual(actualLogRecords, Collections.singletonList(expectedLogs));
+
+        // Verify KV store has correct final state
+        assertThat(kvTablet.getKvPreWriteBuffer().get(Key.of("k1".getBytes()))).isNotNull();
+        assertThat(kvTablet.getKvPreWriteBuffer().get(Key.of("k2".getBytes())))
+                .isEqualTo(valueOf(compactedRow(rowType, new Object[] {2, "v22"})));
+    }
+
+    @Test
+    void testIgnoreUpdateBeforeWithPartialUpdate() throws Exception {
+        // Ignore UPDATE_BEFORE with partial update - still need to fetch oldValue
+        Map<String, String> config = new HashMap<>();
+        config.put("table.changelog.ignore-update-before", "true");
+        initLogTabletAndKvTablet(DATA2_SCHEMA, config);
+        RowType rowType = DATA2_SCHEMA.getRowType();
+        KvRecordTestUtils.KvRecordFactory data2kvRecordFactory =
+                KvRecordTestUtils.KvRecordFactory.of(rowType);
+
+        // Insert with partial columns (column a only)
+        KvRecordBatch kvRecordBatch1 =
+                kvRecordBatchFactory.ofRecords(
+                        data2kvRecordFactory.ofRecord(
+                                "k1".getBytes(), new Object[] {1, null, null}));
+        kvTablet.putAsLeader(kvRecordBatch1, new int[] {0});
+
+        long endOffset = logTablet.localLogEndOffset();
+        // Verify insert produces +I (partial update goes through normal path)
+        LogRecords actualLogRecords = readLogRecords();
+        MemoryLogRecords expectedLogs =
+                logRecords(
+                        rowType,
+                        0L,
+                        Collections.singletonList(ChangeType.INSERT),
+                        Collections.singletonList(new Object[] {1, null, null}));
+        checkEqual(actualLogRecords, Collections.singletonList(expectedLogs), rowType);
+
+        // Update with partial columns (column b)
+        KvRecordBatch kvRecordBatch2 =
+                kvRecordBatchFactory.ofRecords(
+                        data2kvRecordFactory.ofRecord(
+                                "k1".getBytes(), new Object[] {1, "v1", null}));
+        kvTablet.putAsLeader(kvRecordBatch2, new int[] {0, 1});
+
+        // Verify update only produces +U (no -U since changelog producer is disabled)
+        actualLogRecords = readLogRecords(endOffset);
+        expectedLogs =
+                logRecords(
+                        rowType,
+                        endOffset,
+                        Collections.singletonList(ChangeType.UPDATE_AFTER),
+                        Collections.singletonList(new Object[] {1, "v1", null}));
+        checkEqual(actualLogRecords, Collections.singletonList(expectedLogs), rowType);
     }
 
     private LogRecords readLogRecords() throws Exception {

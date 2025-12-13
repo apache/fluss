@@ -49,6 +49,7 @@ import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer.TruncateReason;
 import org.apache.fluss.server.kv.rocksdb.RocksDBKv;
 import org.apache.fluss.server.kv.rocksdb.RocksDBKvBuilder;
 import org.apache.fluss.server.kv.rocksdb.RocksDBResourceContainer;
+import org.apache.fluss.server.kv.rowmerger.DefaultRowMerger;
 import org.apache.fluss.server.kv.rowmerger.RowMerger;
 import org.apache.fluss.server.kv.snapshot.KvFileHandleAndLocalPath;
 import org.apache.fluss.server.kv.snapshot.KvSnapshotDataUploader;
@@ -113,6 +114,9 @@ public final class KvTablet {
 
     private final SchemaGetter schemaGetter;
 
+    // whether to ignore UPDATE_BEFORE records in changelog
+    private final boolean ignoreUpdateBefore;
+
     /**
      * The kv data in pre-write buffer whose log offset is less than the flushedLogOffset has been
      * flushed into kv.
@@ -136,7 +140,8 @@ public final class KvTablet {
             KvFormat kvFormat,
             RowMerger rowMerger,
             ArrowCompressionInfo arrowCompressionInfo,
-            SchemaGetter schemaGetter) {
+            SchemaGetter schemaGetter,
+            boolean ignoreUpdateBefore) {
         this.physicalPath = physicalPath;
         this.tableBucket = tableBucket;
         this.logTablet = logTablet;
@@ -151,6 +156,7 @@ public final class KvTablet {
         this.rowMerger = rowMerger;
         this.arrowCompressionInfo = arrowCompressionInfo;
         this.schemaGetter = schemaGetter;
+        this.ignoreUpdateBefore = ignoreUpdateBefore;
     }
 
     public static KvTablet create(
@@ -163,7 +169,8 @@ public final class KvTablet {
             KvFormat kvFormat,
             RowMerger rowMerger,
             ArrowCompressionInfo arrowCompressionInfo,
-            SchemaGetter schemaGetter)
+            SchemaGetter schemaGetter,
+            boolean ignoreUpdateBefore)
             throws IOException {
         Tuple2<PhysicalTablePath, TableBucket> tablePathAndBucket =
                 FlussPaths.parseTabletDir(kvTabletDir);
@@ -179,7 +186,8 @@ public final class KvTablet {
                 kvFormat,
                 rowMerger,
                 arrowCompressionInfo,
-                schemaGetter);
+                schemaGetter,
+                ignoreUpdateBefore);
     }
 
     public static KvTablet create(
@@ -194,7 +202,8 @@ public final class KvTablet {
             KvFormat kvFormat,
             RowMerger rowMerger,
             ArrowCompressionInfo arrowCompressionInfo,
-            SchemaGetter schemaGetter)
+            SchemaGetter schemaGetter,
+            boolean ignoreUpdateBefore)
             throws IOException {
         RocksDBKv kv = buildRocksDBKv(serverConf, kvTabletDir);
         return new KvTablet(
@@ -211,7 +220,8 @@ public final class KvTablet {
                 kvFormat,
                 rowMerger,
                 arrowCompressionInfo,
-                schemaGetter);
+                schemaGetter,
+                ignoreUpdateBefore);
     }
 
     private static RocksDBKv buildRocksDBKv(Configuration configuration, File kvDir)
@@ -345,52 +355,89 @@ public final class KvTablet {
                                                 latestSchemaRow.replaceRow(oldValue.row));
                                         kvPreWriteBuffer.delete(key, logOffset++);
                                     } else {
-                                        // otherwise, it's a partial update, should produce -U,+U
-                                        walBuilder.append(
-                                                ChangeType.UPDATE_BEFORE,
-                                                latestSchemaRow.replaceRow(oldValue.row));
-                                        walBuilder.append(
-                                                ChangeType.UPDATE_AFTER,
-                                                latestSchemaRow.replaceRow(newValue.row));
-                                        kvPreWriteBuffer.put(
-                                                key, newValue.encodeValue(), logOffset + 1);
-                                        logOffset += 2;
+                                        // otherwise, it's a partial update
+                                        if (ignoreUpdateBefore) {
+                                            // only produce +U
+                                            walBuilder.append(
+                                                    ChangeType.UPDATE_AFTER,
+                                                    latestSchemaRow.replaceRow(newValue.row));
+                                            kvPreWriteBuffer.put(
+                                                    key, newValue.encodeValue(), logOffset);
+                                            logOffset++;
+                                        } else {
+                                            // produce -U, +U
+                                            walBuilder.append(
+                                                    ChangeType.UPDATE_BEFORE,
+                                                    latestSchemaRow.replaceRow(oldValue.row));
+                                            walBuilder.append(
+                                                    ChangeType.UPDATE_AFTER,
+                                                    latestSchemaRow.replaceRow(newValue.row));
+                                            kvPreWriteBuffer.put(
+                                                    key, newValue.encodeValue(), logOffset + 1);
+                                            logOffset += 2;
+                                        }
                                     }
                                 }
                             } else {
                                 // upsert operation
-                                byte[] oldValueBytes = getFromBufferOrKv(key);
-                                // it's update
-                                if (oldValueBytes != null) {
-                                    BinaryValue oldValue = valueDecoder.decodeValue(oldValueBytes);
-                                    BinaryValue newValue =
-                                            currentMerger.merge(oldValue, currentValue);
-                                    if (newValue == oldValue) {
-                                        // newValue is the same to oldValue, means nothing
-                                        // happens (no update/delete), and input should be ignored
-                                        continue;
-                                    }
-
-                                    walBuilder.append(
-                                            ChangeType.UPDATE_BEFORE,
-                                            latestSchemaRow.replaceRow(oldValue.row));
+                                // Optimization: when ignoring UPDATE_BEFORE and merger is
+                                // DefaultRowMerger (full update, not partial update), we can skip
+                                // fetching old value for better performance since it always returns
+                                // new value.
+                                if (ignoreUpdateBefore
+                                        && currentMerger instanceof DefaultRowMerger) {
+                                    // Fast path: directly produce +U without fetching old value
                                     walBuilder.append(
                                             ChangeType.UPDATE_AFTER,
-                                            latestSchemaRow.replaceRow(newValue.row));
-                                    // logOffset is for -U, logOffset + 1 is for +U, we need to use
-                                    // the log offset for +U
-                                    kvPreWriteBuffer.put(
-                                            key, newValue.encodeValue(), logOffset + 1);
-                                    logOffset += 2;
-                                } else {
-                                    // it's insert
-                                    // TODO: we should add guarantees that all non-specified columns
-                                    //  of the input row are set to null.
-                                    walBuilder.append(
-                                            ChangeType.INSERT,
                                             latestSchemaRow.replaceRow(currentValue.row));
                                     kvPreWriteBuffer.put(
                                             key, currentValue.encodeValue(), logOffset++);
+                                } else {
+                                    byte[] oldValueBytes = getFromBufferOrKv(key);
+                                    // it's update
+                                    if (oldValueBytes != null) {
+                                        BinaryValue oldValue =
+                                                valueDecoder.decodeValue(oldValueBytes);
+                                        BinaryValue newValue =
+                                                currentMerger.merge(oldValue, currentValue);
+                                        if (newValue == oldValue) {
+                                            // newValue is the same to oldValue, means nothing
+                                            // happens (no update/delete), and input should be
+                                            // ignored
+                                            continue;
+                                        }
+
+                                        if (ignoreUpdateBefore) {
+                                            // only produce +U when ignoring UPDATE_BEFORE
+                                            walBuilder.append(
+                                                    ChangeType.UPDATE_AFTER,
+                                                    latestSchemaRow.replaceRow(newValue.row));
+                                            kvPreWriteBuffer.put(
+                                                    key, newValue.encodeValue(), logOffset);
+                                            logOffset++;
+                                        } else {
+                                            walBuilder.append(
+                                                    ChangeType.UPDATE_BEFORE,
+                                                    latestSchemaRow.replaceRow(oldValue.row));
+                                            walBuilder.append(
+                                                    ChangeType.UPDATE_AFTER,
+                                                    latestSchemaRow.replaceRow(newValue.row));
+                                            // logOffset is for -U, logOffset + 1 is for +U, we need
+                                            // to use the log offset for +U
+                                            kvPreWriteBuffer.put(
+                                                    key, newValue.encodeValue(), logOffset + 1);
+                                            logOffset += 2;
+                                        }
+                                    } else {
+                                        // it's insert
+                                        // TODO: we should add guarantees that all non-specified
+                                        // columns of the input row are set to null.
+                                        walBuilder.append(
+                                                ChangeType.INSERT,
+                                                latestSchemaRow.replaceRow(currentValue.row));
+                                        kvPreWriteBuffer.put(
+                                                key, currentValue.encodeValue(), logOffset++);
+                                    }
                                 }
                             }
                         }

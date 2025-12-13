@@ -1423,6 +1423,17 @@ public class ConfigOptions {
                                     + "The auto increment column can only be used in primary-key table. The data type of the auto increment column must be INT or BIGINT."
                                     + "Currently a table can have only one auto-increment column.");
 
+    public static final ConfigOption<Boolean> TABLE_CHANGELOG_IGNORE_UPDATE_BEFORE =
+            key("table.changelog.ignore-update-before")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription(
+                            "Whether to ignore UPDATE_BEFORE records in changelog for the primary key table. "
+                                    + "When disabled (default), update operations produce both UPDATE_BEFORE and UPDATE_AFTER records. "
+                                    + "When enabled, update operations only produce UPDATE_AFTER records, "
+                                    + "which reduces storage and transmission costs but loses the ability to track previous values. "
+                                    + "This option only affects primary key tables.");
+
     // ------------------------------------------------------------------------
     //  ConfigOptions for Kv
     // ------------------------------------------------------------------------
