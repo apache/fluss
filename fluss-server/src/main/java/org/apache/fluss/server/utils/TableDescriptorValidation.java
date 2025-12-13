@@ -33,6 +33,7 @@ import org.apache.fluss.metadata.MergeEngineType;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.types.BigIntType;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypeRoot;
 import org.apache.fluss.types.RowType;
@@ -58,7 +59,8 @@ import static org.apache.fluss.utils.PartitionUtils.PARTITION_KEY_SUPPORTED_TYPE
 
 /** Validator of {@link TableDescriptor}. */
 public class TableDescriptorValidation {
-
+    public static final String FIELDS_PREFIX = "fields";
+    public static final String AUTO_INCREMENT = "auto-increment";
     private static final Set<String> SYSTEM_COLUMNS =
             Collections.unmodifiableSet(
                     new LinkedHashSet<>(
@@ -109,6 +111,40 @@ public class TableDescriptorValidation {
         checkTieredLog(tableConf);
         checkPartition(tableConf, tableDescriptor.getPartitionKeys(), schema);
         checkSystemColumns(schema);
+        checkAutoIncColumns(tableDescriptor, tableConf);
+    }
+
+    private static void checkAutoIncColumns(
+            TableDescriptor tableDescriptor, Configuration tableConf) {
+        int count = 0;
+        for (Schema.Column column : tableDescriptor.getSchema().getColumns()) {
+            String columnName = column.getName();
+            if (column.isAutoInc()) {
+                if (!(column.getDataType() instanceof BigIntType)) {
+                    throw new InvalidTableException(
+                            "The data type of the AUTO_INCREMENT column must be BIGINT.");
+                }
+                if (tableDescriptor.getPartitionKeys().contains(columnName)) {
+                    throw new InvalidTableException(
+                            "The AUTO_INCREMENT column can not be used as the partition key.");
+                }
+                Optional<Schema.PrimaryKey> primaryKey =
+                        tableDescriptor.getSchema().getPrimaryKey();
+                if (primaryKey.isEmpty()) {
+                    throw new InvalidTableException(
+                            "The AUTO_INCREMENT column is not supported in log table.");
+                } else {
+                    if (primaryKey.get().getColumnNames().contains(columnName)) {
+                        throw new InvalidTableException(
+                                "The AUTO_INCREMENT column can not be used as the primary key.");
+                    }
+                }
+                if (++count > 1) {
+                    throw new InvalidTableException(
+                            "Each table can have only one AUTO_INCREMENT column.");
+                }
+            }
+        }
     }
 
     public static void validateAlterTableProperties(

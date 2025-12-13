@@ -115,6 +115,15 @@ public final class Schema implements Serializable {
                 .orElseGet(() -> new int[0]);
     }
 
+    /** Returns the auto-increment column index, if any, otherwise returns -1. */
+    public int getAutoIncColumnIndex() {
+        return columns.stream()
+                .mapToInt(columns::indexOf)
+                .filter(idx -> columns.get(idx).isAutoInc())
+                .findFirst()
+                .orElse(-1);
+    }
+
     /** Returns the primary key column names, if any, otherwise returns an empty array. */
     public List<String> getPrimaryKeyColumnNames() {
         return getPrimaryKey().map(PrimaryKey::getColumnNames).orElse(Collections.emptyList());
@@ -155,6 +164,11 @@ public final class Schema implements Serializable {
             columnNames.add(columns.get(columnIndex).columnName);
         }
         return columnNames;
+    }
+
+    /** Returns the column name in given column index. */
+    public String getColumnName(int columnIndex) {
+        return columns.get(columnIndex).columnName;
     }
 
     /** Returns the indexes of the fields in the schema. */
@@ -320,6 +334,18 @@ public final class Schema implements Serializable {
             return this;
         }
 
+        /** set auto increment property to the previous column. */
+        public Builder setAutoIncrement(boolean autoIncrement) {
+            if (!columns.isEmpty()) {
+                columns.get(columns.size() - 1).setAutoIncrement(autoIncrement);
+            } else {
+                throw new IllegalArgumentException(
+                        "Method 'enableAutoIncrement(...)' must be called after a column definition, "
+                                + "but there is no preceding column defined.");
+            }
+            return this;
+        }
+
         /**
          * Declares a primary key constraint for a set of given columns. Primary key uniquely
          * identify a row in a table. Neither of columns in a primary can be nullable. Adding a
@@ -422,22 +448,37 @@ public final class Schema implements Serializable {
         private final int columnId;
         private final String columnName;
         private final DataType dataType;
+        private boolean isAutoInc;
         private final @Nullable String comment;
 
         public Column(String columnName, DataType dataType) {
-            this(columnName, dataType, null, UNKNOWN_COLUMN_ID);
+            this(columnName, dataType, null, UNKNOWN_COLUMN_ID, false);
         }
 
         public Column(String columnName, DataType dataType, @Nullable String comment) {
-            this(columnName, dataType, comment, UNKNOWN_COLUMN_ID);
+            this(columnName, dataType, comment, UNKNOWN_COLUMN_ID, false);
         }
 
         public Column(
                 String columnName, DataType dataType, @Nullable String comment, int columnId) {
+            this(columnName, dataType, comment, columnId, false);
+        }
+
+        public Column(
+                String columnName,
+                DataType dataType,
+                @Nullable String comment,
+                int columnId,
+                boolean isAutoInc) {
             this.columnName = columnName;
             this.dataType = dataType;
             this.comment = comment;
             this.columnId = columnId;
+            this.isAutoInc = isAutoInc;
+        }
+
+        public boolean isAutoInc() {
+            return isAutoInc;
         }
 
         public String getName() {
@@ -460,6 +501,10 @@ public final class Schema implements Serializable {
             return new Column(columnName, dataType, comment, columnId);
         }
 
+        public void setAutoIncrement(boolean autoIncrement) {
+            this.isAutoInc = autoIncrement;
+        }
+
         @Override
         public String toString() {
             final StringBuilder sb = new StringBuilder();
@@ -471,6 +516,9 @@ public final class Schema implements Serializable {
                                 sb.append(EncodingUtils.escapeSingleQuotes(c));
                                 sb.append("'");
                             });
+            if (isAutoInc()) {
+                sb.append(" AUTO_INCREMENT");
+            }
             return sb.toString();
         }
 
@@ -486,12 +534,13 @@ public final class Schema implements Serializable {
             return Objects.equals(columnName, that.columnName)
                     && Objects.equals(dataType, that.dataType)
                     && Objects.equals(comment, that.comment)
-                    && Objects.equals(columnId, that.columnId);
+                    && Objects.equals(columnId, that.columnId)
+                    && Objects.equals(isAutoInc, that.isAutoInc);
         }
 
         @Override
         public int hashCode() {
-            return Objects.hash(columnName, dataType, comment, columnId);
+            return Objects.hash(columnName, dataType, comment, columnId, isAutoInc);
         }
     }
 

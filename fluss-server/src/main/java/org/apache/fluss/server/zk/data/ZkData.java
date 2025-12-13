@@ -251,6 +251,41 @@ public final class ZkData {
     }
 
     /**
+     * The znode for columns of a table. The znode path is:
+     *
+     * <p>/metadata/databases/[databaseName]/tables/[tableName]/schemas/[schemaId]/columns
+     */
+    public static final class ColumnsZNode {
+        public static String path(TablePath tablePath, int schemaId) {
+            return SchemaZNode.path(tablePath, schemaId) + "/columns";
+        }
+    }
+
+    /**
+     * The znode for schemas of a table. The znode path is:
+     *
+     * <p>/metadata/databases/[databaseName]/tables/[tableName]/schemas/[schemaId]/columns/[columnIdx]
+     */
+    public static final class ColumnZNode {
+        public static String path(TablePath tablePath, int schemaId, int columnIdx) {
+            return ColumnsZNode.path(tablePath, schemaId) + "/" + columnIdx;
+        }
+    }
+
+    /**
+     * The znode for auto increment column. The znode path is:
+     *
+     * <p>/metadata/databases/[databaseName]/tables/[tableName]/schemas/[schemaId]/columns/[columnIdx]/auto_increment_counter
+     */
+    public static final class AutoIncrementColumnZNode {
+        public static String path(TablePath tablePath, int schemaId, int columnIdx) {
+            return ColumnZNode.path(tablePath, schemaId, columnIdx)
+                    + "/"
+                    + "auto-increment-counter";
+        }
+    }
+
+    /**
      * The znode used to generate a sequence unique id for a partition. The znode path is:
      *
      * <p>/metadata/partition_seqid

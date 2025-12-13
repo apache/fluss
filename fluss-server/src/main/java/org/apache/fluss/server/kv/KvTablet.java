@@ -44,6 +44,7 @@ import org.apache.fluss.row.PaddingRow;
 import org.apache.fluss.row.arrow.ArrowWriterPool;
 import org.apache.fluss.row.arrow.ArrowWriterProvider;
 import org.apache.fluss.row.encode.ValueDecoder;
+import org.apache.fluss.server.kv.autoinc.AutoIncProcessor;
 import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer;
 import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer.TruncateReason;
 import org.apache.fluss.server.kv.rocksdb.RocksDBKv;
@@ -110,6 +111,7 @@ public final class KvTablet {
     // defines how to merge rows on the same primary key
     private final RowMerger rowMerger;
     private final ArrowCompressionInfo arrowCompressionInfo;
+    private final AutoIncProcessor autoIncProcessor;
 
     private final SchemaGetter schemaGetter;
 
@@ -136,7 +138,8 @@ public final class KvTablet {
             KvFormat kvFormat,
             RowMerger rowMerger,
             ArrowCompressionInfo arrowCompressionInfo,
-            SchemaGetter schemaGetter) {
+            SchemaGetter schemaGetter,
+            AutoIncProcessor autoIncProcessor) {
         this.physicalPath = physicalPath;
         this.tableBucket = tableBucket;
         this.logTablet = logTablet;
@@ -151,6 +154,7 @@ public final class KvTablet {
         this.rowMerger = rowMerger;
         this.arrowCompressionInfo = arrowCompressionInfo;
         this.schemaGetter = schemaGetter;
+        this.autoIncProcessor = autoIncProcessor;
     }
 
     public static KvTablet create(
@@ -163,7 +167,8 @@ public final class KvTablet {
             KvFormat kvFormat,
             RowMerger rowMerger,
             ArrowCompressionInfo arrowCompressionInfo,
-            SchemaGetter schemaGetter)
+            SchemaGetter schemaGetter,
+            AutoIncProcessor autoIncProcessor)
             throws IOException {
         Tuple2<PhysicalTablePath, TableBucket> tablePathAndBucket =
                 FlussPaths.parseTabletDir(kvTabletDir);
@@ -179,7 +184,8 @@ public final class KvTablet {
                 kvFormat,
                 rowMerger,
                 arrowCompressionInfo,
-                schemaGetter);
+                schemaGetter,
+                autoIncProcessor);
     }
 
     public static KvTablet create(
@@ -194,7 +200,8 @@ public final class KvTablet {
             KvFormat kvFormat,
             RowMerger rowMerger,
             ArrowCompressionInfo arrowCompressionInfo,
-            SchemaGetter schemaGetter)
+            SchemaGetter schemaGetter,
+            AutoIncProcessor autoIncProcessor)
             throws IOException {
         RocksDBKv kv = buildRocksDBKv(serverConf, kvTabletDir);
         return new KvTablet(
@@ -211,7 +218,8 @@ public final class KvTablet {
                 kvFormat,
                 rowMerger,
                 arrowCompressionInfo,
-                schemaGetter);
+                schemaGetter,
+                autoIncProcessor);
     }
 
     private static RocksDBKv buildRocksDBKv(Configuration configuration, File kvDir)
@@ -386,11 +394,13 @@ public final class KvTablet {
                                     // it's insert
                                     // TODO: we should add guarantees that all non-specified columns
                                     //  of the input row are set to null.
+
+                                    BinaryValue newValue =
+                                            autoIncProcessor.processAutoInc(currentValue);
                                     walBuilder.append(
                                             ChangeType.INSERT,
-                                            latestSchemaRow.replaceRow(currentValue.row));
-                                    kvPreWriteBuffer.put(
-                                            key, currentValue.encodeValue(), logOffset++);
+                                            latestSchemaRow.replaceRow(newValue.row));
+                                    kvPreWriteBuffer.put(key, newValue.encodeValue(), logOffset++);
                                 }
                             }
                         }

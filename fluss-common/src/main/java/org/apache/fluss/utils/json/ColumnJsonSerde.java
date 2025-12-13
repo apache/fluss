@@ -37,6 +37,7 @@ public class ColumnJsonSerde
     static final String ID = "id";
     static final String DATA_TYPE = "data_type";
     static final String COMMENT = "comment";
+    static final String AUTO_INC = "auto_inc";
 
     @Override
     public void serialize(Schema.Column column, JsonGenerator generator) throws IOException {
@@ -50,6 +51,8 @@ public class ColumnJsonSerde
             generator.writeStringField(COMMENT, column.getComment().get());
         }
         generator.writeNumberField(ID, column.getColumnId());
+        generator.writeFieldName(AUTO_INC);
+        generator.writeBoolean(column.isAutoInc());
 
         generator.writeEndObject();
     }
@@ -64,6 +67,7 @@ public class ColumnJsonSerde
                 columnName,
                 dataType,
                 node.hasNonNull(COMMENT) ? node.get(COMMENT).asText() : null,
-                node.has(ID) ? node.get(ID).asInt() : UNKNOWN_COLUMN_ID);
+                node.has(ID) ? node.get(ID).asInt() : UNKNOWN_COLUMN_ID,
+                node.required(AUTO_INC).asBoolean());
     }
 }
