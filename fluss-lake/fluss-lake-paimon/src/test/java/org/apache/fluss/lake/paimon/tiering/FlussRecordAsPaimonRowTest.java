@@ -21,10 +21,12 @@ import org.apache.fluss.record.GenericRecord;
 import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.Decimal;
+import org.apache.fluss.row.GenericArray;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
 
+import org.apache.paimon.data.InternalArray;
 import org.apache.paimon.data.Timestamp;
 import org.apache.paimon.types.RowKind;
 import org.apache.paimon.types.RowType;
@@ -162,5 +164,122 @@ class FlussRecordAsPaimonRowTest {
         logRecord = new GenericRecord(logOffset, timeStamp, DELETE, genericRow);
         flussRecordAsPaimonRow.setFlussRecord(logRecord);
         assertThat(flussRecordAsPaimonRow.getRowKind()).isEqualTo(RowKind.DELETE);
+    }
+
+    @Test
+    void testArrayTypeWithIntElements() {
+        int tableBucket = 0;
+        RowType tableRowType =
+                RowType.of(
+                        new org.apache.paimon.types.IntType(),
+                        new org.apache.paimon.types.ArrayType(
+                                new org.apache.paimon.types.IntType()),
+                        // system columns: __bucket, __offset, __timestamp
+                        new org.apache.paimon.types.IntType(),
+                        new org.apache.paimon.types.BigIntType(),
+                        new org.apache.paimon.types.LocalZonedTimestampType(3));
+
+        FlussRecordAsPaimonRow flussRecordAsPaimonRow =
+                new FlussRecordAsPaimonRow(tableBucket, tableRowType);
+        long logOffset = 10;
+        long timeStamp = System.currentTimeMillis();
+        GenericRow genericRow = new GenericRow(2);
+        genericRow.setField(0, 42);
+        genericRow.setField(1, new GenericArray(new int[] {1, 2, 3, 4, 5}));
+
+        LogRecord logRecord = new GenericRecord(logOffset, timeStamp, APPEND_ONLY, genericRow);
+        flussRecordAsPaimonRow.setFlussRecord(logRecord);
+
+        assertThat(flussRecordAsPaimonRow.getInt(0)).isEqualTo(42);
+        InternalArray array = flussRecordAsPaimonRow.getArray(1);
+        assertThat(array).isNotNull();
+        assertThat(array.size()).isEqualTo(5);
+        assertThat(array.getInt(0)).isEqualTo(1);
+        assertThat(array.getInt(1)).isEqualTo(2);
+        assertThat(array.getInt(2)).isEqualTo(3);
+        assertThat(array.getInt(3)).isEqualTo(4);
+        assertThat(array.getInt(4)).isEqualTo(5);
+
+        // Verify system columns are still accessible
+        assertThat(flussRecordAsPaimonRow.getInt(2)).isEqualTo(tableBucket);
+        assertThat(flussRecordAsPaimonRow.getLong(3)).isEqualTo(logOffset);
+        assertThat(flussRecordAsPaimonRow.getLong(4)).isEqualTo(timeStamp);
+    }
+
+    @Test
+    void testArrayTypeWithStringElements() {
+        int tableBucket = 1;
+        RowType tableRowType =
+                RowType.of(
+                        new org.apache.paimon.types.ArrayType(
+                                new org.apache.paimon.types.VarCharType()),
+                        // system columns: __bucket, __offset, __timestamp
+                        new org.apache.paimon.types.IntType(),
+                        new org.apache.paimon.types.BigIntType(),
+                        new org.apache.paimon.types.LocalZonedTimestampType(3));
+
+        FlussRecordAsPaimonRow flussRecordAsPaimonRow =
+                new FlussRecordAsPaimonRow(tableBucket, tableRowType);
+        long logOffset = 5;
+        long timeStamp = System.currentTimeMillis();
+        GenericRow genericRow = new GenericRow(1);
+        genericRow.setField(
+                0,
+                new GenericArray(
+                        new Object[] {
+                            BinaryString.fromString("hello"), BinaryString.fromString("world")
+                        }));
+
+        LogRecord logRecord = new GenericRecord(logOffset, timeStamp, INSERT, genericRow);
+        flussRecordAsPaimonRow.setFlussRecord(logRecord);
+
+        InternalArray array = flussRecordAsPaimonRow.getArray(0);
+        assertThat(array).isNotNull();
+        assertThat(array.size()).isEqualTo(2);
+        assertThat(array.getString(0).toString()).isEqualTo("hello");
+        assertThat(array.getString(1).toString()).isEqualTo("world");
+    }
+
+    @Test
+    void testNestedArrayType() {
+        int tableBucket = 0;
+        RowType tableRowType =
+                RowType.of(
+                        new org.apache.paimon.types.ArrayType(
+                                new org.apache.paimon.types.ArrayType(
+                                        new org.apache.paimon.types.IntType())),
+                        // system columns: __bucket, __offset, __timestamp
+                        new org.apache.paimon.types.IntType(),
+                        new org.apache.paimon.types.BigIntType(),
+                        new org.apache.paimon.types.LocalZonedTimestampType(3));
+
+        FlussRecordAsPaimonRow flussRecordAsPaimonRow =
+                new FlussRecordAsPaimonRow(tableBucket, tableRowType);
+        long logOffset = 0;
+        long timeStamp = System.currentTimeMillis();
+        GenericRow genericRow = new GenericRow(1);
+        genericRow.setField(
+                0,
+                new GenericArray(
+                        new Object[] {
+                            new GenericArray(new int[] {1, 2}),
+                            new GenericArray(new int[] {3, 4, 5})
+                        }));
+
+        LogRecord logRecord = new GenericRecord(logOffset, timeStamp, APPEND_ONLY, genericRow);
+        flussRecordAsPaimonRow.setFlussRecord(logRecord);
+
+        InternalArray outerArray = flussRecordAsPaimonRow.getArray(0);
+        assertThat(outerArray).isNotNull();
+        assertThat(outerArray.size()).isEqualTo(2);
+
+        InternalArray innerArray1 = outerArray.getArray(0);
+        assertThat(innerArray1.size()).isEqualTo(2);
+        assertThat(innerArray1.getInt(0)).isEqualTo(1);
+        assertThat(innerArray1.getInt(1)).isEqualTo(2);
+
+        InternalArray innerArray2 = outerArray.getArray(1);
+        assertThat(innerArray2.size()).isEqualTo(3);
+        assertThat(innerArray2.getInt(0)).isEqualTo(3);
     }
 }
