@@ -159,8 +159,8 @@ public class FlussRowAsPaimonRow implements InternalRow {
 
     @Override
     public InternalArray getArray(int pos) {
-        throw new UnsupportedOperationException(
-                "getArray is not support for Fluss record currently.");
+        org.apache.fluss.row.InternalArray flussArray = internalRow.getArray(pos);
+        return flussArray == null ? null : new FlussArrayAsPaimonArray(flussArray);
     }
 
     @Override
