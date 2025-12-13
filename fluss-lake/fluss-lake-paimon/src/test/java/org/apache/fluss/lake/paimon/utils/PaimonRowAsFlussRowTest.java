@@ -239,4 +239,146 @@ class PaimonRowAsFlussRowTest {
         assertThat(array.getBoolean(1)).isFalse();
         assertThat(array.getBoolean(2)).isTrue();
     }
+
+    @Test
+    void testArrayWithAllPrimitiveTypes() {
+        GenericRow paimonRow = new GenericRow(10);
+        paimonRow.setField(0, new GenericArray(new boolean[] {true, false}));
+        paimonRow.setField(1, new GenericArray(new byte[] {1, 2, 3}));
+        paimonRow.setField(2, new GenericArray(new short[] {100, 200}));
+        paimonRow.setField(3, new GenericArray(new int[] {1000, 2000}));
+        paimonRow.setField(4, new GenericArray(new long[] {10000L, 20000L}));
+        paimonRow.setField(5, new GenericArray(new float[] {1.1f, 2.2f}));
+        paimonRow.setField(6, new GenericArray(new double[] {1.11, 2.22}));
+        // System columns
+        paimonRow.setField(7, 0);
+        paimonRow.setField(8, 0L);
+        paimonRow.setField(9, 0L);
+
+        PaimonRowAsFlussRow flussRow = new PaimonRowAsFlussRow(paimonRow);
+
+        // Test boolean array with toArray
+        InternalArray boolArray = flussRow.getArray(0);
+        assertThat(boolArray.toBooleanArray()).isEqualTo(new boolean[] {true, false});
+
+        // Test byte array with toArray
+        InternalArray byteArray = flussRow.getArray(1);
+        assertThat(byteArray.getByte(0)).isEqualTo((byte) 1);
+        assertThat(byteArray.getByte(1)).isEqualTo((byte) 2);
+        assertThat(byteArray.toByteArray()).isEqualTo(new byte[] {1, 2, 3});
+
+        // Test short array with toArray
+        InternalArray shortArray = flussRow.getArray(2);
+        assertThat(shortArray.getShort(0)).isEqualTo((short) 100);
+        assertThat(shortArray.getShort(1)).isEqualTo((short) 200);
+        assertThat(shortArray.toShortArray()).isEqualTo(new short[] {100, 200});
+
+        // Test int array with toArray
+        InternalArray intArray = flussRow.getArray(3);
+        assertThat(intArray.toIntArray()).isEqualTo(new int[] {1000, 2000});
+
+        // Test long array with toArray
+        InternalArray longArray = flussRow.getArray(4);
+        assertThat(longArray.toLongArray()).isEqualTo(new long[] {10000L, 20000L});
+
+        // Test float array with toArray
+        InternalArray floatArray = flussRow.getArray(5);
+        assertThat(floatArray.getFloat(0)).isEqualTo(1.1f);
+        assertThat(floatArray.toFloatArray()).isEqualTo(new float[] {1.1f, 2.2f});
+
+        // Test double array with toArray
+        InternalArray doubleArray = flussRow.getArray(6);
+        assertThat(doubleArray.toDoubleArray()).isEqualTo(new double[] {1.11, 2.22});
+    }
+
+    @Test
+    void testArrayWithDecimalElements() {
+        GenericRow paimonRow = new GenericRow(4);
+        paimonRow.setField(
+                0,
+                new GenericArray(
+                        new Object[] {
+                            org.apache.paimon.data.Decimal.fromBigDecimal(
+                                    new java.math.BigDecimal("123.45"), 10, 2),
+                            org.apache.paimon.data.Decimal.fromBigDecimal(
+                                    new java.math.BigDecimal("678.90"), 10, 2)
+                        }));
+        paimonRow.setField(1, 0);
+        paimonRow.setField(2, 0L);
+        paimonRow.setField(3, 0L);
+
+        PaimonRowAsFlussRow flussRow = new PaimonRowAsFlussRow(paimonRow);
+
+        InternalArray array = flussRow.getArray(0);
+        assertThat(array.size()).isEqualTo(2);
+        assertThat(array.getDecimal(0, 10, 2).toBigDecimal())
+                .isEqualTo(new java.math.BigDecimal("123.45"));
+        assertThat(array.getDecimal(1, 10, 2).toBigDecimal())
+                .isEqualTo(new java.math.BigDecimal("678.90"));
+    }
+
+    @Test
+    void testArrayWithTimestampElements() {
+        GenericRow paimonRow = new GenericRow(4);
+        paimonRow.setField(
+                0,
+                new GenericArray(
+                        new Object[] {
+                            org.apache.paimon.data.Timestamp.fromEpochMillis(1698235273182L),
+                            org.apache.paimon.data.Timestamp.fromEpochMillis(1698235274000L)
+                        }));
+        paimonRow.setField(1, 0);
+        paimonRow.setField(2, 0L);
+        paimonRow.setField(3, 0L);
+
+        PaimonRowAsFlussRow flussRow = new PaimonRowAsFlussRow(paimonRow);
+
+        InternalArray array = flussRow.getArray(0);
+        assertThat(array.size()).isEqualTo(2);
+        assertThat(array.getTimestampNtz(0, 3).getMillisecond()).isEqualTo(1698235273182L);
+        assertThat(array.getTimestampLtz(1, 3).getEpochMillisecond()).isEqualTo(1698235274000L);
+    }
+
+    @Test
+    void testArrayWithBinaryElements() {
+        GenericRow paimonRow = new GenericRow(4);
+        paimonRow.setField(
+                0,
+                new GenericArray(
+                        new Object[] {
+                            new byte[] {1, 2, 3},
+                            new byte[] {4, 5, 6, 7}
+                        }));
+        paimonRow.setField(1, 0);
+        paimonRow.setField(2, 0L);
+        paimonRow.setField(3, 0L);
+
+        PaimonRowAsFlussRow flussRow = new PaimonRowAsFlussRow(paimonRow);
+
+        InternalArray array = flussRow.getArray(0);
+        assertThat(array.size()).isEqualTo(2);
+        assertThat(array.getBinary(0, 3)).isEqualTo(new byte[] {1, 2, 3});
+        assertThat(array.getBytes(1)).isEqualTo(new byte[] {4, 5, 6, 7});
+    }
+
+    @Test
+    void testArrayWithCharElements() {
+        GenericRow paimonRow = new GenericRow(4);
+        paimonRow.setField(
+                0,
+                new GenericArray(
+                        new BinaryString[] {
+                            BinaryString.fromString("abc"), BinaryString.fromString("def")
+                        }));
+        paimonRow.setField(1, 0);
+        paimonRow.setField(2, 0L);
+        paimonRow.setField(3, 0L);
+
+        PaimonRowAsFlussRow flussRow = new PaimonRowAsFlussRow(paimonRow);
+
+        InternalArray array = flussRow.getArray(0);
+        assertThat(array.size()).isEqualTo(2);
+        assertThat(array.getChar(0, 3).toString()).isEqualTo("abc");
+        assertThat(array.getString(1).toString()).isEqualTo("def");
+    }
 }
