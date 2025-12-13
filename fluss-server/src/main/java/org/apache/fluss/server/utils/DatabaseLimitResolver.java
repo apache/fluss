@@ -33,10 +33,10 @@ public final class DatabaseLimitResolver {
     private DatabaseLimitResolver() {}
 
     public static int resolveMaxBucketForDb(
-            int maxClusterBucketNum, List<ConfigEntry> entries, String database) {
+            int clusterMaxBucketNum, List<ConfigEntry> entries, String database) {
         String key = DATABASE_LIMITS_PREFIX + database + ".max.bucket.num";
-        Integer dbMax = findPositiveInt(entries, key);
-        return dbMax == null ? maxClusterBucketNum : dbMax;
+        Integer dbMaxBucketNum = findPositiveInt(entries, key);
+        return dbMaxBucketNum == null ? clusterMaxBucketNum : dbMaxBucketNum;
     }
 
     private static Integer findPositiveInt(List<ConfigEntry> entries, String key) {

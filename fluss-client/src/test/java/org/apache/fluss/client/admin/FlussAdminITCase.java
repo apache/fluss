@@ -1372,7 +1372,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                                         .get())
                 .cause()
                 .isInstanceOf(TooManyBucketsException.class)
-                .hasMessageContaining("exceeding the cluster-level maximum of 30 buckets");
+                .hasMessageContaining("exceeding the database-level maximum of 30 buckets");
     }
 
     /**
@@ -1403,7 +1403,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         assertThatThrownBy(() -> admin.createTable(tablePath, nonPartitionedTable, false).get())
                 .cause()
                 .isInstanceOf(TooManyBucketsException.class)
-                .hasMessageContaining("exceeds the cluster-level maximum limit");
+                .hasMessageContaining("exceeds the database-level maximum limit");
     }
 
     /** Database-level bucket limit should be enforced for non-partitioned tables. */
@@ -1484,6 +1484,44 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                                         .get())
                 .cause()
                 .isInstanceOf(TooManyBucketsException.class);
+    }
+
+    /** Database-level bucket limit should cap total buckets for partitioned tables. */
+    @Test
+    void testDatabaseBucketLimitForAutoPartitionedTable() throws Exception {
+        String dbName = "db_bucket_limit_auto_part";
+        admin.createDatabase(dbName, DatabaseDescriptor.EMPTY, true).get();
+
+        admin.alterClusterConfigs(
+                        Collections.singletonList(
+                                new AlterConfig(
+                                        "database.limits." + dbName + ".max.bucket.num",
+                                        "25",
+                                        AlterConfigOpType.SET)))
+                .get();
+
+        TablePath tablePath = TablePath.of(dbName, "t_auto_part_bucket_limit");
+        TableDescriptor td =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("id", DataTypes.STRING())
+                                        .column("pt", DataTypes.STRING())
+                                        .build())
+                        .distributedBy(10, "id")
+                        .partitionedBy("pt")
+                        .property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, true)
+                        .property(
+                                ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT,
+                                AutoPartitionTimeUnit.YEAR)
+                        .build();
+
+        // default m is 7
+        assertThatThrownBy(() -> admin.createTable(tablePath, td, true).get())
+                .cause()
+                .isInstanceOf(TooManyBucketsException.class)
+                .hasMessageContaining(
+                        "The number of buckets to retain must be less than the total number of buckets.");
     }
 
     /** Database-level bucket limit should only affect the target database. */

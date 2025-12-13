@@ -71,8 +71,7 @@ public class TableDescriptorValidation {
             Arrays.asList(DataTypeRoot.ARRAY, DataTypeRoot.MAP, DataTypeRoot.ROW);
 
     /** Validate table descriptor to create is valid and contain all necessary information. */
-    public static void validateTableDescriptor(
-            TableDescriptor tableDescriptor, int maxBucketNum, int dbLevelMaxBucket) {
+    public static void validateTableDescriptor(TableDescriptor tableDescriptor, int maxBucketNum) {
         boolean hasPrimaryKey = tableDescriptor.getSchema().getPrimaryKey().isPresent();
         RowType schema = tableDescriptor.getSchema().getRowType();
         Configuration tableConf = Configuration.fromMap(tableDescriptor.getProperties());
@@ -99,7 +98,7 @@ public class TableDescriptorValidation {
         }
 
         // check distribution
-        checkDistribution(tableDescriptor, maxBucketNum, dbLevelMaxBucket);
+        checkDistribution(tableDescriptor, maxBucketNum);
         checkPrimaryKey(tableDescriptor);
         // check individual options
         checkReplicationFactor(tableConf);
@@ -108,7 +107,7 @@ public class TableDescriptorValidation {
         checkMergeEngine(tableConf, hasPrimaryKey, schema);
         checkDeleteBehavior(tableConf, hasPrimaryKey);
         checkTieredLog(tableConf);
-        checkPartition(tableConf, tableDescriptor.getPartitionKeys(), schema);
+        checkPartition(tableConf, tableDescriptor, schema, maxBucketNum);
         checkSystemColumns(schema);
     }
 
@@ -153,8 +152,7 @@ public class TableDescriptorValidation {
         }
     }
 
-    private static void checkDistribution(
-            TableDescriptor tableDescriptor, int maxBucketNum, int dbLevelMaxBucket) {
+    private static void checkDistribution(TableDescriptor tableDescriptor, int maxBucketNum) {
         if (!tableDescriptor.getTableDistribution().isPresent()) {
             throw new InvalidTableException("Table distribution is required.");
         }
@@ -165,14 +163,8 @@ public class TableDescriptorValidation {
         if (bucketCount > maxBucketNum) {
             throw new TooManyBucketsException(
                     String.format(
-                            "Bucket count %s exceeds the cluster-level maximum limit %s.",
-                            bucketCount, maxBucketNum));
-        }
-        if (bucketCount > dbLevelMaxBucket) {
-            throw new TooManyBucketsException(
-                    String.format(
                             "Bucket count %s exceeds the database-level maximum limit %s.",
-                            bucketCount, dbLevelMaxBucket));
+                            bucketCount, maxBucketNum));
         }
         List<String> bucketKeys = tableDescriptor.getTableDistribution().get().getBucketKeys();
         if (!bucketKeys.isEmpty()) {
@@ -301,7 +293,11 @@ public class TableDescriptorValidation {
     }
 
     private static void checkPartition(
-            Configuration tableConf, List<String> partitionKeys, RowType rowType) {
+            Configuration tableConf,
+            TableDescriptor tableDescriptor,
+            RowType rowType,
+            int maxBucketNum) {
+        List<String> partitionKeys = tableDescriptor.getPartitionKeys();
         boolean isPartitioned = !partitionKeys.isEmpty();
         AutoPartitionStrategy autoPartition = AutoPartitionStrategy.from(tableConf);
 
@@ -360,6 +356,18 @@ public class TableDescriptorValidation {
                                     "Currently, auto partitioned table must set auto partition time unit when auto "
                                             + "partition is enabled, please set table property '%s'.",
                                     ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT.key()));
+                }
+
+                // Limit the number of auto-partitions when creating a table.
+                int numToRetainPartitions = autoPartition.numToRetain();
+                int bucketCount =
+                        tableDescriptor.getTableDistribution().get().getBucketCount().get();
+                if (numToRetainPartitions * bucketCount > maxBucketNum) {
+                    throw new TooManyBucketsException(
+                            String.format(
+                                    "The number of buckets to retain must be less than the total number of buckets. "
+                                            + "numToRetainPartitions: %d, bucketCount: %d, maxBucketNum: %d",
+                                    numToRetainPartitions, bucketCount, maxBucketNum));
                 }
             }
         }

@@ -82,7 +82,7 @@ public class MetadataManager {
 
     private final ZooKeeperClient zookeeperClient;
     private final int maxPartitionNum;
-    private final int maxBucketNum;
+    private final int maxBucketNumOfCluster;
     private final LakeCatalogDynamicLoader lakeCatalogDynamicLoader;
     private final DynamicConfigManager dynamicConfigManager;
 
@@ -107,7 +107,7 @@ public class MetadataManager {
             DynamicConfigManager dynamicConfigManager) {
         this.zookeeperClient = zookeeperClient;
         this.maxPartitionNum = conf.get(ConfigOptions.MAX_PARTITION_NUM);
-        this.maxBucketNum = conf.get(ConfigOptions.MAX_BUCKET_NUM);
+        this.maxBucketNumOfCluster = conf.get(ConfigOptions.MAX_BUCKET_NUM);
         this.lakeCatalogDynamicLoader = lakeCatalogDynamicLoader;
         this.dynamicConfigManager = dynamicConfigManager;
     }
@@ -284,12 +284,12 @@ public class MetadataManager {
             boolean ignoreIfExists)
             throws TableAlreadyExistException, DatabaseNotExistException {
         // validate table properties before creating table
-        int dbLevelMaxBucket =
+        int maxBucketNumOfDb =
                 DatabaseLimitResolver.resolveMaxBucketForDb(
-                        maxBucketNum,
+                        maxBucketNumOfCluster,
                         dynamicConfigManager.describeConfigs(),
                         tablePath.getDatabaseName());
-        validateTableDescriptor(tableToCreate, maxBucketNum, dbLevelMaxBucket);
+        validateTableDescriptor(tableToCreate, maxBucketNumOfDb);
 
         if (!databaseExists(tablePath.getDatabaseName())) {
             throw new DatabaseNotExistException(
@@ -386,12 +386,12 @@ public class MetadataManager {
 
             if (newDescriptor != null) {
                 // reuse the same validate logic with the createTable() method
-                int dbLevelMaxBucket =
+                int maxBucketNumOfDb =
                         DatabaseLimitResolver.resolveMaxBucketForDb(
-                                maxBucketNum,
+                                maxBucketNumOfCluster,
                                 dynamicConfigManager.describeConfigs(),
                                 tablePath.getDatabaseName());
-                validateTableDescriptor(newDescriptor, maxBucketNum, dbLevelMaxBucket);
+                validateTableDescriptor(newDescriptor, maxBucketNumOfDb);
 
                 // pre alter table properties, e.g. create lake table in lake storage if it's to
                 // enable datalake for the table
@@ -724,28 +724,19 @@ public class MetadataManager {
             int bucketCount = partitionAssignment.getBucketAssignments().size();
             // currently, every partition has the same bucket count
             int totalBuckets = bucketCount * (partitionNumber + 1);
-            if (totalBuckets > maxBucketNum) {
-                throw new TooManyBucketsException(
-                        String.format(
-                                "Adding partition '%s' would result in %d total buckets for table %s, exceeding the cluster-level maximum of %d buckets.",
-                                partition.getPartitionName(),
-                                totalBuckets,
-                                tablePath,
-                                maxBucketNum));
-            }
-            int dbLevelMaxBucket =
+            int maxBucketNumOfDb =
                     DatabaseLimitResolver.resolveMaxBucketForDb(
-                            maxBucketNum,
+                            maxBucketNumOfCluster,
                             dynamicConfigManager.describeConfigs(),
                             tablePath.getDatabaseName());
-            if (totalBuckets > dbLevelMaxBucket) {
+            if (totalBuckets > maxBucketNumOfDb) {
                 throw new TooManyBucketsException(
                         String.format(
                                 "Adding partition '%s' would result in %d total buckets for table %s, exceeding the database-level maximum of %d buckets.",
                                 partition.getPartitionName(),
                                 totalBuckets,
                                 tablePath,
-                                dbLevelMaxBucket));
+                                maxBucketNumOfDb));
             }
         } catch (TooManyBucketsException e) {
             throw e;
