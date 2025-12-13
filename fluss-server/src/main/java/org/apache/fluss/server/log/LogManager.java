@@ -73,8 +73,12 @@ import static org.apache.fluss.utils.concurrent.LockUtils.inLock;
 public final class LogManager extends TabletManagerBase {
     private static final Logger LOG = LoggerFactory.getLogger(LogManager.class);
 
+    private static final int INITIAL_TASK_DELAY_MS = 30_1000;
+
     @VisibleForTesting
     static final String RECOVERY_POINT_CHECKPOINT_FILE = "recovery-point-offset-checkpoint";
+
+    static final String LOG_START_OFFSET_CHECKPOINT_FILE = "log-start-offset-checkpoint";
 
     /**
      * Clean shutdown file that indicates the tabletServer was cleanly shutdown in v0.7 and higher.
@@ -95,19 +99,27 @@ public final class LogManager extends TabletManagerBase {
     private final Map<TableBucket, LogTablet> currentLogs = MapUtils.newConcurrentHashMap();
 
     private volatile OffsetCheckpointFile recoveryPointCheckpoint;
+    private volatile OffsetCheckpointFile logStartOffsetCheckpoint;
     private boolean loadLogsCompletedFlag = false;
+
+    private final long flushRecoveryOffsetCheckpointMs;
+    private final long flushStartOffsetCheckpointMs;
 
     private LogManager(
             File dataDir,
             Configuration conf,
             ZooKeeperClient zkClient,
             int recoveryThreadsPerDataDir,
+            long flushRecoveryOffsetCheckpointMs,
+            long flushStartOffsetCheckpointMs,
             Scheduler scheduler,
             Clock clock,
             TabletServerMetricGroup serverMetricGroup)
             throws Exception {
         super(TabletType.LOG, dataDir, conf, recoveryThreadsPerDataDir);
         this.zkClient = zkClient;
+        this.flushRecoveryOffsetCheckpointMs = flushRecoveryOffsetCheckpointMs;
+        this.flushStartOffsetCheckpointMs = flushStartOffsetCheckpointMs;
         this.scheduler = scheduler;
         this.clock = clock;
         this.serverMetricGroup = serverMetricGroup;
@@ -130,6 +142,8 @@ public final class LogManager extends TabletManagerBase {
                 conf,
                 zkClient,
                 conf.getInt(ConfigOptions.NETTY_SERVER_NUM_WORKER_THREADS),
+                conf.get(ConfigOptions.LOG_FLUSH_RECOVERY_OFFSET_CHECKPOINT_INTERVAL).toMillis(),
+                conf.get(ConfigOptions.LOG_FLUSH_START_OFFSET_CHECKPOINT_INTERVAL).toMillis(),
                 scheduler,
                 clock,
                 serverMetricGroup);
@@ -139,6 +153,18 @@ public final class LogManager extends TabletManagerBase {
         loadLogs();
 
         // TODO add more scheduler, like log-flusher etc.
+        if (scheduler != null) {
+            scheduler.schedule(
+                    "fluss-recovery-point-checkpoint",
+                    this::checkpointRecoveryOffsets,
+                    INITIAL_TASK_DELAY_MS,
+                    flushRecoveryOffsetCheckpointMs);
+            scheduler.schedule(
+                    "fluss-log-start-offset-checkpoint",
+                    this::checkpointLogStartOffsets,
+                    INITIAL_TASK_DELAY_MS,
+                    flushStartOffsetCheckpointMs);
+        }
     }
 
     public File getDataDir() {
@@ -148,6 +174,8 @@ public final class LogManager extends TabletManagerBase {
     private void initializeCheckpointMaps() throws IOException {
         recoveryPointCheckpoint =
                 new OffsetCheckpointFile(new File(dataDir, RECOVERY_POINT_CHECKPOINT_FILE));
+        logStartOffsetCheckpoint =
+                new OffsetCheckpointFile(new File(dataDir, LOG_START_OFFSET_CHECKPOINT_FILE));
     }
 
     /** Recover and load all logs in the given data directories. */
@@ -177,6 +205,17 @@ public final class LogManager extends TabletManagerBase {
                         e);
             }
 
+            Map<TableBucket, Long> logStartOffsets = new HashMap<>();
+            try {
+                logStartOffsets = logStartOffsetCheckpoint.read();
+            } catch (Exception e) {
+                LOG.warn(
+                        "Error occurred while reading log-start-offset-checkpoint file of directory {}, "
+                                + "resetting to the base offset of the first segment",
+                        dataDirAbsolutePath,
+                        e);
+            }
+
             List<File> tabletsToLoad = listTabletsToLoad();
             if (tabletsToLoad.isEmpty()) {
                 LOG.info("No logs found to be loaded in {}", dataDirAbsolutePath);
@@ -191,7 +230,12 @@ public final class LogManager extends TabletManagerBase {
             // set runnable job.
             Runnable[] jobsForDir =
                     createLogLoadingJobs(
-                            tabletsToLoad, cleanShutdown, finalRecoveryPoints, conf, clock);
+                            tabletsToLoad,
+                            cleanShutdown,
+                            finalRecoveryPoints,
+                            logStartOffsets,
+                            conf,
+                            clock);
 
             long startTime = System.currentTimeMillis();
 
@@ -241,6 +285,7 @@ public final class LogManager extends TabletManagerBase {
                                     tabletDir,
                                     conf,
                                     serverMetricGroup,
+                                    0L,
                                     0L,
                                     scheduler,
                                     logFormat,
@@ -315,6 +360,12 @@ public final class LogManager extends TabletManagerBase {
         }
     }
 
+    /**
+     * Delete all data in a bucket and start the log at the new offset.
+     *
+     * @param tableBucket The bucket whose log needs to be truncated
+     * @param newOffset The new offset to start the log with
+     */
     public void truncateFullyAndStartAt(TableBucket tableBucket, long newOffset) {
         LogTablet logTablet = currentLogs.get(tableBucket);
         // If the log tablet does not exist, skip it.
@@ -328,12 +379,14 @@ public final class LogManager extends TabletManagerBase {
             File tabletDir,
             boolean isCleanShutdown,
             Map<TableBucket, Long> recoveryPoints,
+            Map<TableBucket, Long> logStartOffsets,
             Configuration conf,
             Clock clock)
             throws Exception {
         Tuple2<PhysicalTablePath, TableBucket> pathAndBucket = FlussPaths.parseTabletDir(tabletDir);
         TableBucket tableBucket = pathAndBucket.f1;
         long logRecoveryPoint = recoveryPoints.getOrDefault(tableBucket, 0L);
+        long logStartOffset = logStartOffsets.getOrDefault(tableBucket, 0L);
 
         PhysicalTablePath physicalTablePath = pathAndBucket.f0;
         TablePath tablePath = physicalTablePath.getTablePath();
@@ -345,6 +398,7 @@ public final class LogManager extends TabletManagerBase {
                         conf,
                         serverMetricGroup,
                         logRecoveryPoint,
+                        logStartOffset,
                         scheduler,
                         tableInfo.getTableConfig().getLogFormat(),
                         tableInfo.getTableConfig().getTieredLogLocalSegments(),
@@ -439,6 +493,8 @@ public final class LogManager extends TabletManagerBase {
             // update the last flush point.
             checkpointRecoveryOffsets();
 
+            checkpointLogStartOffsets();
+
             // mark that the shutdown was clean by creating marker file for log dirs that all logs
             // have been recovered at startup time.
             if (loadLogsCompletedFlag) {
@@ -461,12 +517,15 @@ public final class LogManager extends TabletManagerBase {
             List<File> tabletsToLoad,
             boolean cleanShutdown,
             Map<TableBucket, Long> recoveryPoints,
+            Map<TableBucket, Long> logStartOffsets,
             Configuration conf,
             Clock clock) {
         Runnable[] jobs = new Runnable[tabletsToLoad.size()];
         for (int i = 0; i < tabletsToLoad.size(); i++) {
             final File tabletDir = tabletsToLoad.get(i);
-            jobs[i] = createLogLoadingJob(tabletDir, cleanShutdown, recoveryPoints, conf, clock);
+            jobs[i] =
+                    createLogLoadingJob(
+                            tabletDir, cleanShutdown, recoveryPoints, logStartOffsets, conf, clock);
         }
         return jobs;
     }
@@ -476,6 +535,7 @@ public final class LogManager extends TabletManagerBase {
             File tabletDir,
             boolean cleanShutdown,
             Map<TableBucket, Long> recoveryPoints,
+            Map<TableBucket, Long> logStartOffsets,
             Configuration conf,
             Clock clock) {
         return new Runnable() {
@@ -483,7 +543,7 @@ public final class LogManager extends TabletManagerBase {
             public void run() {
                 LOG.debug("Loading log {}", tabletDir);
                 try {
-                    loadLog(tabletDir, cleanShutdown, recoveryPoints, conf, clock);
+                    loadLog(tabletDir, cleanShutdown, recoveryPoints, logStartOffsets, conf, clock);
                 } catch (Exception e) {
                     LOG.error("Fail to loadLog from {}", tabletDir, e);
                     if (e instanceof SchemaNotExistException) {
@@ -533,6 +593,34 @@ public final class LogManager extends TabletManagerBase {
             } catch (Exception e) {
                 throw new LogStorageException(
                         "Disk error while writing recovery offsets checkpoint in directory "
+                                + dataDir
+                                + ": "
+                                + e.getMessage(),
+                        e);
+            }
+        }
+    }
+
+    @VisibleForTesting
+    void checkpointLogStartOffsets() {
+        if (logStartOffsetCheckpoint != null) {
+            try {
+                Map<TableBucket, Long> logStartOffsets = new HashMap<>();
+                for (Map.Entry<TableBucket, LogTablet> entry : currentLogs.entrySet()) {
+                    TableBucket tb = entry.getKey();
+                    LogTablet log = entry.getValue();
+                    if (!log.logSegments().isEmpty()) {
+                        long logStartOffset = log.logStartOffset();
+                        long baseOffset = log.logSegments().get(0).getBaseOffset();
+                        if (logStartOffset > baseOffset) {
+                            logStartOffsets.put(tb, logStartOffset);
+                        }
+                    }
+                }
+                logStartOffsetCheckpoint.write(logStartOffsets);
+            } catch (Exception e) {
+                throw new LogStorageException(
+                        "Disk error while writing log start offsets checkpoint in directory "
                                 + dataDir
                                 + ": "
                                 + e.getMessage(),

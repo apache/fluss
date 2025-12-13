@@ -631,6 +631,22 @@ public class ConfigOptions {
                                     + "we would fsync after every message; if it were 5 we would fsync after every "
                                     + "five messages.");
 
+    public static final ConfigOption<Duration> LOG_FLUSH_RECOVERY_OFFSET_CHECKPOINT_INTERVAL =
+            key("log.flush.recovery-offset.checkpoint-interval")
+                    .durationType()
+                    .defaultValue(Duration.ofMinutes(1))
+                    .withDescription(
+                            "The frequency with which the log start offset is saved out to disk. "
+                                    + "The default setting is 1 minute.");
+
+    public static final ConfigOption<Duration> LOG_FLUSH_START_OFFSET_CHECKPOINT_INTERVAL =
+            key("log.flush.start-offset.checkpoint-interval")
+                    .durationType()
+                    .defaultValue(Duration.ofMinutes(1))
+                    .withDescription(
+                            "The frequency with which the log start offset is saved out to disk. "
+                                    + "The default setting is 1 minute.");
+
     public static final ConfigOption<Duration> LOG_REPLICA_HIGH_WATERMARK_CHECKPOINT_INTERVAL =
             key("log.replica.high-watermark.checkpoint-interval")
                     .durationType()

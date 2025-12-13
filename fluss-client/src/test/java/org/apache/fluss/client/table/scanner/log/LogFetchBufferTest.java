@@ -260,7 +260,8 @@ public class LogFetchBufferTest {
     private DefaultCompletedFetch makeCompletedFetch(TableBucket tableBucket) throws Exception {
         return new DefaultCompletedFetch(
                 tableBucket,
-                new FetchLogResultForBucket(tableBucket, genMemoryLogRecordsByObject(DATA1), 10L),
+                new FetchLogResultForBucket(
+                        tableBucket, genMemoryLogRecordsByObject(DATA1), 10L, 0L),
                 readContext,
                 logScannerStatus,
                 true,

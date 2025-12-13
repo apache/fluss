@@ -171,6 +171,7 @@ final class LogManagerTest extends LogTestBase {
         }
         log2.flush(false);
 
+        // recovery offset checkpoint
         logManager.checkpointRecoveryOffsets();
         Map<TableBucket, Long> checkpoints =
                 new OffsetCheckpointFile(
@@ -179,6 +180,21 @@ final class LogManagerTest extends LogTestBase {
 
         assertThat(checkpoints.get(tableBucket1)).isEqualTo(log1.getRecoveryPoint());
         assertThat(checkpoints.get(tableBucket2)).isEqualTo(log2.getRecoveryPoint());
+
+        // update log start offset to ensure can be written to log start offset checkpoint
+        log1.updateHighWatermark(3L);
+        log1.maybeIncrementLogStartOffset(3L, LogStartOffsetIncrementReason.SEGMENT_DELETION);
+        log2.updateHighWatermark(3L);
+        log2.maybeIncrementLogStartOffset(3L, LogStartOffsetIncrementReason.SEGMENT_DELETION);
+        // log start offset checkpoint
+        logManager.checkpointLogStartOffsets();
+        Map<TableBucket, Long> logStartOffsets =
+                new OffsetCheckpointFile(
+                                new File(tempDir, LogManager.LOG_START_OFFSET_CHECKPOINT_FILE))
+                        .read();
+
+        assertThat(logStartOffsets.get(tableBucket1)).isEqualTo(log1.logStartOffset());
+        assertThat(logStartOffsets.get(tableBucket2)).isEqualTo(log2.logStartOffset());
     }
 
     @Test
