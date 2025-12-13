@@ -51,6 +51,10 @@ public interface FlussSerializationSchema<T> extends Serializable {
      */
     RowWithOp serialize(T value) throws Exception;
 
+    default long size(T value, RowType rowType) {
+        return 1;
+    }
+
     /**
      * A contextual information provided for {@link #open(InitializationContext)} method. It can be
      * used to:
