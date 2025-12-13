@@ -17,15 +17,15 @@
 
 package org.apache.fluss.fs.s3.token;
 
-import org.apache.fluss.fs.token.CredentialsJsonSerde;
-import org.apache.fluss.fs.token.ObtainedSecurityToken;
-
 import com.amazonaws.auth.AWSStaticCredentialsProvider;
 import com.amazonaws.auth.BasicAWSCredentials;
 import com.amazonaws.services.securitytoken.AWSSecurityTokenService;
 import com.amazonaws.services.securitytoken.AWSSecurityTokenServiceClientBuilder;
 import com.amazonaws.services.securitytoken.model.Credentials;
 import com.amazonaws.services.securitytoken.model.GetSessionTokenResult;
+import org.apache.fluss.fs.token.CredentialsJsonSerde;
+import org.apache.fluss.fs.token.ObtainedSecurityToken;
+import org.apache.fluss.utils.StringUtils;
 import org.apache.hadoop.conf.Configuration;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -68,7 +68,9 @@ public class S3DelegationTokenProvider {
     }
 
     public ObtainedSecurityToken obtainSecurityToken() {
-        LOG.info("Obtaining session credentials token with access key: {}", accessKey);
+        LOG.info(
+                "Obtaining session credentials token with access key: {}",
+                StringUtils.maskSecret(accessKey));
 
         AWSSecurityTokenService stsClient =
                 AWSSecurityTokenServiceClientBuilder.standard()
@@ -82,7 +84,7 @@ public class S3DelegationTokenProvider {
 
         LOG.info(
                 "Session credentials obtained successfully with access key: {} expiration: {}",
-                credentials.getAccessKeyId(),
+                StringUtils.maskSecret(credentials.getAccessKeyId()),
                 credentials.getExpiration());
 
         return new ObtainedSecurityToken(
