@@ -21,6 +21,7 @@ import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.config.ConfigOption;
 import org.apache.fluss.config.MemorySize;
 import org.apache.fluss.config.Password;
+import org.apache.fluss.flink.adapter.CatalogTableAdapter;
 import org.apache.fluss.flink.catalog.FlinkCatalogFactory;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.Schema;
@@ -242,7 +243,7 @@ public class FlinkConversions {
                 customProperties, catalogBaseTable.getResolvedSchema().getWatermarkSpecs());
 
         // Set materialized table flags to fluss table custom properties
-        if (CatalogBaseTable.TableKind.MATERIALIZED_TABLE == tableKind) {
+        if (CatalogTableAdapter.isMaterializedTable(tableKind)) {
             CatalogMaterializedTable.RefreshMode refreshMode =
                     ((ResolvedCatalogMaterializedTable) catalogBaseTable).getRefreshMode();
             if (refreshMode == CatalogMaterializedTable.RefreshMode.FULL) {
