@@ -57,7 +57,6 @@ import javax.annotation.Nullable;
 import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
@@ -131,7 +130,6 @@ class LanceTieringTest {
                             }
                         }
                         : Collections.singletonMap(null, null);
-        List<String> partitionKeys = isPartitioned ? Arrays.asList("c3") : null;
         Map<TableBucket, Long> tableBucketOffsets = new HashMap<>();
         // first, write data
         for (int bucket = 0; bucket < bucketNum; bucket++) {
@@ -170,9 +168,7 @@ class LanceTieringTest {
                             committableSerializer.getVersion(), serialized);
             long snapshot =
                     lakeCommitter.commit(
-                            lanceCommittable,
-                            toBucketOffsetsProperty(
-                                    tableBucketOffsets, partitionIdAndName, partitionKeys));
+                            lanceCommittable, toBucketOffsetsProperty(tableBucketOffsets));
             // lance dataset version starts from 1
             assertThat(snapshot).isEqualTo(2);
         }
@@ -305,7 +301,7 @@ class LanceTieringTest {
         return Tuple2.of(logRecords, logRecords);
     }
 
-    private Schema createTable(LanceConfig config) throws Exception {
+    private Schema createTable(LanceConfig config) {
         List<Schema.Column> columns = new ArrayList<>();
         columns.add(new Schema.Column("c1", DataTypes.INT()));
         columns.add(new Schema.Column("c2", DataTypes.STRING()));

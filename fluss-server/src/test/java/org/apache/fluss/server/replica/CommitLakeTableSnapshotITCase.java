@@ -31,14 +31,13 @@ import org.apache.fluss.server.log.LogTablet;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.server.testutils.RpcMessageTestUtils;
 import org.apache.fluss.server.zk.ZooKeeperClient;
-import org.apache.fluss.server.zk.data.LakeTableSnapshot;
+import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
 
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 
 import java.time.Duration;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -102,7 +101,6 @@ class CommitLakeTableSnapshotITCase {
         // now, let's commit the lake table snapshot
         CoordinatorGateway coordinatorGateway = FLUSS_CLUSTER_EXTENSION.newCoordinatorClient();
         long snapshotId = 1;
-        long dataLakeLogStartOffset = 0;
         long dataLakeLogEndOffset = 50;
         long dataLakeMaxTimestamp = System.currentTimeMillis();
         CommitLakeTableSnapshotRequest commitLakeTableSnapshotRequest =
@@ -110,39 +108,26 @@ class CommitLakeTableSnapshotITCase {
                         tableId,
                         BUCKET_NUM,
                         snapshotId,
-                        dataLakeLogStartOffset,
                         dataLakeLogEndOffset,
                         dataLakeMaxTimestamp);
         coordinatorGateway.commitLakeTableSnapshot(commitLakeTableSnapshotRequest).get();
 
-        Map<TableBucket, Long> bucketsLogStartOffset = new HashMap<>();
         Map<TableBucket, Long> bucketsLogEndOffset = new HashMap<>();
-        Map<TableBucket, Long> bucketsMaxTimestamp = new HashMap<>();
         for (int bucket = 0; bucket < BUCKET_NUM; bucket++) {
             TableBucket tb = new TableBucket(tableId, bucket);
-            bucketsLogStartOffset.put(tb, dataLakeLogStartOffset);
             bucketsLogEndOffset.put(tb, dataLakeLogEndOffset);
-            bucketsMaxTimestamp.put(tb, dataLakeMaxTimestamp);
             Replica replica = FLUSS_CLUSTER_EXTENSION.waitAndGetLeaderReplica(tb);
             retry(
                     Duration.ofMinutes(2),
                     () -> {
                         LogTablet logTablet = replica.getLogTablet();
-                        assertThat(logTablet.getLakeLogStartOffset())
-                                .isEqualTo(dataLakeLogStartOffset);
                         assertThat(logTablet.getLakeLogEndOffset()).isEqualTo(dataLakeLogEndOffset);
                         assertThat(logTablet.getLakeMaxTimestamp()).isEqualTo(dataLakeMaxTimestamp);
                     });
         }
 
         LakeTableSnapshot expectedDataLakeTieredInfo =
-                new LakeTableSnapshot(
-                        snapshotId,
-                        tableId,
-                        bucketsLogStartOffset,
-                        bucketsLogEndOffset,
-                        bucketsMaxTimestamp,
-                        Collections.emptyMap());
+                new LakeTableSnapshot(snapshotId, bucketsLogEndOffset);
         checkLakeTableDataInZk(tableId, expectedDataLakeTieredInfo);
     }
 
@@ -152,12 +137,7 @@ class CommitLakeTableSnapshotITCase {
     }
 
     private static CommitLakeTableSnapshotRequest genCommitLakeTableSnapshotRequest(
-            long tableId,
-            int buckets,
-            long snapshotId,
-            long logStartOffset,
-            long logEndOffset,
-            long maxTimestamp) {
+            long tableId, int buckets, long snapshotId, long logEndOffset, long maxTimestamp) {
         CommitLakeTableSnapshotRequest commitLakeTableSnapshotRequest =
                 new CommitLakeTableSnapshotRequest();
         PbLakeTableSnapshotInfo reqForTable = commitLakeTableSnapshotRequest.addTablesReq();
@@ -170,7 +150,6 @@ class CommitLakeTableSnapshotITCase {
                 lakeTableOffsetForBucket.setPartitionId(tb.getPartitionId());
             }
             lakeTableOffsetForBucket.setBucketId(tb.getBucket());
-            lakeTableOffsetForBucket.setLogStartOffset(logStartOffset);
             lakeTableOffsetForBucket.setLogEndOffset(logEndOffset);
             lakeTableOffsetForBucket.setMaxTimestamp(maxTimestamp);
         }

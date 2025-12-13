@@ -20,7 +20,6 @@ package org.apache.fluss.flink.tiering.committer;
 import org.apache.fluss.client.metadata.LakeSnapshot;
 import org.apache.fluss.flink.utils.FlinkTestBase;
 import org.apache.fluss.lake.committer.CommittedLakeSnapshot;
-import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
 
@@ -92,13 +91,7 @@ class FlussTableLakeSnapshotCommitterTest extends FlinkTestBase {
                     expectedOffsets.put(new TableBucket(tableId, bucket), bucketOffset);
                 } else {
                     long partitionId = partitionNameAndIds.get(partitionName);
-                    committedLakeSnapshot.addPartitionBucket(
-                            partitionId,
-                            ResolvedPartitionSpec.fromPartitionName(
-                                            Collections.singletonList("a"), partitionName)
-                                    .getPartitionQualifiedName(),
-                            bucket,
-                            bucketOffset);
+                    committedLakeSnapshot.addPartitionBucket(partitionId, bucket, bucketOffset);
                     expectedOffsets.put(
                             new TableBucket(tableId, partitionId, bucket), bucketOffset);
                     expectedPartitionNameById.put(partitionId, partitionName);
@@ -114,9 +107,5 @@ class FlussTableLakeSnapshotCommitterTest extends FlinkTestBase {
         // get and check the offsets
         Map<TableBucket, Long> bucketLogOffsets = lakeSnapshot.getTableBucketsOffset();
         assertThat(bucketLogOffsets).isEqualTo(expectedOffsets);
-
-        // check partition name
-        Map<Long, String> partitionNameById = lakeSnapshot.getPartitionNameById();
-        assertThat(partitionNameById).isEqualTo(expectedPartitionNameById);
     }
 }

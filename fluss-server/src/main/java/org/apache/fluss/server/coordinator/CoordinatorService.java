@@ -122,6 +122,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
@@ -166,14 +167,16 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
             @Nullable Authorizer authorizer,
             LakeCatalogDynamicLoader lakeCatalogDynamicLoader,
             LakeTableTieringManager lakeTableTieringManager,
-            DynamicConfigManager dynamicConfigManager) {
+            DynamicConfigManager dynamicConfigManager,
+            ExecutorService ioExecutor) {
         super(
                 remoteFileSystem,
                 ServerType.COORDINATOR,
                 zkClient,
                 metadataManager,
                 authorizer,
-                dynamicConfigManager);
+                dynamicConfigManager,
+                ioExecutor);
         this.defaultBucketNumber = conf.getInt(ConfigOptions.DEFAULT_BUCKET_NUMBER);
         this.defaultReplicationFactor = conf.getInt(ConfigOptions.DEFAULT_REPLICATION_FACTOR);
         this.logTableAllowCreation = conf.getBoolean(ConfigOptions.LOG_TABLE_ALLOW_CREATION);

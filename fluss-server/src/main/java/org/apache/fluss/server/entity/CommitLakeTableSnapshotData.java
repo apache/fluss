@@ -17,8 +17,9 @@
 
 package org.apache.fluss.server.entity;
 
+import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.rpc.messages.CommitLakeTableSnapshotRequest;
-import org.apache.fluss.server.zk.data.LakeTableSnapshot;
+import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
 
 import java.util.Map;
 import java.util.Objects;
@@ -27,13 +28,21 @@ import java.util.Objects;
 public class CommitLakeTableSnapshotData {
 
     private final Map<Long, LakeTableSnapshot> lakeTableSnapshots;
+    private final Map<TableBucket, Long> tableBucketsMaxTieredTimestamp;
 
-    public CommitLakeTableSnapshotData(Map<Long, LakeTableSnapshot> lakeTableSnapshots) {
+    public CommitLakeTableSnapshotData(
+            Map<Long, LakeTableSnapshot> lakeTableSnapshots,
+            Map<TableBucket, Long> tableBucketsMaxTieredTimestamp) {
         this.lakeTableSnapshots = lakeTableSnapshots;
+        this.tableBucketsMaxTieredTimestamp = tableBucketsMaxTieredTimestamp;
     }
 
     public Map<Long, LakeTableSnapshot> getLakeTableSnapshot() {
         return lakeTableSnapshots;
+    }
+
+    public Map<TableBucket, Long> getTableBucketsMaxTieredTimestamp() {
+        return tableBucketsMaxTieredTimestamp;
     }
 
     @Override
@@ -41,20 +50,27 @@ public class CommitLakeTableSnapshotData {
         if (this == o) {
             return true;
         }
-        if (!(o instanceof CommitLakeTableSnapshotData)) {
+        if (o == null || getClass() != o.getClass()) {
             return false;
         }
         CommitLakeTableSnapshotData that = (CommitLakeTableSnapshotData) o;
-        return Objects.equals(lakeTableSnapshots, that.lakeTableSnapshots);
+        return Objects.equals(lakeTableSnapshots, that.lakeTableSnapshots)
+                && Objects.equals(
+                        tableBucketsMaxTieredTimestamp, that.tableBucketsMaxTieredTimestamp);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hashCode(lakeTableSnapshots);
+        return Objects.hash(lakeTableSnapshots, tableBucketsMaxTieredTimestamp);
     }
 
     @Override
     public String toString() {
-        return "CommitLakeTableSnapshotData{" + "lakeTableInfos=" + lakeTableSnapshots + '}';
+        return "CommitLakeTableSnapshotData{"
+                + "lakeTableSnapshots="
+                + lakeTableSnapshots
+                + ", tableBucketsMaxTieredTimestamp="
+                + tableBucketsMaxTieredTimestamp
+                + '}';
     }
 }

@@ -93,7 +93,7 @@ import org.apache.fluss.server.tablet.TabletService;
 import org.apache.fluss.server.utils.ServerRpcMessageUtils;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.BucketSnapshot;
-import org.apache.fluss.server.zk.data.LakeTableSnapshot;
+import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -108,6 +108,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toAclFilter;
@@ -144,13 +145,16 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
     private long tokenLastUpdateTimeMs = 0;
     private ObtainedSecurityToken securityToken = null;
 
+    private final ExecutorService ioExecutor;
+
     public RpcServiceBase(
             FileSystem remoteFileSystem,
             ServerType provider,
             ZooKeeperClient zkClient,
             MetadataManager metadataManager,
             @Nullable Authorizer authorizer,
-            DynamicConfigManager dynamicConfigManager) {
+            DynamicConfigManager dynamicConfigManager,
+            ExecutorService ioExecutor) {
         this.remoteFileSystem = remoteFileSystem;
         this.provider = provider;
         this.apiManager = new ApiManager(provider);
@@ -158,6 +162,7 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
         this.metadataManager = metadataManager;
         this.authorizer = authorizer;
         this.dynamicConfigManager = dynamicConfigManager;
+        this.ioExecutor = ioExecutor;
     }
 
     @Override
@@ -430,28 +435,33 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
         TableInfo tableInfo = metadataManager.getTable(tablePath);
         // get table id
         long tableId = tableInfo.getTableId();
-
-        Optional<LakeTableSnapshot> optLakeTableSnapshot;
-        try {
-            optLakeTableSnapshot = zkClient.getLakeTableSnapshot(tableId);
-        } catch (Exception e) {
-            throw new FlussRuntimeException(
-                    String.format(
-                            "Failed to get lake table snapshot for table: %s, table id: %d",
-                            tablePath, tableId),
-                    e);
-        }
-
-        if (!optLakeTableSnapshot.isPresent()) {
-            throw new LakeTableSnapshotNotExistException(
-                    String.format(
-                            "Lake table snapshot not exist for table: %s, table id: %d",
-                            tablePath, tableId));
-        }
-
-        LakeTableSnapshot lakeTableSnapshot = optLakeTableSnapshot.get();
-        return CompletableFuture.completedFuture(
-                makeGetLatestLakeSnapshotResponse(tableId, lakeTableSnapshot));
+        CompletableFuture<GetLatestLakeSnapshotResponse> resultFuture = new CompletableFuture<>();
+        ioExecutor.execute(
+                () -> {
+                    Optional<LakeTableSnapshot> optLakeTableSnapshot;
+                    try {
+                        optLakeTableSnapshot = zkClient.getLakeTableSnapshot(tableId);
+                        if (!optLakeTableSnapshot.isPresent()) {
+                            resultFuture.completeExceptionally(
+                                    new LakeTableSnapshotNotExistException(
+                                            String.format(
+                                                    "Lake table snapshot not exist for table: %s, table id: %d",
+                                                    tablePath, tableId)));
+                        } else {
+                            LakeTableSnapshot lakeTableSnapshot = optLakeTableSnapshot.get();
+                            resultFuture.complete(
+                                    makeGetLatestLakeSnapshotResponse(tableId, lakeTableSnapshot));
+                        }
+                    } catch (Exception e) {
+                        resultFuture.completeExceptionally(
+                                new FlussRuntimeException(
+                                        String.format(
+                                                "Failed to get lake table snapshot for table: %s, table id: %d",
+                                                tablePath, tableId),
+                                        e));
+                    }
+                });
+        return resultFuture;
     }
 
     @Override

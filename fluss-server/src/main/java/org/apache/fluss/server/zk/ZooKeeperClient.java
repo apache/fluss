@@ -40,7 +40,6 @@ import org.apache.fluss.server.zk.ZkAsyncResponse.ZkGetDataResponse;
 import org.apache.fluss.server.zk.data.BucketSnapshot;
 import org.apache.fluss.server.zk.data.CoordinatorAddress;
 import org.apache.fluss.server.zk.data.DatabaseRegistration;
-import org.apache.fluss.server.zk.data.LakeTableSnapshot;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
 import org.apache.fluss.server.zk.data.RemoteLogManifestHandle;
@@ -74,6 +73,8 @@ import org.apache.fluss.server.zk.data.ZkData.TableSequenceIdZNode;
 import org.apache.fluss.server.zk.data.ZkData.TableZNode;
 import org.apache.fluss.server.zk.data.ZkData.TablesZNode;
 import org.apache.fluss.server.zk.data.ZkData.WriterIdZNode;
+import org.apache.fluss.server.zk.data.lake.LakeTable;
+import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
 import org.apache.fluss.shaded.curator5.org.apache.curator.framework.CuratorFramework;
 import org.apache.fluss.shaded.curator5.org.apache.curator.framework.api.BackgroundCallback;
 import org.apache.fluss.shaded.curator5.org.apache.curator.framework.api.CuratorEvent;
@@ -133,6 +134,7 @@ public class ZooKeeperClient implements AutoCloseable {
     private final ZkSequenceIDCounter writerIdCounter;
 
     private final Semaphore inFlightRequests;
+    private final Configuration configuration;
 
     public ZooKeeperClient(
             CuratorFrameworkWithUnhandledErrorListener curatorFrameworkWrapper,
@@ -147,6 +149,7 @@ public class ZooKeeperClient implements AutoCloseable {
         int maxInFlightRequests =
                 configuration.getInt(ConfigOptions.ZOOKEEPER_MAX_INFLIGHT_REQUESTS);
         this.inFlightRequests = new Semaphore(maxInFlightRequests);
+        this.configuration = configuration;
     }
 
     public Optional<byte[]> getOrEmpty(String path) throws Exception {
@@ -1023,55 +1026,45 @@ public class ZooKeeperClient implements AutoCloseable {
         return getOrEmpty(path).map(BucketRemoteLogsZNode::decode);
     }
 
-    public void upsertLakeTableSnapshot(long tableId, LakeTableSnapshot lakeTableSnapshot)
+    /** Upsert the {@link LakeTable} to Zk Node. */
+    public void upsertLakeTable(long tableId, LakeTable lakeTable, boolean isUpdate)
             throws Exception {
-        String path = LakeTableZNode.path(tableId);
-        Optional<LakeTableSnapshot> optLakeTableSnapshot = getLakeTableSnapshot(tableId);
-        if (optLakeTableSnapshot.isPresent()) {
-            // we need to merge current lake table snapshot with previous
-            // since the current lake table snapshot request won't carry all
-            // the bucket for the table. It will only carry the bucket that is written
-            // after the previous commit
-            LakeTableSnapshot previous = optLakeTableSnapshot.get();
-
-            // merge log startup offset, current will override the previous
-            Map<TableBucket, Long> bucketLogStartOffset =
-                    new HashMap<>(previous.getBucketLogStartOffset());
-            bucketLogStartOffset.putAll(lakeTableSnapshot.getBucketLogStartOffset());
-
-            // merge log end offsets, current will override the previous
-            Map<TableBucket, Long> bucketLogEndOffset =
-                    new HashMap<>(previous.getBucketLogEndOffset());
-            bucketLogEndOffset.putAll(lakeTableSnapshot.getBucketLogEndOffset());
-
-            // merge max timestamp, current will override the previous
-            Map<TableBucket, Long> bucketMaxTimestamp =
-                    new HashMap<>(previous.getBucketMaxTimestamp());
-            bucketMaxTimestamp.putAll(lakeTableSnapshot.getBucketMaxTimestamp());
-
-            Map<Long, String> partitionNameById =
-                    new HashMap<>(previous.getPartitionNameIdByPartitionId());
-            partitionNameById.putAll(lakeTableSnapshot.getPartitionNameIdByPartitionId());
-
-            lakeTableSnapshot =
-                    new LakeTableSnapshot(
-                            lakeTableSnapshot.getSnapshotId(),
-                            lakeTableSnapshot.getTableId(),
-                            bucketLogStartOffset,
-                            bucketLogEndOffset,
-                            bucketMaxTimestamp,
-                            partitionNameById);
-            zkClient.setData().forPath(path, LakeTableZNode.encode(lakeTableSnapshot));
+        byte[] zkData = LakeTableZNode.encode(lakeTable);
+        String zkPath = LakeTableZNode.path(tableId);
+        if (isUpdate) {
+            zkClient.setData().forPath(zkPath, zkData);
         } else {
-            zkClient.create()
-                    .creatingParentsIfNeeded()
-                    .forPath(path, LakeTableZNode.encode(lakeTableSnapshot));
+            zkClient.create().creatingParentsIfNeeded().forPath(zkPath, zkData);
         }
     }
 
+    /**
+     * Gets the {@link LakeTable} for the given table ID.
+     *
+     * @param tableId the table ID
+     * @return an Optional containing the LakeTable if it exists, empty otherwise
+     * @throws Exception if the operation fails
+     */
+    public Optional<LakeTable> getLakeTable(long tableId) throws Exception {
+        String zkPath = LakeTableZNode.path(tableId);
+        return getOrEmpty(zkPath).map(LakeTableZNode::decode);
+    }
+
+    /**
+     * Gets the {@link LakeTableSnapshot} for the given table ID.
+     *
+     * @param tableId the table ID
+     * @return an Optional containing the LakeTableSnapshot if the table exists, empty otherwise
+     * @throws Exception if the operation fails
+     */
     public Optional<LakeTableSnapshot> getLakeTableSnapshot(long tableId) throws Exception {
-        String path = LakeTableZNode.path(tableId);
-        return getOrEmpty(path).map(LakeTableZNode::decode);
+        Optional<LakeTable> optLakeTable = getLakeTable(tableId);
+        if (optLakeTable.isPresent()) {
+            // always get the latest snapshot
+            return Optional.of(optLakeTable.get().getLatestTableSnapshot());
+        } else {
+            return Optional.empty();
+        }
     }
 
     /**

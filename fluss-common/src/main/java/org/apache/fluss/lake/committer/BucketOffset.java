@@ -31,17 +31,11 @@ public class BucketOffset implements Serializable {
     private final long logOffset;
     private final int bucket;
     private final @Nullable Long partitionId;
-    private final @Nullable String partitionQualifiedName;
 
-    public BucketOffset(
-            long logOffset,
-            int bucket,
-            @Nullable Long partitionId,
-            @Nullable String partitionQualifiedName) {
+    public BucketOffset(long logOffset, int bucket, @Nullable Long partitionId) {
         this.logOffset = logOffset;
         this.bucket = bucket;
         this.partitionId = partitionId;
-        this.partitionQualifiedName = partitionQualifiedName;
     }
 
     public long getLogOffset() {
@@ -57,11 +51,6 @@ public class BucketOffset implements Serializable {
         return partitionId;
     }
 
-    @Nullable
-    public String getPartitionQualifiedName() {
-        return partitionQualifiedName;
-    }
-
     @Override
     public boolean equals(Object o) {
         if (this == o) {
@@ -71,9 +60,13 @@ public class BucketOffset implements Serializable {
             return false;
         }
         BucketOffset that = (BucketOffset) o;
-        return bucket == that.bucket
-                && logOffset == that.logOffset
-                && Objects.equals(partitionId, that.partitionId)
-                && Objects.equals(partitionQualifiedName, that.partitionQualifiedName);
+        return logOffset == that.logOffset
+                && bucket == that.bucket
+                && Objects.equals(partitionId, that.partitionId);
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(logOffset, bucket, partitionId);
     }
 }
