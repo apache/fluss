@@ -41,6 +41,7 @@ import org.apache.fluss.rpc.messages.NotifyKvSnapshotOffsetRequest;
 import org.apache.fluss.rpc.messages.NotifyRemoteLogOffsetsRequest;
 import org.apache.fluss.rpc.messages.UpdateMetadataRequest;
 import org.apache.fluss.rpc.protocol.ApiKeys;
+import org.apache.fluss.server.DynamicConfigManager;
 import org.apache.fluss.server.coordinator.event.AccessContextEvent;
 import org.apache.fluss.server.coordinator.event.AdjustIsrReceivedEvent;
 import org.apache.fluss.server.coordinator.event.CommitKvSnapshotEvent;
@@ -161,7 +162,8 @@ class CoordinatorEventProcessorTest {
                 new MetadataManager(
                         zookeeperClient,
                         new Configuration(),
-                        new LakeCatalogDynamicLoader(new Configuration(), null, true));
+                        new LakeCatalogDynamicLoader(new Configuration(), null, true),
+                        new DynamicConfigManager(zookeeperClient, new Configuration(), true));
 
         // register coordinator server
         zookeeperClient.registerCoordinatorLeader(
@@ -348,7 +350,8 @@ class CoordinatorEventProcessorTest {
                 new MetadataManager(
                         zookeeperClient,
                         new Configuration(),
-                        new LakeCatalogDynamicLoader(new Configuration(), null, true));
+                        new LakeCatalogDynamicLoader(new Configuration(), null, true),
+                        new DynamicConfigManager(zookeeperClient, new Configuration(), true));
         TableAssignment table1Assignment =
                 TableAssignment.builder()
                         .add(0, BucketAssignment.of(0, 3, 2))
@@ -458,7 +461,8 @@ class CoordinatorEventProcessorTest {
                 new MetadataManager(
                         zookeeperClient,
                         new Configuration(),
-                        new LakeCatalogDynamicLoader(new Configuration(), null, true));
+                        new LakeCatalogDynamicLoader(new Configuration(), null, true),
+                        new DynamicConfigManager(zookeeperClient, new Configuration(), true));
         TableAssignment tableAssignment =
                 TableAssignment.builder()
                         .add(0, BucketAssignment.of(0, 1, 2))

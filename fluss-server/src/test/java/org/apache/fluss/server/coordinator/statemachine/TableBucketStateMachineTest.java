@@ -24,6 +24,7 @@ import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.RpcClient;
 import org.apache.fluss.rpc.metrics.TestingClientMetricGroup;
+import org.apache.fluss.server.DynamicConfigManager;
 import org.apache.fluss.server.coordinator.AutoPartitionManager;
 import org.apache.fluss.server.coordinator.CoordinatorChannelManager;
 import org.apache.fluss.server.coordinator.CoordinatorContext;
@@ -114,7 +115,9 @@ class TableBucketStateMachineTest {
                         new MetadataManager(
                                 zookeeperClient,
                                 new Configuration(),
-                                new LakeCatalogDynamicLoader(new Configuration(), null, true)),
+                                new LakeCatalogDynamicLoader(new Configuration(), null, true),
+                                new DynamicConfigManager(
+                                        zookeeperClient, new Configuration(), true)),
                         new Configuration());
         lakeTableTieringManager = new LakeTableTieringManager();
     }
@@ -263,7 +266,9 @@ class TableBucketStateMachineTest {
                         new MetadataManager(
                                 zookeeperClient,
                                 new Configuration(),
-                                new LakeCatalogDynamicLoader(new Configuration(), null, true)));
+                                new LakeCatalogDynamicLoader(new Configuration(), null, true),
+                                new DynamicConfigManager(
+                                        zookeeperClient, new Configuration(), true)));
         CoordinatorEventManager eventManager =
                 new CoordinatorEventManager(
                         coordinatorEventProcessor, TestingMetricGroups.COORDINATOR_METRICS);
