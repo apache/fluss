@@ -444,21 +444,32 @@ public class ReplicaStateMachine {
                 // isr doesn't contain the replica, skip
                 continue;
             }
-            int newLeader =
-                    replicaId == leaderAndIsr.leader()
-                            ?
-                            // the leader become offline, set it to no leader
-                            LeaderAndIsr.NO_LEADER
-                            // otherwise, keep the origin as leader
-                            : leaderAndIsr.leader();
+
+            boolean isEndangeredIsr = leaderAndIsr.isr().size() == 1;
+
             List<Integer> newIsr =
-                    leaderAndIsr.isr().size() == 1
+                    isEndangeredIsr
                             // don't remove the replica id from isr when isr size is 1,
                             // if isr is empty, we can't elect leader anymore
                             ? leaderAndIsr.isr()
                             : leaderAndIsr.isr().stream()
                                     .filter(id -> id != replicaId)
                                     .collect(Collectors.toList());
+
+            int newLeader =
+                    replicaId == leaderAndIsr.leader() && !isEndangeredIsr
+                            ?
+                            // the leader become offline, and the isr is not endangered, set it to
+                            // no leader
+                            // TODO: switch new leader to LeaderAndIsr.NO_LEADER is sometimes
+                            // dangerous,
+                            // that may cause ISR loose it's leader permanently, maybe we should
+                            // immediately do new leader election, if elected new leader is invalid,
+                            // we should not change leader.
+                            LeaderAndIsr.NO_LEADER
+                            // otherwise, keep the origin as leader
+                            : leaderAndIsr.leader();
+
             LeaderAndIsr adjustLeaderAndIsr =
                     newLeader == LeaderAndIsr.NO_LEADER
                             ? leaderAndIsr.newLeaderAndIsr(newLeader, newIsr)

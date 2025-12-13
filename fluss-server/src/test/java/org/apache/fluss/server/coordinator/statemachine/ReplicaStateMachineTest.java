@@ -227,6 +227,55 @@ class ReplicaStateMachineTest {
     }
 
     @Test
+    void testOfflineReplicaShouldBeRemovedFromIsrAndEndangeredIsrProcessing() throws Exception {
+        CoordinatorContext coordinatorContext = new CoordinatorContext();
+        coordinatorContext.setLiveTabletServers(createServers(new int[] {0, 1, 2}));
+        ReplicaStateMachine replicaStateMachine = createReplicaStateMachine(coordinatorContext);
+
+        // put the replica to online
+        long tableId = 1;
+        coordinatorContext.putTableInfo(
+                TableInfo.of(
+                        DATA1_TABLE_PATH,
+                        tableId,
+                        0,
+                        DATA1_TABLE_DESCRIPTOR,
+                        System.currentTimeMillis(),
+                        System.currentTimeMillis()));
+        coordinatorContext.putTablePath(tableId, DATA1_TABLE_PATH);
+        TableBucket tableBucket = new TableBucket(tableId, 3);
+        for (int i = 0; i < 3; i++) {
+            TableBucketReplica replica = new TableBucketReplica(tableBucket, i);
+            coordinatorContext.putReplicaState(replica, OnlineReplica);
+        }
+        // put leader and isr
+        LeaderAndIsr leaderAndIsr = new LeaderAndIsr(0, 0, Arrays.asList(0, 1, 2), 0, 0);
+        zookeeperClient.registerLeaderAndIsr(tableBucket, leaderAndIsr);
+        coordinatorContext.updateBucketReplicaAssignment(tableBucket, Arrays.asList(0, 1, 2));
+        coordinatorContext.putBucketLeaderAndIsr(tableBucket, leaderAndIsr);
+
+        // set replica 1 to offline
+        replicaStateMachine.handleStateChanges(
+                Collections.singleton(new TableBucketReplica(tableBucket, 1)), OfflineReplica);
+        leaderAndIsr = coordinatorContext.getBucketLeaderAndIsr(tableBucket).get();
+        assertThat(leaderAndIsr).isEqualTo(new LeaderAndIsr(0, 0, Arrays.asList(0, 2), 0, 1));
+
+        // set replica 2 to offline
+        replicaStateMachine.handleStateChanges(
+                Collections.singleton(new TableBucketReplica(tableBucket, 2)), OfflineReplica);
+        leaderAndIsr = coordinatorContext.getBucketLeaderAndIsr(tableBucket).get();
+        assertThat(leaderAndIsr)
+                .isEqualTo(new LeaderAndIsr(0, 0, Collections.singletonList(0), 0, 2));
+
+        // set replica 0 to offline, isr shouldn't be empty, leader should be original leader
+        replicaStateMachine.handleStateChanges(
+                Collections.singleton(new TableBucketReplica(tableBucket, 0)), OfflineReplica);
+        leaderAndIsr = coordinatorContext.getBucketLeaderAndIsr(tableBucket).get();
+        assertThat(leaderAndIsr)
+                .isEqualTo(new LeaderAndIsr(0, 0, Collections.singletonList(0), 0, 3));
+    }
+
+    @Test
     void testOfflineReplicaShouldBeRemovedFromIsr() throws Exception {
         CoordinatorContext coordinatorContext = new CoordinatorContext();
         coordinatorContext.setLiveTabletServers(createServers(new int[] {0, 1, 2}));
@@ -260,21 +309,23 @@ class ReplicaStateMachineTest {
         leaderAndIsr = coordinatorContext.getBucketLeaderAndIsr(tableBucket).get();
         assertThat(leaderAndIsr).isEqualTo(new LeaderAndIsr(0, 0, Arrays.asList(0, 2), 0, 1));
 
-        // set replica 2 to offline
-        replicaStateMachine.handleStateChanges(
-                Collections.singleton(new TableBucketReplica(tableBucket, 2)), OfflineReplica);
-        leaderAndIsr = coordinatorContext.getBucketLeaderAndIsr(tableBucket).get();
-        assertThat(leaderAndIsr)
-                .isEqualTo(new LeaderAndIsr(0, 0, Collections.singletonList(0), 0, 2));
-
-        // set replica 0 to offline, isr shouldn't be empty, leader should be NO_LEADER
+        // set replica 0 to offline, isr shouldn't be empty, leader should be original leader
         replicaStateMachine.handleStateChanges(
                 Collections.singleton(new TableBucketReplica(tableBucket, 0)), OfflineReplica);
         leaderAndIsr = coordinatorContext.getBucketLeaderAndIsr(tableBucket).get();
         assertThat(leaderAndIsr)
                 .isEqualTo(
                         new LeaderAndIsr(
-                                LeaderAndIsr.NO_LEADER, 1, Collections.singletonList(0), 0, 3));
+                                LeaderAndIsr.NO_LEADER, 1, Collections.singletonList(2), 0, 2));
+
+        // set replica 2 to offline
+        replicaStateMachine.handleStateChanges(
+                Collections.singleton(new TableBucketReplica(tableBucket, 2)), OfflineReplica);
+        leaderAndIsr = coordinatorContext.getBucketLeaderAndIsr(tableBucket).get();
+        assertThat(leaderAndIsr)
+                .isEqualTo(
+                        new LeaderAndIsr(
+                                LeaderAndIsr.NO_LEADER, 2, Collections.singletonList(2), 0, 3));
     }
 
     private void toReplicaDeletionStartedState(
