@@ -26,7 +26,6 @@ import org.apache.fluss.utils.crc.Crc32C;
 
 import java.io.IOException;
 
-import static org.apache.fluss.record.LogRecordBatch.CURRENT_LOG_MAGIC_VALUE;
 import static org.apache.fluss.record.LogRecordBatchFormat.BASE_OFFSET_LENGTH;
 import static org.apache.fluss.record.LogRecordBatchFormat.LENGTH_LENGTH;
 import static org.apache.fluss.record.LogRecordBatchFormat.LOG_MAGIC_VALUE_V1;
@@ -45,6 +44,7 @@ abstract class AbstractRowMemoryLogRecordsBuilder<T> implements AutoCloseable {
 
     protected final long baseLogOffset;
     protected final int schemaId;
+    // The max bytes can be appended.
     protected final int writeLimit;
     protected final byte magic;
     protected final AbstractPagedOutputView pagedOutputView;
@@ -85,17 +85,6 @@ abstract class AbstractRowMemoryLogRecordsBuilder<T> implements AutoCloseable {
         int headerSize = recordBatchHeaderSize(magic);
         this.pagedOutputView.setPosition(headerSize);
         this.sizeInBytes = headerSize;
-    }
-
-    protected AbstractRowMemoryLogRecordsBuilder(
-            int schemaId, int writeLimit, AbstractPagedOutputView outputView, boolean appendOnly) {
-        this(
-                BUILDER_DEFAULT_OFFSET,
-                schemaId,
-                writeLimit,
-                CURRENT_LOG_MAGIC_VALUE,
-                outputView,
-                appendOnly);
     }
 
     /** Implement to return size of the record (including length field). */
@@ -222,7 +211,7 @@ abstract class AbstractRowMemoryLogRecordsBuilder<T> implements AutoCloseable {
         if (currentRecordNumber > 0) {
             outputView.writeInt(currentRecordNumber - 1);
         } else {
-            // If there is no record, we write 0 for filed lastOffsetDelta, see the comments about
+            // If there is no record, we write 0 for field lastOffsetDelta, see the comments about
             // the field 'lastOffsetDelta' in DefaultLogRecordBatch.
             outputView.writeInt(0);
         }

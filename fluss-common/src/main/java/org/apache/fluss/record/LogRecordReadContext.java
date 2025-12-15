@@ -79,12 +79,6 @@ public class LogRecordReadContext implements LogRecordBatch.ReadContext, AutoClo
                     Projection.of(
                             IntStream.range(0, rowType.getFieldCount()).toArray(),
                             tableInfo.getSchema());
-        } else {
-            // Explicitly forbid any projection for COMPACTED log format
-            if (logFormat == LogFormat.COMPACTED) {
-                throw new IllegalArgumentException(
-                        "Projection is not supported for COMPACTED log format. Please remove projection.");
-            }
         }
 
         if (logFormat == LogFormat.ARROW) {

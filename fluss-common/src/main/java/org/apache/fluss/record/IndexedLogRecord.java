@@ -122,8 +122,7 @@ public class IndexedLogRecord implements LogRecord {
     @Override
     public InternalRow getRow() {
         int rowOffset = LENGTH_LENGTH + ATTRIBUTES_LENGTH;
-        // TODO currently, we only support indexed row.
-        return deserializeInternalRow(
+        return LogRecord.deserializeInternalRow(
                 sizeInBytes - rowOffset,
                 segment,
                 offset + rowOffset,
@@ -175,21 +174,5 @@ public class IndexedLogRecord implements LogRecord {
     private static void serializeInternalRow(OutputView outputView, IndexedRow row)
             throws IOException {
         IndexedRowWriter.serializeIndexedRow(row, outputView);
-    }
-
-    private static InternalRow deserializeInternalRow(
-            int length,
-            MemorySegment segment,
-            int position,
-            DataType[] fieldTypes,
-            LogFormat logFormat) {
-        if (logFormat == LogFormat.INDEXED) {
-            IndexedRow indexedRow = new IndexedRow(fieldTypes);
-            indexedRow.pointTo(segment, position, length);
-            return indexedRow;
-        } else {
-            throw new IllegalArgumentException(
-                    "No such internal row deserializer for: " + logFormat);
-        }
     }
 }

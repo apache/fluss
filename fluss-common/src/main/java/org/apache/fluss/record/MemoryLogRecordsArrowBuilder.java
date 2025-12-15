@@ -279,7 +279,7 @@ public class MemoryLogRecordsArrowBuilder implements AutoCloseable {
         if (recordCount > 0) {
             outputView.writeInt(recordCount - 1);
         } else {
-            // If there is no record, we write 0 for filed lastOffsetDelta, see the comments about
+            // If there is no record, we write 0 for field lastOffsetDelta, see the comments about
             // the field 'lastOffsetDelta' in DefaultLogRecordBatch.
             outputView.writeInt(0);
         }

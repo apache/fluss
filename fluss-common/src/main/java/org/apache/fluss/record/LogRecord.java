@@ -18,7 +18,13 @@
 package org.apache.fluss.record;
 
 import org.apache.fluss.annotation.PublicEvolving;
+import org.apache.fluss.memory.MemorySegment;
+import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.row.compacted.CompactedRow;
+import org.apache.fluss.row.compacted.CompactedRowDeserializer;
+import org.apache.fluss.row.indexed.IndexedRow;
+import org.apache.fluss.types.DataType;
 
 /**
  * A log record is a tuple consisting of a unique offset in the log, a changeType and a row.
@@ -55,4 +61,26 @@ public interface LogRecord {
      * @return the log record's row
      */
     InternalRow getRow();
+
+    /** Deserialize the row in the log record according to given log format. */
+    static InternalRow deserializeInternalRow(
+            int length,
+            MemorySegment segment,
+            int position,
+            DataType[] fieldTypes,
+            LogFormat logFormat) {
+        if (logFormat == LogFormat.INDEXED) {
+            IndexedRow indexedRow = new IndexedRow(fieldTypes);
+            indexedRow.pointTo(segment, position, length);
+            return indexedRow;
+        } else if (logFormat == LogFormat.COMPACTED) {
+            CompactedRow compactedRow =
+                    new CompactedRow(fieldTypes.length, new CompactedRowDeserializer(fieldTypes));
+            compactedRow.pointTo(segment, position, length);
+            return compactedRow;
+        } else {
+            throw new IllegalArgumentException(
+                    "No such internal row deserializer for: " + logFormat);
+        }
+    }
 }
