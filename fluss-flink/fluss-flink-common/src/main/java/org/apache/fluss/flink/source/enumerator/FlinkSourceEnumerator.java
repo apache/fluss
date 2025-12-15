@@ -17,6 +17,13 @@
 
 package org.apache.fluss.flink.source.enumerator;
 
+import org.apache.flink.annotation.Internal;
+import org.apache.flink.annotation.VisibleForTesting;
+import org.apache.flink.api.connector.source.SourceEvent;
+import org.apache.flink.api.connector.source.SplitEnumerator;
+import org.apache.flink.api.connector.source.SplitEnumeratorContext;
+import org.apache.flink.api.connector.source.SplitsAssignment;
+import org.apache.flink.util.FlinkRuntimeException;
 import org.apache.fluss.client.Connection;
 import org.apache.fluss.client.ConnectionFactory;
 import org.apache.fluss.client.admin.Admin;
@@ -29,6 +36,7 @@ import org.apache.fluss.flink.source.enumerator.initializer.NoStoppingOffsetsIni
 import org.apache.fluss.flink.source.enumerator.initializer.OffsetsInitializer;
 import org.apache.fluss.flink.source.enumerator.initializer.OffsetsInitializer.BucketOffsetsRetriever;
 import org.apache.fluss.flink.source.enumerator.initializer.SnapshotOffsetsInitializer;
+import org.apache.fluss.flink.source.event.FinishedKvSnapshotConsumeEvent;
 import org.apache.fluss.flink.source.event.PartitionBucketsUnsubscribedEvent;
 import org.apache.fluss.flink.source.event.PartitionsRemovedEvent;
 import org.apache.fluss.flink.source.split.HybridSnapshotLogSplit;
@@ -46,19 +54,11 @@ import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.utils.ExceptionUtils;
-
-import org.apache.flink.annotation.Internal;
-import org.apache.flink.annotation.VisibleForTesting;
-import org.apache.flink.api.connector.source.SourceEvent;
-import org.apache.flink.api.connector.source.SplitEnumerator;
-import org.apache.flink.api.connector.source.SplitEnumeratorContext;
-import org.apache.flink.api.connector.source.SplitsAssignment;
-import org.apache.flink.util.FlinkRuntimeException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
-
+import javax.annotation.concurrent.GuardedBy;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -69,13 +69,18 @@ import java.util.LinkedHashSet;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
+import java.util.NavigableMap;
 import java.util.Objects;
 import java.util.OptionalLong;
 import java.util.Set;
+import java.util.TreeMap;
+import java.util.concurrent.locks.ReadWriteLock;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 import static org.apache.fluss.utils.Preconditions.checkState;
+import static org.apache.fluss.utils.concurrent.LockUtils.inWriteLock;
 
 /**
  * An implementation of {@link SplitEnumerator} for the data of Fluss.
@@ -124,6 +129,12 @@ public class FlinkSourceEnumerator
     private final OffsetsInitializer startingOffsetsInitializer;
     private final OffsetsInitializer stoppingOffsetsInitializer;
 
+    private final String kvSnapshotConsumerId;
+    private final ReadWriteLock lock = new ReentrantReadWriteLock();
+    /** checkpointId -> tableBuckets who finished consume kv snapshots. */
+    @GuardedBy("lock")
+    private final TreeMap<Long, Set<TableBucket>> consumedKvSnapshotMap = new TreeMap<>();
+
     // Lazily instantiated or mutable fields.
     private Connection connection;
     private Admin flussAdmin;
@@ -152,7 +163,8 @@ public class FlinkSourceEnumerator
             long scanPartitionDiscoveryIntervalMs,
             boolean streaming,
             @Nullable Predicate partitionFilters,
-            @Nullable LakeSource<LakeSplit> lakeSource) {
+            @Nullable LakeSource<LakeSplit> lakeSource,
+            String kvSnapshotConsumerId) {
         this(
                 tablePath,
                 flussConf,
@@ -166,7 +178,8 @@ public class FlinkSourceEnumerator
                 scanPartitionDiscoveryIntervalMs,
                 streaming,
                 partitionFilters,
-                lakeSource);
+                lakeSource,
+                kvSnapshotConsumerId);
     }
 
     public FlinkSourceEnumerator(
@@ -182,7 +195,8 @@ public class FlinkSourceEnumerator
             long scanPartitionDiscoveryIntervalMs,
             boolean streaming,
             @Nullable Predicate partitionFilters,
-            @Nullable LakeSource<LakeSplit> lakeSource) {
+            @Nullable LakeSource<LakeSplit> lakeSource,
+            String kvSnapshotConsumerId) {
         this(
                 tablePath,
                 flussConf,
@@ -197,7 +211,8 @@ public class FlinkSourceEnumerator
                 streaming,
                 partitionFilters,
                 lakeSource,
-                new WorkerExecutor(context));
+                new WorkerExecutor(context),
+                kvSnapshotConsumerId);
     }
 
     FlinkSourceEnumerator(
@@ -214,7 +229,8 @@ public class FlinkSourceEnumerator
             boolean streaming,
             @Nullable Predicate partitionFilters,
             @Nullable LakeSource<LakeSplit> lakeSource,
-            WorkerExecutor workerExecutor) {
+            WorkerExecutor workerExecutor,
+            String kvSnapshotConsumerId) {
         this.tablePath = checkNotNull(tablePath);
         this.flussConf = checkNotNull(flussConf);
         this.hasPrimaryKey = hasPrimaryKey;
@@ -235,6 +251,7 @@ public class FlinkSourceEnumerator
                 streaming ? new NoStoppingOffsetsInitializer() : OffsetsInitializer.latest();
         this.lakeSource = lakeSource;
         this.workerExecutor = workerExecutor;
+        this.kvSnapshotConsumerId = kvSnapshotConsumerId;
     }
 
     @Override
@@ -341,6 +358,25 @@ public class FlinkSourceEnumerator
             final KvSnapshots kvSnapshots;
             try {
                 kvSnapshots = flussAdmin.getLatestKvSnapshots(tablePath).get();
+
+                Map<TableBucket, Long> consumeBuckets = new HashMap<>();
+                for (Integer bucketId : kvSnapshots.getBucketIds()) {
+                    TableBucket tb =
+                            new TableBucket(
+                                    kvSnapshots.getTableId(),
+                                    kvSnapshots.getPartitionId(),
+                                    bucketId);
+                    OptionalLong snapshotIdOpt = kvSnapshots.getSnapshotId(bucketId);
+                    if (!ignoreTableBucket(tb) && snapshotIdOpt.isPresent()) {
+                        consumeBuckets.put(tb, snapshotIdOpt.getAsLong());
+                    }
+                }
+
+                if (!consumeBuckets.isEmpty()) {
+                    flussAdmin
+                            .registerKvSnapshotConsumer(kvSnapshotConsumerId, consumeBuckets)
+                            .get();
+                }
             } catch (Exception e) {
                 throw new FlinkRuntimeException(
                         String.format("Failed to get table snapshot for %s", tablePath),
@@ -523,10 +559,29 @@ public class FlinkSourceEnumerator
             final KvSnapshots kvSnapshots;
             try {
                 kvSnapshots = flussAdmin.getLatestKvSnapshots(tablePath, partitionName).get();
+
+                Map<TableBucket, Long> consumeBuckets = new HashMap<>();
+                for (Integer bucketId : kvSnapshots.getBucketIds()) {
+                    TableBucket tb =
+                            new TableBucket(
+                                    kvSnapshots.getTableId(),
+                                    kvSnapshots.getPartitionId(),
+                                    bucketId);
+                    OptionalLong snapshotIdOpt = kvSnapshots.getSnapshotId(bucketId);
+                    if (!ignoreTableBucket(tb) && snapshotIdOpt.isPresent()) {
+                        consumeBuckets.put(tb, snapshotIdOpt.getAsLong());
+                    }
+                }
+
+                if (!consumeBuckets.isEmpty()) {
+                    flussAdmin
+                            .registerKvSnapshotConsumer(kvSnapshotConsumerId, consumeBuckets)
+                            .get();
+                }
             } catch (Exception e) {
                 throw new FlinkRuntimeException(
                         String.format(
-                                "Failed to get table snapshot for table %s and partition %s",
+                                "Failed to get and register table snapshot for table %s and partition %s",
                                 tablePath, partitionName),
                         ExceptionUtils.stripCompletionException(e));
             }
@@ -847,6 +902,11 @@ public class FlinkSourceEnumerator
             for (Long partitionToRemove : partitionsPendingRemove) {
                 assignedPartitions.remove(partitionToRemove);
             }
+        } else if (sourceEvent instanceof FinishedKvSnapshotConsumeEvent) {
+            FinishedKvSnapshotConsumeEvent event = (FinishedKvSnapshotConsumeEvent) sourceEvent;
+            long checkpointId = event.getCheckpointId();
+            event.getTableBuckets()
+                    .forEach(tableBucket -> addConsumedBucket(checkpointId, tableBucket));
         }
     }
 
@@ -879,6 +939,42 @@ public class FlinkSourceEnumerator
                         assignedTableBuckets, assignedPartitions, pendingHybridLakeFlussSplits);
         LOG.debug("Source Checkpoint is {}", enumeratorState);
         return enumeratorState;
+    }
+
+    @Override
+    public void notifyCheckpointComplete(long checkpointId) throws Exception {
+        // lower than this checkpoint id.
+        Set<TableBucket> consumedKvSnapshots = getAndRemoveConsumedBucketsUpTo(checkpointId);
+
+        // send request to fluss admin to unregister the kv snapshot consumer.
+        flussAdmin.unregisterKvSnapshotConsumer(kvSnapshotConsumerId, consumedKvSnapshots).get();
+    }
+
+    /** Add bucket who has been consumed kv snapshot to the consumedKvSnapshotMap. */
+    public void addConsumedBucket(long checkpointId, TableBucket tableBucket) {
+        inWriteLock(
+                lock,
+                () -> {
+                    consumedKvSnapshotMap
+                            .computeIfAbsent(checkpointId, k -> new HashSet<>())
+                            .add(tableBucket);
+                });
+    }
+
+    /** Get and remove the buckets who have been consumed kv snapshot up to the checkpoint id. */
+    public Set<TableBucket> getAndRemoveConsumedBucketsUpTo(long checkpointId) {
+        return inWriteLock(
+                lock,
+                () -> {
+                    NavigableMap<Long, Set<TableBucket>> toRemove =
+                            consumedKvSnapshotMap.headMap(checkpointId, false);
+                    Set<TableBucket> result = new HashSet<>();
+                    for (Set<TableBucket> snapshots : toRemove.values()) {
+                        result.addAll(snapshots);
+                    }
+                    toRemove.clear();
+                    return result;
+                });
     }
 
     @Override

@@ -71,6 +71,7 @@ public class FlussSourceBuilder<OUT> {
     private Long scanPartitionDiscoveryIntervalMs;
     private OffsetsInitializer offsetsInitializer;
     private FlussDeserializationSchema<OUT> deserializationSchema;
+    private String kvSnapshotConsumerId;
 
     private String bootstrapServers;
 
@@ -171,6 +172,11 @@ public class FlussSourceBuilder<OUT> {
     public FlussSourceBuilder<OUT> setProjectedFields(String... projectedFieldNames) {
         checkNotNull(projectedFieldNames, "Field names must not be null");
         this.projectedFieldNames = projectedFieldNames;
+        return this;
+    }
+
+    public FlussSourceBuilder<OUT> setKvSnapshotConsumerId(String kvSnapshotConsumerId) {
+        this.kvSnapshotConsumerId = kvSnapshotConsumerId;
         return this;
     }
 
@@ -300,6 +306,7 @@ public class FlussSourceBuilder<OUT> {
                 offsetsInitializer,
                 scanPartitionDiscoveryIntervalMs,
                 deserializationSchema,
-                true);
+                true,
+                kvSnapshotConsumerId);
     }
 }

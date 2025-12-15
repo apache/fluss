@@ -132,6 +132,8 @@ public class FlinkTableSource
 
     private final long scanPartitionDiscoveryIntervalMs;
     private final boolean isDataLakeEnabled;
+    private final String kvSnapshotConsumerId;
+
     @Nullable private final MergeEngineType mergeEngineType;
 
     // output type after projection pushdown
@@ -170,7 +172,8 @@ public class FlinkTableSource
             long scanPartitionDiscoveryIntervalMs,
             boolean isDataLakeEnabled,
             @Nullable MergeEngineType mergeEngineType,
-            Map<String, String> tableOptions) {
+            Map<String, String> tableOptions,
+            String kvSnapshotConsumerId) {
         this.tablePath = tablePath;
         this.flussConfig = flussConfig;
         this.tableOutputType = tableOutputType;
@@ -186,6 +189,7 @@ public class FlinkTableSource
 
         this.scanPartitionDiscoveryIntervalMs = scanPartitionDiscoveryIntervalMs;
         this.isDataLakeEnabled = isDataLakeEnabled;
+        this.kvSnapshotConsumerId = kvSnapshotConsumerId;
         this.mergeEngineType = mergeEngineType;
         this.tableOptions = tableOptions;
         if (isDataLakeEnabled) {
@@ -331,7 +335,8 @@ public class FlinkTableSource
                         new RowDataDeserializationSchema(),
                         streaming,
                         partitionFilters,
-                        enableLakeSource ? lakeSource : null);
+                        enableLakeSource ? lakeSource : null,
+                        kvSnapshotConsumerId);
 
         if (!streaming) {
             // return a bounded source provide to make planner happy,
@@ -448,7 +453,8 @@ public class FlinkTableSource
                         scanPartitionDiscoveryIntervalMs,
                         isDataLakeEnabled,
                         mergeEngineType,
-                        tableOptions);
+                        tableOptions,
+                        kvSnapshotConsumerId);
         source.producedDataType = producedDataType;
         source.projectedFields = projectedFields;
         source.singleRowFilter = singleRowFilter;

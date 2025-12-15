@@ -67,7 +67,8 @@ public class FlussSource<OUT> extends FlinkSource<OUT> {
             OffsetsInitializer offsetsInitializer,
             long scanPartitionDiscoveryIntervalMs,
             FlussDeserializationSchema<OUT> deserializationSchema,
-            boolean streaming) {
+            boolean streaming,
+            String kvSnapshotConsumerId) {
         // TODO: Support partition pushDown in datastream
         super(
                 flussConf,
@@ -80,7 +81,8 @@ public class FlussSource<OUT> extends FlinkSource<OUT> {
                 scanPartitionDiscoveryIntervalMs,
                 deserializationSchema,
                 streaming,
-                null);
+                null,
+                kvSnapshotConsumerId);
     }
 
     /**

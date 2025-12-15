@@ -67,6 +67,7 @@ public class FlinkSource<OUT>
     private final FlussDeserializationSchema<OUT> deserializationSchema;
     @Nullable private final Predicate partitionFilters;
     @Nullable private final LakeSource<LakeSplit> lakeSource;
+    private final String kvSnapshotConsumerId;
 
     public FlinkSource(
             Configuration flussConf,
@@ -79,7 +80,8 @@ public class FlinkSource<OUT>
             long scanPartitionDiscoveryIntervalMs,
             FlussDeserializationSchema<OUT> deserializationSchema,
             boolean streaming,
-            @Nullable Predicate partitionFilters) {
+            @Nullable Predicate partitionFilters,
+            String kvSnapshotConsumerId) {
         this(
                 flussConf,
                 tablePath,
@@ -92,7 +94,8 @@ public class FlinkSource<OUT>
                 deserializationSchema,
                 streaming,
                 partitionFilters,
-                null);
+                null,
+                kvSnapshotConsumerId);
     }
 
     public FlinkSource(
@@ -107,7 +110,8 @@ public class FlinkSource<OUT>
             FlussDeserializationSchema<OUT> deserializationSchema,
             boolean streaming,
             @Nullable Predicate partitionFilters,
-            @Nullable LakeSource<LakeSplit> lakeSource) {
+            @Nullable LakeSource<LakeSplit> lakeSource,
+            String kvSnapshotConsumerId) {
         this.flussConf = flussConf;
         this.tablePath = tablePath;
         this.hasPrimaryKey = hasPrimaryKey;
@@ -120,6 +124,7 @@ public class FlinkSource<OUT>
         this.streaming = streaming;
         this.partitionFilters = partitionFilters;
         this.lakeSource = lakeSource;
+        this.kvSnapshotConsumerId = kvSnapshotConsumerId;
     }
 
     @Override
@@ -140,7 +145,8 @@ public class FlinkSource<OUT>
                 scanPartitionDiscoveryIntervalMs,
                 streaming,
                 partitionFilters,
-                lakeSource);
+                lakeSource,
+                kvSnapshotConsumerId);
     }
 
     @Override
@@ -160,7 +166,8 @@ public class FlinkSource<OUT>
                 scanPartitionDiscoveryIntervalMs,
                 streaming,
                 partitionFilters,
-                lakeSource);
+                lakeSource,
+                kvSnapshotConsumerId);
     }
 
     @Override

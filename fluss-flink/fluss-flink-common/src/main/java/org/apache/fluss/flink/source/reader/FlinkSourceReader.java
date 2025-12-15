@@ -21,10 +21,12 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.adapter.SingleThreadMultiplexSourceReaderBaseAdapter;
 import org.apache.fluss.flink.lake.LakeSplitStateInitializer;
 import org.apache.fluss.flink.source.emitter.FlinkRecordEmitter;
+import org.apache.fluss.flink.source.event.FinishedKvSnapshotConsumeEvent;
 import org.apache.fluss.flink.source.event.PartitionBucketsUnsubscribedEvent;
 import org.apache.fluss.flink.source.event.PartitionsRemovedEvent;
 import org.apache.fluss.flink.source.metrics.FlinkSourceReaderMetrics;
 import org.apache.fluss.flink.source.reader.fetcher.FlinkSourceFetcherManager;
+import org.apache.fluss.flink.source.split.HybridSnapshotLogSplit;
 import org.apache.fluss.flink.source.split.HybridSnapshotLogSplitState;
 import org.apache.fluss.flink.source.split.LogSplitState;
 import org.apache.fluss.flink.source.split.SourceSplitBase;
@@ -42,6 +44,8 @@ import org.apache.flink.connector.base.source.reader.synchronization.FutureCompl
 
 import javax.annotation.Nullable;
 
+import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.Consumer;
@@ -50,6 +54,9 @@ import java.util.function.Consumer;
 public class FlinkSourceReader<OUT>
         extends SingleThreadMultiplexSourceReaderBaseAdapter<
                 RecordAndPos, OUT, SourceSplitBase, SourceSplitState> {
+
+    /** the tableBuckets ignore to send FinishedKvSnapshotConsumeEvent as it already sending. */
+    private final Set<TableBucket> ignoreBuckets;
 
     public FlinkSourceReader(
             FutureCompletingBlockingQueue<RecordsWithSplitIds<RecordAndPos>> elementsQueue,
@@ -77,11 +84,46 @@ public class FlinkSourceReader<OUT>
                 recordEmitter,
                 context.getConfiguration(),
                 context);
+        this.ignoreBuckets = new HashSet<>();
     }
 
     @Override
     protected void onSplitFinished(Map<String, SourceSplitState> map) {
         // do nothing
+    }
+
+    @Override
+    public List<SourceSplitBase> snapshotState(long checkpointId) {
+        Set<TableBucket> bucketsFinishedConsumeKvSnapshot = new HashSet<>();
+
+        // do not modify this state.
+        List<SourceSplitBase> sourceSplitBases = super.snapshotState(checkpointId);
+        for (SourceSplitBase sourceSplitBase : sourceSplitBases) {
+            TableBucket tableBucket = sourceSplitBase.getTableBucket();
+            if (ignoreBuckets.contains(tableBucket)) {
+                continue;
+            }
+
+            if (sourceSplitBase.isHybridSnapshotLogSplit()) {
+                HybridSnapshotLogSplit hybridSnapshotLogSplit =
+                        sourceSplitBase.asHybridSnapshotLogSplit();
+                if (!hybridSnapshotLogSplit.isSnapshotFinished()) {
+                    bucketsFinishedConsumeKvSnapshot.add(tableBucket);
+                }
+            }
+        }
+
+        // report finished kv snapshot consume event.
+        if (!bucketsFinishedConsumeKvSnapshot.isEmpty()) {
+            context.sendSourceEventToCoordinator(
+                    new FinishedKvSnapshotConsumeEvent(
+                            checkpointId, bucketsFinishedConsumeKvSnapshot));
+            // It won't be sent anymore in the future for this table bucket, but will be resent
+            // after failover recovery as ignoreBuckets is cleared.
+            ignoreBuckets.addAll(bucketsFinishedConsumeKvSnapshot);
+        }
+
+        return sourceSplitBases;
     }
 
     @Override

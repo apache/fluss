@@ -17,18 +17,17 @@
 
 package org.apache.fluss.flink.procedure;
 
+import org.apache.flink.table.api.EnvironmentSettings;
+import org.apache.flink.table.api.TableEnvironment;
+import org.apache.flink.types.Row;
+import org.apache.flink.util.CloseableIterator;
+import org.apache.flink.util.CollectionUtil;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.MemorySize;
 import org.apache.fluss.exception.SecurityDisabledException;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
-
-import org.apache.flink.table.api.EnvironmentSettings;
-import org.apache.flink.table.api.TableEnvironment;
-import org.apache.flink.types.Row;
-import org.apache.flink.util.CloseableIterator;
-import org.apache.flink.util.CollectionUtil;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
@@ -91,7 +90,11 @@ public abstract class FlinkProcedureITCase {
         try (CloseableIterator<Row> showProceduresIterator =
                 tEnv.executeSql("show procedures").collect()) {
             List<String> expectedShowProceduresResult =
-                    Arrays.asList("+I[sys.add_acl]", "+I[sys.drop_acl]", "+I[sys.list_acl]");
+                    Arrays.asList(
+                            "+I[sys.add_acl]",
+                            "+I[sys.drop_acl]",
+                            "+I[sys.list_acl]",
+                            "+I[sys.clear_kv_snapshot_consumer]");
             // make sure no more results is unread.
             assertResultsIgnoreOrder(showProceduresIterator, expectedShowProceduresResult, true);
         }

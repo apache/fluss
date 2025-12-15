@@ -153,7 +153,8 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
                 partitionDiscoveryIntervalMs,
                 tableOptions.get(toFlinkOption(ConfigOptions.TABLE_DATALAKE_ENABLED)),
                 tableOptions.get(toFlinkOption(ConfigOptions.TABLE_MERGE_ENGINE)),
-                context.getCatalogTable().getOptions());
+                context.getCatalogTable().getOptions(),
+                tableOptions.get(FlinkConnectorOptions.SCAN_KV_SNAPSHOT_CONSUMER_ID));
     }
 
     @Override
@@ -247,6 +248,14 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
         // retry. The option 'client.lookup.max-retries' is only for dealing with the
         // RetriableException return by server not all exceptions. Trace by:
         // https://github.com/apache/fluss/issues/2099
+
+        if (tableOptions.containsKey(
+                FlinkConnectorOptions.SCAN_KV_SNAPSHOT_CONSUMER_EXPIRATION_TIME.key())) {
+            flussConfig.setString(
+                    ConfigOptions.CLIENT_SCANNER_KV_SNAPSHOT_CONSUMER_EXPIRATION_TIME.key(),
+                    tableOptions.get(
+                            FlinkConnectorOptions.SCAN_KV_SNAPSHOT_CONSUMER_EXPIRATION_TIME.key()));
+        }
 
         // pass flink io tmp dir to fluss client.
         flussConfig.setString(
