@@ -20,6 +20,7 @@ package org.apache.fluss.client.utils;
 import org.apache.fluss.client.admin.OffsetSpec;
 import org.apache.fluss.client.lookup.LookupBatch;
 import org.apache.fluss.client.lookup.PrefixLookupBatch;
+import org.apache.fluss.client.metadata.AcquireKvSnapshotLeaseResult;
 import org.apache.fluss.client.metadata.KvSnapshotMetadata;
 import org.apache.fluss.client.metadata.KvSnapshots;
 import org.apache.fluss.client.metadata.LakeSnapshot;
@@ -41,6 +42,8 @@ import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.rpc.messages.AcquireKvSnapshotLeaseRequest;
+import org.apache.fluss.rpc.messages.AcquireKvSnapshotLeaseResponse;
 import org.apache.fluss.rpc.messages.AlterTableRequest;
 import org.apache.fluss.rpc.messages.CreatePartitionRequest;
 import org.apache.fluss.rpc.messages.DropPartitionRequest;
@@ -55,10 +58,13 @@ import org.apache.fluss.rpc.messages.LookupRequest;
 import org.apache.fluss.rpc.messages.MetadataRequest;
 import org.apache.fluss.rpc.messages.PbAddColumn;
 import org.apache.fluss.rpc.messages.PbAlterConfig;
+import org.apache.fluss.rpc.messages.PbBucket;
 import org.apache.fluss.rpc.messages.PbDescribeConfig;
 import org.apache.fluss.rpc.messages.PbDropColumn;
 import org.apache.fluss.rpc.messages.PbKeyValue;
 import org.apache.fluss.rpc.messages.PbKvSnapshot;
+import org.apache.fluss.rpc.messages.PbKvSnapshotLeaseForBucket;
+import org.apache.fluss.rpc.messages.PbKvSnapshotLeaseForTable;
 import org.apache.fluss.rpc.messages.PbLakeSnapshotForBucket;
 import org.apache.fluss.rpc.messages.PbLookupReqForBucket;
 import org.apache.fluss.rpc.messages.PbModifyColumn;
@@ -74,6 +80,7 @@ import org.apache.fluss.rpc.messages.PbRenameColumn;
 import org.apache.fluss.rpc.messages.PrefixLookupRequest;
 import org.apache.fluss.rpc.messages.ProduceLogRequest;
 import org.apache.fluss.rpc.messages.PutKvRequest;
+import org.apache.fluss.rpc.messages.ReleaseKvSnapshotLeaseRequest;
 import org.apache.fluss.utils.json.DataTypeJsonSerde;
 import org.apache.fluss.utils.json.JsonSerdeUtils;
 
@@ -378,6 +385,75 @@ public class ClientRpcMessageUtils {
                 .addAllDropColumns(dropColumns)
                 .addAllRenameColumns(renameColumns)
                 .addAllModifyColumns(modifyColumns);
+        return request;
+    }
+
+    public static AcquireKvSnapshotLeaseRequest makeAcquireKvSnapshotLeaseRequest(
+            String leaseId, Map<TableBucket, Long> snapshotIds, long leaseDuration) {
+        AcquireKvSnapshotLeaseRequest request = new AcquireKvSnapshotLeaseRequest();
+        request.setLeaseId(leaseId).setLeaseDuration(leaseDuration);
+
+        Map<Long, List<PbKvSnapshotLeaseForBucket>> pbLeaseForTables = new HashMap<>();
+        for (Map.Entry<TableBucket, Long> entry : snapshotIds.entrySet()) {
+            TableBucket tableBucket = entry.getKey();
+            Long snapshotId = entry.getValue();
+            PbKvSnapshotLeaseForBucket pbLeaseForBucket =
+                    new PbKvSnapshotLeaseForBucket()
+                            .setBucketId(tableBucket.getBucket())
+                            .setSnapshotId(snapshotId);
+            if (tableBucket.getPartitionId() != null) {
+                pbLeaseForBucket.setPartitionId(tableBucket.getPartitionId());
+            }
+            pbLeaseForTables
+                    .computeIfAbsent(tableBucket.getTableId(), k -> new ArrayList<>())
+                    .add(pbLeaseForBucket);
+        }
+
+        for (Map.Entry<Long, List<PbKvSnapshotLeaseForBucket>> entry :
+                pbLeaseForTables.entrySet()) {
+            request.addTableLeaseReq()
+                    .setTableId(entry.getKey())
+                    .addAllBucketsReqs(entry.getValue());
+        }
+        return request;
+    }
+
+    public static AcquireKvSnapshotLeaseResult toAcquireKvSnapshotLeaseResult(
+            AcquireKvSnapshotLeaseResponse response) {
+        Map<TableBucket, Long> unavailableSnapshots = new HashMap<>();
+        for (PbKvSnapshotLeaseForTable leaseForTable : response.getTablesLeaseResList()) {
+            long tableId = leaseForTable.getTableId();
+            for (PbKvSnapshotLeaseForBucket leaseForBucket : leaseForTable.getBucketsReqsList()) {
+                TableBucket tableBucket =
+                        new TableBucket(
+                                tableId,
+                                leaseForBucket.hasPartitionId()
+                                        ? leaseForBucket.getPartitionId()
+                                        : null,
+                                leaseForBucket.getBucketId());
+                unavailableSnapshots.put(tableBucket, leaseForBucket.getSnapshotId());
+            }
+        }
+        return new AcquireKvSnapshotLeaseResult(unavailableSnapshots);
+    }
+
+    public static ReleaseKvSnapshotLeaseRequest makeReleaseKvSnapshotLeaseRequest(
+            String leaseId, Set<TableBucket> bucketsToRelease) {
+        ReleaseKvSnapshotLeaseRequest request = new ReleaseKvSnapshotLeaseRequest();
+        request.setLeaseId(leaseId);
+
+        Map<Long, List<PbBucket>> pbLeasedTable = new HashMap<>();
+        for (TableBucket tb : bucketsToRelease) {
+            PbBucket pbBucket = new PbBucket().setBucketId(tb.getBucket());
+            if (tb.getPartitionId() != null) {
+                pbBucket.setPartitionId(tb.getPartitionId());
+            }
+            pbLeasedTable.computeIfAbsent(tb.getTableId(), k -> new ArrayList<>()).add(pbBucket);
+        }
+
+        for (Map.Entry<Long, List<PbBucket>> entry : pbLeasedTable.entrySet()) {
+            request.addReleaseTable().setTableId(entry.getKey()).addAllBuckets(entry.getValue());
+        }
         return request;
     }
 

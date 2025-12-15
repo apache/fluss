@@ -70,7 +70,10 @@ public class LogFetcherTest {
         metadataUpdater = initializeMetadataUpdater();
         ClientSchemaGetter clientSchemaGetter =
                 new TestingClientSchemaGetter(
-                        DATA1_TABLE_PATH, new SchemaInfo(DATA1_SCHEMA, 0), metadataUpdater);
+                        DATA1_TABLE_PATH,
+                        new SchemaInfo(DATA1_SCHEMA, 0),
+                        metadataUpdater,
+                        new Configuration());
         LogScannerStatus logScannerStatus = initializeLogScannerStatus();
         logFetcher =
                 new LogFetcher(
