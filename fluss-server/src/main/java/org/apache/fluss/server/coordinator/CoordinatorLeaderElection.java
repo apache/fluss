@@ -38,18 +38,13 @@ public class CoordinatorLeaderElection implements AutoCloseable {
     private final ZooKeeperClient zkClient;
     private final CoordinatorContext coordinatorContext;
     private final LeaderLatch leaderLatch;
-    private final CoordinatorServer server;
     private final AtomicBoolean isLeader = new AtomicBoolean(false);
 
     public CoordinatorLeaderElection(
-            ZooKeeperClient zkClient,
-            int serverId,
-            CoordinatorContext coordinatorContext,
-            CoordinatorServer server) {
+            ZooKeeperClient zkClient, int serverId, CoordinatorContext coordinatorContext) {
         this.serverId = serverId;
         this.zkClient = zkClient;
         this.coordinatorContext = coordinatorContext;
-        this.server = server;
         this.leaderLatch =
                 new LeaderLatch(
                         zkClient.getCuratorClient(),
@@ -100,7 +95,6 @@ public class CoordinatorLeaderElection implements AutoCloseable {
             // Later we can make it as a hot backup server to continuously synchronize metadata from
             // Zookeeper, which save time from initializing context
             //            leaderLatch.await();
-            //            initLeaderServices.run();
 
         } catch (Exception e) {
             LOG.error("Failed to start LeaderLatch for server {}", serverId, e);

@@ -141,6 +141,9 @@ public class CoordinatorServer extends ServerBase {
     @GuardedBy("lock")
     private LakeCatalogDynamicLoader lakeCatalogDynamicLoader;
 
+    @GuardedBy("lock")
+    private CoordinatorLeaderElection coordinatorLeaderElection;
+
     public CoordinatorServer(Configuration conf) {
         super(conf);
         validateConfigs(conf);
@@ -172,8 +175,8 @@ public class CoordinatorServer extends ServerBase {
                 zkClient, this::registerCoordinatorServer, this);
 
         // standby
-        CoordinatorLeaderElection coordinatorLeaderElection =
-                new CoordinatorLeaderElection(zkClient, serverId, coordinatorContext, this);
+        this.coordinatorLeaderElection =
+                new CoordinatorLeaderElection(zkClient, serverId, coordinatorContext);
         coordinatorLeaderElection.startElectLeader(
                 () -> {
                     try {
@@ -510,6 +513,14 @@ public class CoordinatorServer extends ServerBase {
 
                 if (lakeCatalogDynamicLoader != null) {
                     lakeCatalogDynamicLoader.close();
+                }
+            } catch (Throwable t) {
+                exception = ExceptionUtils.firstOrSuppressed(t, exception);
+            }
+
+            try {
+                if (coordinatorLeaderElection != null) {
+                    coordinatorLeaderElection.close();
                 }
             } catch (Throwable t) {
                 exception = ExceptionUtils.firstOrSuppressed(t, exception);
