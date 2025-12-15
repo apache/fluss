@@ -26,6 +26,7 @@ import org.apache.fluss.rpc.entity.FetchLogResultForBucket;
 import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.server.coordinator.TestCoordinatorGateway;
 import org.apache.fluss.server.entity.FetchReqInfo;
+import org.apache.fluss.server.exception.CorruptIndexException;
 import org.apache.fluss.server.log.FetchParams;
 import org.apache.fluss.server.log.LogTablet;
 import org.apache.fluss.server.replica.Replica;
@@ -34,6 +35,10 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
+import java.io.File;
+import java.nio.ByteBuffer;
+import java.nio.channels.FileChannel;
+import java.nio.file.StandardOpenOption;
 import java.time.Duration;
 import java.util.Collections;
 import java.util.List;
@@ -349,6 +354,62 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
         assertThat(resultForBucket.getHighWatermark()).isEqualTo(50L);
         assertThat(resultForBucket.records()).isNotNull();
         assertThat(resultForBucket.fetchFromRemote()).isFalse();
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testFetchRecordsFromRemoteWithCorruptIndex(boolean partitionTable) throws Exception {
+        TableBucket tb = makeTableBucket(partitionTable);
+        // Need to make leader by ReplicaManager.
+        makeLogTableAsLeader(tb, partitionTable);
+        LogTablet logTablet = replicaManager.getReplicaOrException(tb).getLogTablet();
+        addMultiSegmentsToLogTablet(logTablet, 5);
+
+        File file = logTablet.getSegments().get(0).timeIndex().file();
+        // mock corrupt index
+        try (FileChannel fileChannel = FileChannel.open(file.toPath(), StandardOpenOption.APPEND)) {
+            for (int i = 0; i < 12; i++) {
+                fileChannel.write(ByteBuffer.wrap(new byte[] {0}));
+            }
+        }
+
+        // trigger RLMTask copy local log segment to remote and update metadata.
+        remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
+        List<RemoteLogSegment> remoteLogSegmentList =
+                remoteLogManager.relevantRemoteLogSegments(tb, 0L);
+        assertThat(remoteLogSegmentList.size()).isEqualTo(4);
+
+        logTablet.updateRemoteLogEndOffset(40L);
+
+        // 1. fetch log records from client, should throw CorruptIndexException since we mock a
+        // corrupt index
+        CompletableFuture<Map<TableBucket, FetchLogResultForBucket>> future =
+                new CompletableFuture<>();
+        CompletableFuture<Map<TableBucket, FetchLogResultForBucket>> finalFuture = future;
+        assertThatThrownBy(
+                        () ->
+                                replicaManager.fetchLogRecords(
+                                        new FetchParams(-1, Integer.MAX_VALUE),
+                                        Collections.singletonMap(
+                                                tb,
+                                                new FetchReqInfo(tb.getTableId(), 0L, 1024 * 1024)),
+                                        finalFuture::complete))
+                .isInstanceOf(CorruptIndexException.class);
+
+        // 2. fetch log records from follower, should succeed since we don't need to lookup index
+        future = new CompletableFuture<>();
+        replicaManager.fetchLogRecords(
+                new FetchParams(1, Integer.MAX_VALUE),
+                Collections.singletonMap(tb, new FetchReqInfo(tb.getTableId(), 0L, 1024 * 1024)),
+                future::complete);
+        Map<TableBucket, FetchLogResultForBucket> result = future.get();
+        assertThat(result.size()).isEqualTo(1);
+        FetchLogResultForBucket resultForBucket = result.get(tb);
+        assertThat(resultForBucket.getError()).isEqualTo(ApiError.NONE);
+        assertThat(resultForBucket.getTableBucket()).isEqualTo(tb);
+        assertThat(resultForBucket.fetchFromRemote()).isTrue();
+        assertThat(resultForBucket.records()).isNull();
+        assertThat(resultForBucket.getHighWatermark()).isEqualTo(50L);
     }
 
     @ParameterizedTest
