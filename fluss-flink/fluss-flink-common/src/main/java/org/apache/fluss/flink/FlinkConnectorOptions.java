@@ -31,6 +31,7 @@ import org.apache.flink.table.catalog.IntervalFreshness;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.List;
+import java.util.UUID;
 
 import static org.apache.flink.configuration.description.TextElement.text;
 
@@ -75,6 +76,23 @@ public class FlinkConnectorOptions {
                     .withDescription(
                             "A list of host/port pairs to use for establishing the initial connection to the Fluss cluster. "
                                     + "The list should be in the form host1:port1,host2:port2,....");
+
+    public static final ConfigOption<String> SCAN_KV_SNAPSHOT_LEASE_ID =
+            ConfigOptions.key("scan.kv.snapshot.lease.id")
+                    .stringType()
+                    .defaultValue(String.valueOf(UUID.randomUUID()))
+                    .withDescription(
+                            "The lease id to ping kv snapshots. If set, the acquired kv snapshots will not be deleted "
+                                    + "until the consumer finished consuming all the snapshots or the lease duration time "
+                                    + "is reached. If not set, an UUID will be set.");
+
+    public static final ConfigOption<Duration> SCAN_KV_SNAPSHOT_LEASE_DURATION =
+            ConfigOptions.key("scan.kv.snapshot.lease.duration")
+                    .durationType()
+                    .defaultValue(Duration.ofDays(1))
+                    .withDescription(
+                            "The time period how long to wait before expiring the kv snapshot lease to "
+                                    + "avoid kv snapshot blocking to delete.");
 
     // --------------------------------------------------------------------------------------------
     // Lookup specific options

@@ -32,13 +32,13 @@ public class TestingClientSchemaGetter extends ClientSchemaGetter {
     public TestingClientSchemaGetter(
             TablePath tablePath,
             SchemaInfo latestSchemaInfo,
-            TestingMetadataUpdater metadataUpdater) {
+            TestingMetadataUpdater metadataUpdater,
+            Configuration conf) {
         super(
                 tablePath,
                 latestSchemaInfo,
                 new FlussAdmin(
-                        RpcClient.create(
-                                new Configuration(), TestingClientMetricGroup.newInstance(), false),
+                        RpcClient.create(conf, TestingClientMetricGroup.newInstance(), false),
                         metadataUpdater));
     }
 

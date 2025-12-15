@@ -77,7 +77,8 @@ public class ProcedureManager {
         REMOVE_SERVER_TAG("sys.remove_server_tag", RemoveServerTagProcedure.class),
         REBALANCE("sys.rebalance", RebalanceProcedure.class),
         CANCEL_REBALANCE("sys.cancel_rebalance", CancelRebalanceProcedure.class),
-        LIST_REBALANCE_PROGRESS("sys.list_rebalance", ListRebalanceProcessProcedure.class);
+        LIST_REBALANCE_PROGRESS("sys.list_rebalance", ListRebalanceProcessProcedure.class),
+        DROP_KV_SNAPSHOT_LEASE("sys.drop_kv_snapshot_lease", DropKvSnapshotLeaseProcedure.class);
 
         private final String path;
         private final Class<? extends ProcedureBase> procedureClass;
