@@ -205,6 +205,7 @@ public final class FlussClusterExtension
         // metadata.
         for (TabletServer tabletServer : tabletServers.values()) {
             tabletServer.getMetadataCache().clearTableMetadata();
+            tabletServer.getReplicaManager().resetCoordinatorEpoch();
         }
     }
 
@@ -940,7 +941,9 @@ public final class FlussClusterExtension
         return coordinatorServer;
     }
 
-    public void waitUntilCoordinatorServerElected() {
+    public void waitUntilCoordinatorServerElected() throws Exception {
+        coordinatorServer.getLeaderElectionFuture().get();
+
         waitUntil(
                 () -> zooKeeperClient.getCoordinatorLeaderAddress().isPresent(),
                 Duration.ofSeconds(10),

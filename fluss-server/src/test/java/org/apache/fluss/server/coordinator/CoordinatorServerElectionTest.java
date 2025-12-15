@@ -33,8 +33,6 @@ import org.junit.jupiter.api.extension.RegisterExtension;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.List;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 
 import static org.apache.fluss.testutils.common.CommonTestUtils.waitUntil;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -64,17 +62,9 @@ class CoordinatorServerElectionTest {
                 Arrays.asList(coordinatorServer1, coordinatorServer2, coordinatorServer3);
 
         // start 3 coordinator servers
-        ExecutorService executor = Executors.newFixedThreadPool(3);
         for (int i = 0; i < 3; i++) {
             CoordinatorServer server = coordinatorServerList.get(i);
-            executor.submit(
-                    () -> {
-                        try {
-                            server.start();
-                        } catch (Exception e) {
-                            e.printStackTrace();
-                        }
-                    });
+            server.start();
         }
 
         // random coordinator become leader
@@ -142,11 +132,6 @@ class CoordinatorServerElectionTest {
                 ConfigOptions.BIND_LISTENERS, "CLIENT://localhost:0,FLUSS://localhost:0");
         configuration.setString(ConfigOptions.ADVERTISED_LISTENERS, "CLIENT://198.168.0.1:100");
         configuration.set(ConfigOptions.REMOTE_DATA_DIR, "/tmp/fluss/remote-data");
-
-        // set to small timout to verify the case that zk session is timeout
-        configuration.set(ConfigOptions.ZOOKEEPER_SESSION_TIMEOUT, Duration.ofMillis(500));
-        configuration.set(ConfigOptions.ZOOKEEPER_CONNECTION_TIMEOUT, Duration.ofMillis(500));
-        configuration.set(ConfigOptions.ZOOKEEPER_RETRY_WAIT, Duration.ofMillis(500));
 
         configuration.set(ConfigOptions.COORDINATOR_ID, serverId);
         return configuration;

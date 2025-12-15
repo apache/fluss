@@ -28,6 +28,10 @@ public class ZkEpoch {
         this.coordinatorEpochZkVersion = coordinatorEpochZkVersion;
     }
 
+    public ZkEpoch nextZkEpoch() {
+        return new ZkEpoch(coordinatorEpoch + 1, coordinatorEpochZkVersion + 1);
+    }
+
     public int getCoordinatorEpoch() {
         return coordinatorEpoch;
     }

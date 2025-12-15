@@ -78,14 +78,7 @@ class CoordinatorServerTest extends ServerTestBase {
     public void waitUntilCoordinatorServerElected() {
         waitUntil(
                 () -> zookeeperClient.getCoordinatorLeaderAddress().isPresent(),
-                Duration.ofSeconds(10),
+                Duration.ofSeconds(5),
                 "Fail to wait coordinator server elected");
-        // Sleep 1 second to make sure coordinator server has been started and event processor
-        // started.
-        try {
-            Thread.sleep(1000);
-        } catch (InterruptedException e) {
-            throw new RuntimeException(e);
-        }
     }
 }
