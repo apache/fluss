@@ -48,6 +48,7 @@ import org.apache.fluss.rpc.messages.ListPartitionInfosRequest;
 import org.apache.fluss.rpc.messages.ListTablesRequest;
 import org.apache.fluss.rpc.messages.LookupRequest;
 import org.apache.fluss.rpc.messages.MetadataRequest;
+import org.apache.fluss.rpc.messages.PbAddColumn;
 import org.apache.fluss.rpc.messages.PbAlterConfig;
 import org.apache.fluss.rpc.messages.PbFetchLogReqForBucket;
 import org.apache.fluss.rpc.messages.PbFetchLogReqForTable;
@@ -70,7 +71,6 @@ import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.types.Tuple2;
 
 import javax.annotation.Nullable;
-
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -145,9 +145,13 @@ public class RpcMessageTestUtils {
     }
 
     public static AlterTableRequest newAlterTableRequest(
-            TablePath tablePath, List<PbAlterConfig> alterConfigs, boolean ignoreIfExists) {
+            TablePath tablePath,
+            List<PbAlterConfig> alterConfigs,
+            List<PbAddColumn> addColumns,
+            boolean ignoreIfExists) {
         AlterTableRequest request = new AlterTableRequest();
         request.addAllConfigChanges(alterConfigs)
+                .addAllAddColumns(addColumns)
                 .setIgnoreIfNotExists(ignoreIfExists)
                 .setTablePath()
                 .setDatabaseName(tablePath.getDatabaseName())
