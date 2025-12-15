@@ -62,7 +62,6 @@ public class LakeSnapshotAndLogSplitScanner implements BatchScanner {
     // the indexes of primary key in emitted row by paimon and fluss
     private int[] keyIndexesInRow;
     @Nullable private int[] adjustProjectedFields;
-    private final int[] newProjectedFields;
 
     // the sorted logs in memory, mapping from key -> value
     private Map<InternalRow, KeyValueRow> logRows;
@@ -81,7 +80,7 @@ public class LakeSnapshotAndLogSplitScanner implements BatchScanner {
         this.pkIndexes = table.getTableInfo().getSchema().getPrimaryKeyIndexes();
         this.lakeSnapshotSplitAndFlussLogSplit = lakeSnapshotAndFlussLogSplit;
         this.lakeSource = lakeSource;
-        this.newProjectedFields = getNeedProjectFields(table, projectedFields);
+        int[] newProjectedFields = getNeedProjectFields(table, projectedFields);
 
         this.logScanner = table.newScan().project(newProjectedFields).createLogScanner();
         this.lakeSource.withProject(
