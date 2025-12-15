@@ -43,6 +43,7 @@ import org.apache.fluss.server.zk.ZooKeeperExtension;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.shaded.guava32.com.google.common.collect.Sets;
 import org.apache.fluss.testutils.common.AllCallbackWrapper;
+import org.apache.fluss.utils.clock.SystemClock;
 import org.apache.fluss.utils.concurrent.ExecutorThreadFactory;
 
 import org.junit.jupiter.api.BeforeAll;
@@ -263,7 +264,8 @@ class TableBucketStateMachineTest {
                         new MetadataManager(
                                 zookeeperClient,
                                 new Configuration(),
-                                new LakeCatalogDynamicLoader(new Configuration(), null, true)));
+                                new LakeCatalogDynamicLoader(new Configuration(), null, true)),
+                        SystemClock.getInstance());
         CoordinatorEventManager eventManager =
                 new CoordinatorEventManager(
                         coordinatorEventProcessor, TestingMetricGroups.COORDINATOR_METRICS);

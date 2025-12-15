@@ -93,6 +93,8 @@ public class FlussPaths {
 
     private static final String REMOTE_LAKE_DIR_NAME = "lake";
 
+    private static final String REMOTE_LEASE_DIR_NAME = "lease";
+
     // ----------------------------------------------------------------------------------------
     // LOG/KV Tablet Paths
     // ----------------------------------------------------------------------------------------
@@ -719,6 +721,41 @@ public class FlussPaths {
                 String.format(
                         "%s/metadata/%s.offsets",
                         remoteLakeTableSnapshotDir(remoteDataDir, tablePath, tableId),
+                        UUID.randomUUID()));
+    }
+
+    /**
+     * Returns the remote directory path for storing kv snapshot lease files.
+     *
+     * <p>The path contract:
+     *
+     * <pre>
+     * {$remote.data.dir}/lease/kv-snapshot/{leaseId}/{tableId}/
+     * </pre>
+     */
+    private static FsPath remoteKvSnapshotLeaseDir(
+            String remoteDataDir, String leaseId, long tableId) {
+        return new FsPath(
+                String.format(
+                        "%s/%s/kv-snapshot/%s/%d",
+                        remoteDataDir, REMOTE_LEASE_DIR_NAME, leaseId, tableId));
+    }
+
+    /**
+     * Returns the remote file path for storing kv snapshot lease files.
+     *
+     * <p>The path contract:
+     *
+     * <pre>
+     * {$remoteKvSnapshotLeaseDir}/{uuid}.metadata
+     * </pre>
+     */
+    public static FsPath remoteKvSnapshotLeaseFile(
+            String remoteDataDir, String leaseId, long tableId) {
+        return new FsPath(
+                String.format(
+                        "%s/%s.metadata",
+                        remoteKvSnapshotLeaseDir(remoteDataDir, leaseId, tableId),
                         UUID.randomUUID()));
     }
 
