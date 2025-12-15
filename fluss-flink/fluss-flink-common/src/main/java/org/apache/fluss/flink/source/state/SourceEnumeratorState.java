@@ -88,6 +88,8 @@ public class SourceEnumeratorState {
                 + assignedBuckets
                 + ", assignedPartitions="
                 + assignedPartitions
+                + ", remainingHybridLakeFlussSplits="
+                + remainingHybridLakeFlussSplits
                 + '}';
     }
 }

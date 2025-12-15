@@ -61,10 +61,12 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 import static org.apache.fluss.flink.tiering.source.TieringSourceOptions.POLL_TIERING_TABLE_INTERVAL;
 import static org.apache.fluss.testutils.DataTestUtils.row;
@@ -386,26 +388,11 @@ public abstract class FlinkPaimonTieringTestBase {
         return Identifier.create(tablePath.getDatabaseName(), tablePath.getTableName());
     }
 
-    protected void assertReplicaStatus(
-            TablePath tablePath,
-            long tableId,
-            int bucketCount,
-            boolean isPartitioned,
-            Map<TableBucket, Long> expectedLogEndOffset) {
-        if (isPartitioned) {
-            Map<Long, String> partitionById =
-                    waitUntilPartitions(getFlussClusterExtension().getZooKeeperClient(), tablePath);
-            for (Long partitionId : partitionById.keySet()) {
-                for (int i = 0; i < bucketCount; i++) {
-                    TableBucket tableBucket = new TableBucket(tableId, partitionId, i);
-                    assertReplicaStatus(tableBucket, expectedLogEndOffset.get(tableBucket));
-                }
-            }
-        } else {
-            for (int i = 0; i < bucketCount; i++) {
-                TableBucket tableBucket = new TableBucket(tableId, i);
-                assertReplicaStatus(tableBucket, expectedLogEndOffset.get(tableBucket));
-            }
+    protected void assertReplicaStatus(Map<TableBucket, Long> expectedLogEndOffset) {
+        for (Map.Entry<TableBucket, Long> expectedLogEndOffsetEntry :
+                expectedLogEndOffset.entrySet()) {
+            assertReplicaStatus(
+                    expectedLogEndOffsetEntry.getKey(), expectedLogEndOffsetEntry.getValue());
         }
     }
 
@@ -423,19 +410,27 @@ public abstract class FlinkPaimonTieringTestBase {
 
     protected void waitUntilBucketSynced(
             TablePath tablePath, long tableId, int bucketCount, boolean isPartition) {
+        Set<TableBucket> tableBuckets = new HashSet<>();
         if (isPartition) {
             Map<Long, String> partitionById = waitUntilPartitions(tablePath);
             for (Long partitionId : partitionById.keySet()) {
                 for (int i = 0; i < bucketCount; i++) {
                     TableBucket tableBucket = new TableBucket(tableId, partitionId, i);
-                    waitUntilBucketSynced(tableBucket);
+                    tableBuckets.add(tableBucket);
                 }
             }
         } else {
             for (int i = 0; i < bucketCount; i++) {
                 TableBucket tableBucket = new TableBucket(tableId, i);
-                waitUntilBucketSynced(tableBucket);
+                tableBuckets.add(tableBucket);
             }
+        }
+        waitUntilBucketsSynced(tableBuckets);
+    }
+
+    protected void waitUntilBucketsSynced(Set<TableBucket> tableBuckets) {
+        for (TableBucket tableBucket : tableBuckets) {
+            waitUntilBucketSynced(tableBucket);
         }
     }
 

@@ -19,12 +19,15 @@ package org.apache.fluss.lake.paimon.source;
 
 import org.apache.fluss.lake.source.SortedRecordReader;
 import org.apache.fluss.row.InternalRow;
+
 import org.apache.paimon.predicate.Predicate;
 import org.apache.paimon.table.FileStoreTable;
+import org.apache.paimon.table.PrimaryKeyTableUtils;
 import org.apache.paimon.types.RowType;
 import org.apache.paimon.utils.KeyComparatorSupplier;
 
 import javax.annotation.Nullable;
+
 import java.io.IOException;
 import java.util.Comparator;
 
@@ -35,12 +38,16 @@ public class PaimonSortedRecordReader extends PaimonRecordReader implements Sort
 
     public PaimonSortedRecordReader(
             FileStoreTable fileStoreTable,
-            PaimonSplit split,
+            // a temporary fix to pass null split to get the order comparator
+            @Nullable PaimonSplit split,
             @Nullable int[][] project,
             @Nullable Predicate predicate)
             throws IOException {
         super(fileStoreTable, split, project, predicate);
-        RowType pkKeyType = new RowType(fileStoreTable.schema().primaryKeysFields());
+        RowType pkKeyType =
+                new RowType(
+                        PrimaryKeyTableUtils.addKeyNamePrefix(
+                                fileStoreTable.schema().primaryKeysFields()));
         this.comparator =
                 toFlussRowComparator(paimonRowType, new KeyComparatorSupplier(pkKeyType).get());
     }

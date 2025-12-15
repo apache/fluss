@@ -23,7 +23,9 @@ import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.Decimal;
+import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
@@ -39,6 +41,7 @@ import org.apache.flink.types.RowKind;
 import org.apache.flink.util.CloseableIterator;
 import org.apache.flink.util.CollectionUtil;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -89,7 +92,7 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
         waitUntilBucketSynced(t1, tableId, DEFAULT_BUCKET_NUM, isPartitioned);
 
         // check the status of replica after synced
-        assertReplicaStatus(t1, tableId, DEFAULT_BUCKET_NUM, isPartitioned, bucketLogEndOffset);
+        assertReplicaStatus(bucketLogEndOffset);
 
         // will read paimon snapshot, won't merge log since it's empty
         List<String> resultEmptyLog =
@@ -380,6 +383,51 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
         assertThat(projectRows2.toString()).isEqualTo(sortedRows(expectedProjectRows2).toString());
     }
 
+    @Test
+    void testUnionReadWhenSomeBucketNotTiered() throws Exception {
+        // first of all, start tiering
+        JobClient jobClient = buildTieringJob(execEnv);
+
+        String tableName = "pk_table_union_read_some_bucket_not_tiered";
+        TablePath t1 = TablePath.of(DEFAULT_DB, tableName);
+        int bucketNum = 3;
+        // create table & write initial data
+        long tableId = createSimplePkTable(t1, bucketNum, false, true);
+
+        writeRows(
+                t1,
+                Arrays.asList(
+                        GenericRow.of(
+                                1, BinaryString.fromString("v11"), BinaryString.fromString("v12")),
+                        GenericRow.of(
+                                2, BinaryString.fromString("v21"), BinaryString.fromString("v22"))),
+                false);
+
+        Map<TableBucket, Long> bucketLogEndOffset = new HashMap<>();
+        bucketLogEndOffset.put(new TableBucket(tableId, 1), 1L);
+        bucketLogEndOffset.put(new TableBucket(tableId, 2), 1L);
+
+        // wait unit records have been synced
+        waitUntilBucketsSynced(bucketLogEndOffset.keySet());
+
+        // check the status of replica after synced
+        assertReplicaStatus(bucketLogEndOffset);
+
+        jobClient.cancel().get();
+        writeRows(
+                t1,
+                Arrays.asList(
+                        GenericRow.of(
+                                0, BinaryString.fromString("v01"), BinaryString.fromString("v02")),
+                        GenericRow.of(
+                                3, BinaryString.fromString("v31"), BinaryString.fromString("v32"))),
+                false);
+
+        List<String> result = toSortedRows(batchTEnv.executeSql("select * from " + tableName));
+        assertThat(result.toString())
+                .isEqualTo("[+I[0, v01, v02], +I[1, v11, v12], +I[2, v21, v22], +I[3, v31, v32]]");
+    }
+
     @ParameterizedTest
     @ValueSource(booleans = {false, true})
     void testUnionReadInStreamMode(Boolean isPartitioned) throws Exception {
@@ -398,7 +446,7 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
         waitUntilBucketSynced(t1, tableId, DEFAULT_BUCKET_NUM, isPartitioned);
 
         // check the status of replica after synced
-        assertReplicaStatus(t1, tableId, DEFAULT_BUCKET_NUM, isPartitioned, bucketLogEndOffset);
+        assertReplicaStatus(bucketLogEndOffset);
 
         // will read paimon snapshot, should only +I since no change log
         List<Row> expectedRows = new ArrayList<>();
@@ -628,7 +676,7 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
                         bucketLogEndOffset);
 
         // check the status of replica after synced
-        assertReplicaStatus(table1, tableId, DEFAULT_BUCKET_NUM, isPartitioned, bucketLogEndOffset);
+        assertReplicaStatus(bucketLogEndOffset);
 
         // create result table
         createSimplePkTable(resultTable, DEFAULT_BUCKET_NUM, isPartitioned, false);
@@ -895,7 +943,7 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
         if (isPartitioned) {
             tableBuilder.property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, true);
             tableBuilder.partitionedBy(partitionKeys);
-            schemaBuilder.primaryKey(primaryKey, partitionKeys);
+            schemaBuilder.primaryKey(partitionKeys, primaryKey);
             tableBuilder.property(
                     ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT, AutoPartitionTimeUnit.YEAR);
         } else {

@@ -55,8 +55,16 @@ public class LakeSplitReaderGenerator {
         if (split instanceof LakeSnapshotSplit) {
             boundedSplits.add(split);
         } else if (split instanceof LakeSnapshotAndFlussLogSplit) {
-            // lake split not finished, add to it
-            if (!((LakeSnapshotAndFlussLogSplit) split).isLakeSplitFinished()) {
+            LakeSnapshotAndFlussLogSplit lakeSnapshotAndFlussLogSplit =
+                    (LakeSnapshotAndFlussLogSplit) split;
+            boolean isStreaming = ((LakeSnapshotAndFlussLogSplit) split).isStreaming();
+            // if is streaming and lake split not finished, add to it
+            if (isStreaming) {
+                if (!lakeSnapshotAndFlussLogSplit.isLakeSplitFinished()) {
+                    boundedSplits.add(split);
+                }
+            } else {
+                // otherwise, in batch mode, always add it
                 boundedSplits.add(split);
             }
         } else {

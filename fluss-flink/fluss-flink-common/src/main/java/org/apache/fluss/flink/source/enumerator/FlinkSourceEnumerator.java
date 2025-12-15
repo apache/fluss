@@ -628,8 +628,16 @@ public class FlinkSourceEnumerator
                             stoppingOffsetsInitializer,
                             tableInfo.getNumBuckets(),
                             this::listPartitions);
-            pendingHybridLakeFlussSplits = lakeSplitGenerator.generateHybridLakeFlussSplits();
-            return pendingHybridLakeFlussSplits;
+            List<SourceSplitBase> generatedSplits =
+                    lakeSplitGenerator.generateHybridLakeFlussSplits();
+            if (generatedSplits == null) {
+                // no hybrid lake splits, set the pending splits to empty list
+                pendingHybridLakeFlussSplits = Collections.emptyList();
+                return null;
+            } else {
+                pendingHybridLakeFlussSplits = generatedSplits;
+                return generatedSplits;
+            }
         } catch (Exception e) {
             throw new FlinkRuntimeException("Failed to generate hybrid lake fluss splits", e);
         }
@@ -680,6 +688,7 @@ public class FlinkSourceEnumerator
                         t);
             }
         }
+        doHandleSplitsAdd(splits);
         if (isPartitioned) {
             if (!streaming || scanPartitionDiscoveryIntervalMs <= 0) {
                 // if not streaming or partition discovery is disabled
@@ -691,7 +700,6 @@ public class FlinkSourceEnumerator
             // so, noMoreNewPartitionSplits should be set to true
             noMoreNewSplits = true;
         }
-        doHandleSplitsAdd(splits);
     }
 
     private void doHandleSplitsAdd(List<SourceSplitBase> splits) {

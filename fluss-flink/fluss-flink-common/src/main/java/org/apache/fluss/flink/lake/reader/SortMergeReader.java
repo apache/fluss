@@ -183,7 +183,10 @@ class SortMergeReader {
             // we should emit the log record firsts; and still need to iterator changelog to find
             // the first change log greater than the snapshot record
             List<InternalRow> emitRows = new ArrayList<>();
-            emitRows.add(logKeyValueRow.valueRow());
+            // only emit the log record if it's not a delete operation
+            if (!logKeyValueRow.isDelete()) {
+                emitRows.add(logKeyValueRow.valueRow());
+            }
             boolean shouldEmitSnapshotRecord = true;
             while (changeLogIterator.hasNext()) {
                 // get the next log record
@@ -203,7 +206,9 @@ class SortMergeReader {
                 } else if (compareResult > 0) {
                     // snapshot record > the log record
                     // the log record should be emitted
-                    emitRows.add(logKeyValueRow.valueRow());
+                    if (!logKeyValueRow.isDelete()) {
+                        emitRows.add(logKeyValueRow.valueRow());
+                    }
                 } else {
                     // log record == snapshot record
                     // the log record should be emitted if is not delete, but the snapshot record
@@ -282,12 +287,14 @@ class SortMergeReader {
 
     private static class ChangeLogIteratorWrapper implements CloseableIterator<InternalRow> {
         private CloseableIterator<KeyValueRow> changeLogRecordIterator;
+        private KeyValueRow nextReturnRow;
 
         public ChangeLogIteratorWrapper() {}
 
         public ChangeLogIteratorWrapper replace(
                 CloseableIterator<KeyValueRow> changeLogRecordIterator) {
             this.changeLogRecordIterator = changeLogRecordIterator;
+            this.nextReturnRow = null;
             return this;
         }
 
@@ -300,12 +307,27 @@ class SortMergeReader {
 
         @Override
         public boolean hasNext() {
-            return changeLogRecordIterator != null && changeLogRecordIterator.hasNext();
+            if (nextReturnRow != null) {
+                return true;
+            }
+            while (changeLogRecordIterator != null && changeLogRecordIterator.hasNext()) {
+                KeyValueRow row = changeLogRecordIterator.next();
+                if (!row.isDelete()) {
+                    nextReturnRow = row;
+                    return true;
+                }
+            }
+            return false;
         }
 
         @Override
         public InternalRow next() {
-            return changeLogRecordIterator.next().valueRow();
+            if (nextReturnRow == null) {
+                throw new NoSuchElementException();
+            }
+            KeyValueRow row = nextReturnRow;
+            nextReturnRow = null; // Clear cache after consuming
+            return row.valueRow();
         }
     }
 
