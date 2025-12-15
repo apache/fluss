@@ -20,6 +20,7 @@ package org.apache.fluss.server.log;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.MemorySize;
+import org.apache.fluss.exception.LogOffsetOutOfRangeException;
 import org.apache.fluss.exception.OutOfOrderSequenceException;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
@@ -93,6 +94,7 @@ final class LogTabletTest extends LogTestBase {
                         conf,
                         TestingMetricGroups.TABLET_SERVER_METRICS,
                         0,
+                        0,
                         scheduler,
                         LogFormat.ARROW,
                         1,
@@ -104,6 +106,97 @@ final class LogTabletTest extends LogTestBase {
     @AfterEach
     public void teardown() throws Exception {
         scheduler.shutdown();
+    }
+
+    @Test
+    void testTruncateTo() throws Exception {
+        MemoryLogRecords createRecords =
+                genMemoryLogRecordsByObject(Collections.singletonList(new Object[] {1, "a"}));
+        int setSize = createRecords.sizeInBytes();
+        int msgPerSeg = 10;
+        int segmentSize = msgPerSeg * setSize;
+
+        // Create a log with segment size configured
+        Configuration conf = new Configuration();
+        conf.set(ConfigOptions.LOG_SEGMENT_FILE_SIZE, new MemorySize(segmentSize));
+        LogTablet log = createLogTablet(conf);
+        assertThat(log.logSegments().size()).isEqualTo(1);
+
+        // Append messages to fill one segment
+        for (int i = 0; i < msgPerSeg; i++) {
+            log.appendAsLeader(createRecords);
+        }
+
+        assertThat(log.logSegments().size()).isEqualTo(1);
+        assertThat(log.localLogEndOffset()).isEqualTo(msgPerSeg);
+
+        long lastOffset = log.localLogEndOffset();
+        long size = log.logSize();
+
+        // Keep the entire log
+        log.truncateTo(log.localLogEndOffset());
+        assertThat(log.localLogEndOffset()).isEqualTo(lastOffset);
+        assertThat(log.logSize()).isEqualTo(size);
+
+        // Try to truncate beyond lastOffset
+        log.truncateTo(log.localLogEndOffset() + 1);
+        assertThat(log.localLogEndOffset()).isEqualTo(lastOffset);
+        assertThat(log.logSize()).isEqualTo(size);
+
+        // Truncate somewhere in between
+        log.truncateTo(msgPerSeg / 2);
+        assertThat(log.localLogEndOffset()).isEqualTo(msgPerSeg / 2);
+        assertThat(log.logSize()).isLessThan(size);
+
+        // Truncate the entire log
+        log.truncateTo(0);
+        assertThat(log.localLogEndOffset()).isEqualTo(0);
+        assertThat(log.logSize()).isEqualTo(0);
+
+        // Append messages again
+        for (int i = 0; i < msgPerSeg; i++) {
+            log.appendAsLeader(createRecords);
+        }
+
+        assertThat(log.localLogEndOffset()).isEqualTo(lastOffset);
+        assertThat(log.logSize()).isEqualTo(size);
+
+        // Truncate fully and start at a new offset
+        log.truncateFullyAndStartAt(log.localLogEndOffset() - (msgPerSeg - 1));
+        assertThat(log.localLogEndOffset()).isEqualTo(lastOffset - (msgPerSeg - 1));
+        assertThat(log.logSize()).isEqualTo(0);
+
+        // Append messages again
+        for (int i = 0; i < msgPerSeg; i++) {
+            log.appendAsLeader(createRecords);
+        }
+
+        assertThat(log.localLogEndOffset()).isGreaterThan(msgPerSeg);
+        assertThat(log.logSize()).isEqualTo(size);
+
+        // Truncate before first start offset in the log
+        log.truncateTo(0);
+        assertThat(log.localLogEndOffset()).as("Should change offset").isEqualTo(0);
+        assertThat(log.logSize()).as("Should change log size").isEqualTo(0);
+    }
+
+    @Test
+    void testTruncateFullyAndStart() throws Exception {
+        MemoryLogRecords records =
+                genMemoryLogRecordsByObject(Collections.singletonList(new Object[] {1, "a"}));
+        conf.set(ConfigOptions.LOG_SEGMENT_FILE_SIZE, new MemorySize(records.sizeInBytes()));
+        LogTablet log = createLogTablet(conf);
+        log.appendAsLeader(records);
+        takeWriterSnapshot(log);
+
+        log.appendAsLeader(
+                genMemoryLogRecordsByObject(Collections.singletonList(new Object[] {2, "b"})));
+        log.appendAsLeader(
+                genMemoryLogRecordsByObject(Collections.singletonList(new Object[] {3, "c"})));
+        takeWriterSnapshot(log);
+
+        log.truncateFullyAndStartAt(2);
+        assertThat(log.localLogEndOffset()).isEqualTo(2L);
     }
 
     @Test
@@ -481,6 +574,75 @@ final class LogTabletTest extends LogTestBase {
                                 logTablet.getTableBucket().getBucket()));
     }
 
+    @Test
+    void testCannotIncrementLogStartOffsetPastHighWatermark() throws Exception {
+        LogTablet log = createLogTablet(conf);
+
+        long writerId = 1L;
+        for (int i = 0; i < 100; i++) {
+            log.appendAsLeader(
+                    genMemoryLogRecordsWithWriterId(
+                            Collections.singletonList(new Object[] {1, "a"}), writerId, i, 0L));
+        }
+
+        log.updateHighWatermark(25L);
+        assertThatThrownBy(
+                        () ->
+                                log.maybeIncrementLogStartOffset(
+                                        26L, LogStartOffsetIncrementReason.SEGMENT_DELETION))
+                .isInstanceOf(LogOffsetOutOfRangeException.class);
+    }
+
+    @Test
+    void testStartOffsets() throws Exception {
+        LogTablet log = createLogTablet(conf);
+
+        long writerId = 1L;
+        for (int i = 0; i < 100; i++) {
+            log.appendAsLeader(
+                    genMemoryLogRecordsWithWriterId(
+                            Collections.singletonList(new Object[] {1, "a"}), writerId, i, 0L));
+        }
+
+        log.updateHighWatermark(80L);
+        long newLogStartOffset = 40L;
+        log.maybeIncrementLogStartOffset(
+                newLogStartOffset, LogStartOffsetIncrementReason.SEGMENT_DELETION);
+        assertThat(newLogStartOffset).isEqualTo(log.logStartOffset());
+        assertThat(log.logStartOffset()).isEqualTo(log.localLogStartOffset());
+    }
+
+    @Test
+    void testIncrementLocalLogStartOffsetAfterLocalLogDeletion() throws Exception {
+        LogTablet log = createLogTablet(conf);
+
+        long writerId = 1L;
+        long offset;
+        for (int i = 0; i < 50; i++) {
+            LogAppendInfo info =
+                    log.appendAsLeader(
+                            genMemoryLogRecordsWithWriterId(
+                                    Collections.singletonList(new Object[] {1, "a"}),
+                                    writerId,
+                                    i,
+                                    0L));
+            offset = info.lastOffset();
+            if (offset != 0 && offset % 10 == 0) {
+                log.roll(Optional.empty());
+            }
+        }
+
+        assertThat(log.logSegments().size()).isEqualTo(5);
+        log.updateHighWatermark(log.localLogEndOffset());
+
+        log.updateRemoteLogEndOffset(31);
+        log.deleteSegmentsAlreadyExistsInRemote();
+
+        assertThat(log.logSegments().size()).isEqualTo(2);
+        assertThat(log.logStartOffset()).isEqualTo(0);
+        assertThat(log.localLogStartOffset()).isEqualTo(31);
+    }
+
     private LogTablet createLogTablet(Configuration config) throws Exception {
         File logDir =
                 LogTestUtils.makeRandomLogTabletDir(
@@ -495,6 +657,7 @@ final class LogTabletTest extends LogTestBase {
                 logDir,
                 config,
                 TestingMetricGroups.TABLET_SERVER_METRICS,
+                0,
                 0,
                 scheduler,
                 LogFormat.ARROW,

@@ -169,7 +169,7 @@ public final class LocalLog {
         }
     }
 
-    private void updateRecoveryPoint(long newRecoveryPoint) {
+    public void updateRecoveryPoint(long newRecoveryPoint) {
         recoveryPoint = newRecoveryPoint;
     }
 
@@ -328,6 +328,7 @@ public final class LocalLog {
 
         if (newOffset != segmentToDelete.getBaseOffset()) {
             segments.remove(segmentToDelete.getBaseOffset());
+            deleteSegmentFiles(Collections.singletonList(segmentToDelete), reason);
         }
         return newSegment;
     }

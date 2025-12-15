@@ -27,6 +27,7 @@ import org.apache.fluss.record.LogTestBase;
 import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.server.exception.CorruptIndexException;
 import org.apache.fluss.server.metrics.group.TestingMetricGroups;
+import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.clock.Clock;
 import org.apache.fluss.utils.clock.ManualClock;
 import org.apache.fluss.utils.clock.SystemClock;
@@ -40,10 +41,16 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -52,6 +59,8 @@ import static org.apache.fluss.record.TestData.DATA1_TABLE_ID;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
 import static org.apache.fluss.record.TestData.DEFAULT_SCHEMA_ID;
 import static org.apache.fluss.testutils.DataTestUtils.createBasicMemoryLogRecords;
+import static org.apache.fluss.testutils.DataTestUtils.genMemoryLogRecordsByObject;
+import static org.apache.fluss.testutils.DataTestUtils.genMemoryLogRecordsWithWriterId;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -269,18 +278,537 @@ final class LogLoaderTest extends LogTestBase {
         assertThat(logTablet.logSegments().size()).isEqualTo(corruptSegmentIndex + 1);
     }
 
+    @Test
+    void testWriterSnapshotsRecoveryAfterCleanShutdown() throws Exception {
+        LogTablet log = createLogTablet(true);
+        assertThat(log.writerStateManager().oldestSnapshotOffset()).isEmpty();
+
+        long wid1 = 1L;
+        long wid2 = 2L;
+        int seq1 = 0;
+        int seq2 = 0;
+
+        // Append some records to create multiple segments,
+        for (int i = 0; i <= 5; i++) {
+            if (i % 2 == 0) {
+                MemoryLogRecords records =
+                        genMemoryLogRecordsWithWriterId(
+                                Collections.singletonList(new Object[] {seq1, "a"}),
+                                wid1,
+                                seq1,
+                                0L);
+                log.appendAsLeader(records);
+                seq1++;
+            } else {
+                MemoryLogRecords records =
+                        genMemoryLogRecordsWithWriterId(
+                                Collections.singletonList(new Object[] {seq2, "a"}),
+                                wid2,
+                                seq2,
+                                0L);
+                log.appendAsLeader(records);
+                seq2++;
+            }
+            log.roll(Optional.empty());
+        }
+
+        // Append some records to the last segment
+        MemoryLogRecords records =
+                genMemoryLogRecordsByObject(Collections.singletonList(new Object[] {1, "a"}));
+        log.appendAsLeader(records);
+        log.close();
+
+        // Test writer state recovery after clean shutdown
+        log = createLogTablet(true);
+
+        List<Long> segmentOffsets =
+                log.logSegments().stream()
+                        .map(LogSegment::getBaseOffset)
+                        .collect(Collectors.toList());
+
+        // verify that the snapshot files are created
+        Set<Long> expectedSnapshotOffsets =
+                new HashSet<>(segmentOffsets.subList(1, segmentOffsets.size()));
+        expectedSnapshotOffsets.add(log.localLogEndOffset());
+        Set<Long> actualSnapshotOffsets =
+                WriterStateManager.listSnapshotFiles(logDir).stream()
+                        .map(snapshotFile -> snapshotFile.offset)
+                        .collect(Collectors.toSet());
+        assertThat(actualSnapshotOffsets)
+                .containsExactlyInAnyOrderElementsOf(expectedSnapshotOffsets);
+
+        // Verify that expected writers last batch sequence
+        Map<Long, Integer> actualWritersLastBatchSequence =
+                log.writerStateManager().activeWriters().entrySet().stream()
+                        .collect(
+                                Collectors.toMap(
+                                        Map.Entry::getKey, e -> e.getValue().lastBatchSequence()));
+        Map<Long, Integer> expectedWritersLastBatchSequence = new HashMap<>();
+        expectedWritersLastBatchSequence.put(wid1, seq1 - 1);
+        expectedWritersLastBatchSequence.put(wid2, seq2 - 1);
+        assertThat(actualWritersLastBatchSequence).isEqualTo(expectedWritersLastBatchSequence);
+    }
+
+    @Test
+    void testWriterSnapshotsRecoveryAfterUncleanShutdown() throws Exception {
+        LogTablet log = createLogTablet(true);
+        assertThat(log.writerStateManager().oldestSnapshotOffset()).isEmpty();
+
+        long wid1 = 1L;
+        long wid2 = 2L;
+        int seq1 = 0;
+        int seq2 = 0;
+
+        // Append some records to create multiple segments,
+        // after this step, the segments should be
+        //              [0-0], [1-1], [2-2], [3-3], [4-4], [5-5], [6-]
+        // writer id    1      2      1      2      1      2
+        // se1 id       0      0      1      1      2      2
+        // snapshot            1      2      3      4      5      6
+        for (int i = 0; i <= 5; i++) {
+            if (i % 2 == 0) {
+                MemoryLogRecords records =
+                        genMemoryLogRecordsWithWriterId(
+                                Collections.singletonList(new Object[] {seq1, "a"}),
+                                wid1,
+                                seq1,
+                                0L);
+                log.appendAsLeader(records);
+                seq1++;
+            } else {
+                MemoryLogRecords records =
+                        genMemoryLogRecordsWithWriterId(
+                                Collections.singletonList(new Object[] {seq2, "a"}),
+                                wid2,
+                                seq2,
+                                0L);
+                log.appendAsLeader(records);
+                seq2++;
+            }
+            log.roll(Optional.empty());
+        }
+        // Append some records to the last segment
+        MemoryLogRecords records =
+                genMemoryLogRecordsByObject(Collections.singletonList(new Object[] {1, "a"}));
+        log.appendAsLeader(records);
+
+        assertThat(log.logSegments().size()).isGreaterThanOrEqualTo(5);
+
+        List<Long> segmentOffsets =
+                log.logSegments().stream()
+                        .map(LogSegment::getBaseOffset)
+                        .collect(Collectors.toList());
+
+        // verify that the snapshot files are created
+        Set<Long> expectedSnapshotOffsets =
+                new HashSet<>(segmentOffsets.subList(1, segmentOffsets.size()));
+        Set<Long> actualSnapshotOffsets =
+                WriterStateManager.listSnapshotFiles(logDir).stream()
+                        .map(snapshotFile -> snapshotFile.offset)
+                        .collect(Collectors.toSet());
+        assertThat(actualSnapshotOffsets)
+                .containsExactlyInAnyOrderElementsOf(expectedSnapshotOffsets);
+
+        // Verify that expected writers last batch sequence
+        Map<Long, Integer> actualWritersLastBatchSequence =
+                log.writerStateManager().activeWriters().entrySet().stream()
+                        .collect(
+                                Collectors.toMap(
+                                        Map.Entry::getKey, e -> e.getValue().lastBatchSequence()));
+        Map<Long, Integer> expectedWritersLastBatchSequence = new HashMap<>();
+        expectedWritersLastBatchSequence.put(wid1, seq1 - 1);
+        expectedWritersLastBatchSequence.put(wid2, seq2 - 1);
+        assertThat(actualWritersLastBatchSequence).isEqualTo(expectedWritersLastBatchSequence);
+        log.close();
+
+        //  [0-0], [1-1], [2-2], [3-3], [4-4], [5-5], [6-]
+        //                               |----> offsetForSegmentAfterRecoveryPoint
+        //                        |----> recoveryPoint
+        long offsetForSegmentAfterRecoveryPoint = segmentOffsets.get(segmentOffsets.size() - 3);
+        long recoveryPoint = segmentOffsets.get(segmentOffsets.size() - 4);
+        assertThat(recoveryPoint).isLessThan(offsetForSegmentAfterRecoveryPoint);
+
+        // 1. Test unclean shut without any recovery
+        // Retain snapshots for the last 2 segments (delete snapshots before that)
+        long snapshotRetentionOffset = segmentOffsets.get(segmentOffsets.size() - 2);
+        log.writerStateManager().deleteSnapshotsBefore(snapshotRetentionOffset);
+        log.close();
+
+        // Reopen the log with recovery point. Although we use unclean shutdown here,
+        // all the index files are correctly close, so Fluss will not trigger recover for any
+        // segment.
+        log = createLogTablet(false, recoveryPoint, 0L);
+
+        // Expected snapshot offsets: last 2 segment base offsets + log end offset
+        List<Long> lastTowSegmentOffsets =
+                segmentOffsets.subList(
+                        Math.max(0, segmentOffsets.size() - 2), segmentOffsets.size());
+        expectedSnapshotOffsets = new HashSet<>(lastTowSegmentOffsets);
+        expectedSnapshotOffsets.add(log.localLogEndOffset());
+
+        // Verify that expected snapshot offsets exist
+        actualSnapshotOffsets =
+                WriterStateManager.listSnapshotFiles(logDir).stream()
+                        .map(snapshotFile -> snapshotFile.offset)
+                        .collect(Collectors.toSet());
+        assertThat(actualSnapshotOffsets).isEqualTo(expectedSnapshotOffsets);
+
+        // Verify that expected writers last batch sequence
+        actualWritersLastBatchSequence =
+                log.writerStateManager().activeWriters().entrySet().stream()
+                        .collect(
+                                Collectors.toMap(
+                                        Map.Entry::getKey, e -> e.getValue().lastBatchSequence()));
+        expectedWritersLastBatchSequence = new HashMap<>();
+        expectedWritersLastBatchSequence.put(wid1, seq1 - 1);
+        expectedWritersLastBatchSequence.put(wid2, seq2 - 1);
+        assertThat(actualWritersLastBatchSequence).isEqualTo(expectedWritersLastBatchSequence);
+        log.close();
+
+        // 2. Test unclean shut down without recover segment will rebuild writer state
+        // Delete all snapshot files
+        deleteAllWriterSnapshot(logDir);
+
+        // Reopen the log with recovery point. Although Fluss will not trigger recover for any
+        // segment, but the writer state should be rebuilt.
+        log = createLogTablet(false, recoveryPoint, 0L);
+
+        actualSnapshotOffsets =
+                WriterStateManager.listSnapshotFiles(logDir).stream()
+                        .map(snapshotFile -> snapshotFile.offset)
+                        .collect(Collectors.toSet());
+        // Will rebuild writer state for all segments, but only take snapshot for the last 2
+        // segments and the last offset
+        expectedSnapshotOffsets = new HashSet<>();
+        expectedSnapshotOffsets.add(segmentOffsets.get(segmentOffsets.size() - 2));
+        expectedSnapshotOffsets.add(segmentOffsets.get(segmentOffsets.size() - 1));
+        expectedSnapshotOffsets.add(log.localLogEndOffset());
+        assertThat(actualSnapshotOffsets).isEqualTo(expectedSnapshotOffsets);
+
+        // Verify that expected writers last batch sequence
+        actualWritersLastBatchSequence =
+                log.writerStateManager().activeWriters().entrySet().stream()
+                        .collect(
+                                Collectors.toMap(
+                                        Map.Entry::getKey, e -> e.getValue().lastBatchSequence()));
+        expectedWritersLastBatchSequence = new HashMap<>();
+        expectedWritersLastBatchSequence.put(wid1, seq1 - 1);
+        expectedWritersLastBatchSequence.put(wid2, seq2 - 1);
+        assertThat(actualWritersLastBatchSequence).isEqualTo(expectedWritersLastBatchSequence);
+        log.close();
+
+        // 3. Test unclean shut down with recover segment will rebuild writer state for each segment
+        // after recovery point.
+        // Delete all snapshot files and index files (to trigger segment recover)
+        deleteAllWriterSnapshot(logDir);
+        deleteAllOffsetIndexFile(log);
+
+        // Reopen the log with recovery point. All segments will be recovered since we delete all
+        // the index files
+        log = createLogTablet(false, recoveryPoint, 0L);
+
+        // Writer snapshot files should be rebuilt for each segment after recovery point
+        actualSnapshotOffsets =
+                WriterStateManager.listSnapshotFiles(logDir).stream()
+                        .map(snapshotFile -> snapshotFile.offset)
+                        .collect(Collectors.toSet());
+        expectedSnapshotOffsets =
+                log.logSegments(recoveryPoint, log.localLogEndOffset()).stream()
+                        .map(LogSegment::getBaseOffset)
+                        .collect(Collectors.toSet());
+        expectedSnapshotOffsets.add(log.localLogEndOffset());
+        assertThat(actualSnapshotOffsets).isEqualTo(expectedSnapshotOffsets);
+
+        actualWritersLastBatchSequence =
+                log.writerStateManager().activeWriters().entrySet().stream()
+                        .collect(
+                                Collectors.toMap(
+                                        Map.Entry::getKey, e -> e.getValue().lastBatchSequence()));
+        expectedWritersLastBatchSequence = new HashMap<>();
+        expectedWritersLastBatchSequence.put(wid1, seq1 - 1);
+        expectedWritersLastBatchSequence.put(wid2, seq2 - 1);
+        assertThat(actualWritersLastBatchSequence).isEqualTo(expectedWritersLastBatchSequence);
+        log.close();
+    }
+
+    @Test
+    void testWriterSnapshotsRecoveryWithLogStartOffset() throws Exception {
+        LogTablet log = createLogTablet(true);
+        assertThat(log.writerStateManager().oldestSnapshotOffset()).isEmpty();
+
+        long wid0 = 0L;
+
+        // append some records before log start offset
+        MemoryLogRecords records =
+                genMemoryLogRecordsWithWriterId(
+                        Collections.singletonList(new Object[] {0, "xx"}), wid0, 0, 0L);
+        log.appendAsLeader(records);
+        log.roll(Optional.empty());
+        records =
+                genMemoryLogRecordsWithWriterId(
+                        Collections.singletonList(new Object[] {0, "xx"}), wid0, 1, 0L);
+        log.appendAsLeader(records);
+        log.roll(Optional.empty());
+
+        long logStartOffset = log.localLogEndOffset();
+
+        long wid1 = 1L;
+        long wid2 = 2L;
+        int seq1 = 0;
+        int seq2 = 0;
+
+        // Append some records to create multiple segments
+        for (int i = 0; i <= 5; i++) {
+            if (i % 2 == 0) {
+                records =
+                        genMemoryLogRecordsWithWriterId(
+                                Collections.singletonList(new Object[] {seq1, "a"}),
+                                wid1,
+                                seq1,
+                                0L);
+                log.appendAsLeader(records);
+                seq1++;
+            } else {
+                records =
+                        genMemoryLogRecordsWithWriterId(
+                                Collections.singletonList(new Object[] {seq2, "a"}),
+                                wid2,
+                                seq2,
+                                0L);
+                log.appendAsLeader(records);
+                seq2++;
+            }
+            log.roll(Optional.empty());
+        }
+        // Append some records to the last segment
+        records = genMemoryLogRecordsByObject(Collections.singletonList(new Object[] {1, "a"}));
+        log.appendAsLeader(records);
+        log.close();
+
+        // Now the segments should be
+        //              [0-0], [1-1], [2-2], [3-3], [4-4], [5-5], [6-6], [7-7], [8-]
+        // writer id    0      0      1      2      1      2      1      2
+        // se1 id       0      1      0      0      1      1      2      2
+        // snapshot            1      2      3      4      5      6      7      8
+        //                            |----> logStartOffset
+
+        // verify that the snapshot files are created
+        Set<Long> expectedSnapshots =
+                log.logSegments().subList(1, log.logSegments().size()).stream()
+                        .map(LogSegment::getBaseOffset)
+                        .collect(Collectors.toSet());
+        expectedSnapshots.add(log.localLogEndOffset());
+        Set<Long> actualSnapshotOffsets =
+                WriterStateManager.listSnapshotFiles(logDir).stream()
+                        .map(snapshotFile -> snapshotFile.offset)
+                        .collect(Collectors.toSet());
+        assertThat(actualSnapshotOffsets).isEqualTo(expectedSnapshots);
+
+        // Verify that expected writers last batch sequence
+        Map<Long, Integer> actualWritersLastBatchSequence =
+                log.writerStateManager().activeWriters().entrySet().stream()
+                        .collect(
+                                Collectors.toMap(
+                                        Map.Entry::getKey, e -> e.getValue().lastBatchSequence()));
+        Map<Long, Integer> expectedWritersLastBatchSequence = new HashMap<>();
+        expectedWritersLastBatchSequence.put(wid0, 1);
+        expectedWritersLastBatchSequence.put(wid1, seq1 - 1);
+        expectedWritersLastBatchSequence.put(wid2, seq2 - 1);
+        assertThat(actualWritersLastBatchSequence).isEqualTo(expectedWritersLastBatchSequence);
+
+        // 1. Test no recovery segments
+        log = createLogTablet(false, logStartOffset, logStartOffset);
+
+        actualSnapshotOffsets =
+                WriterStateManager.listSnapshotFiles(logDir).stream()
+                        .map(snapshotFile -> snapshotFile.offset)
+                        .collect(Collectors.toSet());
+        // All writer snapshot files before log start offset will be deleted when rebuild writer
+        // state
+        expectedSnapshots =
+                log.logSegments(logStartOffset + 1, log.localLogEndOffset()).stream()
+                        .map(LogSegment::getBaseOffset)
+                        .collect(Collectors.toSet());
+        expectedSnapshots.add(log.localLogEndOffset());
+        assertThat(actualSnapshotOffsets).isEqualTo(expectedSnapshots);
+
+        // When no recovery segment, and lastMapOffset == lastOffset, no writer state will be
+        // rebuilt, only the latest snapshot will be reloaded, so the writer state should not have
+        // any changes
+        actualWritersLastBatchSequence =
+                log.writerStateManager().activeWriters().entrySet().stream()
+                        .collect(
+                                Collectors.toMap(
+                                        Map.Entry::getKey, e -> e.getValue().lastBatchSequence()));
+        assertThat(actualWritersLastBatchSequence).isEqualTo(expectedWritersLastBatchSequence);
+        log.close();
+
+        // 2. Test recovery all segments
+        // Delete all index files to trigger segment recover
+        deleteAllOffsetIndexFile(log);
+        log = createLogTablet(false, logStartOffset, logStartOffset);
+
+        actualSnapshotOffsets =
+                WriterStateManager.listSnapshotFiles(logDir).stream()
+                        .map(snapshotFile -> snapshotFile.offset)
+                        .collect(Collectors.toSet());
+        // All writer snapshot files will be deleted when recovery segment [2-2],
+        // because logStartOffset == segment[2-2].baseOffset.
+        // Writer snapshot for every segment after recovery point should be rebuilt
+        expectedSnapshots =
+                log.logSegments(logStartOffset + 1, log.localLogEndOffset()).stream()
+                        .map(LogSegment::getBaseOffset)
+                        .collect(Collectors.toSet());
+        expectedSnapshots.add(log.localLogEndOffset());
+        assertThat(actualSnapshotOffsets).isEqualTo(expectedSnapshots);
+
+        // after rebuild writer state, only writers after log start offset should be retained
+        assertThat(log.writerStateManager().activeWriters().size()).isEqualTo(2);
+        assertThat(log.writerStateManager().activeWriters().keySet()).contains(1L, 2L);
+        log.close();
+    }
+
+    @Test
+    void testLoadWritersAfterDeleteRecordsMidSegment() throws Exception {
+        LogTablet log = createLogTablet(true);
+        long wid1 = 1L;
+        long wid2 = 2L;
+
+        log.appendAsLeader(
+                genMemoryLogRecordsWithWriterId(
+                        Collections.singletonList(new Object[] {1, "a"}), wid1, 0, 0L));
+        log.appendAsLeader(
+                genMemoryLogRecordsWithWriterId(
+                        Collections.singletonList(new Object[] {2, "b"}), wid2, 0, 0L));
+        assertThat(log.writerStateManager().activeWriters().size()).isEqualTo(2);
+
+        log.updateHighWatermark(log.localLogEndOffset());
+        log.maybeIncrementLogStartOffset(1, LogStartOffsetIncrementReason.SEGMENT_DELETION);
+
+        // Deleting records should not remove writer state
+        assertThat(log.writerStateManager().activeWriters().size()).isEqualTo(2);
+        int retainedLastSeq = log.activeWriters().get(wid2).lastBatchSequence();
+        assertThat(retainedLastSeq).isEqualTo(0);
+
+        log.close();
+
+        // Because the log start offset did not advance, writer snapshots will still be present and
+        // the state will be rebuilt
+        LogTablet reloadedLog = createLogTablet(false, 0L, 1L);
+        assertThat(reloadedLog.activeWriters().size()).isEqualTo(2);
+        int reloadedLastSeq = reloadedLog.activeWriters().get(wid2).lastBatchSequence();
+        assertThat(reloadedLastSeq).isEqualTo(retainedLastSeq);
+    }
+
+    @Test
+    void testLoadingLogKeepsLargestStrayWriterStateSnapshot() throws Exception {
+        LogTablet log = createLogTablet(true);
+        long wid1 = 1L;
+
+        log.appendAsLeader(
+                genMemoryLogRecordsWithWriterId(
+                        Collections.singletonList(new Object[] {1, "a"}), wid1, 0, 0L));
+        log.roll(Optional.empty());
+        log.appendAsLeader(
+                genMemoryLogRecordsWithWriterId(
+                        Collections.singletonList(new Object[] {2, "b"}), wid1, 1, 0L));
+        log.roll(Optional.empty());
+
+        log.appendAsLeader(
+                genMemoryLogRecordsWithWriterId(
+                        Collections.singletonList(new Object[] {3, "c"}), wid1, 2, 0L));
+        log.appendAsLeader(
+                genMemoryLogRecordsWithWriterId(
+                        Collections.singletonList(new Object[] {4, "d"}), wid1, 3, 0L));
+
+        // Close the log, we should now have 3 segments
+        log.close();
+        assertThat(log.logSegments().size()).isEqualTo(3);
+        // We expect 3 snapshot files, two of which are for the first two segments, the last was
+        // written out during log closing.
+        assertThat(
+                        WriterStateManager.listSnapshotFiles(logDir).stream()
+                                .map(snapshotFile -> snapshotFile.offset)
+                                .sorted())
+                .containsExactly(1L, 2L, 4L);
+        // Inject a stray snapshot file within the bounds of the log at offset 3, it should be
+        // cleaned up after loading the log
+        Path path = FlussPaths.writerSnapshotFile(logDir, 3L).toPath();
+        Files.createFile(path);
+        assertThat(
+                        WriterStateManager.listSnapshotFiles(logDir).stream()
+                                .map(snapshotFile -> snapshotFile.offset)
+                                .sorted())
+                .containsExactly(1L, 2L, 3L, 4L);
+
+        createLogTablet(false);
+        // We should clean up the stray writer state snapshot file, but keep the largest snapshot
+        // file (4)
+        assertThat(
+                        WriterStateManager.listSnapshotFiles(logDir).stream()
+                                .map(snapshotFile -> snapshotFile.offset)
+                                .sorted())
+                .containsExactly(1L, 2L, 4L);
+    }
+
+    @Test
+    void testLoadWritersAfterDeleteRecordsOnSegment() throws Exception {
+        LogTablet log = createLogTablet(true);
+        long wid1 = 1L;
+        long wid2 = 2L;
+
+        log.appendAsLeader(
+                genMemoryLogRecordsWithWriterId(
+                        Collections.singletonList(new Object[] {1, "a"}), wid1, 0, 0L));
+        log.roll(Optional.empty());
+        log.appendAsLeader(
+                genMemoryLogRecordsWithWriterId(
+                        Collections.singletonList(new Object[] {2, "b"}), wid2, 0, 0L));
+
+        assertThat(log.logSegments().size()).isEqualTo(2);
+        assertThat(log.writerStateManager().activeWriters().size()).isEqualTo(2);
+
+        log.updateHighWatermark(log.localLogEndOffset());
+        log.maybeIncrementLogStartOffset(1, LogStartOffsetIncrementReason.SEGMENT_DELETION);
+        // update remote log end offset to trigger segment deletion
+        log.updateRemoteLogEndOffset(1L);
+
+        // Deleting records should not remove writer state
+        assertThat(log.logSegments().size()).isEqualTo(1);
+        assertThat(log.writerStateManager().activeWriters().size()).isEqualTo(2);
+        int retainedLastSeq = log.activeWriters().get(wid2).lastBatchSequence();
+        assertThat(retainedLastSeq).isEqualTo(0);
+
+        log.close();
+
+        // delete the index file to trigger the recovery, otherwise fluss does not recovery segments
+        // even is unclean shutdown
+        log.logSegments().get(0).offsetIndex().deleteIfExists();
+        // After reloading log, writer state should not be regenerated
+        LogTablet reloadedLog = createLogTablet(false, 0L, 1L);
+        assertThat(reloadedLog.activeWriters().size()).isEqualTo(1);
+        int reloadedLastSeq = reloadedLog.activeWriters().get(wid2).lastBatchSequence();
+        assertThat(reloadedLastSeq).isEqualTo(retainedLastSeq);
+    }
+
     private LogTablet createLogTablet(boolean isCleanShutdown) throws Exception {
-        return createLogTablet(isCleanShutdown, 0);
+        return createLogTablet(isCleanShutdown, 0, 0);
     }
 
     private LogTablet createLogTablet(boolean isCleanShutdown, long recoveryPoint)
             throws Exception {
+        return createLogTablet(isCleanShutdown, recoveryPoint, 0);
+    }
+
+    private LogTablet createLogTablet(
+            boolean isCleanShutdown, long recoveryPoint, long logStartOffset) throws Exception {
         return LogTablet.create(
                 PhysicalTablePath.of(DATA1_TABLE_PATH),
                 logDir,
                 conf,
                 TestingMetricGroups.TABLET_SERVER_METRICS,
                 recoveryPoint,
+                logStartOffset,
                 scheduler,
                 LogFormat.ARROW,
                 1,
@@ -324,5 +852,19 @@ final class LogLoaderTest extends LogTestBase {
             indexFiles.add(segment.timeIndex().file());
         }
         return indexFiles;
+    }
+
+    private void deleteAllOffsetIndexFile(LogTablet logTablet) throws IOException {
+        List<LogSegment> logSegments = logTablet.logSegments();
+        for (LogSegment segment : logSegments) {
+            segment.offsetIndex().deleteIfExists();
+        }
+    }
+
+    private void deleteAllWriterSnapshot(File logDir) throws Exception {
+        List<SnapshotFile> snapshotFiles = WriterStateManager.listSnapshotFiles(logDir);
+        for (SnapshotFile snapshotFile : snapshotFiles) {
+            snapshotFile.deleteIfExists();
+        }
     }
 }

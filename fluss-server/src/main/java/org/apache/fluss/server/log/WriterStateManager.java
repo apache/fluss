@@ -161,11 +161,16 @@ public class WriterStateManager {
             clearWriterIds();
             loadFromSnapshot(logStartOffset, currentTimeMs);
         } else {
-            if (lastMapOffset < logStartOffset) {
-                lastMapOffset = logStartOffset;
-            }
-            lastSnapOffset = latestSnapshotOffset().orElse(logStartOffset);
+            onLogStartOffsetIncremented(logStartOffset);
         }
+    }
+
+    public void onLogStartOffsetIncremented(long logStartOffset) {
+        if (lastMapOffset < logStartOffset) {
+            lastMapOffset = logStartOffset;
+        }
+
+        lastSnapOffset = latestSnapshotOffset().orElse(logStartOffset);
     }
 
     public void truncateFullyAndStartAt(long offset) throws IOException {
@@ -183,7 +188,7 @@ public class WriterStateManager {
     }
 
     public void truncateFullyAndReloadSnapshots() throws IOException {
-        LOG.info("Reloading the writer state snapshots");
+        LOG.info("Reloading the writer state snapshots with fully truncation");
         truncateFullyAndStartAt(0L);
         snapshots = loadSnapshots();
     }
@@ -200,7 +205,7 @@ public class WriterStateManager {
             long start = System.currentTimeMillis();
             writeSnapshot(snapshotFile.file(), writers);
             LOG.info(
-                    "Wrote writer snapshot at offset {} with {} producer ids for table bucket {} in {} ms.",
+                    "Wrote writer snapshot at offset {} with {} writer ids for table bucket {} in {} ms.",
                     lastMapOffset,
                     writers.size(),
                     tableBucket,
@@ -219,6 +224,16 @@ public class WriterStateManager {
     @VisibleForTesting
     public void deleteSnapshotsBefore(long offset) throws IOException {
         for (SnapshotFile snapshot : snapshots.subMap(0L, offset).values()) {
+            removeAndDeleteSnapshot(snapshot.offset);
+        }
+    }
+
+    /**
+     * Deletes the writer snapshot files after the given offset (exclusive) in a thread safe manner.
+     */
+    @VisibleForTesting
+    public void deleteSnapshotAfter(long offset) throws IOException {
+        for (SnapshotFile snapshot : snapshots.tailMap(offset, false).values()) {
             removeAndDeleteSnapshot(snapshot.offset);
         }
     }

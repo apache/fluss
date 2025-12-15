@@ -674,7 +674,7 @@ message PbFetchLogRespForBucket {
   optional int32 error_code = 3;
   optional string error_message = 4;
   optional int64 high_watermark = 5;
-  optional int64 log_start_offset = 6; // TODO now we don't introduce log start offset, but remain it in protobuf
+  optional int64 log_start_offset = 6;
   optional PbRemoteLogFetchInfo remote_log_fetch_info = 7;
   optional bytes records = 8;
 }

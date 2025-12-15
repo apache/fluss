@@ -25,11 +25,14 @@ public class LogReadInfo {
 
     private final FetchDataInfo fetchedData;
     private final long highWatermark;
+    private final long logStartOffset;
     private final long logEndOffset;
 
-    public LogReadInfo(FetchDataInfo fetchedData, long highWatermark, long logEndOffset) {
+    public LogReadInfo(
+            FetchDataInfo fetchedData, long highWatermark, long logStartOffset, long logEndOffset) {
         this.fetchedData = fetchedData;
         this.highWatermark = highWatermark;
+        this.logStartOffset = logStartOffset;
         this.logEndOffset = logEndOffset;
     }
 
@@ -39,6 +42,10 @@ public class LogReadInfo {
 
     public long getHighWatermark() {
         return highWatermark;
+    }
+
+    public long getLogStartOffset() {
+        return logStartOffset;
     }
 
     public long getLogEndOffset() {
@@ -52,6 +59,8 @@ public class LogReadInfo {
                 + fetchedData
                 + ", highWatermark="
                 + highWatermark
+                + ", logStartOffset="
+                + logStartOffset
                 + ", logEndOffset="
                 + logEndOffset
                 + ')';

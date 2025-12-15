@@ -1370,7 +1370,11 @@ public final class Replica {
         inReadLock(leaderIsrUpdateLock, () -> logManager.truncateTo(tableBucket, offset));
     }
 
-    /** Delete all data in the local log of this bucket and start the log at the new offset. */
+    /**
+     * Delete all data in the local log of this bucket and start the log at the new offset.
+     *
+     * @param newOffset The new offset to start the log with
+     */
     public void truncateFullyAndStartAt(long newOffset) {
         inReadLock(
                 leaderIsrUpdateLock,
@@ -1382,6 +1386,7 @@ public final class Replica {
         // Note we use the log end offset prior to the read. This ensures that any appends following
         // the fetch do not prevent a follower from coming into sync.
         long initialHighWatermark = logTablet.getHighWatermark();
+        long initialLogStartOffset = logTablet.logStartOffset();
         long initialLogEndOffset = logTablet.localLogEndOffset();
         long readOffset =
                 fetchParams.fetchOffset() == FetchParams.FETCH_FROM_EARLIEST_OFFSET
@@ -1397,7 +1402,8 @@ public final class Replica {
                         fetchParams.isolation(),
                         fetchParams.minOneMessage(),
                         fetchParams.projection());
-        return new LogReadInfo(fetchDataInfo, initialHighWatermark, initialLogEndOffset);
+        return new LogReadInfo(
+                fetchDataInfo, initialHighWatermark, initialLogStartOffset, initialLogEndOffset);
     }
 
     private void tryCompleteDelayedOperations() {

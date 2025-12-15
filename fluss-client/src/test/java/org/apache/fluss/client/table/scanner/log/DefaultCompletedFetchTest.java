@@ -100,7 +100,10 @@ public class DefaultCompletedFetchTest {
         TableBucket tb = new TableBucket(DATA2_TABLE_ID, bucketId);
         FetchLogResultForBucket resultForBucket0 =
                 new FetchLogResultForBucket(
-                        tb, createMemoryLogRecords(DATA2, LogFormat.ARROW, recordBatchMagic), 10L);
+                        tb,
+                        createMemoryLogRecords(DATA2, LogFormat.ARROW, recordBatchMagic),
+                        10L,
+                        0L);
         DefaultCompletedFetch defaultCompletedFetch =
                 makeCompletedFetch(tb, resultForBucket0, fetchOffset);
         List<ScanRecord> scanRecords = defaultCompletedFetch.fetchRecords(8);
@@ -123,7 +126,10 @@ public class DefaultCompletedFetchTest {
         TableBucket tb = new TableBucket(DATA2_TABLE_ID, bucketId);
         FetchLogResultForBucket resultForBucket0 =
                 new FetchLogResultForBucket(
-                        tb, createMemoryLogRecords(DATA2, LogFormat.ARROW, recordBatchMagic), 10L);
+                        tb,
+                        createMemoryLogRecords(DATA2, LogFormat.ARROW, recordBatchMagic),
+                        10L,
+                        0L);
         DefaultCompletedFetch defaultCompletedFetch =
                 makeCompletedFetch(tb, resultForBucket0, fetchOffset);
         List<ScanRecord> scanRecords = defaultCompletedFetch.fetchRecords(-10);
@@ -136,7 +142,7 @@ public class DefaultCompletedFetchTest {
         int bucketId = 0; // records for 0-10.
         TableBucket tb = new TableBucket(DATA2_TABLE_ID, bucketId);
         FetchLogResultForBucket resultForBucket0 =
-                new FetchLogResultForBucket(tb, MemoryLogRecords.EMPTY, 0L);
+                new FetchLogResultForBucket(tb, MemoryLogRecords.EMPTY, 0L, 0L);
         DefaultCompletedFetch defaultCompletedFetch =
                 makeCompletedFetch(tb, resultForBucket0, fetchOffset);
         List<ScanRecord> scanRecords = defaultCompletedFetch.fetchRecords(10);
@@ -178,7 +184,7 @@ public class DefaultCompletedFetchTest {
             memoryLogRecords = createMemoryLogRecords(DATA2, LogFormat.INDEXED, magic);
         }
         FetchLogResultForBucket resultForBucket0 =
-                new FetchLogResultForBucket(tb, memoryLogRecords, 10L);
+                new FetchLogResultForBucket(tb, memoryLogRecords, 10L, 0L);
         DefaultCompletedFetch defaultCompletedFetch =
                 makeCompletedFetch(tb, resultForBucket0, fetchOffset, projection);
         List<ScanRecord> scanRecords = defaultCompletedFetch.fetchRecords(8);
@@ -269,7 +275,8 @@ public class DefaultCompletedFetchTest {
                                 LOG_MAGIC_VALUE_V0,
                                 complexData,
                                 LogFormat.ARROW),
-                        3L);
+                        3L,
+                        0L);
         DefaultCompletedFetch defaultCompletedFetch =
                 new DefaultCompletedFetch(
                         tb,

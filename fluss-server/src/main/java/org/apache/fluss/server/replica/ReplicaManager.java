@@ -1102,7 +1102,10 @@ public class ReplicaManager {
                         tb,
                         new LogReadResult(
                                 new FetchLogResultForBucket(
-                                        tb, fetchedData.getRecords(), readInfo.getHighWatermark()),
+                                        tb,
+                                        fetchedData.getRecords(),
+                                        readInfo.getHighWatermark(),
+                                        readInfo.getLogStartOffset()),
                                 fetchedData.getFetchOffsetMetadata()));
 
                 // update metrics
@@ -1147,7 +1150,10 @@ public class ReplicaManager {
             // need to return the info of datalake to make client can fetch
             // from datalake directly
             return new FetchLogResultForBucket(
-                    tb, MemoryLogRecords.EMPTY, replica.getLogHighWatermark());
+                    tb,
+                    MemoryLogRecords.EMPTY,
+                    replica.getLogHighWatermark(),
+                    replica.getLogStartOffset());
         }
         // Once we get a fetch out of range exception from local storage, we need to check whether
         // the log segment already upload to the remote storage. If uploaded, we will return a list
@@ -1157,7 +1163,10 @@ public class ReplicaManager {
             RemoteLogFetchInfo remoteLogFetchInfo = fetchLogFromRemote(replica, fetchOffset);
             if (remoteLogFetchInfo != null) {
                 return new FetchLogResultForBucket(
-                        tb, remoteLogFetchInfo, replica.getLogHighWatermark());
+                        tb,
+                        remoteLogFetchInfo,
+                        replica.getLogHighWatermark(),
+                        replica.getLogStartOffset());
             } else {
                 return new FetchLogResultForBucket(
                         tb,
