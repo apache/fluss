@@ -51,6 +51,7 @@ import org.apache.fluss.server.zk.data.DatabaseRegistration;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
 import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.server.zk.data.TableRegistration;
+import org.apache.fluss.server.zk.data.ZkVersion;
 import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException;
 import org.apache.fluss.utils.function.RunnableWithException;
 import org.apache.fluss.utils.function.ThrowingRunnable;
@@ -249,7 +250,9 @@ public class MetadataManager {
         // delete bucket assignments node, which will also delete the bucket state node,
         // so that all the zk nodes related to this table are deleted.
         rethrowIfIsNotNoNodeException(
-                () -> zookeeperClient.deleteTableAssignment(tableId),
+                () ->
+                        zookeeperClient.deleteTableAssignment(
+                                tableId, ZkVersion.MATCH_ANY_VERSION.getVersion()),
                 String.format("Delete tablet assignment meta fail for table %s.", tableId));
     }
 
@@ -258,7 +261,9 @@ public class MetadataManager {
         // delete partition assignments node, which will also delete the bucket state node,
         // so that all the zk nodes related to this partition are deleted.
         rethrowIfIsNotNoNodeException(
-                () -> zookeeperClient.deletePartitionAssignment(partitionId),
+                () ->
+                        zookeeperClient.deletePartitionAssignment(
+                                partitionId, ZkVersion.MATCH_ANY_VERSION.getVersion()),
                 String.format("Delete tablet assignment meta fail for partition %s.", partitionId));
     }
 
@@ -311,7 +316,8 @@ public class MetadataManager {
                     long tableId = zookeeperClient.getTableIdAndIncrement();
                     if (tableAssignment != null) {
                         // register table assignment
-                        zookeeperClient.registerTableAssignment(tableId, tableAssignment);
+                        zookeeperClient.registerTableAssignment(
+                                tableId, tableAssignment, ZkVersion.MATCH_ANY_VERSION.getVersion());
                     }
                     // register the table
                     zookeeperClient.registerTable(
