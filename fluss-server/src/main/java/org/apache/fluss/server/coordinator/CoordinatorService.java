@@ -52,6 +52,8 @@ import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.gateway.CoordinatorGateway;
+import org.apache.fluss.rpc.messages.AcquireKvSnapshotLeaseRequest;
+import org.apache.fluss.rpc.messages.AcquireKvSnapshotLeaseResponse;
 import org.apache.fluss.rpc.messages.AddServerTagRequest;
 import org.apache.fluss.rpc.messages.AddServerTagResponse;
 import org.apache.fluss.rpc.messages.AdjustIsrRequest;
@@ -108,6 +110,8 @@ import org.apache.fluss.rpc.messages.RebalanceRequest;
 import org.apache.fluss.rpc.messages.RebalanceResponse;
 import org.apache.fluss.rpc.messages.RegisterProducerOffsetsRequest;
 import org.apache.fluss.rpc.messages.RegisterProducerOffsetsResponse;
+import org.apache.fluss.rpc.messages.ReleaseKvSnapshotLeaseRequest;
+import org.apache.fluss.rpc.messages.ReleaseKvSnapshotLeaseResponse;
 import org.apache.fluss.rpc.messages.RemoveServerTagRequest;
 import org.apache.fluss.rpc.messages.RemoveServerTagResponse;
 import org.apache.fluss.rpc.netty.server.Session;
@@ -124,6 +128,7 @@ import org.apache.fluss.server.authorizer.AclCreateResult;
 import org.apache.fluss.server.authorizer.AclDeleteResult;
 import org.apache.fluss.server.authorizer.Authorizer;
 import org.apache.fluss.server.coordinator.event.AccessContextEvent;
+import org.apache.fluss.server.coordinator.event.AcquireKvSnapshotLeaseEvent;
 import org.apache.fluss.server.coordinator.event.AddServerTagEvent;
 import org.apache.fluss.server.coordinator.event.AdjustIsrReceivedEvent;
 import org.apache.fluss.server.coordinator.event.CancelRebalanceEvent;
@@ -134,6 +139,7 @@ import org.apache.fluss.server.coordinator.event.ControlledShutdownEvent;
 import org.apache.fluss.server.coordinator.event.EventManager;
 import org.apache.fluss.server.coordinator.event.ListRebalanceProgressEvent;
 import org.apache.fluss.server.coordinator.event.RebalanceEvent;
+import org.apache.fluss.server.coordinator.event.ReleaseKvSnapshotLeaseEvent;
 import org.apache.fluss.server.coordinator.event.RemoveServerTagEvent;
 import org.apache.fluss.server.coordinator.producer.ProducerOffsetsManager;
 import org.apache.fluss.server.coordinator.rebalance.goal.Goal;
@@ -183,10 +189,12 @@ import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toAclBindings;
 import static org.apache.fluss.server.coordinator.rebalance.goal.GoalUtils.getGoalByType;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.addTableOffsetsToResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.fromTablePath;
+import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getAcquireKvSnapshotLeaseData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getAdjustIsrData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getCommitLakeTableSnapshotData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getCommitRemoteLogManifestData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getPartitionSpec;
+import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getReleaseKvSnapshotLeaseData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.groupOffsetsByTableId;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeCreateAclsResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeDropAclsResponse;
@@ -852,6 +860,35 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                         new ControlledShutdownEvent(
                                 request.getTabletServerId(),
                                 request.getTabletServerEpoch(),
+                                response));
+        return response;
+    }
+
+    @Override
+    public CompletableFuture<AcquireKvSnapshotLeaseResponse> acquireKvSnapshotLease(
+            AcquireKvSnapshotLeaseRequest request) {
+        CompletableFuture<AcquireKvSnapshotLeaseResponse> response = new CompletableFuture<>();
+        eventManagerSupplier
+                .get()
+                .put(
+                        new AcquireKvSnapshotLeaseEvent(
+                                request.getLeaseId(),
+                                request.getLeaseDuration(),
+                                getAcquireKvSnapshotLeaseData(request),
+                                response));
+        return response;
+    }
+
+    @Override
+    public CompletableFuture<ReleaseKvSnapshotLeaseResponse> releaseKvSnapshotLease(
+            ReleaseKvSnapshotLeaseRequest request) {
+        CompletableFuture<ReleaseKvSnapshotLeaseResponse> response = new CompletableFuture<>();
+        eventManagerSupplier
+                .get()
+                .put(
+                        new ReleaseKvSnapshotLeaseEvent(
+                                request.getLeaseId(),
+                                getReleaseKvSnapshotLeaseData(request),
                                 response));
         return response;
     }

@@ -30,6 +30,7 @@ import org.apache.fluss.config.cluster.ConfigEntry;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.fs.token.ObtainedSecurityToken;
 import org.apache.fluss.metadata.DatabaseSummary;
+import org.apache.fluss.metadata.KvSnapshotLeaseForBucket;
 import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
@@ -55,6 +56,7 @@ import org.apache.fluss.rpc.entity.LookupResultForBucket;
 import org.apache.fluss.rpc.entity.PrefixLookupResultForBucket;
 import org.apache.fluss.rpc.entity.ProduceLogResultForBucket;
 import org.apache.fluss.rpc.entity.PutKvResultForBucket;
+import org.apache.fluss.rpc.messages.AcquireKvSnapshotLeaseRequest;
 import org.apache.fluss.rpc.messages.AdjustIsrRequest;
 import org.apache.fluss.rpc.messages.AdjustIsrResponse;
 import org.apache.fluss.rpc.messages.AlterTableRequest;
@@ -93,6 +95,7 @@ import org.apache.fluss.rpc.messages.PbAdjustIsrReqForTable;
 import org.apache.fluss.rpc.messages.PbAdjustIsrRespForBucket;
 import org.apache.fluss.rpc.messages.PbAdjustIsrRespForTable;
 import org.apache.fluss.rpc.messages.PbAlterConfig;
+import org.apache.fluss.rpc.messages.PbBucket;
 import org.apache.fluss.rpc.messages.PbBucketMetadata;
 import org.apache.fluss.rpc.messages.PbBucketOffset;
 import org.apache.fluss.rpc.messages.PbCreateAclRespInfo;
@@ -107,6 +110,8 @@ import org.apache.fluss.rpc.messages.PbFetchLogRespForBucket;
 import org.apache.fluss.rpc.messages.PbFetchLogRespForTable;
 import org.apache.fluss.rpc.messages.PbKeyValue;
 import org.apache.fluss.rpc.messages.PbKvSnapshot;
+import org.apache.fluss.rpc.messages.PbKvSnapshotLeaseForBucket;
+import org.apache.fluss.rpc.messages.PbKvSnapshotLeaseForTable;
 import org.apache.fluss.rpc.messages.PbLakeSnapshotForBucket;
 import org.apache.fluss.rpc.messages.PbLakeTableOffsetForBucket;
 import org.apache.fluss.rpc.messages.PbLakeTableSnapshotInfo;
@@ -136,6 +141,7 @@ import org.apache.fluss.rpc.messages.PbRenameColumn;
 import org.apache.fluss.rpc.messages.PbServerNode;
 import org.apache.fluss.rpc.messages.PbStopReplicaReqForBucket;
 import org.apache.fluss.rpc.messages.PbStopReplicaRespForBucket;
+import org.apache.fluss.rpc.messages.PbTable;
 import org.apache.fluss.rpc.messages.PbTableBucket;
 import org.apache.fluss.rpc.messages.PbTableMetadata;
 import org.apache.fluss.rpc.messages.PbTableOffsets;
@@ -149,6 +155,7 @@ import org.apache.fluss.rpc.messages.ProduceLogResponse;
 import org.apache.fluss.rpc.messages.PutKvRequest;
 import org.apache.fluss.rpc.messages.PutKvResponse;
 import org.apache.fluss.rpc.messages.RebalanceResponse;
+import org.apache.fluss.rpc.messages.ReleaseKvSnapshotLeaseRequest;
 import org.apache.fluss.rpc.messages.StopReplicaRequest;
 import org.apache.fluss.rpc.messages.StopReplicaResponse;
 import org.apache.fluss.rpc.messages.UpdateMetadataRequest;
@@ -1966,6 +1973,48 @@ public class ServerRpcMessageUtils {
                                 .mapToInt(Integer::intValue)
                                 .toArray());
         return pbRebalancePlanForBucket;
+    }
+
+    public static Map<Long, List<KvSnapshotLeaseForBucket>> getAcquireKvSnapshotLeaseData(
+            AcquireKvSnapshotLeaseRequest request) {
+        Map<Long, List<KvSnapshotLeaseForBucket>> tableIdToLeasedBucket = new HashMap<>();
+        for (PbKvSnapshotLeaseForTable leaseForTable : request.getTableLeaseReqsList()) {
+            long tableId = leaseForTable.getTableId();
+            List<KvSnapshotLeaseForBucket> bucketList = new ArrayList<>();
+            for (PbKvSnapshotLeaseForBucket leaseForBucket : leaseForTable.getBucketsReqsList()) {
+                bucketList.add(getKvSnapshotLeaseForBucket(tableId, leaseForBucket));
+            }
+            tableIdToLeasedBucket.put(tableId, bucketList);
+        }
+        return tableIdToLeasedBucket;
+    }
+
+    public static Map<Long, List<TableBucket>> getReleaseKvSnapshotLeaseData(
+            ReleaseKvSnapshotLeaseRequest request) {
+        Map<Long, List<TableBucket>> tableIdToReleasedBucket = new HashMap<>();
+        for (PbTable pbTable : request.getReleaseTablesList()) {
+            long tableId = pbTable.getTableId();
+            List<TableBucket> bucketList = new ArrayList<>();
+            for (PbBucket pbBucket : pbTable.getBucketsList()) {
+                bucketList.add(
+                        new TableBucket(
+                                tableId,
+                                pbBucket.hasPartitionId() ? pbBucket.getPartitionId() : null,
+                                pbBucket.getBucketId()));
+            }
+            tableIdToReleasedBucket.put(tableId, bucketList);
+        }
+        return tableIdToReleasedBucket;
+    }
+
+    private static KvSnapshotLeaseForBucket getKvSnapshotLeaseForBucket(
+            long tableId, PbKvSnapshotLeaseForBucket leaseForBucket) {
+        return new KvSnapshotLeaseForBucket(
+                new TableBucket(
+                        tableId,
+                        leaseForBucket.hasPartitionId() ? leaseForBucket.getPartitionId() : null,
+                        leaseForBucket.getBucketId()),
+                leaseForBucket.getSnapshotId());
     }
 
     private static <T> Map<TableBucket, T> mergeResponse(

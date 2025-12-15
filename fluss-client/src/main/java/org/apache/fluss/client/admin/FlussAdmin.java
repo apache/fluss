@@ -18,6 +18,7 @@
 package org.apache.fluss.client.admin;
 
 import org.apache.fluss.annotation.VisibleForTesting;
+import org.apache.fluss.client.metadata.AcquireKvSnapshotLeaseResult;
 import org.apache.fluss.client.metadata.KvSnapshotMetadata;
 import org.apache.fluss.client.metadata.KvSnapshots;
 import org.apache.fluss.client.metadata.LakeSnapshot;
@@ -84,6 +85,7 @@ import org.apache.fluss.rpc.messages.PbPartitionSpec;
 import org.apache.fluss.rpc.messages.PbTablePath;
 import org.apache.fluss.rpc.messages.RebalanceRequest;
 import org.apache.fluss.rpc.messages.RebalanceResponse;
+import org.apache.fluss.rpc.messages.ReleaseKvSnapshotLeaseRequest;
 import org.apache.fluss.rpc.messages.RemoveServerTagRequest;
 import org.apache.fluss.rpc.messages.TableExistsRequest;
 import org.apache.fluss.rpc.messages.TableExistsResponse;
@@ -101,14 +103,17 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 
+import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeAcquireKvSnapshotLeaseRequest;
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeAlterTableRequest;
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeCreatePartitionRequest;
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeDropPartitionRequest;
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeListOffsetsRequest;
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makePbPartitionSpec;
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeRegisterProducerOffsetsRequest;
+import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeReleaseKvSnapshotLeaseRequest;
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.toConfigEntries;
 import static org.apache.fluss.client.utils.MetadataUtils.sendMetadataRequestAndRebuildCluster;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toAclBindings;
@@ -398,6 +403,34 @@ public class FlussAdmin implements Admin {
         return readOnlyGateway
                 .getKvSnapshotMetadata(request)
                 .thenApply(ClientRpcMessageUtils::toKvSnapshotMetadata);
+    }
+
+    @Override
+    public CompletableFuture<AcquireKvSnapshotLeaseResult> acquireKvSnapshotLease(
+            String leaseId, Map<TableBucket, Long> snapshotIds, long leaseDuration) {
+        if (snapshotIds.isEmpty()) {
+            throw new IllegalArgumentException(
+                    "The snapshotIds to acquire kv snapshot lease is empty");
+        }
+
+        return gateway.acquireKvSnapshotLease(
+                        makeAcquireKvSnapshotLeaseRequest(leaseId, snapshotIds, leaseDuration))
+                .thenApply(ClientRpcMessageUtils::toAcquireKvSnapshotLeaseResult);
+    }
+
+    @Override
+    public CompletableFuture<Void> releaseKvSnapshotLease(
+            String leaseId, Set<TableBucket> bucketsToRelease) {
+        return gateway.releaseKvSnapshotLease(
+                        makeReleaseKvSnapshotLeaseRequest(leaseId, bucketsToRelease))
+                .thenApply(r -> null);
+    }
+
+    @Override
+    public CompletableFuture<Void> releaseAllKvSnapshotLease(String leaseId) {
+        ReleaseKvSnapshotLeaseRequest request =
+                new ReleaseKvSnapshotLeaseRequest().setLeaseId(leaseId);
+        return gateway.releaseKvSnapshotLease(request).thenApply(r -> null);
     }
 
     @Override

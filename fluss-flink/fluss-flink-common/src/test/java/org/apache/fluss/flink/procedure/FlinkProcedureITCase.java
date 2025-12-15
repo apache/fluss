@@ -30,6 +30,7 @@ import org.apache.fluss.exception.NoRebalanceInProgressException;
 import org.apache.fluss.exception.SecurityDisabledException;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.ServerTags;
@@ -57,7 +58,9 @@ import java.util.stream.Collectors;
 
 import static org.apache.fluss.cluster.rebalance.ServerTag.PERMANENT_OFFLINE;
 import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.assertResultsIgnoreOrder;
+import static org.apache.fluss.flink.utils.FlinkTestBase.writeRows;
 import static org.apache.fluss.server.testutils.FlussClusterExtension.BUILTIN_DATABASE;
+import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -140,7 +143,8 @@ public abstract class FlinkProcedureITCase {
                             "+I[sys.remove_server_tag]",
                             "+I[sys.rebalance]",
                             "+I[sys.cancel_rebalance]",
-                            "+I[sys.list_rebalance]");
+                            "+I[sys.list_rebalance]",
+                            "+I[sys.release_all_kv_snapshot_lease]");
             // make sure no more results is unread.
             assertResultsIgnoreOrder(showProceduresIterator, expectedShowProceduresResult, true);
         }
@@ -777,6 +781,43 @@ public abstract class FlinkProcedureITCase {
                         assertThat((String) row.getField(3)).startsWith("{\"rebalance_id\":");
                     }
                 });
+    }
+
+    @Test
+    void testReleaseAllKvSnapshotLeaseProcedure() throws Exception {
+        tEnv.executeSql(
+                "create table testcatalog.fluss.pk_table_test_kv_snapshot_lease ("
+                        + "a int not null primary key not enforced, b varchar)");
+        TablePath tablePath = TablePath.of("fluss", "pk_table_test_kv_snapshot_lease");
+
+        List<InternalRow> rows = Arrays.asList(row(1, "v1"), row(2, "v2"), row(3, "v3"));
+
+        // write records
+        writeRows(conn, tablePath, rows, false);
+
+        FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshot(tablePath);
+
+        List<String> expectedRows = Arrays.asList("+I[1, v1]", "+I[2, v2]", "+I[3, v3]");
+
+        String leaseId = "test-lease-kjhdds23";
+        org.apache.flink.util.CloseableIterator<Row> rowIter =
+                tEnv.executeSql(
+                                "select * from testcatalog.fluss.pk_table_test_kv_snapshot_lease "
+                                        + "/*+ OPTIONS('scan.kv.snapshot.lease.id' = '"
+                                        + leaseId
+                                        + "') */")
+                        .collect();
+        assertResultsIgnoreOrder(rowIter, expectedRows, false);
+
+        // Lease will not be dropped automatically as the checkpoint not trigger.
+        ZooKeeperClient zkClient = FLUSS_CLUSTER_EXTENSION.getZooKeeperClient();
+        assertThat(zkClient.getKvSnapshotLeaseMetadata(leaseId)).isPresent();
+        tEnv.executeSql(
+                        String.format(
+                                "Call %s.sys.release_all_kv_snapshot_lease('" + leaseId + "' )",
+                                CATALOG_NAME))
+                .await();
+        assertThat(zkClient.getKvSnapshotLeaseMetadata(leaseId)).isNotPresent();
     }
 
     private static Configuration initConfig() {

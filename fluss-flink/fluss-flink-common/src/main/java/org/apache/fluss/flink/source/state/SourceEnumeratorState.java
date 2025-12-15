@@ -17,6 +17,7 @@
 
 package org.apache.fluss.flink.source.state;
 
+import org.apache.fluss.flink.source.reader.LeaseContext;
 import org.apache.fluss.flink.source.split.SourceSplitBase;
 import org.apache.fluss.metadata.TableBucket;
 
@@ -41,13 +42,18 @@ public class SourceEnumeratorState {
     // lake snapshot
     @Nullable private final List<SourceSplitBase> remainingHybridLakeFlussSplits;
 
+    // lease context for restore.
+    private final LeaseContext leaseContext;
+
     public SourceEnumeratorState(
             Set<TableBucket> assignedBuckets,
             Map<Long, String> assignedPartitions,
-            @Nullable List<SourceSplitBase> remainingHybridLakeFlussSplits) {
+            @Nullable List<SourceSplitBase> remainingHybridLakeFlussSplits,
+            @Nullable LeaseContext leaseContext) {
         this.assignedBuckets = assignedBuckets;
         this.assignedPartitions = assignedPartitions;
         this.remainingHybridLakeFlussSplits = remainingHybridLakeFlussSplits;
+        this.leaseContext = leaseContext;
     }
 
     public Set<TableBucket> getAssignedBuckets() {
@@ -63,6 +69,10 @@ public class SourceEnumeratorState {
         return remainingHybridLakeFlussSplits;
     }
 
+    public LeaseContext getLeaseContext() {
+        return leaseContext;
+    }
+
     @Override
     public boolean equals(Object o) {
         if (this == o) {
@@ -75,7 +85,8 @@ public class SourceEnumeratorState {
         return Objects.equals(assignedBuckets, that.assignedBuckets)
                 && Objects.equals(assignedPartitions, that.assignedPartitions)
                 && Objects.equals(
-                        remainingHybridLakeFlussSplits, that.remainingHybridLakeFlussSplits);
+                        remainingHybridLakeFlussSplits, that.remainingHybridLakeFlussSplits)
+                && Objects.equals(leaseContext, that.leaseContext);
     }
 
     @Override
@@ -92,6 +103,8 @@ public class SourceEnumeratorState {
                 + assignedPartitions
                 + ", remainingHybridLakeFlussSplits="
                 + remainingHybridLakeFlussSplits
+                + ", leaseContext="
+                + leaseContext
                 + '}';
     }
 }

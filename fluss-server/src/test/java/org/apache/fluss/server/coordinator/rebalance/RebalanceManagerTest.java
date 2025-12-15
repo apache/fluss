@@ -33,6 +33,7 @@ import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperExtension;
 import org.apache.fluss.server.zk.data.RebalanceTask;
 import org.apache.fluss.testutils.common.AllCallbackWrapper;
+import org.apache.fluss.utils.clock.SystemClock;
 import org.apache.fluss.utils.concurrent.ExecutorThreadFactory;
 
 import org.junit.jupiter.api.AfterEach;
@@ -126,6 +127,7 @@ public class RebalanceManagerTest {
                 TestingMetricGroups.COORDINATOR_METRICS,
                 new Configuration(),
                 Executors.newFixedThreadPool(1, new ExecutorThreadFactory("test-coordinator-io")),
-                metadataManager);
+                metadataManager,
+                SystemClock.getInstance());
     }
 }

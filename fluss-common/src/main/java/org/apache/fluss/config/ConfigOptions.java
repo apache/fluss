@@ -1552,8 +1552,16 @@ public class ConfigOptions {
     public static final ConfigOption<Integer> KV_MAX_RETAINED_SNAPSHOTS =
             key("kv.snapshot.num-retained")
                     .intType()
-                    .defaultValue(1)
+                    .defaultValue(2)
                     .withDescription("The maximum number of completed snapshots to retain.");
+
+    public static final ConfigOption<Duration> KV_SNAPSHOT_LEASE_EXPIRATION_CHECK_INTERVAL =
+            key("kv.snapshot.lease.expiration-check-interval")
+                    .durationType()
+                    .defaultValue(Duration.ofMinutes(10))
+                    .withDescription(
+                            "The interval to check the expiration of kv snapshot lease. "
+                                    + "The default setting is 10 minutes.");
 
     public static final ConfigOption<Integer> KV_MAX_BACKGROUND_THREADS =
             key("kv.rocksdb.thread.num")

@@ -78,6 +78,7 @@ import org.apache.fluss.server.zk.data.ZkData.TableIdsZNode;
 import org.apache.fluss.testutils.common.AllCallbackWrapper;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.utils.ExceptionUtils;
+import org.apache.fluss.utils.clock.SystemClock;
 import org.apache.fluss.utils.concurrent.ExecutorThreadFactory;
 import org.apache.fluss.utils.types.Tuple2;
 
@@ -1051,7 +1052,8 @@ class CoordinatorEventProcessorTest {
                 TestingMetricGroups.COORDINATOR_METRICS,
                 new Configuration(),
                 Executors.newFixedThreadPool(1, new ExecutorThreadFactory("test-coordinator-io")),
-                metadataManager);
+                metadataManager,
+                SystemClock.getInstance());
     }
 
     private void initCoordinatorChannel() throws Exception {
