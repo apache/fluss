@@ -26,6 +26,7 @@ import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshotHandle;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshotHandleStore;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshotStore;
+import org.apache.fluss.server.kv.snapshot.CompletedSnapshotStore.CanSubsume;
 import org.apache.fluss.server.kv.snapshot.SharedKvFileRegistry;
 import org.apache.fluss.server.kv.snapshot.ZooKeeperCompletedSnapshotHandleStore;
 import org.apache.fluss.server.metrics.group.CoordinatorMetricGroup;
@@ -45,7 +46,6 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
 import java.util.function.Function;
 
-import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /**
@@ -57,42 +57,40 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
 public class CompletedSnapshotStoreManager {
 
     private static final Logger LOG = LoggerFactory.getLogger(CompletedSnapshotStoreManager.class);
-    private final int maxNumberOfSnapshotsToRetain;
     private final ZooKeeperClient zooKeeperClient;
     private final ConcurrentHashMap<TableBucket, CompletedSnapshotStore>
             bucketCompletedSnapshotStores;
     private final Executor ioExecutor;
     private final Function<ZooKeeperClient, CompletedSnapshotHandleStore>
             makeZookeeperCompletedSnapshotHandleStore;
+    private final CanSubsume canSubsume;
     private final CoordinatorMetricGroup coordinatorMetricGroup;
 
     public CompletedSnapshotStoreManager(
-            int maxNumberOfSnapshotsToRetain,
             Executor ioExecutor,
             ZooKeeperClient zooKeeperClient,
-            CoordinatorMetricGroup coordinatorMetricGroup) {
+            CoordinatorMetricGroup coordinatorMetricGroup,
+            CanSubsume canSubsume) {
         this(
-                maxNumberOfSnapshotsToRetain,
                 ioExecutor,
                 zooKeeperClient,
                 ZooKeeperCompletedSnapshotHandleStore::new,
-                coordinatorMetricGroup);
+                coordinatorMetricGroup,
+                canSubsume);
     }
 
     @VisibleForTesting
     CompletedSnapshotStoreManager(
-            int maxNumberOfSnapshotsToRetain,
             Executor ioExecutor,
             ZooKeeperClient zooKeeperClient,
             Function<ZooKeeperClient, CompletedSnapshotHandleStore>
                     makeZookeeperCompletedSnapshotHandleStore,
-            CoordinatorMetricGroup coordinatorMetricGroup) {
-        checkArgument(
-                maxNumberOfSnapshotsToRetain > 0, "maxNumberOfSnapshotsToRetain must be positive");
-        this.maxNumberOfSnapshotsToRetain = maxNumberOfSnapshotsToRetain;
+            CoordinatorMetricGroup coordinatorMetricGroup,
+            CanSubsume canSubsume) {
         this.zooKeeperClient = zooKeeperClient;
         this.bucketCompletedSnapshotStores = MapUtils.newConcurrentHashMap();
         this.ioExecutor = ioExecutor;
+        this.canSubsume = canSubsume;
         this.makeZookeeperCompletedSnapshotHandleStore = makeZookeeperCompletedSnapshotHandleStore;
         this.coordinatorMetricGroup = coordinatorMetricGroup;
 
@@ -233,11 +231,11 @@ public class CompletedSnapshotStoreManager {
         }
 
         return new CompletedSnapshotStore(
-                maxNumberOfSnapshotsToRetain,
                 sharedKvFileRegistry,
                 retrievedSnapshots,
                 completedSnapshotHandleStore,
-                ioExecutor);
+                ioExecutor,
+                canSubsume);
     }
 
     @VisibleForTesting

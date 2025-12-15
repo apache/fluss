@@ -17,6 +17,7 @@
 
 package org.apache.fluss.server.coordinator;
 
+import org.apache.fluss.metadata.ConsumeKvSnapshotForBucket;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshotHandle;
@@ -43,8 +44,10 @@ import org.junit.jupiter.params.provider.ValueSource;
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.nio.file.Path;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -96,8 +99,10 @@ class CompletedSnapshotStoreManagerTest {
     @ValueSource(ints = {1, 2})
     void testCompletedSnapshotStoreManage(int maxNumberOfSnapshotsToRetain) throws Exception {
         // create a manager for completed snapshot store
+        TestingKvSnapshotConsumerManager testingKvSnapshotConsumerManager =
+                new TestingKvSnapshotConsumerManager(maxNumberOfSnapshotsToRetain);
         CompletedSnapshotStoreManager completedSnapshotStoreManager =
-                createCompletedSnapshotStoreManager(maxNumberOfSnapshotsToRetain);
+                createCompletedSnapshotStoreManager(testingKvSnapshotConsumerManager);
 
         // add snapshots for a series of buckets
         Set<TableBucket> tableBuckets = createTableBuckets(2, 3);
@@ -109,6 +114,8 @@ class CompletedSnapshotStoreManagerTest {
             for (int snapshot = 0; snapshot < snapshotNum; snapshot++) {
                 CompletedSnapshot completedSnapshot =
                         KvTestUtils.mockCompletedSnapshot(tempDir, tableBucket, snapshot);
+                testingKvSnapshotConsumerManager.register(
+                        completedSnapshot.getTableBucket(), completedSnapshot.getSnapshotID());
                 addCompletedSnapshot(completedSnapshotStoreManager, completedSnapshot);
 
                 // check gotten completed snapshot
@@ -127,7 +134,7 @@ class CompletedSnapshotStoreManagerTest {
 
         // we create another table bucket snapshot manager
         completedSnapshotStoreManager =
-                createCompletedSnapshotStoreManager(maxNumberOfSnapshotsToRetain);
+                createCompletedSnapshotStoreManager(testingKvSnapshotConsumerManager);
 
         for (TableBucket tableBucket : tableBucketLatestCompletedSnapshots.keySet()) {
             // get latest snapshot
@@ -140,6 +147,8 @@ class CompletedSnapshotStoreManagerTest {
             // add a new snapshot
             long snapshotId = completedSnapshot.getSnapshotID() + 1;
             completedSnapshot = KvTestUtils.mockCompletedSnapshot(tempDir, tableBucket, snapshotId);
+            testingKvSnapshotConsumerManager.register(
+                    completedSnapshot.getTableBucket(), completedSnapshot.getSnapshotID());
             addCompletedSnapshot(completedSnapshotStoreManager, completedSnapshot);
             // check gotten completed snapshot
             assertThat(getCompletedSnapshot(tableBucket, snapshotId)).isEqualTo(completedSnapshot);
@@ -164,8 +173,10 @@ class CompletedSnapshotStoreManagerTest {
 
     @Test
     void testRemoveCompletedSnapshotStoreFromManager() throws Exception {
+        TestingKvSnapshotConsumerManager testingKvSnapshotConsumerManager =
+                new TestingKvSnapshotConsumerManager(10);
         CompletedSnapshotStoreManager completedSnapshotStoreManager =
-                createCompletedSnapshotStoreManager(10);
+                createCompletedSnapshotStoreManager(testingKvSnapshotConsumerManager);
         Set<TableBucket> tableBuckets = createTableBuckets(1, 2);
         int snapshotNum = 3;
         for (TableBucket tableBucket : tableBuckets) {
@@ -173,6 +184,8 @@ class CompletedSnapshotStoreManagerTest {
             for (int snapshot = 0; snapshot < snapshotNum; snapshot++) {
                 CompletedSnapshot completedSnapshot =
                         KvTestUtils.mockCompletedSnapshot(tempDir, tableBucket, snapshot);
+                testingKvSnapshotConsumerManager.register(
+                        completedSnapshot.getTableBucket(), completedSnapshot.getSnapshotID());
                 addCompletedSnapshot(completedSnapshotStoreManager, completedSnapshot);
             }
         }
@@ -205,13 +218,15 @@ class CompletedSnapshotStoreManagerTest {
         completedSnapshotHandleStore.add(tableBucket, 2L, invalidSnapshotHandle);
 
         // CompletedSnapshotStoreManager
+        TestingKvSnapshotConsumerManager testingKvSnapshotConsumerManager =
+                new TestingKvSnapshotConsumerManager(10);
         CompletedSnapshotStoreManager completedSnapshotStoreManager =
                 new CompletedSnapshotStoreManager(
-                        10,
                         ioExecutor,
                         zookeeperClient,
                         zooKeeperClient -> completedSnapshotHandleStore,
-                        TestingMetricGroups.COORDINATOR_METRICS);
+                        TestingMetricGroups.COORDINATOR_METRICS,
+                        testingKvSnapshotConsumerManager::snapshotConsumerNotExist);
 
         // Verify that only the valid snapshot remains
         CompletedSnapshotStore completedSnapshotStore =
@@ -222,12 +237,12 @@ class CompletedSnapshotStoreManagerTest {
     }
 
     private CompletedSnapshotStoreManager createCompletedSnapshotStoreManager(
-            int maxNumberOfSnapshotsToRetain) {
+            TestingKvSnapshotConsumerManager testingKvSnapshotConsumerManager) {
         return new CompletedSnapshotStoreManager(
-                maxNumberOfSnapshotsToRetain,
                 ioExecutor,
                 zookeeperClient,
-                TestingMetricGroups.COORDINATOR_METRICS);
+                TestingMetricGroups.COORDINATOR_METRICS,
+                testingKvSnapshotConsumerManager::snapshotConsumerNotExist);
     }
 
     private CompletedSnapshot getLatestCompletedSnapshot(
@@ -332,6 +347,36 @@ class CompletedSnapshotStoreManagerTest {
                 TableBucket tableBucket) throws Exception {
             return new ArrayList<>(snapshotHandleMap.get(tableBucket).values())
                     .stream().max(Comparator.comparingLong(CompletedSnapshotHandle::getSnapshotId));
+        }
+    }
+
+    private static final class TestingKvSnapshotConsumerManager {
+        private final int numRetain;
+        private final Map<TableBucket, Deque<Long>> snapshotIds = new HashMap<>();
+
+        public TestingKvSnapshotConsumerManager(int numRetain) {
+            this.numRetain = numRetain;
+        }
+
+        public void register(TableBucket tableBucket, long snapshotId) {
+            Deque<Long> queue = snapshotIds.computeIfAbsent(tableBucket, k -> new ArrayDeque<>());
+
+            if (queue.size() >= numRetain) {
+                queue.pollFirst();
+            }
+            queue.addLast(snapshotId);
+        }
+
+        public boolean snapshotConsumerNotExist(
+                ConsumeKvSnapshotForBucket consumeKvSnapshotForBucket) {
+            TableBucket tableBucket = consumeKvSnapshotForBucket.getTableBucket();
+            Deque<Long> queue = snapshotIds.get(tableBucket);
+            if (queue.size() < numRetain) {
+                // not enough snapshots
+                return false;
+            } else {
+                return !queue.contains(consumeKvSnapshotForBucket.getKvSnapshotId());
+            }
         }
     }
 }

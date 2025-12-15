@@ -30,6 +30,7 @@ import org.apache.flink.table.catalog.IntervalFreshness;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.List;
+import java.util.UUID;
 
 import static org.apache.flink.configuration.description.TextElement.text;
 
@@ -61,6 +62,24 @@ public class FlinkConnectorOptions {
                     .withDescription(
                             "A list of host/port pairs to use for establishing the initial connection to the Fluss cluster. "
                                     + "The list should be in the form host1:port1,host2:port2,....");
+
+    public static final ConfigOption<String> SCAN_KV_SNAPSHOT_CONSUMER_ID =
+            ConfigOptions.key("scan.kv.snapshot.consumer-id")
+                    .stringType()
+                    .defaultValue(String.valueOf(UUID.randomUUID()))
+                    .withDescription(
+                            "The consumer id to consumer kv snapshots. If set, the registered kv snapshots will not be deleted "
+                                    + "until the consumer finished consuming all the snapshots or the expiration time "
+                                    + "is reached. If not set, an UUID will be set.");
+
+    public static final ConfigOption<Duration> SCAN_KV_SNAPSHOT_CONSUMER_EXPIRATION_TIME =
+            ConfigOptions.key("scan.kv.snapshot.consumer-expiration-time")
+                    .durationType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The time period how long to wait before expiring the kv snapshot consumer to "
+                                    + "avoid kv snapshot blocking to delete. If not set, the fluss client default "
+                                    + "expiration time will be used ('client.scanner.kv.snapshot.consumer-expiration-time').");
 
     // --------------------------------------------------------------------------------------------
     // Lookup specific options

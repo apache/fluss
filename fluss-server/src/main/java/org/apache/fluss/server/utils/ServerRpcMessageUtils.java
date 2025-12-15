@@ -26,6 +26,7 @@ import org.apache.fluss.config.cluster.ColumnPositionType;
 import org.apache.fluss.config.cluster.ConfigEntry;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.fs.token.ObtainedSecurityToken;
+import org.apache.fluss.metadata.ConsumeKvSnapshotForBucket;
 import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
@@ -87,7 +88,10 @@ import org.apache.fluss.rpc.messages.PbAdjustIsrReqForTable;
 import org.apache.fluss.rpc.messages.PbAdjustIsrRespForBucket;
 import org.apache.fluss.rpc.messages.PbAdjustIsrRespForTable;
 import org.apache.fluss.rpc.messages.PbAlterConfig;
+import org.apache.fluss.rpc.messages.PbBucket;
 import org.apache.fluss.rpc.messages.PbBucketMetadata;
+import org.apache.fluss.rpc.messages.PbConsumeKvSnapshotForBucket;
+import org.apache.fluss.rpc.messages.PbConsumeKvSnapshotForTable;
 import org.apache.fluss.rpc.messages.PbCreateAclRespInfo;
 import org.apache.fluss.rpc.messages.PbDescribeConfig;
 import org.apache.fluss.rpc.messages.PbDropAclsFilterResult;
@@ -124,6 +128,7 @@ import org.apache.fluss.rpc.messages.PbRenameColumn;
 import org.apache.fluss.rpc.messages.PbServerNode;
 import org.apache.fluss.rpc.messages.PbStopReplicaReqForBucket;
 import org.apache.fluss.rpc.messages.PbStopReplicaRespForBucket;
+import org.apache.fluss.rpc.messages.PbTable;
 import org.apache.fluss.rpc.messages.PbTableBucket;
 import org.apache.fluss.rpc.messages.PbTableMetadata;
 import org.apache.fluss.rpc.messages.PbTablePath;
@@ -135,8 +140,10 @@ import org.apache.fluss.rpc.messages.ProduceLogRequest;
 import org.apache.fluss.rpc.messages.ProduceLogResponse;
 import org.apache.fluss.rpc.messages.PutKvRequest;
 import org.apache.fluss.rpc.messages.PutKvResponse;
+import org.apache.fluss.rpc.messages.RegisterKvSnapshotConsumerRequest;
 import org.apache.fluss.rpc.messages.StopReplicaRequest;
 import org.apache.fluss.rpc.messages.StopReplicaResponse;
+import org.apache.fluss.rpc.messages.UnregisterKvSnapshotConsumerRequest;
 import org.apache.fluss.rpc.messages.UpdateMetadataRequest;
 import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.rpc.protocol.Errors;
@@ -1772,6 +1779,48 @@ public class ServerRpcMessageUtils {
                             return pbDescribeConfig;
                         })
                 .collect(Collectors.toList());
+    }
+
+    public static Map<Long, List<ConsumeKvSnapshotForBucket>> getRegisterKvSnapshotConsumerData(
+            RegisterKvSnapshotConsumerRequest request) {
+        Map<Long, List<ConsumeKvSnapshotForBucket>> tableIdToRegisterBucket = new HashMap<>();
+        for (PbConsumeKvSnapshotForTable pbForTable : request.getRegisterTablesList()) {
+            long tableId = pbForTable.getTableId();
+            List<ConsumeKvSnapshotForBucket> bucketList = new ArrayList<>();
+            for (PbConsumeKvSnapshotForBucket pbForBucket : pbForTable.getBucketsReqsList()) {
+                bucketList.add(getConsumeKvSnapshotForBucket(tableId, pbForBucket));
+            }
+            tableIdToRegisterBucket.put(tableId, bucketList);
+        }
+        return tableIdToRegisterBucket;
+    }
+
+    public static Map<Long, List<TableBucket>> getUnregisterKvSnapshotConsumerData(
+            UnregisterKvSnapshotConsumerRequest request) {
+        Map<Long, List<TableBucket>> tableIdToUnregisterBucket = new HashMap<>();
+        for (PbTable pbTable : request.getUnregisterTablesList()) {
+            long tableId = pbTable.getTableId();
+            List<TableBucket> bucketList = new ArrayList<>();
+            for (PbBucket pbBucket : pbTable.getBucketsList()) {
+                bucketList.add(
+                        new TableBucket(
+                                tableId,
+                                pbBucket.hasPartitionId() ? pbBucket.getPartitionId() : null,
+                                pbBucket.getBucketId()));
+            }
+            tableIdToUnregisterBucket.put(tableId, bucketList);
+        }
+        return tableIdToUnregisterBucket;
+    }
+
+    private static ConsumeKvSnapshotForBucket getConsumeKvSnapshotForBucket(
+            long tableId, PbConsumeKvSnapshotForBucket pbForBucket) {
+        return new ConsumeKvSnapshotForBucket(
+                new TableBucket(
+                        tableId,
+                        pbForBucket.hasPartitionId() ? pbForBucket.getPartitionId() : null,
+                        pbForBucket.getBucketId()),
+                pbForBucket.getSnapshotId());
     }
 
     private static <T> Map<TableBucket, T> mergeResponse(

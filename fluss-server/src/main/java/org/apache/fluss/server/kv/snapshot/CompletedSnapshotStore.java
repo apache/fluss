@@ -21,6 +21,7 @@ import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.fs.FSDataOutputStream;
 import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.fs.FsPath;
+import org.apache.fluss.metadata.ConsumeKvSnapshotForBucket;
 import org.apache.fluss.metadata.TableBucket;
 
 import org.slf4j.Logger;
@@ -51,9 +52,6 @@ public class CompletedSnapshotStore {
 
     private static final Logger LOG = LoggerFactory.getLogger(CompletedSnapshotStore.class);
 
-    /** The maximum number of snapshots to retain (at least 1). */
-    private final int maxNumberOfSnapshotsToRetain;
-
     /** Completed snapshots state kv store. */
     private final CompletedSnapshotHandleStore completedSnapshotHandleStore;
 
@@ -61,6 +59,7 @@ public class CompletedSnapshotStore {
 
     private final Executor ioExecutor;
     private final SnapshotsCleaner snapshotsCleaner;
+    private final CanSubsume canSubsume;
 
     /**
      * Local copy of the completed snapshots in snapshot store. This is restored from snapshot
@@ -69,16 +68,16 @@ public class CompletedSnapshotStore {
     private final ArrayDeque<CompletedSnapshot> completedSnapshots;
 
     public CompletedSnapshotStore(
-            int maxNumberOfSnapshotsToRetain,
             SharedKvFileRegistry sharedKvFileRegistry,
             Collection<CompletedSnapshot> completedSnapshots,
             CompletedSnapshotHandleStore completedSnapshotHandleStore,
-            Executor executor) {
-        this.maxNumberOfSnapshotsToRetain = maxNumberOfSnapshotsToRetain;
+            Executor executor,
+            CanSubsume canSubsume) {
         this.sharedKvFileRegistry = sharedKvFileRegistry;
         this.completedSnapshots = new ArrayDeque<>();
         this.completedSnapshots.addAll(completedSnapshots);
         this.completedSnapshotHandleStore = completedSnapshotHandleStore;
+        this.canSubsume = canSubsume;
         this.ioExecutor = executor;
         this.snapshotsCleaner = new SnapshotsCleaner();
     }
@@ -123,13 +122,13 @@ public class CompletedSnapshotStore {
         Optional<CompletedSnapshot> subsume =
                 subsume(
                         completedSnapshots,
-                        maxNumberOfSnapshotsToRetain,
                         completedSnapshot -> {
                             remove(
                                     completedSnapshot.getTableBucket(),
                                     completedSnapshot.getSnapshotID());
                             snapshotsCleaner.addSubsumedSnapshot(completedSnapshot);
-                        });
+                        },
+                        canSubsume);
 
         findLowest(completedSnapshots)
                 .ifPresent(
@@ -148,7 +147,9 @@ public class CompletedSnapshotStore {
     }
 
     private static Optional<CompletedSnapshot> subsume(
-            Deque<CompletedSnapshot> snapshots, int numRetain, SubsumeAction subsumeAction) {
+            Deque<CompletedSnapshot> snapshots,
+            SubsumeAction subsumeAction,
+            CanSubsume canSubsume) {
         if (snapshots.isEmpty()) {
             return Optional.empty();
         }
@@ -156,9 +157,10 @@ public class CompletedSnapshotStore {
         CompletedSnapshot latest = snapshots.peekLast();
         Optional<CompletedSnapshot> lastSubsumedSnapshot = Optional.empty();
         Iterator<CompletedSnapshot> iterator = snapshots.iterator();
-        while (snapshots.size() > numRetain && iterator.hasNext()) {
+        // max num retain is 1.
+        while (snapshots.size() > 1 && iterator.hasNext()) {
             CompletedSnapshot next = iterator.next();
-            if (canSubsume(next, latest)) {
+            if (canSubsume(next, latest, canSubsume)) {
                 // always return the subsumed snapshot with larger snapshot id.
                 if (!lastSubsumedSnapshot.isPresent()
                         || next.getSnapshotID() > lastSubsumedSnapshot.get().getSnapshotID()) {
@@ -180,14 +182,21 @@ public class CompletedSnapshotStore {
         void subsume(CompletedSnapshot snapshot) throws Exception;
     }
 
-    private static boolean canSubsume(CompletedSnapshot next, CompletedSnapshot latest) {
+    /** A function to determine whether a snapshot can be subsumed. */
+    @FunctionalInterface
+    public interface CanSubsume {
+        boolean canSubsume(ConsumeKvSnapshotForBucket bucket);
+    }
+
+    private static boolean canSubsume(
+            CompletedSnapshot next, CompletedSnapshot latest, CanSubsume canSubsume) {
         // if the snapshot is equal to the latest snapshot, it means it can't be subsumed
         if (next == latest) {
             return false;
         }
-        // else, we always subsume it as we will only keep single one snapshot currently
-        // todo: consider some client are pining this snapshot in FLUSS-54730210
-        return true;
+
+        return canSubsume.canSubsume(
+                new ConsumeKvSnapshotForBucket(next.getTableBucket(), next.getSnapshotID()));
     }
 
     /**

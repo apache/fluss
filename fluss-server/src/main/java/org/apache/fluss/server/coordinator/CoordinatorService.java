@@ -50,6 +50,8 @@ import org.apache.fluss.rpc.messages.AlterClusterConfigsRequest;
 import org.apache.fluss.rpc.messages.AlterClusterConfigsResponse;
 import org.apache.fluss.rpc.messages.AlterTableRequest;
 import org.apache.fluss.rpc.messages.AlterTableResponse;
+import org.apache.fluss.rpc.messages.ClearKvSnapshotConsumerRequest;
+import org.apache.fluss.rpc.messages.ClearKvSnapshotConsumerResponse;
 import org.apache.fluss.rpc.messages.CommitKvSnapshotRequest;
 import org.apache.fluss.rpc.messages.CommitKvSnapshotResponse;
 import org.apache.fluss.rpc.messages.CommitLakeTableSnapshotRequest;
@@ -81,6 +83,10 @@ import org.apache.fluss.rpc.messages.MetadataResponse;
 import org.apache.fluss.rpc.messages.PbAlterConfig;
 import org.apache.fluss.rpc.messages.PbHeartbeatReqForTable;
 import org.apache.fluss.rpc.messages.PbHeartbeatRespForTable;
+import org.apache.fluss.rpc.messages.RegisterKvSnapshotConsumerRequest;
+import org.apache.fluss.rpc.messages.RegisterKvSnapshotConsumerResponse;
+import org.apache.fluss.rpc.messages.UnregisterKvSnapshotConsumerRequest;
+import org.apache.fluss.rpc.messages.UnregisterKvSnapshotConsumerResponse;
 import org.apache.fluss.rpc.netty.server.Session;
 import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.security.acl.AclBinding;
@@ -95,11 +101,14 @@ import org.apache.fluss.server.authorizer.AclDeleteResult;
 import org.apache.fluss.server.authorizer.Authorizer;
 import org.apache.fluss.server.coordinator.event.AccessContextEvent;
 import org.apache.fluss.server.coordinator.event.AdjustIsrReceivedEvent;
+import org.apache.fluss.server.coordinator.event.ClearKvSnapshotConsumerEvent;
 import org.apache.fluss.server.coordinator.event.CommitKvSnapshotEvent;
 import org.apache.fluss.server.coordinator.event.CommitLakeTableSnapshotEvent;
 import org.apache.fluss.server.coordinator.event.CommitRemoteLogManifestEvent;
 import org.apache.fluss.server.coordinator.event.ControlledShutdownEvent;
 import org.apache.fluss.server.coordinator.event.EventManager;
+import org.apache.fluss.server.coordinator.event.RegisterKvSnapshotConsumerEvent;
+import org.apache.fluss.server.coordinator.event.UnregisterKvSnapshotConsumerEvent;
 import org.apache.fluss.server.entity.CommitKvSnapshotData;
 import org.apache.fluss.server.entity.LakeTieringTableInfo;
 import org.apache.fluss.server.entity.TablePropertyChanges;
@@ -133,6 +142,8 @@ import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getAdjustIsrDa
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getCommitLakeTableSnapshotData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getCommitRemoteLogManifestData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getPartitionSpec;
+import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getRegisterKvSnapshotConsumerData;
+import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getUnregisterKvSnapshotConsumerData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeCreateAclsResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeDropAclsResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toAlterTableConfigChanges;
@@ -688,6 +699,46 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                                 request.getTabletServerId(),
                                 request.getTabletServerEpoch(),
                                 response));
+        return response;
+    }
+
+    @Override
+    public CompletableFuture<RegisterKvSnapshotConsumerResponse> registerKvSnapshotConsumer(
+            RegisterKvSnapshotConsumerRequest request) {
+        CompletableFuture<RegisterKvSnapshotConsumerResponse> response = new CompletableFuture<>();
+        eventManagerSupplier
+                .get()
+                .put(
+                        new RegisterKvSnapshotConsumerEvent(
+                                request.getConsumerId(),
+                                request.getExpirationTime(),
+                                getRegisterKvSnapshotConsumerData(request),
+                                response));
+        return response;
+    }
+
+    @Override
+    public CompletableFuture<UnregisterKvSnapshotConsumerResponse> unregisterKvSnapshotConsumer(
+            UnregisterKvSnapshotConsumerRequest request) {
+        CompletableFuture<UnregisterKvSnapshotConsumerResponse> response =
+                new CompletableFuture<>();
+        eventManagerSupplier
+                .get()
+                .put(
+                        new UnregisterKvSnapshotConsumerEvent(
+                                request.getConsumerId(),
+                                getUnregisterKvSnapshotConsumerData(request),
+                                response));
+        return response;
+    }
+
+    @Override
+    public CompletableFuture<ClearKvSnapshotConsumerResponse> clearKvSnapshotConsumer(
+            ClearKvSnapshotConsumerRequest request) {
+        CompletableFuture<ClearKvSnapshotConsumerResponse> response = new CompletableFuture<>();
+        eventManagerSupplier
+                .get()
+                .put(new ClearKvSnapshotConsumerEvent(request.getConsumerId(), response));
         return response;
     }
 

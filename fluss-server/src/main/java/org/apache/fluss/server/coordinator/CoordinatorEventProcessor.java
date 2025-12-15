@@ -38,14 +38,18 @@ import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.messages.AdjustIsrResponse;
+import org.apache.fluss.rpc.messages.ClearKvSnapshotConsumerResponse;
 import org.apache.fluss.rpc.messages.CommitKvSnapshotResponse;
 import org.apache.fluss.rpc.messages.CommitLakeTableSnapshotResponse;
 import org.apache.fluss.rpc.messages.CommitRemoteLogManifestResponse;
 import org.apache.fluss.rpc.messages.ControlledShutdownResponse;
 import org.apache.fluss.rpc.messages.PbCommitLakeTableSnapshotRespForTable;
+import org.apache.fluss.rpc.messages.RegisterKvSnapshotConsumerResponse;
+import org.apache.fluss.rpc.messages.UnregisterKvSnapshotConsumerResponse;
 import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.server.coordinator.event.AccessContextEvent;
 import org.apache.fluss.server.coordinator.event.AdjustIsrReceivedEvent;
+import org.apache.fluss.server.coordinator.event.ClearKvSnapshotConsumerEvent;
 import org.apache.fluss.server.coordinator.event.CommitKvSnapshotEvent;
 import org.apache.fluss.server.coordinator.event.CommitLakeTableSnapshotEvent;
 import org.apache.fluss.server.coordinator.event.CommitRemoteLogManifestEvent;
@@ -63,7 +67,9 @@ import org.apache.fluss.server.coordinator.event.FencedCoordinatorEvent;
 import org.apache.fluss.server.coordinator.event.NewTabletServerEvent;
 import org.apache.fluss.server.coordinator.event.NotifyKvSnapshotOffsetEvent;
 import org.apache.fluss.server.coordinator.event.NotifyLeaderAndIsrResponseReceivedEvent;
+import org.apache.fluss.server.coordinator.event.RegisterKvSnapshotConsumerEvent;
 import org.apache.fluss.server.coordinator.event.SchemaChangeEvent;
+import org.apache.fluss.server.coordinator.event.UnregisterKvSnapshotConsumerEvent;
 import org.apache.fluss.server.coordinator.event.watcher.TableChangeWatcher;
 import org.apache.fluss.server.coordinator.event.watcher.TabletServerChangeWatcher;
 import org.apache.fluss.server.coordinator.statemachine.ReplicaStateMachine;
@@ -89,6 +95,7 @@ import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.server.zk.data.TabletServerRegistration;
 import org.apache.fluss.server.zk.data.ZkData.PartitionIdsZNode;
 import org.apache.fluss.server.zk.data.ZkData.TableIdsZNode;
+import org.apache.fluss.utils.clock.Clock;
 import org.apache.fluss.utils.types.Tuple2;
 
 import org.slf4j.Logger;
@@ -143,6 +150,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
     private final CoordinatorMetricGroup coordinatorMetricGroup;
     private final String internalListenerName;
 
+    private final KvSnapshotConsumerManager kvSnapshotConsumerManager;
     private final CompletedSnapshotStoreManager completedSnapshotStoreManager;
 
     public CoordinatorEventProcessor(
@@ -155,7 +163,8 @@ public class CoordinatorEventProcessor implements EventProcessor {
             CoordinatorMetricGroup coordinatorMetricGroup,
             Configuration conf,
             ExecutorService ioExecutor,
-            MetadataManager metadataManager) {
+            MetadataManager metadataManager,
+            Clock clock) {
         this.zooKeeperClient = zooKeeperClient;
         this.serverMetadataCache = serverMetadataCache;
         this.coordinatorChannelManager = coordinatorChannelManager;
@@ -193,12 +202,17 @@ public class CoordinatorEventProcessor implements EventProcessor {
         this.coordinatorRequestBatch =
                 new CoordinatorRequestBatch(
                         coordinatorChannelManager, coordinatorEventManager, coordinatorContext);
+
+        this.kvSnapshotConsumerManager =
+                new KvSnapshotConsumerManager(
+                        conf, zooKeeperClient, coordinatorContext, clock, coordinatorMetricGroup);
+
         this.completedSnapshotStoreManager =
                 new CompletedSnapshotStoreManager(
-                        conf.getInt(ConfigOptions.KV_MAX_RETAINED_SNAPSHOTS),
                         ioExecutor,
                         zooKeeperClient,
-                        coordinatorMetricGroup);
+                        coordinatorMetricGroup,
+                        kvSnapshotConsumerManager::snapshotConsumerNotExist);
         this.autoPartitionManager = autoPartitionManager;
         this.lakeTableTieringManager = lakeTableTieringManager;
         this.coordinatorMetricGroup = coordinatorMetricGroup;
@@ -239,6 +253,9 @@ public class CoordinatorEventProcessor implements EventProcessor {
 
         // start the event manager which will then process the event
         coordinatorEventManager.start();
+
+        // start kv snapshot consumer manager
+        kvSnapshotConsumerManager.start();
     }
 
     public void shutdown() {
@@ -380,6 +397,9 @@ public class CoordinatorEventProcessor implements EventProcessor {
         LOG.info(
                 "Load table and partition assignment success in {}ms when initializing coordinator context.",
                 System.currentTimeMillis() - start4loadAssignment);
+
+        // load all kv snapshot consumer.
+        kvSnapshotConsumerManager.initialize();
 
         long end = System.currentTimeMillis();
         LOG.info("Current total {} tables in the cluster.", coordinatorContext.allTables().size());
@@ -546,6 +566,26 @@ public class CoordinatorEventProcessor implements EventProcessor {
             completeFromCallable(
                     controlledShutdownEvent.getRespCallback(),
                     () -> tryProcessControlledShutdown(controlledShutdownEvent));
+        } else if (event instanceof RegisterKvSnapshotConsumerEvent) {
+            RegisterKvSnapshotConsumerEvent registerKvSnapshotConsumerEvent =
+                    (RegisterKvSnapshotConsumerEvent) event;
+            completeFromCallable(
+                    registerKvSnapshotConsumerEvent.getRespCallback(),
+                    () -> tryProcessRegisterKvSnapshotConsumer(registerKvSnapshotConsumerEvent));
+        } else if (event instanceof UnregisterKvSnapshotConsumerEvent) {
+            UnregisterKvSnapshotConsumerEvent unregisterKvSnapshotConsumerEvent =
+                    (UnregisterKvSnapshotConsumerEvent) event;
+            completeFromCallable(
+                    unregisterKvSnapshotConsumerEvent.getRespCallback(),
+                    () ->
+                            tryProcessUnregisterKvSnapshotConsumer(
+                                    unregisterKvSnapshotConsumerEvent));
+        } else if (event instanceof ClearKvSnapshotConsumerEvent) {
+            ClearKvSnapshotConsumerEvent clearKvSnapshotConsumerEvent =
+                    (ClearKvSnapshotConsumerEvent) event;
+            completeFromCallable(
+                    clearKvSnapshotConsumerEvent.getRespCallback(),
+                    () -> tryProcessClearKvSnapshotConsumer(clearKvSnapshotConsumerEvent));
         } else if (event instanceof AccessContextEvent) {
             AccessContextEvent<?> accessContextEvent = (AccessContextEvent<?>) event;
             processAccessContext(accessContextEvent);
@@ -1299,6 +1339,31 @@ public class CoordinatorEventProcessor implements EventProcessor {
                 coordinatorContext.getBucketsWithLeaderIn(tabletServerId).stream()
                         .map(ServerRpcMessageUtils::fromTableBucket)
                         .collect(Collectors.toList()));
+        return response;
+    }
+
+    private RegisterKvSnapshotConsumerResponse tryProcessRegisterKvSnapshotConsumer(
+            RegisterKvSnapshotConsumerEvent event) throws Exception {
+        RegisterKvSnapshotConsumerResponse response = new RegisterKvSnapshotConsumerResponse();
+        kvSnapshotConsumerManager.register(
+                event.getConsumerId(),
+                event.getExpirationTime(),
+                event.getTableIdToRegisterBucket());
+        return response;
+    }
+
+    private UnregisterKvSnapshotConsumerResponse tryProcessUnregisterKvSnapshotConsumer(
+            UnregisterKvSnapshotConsumerEvent event) throws Exception {
+        UnregisterKvSnapshotConsumerResponse response = new UnregisterKvSnapshotConsumerResponse();
+        kvSnapshotConsumerManager.unregister(
+                event.getConsumerId(), event.getTableIdToUnregisterBucket());
+        return response;
+    }
+
+    private ClearKvSnapshotConsumerResponse tryProcessClearKvSnapshotConsumer(
+            ClearKvSnapshotConsumerEvent event) throws Exception {
+        ClearKvSnapshotConsumerResponse response = new ClearKvSnapshotConsumerResponse();
+        kvSnapshotConsumerManager.clear(event.getConsumerId());
         return response;
     }
 

@@ -98,7 +98,7 @@ public class LogFetcherTest extends ClientToServerITCaseBase {
         scanBuckets.put(new TableBucket(tableId, bucketId1), 0L);
         logScannerStatus = new LogScannerStatus();
         logScannerStatus.assignScanBuckets(scanBuckets);
-        admin = new FlussAdmin(rpcClient, metadataUpdater);
+        admin = new FlussAdmin(rpcClient, metadataUpdater, clientConf);
         clientSchemaGetter =
                 new ClientSchemaGetter(DATA1_TABLE_PATH, new SchemaInfo(DATA1_SCHEMA, 1), admin);
         logFetcher =
@@ -271,7 +271,7 @@ public class LogFetcherTest extends ClientToServerITCaseBase {
                 new ClientSchemaGetter(
                         DATA1_TABLE_PATH,
                         new SchemaInfo(DATA1_SCHEMA, 1),
-                        new FlussAdmin(rpcClient, metadataUpdater));
+                        new FlussAdmin(rpcClient, metadataUpdater, clientConf));
 
         LogFetcher logFetcher =
                 new LogFetcher(
@@ -312,7 +312,10 @@ public class LogFetcherTest extends ClientToServerITCaseBase {
                 new ClientSchemaGetter(
                         DATA1_TABLE_PATH,
                         new SchemaInfo(DATA1_SCHEMA, 1),
-                        new FlussAdmin(FLUSS_CLUSTER_EXTENSION.getRpcClient(), metadataUpdater1));
+                        new FlussAdmin(
+                                FLUSS_CLUSTER_EXTENSION.getRpcClient(),
+                                metadataUpdater1,
+                                clientConf));
         logFetcher =
                 new LogFetcher(
                         DATA1_TABLE_INFO,

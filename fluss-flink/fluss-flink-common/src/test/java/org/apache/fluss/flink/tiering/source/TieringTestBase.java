@@ -181,8 +181,6 @@ public class TieringTestBase extends AbstractTestBase {
         Configuration conf = new Configuration();
         // set snapshot interval to 1s for testing purposes
         conf.set(ConfigOptions.KV_SNAPSHOT_INTERVAL, Duration.ofSeconds(1));
-        // not to clean snapshots for test purpose
-        conf.set(ConfigOptions.KV_MAX_RETAINED_SNAPSHOTS, Integer.MAX_VALUE);
 
         // enable lake tiering
         conf.set(ConfigOptions.DATALAKE_FORMAT, DataLakeFormat.PAIMON);

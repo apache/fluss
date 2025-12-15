@@ -30,6 +30,8 @@ import org.apache.fluss.rpc.messages.AlterTableRequest;
 import org.apache.fluss.rpc.messages.AlterTableResponse;
 import org.apache.fluss.rpc.messages.ApiVersionsRequest;
 import org.apache.fluss.rpc.messages.ApiVersionsResponse;
+import org.apache.fluss.rpc.messages.ClearKvSnapshotConsumerRequest;
+import org.apache.fluss.rpc.messages.ClearKvSnapshotConsumerResponse;
 import org.apache.fluss.rpc.messages.CommitKvSnapshotRequest;
 import org.apache.fluss.rpc.messages.CommitKvSnapshotResponse;
 import org.apache.fluss.rpc.messages.CommitLakeTableSnapshotRequest;
@@ -84,8 +86,12 @@ import org.apache.fluss.rpc.messages.ListTablesRequest;
 import org.apache.fluss.rpc.messages.ListTablesResponse;
 import org.apache.fluss.rpc.messages.MetadataRequest;
 import org.apache.fluss.rpc.messages.MetadataResponse;
+import org.apache.fluss.rpc.messages.RegisterKvSnapshotConsumerRequest;
+import org.apache.fluss.rpc.messages.RegisterKvSnapshotConsumerResponse;
 import org.apache.fluss.rpc.messages.TableExistsRequest;
 import org.apache.fluss.rpc.messages.TableExistsResponse;
+import org.apache.fluss.rpc.messages.UnregisterKvSnapshotConsumerRequest;
+import org.apache.fluss.rpc.messages.UnregisterKvSnapshotConsumerResponse;
 import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.server.entity.AdjustIsrResultForBucket;
 import org.apache.fluss.server.entity.CommitRemoteLogManifestData;
@@ -342,6 +348,24 @@ public class TestCoordinatorGateway implements CoordinatorGateway {
     @Override
     public CompletableFuture<ControlledShutdownResponse> controlledShutdown(
             ControlledShutdownRequest request) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public CompletableFuture<RegisterKvSnapshotConsumerResponse> registerKvSnapshotConsumer(
+            RegisterKvSnapshotConsumerRequest request) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public CompletableFuture<UnregisterKvSnapshotConsumerResponse> unregisterKvSnapshotConsumer(
+            UnregisterKvSnapshotConsumerRequest request) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public CompletableFuture<ClearKvSnapshotConsumerResponse> clearKvSnapshotConsumer(
+            ClearKvSnapshotConsumerRequest request) {
         throw new UnsupportedOperationException();
     }
 

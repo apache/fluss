@@ -50,6 +50,8 @@ import org.apache.fluss.rpc.messages.LookupRequest;
 import org.apache.fluss.rpc.messages.MetadataRequest;
 import org.apache.fluss.rpc.messages.PbAddColumn;
 import org.apache.fluss.rpc.messages.PbAlterConfig;
+import org.apache.fluss.rpc.messages.PbBucket;
+import org.apache.fluss.rpc.messages.PbConsumeKvSnapshotForBucket;
 import org.apache.fluss.rpc.messages.PbDescribeConfig;
 import org.apache.fluss.rpc.messages.PbDropColumn;
 import org.apache.fluss.rpc.messages.PbKeyValue;
@@ -66,6 +68,8 @@ import org.apache.fluss.rpc.messages.PbRenameColumn;
 import org.apache.fluss.rpc.messages.PrefixLookupRequest;
 import org.apache.fluss.rpc.messages.ProduceLogRequest;
 import org.apache.fluss.rpc.messages.PutKvRequest;
+import org.apache.fluss.rpc.messages.RegisterKvSnapshotConsumerRequest;
+import org.apache.fluss.rpc.messages.UnregisterKvSnapshotConsumerRequest;
 import org.apache.fluss.utils.json.DataTypeJsonSerde;
 import org.apache.fluss.utils.json.JsonSerdeUtils;
 
@@ -371,6 +375,56 @@ public class ClientRpcMessageUtils {
                 .addAllDropColumns(dropColumns)
                 .addAllRenameColumns(renameColumns)
                 .addAllModifyColumns(modifyColumns);
+        return request;
+    }
+
+    public static RegisterKvSnapshotConsumerRequest makeRegisterKvSnapshotConsumerRequest(
+            String consumerId, Map<TableBucket, Long> consumeBuckets, long expirationTime) {
+        RegisterKvSnapshotConsumerRequest request = new RegisterKvSnapshotConsumerRequest();
+        request.setConsumerId(consumerId).setExpirationTime(expirationTime);
+
+        Map<Long, List<PbConsumeKvSnapshotForBucket>> pbConsumeTables = new HashMap<>();
+        for (Map.Entry<TableBucket, Long> entry : consumeBuckets.entrySet()) {
+            TableBucket tableBucket = entry.getKey();
+            Long snapshotId = entry.getValue();
+            PbConsumeKvSnapshotForBucket pbConsumeKvSnapshotForBucket =
+                    new PbConsumeKvSnapshotForBucket()
+                            .setBucketId(tableBucket.getBucket())
+                            .setSnapshotId(snapshotId);
+            if (tableBucket.getPartitionId() != null) {
+                pbConsumeKvSnapshotForBucket.setPartitionId(tableBucket.getPartitionId());
+            }
+            pbConsumeTables
+                    .computeIfAbsent(tableBucket.getTableId(), k -> new ArrayList<>())
+                    .add(pbConsumeKvSnapshotForBucket);
+        }
+
+        for (Map.Entry<Long, List<PbConsumeKvSnapshotForBucket>> entry :
+                pbConsumeTables.entrySet()) {
+            request.addRegisterTable()
+                    .setTableId(entry.getKey())
+                    .addAllBucketsReqs(entry.getValue());
+        }
+        return request;
+    }
+
+    public static UnregisterKvSnapshotConsumerRequest makeUnregisterKvSnapshotConsumerRequest(
+            String consumerId, Set<TableBucket> bucketsToUnregister) {
+        UnregisterKvSnapshotConsumerRequest request = new UnregisterKvSnapshotConsumerRequest();
+        request.setConsumerId(consumerId);
+
+        Map<Long, List<PbBucket>> pbConsumeTables = new HashMap<>();
+        for (TableBucket tb : bucketsToUnregister) {
+            PbBucket pbBucket = new PbBucket().setBucketId(tb.getBucket());
+            if (tb.getPartitionId() != null) {
+                pbBucket.setPartitionId(tb.getPartitionId());
+            }
+            pbConsumeTables.computeIfAbsent(tb.getTableId(), k -> new ArrayList<>()).add(pbBucket);
+        }
+
+        for (Map.Entry<Long, List<PbBucket>> entry : pbConsumeTables.entrySet()) {
+            request.addUnregisterTable().setTableId(entry.getKey()).addAllBuckets(entry.getValue());
+        }
         return request;
     }
 

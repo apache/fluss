@@ -33,6 +33,7 @@ import org.apache.fluss.exception.InvalidDatabaseException;
 import org.apache.fluss.exception.InvalidPartitionException;
 import org.apache.fluss.exception.InvalidReplicationFactorException;
 import org.apache.fluss.exception.InvalidTableException;
+import org.apache.fluss.exception.KvSnapshotConsumerNotExistException;
 import org.apache.fluss.exception.KvSnapshotNotExistException;
 import org.apache.fluss.exception.LakeTableSnapshotNotExistException;
 import org.apache.fluss.exception.NonPrimaryKeyTableException;
@@ -60,6 +61,8 @@ import org.apache.fluss.security.acl.AclBindingFilter;
 
 import java.util.Collection;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 
 /**
@@ -399,6 +402,61 @@ public interface Admin extends AutoCloseable {
      */
     CompletableFuture<KvSnapshotMetadata> getKvSnapshotMetadata(
             TableBucket bucket, long snapshotId);
+
+    /**
+     * Register the kv snapshot consumer of the given tableBucket set asynchronously. After
+     * registered, the kv snapshot will not be deleted until unregistered or the consumer expired.
+     *
+     * <p>For the details bucket to consume, you can call {@link #getLatestKvSnapshots(TablePath)}
+     * or {@link #getLatestKvSnapshots(TablePath, String)} first.
+     *
+     * <p>The following exceptions can be anticipated when calling {@code get()} on returned future.
+     *
+     * <ul>
+     *   <li>{@link TableNotExistException} if the table does not exist.
+     *   <li>{@link PartitionNotExistException} if the partition does not exist
+     * </ul>
+     *
+     * @param consumerId the consumer id.
+     * @param consumeBuckets the tableBuckets to consume, a map from TableBucket to kvSnapshotId.
+     */
+    CompletableFuture<Void> registerKvSnapshotConsumer(
+            String consumerId, Map<TableBucket, Long> consumeBuckets);
+
+    /**
+     * Unregister the kv snapshot consumer of the given tableBucket set asynchronously.
+     *
+     * <p>As the following situation happens, unregister operation will be partially ignored or
+     * completely ignored
+     *
+     * <ul>
+     *   <li>If the table/partition not exists, the unregister operation will be ignored for this
+     *       table/partition, others will success.
+     *   <li>If the partition bucket/kvSnapshotId not exists, the unregister operation will be
+     *       ignored for this bucket/kvSnapshotId, others will success.
+     *   <li>If the consumerId not exists, the unregister operation will be ignored.
+     * </ul>
+     *
+     * @param consumerId the consumer id.
+     * @param bucketsToUnregister the tableBucket to unregister.
+     */
+    CompletableFuture<Void> unregisterKvSnapshotConsumer(
+            String consumerId, Set<TableBucket> bucketsToUnregister);
+
+    /**
+     * Clear the kv snapshot consumer asynchronously. After cleared, all the registered kv snapshot
+     * consume info for this consumer will be cleared.
+     *
+     * <p>The following exceptions can be anticipated when calling {@code get()} on returned future.
+     *
+     * <ul>
+     *   <li>{@link TableNotExistException} if the table does not exist.
+     *   <li>{@link KvSnapshotConsumerNotExistException} if the kv snapshot consumer does not exist.
+     * </ul>
+     *
+     * @param consumerId the consumer id.
+     */
+    CompletableFuture<Void> clearKvSnapshotConsumer(String consumerId);
 
     /**
      * Get table lake snapshot info of the given table asynchronously.

@@ -746,4 +746,38 @@ public final class ZkData {
             return new byte[0];
         }
     }
+
+    // ------------------------------------------------------------------------------------------
+    // ZNodes for Consumers.
+    // ------------------------------------------------------------------------------------------
+
+    /** The root znode for consumers. It will record all the info of fluss consumers. */
+    public static final class ConsumersNode {
+        public static String path() {
+            return "/consumers";
+        }
+    }
+
+    /** The root znode for kv snapshot consumers. */
+    public static final class KvSnapshotConsumersZNode {
+        public static String path() {
+            return ConsumersNode.path() + "/kv_snapshots";
+        }
+    }
+
+    /** The znode for kv snapshot consumer. */
+    public static final class KvSnapshotConsumerZNode {
+        public static String path(String consumerId) {
+            return KvSnapshotConsumersZNode.path() + "/" + consumerId;
+        }
+
+        public static byte[] encode(KvSnapshotConsumer kvSnapshotConsumer) {
+            return JsonSerdeUtils.writeValueAsBytes(
+                    kvSnapshotConsumer, KvSnapshotConsumerJsonSerde.INSTANCE);
+        }
+
+        public static KvSnapshotConsumer decode(byte[] json) {
+            return JsonSerdeUtils.readValue(json, KvSnapshotConsumerJsonSerde.INSTANCE);
+        }
+    }
 }

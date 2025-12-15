@@ -142,7 +142,7 @@ public final class FlussConnection implements Connection {
         if (admin == null) {
             synchronized (this) {
                 if (admin == null) {
-                    admin = new FlussAdmin(rpcClient, metadataUpdater);
+                    admin = new FlussAdmin(rpcClient, metadataUpdater, conf);
                 }
             }
         }

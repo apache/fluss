@@ -364,6 +364,27 @@ message GetKvSnapshotMetadataResponse {
   repeated PbRemotePathAndLocalFile snapshot_files = 2;
 }
 
+message RegisterKvSnapshotConsumerRequest {
+  required string consumer_id = 1;
+  required int64 expiration_time = 2;
+  repeated PbConsumeKvSnapshotForTable register_tables = 3;
+}
+
+message RegisterKvSnapshotConsumerResponse {}
+
+message UnregisterKvSnapshotConsumerRequest {
+  required string consumer_id = 1;
+  repeated PbTable unregister_tables = 2;
+}
+
+message UnregisterKvSnapshotConsumerResponse {}
+
+message ClearKvSnapshotConsumerRequest {
+  required string consumer_id = 1;
+}
+
+message ClearKvSnapshotConsumerResponse {}
+
 message GetLatestLakeSnapshotRequest {
   required PbTablePath table_path = 1;
 }
@@ -735,6 +756,16 @@ message PbTableBucket {
   required int32 bucket_id = 3;
 }
 
+message PbTable {
+  required int64 table_id = 1;
+  repeated PbBucket buckets = 2;
+}
+
+message PbBucket {
+  optional int64 partition_id = 1;
+  required int32 bucket_id = 2;
+}
+
 message PbAdjustIsrReqForTable {
   required int64 table_id = 1;
   repeated PbAdjustIsrReqForBucket buckets_req = 2;
@@ -934,7 +965,6 @@ message PbRenameColumn {
   required string new_column_name = 2;
 }
 
-
 message PbModifyColumn {
   required string column_name = 1;
   optional bytes data_type_json = 2;
@@ -942,11 +972,19 @@ message PbModifyColumn {
   optional int32 column_position_type = 4; // LAST=0,FIRST=1,AFTER=3
 }
 
-
-
 message PbDescribeConfig {
   required string config_key = 1;
   optional string config_value = 2;
   required string config_source = 3;
 }
 
+message PbConsumeKvSnapshotForTable {
+  required int64 table_id = 1;
+  repeated PbConsumeKvSnapshotForBucket buckets_req = 2;
+}
+
+message PbConsumeKvSnapshotForBucket {
+  optional int64 partition_id = 1;
+  required int32 bucket_id = 2;
+  required int64 snapshot_id = 3;
+}

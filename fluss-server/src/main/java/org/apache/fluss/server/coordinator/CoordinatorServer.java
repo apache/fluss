@@ -43,6 +43,8 @@ import org.apache.fluss.server.zk.data.CoordinatorAddress;
 import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException;
 import org.apache.fluss.utils.ExceptionUtils;
 import org.apache.fluss.utils.ExecutorUtils;
+import org.apache.fluss.utils.clock.Clock;
+import org.apache.fluss.utils.clock.SystemClock;
 import org.apache.fluss.utils.concurrent.ExecutorThreadFactory;
 import org.apache.fluss.utils.concurrent.FutureUtils;
 
@@ -84,6 +86,7 @@ public class CoordinatorServer extends ServerBase {
     private final CompletableFuture<Result> terminationFuture;
 
     private final AtomicBoolean isShutDown = new AtomicBoolean(false);
+    private final Clock clock;
 
     @GuardedBy("lock")
     private String serverId;
@@ -141,9 +144,14 @@ public class CoordinatorServer extends ServerBase {
     private LakeCatalogDynamicLoader lakeCatalogDynamicLoader;
 
     public CoordinatorServer(Configuration conf) {
+        this(conf, SystemClock.getInstance());
+    }
+
+    public CoordinatorServer(Configuration conf, Clock clock) {
         super(conf);
         validateConfigs(conf);
         this.terminationFuture = new CompletableFuture<>();
+        this.clock = clock;
     }
 
     public static void main(String[] args) {
@@ -246,7 +254,8 @@ public class CoordinatorServer extends ServerBase {
                             serverMetricGroup,
                             conf,
                             ioExecutor,
-                            metadataManager);
+                            metadataManager,
+                            clock);
             coordinatorEventProcessor.startup();
 
             createDefaultDatabase();
@@ -511,12 +520,6 @@ public class CoordinatorServer extends ServerBase {
                     String.format(
                             "Invalid configuration for %s, it must be greater than or equal 1.",
                             ConfigOptions.DEFAULT_REPLICATION_FACTOR.key()));
-        }
-        if (conf.get(ConfigOptions.KV_MAX_RETAINED_SNAPSHOTS) < 1) {
-            throw new IllegalConfigurationException(
-                    String.format(
-                            "Invalid configuration for %s, it must be greater than or equal 1.",
-                            ConfigOptions.KV_MAX_RETAINED_SNAPSHOTS.key()));
         }
 
         if (conf.get(ConfigOptions.COORDINATOR_IO_POOL_SIZE) < 1) {

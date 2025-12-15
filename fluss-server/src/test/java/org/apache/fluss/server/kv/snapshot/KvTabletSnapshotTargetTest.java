@@ -476,11 +476,11 @@ class KvTabletSnapshotTargetTest {
 
         CompletedSnapshotStore completedSnapshotStore =
                 new CompletedSnapshotStore(
-                        1,
                         sharedKvFileRegistry,
                         Collections.emptyList(),
                         snapshotHandleStore,
-                        executor);
+                        executor,
+                        (consumeKvSnapshotForBucket) -> true); //  only retain the latest snapshot.
 
         RocksIncrementalSnapshot rocksIncrementalSnapshot =
                 createIncrementalSnapshot(snapshotFailType);

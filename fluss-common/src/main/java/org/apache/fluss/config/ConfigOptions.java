@@ -1094,6 +1094,20 @@ public class ConfigOptions {
                                     + CLIENT_SCANNER_LOG_FETCH_WAIT_MAX_TIME.key()
                                     + " time to return.");
 
+    public static final ConfigOption<Duration> CLIENT_SCANNER_KV_SNAPSHOT_CONSUMER_EXPIRATION_TIME =
+            key("client.scanner.kv.snapshot.consumer-expiration-time")
+                    .durationType()
+                    .defaultValue(Duration.ofDays(1))
+                    .withDescription(
+                            "The time period how long to wait before expiring the kv snapshot consumer to avoid "
+                                    + "kv snapshot blocking to delete. When calling `Admin#registerKvSnapshotConsumer`, "
+                                    + "Fluss will include this config to control the expiration time of the newly "
+                                    + "registered consumer. If the server finds that this consumer has not been "
+                                    + "registered before, the config will take effect to determine the consumer's "
+                                    + "expiration time. However, if the server detects that the consumer was already "
+                                    + "registered previously, the expiration time from the **initial registration** will "
+                                    + "be used instead.");
+
     public static final ConfigOption<Integer> CLIENT_LOOKUP_QUEUE_SIZE =
             key("client.lookup.queue-size")
                     .intType()
@@ -1448,11 +1462,13 @@ public class ConfigOptions {
                     .withDescription(
                             "The number of threads the server uses to transfer (download and upload) kv snapshot files.");
 
-    public static final ConfigOption<Integer> KV_MAX_RETAINED_SNAPSHOTS =
-            key("kv.snapshot.num-retained")
-                    .intType()
-                    .defaultValue(1)
-                    .withDescription("The maximum number of completed snapshots to retain.");
+    public static final ConfigOption<Duration> KV_SNAPSHOT_CONSUMER_EXPIRATION_CHECK_INTERVAL =
+            key("kv.snapshot.consumer-expiration-check-interval")
+                    .durationType()
+                    .defaultValue(Duration.ofMinutes(10))
+                    .withDescription(
+                            "The interval to check the expiration of kv snapshot consumers. "
+                                    + "The default setting is 10 minutes.");
 
     public static final ConfigOption<Integer> KV_MAX_BACKGROUND_THREADS =
             key("kv.rocksdb.thread.num")

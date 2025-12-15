@@ -135,10 +135,10 @@ class ZooKeeperCompletedSnapshotStoreTest {
         ZooKeeperCompletedSnapshotHandleStore snapshotsInZooKeeper =
                 new ZooKeeperCompletedSnapshotHandleStore(zooKeeperClient);
         return new CompletedSnapshotStore(
-                1,
                 sharedKvFileRegistry,
                 Collections.emptyList(),
                 snapshotsInZooKeeper,
-                Executors.directExecutor());
+                Executors.directExecutor(),
+                (consumeKvSnapshotForBucket) -> true); // only retain the latest snapshot.
     }
 }

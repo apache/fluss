@@ -40,6 +40,7 @@ import org.apache.fluss.server.zk.ZkAsyncResponse.ZkGetDataResponse;
 import org.apache.fluss.server.zk.data.BucketSnapshot;
 import org.apache.fluss.server.zk.data.CoordinatorAddress;
 import org.apache.fluss.server.zk.data.DatabaseRegistration;
+import org.apache.fluss.server.zk.data.KvSnapshotConsumer;
 import org.apache.fluss.server.zk.data.LakeTableSnapshot;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
@@ -58,6 +59,8 @@ import org.apache.fluss.server.zk.data.ZkData.ConfigEntityZNode;
 import org.apache.fluss.server.zk.data.ZkData.CoordinatorZNode;
 import org.apache.fluss.server.zk.data.ZkData.DatabaseZNode;
 import org.apache.fluss.server.zk.data.ZkData.DatabasesZNode;
+import org.apache.fluss.server.zk.data.ZkData.KvSnapshotConsumerZNode;
+import org.apache.fluss.server.zk.data.ZkData.KvSnapshotConsumersZNode;
 import org.apache.fluss.server.zk.data.ZkData.LakeTableZNode;
 import org.apache.fluss.server.zk.data.ZkData.LeaderAndIsrZNode;
 import org.apache.fluss.server.zk.data.ZkData.PartitionIdZNode;
@@ -983,6 +986,35 @@ public class ZooKeeperClient implements AutoCloseable {
             snapshots.put(bucketId, optTableBucketSnapshot);
         }
         return snapshots;
+    }
+
+    public List<String> getKvSnapshotConsumerList() throws Exception {
+        return getChildren(KvSnapshotConsumersZNode.path());
+    }
+
+    public void registerKvSnapshotConsumer(String consumerId, KvSnapshotConsumer consumer)
+            throws Exception {
+        String path = KvSnapshotConsumerZNode.path(consumerId);
+        zkClient.create()
+                .creatingParentsIfNeeded()
+                .withMode(CreateMode.PERSISTENT)
+                .forPath(path, KvSnapshotConsumerZNode.encode(consumer));
+    }
+
+    public void updateKvSnapshotConsumer(String consumerId, KvSnapshotConsumer consumer)
+            throws Exception {
+        String path = KvSnapshotConsumerZNode.path(consumerId);
+        zkClient.setData().forPath(path, KvSnapshotConsumerZNode.encode(consumer));
+    }
+
+    public Optional<KvSnapshotConsumer> getKvSnapshotConsumer(String consumerId) throws Exception {
+        String path = KvSnapshotConsumerZNode.path(consumerId);
+        return getOrEmpty(path).map(KvSnapshotConsumerZNode::decode);
+    }
+
+    public void deleteKvSnapshotConsumer(String consumerId) throws Exception {
+        String path = KvSnapshotConsumerZNode.path(consumerId);
+        zkClient.delete().forPath(path);
     }
 
     // --------------------------------------------------------------------------------------------

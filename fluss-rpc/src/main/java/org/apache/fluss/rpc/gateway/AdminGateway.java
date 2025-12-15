@@ -21,6 +21,8 @@ import org.apache.fluss.rpc.messages.AlterClusterConfigsRequest;
 import org.apache.fluss.rpc.messages.AlterClusterConfigsResponse;
 import org.apache.fluss.rpc.messages.AlterTableRequest;
 import org.apache.fluss.rpc.messages.AlterTableResponse;
+import org.apache.fluss.rpc.messages.ClearKvSnapshotConsumerRequest;
+import org.apache.fluss.rpc.messages.ClearKvSnapshotConsumerResponse;
 import org.apache.fluss.rpc.messages.CreateAclsRequest;
 import org.apache.fluss.rpc.messages.CreateAclsResponse;
 import org.apache.fluss.rpc.messages.CreateDatabaseRequest;
@@ -37,6 +39,10 @@ import org.apache.fluss.rpc.messages.DropPartitionRequest;
 import org.apache.fluss.rpc.messages.DropPartitionResponse;
 import org.apache.fluss.rpc.messages.DropTableRequest;
 import org.apache.fluss.rpc.messages.DropTableResponse;
+import org.apache.fluss.rpc.messages.RegisterKvSnapshotConsumerRequest;
+import org.apache.fluss.rpc.messages.RegisterKvSnapshotConsumerResponse;
+import org.apache.fluss.rpc.messages.UnregisterKvSnapshotConsumerRequest;
+import org.apache.fluss.rpc.messages.UnregisterKvSnapshotConsumerResponse;
 import org.apache.fluss.rpc.protocol.ApiKeys;
 import org.apache.fluss.rpc.protocol.RPC;
 
@@ -119,6 +125,18 @@ public interface AdminGateway extends AdminReadOnlyGateway {
     @RPC(api = ApiKeys.ALTER_CLUSTER_CONFIGS)
     CompletableFuture<AlterClusterConfigsResponse> alterClusterConfigs(
             AlterClusterConfigsRequest request);
+
+    @RPC(api = ApiKeys.REGISTER_KV_SNAPSHOT_CONSUMER)
+    CompletableFuture<RegisterKvSnapshotConsumerResponse> registerKvSnapshotConsumer(
+            RegisterKvSnapshotConsumerRequest request);
+
+    @RPC(api = ApiKeys.UNREGISTER_KV_SNAPSHOT_CONSUMER)
+    CompletableFuture<UnregisterKvSnapshotConsumerResponse> unregisterKvSnapshotConsumer(
+            UnregisterKvSnapshotConsumerRequest request);
+
+    @RPC(api = ApiKeys.CLEAR_KV_SNAPSHOT_CONSUMER)
+    CompletableFuture<ClearKvSnapshotConsumerResponse> clearKvSnapshotConsumer(
+            ClearKvSnapshotConsumerRequest request);
 
     // todo: rename table & alter table
 

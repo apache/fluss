@@ -31,6 +31,7 @@ import org.apache.fluss.server.entity.RegisterTableBucketLeadAndIsrInfo;
 import org.apache.fluss.server.zk.data.BucketAssignment;
 import org.apache.fluss.server.zk.data.BucketSnapshot;
 import org.apache.fluss.server.zk.data.CoordinatorAddress;
+import org.apache.fluss.server.zk.data.KvSnapshotConsumer;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
 import org.apache.fluss.server.zk.data.TableAssignment;
@@ -483,6 +484,36 @@ class ZooKeeperClientTest {
     }
 
     @Test
+    void testKvSnapshotConsumer() throws Exception {
+        KvSnapshotConsumer consumer1 = new KvSnapshotConsumer(1000L);
+        registerBucket(consumer1, new TableBucket(150001L, 0), 5L, 32);
+        registerBucket(consumer1, new TableBucket(150001L, 1), 6L, 32);
+        registerBucket(consumer1, new TableBucket(150002L, 10L, 0), 7L, 8);
+        registerBucket(consumer1, new TableBucket(150002L, 10L, 1), 8L, 8);
+        registerBucket(consumer1, new TableBucket(150002L, 11L, 0), 9L, 8);
+
+        assertThat(zookeeperClient.getKvSnapshotConsumerList()).isEmpty();
+        zookeeperClient.registerKvSnapshotConsumer("consumer1", consumer1);
+        assertThat(zookeeperClient.getKvSnapshotConsumerList()).containsExactly("consumer1");
+
+        Optional<KvSnapshotConsumer> consumerForZk =
+                zookeeperClient.getKvSnapshotConsumer("consumer1");
+        assertThat(consumerForZk.isPresent()).isTrue();
+        assertThat(consumerForZk.get()).isEqualTo(consumer1);
+
+        registerBucket(consumer1, new TableBucket(150002L, 11L, 0), 12L, 8);
+        unregisterBucket(consumer1, new TableBucket(150002L, 10L, 0));
+        zookeeperClient.updateKvSnapshotConsumer("consumer1", consumer1);
+
+        consumerForZk = zookeeperClient.getKvSnapshotConsumer("consumer1");
+        assertThat(consumerForZk.isPresent()).isTrue();
+        assertThat(consumerForZk.get()).isEqualTo(consumer1);
+
+        zookeeperClient.deleteKvSnapshotConsumer("consumer1");
+        assertThat(zookeeperClient.getKvSnapshotConsumer("consumer1")).isNotPresent();
+    }
+
+    @Test
     void testGetWriterIdAndIncrement() throws Exception {
         // init
         int firstN = 10;
@@ -580,5 +611,14 @@ class ZooKeeperClientTest {
             assertThat(clientConfig.getProperty(ZKClientConfig.ZK_SASL_CLIENT_USERNAME))
                     .isEqualTo("zookeeper2");
         }
+    }
+
+    private void registerBucket(
+            KvSnapshotConsumer consumer, TableBucket tb, long kvSnapshotId, int bucketNum) {
+        consumer.registerBucket(tb, kvSnapshotId, bucketNum);
+    }
+
+    private void unregisterBucket(KvSnapshotConsumer consumer, TableBucket tb) {
+        consumer.unregisterBucket(tb);
     }
 }

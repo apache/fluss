@@ -78,9 +78,7 @@ public class FlinkLanceTieringTestBase {
 
     private static Configuration initConfig() {
         Configuration conf = new Configuration();
-        conf.set(ConfigOptions.KV_SNAPSHOT_INTERVAL, Duration.ofSeconds(1))
-                // not to clean snapshots for test purpose
-                .set(ConfigOptions.KV_MAX_RETAINED_SNAPSHOTS, Integer.MAX_VALUE);
+        conf.set(ConfigOptions.KV_SNAPSHOT_INTERVAL, Duration.ofSeconds(1));
         conf.setString("datalake.format", "lance");
         try {
             warehousePath =

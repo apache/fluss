@@ -24,6 +24,8 @@ import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.client.utils.ClientRpcMessageUtils;
 import org.apache.fluss.cluster.Cluster;
 import org.apache.fluss.cluster.ServerNode;
+import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.cluster.AlterConfig;
 import org.apache.fluss.config.cluster.ConfigEntry;
 import org.apache.fluss.exception.LeaderNotAvailableException;
@@ -46,6 +48,7 @@ import org.apache.fluss.rpc.gateway.AdminReadOnlyGateway;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.AlterClusterConfigsRequest;
 import org.apache.fluss.rpc.messages.AlterTableRequest;
+import org.apache.fluss.rpc.messages.ClearKvSnapshotConsumerRequest;
 import org.apache.fluss.rpc.messages.CreateAclsRequest;
 import org.apache.fluss.rpc.messages.CreateDatabaseRequest;
 import org.apache.fluss.rpc.messages.CreateTableRequest;
@@ -87,6 +90,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeAlterTableRequest;
@@ -94,6 +98,8 @@ import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeCreatePart
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeDropPartitionRequest;
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeListOffsetsRequest;
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makePbPartitionSpec;
+import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeRegisterKvSnapshotConsumerRequest;
+import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeUnregisterKvSnapshotConsumerRequest;
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.toConfigEntries;
 import static org.apache.fluss.client.utils.MetadataUtils.sendMetadataRequestAndRebuildCluster;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toAclBindings;
@@ -112,8 +118,10 @@ public class FlussAdmin implements Admin {
     private final AdminGateway gateway;
     private final AdminReadOnlyGateway readOnlyGateway;
     private final MetadataUpdater metadataUpdater;
+    private final Configuration clientConfig;
 
-    public FlussAdmin(RpcClient client, MetadataUpdater metadataUpdater) {
+    public FlussAdmin(
+            RpcClient client, MetadataUpdater metadataUpdater, Configuration clientConfig) {
         this.gateway =
                 GatewayClientProxy.createGatewayProxy(
                         metadataUpdater::getCoordinatorServer, client, AdminGateway.class);
@@ -121,6 +129,7 @@ public class FlussAdmin implements Admin {
                 GatewayClientProxy.createGatewayProxy(
                         metadataUpdater::getRandomTabletServer, client, AdminGateway.class);
         this.metadataUpdater = metadataUpdater;
+        this.clientConfig = clientConfig;
     }
 
     @Override
@@ -375,6 +384,38 @@ public class FlussAdmin implements Admin {
         return readOnlyGateway
                 .getKvSnapshotMetadata(request)
                 .thenApply(ClientRpcMessageUtils::toKvSnapshotMetadata);
+    }
+
+    @Override
+    public CompletableFuture<Void> registerKvSnapshotConsumer(
+            String consumerId, Map<TableBucket, Long> consumeBuckets) {
+        if (consumeBuckets.isEmpty()) {
+            throw new IllegalArgumentException("consumeBuckets is empty");
+        }
+
+        long expirationTime =
+                clientConfig
+                        .get(ConfigOptions.CLIENT_SCANNER_KV_SNAPSHOT_CONSUMER_EXPIRATION_TIME)
+                        .toMillis();
+        return gateway.registerKvSnapshotConsumer(
+                        makeRegisterKvSnapshotConsumerRequest(
+                                consumerId, consumeBuckets, expirationTime))
+                .thenApply(r -> null);
+    }
+
+    @Override
+    public CompletableFuture<Void> unregisterKvSnapshotConsumer(
+            String consumerId, Set<TableBucket> bucketsToUnregister) {
+        return gateway.unregisterKvSnapshotConsumer(
+                        makeUnregisterKvSnapshotConsumerRequest(consumerId, bucketsToUnregister))
+                .thenApply(r -> null);
+    }
+
+    @Override
+    public CompletableFuture<Void> clearKvSnapshotConsumer(String consumerId) {
+        ClearKvSnapshotConsumerRequest request =
+                new ClearKvSnapshotConsumerRequest().setConsumerId(consumerId);
+        return gateway.clearKvSnapshotConsumer(request).thenApply(r -> null);
     }
 
     @Override

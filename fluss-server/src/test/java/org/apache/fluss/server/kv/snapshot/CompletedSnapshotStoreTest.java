@@ -20,6 +20,7 @@ package org.apache.fluss.server.kv.snapshot;
 import org.apache.fluss.exception.FlussException;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.fs.FsPath;
+import org.apache.fluss.metadata.ConsumeKvSnapshotForBucket;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.utils.concurrent.ExecutorThreadFactory;
 import org.apache.fluss.utils.types.Tuple2;
@@ -30,10 +31,12 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Path;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.Deque;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
@@ -71,13 +74,21 @@ class CompletedSnapshotStoreTest {
         CompletedSnapshot cp1 = getSnapshot(1L);
         CompletedSnapshot cp2 = getSnapshot(2L);
         CompletedSnapshot cp3 = getSnapshot(3L);
-        testSnapshotRetention(1, asList(cp1, cp2, cp3), Collections.singletonList(cp3));
+        // only retain the latest snapshot.
+        testSnapshotRetention(
+                new TestingKvSnapshotConsumerManager(1),
+                asList(cp1, cp2, cp3),
+                Collections.singletonList(cp3));
     }
 
     @Test
     void testNotSubsumedIfNotNeeded() throws Exception {
         CompletedSnapshot cp1 = getSnapshot(1L);
-        testSnapshotRetention(1, Collections.singletonList(cp1), Collections.singletonList(cp1));
+        // only retain the latest snapshot.
+        testSnapshotRetention(
+                new TestingKvSnapshotConsumerManager(1),
+                Collections.singletonList(cp1),
+                Collections.singletonList(cp1));
     }
 
     @Test
@@ -86,28 +97,40 @@ class CompletedSnapshotStoreTest {
         CompletedSnapshot cp2 = getSnapshot(2L);
         CompletedSnapshot cp3 = getSnapshot(3L);
 
-        testSnapshotRetention(2, asList(cp1, cp2, cp3), Arrays.asList(cp2, cp3));
+        // retain two snapshots.
+        testSnapshotRetention(
+                new TestingKvSnapshotConsumerManager(2),
+                asList(cp1, cp2, cp3),
+                Arrays.asList(cp2, cp3));
 
-        testSnapshotRetention(3, asList(cp1, cp2, cp3), Arrays.asList(cp1, cp2, cp3));
+        // retain three snapshots.
+        testSnapshotRetention(
+                new TestingKvSnapshotConsumerManager(3),
+                asList(cp1, cp2, cp3),
+                Arrays.asList(cp1, cp2, cp3));
     }
 
     @Test
     void testLastSnapshot() throws Exception {
         final TestCompletedSnapshotHandleStore completedSnapshotHandleStore = builder.build();
+        TestingKvSnapshotConsumerManager testingKvSnapshotConsumerManager =
+                new TestingKvSnapshotConsumerManager(1);
         CompletedSnapshotStore completedSnapshotStore =
                 createCompletedSnapshotStore(
-                        1, completedSnapshotHandleStore, Collections.emptyList());
+                        testingKvSnapshotConsumerManager,
+                        completedSnapshotHandleStore,
+                        Collections.emptyList());
         assertThat(completedSnapshotStore.getLatestSnapshot()).isEmpty();
         CompletedSnapshot snapshot = getSnapshot(1);
+
+        testingKvSnapshotConsumerManager.register(1);
         completedSnapshotStore.add(snapshot);
         assertThat(completedSnapshotStore.getLatestSnapshot().get()).isEqualTo(snapshot);
     }
 
     @Test
     void testAddSnapshotSuccessfullyShouldRemoveOldOnes() throws Exception {
-        final int num = 1;
         final CompletableFuture<CompletedSnapshotHandle> addFuture = new CompletableFuture<>();
-        List<Tuple2<CompletedSnapshotHandle, String>> snapshotHandles = createSnapshotHandles(num);
         final TestCompletedSnapshotHandleStore completedSnapshotHandleStore =
                 builder.setAddFunction(
                                 (snapshot) -> {
@@ -115,27 +138,42 @@ class CompletedSnapshotStoreTest {
                                     return null;
                                 })
                         .build();
-        final List<CompletedSnapshot> completedSnapshots = mapToCompletedSnapshot(snapshotHandles);
+        TestingKvSnapshotConsumerManager testingKvSnapshotConsumerManager =
+                new TestingKvSnapshotConsumerManager(1);
         final CompletedSnapshotStore completedSnapshotStore =
-                createCompletedSnapshotStore(1, completedSnapshotHandleStore, completedSnapshots);
+                createCompletedSnapshotStore(
+                        testingKvSnapshotConsumerManager,
+                        completedSnapshotHandleStore,
+                        Collections.emptyList());
 
-        assertThat(completedSnapshotStore.getAllSnapshots()).hasSize(num);
-        assertThat(completedSnapshotStore.getAllSnapshots().get(0).getSnapshotID()).isOne();
+        assertThat(completedSnapshotStore.getAllSnapshots()).hasSize(0);
 
-        final long ckpId = 100L;
-        final CompletedSnapshot ckp = getSnapshot(ckpId);
+        // add the first one.
+        final long snapshotId = 100L;
+        final CompletedSnapshot ckp = getSnapshot(snapshotId);
+        testingKvSnapshotConsumerManager.register(snapshotId);
         completedSnapshotStore.add(ckp);
 
         // We should persist the completed snapshot to snapshot handle store.
         final CompletedSnapshotHandle addedCkpHandle =
                 addFuture.get(timeout, TimeUnit.MILLISECONDS);
 
-        assertThat(addedCkpHandle.retrieveCompleteSnapshot().getSnapshotID()).isEqualTo(ckpId);
+        assertThat(addedCkpHandle.retrieveCompleteSnapshot().getSnapshotID()).isEqualTo(snapshotId);
+
+        assertThat(completedSnapshotStore.getAllSnapshots()).hasSize(1);
+        assertThat(completedSnapshotStore.getAllSnapshots().get(0).getSnapshotID())
+                .isEqualTo(snapshotId);
+
+        // add the second one.
+        final long snapshotId2 = 101L;
+        final CompletedSnapshot ckp2 = getSnapshot(snapshotId2);
+        testingKvSnapshotConsumerManager.register(snapshotId2);
+        completedSnapshotStore.add(ckp2);
 
         // Check the old snapshot is removed and new one is added.
-        assertThat(completedSnapshotStore.getAllSnapshots()).hasSize(num);
+        assertThat(completedSnapshotStore.getAllSnapshots()).hasSize(1);
         assertThat(completedSnapshotStore.getAllSnapshots().get(0).getSnapshotID())
-                .isEqualTo(ckpId);
+                .isEqualTo(snapshotId2);
     }
 
     @Test
@@ -151,15 +189,19 @@ class CompletedSnapshotStoreTest {
 
         List<Tuple2<CompletedSnapshotHandle, String>> snapshotHandles = createSnapshotHandles(num);
         final List<CompletedSnapshot> completedSnapshots = mapToCompletedSnapshot(snapshotHandles);
+        TestingKvSnapshotConsumerManager testingKvSnapshotConsumerManager =
+                new TestingKvSnapshotConsumerManager(1);
         final CompletedSnapshotStore completedSnapshotStore =
-                createCompletedSnapshotStore(1, handleStore, completedSnapshots);
+                createCompletedSnapshotStore(
+                        testingKvSnapshotConsumerManager, handleStore, completedSnapshots);
 
         assertThat(completedSnapshotStore.getAllSnapshots()).hasSize(num);
         assertThat(completedSnapshotStore.getAllSnapshots().get(0).getSnapshotID()).isOne();
 
-        final long ckpId = 100L;
-        final CompletedSnapshot ckp = getSnapshot(ckpId);
+        final long snapshotId = 100L;
+        final CompletedSnapshot ckp = getSnapshot(snapshotId);
 
+        testingKvSnapshotConsumerManager.register(snapshotId);
         assertThatThrownBy(() -> completedSnapshotStore.add(ckp))
                 .as("We should get an exception when add snapshot to failed..")
                 .hasMessageContaining(errMsg)
@@ -196,34 +238,36 @@ class CompletedSnapshotStoreTest {
     }
 
     private void testSnapshotRetention(
-            int numToRetain,
+            TestingKvSnapshotConsumerManager testingKvSnapshotConsumerManager,
             List<CompletedSnapshot> completed,
             List<CompletedSnapshot> expectedRetained)
             throws Exception {
-        List<Tuple2<CompletedSnapshotHandle, String>> snapshotHandles = createSnapshotHandles(3);
-        final List<CompletedSnapshot> completedSnapshots = mapToCompletedSnapshot(snapshotHandles);
         final TestCompletedSnapshotHandleStore snapshotHandleStore = builder.build();
         final CompletedSnapshotStore completedSnapshotStore =
-                createCompletedSnapshotStore(numToRetain, snapshotHandleStore, completedSnapshots);
+                createCompletedSnapshotStore(
+                        testingKvSnapshotConsumerManager,
+                        snapshotHandleStore,
+                        Collections.emptyList());
 
         for (CompletedSnapshot c : completed) {
+            testingKvSnapshotConsumerManager.register(c.getSnapshotID());
             completedSnapshotStore.add(c);
         }
         assertThat(completedSnapshotStore.getAllSnapshots()).isEqualTo(expectedRetained);
     }
 
     private CompletedSnapshotStore createCompletedSnapshotStore(
-            int numToRetain,
+            TestingKvSnapshotConsumerManager testingKvSnapshotConsumerManager,
             CompletedSnapshotHandleStore snapshotHandleStore,
             Collection<CompletedSnapshot> completedSnapshots) {
 
         SharedKvFileRegistry sharedKvFileRegistry = new SharedKvFileRegistry();
         return new CompletedSnapshotStore(
-                numToRetain,
                 sharedKvFileRegistry,
                 completedSnapshots,
                 snapshotHandleStore,
-                executorService);
+                executorService,
+                testingKvSnapshotConsumerManager::snapshotConsumerNotExist);
     }
 
     private List<Tuple2<CompletedSnapshotHandle, String>> createSnapshotHandles(int num) {
@@ -247,5 +291,31 @@ class CompletedSnapshotStoreTest {
             stateHandles.add(new Tuple2<>(snapshotStateHandle, String.valueOf(i)));
         }
         return stateHandles;
+    }
+
+    private static final class TestingKvSnapshotConsumerManager {
+        private final int numRetain;
+        private final Deque<Long> snapshotIds = new ArrayDeque<>();
+
+        public TestingKvSnapshotConsumerManager(int numRetain) {
+            this.numRetain = numRetain;
+        }
+
+        public void register(long snapshotId) {
+            if (snapshotIds.size() >= numRetain) {
+                snapshotIds.pollFirst();
+            }
+            snapshotIds.addLast(snapshotId);
+        }
+
+        public boolean snapshotConsumerNotExist(
+                ConsumeKvSnapshotForBucket consumeKvSnapshotForBucket) {
+            if (snapshotIds.size() < numRetain) {
+                // not enough snapshots
+                return false;
+            } else {
+                return !snapshotIds.contains(consumeKvSnapshotForBucket.getKvSnapshotId());
+            }
+        }
     }
 }

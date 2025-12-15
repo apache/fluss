@@ -75,11 +75,7 @@ abstract class FlinkTableSourceFailOverITCase {
                     .setClusterConf(
                             new org.apache.fluss.config.Configuration()
                                     // set snapshot interval to 1s for testing purposes
-                                    .set(ConfigOptions.KV_SNAPSHOT_INTERVAL, Duration.ofSeconds(1))
-                                    // not to clean snapshots for test purpose
-                                    .set(
-                                            ConfigOptions.KV_MAX_RETAINED_SNAPSHOTS,
-                                            Integer.MAX_VALUE))
+                                    .set(ConfigOptions.KV_SNAPSHOT_INTERVAL, Duration.ofSeconds(1)))
                     .setNumOfTabletServers(3)
                     .build();
 

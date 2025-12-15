@@ -34,6 +34,8 @@ import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.ProjectedRow;
 import org.apache.fluss.row.encode.CompactedKeyEncoder;
 import org.apache.fluss.row.encode.KeyEncoder;
+import org.apache.fluss.server.zk.ZooKeeperClient;
+import org.apache.fluss.server.zk.data.KvSnapshotConsumer;
 import org.apache.fluss.types.DataTypes;
 
 import org.junit.jupiter.api.AfterEach;
@@ -182,6 +184,80 @@ class KvSnapshotBatchScannerITCase extends ClientToServerITCaseBase {
         testSnapshotRead(tablePath, expectedRowByBuckets);
     }
 
+    @Test
+    public void testKvSnapshotConsumer() throws Exception {
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "test-kv-snapshot-consumer");
+        long tableId = createTable(tablePath, DEFAULT_TABLE_DESCRIPTOR, true);
+
+        String kvSnapshotConsumer1 = "test-consumer";
+        String kvSnapshotConsumer2 = "test-consumer2";
+
+        // scan the snapshot
+        Map<TableBucket, List<InternalRow>> expectedRowByBuckets = putRows(tableId, tablePath, 10);
+
+        // wait snapshot finish
+        waitUntilAllSnapshotFinished(expectedRowByBuckets.keySet(), 0);
+
+        ZooKeeperClient zkClient = FLUSS_CLUSTER_EXTENSION.getZooKeeperClient();
+        assertThat(zkClient.getKvSnapshotConsumerList()).isEmpty();
+
+        // test register kv snapshot consumer for snapshot 0.
+        Map<TableBucket, Long> consumeBuckets = new HashMap<>();
+        KvSnapshots kvSnapshots = admin.getLatestKvSnapshots(tablePath).get();
+        for (int bucketId : kvSnapshots.getBucketIds()) {
+            TableBucket tableBucket = new TableBucket(kvSnapshots.getTableId(), bucketId);
+            consumeBuckets.put(tableBucket, kvSnapshots.getSnapshotId(bucketId).getAsLong());
+        }
+        admin.registerKvSnapshotConsumer(kvSnapshotConsumer1, consumeBuckets).get();
+        checkKvSnapshotConsumerEquals(
+                zkClient, kvSnapshotConsumer1, 3, tableId, new Long[] {0L, 0L, 0L});
+
+        expectedRowByBuckets = putRows(tableId, tablePath, 10);
+        // wait snapshot2 finish
+        waitUntilAllSnapshotFinished(expectedRowByBuckets.keySet(), 1);
+
+        // test register kv snapshot consumer for snapshot 1.
+        consumeBuckets = new HashMap<>();
+        kvSnapshots = admin.getLatestKvSnapshots(tablePath).get();
+        for (int bucketId : kvSnapshots.getBucketIds()) {
+            TableBucket tableBucket = new TableBucket(kvSnapshots.getTableId(), bucketId);
+            consumeBuckets.put(tableBucket, kvSnapshots.getSnapshotId(bucketId).getAsLong());
+        }
+        admin.registerKvSnapshotConsumer(kvSnapshotConsumer2, consumeBuckets).get();
+        checkKvSnapshotConsumerEquals(
+                zkClient, kvSnapshotConsumer2, 3, tableId, new Long[] {1L, 1L, 1L});
+        // check even snapshot1 is generated, snapshot0 also retained as consumer exists.
+        for (TableBucket tb : expectedRowByBuckets.keySet()) {
+            assertThat(zkClient.getTableBucketSnapshot(tb, 0L).isPresent()).isTrue();
+            assertThat(zkClient.getTableBucketSnapshot(tb, 1L).isPresent()).isTrue();
+        }
+
+        // unregister partial snapshot for consumer1.
+        admin.unregisterKvSnapshotConsumer(
+                        kvSnapshotConsumer1, Collections.singleton(new TableBucket(tableId, 0)))
+                .get();
+        checkKvSnapshotConsumerEquals(
+                zkClient, kvSnapshotConsumer1, 2, tableId, new Long[] {-1L, 0L, 0L});
+
+        // unregister all snapshot for consumer2.
+        admin.unregisterKvSnapshotConsumer(kvSnapshotConsumer2, consumeBuckets.keySet()).get();
+        assertThat(zkClient.getKvSnapshotConsumerList()).doesNotContain(kvSnapshotConsumer2);
+
+        // clear consumer1
+        admin.clearKvSnapshotConsumer(kvSnapshotConsumer1).get();
+        assertThat(zkClient.getKvSnapshotConsumerList()).isEmpty();
+
+        expectedRowByBuckets = putRows(tableId, tablePath, 10);
+        // wait snapshot2 finish
+        waitUntilAllSnapshotFinished(expectedRowByBuckets.keySet(), 2);
+        // as all consumers are cleared, and new snapshot is generated, all old snapshot are
+        // cleared.
+        for (TableBucket tb : expectedRowByBuckets.keySet()) {
+            assertThat(zkClient.getTableBucketSnapshot(tb, 0L).isPresent()).isFalse();
+            assertThat(zkClient.getTableBucketSnapshot(tb, 1L).isPresent()).isFalse();
+        }
+    }
+
     private Map<TableBucket, List<InternalRow>> putRows(
             long tableId, TablePath tablePath, int rowNumber) throws Exception {
         List<InternalRow> rows = new ArrayList<>();
@@ -244,6 +320,26 @@ class KvSnapshotBatchScannerITCase extends ClientToServerITCaseBase {
     private void waitUntilAllSnapshotFinished(Set<TableBucket> tableBuckets, long snapshotId) {
         for (TableBucket tableBucket : tableBuckets) {
             FLUSS_CLUSTER_EXTENSION.waitUntilSnapshotFinished(tableBucket, snapshotId);
+        }
+    }
+
+    private void checkKvSnapshotConsumerEquals(
+            ZooKeeperClient zkClient,
+            String consumerId,
+            int expectedSize,
+            long tableId,
+            Long[] expectedBucketIndex)
+            throws Exception {
+        assertThat(zkClient.getKvSnapshotConsumerList()).contains(consumerId);
+        assertThat(zkClient.getKvSnapshotConsumer(consumerId)).isPresent();
+        KvSnapshotConsumer actual = zkClient.getKvSnapshotConsumer(consumerId).get();
+        assertThat(actual.getTableIdToPartitions()).isEmpty();
+        assertThat(actual.getPartitionIdToSnapshots()).isEmpty();
+        assertThat(actual.getConsumedSnapshotCount()).isEqualTo(expectedSize);
+        Long[] bucketIndex = actual.getTableIdToSnapshots().get(tableId);
+        assertThat(bucketIndex).hasSize(DEFAULT_BUCKET_NUM);
+        for (int i = 0; i < DEFAULT_BUCKET_NUM; i++) {
+            assertThat(bucketIndex[i]).isEqualTo(expectedBucketIndex[i]);
         }
     }
 }

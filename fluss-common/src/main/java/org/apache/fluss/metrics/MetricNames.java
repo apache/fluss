@@ -53,6 +53,10 @@ public class MetricNames {
     public static final String KV_ALL_SNAPSHOT_SIZE = "allKvSnapshotSize";
     public static final String SERVER_PHYSICAL_STORAGE_REMOTE_KV_SIZE = "remoteKvSize";
 
+    // for kv snapshot consumer.
+    public static final String KV_SNAPSHOT_CONSUMER_COUNT = "kvSnapshotConsumerCount";
+    public static final String CONSUMED_KV_SNAPSHOT_COUNT = "consumedKvSnapshotCount";
+
     // --------------------------------------------------------------------------------------------
     // metrics for tablet server
     // --------------------------------------------------------------------------------------------
