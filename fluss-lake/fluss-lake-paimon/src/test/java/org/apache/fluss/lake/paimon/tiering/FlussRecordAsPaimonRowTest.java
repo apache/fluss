@@ -191,11 +191,7 @@ class FlussRecordAsPaimonRowTest {
         assertThat(flussRecordAsPaimonRow.getFieldCount()).isEqualTo(5);
 
         assertThat(flussRecordAsPaimonRow.getBoolean(0)).isTrue();
-
-
         assertThat(flussRecordAsPaimonRow.isNullAt(1)).isTrue();
-
-
         assertThat(flussRecordAsPaimonRow.getInt(2)).isEqualTo(tableBucket);
         assertThat(flussRecordAsPaimonRow.getLong(3)).isEqualTo(logOffset);
         assertThat(flussRecordAsPaimonRow.getLong(4)).isEqualTo(timeStamp);
@@ -217,18 +213,14 @@ class FlussRecordAsPaimonRowTest {
 
         long logOffset = 7L;
         long timeStamp = System.currentTimeMillis();
-
         GenericRow genericRow = new GenericRow(2);
         genericRow.setField(0, true);
         genericRow.setField(1, BinaryString.fromString("extra"));
         LogRecord logRecord = new GenericRecord(logOffset, timeStamp, APPEND_ONLY, genericRow);
         flussRecordAsPaimonRow.setFlussRecord(logRecord);
 
-
         assertThat(flussRecordAsPaimonRow.getFieldCount()).isEqualTo(4);
         assertThat(flussRecordAsPaimonRow.getBoolean(0)).isTrue();
-
-
         assertThat(flussRecordAsPaimonRow.getInt(1)).isEqualTo(tableBucket);
         assertThat(flussRecordAsPaimonRow.getLong(2)).isEqualTo(logOffset);
         assertThat(flussRecordAsPaimonRow.getLong(3)).isEqualTo(timeStamp);
