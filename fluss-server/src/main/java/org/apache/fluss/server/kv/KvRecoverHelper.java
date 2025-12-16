@@ -19,6 +19,7 @@ package org.apache.fluss.server.kv;
 
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.KvFormat;
+import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
@@ -55,6 +56,7 @@ public class KvRecoverHelper {
     private final long recoverPointOffset;
     private final KvRecoverContext recoverContext;
     private final KvFormat kvFormat;
+    private final LogFormat logFormat;
 
     // will be initialized when first encounter a log record during recovering from log
     private Integer currentSchemaId;
@@ -72,12 +74,14 @@ public class KvRecoverHelper {
             long recoverPointOffset,
             KvRecoverContext recoverContext,
             KvFormat kvFormat,
+            LogFormat logFormat,
             SchemaGetter schemaGetter) {
         this.kvTablet = kvTablet;
         this.logTablet = logTablet;
         this.recoverPointOffset = recoverPointOffset;
         this.recoverContext = recoverContext;
         this.kvFormat = kvFormat;
+        this.logFormat = logFormat;
         this.schemaGetter = schemaGetter;
     }
 
@@ -127,9 +131,7 @@ public class KvRecoverHelper {
             FetchIsolation fetchIsolation,
             ThrowingConsumer<KeyValueAndLogOffset, Exception> resumeRecordConsumer)
             throws Exception {
-        try (LogRecordReadContext readContext =
-                LogRecordReadContext.createArrowReadContext(
-                        currentRowType, currentSchemaId, schemaGetter)) {
+        try (LogRecordReadContext readContext = createLogRecordReadContext()) {
             long nextFetchOffset = startFetchOffset;
             while (true) {
                 LogRecords logRecords =
@@ -172,6 +174,18 @@ public class KvRecoverHelper {
                 }
             }
             return nextFetchOffset;
+        }
+    }
+
+    private LogRecordReadContext createLogRecordReadContext() {
+        if (logFormat == LogFormat.ARROW) {
+            return LogRecordReadContext.createArrowReadContext(
+                    currentRowType, currentSchemaId, schemaGetter);
+        } else if (logFormat == LogFormat.COMPACTED) {
+            return LogRecordReadContext.createCompactedRowReadContext(
+                    currentRowType, currentSchemaId);
+        } else {
+            throw new UnsupportedOperationException("Unsupported log format: " + logFormat);
         }
     }
 

@@ -752,6 +752,7 @@ public final class Replica {
                             startRecoverLogOffset,
                             recoverContext,
                             tableConfig.getKvFormat(),
+                            tableConfig.getLogFormat(),
                             schemaGetter);
             kvRecoverHelper.recover();
         } catch (Exception e) {
