@@ -82,12 +82,14 @@ public class TieringLogSplit extends TieringSplit {
                 + ", partitionName='"
                 + partitionName
                 + '\''
+                + ", numberOfSplits="
+                + numberOfSplits
+                + ", forceIgnore="
+                + forceIgnore
                 + ", startingOffset="
                 + startingOffset
                 + ", stoppingOffset="
                 + stoppingOffset
-                + ", numberOfSplits="
-                + numberOfSplits
                 + '}';
     }
 

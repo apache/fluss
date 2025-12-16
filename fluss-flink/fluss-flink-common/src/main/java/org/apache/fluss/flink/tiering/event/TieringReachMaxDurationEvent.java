@@ -19,19 +19,40 @@ package org.apache.fluss.flink.tiering.event;
 
 import org.apache.flink.api.connector.source.SourceEvent;
 
-/** SourceEvent used to notify TieringSourceReader that a table has timed out and should be completed. */
-public class TieringTimeoutEvent implements SourceEvent {
+import java.util.Objects;
+
+/**
+ * SourceEvent used to notify TieringSourceReader that a table has reached the maximum tiering
+ * duration and should be force completed.
+ */
+public class TieringReachMaxDurationEvent implements SourceEvent {
 
     private static final long serialVersionUID = 1L;
 
     private final long tableId;
 
-    public TieringTimeoutEvent(long tableId) {
+    public TieringReachMaxDurationEvent(long tableId) {
         this.tableId = tableId;
     }
 
     public long getTableId() {
         return tableId;
     }
-}
 
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) {
+            return true;
+        }
+        if (!(o instanceof TieringReachMaxDurationEvent)) {
+            return false;
+        }
+        TieringReachMaxDurationEvent that = (TieringReachMaxDurationEvent) o;
+        return tableId == that.tableId;
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hashCode(tableId);
+    }
+}

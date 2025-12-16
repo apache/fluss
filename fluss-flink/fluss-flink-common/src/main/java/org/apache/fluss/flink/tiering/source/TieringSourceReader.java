@@ -19,7 +19,8 @@ package org.apache.fluss.flink.tiering.source;
 
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.client.Connection;
-import org.apache.fluss.flink.tiering.event.TieringTimeoutEvent;
+import org.apache.fluss.flink.adapter.SingleThreadMultiplexSourceReaderBaseAdapter;
+import org.apache.fluss.flink.tiering.event.TieringReachMaxDurationEvent;
 import org.apache.fluss.flink.tiering.source.split.TieringSplit;
 import org.apache.fluss.flink.tiering.source.state.TieringSplitState;
 import org.apache.fluss.lake.writer.LakeTieringFactory;
@@ -27,7 +28,8 @@ import org.apache.fluss.lake.writer.LakeTieringFactory;
 import org.apache.flink.api.connector.source.SourceEvent;
 import org.apache.flink.api.connector.source.SourceReader;
 import org.apache.flink.api.connector.source.SourceReaderContext;
-import org.apache.flink.connector.base.source.reader.SingleThreadMultiplexSourceReaderBase;
+import org.apache.flink.connector.base.source.reader.RecordsWithSplitIds;
+import org.apache.flink.connector.base.source.reader.synchronization.FutureCompletingBlockingQueue;
 
 import java.util.Collections;
 import java.util.List;
@@ -36,34 +38,31 @@ import java.util.Map;
 /** A {@link SourceReader} that read records from Fluss and write to lake. */
 @Internal
 public final class TieringSourceReader<WriteResult>
-        extends SingleThreadMultiplexSourceReaderBase<
+        extends SingleThreadMultiplexSourceReaderBaseAdapter<
                 TableBucketWriteResult<WriteResult>,
                 TableBucketWriteResult<WriteResult>,
                 TieringSplit,
                 TieringSplitState> {
 
     private final Connection connection;
-    private final LakeTieringFactory<WriteResult, ?> lakeTieringFactory;
-    // Thread-local storage for split reader to handle timeout events
-    private static final ThreadLocal<TieringSplitReader<?>> CURRENT_SPLIT_READER = new ThreadLocal<>();
 
     public TieringSourceReader(
+            FutureCompletingBlockingQueue<RecordsWithSplitIds<TableBucketWriteResult<WriteResult>>>
+                    elementsQueue,
             SourceReaderContext context,
             Connection connection,
             LakeTieringFactory<WriteResult, ?> lakeTieringFactory) {
         super(
-                () -> {
-                    TieringSplitReader<WriteResult> reader =
-                            new TieringSplitReader<>(connection, lakeTieringFactory);
-                    // Store reference in thread-local for timeout handling
-                    CURRENT_SPLIT_READER.set(reader);
-                    return reader;
-                },
+                elementsQueue,
+                new TieringSourceFetcherManager<>(
+                        elementsQueue,
+                        () -> new TieringSplitReader<>(connection, lakeTieringFactory),
+                        context.getConfiguration(),
+                        (ignore) -> {}),
                 new TableBucketWriteResultEmitter<>(),
                 context.getConfiguration(),
                 context);
         this.connection = connection;
-        this.lakeTieringFactory = lakeTieringFactory;
     }
 
     @Override
@@ -103,18 +102,17 @@ public final class TieringSourceReader<WriteResult>
 
     @Override
     public void handleSourceEvents(SourceEvent sourceEvent) {
-        if (sourceEvent instanceof TieringTimeoutEvent) {
-            TieringTimeoutEvent timeoutEvent = (TieringTimeoutEvent) sourceEvent;
-            TieringSplitReader<?> splitReader = CURRENT_SPLIT_READER.get();
-            if (splitReader != null) {
-                splitReader.handleTableTimeout(timeoutEvent.getTableId());
-            }
+        if (sourceEvent instanceof TieringReachMaxDurationEvent) {
+            TieringReachMaxDurationEvent reachMaxDurationEvent =
+                    (TieringReachMaxDurationEvent) sourceEvent;
+            long tableId = reachMaxDurationEvent.getTableId();
+            ((TieringSourceFetcherManager<WriteResult>) splitFetcherManager)
+                    .markTableAsTieringTimeOut(tableId);
         }
     }
 
     @Override
     public void close() throws Exception {
-        CURRENT_SPLIT_READER.remove();
         super.close();
         connection.close();
     }

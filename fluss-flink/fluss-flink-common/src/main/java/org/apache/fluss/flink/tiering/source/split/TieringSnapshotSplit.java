@@ -84,12 +84,14 @@ public class TieringSnapshotSplit extends TieringSplit {
                 + ", partitionName='"
                 + partitionName
                 + '\''
+                + ", numberOfSplits="
+                + numberOfSplits
+                + ", forceIgnore="
+                + forceIgnore
                 + ", snapshotId="
                 + snapshotId
                 + ", logOffsetOfSnapshot="
                 + logOffsetOfSnapshot
-                + ", numberOfSplits="
-                + numberOfSplits
                 + '}';
     }
 

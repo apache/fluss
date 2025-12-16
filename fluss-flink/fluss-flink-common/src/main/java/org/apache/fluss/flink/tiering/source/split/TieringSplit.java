@@ -41,6 +41,8 @@ public abstract class TieringSplit implements SourceSplit {
     // the total number of splits in one round of tiering
     protected final int numberOfSplits;
 
+    protected boolean forceIgnore = false;
+
     public TieringSplit(
             TablePath tablePath,
             TableBucket tableBucket,
@@ -70,6 +72,14 @@ public abstract class TieringSplit implements SourceSplit {
     /** Checks whether this split is a log split to tier. */
     public final boolean isTieringLogSplit() {
         return getClass() == TieringLogSplit.class;
+    }
+
+    public void forceIgnore() {
+        this.forceIgnore = true;
+    }
+
+    public boolean isForceIgnore() {
+        return forceIgnore;
     }
 
     /** Casts this split into a {@link TieringLogSplit}. */
