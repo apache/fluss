@@ -26,6 +26,7 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.metrics.FlinkMetricRegistry;
 import org.apache.fluss.flink.tiering.event.FailedTieringEvent;
 import org.apache.fluss.flink.tiering.event.FinishedTieringEvent;
+import org.apache.fluss.flink.tiering.event.TieringReachMaxDurationEvent;
 import org.apache.fluss.flink.tiering.source.split.TieringSplit;
 import org.apache.fluss.flink.tiering.source.split.TieringSplitGenerator;
 import org.apache.fluss.flink.tiering.source.state.TieringSourceEnumeratorState;
@@ -39,6 +40,8 @@ import org.apache.fluss.rpc.messages.PbHeartbeatReqForTable;
 import org.apache.fluss.rpc.messages.PbLakeTieringTableInfo;
 import org.apache.fluss.rpc.metrics.ClientMetricGroup;
 import org.apache.fluss.utils.MapUtils;
+import org.apache.fluss.utils.clock.Clock;
+import org.apache.fluss.utils.clock.SystemClock;
 
 import org.apache.flink.api.connector.source.ReaderInfo;
 import org.apache.flink.api.connector.source.SourceEvent;
@@ -54,7 +57,9 @@ import javax.annotation.Nullable;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -92,11 +97,17 @@ public class TieringSourceEnumerator
     private final SplitEnumeratorContext<TieringSplit> context;
     private final SplitEnumeratorMetricGroup enumeratorMetricGroup;
     private final long pollTieringTableIntervalMs;
+    private final long tieringTableDurationMaxMs;
+    private final long tieringTableDurationDetectIntervalMs;
     private final List<TieringSplit> pendingSplits;
     private final Set<Integer> readersAwaitingSplit;
+
+    private final Map<Long, Long> tieringTablesDeadline;
     private final Map<Long, Long> tieringTableEpochs;
     private final Map<Long, Long> failedTableEpochs;
     private final Map<Long, Long> finishedTableEpochs;
+
+    private final Clock clock;
 
     // lazily instantiated
     private RpcClient rpcClient;
@@ -113,16 +124,38 @@ public class TieringSourceEnumerator
     public TieringSourceEnumerator(
             Configuration flussConf,
             SplitEnumeratorContext<TieringSplit> context,
-            long pollTieringTableIntervalMs) {
+            long pollTieringTableIntervalMs,
+            long tieringTableDurationMaxMs,
+            long tieringTableDurationDetectIntervalMs) {
+        this(
+                flussConf,
+                context,
+                pollTieringTableIntervalMs,
+                tieringTableDurationMaxMs,
+                tieringTableDurationDetectIntervalMs,
+                SystemClock.getInstance());
+    }
+
+    public TieringSourceEnumerator(
+            Configuration flussConf,
+            SplitEnumeratorContext<TieringSplit> context,
+            long pollTieringTableIntervalMs,
+            long tieringTableDurationMaxMs,
+            long tieringTableDurationDetectIntervalMs,
+            Clock clock) {
         this.flussConf = flussConf;
         this.context = context;
         this.enumeratorMetricGroup = context.metricGroup();
         this.pollTieringTableIntervalMs = pollTieringTableIntervalMs;
+        this.tieringTableDurationMaxMs = tieringTableDurationMaxMs;
+        this.tieringTableDurationDetectIntervalMs = tieringTableDurationDetectIntervalMs;
         this.pendingSplits = new ArrayList<>();
         this.readersAwaitingSplit = new TreeSet<>();
         this.tieringTableEpochs = MapUtils.newConcurrentHashMap();
         this.finishedTableEpochs = MapUtils.newConcurrentHashMap();
         this.failedTableEpochs = MapUtils.newConcurrentHashMap();
+        this.tieringTablesDeadline = MapUtils.newConcurrentHashMap();
+        this.clock = clock;
     }
 
     @Override
@@ -158,6 +191,12 @@ public class TieringSourceEnumerator
                 this::generateAndAssignSplits,
                 0,
                 pollTieringTableIntervalMs);
+
+        this.context.callAsync(
+                this::checkTableReachMaxTieringDuration,
+                this::handleReachMaxTieringDurationTables,
+                0,
+                tieringTableDurationDetectIntervalMs);
     }
 
     @Override
@@ -243,6 +282,7 @@ public class TieringSourceEnumerator
             } else {
                 finishedTableEpochs.put(finishedTableId, tieringEpoch);
             }
+            tieringTablesDeadline.remove(finishedTableId);
         }
 
         if (sourceEvent instanceof FailedTieringEvent) {
@@ -261,6 +301,7 @@ public class TieringSourceEnumerator
             } else {
                 failedTableEpochs.put(failedTableId, tieringEpoch);
             }
+            tieringTablesDeadline.remove(failedTableId);
         }
 
         if (!finishedTableEpochs.isEmpty() || !failedTableEpochs.isEmpty()) {
@@ -286,6 +327,53 @@ public class TieringSourceEnumerator
         }
     }
 
+    private Set<Long> checkTableReachMaxTieringDuration() {
+        Set<Long> tieringReachMaxDurationTables = new HashSet<>();
+        long currentTime = clock.milliseconds();
+        for (Map.Entry<Long, Long> tieringTableDeadline : tieringTablesDeadline.entrySet()) {
+            long tableId = tieringTableDeadline.getKey();
+            long deadline = tieringTableDeadline.getValue();
+            if (deadline < currentTime) {
+                tieringReachMaxDurationTables.add(tableId);
+            }
+        }
+        return tieringReachMaxDurationTables;
+    }
+
+    private void handleReachMaxTieringDurationTables(
+            Set<Long> tieringReachMaxDurationTables, Throwable throwable) {
+        if (throwable != null) {
+            LOG.error("Fail to check tiering timeout tables.", throwable);
+            return;
+        }
+
+        for (Long reachMaxDurationTable : tieringReachMaxDurationTables) {
+            for (TieringSplit tieringSplit : pendingSplits) {
+                if (tieringSplit.getTableBucket().getTableId() == reachMaxDurationTable) {
+                    // force ignore this tiering split since the tiering for this table is timeout,
+                    // we have to force to set to ignore the tiering split so that the
+                    // tiering source reader can ignore them directly
+                    tieringSplit.forceIgnore();
+                } else {
+                    // we can break directly, if found any one split's table id is not equal to the
+                    // timeout
+                    // table, the following split must be not equal to the table id
+                    break;
+                }
+            }
+
+            LOG.debug("Found the table {} reach max tiering duration.", reachMaxDurationTable);
+
+            // broadcast the tiering reach max duration event to all readers,
+            // we broadcast all for simplicity
+            Set<Integer> readers = new HashSet<>(context.registeredReaders().keySet());
+            for (int reader : readers) {
+                context.sendEventToSourceReader(
+                        reader, new TieringReachMaxDurationEvent(reachMaxDurationTable));
+            }
+        }
+    }
+
     private void generateAndAssignSplits(
             @Nullable Tuple3<Long, Long, TablePath> tieringTable, Throwable throwable) {
         if (throwable != null) {
@@ -303,6 +391,7 @@ public class TieringSourceEnumerator
             return;
         }
         /* This method may be called from both addSplitsBack and handleSplitRequest, make it thread safe. */
+        // todo: do we need to add lock?
         synchronized (readersAwaitingSplit) {
             if (!readersAwaitingSplit.isEmpty()) {
                 final Integer[] readers = readersAwaitingSplit.toArray(new Integer[0]);
@@ -378,6 +467,9 @@ public class TieringSourceEnumerator
             List<TieringSplit> tieringSplits =
                     populateNumberOfTieringSplits(
                             splitGenerator.generateTableSplits(tieringTable.f2));
+            // shuffle tiering split to avoid splits tiering skew
+            // after introduce tiering max duration
+            Collections.shuffle(tieringSplits);
             LOG.info(
                     "Generate Tiering {} splits for table {} with cost {}ms.",
                     tieringSplits.size(),
@@ -391,6 +483,8 @@ public class TieringSourceEnumerator
             } else {
                 tieringTableEpochs.put(tieringTable.f0, tieringTable.f1);
                 pendingSplits.addAll(tieringSplits);
+                tieringTablesDeadline.put(
+                        tieringTable.f0, clock.milliseconds() + tieringTableDurationMaxMs);
             }
         } catch (Exception e) {
             LOG.warn("Fail to generate Tiering splits for table {}.", tieringTable.f2, e);
