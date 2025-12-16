@@ -23,7 +23,6 @@ import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.FlussRuntimeException;
-import org.apache.fluss.exception.InvalidAlterTableException;
 import org.apache.fluss.exception.InvalidConfigException;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.LakeTableAlreadyExistException;
@@ -906,11 +905,26 @@ class LakeEnabledTableCreateITCase {
                                 DataTypes.INT(),
                                 "c3 comment",
                                 TableChange.ColumnPosition.last()));
-        assertThatThrownBy(() -> admin.alterTable(tablePath, tableChanges, false).get())
-                .cause()
-                .isInstanceOf(InvalidAlterTableException.class)
-                .hasMessage(
-                        "Schema evolution is currently not supported for tables with datalake enabled.");
+
+        admin.alterTable(tablePath, tableChanges, false).get();
+
+        Table alteredPaimonTable =
+                paimonCatalog.getTable(Identifier.create(DATABASE, tablePath.getTableName()));
+        // Verify the new column c3 with comment was added to Paimon table
+        RowType alteredRowType = alteredPaimonTable.rowType();
+        assertThat(alteredRowType.getFieldCount()).isEqualTo(6);
+        assertThat(alteredRowType.getFieldNames())
+                .containsExactly(
+                        "c1",
+                        "c2",
+                        "c3",
+                        BUCKET_COLUMN_NAME,
+                        OFFSET_COLUMN_NAME,
+                        TIMESTAMP_COLUMN_NAME);
+        // Verify c3 column has the correct type and comment
+        assertThat(alteredRowType.getField("c3").type())
+                .isEqualTo(org.apache.paimon.types.DataTypes.INT());
+        assertThat(alteredRowType.getField("c3").description()).isEqualTo("c3 comment");
     }
 
     private void verifyPaimonTable(

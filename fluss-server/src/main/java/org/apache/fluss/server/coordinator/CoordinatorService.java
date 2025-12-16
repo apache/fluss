@@ -328,14 +328,21 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                             + "table properties or table schema.");
         }
 
+        LakeCatalogDynamicLoader.LakeCatalogContainer lakeCatalogContainer =
+                lakeCatalogDynamicLoader.getLakeCatalogContainer();
+        LakeCatalog.Context lakeCatalogContext =
+                new DefaultLakeCatalogContext(false, currentSession().getPrincipal());
+
         if (!alterSchemaChanges.isEmpty()) {
             metadataManager.alterTableSchema(
-                    tablePath, alterSchemaChanges, request.isIgnoreIfNotExists());
+                    tablePath,
+                    alterSchemaChanges,
+                    request.isIgnoreIfNotExists(),
+                    lakeCatalogContainer.getLakeCatalog(),
+                    lakeCatalogContext);
         }
 
         if (!alterTableConfigChanges.isEmpty()) {
-            LakeCatalogDynamicLoader.LakeCatalogContainer lakeCatalogContainer =
-                    lakeCatalogDynamicLoader.getLakeCatalogContainer();
             metadataManager.alterTableProperties(
                     tablePath,
                     alterTableConfigChanges,
@@ -343,7 +350,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                     request.isIgnoreIfNotExists(),
                     lakeCatalogContainer.getLakeCatalog(),
                     lakeTableTieringManager,
-                    new DefaultLakeCatalogContext(false, currentSession().getPrincipal()));
+                    lakeCatalogContext);
         }
 
         return CompletableFuture.completedFuture(new AlterTableResponse());

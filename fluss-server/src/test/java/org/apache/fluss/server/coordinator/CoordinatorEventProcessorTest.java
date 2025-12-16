@@ -1230,7 +1230,7 @@ class CoordinatorEventProcessorTest {
     }
 
     private void alterTable(TablePath tablePath, List<TableChange> schemaChanges) {
-        metadataManager.alterTableSchema(tablePath, schemaChanges, true);
+        metadataManager.alterTableSchema(tablePath, schemaChanges, true, null, null);
     }
 
     private TableDescriptor getPartitionedTable() {

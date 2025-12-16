@@ -110,8 +110,10 @@ public class PaimonLakeCatalog implements LakeCatalog {
         try {
             List<SchemaChange> paimonSchemaChanges = toPaimonSchemaChanges(tableChanges);
             alterTable(tablePath, paimonSchemaChanges);
-        } catch (Catalog.ColumnAlreadyExistException | Catalog.ColumnNotExistException e) {
-            // shouldn't happen before we support schema change
+        } catch (Catalog.ColumnAlreadyExistException e) {
+            // Column already exists, treat as idempotent success for retry scenarios.
+        } catch (Catalog.ColumnNotExistException e) {
+            // This shouldn't happen for AddColumn operations
             throw new RuntimeException(e);
         }
     }
