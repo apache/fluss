@@ -17,6 +17,12 @@
 
 package org.apache.fluss.flink.tiering.source.enumerator;
 
+import org.apache.flink.api.connector.source.SourceEvent;
+import org.apache.flink.api.connector.source.SplitEnumerator;
+import org.apache.flink.api.connector.source.SplitEnumeratorContext;
+import org.apache.flink.api.java.tuple.Tuple3;
+import org.apache.flink.metrics.groups.SplitEnumeratorMetricGroup;
+import org.apache.flink.util.FlinkRuntimeException;
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.client.Connection;
 import org.apache.fluss.client.ConnectionFactory;
@@ -27,6 +33,7 @@ import org.apache.fluss.flink.metrics.FlinkMetricRegistry;
 import org.apache.fluss.flink.tiering.event.FailedTieringEvent;
 import org.apache.fluss.flink.tiering.event.FinishedTieringEvent;
 import org.apache.fluss.flink.tiering.event.TieringFailOverEvent;
+import org.apache.fluss.flink.tiering.event.TieringTimeoutEvent;
 import org.apache.fluss.flink.tiering.source.split.TieringSplit;
 import org.apache.fluss.flink.tiering.source.split.TieringSplitGenerator;
 import org.apache.fluss.flink.tiering.source.state.TieringSourceEnumeratorState;
@@ -40,21 +47,16 @@ import org.apache.fluss.rpc.messages.PbHeartbeatReqForTable;
 import org.apache.fluss.rpc.messages.PbLakeTieringTableInfo;
 import org.apache.fluss.rpc.metrics.ClientMetricGroup;
 import org.apache.fluss.utils.MapUtils;
-
-import org.apache.flink.api.connector.source.SourceEvent;
-import org.apache.flink.api.connector.source.SplitEnumerator;
-import org.apache.flink.api.connector.source.SplitEnumeratorContext;
-import org.apache.flink.api.java.tuple.Tuple3;
-import org.apache.flink.metrics.groups.SplitEnumeratorMetricGroup;
-import org.apache.flink.util.FlinkRuntimeException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
-
 import java.io.IOException;
+import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -85,6 +87,8 @@ import static org.apache.fluss.flink.tiering.source.enumerator.TieringSourceEnum
 public class TieringSourceEnumerator
         implements SplitEnumerator<TieringSplit, TieringSourceEnumeratorState> {
 
+    private static final long TIERING_TIMEOUT_MS = Duration.ofMinutes(10).toMillis();
+
     private static final Logger LOG = LoggerFactory.getLogger(TieringSourceEnumerator.class);
 
     private final Configuration flussConf;
@@ -93,6 +97,8 @@ public class TieringSourceEnumerator
     private final long pollTieringTableIntervalMs;
     private final List<TieringSplit> pendingSplits;
     private final Set<Integer> readersAwaitingSplit;
+
+    private final Map<Long, Long> tieringTableDeadline;
     private final Map<Long, Long> tieringTableEpochs;
     private final Map<Long, Long> failedTableEpochs;
     private final Map<Long, Long> finishedTableEpochs;
@@ -120,6 +126,7 @@ public class TieringSourceEnumerator
         this.tieringTableEpochs = MapUtils.newConcurrentHashMap();
         this.finishedTableEpochs = MapUtils.newConcurrentHashMap();
         this.failedTableEpochs = MapUtils.newConcurrentHashMap();
+        this.tieringTableDeadline = MapUtils.newConcurrentHashMap();
     }
 
     @Override
@@ -167,6 +174,9 @@ public class TieringSourceEnumerator
         readersAwaitingSplit.add(subtaskId);
         this.context.callAsync(
                 this::requestTieringTableSplitsViaHeartBeat, this::generateAndAssignSplits);
+
+        this.context.callAsync(
+                this::checkTieringTimeoutTables, this::handleTieringTimeoutTables, 10_000L, 10_000);
     }
 
     @Override
@@ -236,6 +246,26 @@ public class TieringSourceEnumerator
         }
     }
 
+    private Set<Long> checkTieringTimeoutTables() {
+        Set<Long> tieringTimeoutTables = new HashSet<>();
+
+    }
+
+    private void handleTieringTimeoutTables(Set<Long> tieringTimeOutTables, Throwable throwable) {
+        if (throwable != null) {
+            LOG.error("Fail to check tiering timeout tables.", throwable);
+            return;
+        }
+
+        for (Long tieringTimeOutTable : tieringTimeOutTables) {
+            Set<Integer> readers = new HashSet<>(context.registeredReaders().keySet());
+            for (int reader : readers) {
+                context.sendEventToSourceReader(
+                        reader, new TieringTimeoutEvent(tieringTimeOutTable));
+            }
+        }
+    }
+
     private void generateAndAssignSplits(
             @Nullable Tuple3<Long, Long, TablePath> tieringTable, Throwable throwable) {
         if (throwable != null) {
@@ -260,6 +290,12 @@ public class TieringSourceEnumerator
                     if (!pendingSplits.isEmpty()) {
                         TieringSplit tieringSplit = pendingSplits.remove(0);
                         context.assignSplit(tieringSplit, nextAwaitingReader);
+
+                        long tableId = tieringSplit.getTableBucket().getTableId();
+                        if (!tieringTableDeadline.containsKey(tableId)) {
+                            tieringTableDeadline.put(
+                                    tableId, System.currentTimeMillis() + TIERING_TIMEOUT_MS);
+                        }
                         readersAwaitingSplit.remove(nextAwaitingReader);
                     }
                 }
@@ -324,6 +360,8 @@ public class TieringSourceEnumerator
             List<TieringSplit> tieringSplits =
                     populateNumberOfTieringSplits(
                             splitGenerator.generateTableSplits(tieringTable.f2));
+            // shuffle tiering split to avoid splits tiering skew
+            Collections.shuffle(tieringSplits);
             LOG.info(
                     "Generate Tiering {} splits for table {} with cost {}ms.",
                     tieringSplits.size(),

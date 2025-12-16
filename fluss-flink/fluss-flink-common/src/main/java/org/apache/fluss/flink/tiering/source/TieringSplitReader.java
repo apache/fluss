@@ -93,6 +93,8 @@ public class TieringSplitReader<WriteResult>
     private final Map<TableBucket, TieringSplit> currentTableSplitsByBucket;
     private final Map<TableBucket, Long> currentTableStoppingOffsets;
     private final Set<TieringLogSplit> currentTableEmptyLogSplits;
+    // Flag to indicate if the current table has timed out and should be force completed
+    private boolean currentTableTimedOut;
 
     public TieringSplitReader(
             Connection connection, LakeTieringFactory<WriteResult, ?> lakeTieringFactory) {
@@ -106,10 +108,24 @@ public class TieringSplitReader<WriteResult>
         this.currentTableSplitsByBucket = new HashMap<>();
         this.lakeWriters = new HashMap<>();
         this.currentPendingSnapshotSplits = new ArrayDeque<>();
+        this.currentTableTimedOut = false;
     }
 
     @Override
     public RecordsWithSplitIds<TableBucketWriteResult<WriteResult>> fetch() throws IOException {
+        // Check if current table has timed out and should be force completed
+        if (currentTableTimedOut && currentTableId != null) {
+            LOG.warn(
+                    "Table {} has timed out, force completing. Remaining splits: {}",
+                    currentTableId,
+                    currentTableSplitsByBucket.size());
+            mayFinishCurrentTable();
+            // Return empty result after force completion
+            if (currentTableId == null) {
+                return emptyTableBucketWriteResultWithSplitIds();
+            }
+        }
+
         // check empty splits
         if (!currentTableEmptyLogSplits.isEmpty()) {
             LOG.info("Empty split(s) {} finished.", currentTableEmptyLogSplits);
@@ -360,10 +376,51 @@ public class TieringSplitReader<WriteResult>
     }
 
     private void mayFinishCurrentTable() throws IOException {
-        // no any pending splits for the table, just finish the table
-        if (currentTableSplitsByBucket.isEmpty()) {
-            LOG.info("Finish tier  table {} of table id {}.", currentTablePath, currentTableId);
+        // Finish the table if:
+        // 1. No pending splits, OR
+        // 2. Table has timed out (force completion)
+        if (currentTableSplitsByBucket.isEmpty() || currentTableTimedOut) {
+            if (currentTableTimedOut) {
+                LOG.warn(
+                        "Force finishing table {} of table id {} due to timeout. "
+                                + "Remaining splits: {}",
+                        currentTablePath,
+                        currentTableId,
+                        currentTableSplitsByBucket.size());
+                // Complete all remaining writers for buckets that have been processed
+                forceCompleteRemainingWriters();
+            } else {
+                LOG.info("Finish tier table {} of table id {}.", currentTablePath, currentTableId);
+            }
             finishCurrentTable();
+        }
+    }
+
+    /**
+     * Force complete remaining lake writers for buckets that have been processed but splits are not
+     * finished yet. This is called when a table times out.
+     */
+    private void forceCompleteRemainingWriters() throws IOException {
+        // Complete writers for all buckets that have been started but not yet completed
+        // Create a copy of the entry set to avoid concurrent modification
+        Set<Map.Entry<TableBucket, LakeWriter<WriteResult>>> writersToComplete =
+                new HashSet<>(lakeWriters.entrySet());
+        for (Map.Entry<TableBucket, LakeWriter<WriteResult>> entry : writersToComplete) {
+            TableBucket bucket = entry.getKey();
+            TieringSplit split = currentTableSplitsByBucket.get(bucket);
+            if (split != null) {
+                // This bucket has a pending split, complete the writer with current stopping offset
+                Long stoppingOffset = currentTableStoppingOffsets.get(bucket);
+                if (stoppingOffset == null) {
+                    // If no stopping offset, use a safe value (current log end or 0)
+                    stoppingOffset = 0L;
+                }
+                completeLakeWriter(
+                        bucket,
+                        split.getPartitionName(),
+                        stoppingOffset,
+                        UNKNOWN_BUCKET_TIMESTAMP);
+            }
         }
     }
 
@@ -439,6 +496,18 @@ public class TieringSplitReader<WriteResult>
         currentTableStoppingOffsets.clear();
         currentTableEmptyLogSplits.clear();
         currentTableSplitsByBucket.clear();
+        currentTableTimedOut = false;
+    }
+
+    /**
+     * Handle timeout event for a table. This will mark the current table as timed out, and it will
+     * be force completed in the next fetch cycle.
+     */
+    public void handleTableTimeout(long tableId) {
+        if (currentTableId != null && currentTableId.equals(tableId)) {
+            LOG.warn("Table {} timeout event received, will force complete after current processing.", tableId);
+            currentTableTimedOut = true;
+        }
     }
 
     @Override

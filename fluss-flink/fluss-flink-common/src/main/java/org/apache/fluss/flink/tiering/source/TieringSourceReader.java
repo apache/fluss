@@ -19,10 +19,12 @@ package org.apache.fluss.flink.tiering.source;
 
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.client.Connection;
+import org.apache.fluss.flink.tiering.event.TieringTimeoutEvent;
 import org.apache.fluss.flink.tiering.source.split.TieringSplit;
 import org.apache.fluss.flink.tiering.source.state.TieringSplitState;
 import org.apache.fluss.lake.writer.LakeTieringFactory;
 
+import org.apache.flink.api.connector.source.SourceEvent;
 import org.apache.flink.api.connector.source.SourceReader;
 import org.apache.flink.api.connector.source.SourceReaderContext;
 import org.apache.flink.connector.base.source.reader.SingleThreadMultiplexSourceReaderBase;
@@ -41,17 +43,27 @@ public final class TieringSourceReader<WriteResult>
                 TieringSplitState> {
 
     private final Connection connection;
+    private final LakeTieringFactory<WriteResult, ?> lakeTieringFactory;
+    // Thread-local storage for split reader to handle timeout events
+    private static final ThreadLocal<TieringSplitReader<?>> CURRENT_SPLIT_READER = new ThreadLocal<>();
 
     public TieringSourceReader(
             SourceReaderContext context,
             Connection connection,
             LakeTieringFactory<WriteResult, ?> lakeTieringFactory) {
         super(
-                () -> new TieringSplitReader<>(connection, lakeTieringFactory),
+                () -> {
+                    TieringSplitReader<WriteResult> reader =
+                            new TieringSplitReader<>(connection, lakeTieringFactory);
+                    // Store reference in thread-local for timeout handling
+                    CURRENT_SPLIT_READER.set(reader);
+                    return reader;
+                },
                 new TableBucketWriteResultEmitter<>(),
                 context.getConfiguration(),
                 context);
         this.connection = connection;
+        this.lakeTieringFactory = lakeTieringFactory;
     }
 
     @Override
@@ -90,7 +102,19 @@ public final class TieringSourceReader<WriteResult>
     }
 
     @Override
+    public void handleSourceEvents(SourceEvent sourceEvent) {
+        if (sourceEvent instanceof TieringTimeoutEvent) {
+            TieringTimeoutEvent timeoutEvent = (TieringTimeoutEvent) sourceEvent;
+            TieringSplitReader<?> splitReader = CURRENT_SPLIT_READER.get();
+            if (splitReader != null) {
+                splitReader.handleTableTimeout(timeoutEvent.getTableId());
+            }
+        }
+    }
+
+    @Override
     public void close() throws Exception {
+        CURRENT_SPLIT_READER.remove();
         super.close();
         connection.close();
     }
