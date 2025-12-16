@@ -1277,7 +1277,7 @@ public final class LogTablet {
         Map<Long, WriterAppendInfo> loadedWriters = new HashMap<>();
         for (LogRecordBatch batch : records.batches()) {
             if (batch.hasWriterId()) {
-                updateWriterAppendInfo(writerStateManager, batch, loadedWriters, true);
+                updateWriterAppendInfo(writerStateManager, batch, loadedWriters, false);
             }
         }
         loadedWriters.values().forEach(writerStateManager::update);
