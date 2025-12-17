@@ -23,6 +23,7 @@ import org.apache.fluss.row.columnar.ColumnarRow;
 import org.apache.fluss.row.columnar.VectorizedColumnBatch;
 import org.apache.fluss.types.ArrayType;
 import org.apache.fluss.types.DataType;
+import org.apache.fluss.types.MapType;
 import org.apache.fluss.types.RowType;
 
 import javax.annotation.Nullable;
@@ -214,7 +215,9 @@ public interface InternalRow extends DataGetters {
             case ARRAY:
                 fieldGetter = row -> row.getArray(fieldPos);
                 break;
-                // TODO: MAP support will be added in Issue #1973
+            case MAP:
+                fieldGetter = row -> row.getMap(fieldPos);
+                break;
             case ROW:
                 final int numFields = ((RowType) fieldType).getFieldCount();
                 fieldGetter = row -> row.getRow(fieldPos, numFields);
@@ -260,6 +263,28 @@ public interface InternalRow extends DataGetters {
                             return new GenericArray(objs);
                         };
                 break;
+            case MAP:
+                MapType mapType = (MapType) fieldType;
+                InternalArray.ElementGetter keyGetter =
+                        createDeepElementGetter(mapType.getKeyType());
+                InternalArray.ElementGetter valueGetter =
+                        createDeepElementGetter(mapType.getValueType());
+                fieldGetter =
+                        row -> {
+                            InternalMap map = row.getMap(fieldPos);
+                            Object[] keys = new Object[map.size()];
+                            Object[] values = new Object[map.size()];
+                            for (int i = 0; i < map.size(); i++) {
+                                keys[i] = keyGetter.getElementOrNull(map.keyArray(), i);
+                                values[i] = valueGetter.getElementOrNull(map.valueArray(), i);
+                            }
+                            java.util.Map<Object, Object> javaMap = new java.util.HashMap<>();
+                            for (int i = 0; i < keys.length; i++) {
+                                javaMap.put(keys[i], values[i]);
+                            }
+                            return new GenericMap(javaMap);
+                        };
+                break;
             case ROW:
                 RowType rowType = (RowType) fieldType;
                 int numFields = rowType.getFieldCount();
@@ -278,12 +303,6 @@ public interface InternalRow extends DataGetters {
                             return genericRow;
                         };
                 break;
-            case MAP:
-                String msg =
-                        String.format(
-                                "type %s not support in %s",
-                                fieldType.getTypeRoot().toString(), InternalArray.class.getName());
-                throw new IllegalArgumentException(msg);
             default:
                 // for primitive types, use the normal field getter
                 fieldGetter = createFieldGetter(fieldType, fieldPos);

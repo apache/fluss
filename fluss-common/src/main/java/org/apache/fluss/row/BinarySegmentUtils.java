@@ -1002,18 +1002,30 @@ public final class BinarySegmentUtils {
         return reusedArray;
     }
 
+    public static BinaryMap readBinaryMap(
+            MemorySegment[] segments, int baseOffset, long offsetAndSize) {
+        final int size = ((int) offsetAndSize);
+        int offset = (int) (offsetAndSize >> 32);
+        BinaryMap map = new BinaryMap();
+        map.pointTo(segments, offset + baseOffset, size);
+        return map;
+    }
+
     /** Read map data from segments. */
     public static InternalMap readMap(MemorySegment[] segments, int offset, int numBytes) {
-        // TODO: Map type support will be added in Issue #1973
-        throw new UnsupportedOperationException(
-                "Map type is not supported yet. Will be added in Issue #1973.");
+        return readMapData(segments, offset, numBytes);
     }
 
     /** Read map data from segments with long offset. */
     public static InternalMap readMap(MemorySegment[] segments, int offset, long numBytes) {
-        // TODO: Map type support will be added in Issue #1973
-        throw new UnsupportedOperationException(
-                "Map type is not supported yet. Will be added in Issue #1973.");
+        return readMapData(segments, offset, (int) numBytes);
+    }
+
+    /** Read map data from segments. */
+    public static BinaryMap readMapData(MemorySegment[] segments, int offset, int numBytes) {
+        BinaryMap map = new BinaryMap();
+        map.pointTo(segments, offset, numBytes);
+        return map;
     }
 
     /** Read aligned row from segments. */

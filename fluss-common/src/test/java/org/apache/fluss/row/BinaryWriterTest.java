@@ -24,7 +24,6 @@ import org.apache.fluss.types.DataTypes;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link BinaryWriter}. */
 public class BinaryWriterTest {
@@ -124,13 +123,27 @@ public class BinaryWriterTest {
     }
 
     @Test
-    public void testCreateValueSetterForMapThrowsException() {
-        assertThatThrownBy(
-                        () ->
-                                createPrimitiveValueWriter(
-                                        DataTypes.MAP(DataTypes.INT(), DataTypes.STRING())))
-                .isInstanceOf(UnsupportedOperationException.class)
-                .hasMessageContaining("Map type is not supported yet");
+    public void testValueSetterWithMapType() {
+        BinaryArray array = new org.apache.fluss.row.array.PrimitiveBinaryArray();
+        BinaryArrayWriter writer = new BinaryArrayWriter(array, 2, 8);
+
+        BinaryWriter.ValueWriter setter =
+                BinaryWriter.createValueWriter(
+                        DataTypes.MAP(DataTypes.INT().copy(false), DataTypes.STRING()),
+                        BinaryRow.BinaryRowFormat.COMPACTED);
+
+        GenericMap map1 =
+                GenericMap.of(1, BinaryString.fromString("one"), 2, BinaryString.fromString("two"));
+        GenericMap map2 =
+                GenericMap.of(
+                        3, BinaryString.fromString("three"), 4, BinaryString.fromString("four"));
+
+        setter.writeValue(writer, 0, map1);
+        setter.writeValue(writer, 1, map2);
+        writer.complete();
+
+        assertThat(array.getMap(0).size()).isEqualTo(2);
+        assertThat(array.getMap(1).size()).isEqualTo(2);
     }
 
     @Test

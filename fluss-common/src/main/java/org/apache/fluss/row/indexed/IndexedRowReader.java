@@ -23,6 +23,7 @@ import org.apache.fluss.row.BinarySegmentUtils;
 import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.Decimal;
 import org.apache.fluss.row.InternalArray;
+import org.apache.fluss.row.InternalMap;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
@@ -214,6 +215,14 @@ public class IndexedRowReader {
         return array;
     }
 
+    public InternalMap readMap() {
+        int length = readVarLengthFromVarLengthList();
+        MemorySegment[] segments = new MemorySegment[] {segment};
+        InternalMap map = BinarySegmentUtils.readBinaryMap(segments, position, length);
+        position += length;
+        return map;
+    }
+
     public InternalRow readRow(DataType[] nestedFieldTypes) {
         int length = readVarLengthFromVarLengthList();
         MemorySegment[] segments = new MemorySegment[] {segment};
@@ -286,15 +295,14 @@ public class IndexedRowReader {
                 DataType elementType = ((ArrayType) fieldType).getElementType();
                 fieldReader = (reader, pos) -> reader.readArray(elementType);
                 break;
+            case MAP:
+                fieldReader = (reader, pos) -> reader.readMap();
+                break;
             case ROW:
                 DataType[] nestedFieldTypes =
                         ((RowType) fieldType).getFieldTypes().toArray(new DataType[0]);
                 fieldReader = (reader, pos) -> reader.readRow(nestedFieldTypes);
                 break;
-            case MAP:
-                // TODO: Map type support will be added in Issue #1973
-                throw new UnsupportedOperationException(
-                        "Map type for Indexed row format is not supported yet.");
             default:
                 throw new IllegalArgumentException("Unsupported type for IndexedRow: " + fieldType);
         }

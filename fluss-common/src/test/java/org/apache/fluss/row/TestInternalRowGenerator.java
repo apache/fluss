@@ -69,9 +69,9 @@ public class TestInternalRowGenerator {
                 new DataField(
                         "f21",
                         DataTypes.ARRAY(DataTypes.ARRAY(DataTypes.STRING()))), // nested array
-                // TODO: Add Map and Row fields in Issue #1973
+                new DataField("f22", DataTypes.MAP(DataTypes.INT(), DataTypes.STRING())),
                 new DataField(
-                        "f22",
+                        "f23",
                         DataTypes.ROW(
                                 new DataField("u1", DataTypes.INT()),
                                 new DataField(
@@ -140,17 +140,12 @@ public class TestInternalRowGenerator {
                         GenericArray.of(fromString("hello"), fromString("world")));
         setRandomNull(writers[21], writer, 21, rnd, array3);
 
-        // TODO: Map type support will be added in Issue #1973
-        // Map<Object, Object> javaMap = new HashMap<>();
-        // javaMap.put(0, null);
-        // javaMap.put(1, fromString("1"));
-        // javaMap.put(2, fromString("2"));
-        // GenericMap map = new GenericMap(javaMap);
-        // setRandomNull(writers[20], writer, 20, rnd, map);
+        GenericMap map = GenericMap.of(0, null, 1, fromString("1"), 2, fromString("2"));
+        setRandomNull(writers[22], writer, 22, rnd, map);
 
         GenericRow innerRow = GenericRow.of(22);
         GenericRow genericRow = GenericRow.of(123, innerRow, BinaryString.fromString("Test"));
-        setRandomNull(writers[22], writer, 22, rnd, genericRow);
+        setRandomNull(writers[23], writer, 23, rnd, genericRow);
 
         IndexedRow row = new IndexedRow(dataTypes);
         row.pointTo(writer.segment(), 0, writer.position());

@@ -26,6 +26,7 @@ import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.BinaryWriter;
 import org.apache.fluss.row.Decimal;
 import org.apache.fluss.row.InternalArray;
+import org.apache.fluss.row.InternalMap;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.NullAwareGetters;
 import org.apache.fluss.row.TimestampLtz;
@@ -397,7 +398,13 @@ public class IndexedRow implements BinaryRow, NullAwareGetters {
         }
     }
 
-    // TODO: getMap() will be added in Issue #1973
+    @Override
+    public InternalMap getMap(int pos) {
+        assertIndexIsValid(pos);
+        int index = getFieldOffset(pos);
+        int length = columnLengths[pos];
+        return BinarySegmentUtils.readMapData(segments, index, length);
+    }
 
     @Override
     public InternalRow getRow(int pos, int numFields) {

@@ -133,12 +133,13 @@ public interface InternalArray extends DataGetters {
             case ARRAY:
                 elementGetter = InternalArray::getArray;
                 break;
+            case MAP:
+                elementGetter = InternalArray::getMap;
+                break;
             case ROW:
                 final int rowFieldCount = ((RowType) fieldType).getFieldCount();
                 elementGetter = (array, pos) -> array.getRow(pos, rowFieldCount);
                 break;
-                // TODO: MAP support will be added in Issue #1973
-            case MAP:
             default:
                 String msg =
                         String.format(
@@ -146,9 +147,8 @@ public interface InternalArray extends DataGetters {
                                 fieldType.getTypeRoot().toString(), InternalArray.class.getName());
                 throw new IllegalArgumentException(msg);
         }
-        if (!fieldType.isNullable()) {
-            return elementGetter;
-        }
+        // Always wrap with null check for safety, even for non-nullable types
+        // This is necessary because Arrow format may contain nulls in practice
         return (array, pos) -> {
             if (array.isNullAt(pos)) {
                 return null;
@@ -184,6 +184,29 @@ public interface InternalArray extends DataGetters {
                             return new GenericArray(objs);
                         };
                 break;
+            case MAP:
+                DataType keyType = ((org.apache.fluss.types.MapType) fieldType).getKeyType();
+                DataType valueType = ((org.apache.fluss.types.MapType) fieldType).getValueType();
+                ElementGetter keyGetter = createDeepElementGetter(keyType);
+                ElementGetter valueGetter = createDeepElementGetter(valueType);
+                elementGetter =
+                        (array, pos) -> {
+                            InternalMap inner = array.getMap(pos);
+                            InternalArray keys = inner.keyArray();
+                            InternalArray values = inner.valueArray();
+                            Object[] keyObjs = new Object[keys.size()];
+                            Object[] valueObjs = new Object[values.size()];
+                            for (int i = 0; i < keys.size(); i++) {
+                                keyObjs[i] = keyGetter.getElementOrNull(keys, i);
+                                valueObjs[i] = valueGetter.getElementOrNull(values, i);
+                            }
+                            java.util.Map<Object, Object> map = new java.util.HashMap<>();
+                            for (int i = 0; i < keyObjs.length; i++) {
+                                map.put(keyObjs[i], valueObjs[i]);
+                            }
+                            return new GenericMap(map);
+                        };
+                break;
             case ROW:
                 RowType rowType = (RowType) fieldType;
                 int numFields = rowType.getFieldCount();
@@ -201,12 +224,6 @@ public interface InternalArray extends DataGetters {
                             return genericRow;
                         };
                 break;
-            case MAP:
-                String msg =
-                        String.format(
-                                "type %s not support in %s",
-                                fieldType.getTypeRoot().toString(), InternalArray.class.getName());
-                throw new IllegalArgumentException(msg);
             default:
                 // for primitive types, we can directly return the element getter
                 elementGetter = createElementGetter(fieldType);

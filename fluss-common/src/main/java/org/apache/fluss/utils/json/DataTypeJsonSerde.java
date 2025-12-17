@@ -285,7 +285,8 @@ public class DataTypeJsonSerde implements JsonSerializer<DataType>, JsonDeserial
         final DataType keyType = DataTypeJsonSerde.INSTANCE.deserialize(keyNode);
         final JsonNode valueNode = dataTypeNode.get(FIELD_NAME_VALUE_TYPE);
         final DataType valueType = DataTypeJsonSerde.INSTANCE.deserialize(valueNode);
-        return new MapType(keyType, valueType);
+        final DataType nonNullableKeyType = keyType.isNullable() ? keyType.copy(false) : keyType;
+        return new MapType(nonNullableKeyType, valueType);
     }
 
     private static DataType deserializeRow(JsonNode dataTypeNode) {

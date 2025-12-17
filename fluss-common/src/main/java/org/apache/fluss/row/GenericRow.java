@@ -171,7 +171,10 @@ public final class GenericRow implements InternalRow, Serializable {
         return (InternalArray) this.fields[pos];
     }
 
-    // TODO: getMap() will be added in Issue #1973
+    @Override
+    public InternalMap getMap(int pos) {
+        return (InternalMap) this.fields[pos];
+    }
 
     @Override
     public InternalRow getRow(int pos, int numFields) {

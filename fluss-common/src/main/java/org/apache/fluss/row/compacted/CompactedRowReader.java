@@ -22,12 +22,15 @@ import org.apache.fluss.row.BinarySegmentUtils;
 import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.Decimal;
 import org.apache.fluss.row.InternalArray;
+import org.apache.fluss.row.InternalMap;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
 import org.apache.fluss.row.array.CompactedArray;
+import org.apache.fluss.row.map.CompactedMap;
 import org.apache.fluss.types.ArrayType;
 import org.apache.fluss.types.DataType;
+import org.apache.fluss.types.MapType;
 import org.apache.fluss.types.RowType;
 
 import java.io.Serializable;
@@ -325,7 +328,10 @@ public class CompactedRowReader {
                 DataType elementType = ((ArrayType) fieldType).getElementType();
                 fieldReader = (reader, pos) -> reader.readArray(elementType);
                 break;
-
+            case MAP:
+                MapType mapType = (MapType) fieldType;
+                fieldReader = (reader, pos) -> reader.readMap(mapType);
+                break;
             case ROW:
                 DataType[] nestedFieldTypes =
                         ((RowType) fieldType).getFieldTypes().toArray(new DataType[0]);
@@ -352,6 +358,14 @@ public class CompactedRowReader {
                         segments, position, length, new CompactedArray(elementType));
         position += length;
         return array;
+    }
+
+    public InternalMap readMap(MapType mapType) {
+        int length = readInt();
+        CompactedMap map = new CompactedMap(mapType.getKeyType(), mapType.getValueType());
+        map.pointTo(segments, position, length);
+        position += length;
+        return map;
     }
 
     public InternalRow readRow(DataType[] nestedFieldTypes) {

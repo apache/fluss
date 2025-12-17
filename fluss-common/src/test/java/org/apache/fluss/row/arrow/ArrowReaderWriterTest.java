@@ -23,6 +23,7 @@ import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.memory.TestingMemorySegmentPool;
 import org.apache.fluss.row.Decimal;
 import org.apache.fluss.row.GenericArray;
+import org.apache.fluss.row.GenericMap;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.TimestampLtz;
@@ -90,7 +91,7 @@ class ArrowReaderWriterTest {
                     DataTypes.ARRAY(DataTypes.INT()),
                     DataTypes.ARRAY(DataTypes.FLOAT().copy(false)), // vector embedding type
                     DataTypes.ARRAY(DataTypes.ARRAY(DataTypes.STRING())), // nested array
-                    // TODO: Add Map and Row types in Issue #1973
+                    DataTypes.MAP(DataTypes.INT().copy(false), DataTypes.STRING()),
                     DataTypes.ROW(
                             DataTypes.FIELD("i", DataTypes.INT()),
                             DataTypes.FIELD("r", NESTED_DATA_TYPE),
@@ -126,6 +127,13 @@ class ArrowReaderWriterTest {
                             GenericArray.of(
                                     GenericArray.of(fromString("a"), fromString("b")),
                                     GenericArray.of(fromString("c"), fromString("d"))),
+                            GenericMap.of(
+                                    1,
+                                    fromString("one"),
+                                    2,
+                                    fromString("two"),
+                                    3,
+                                    fromString("three")),
                             GenericRow.of(
                                     12,
                                     GenericRow.of(34, fromString("56"), 78L),
@@ -166,6 +174,7 @@ class ArrowReaderWriterTest {
                                     GenericArray.of(fromString("a"), null, fromString("c")),
                                     null,
                                     GenericArray.of(fromString("hello"), fromString("world"))),
+                            GenericMap.of(10, fromString("ten"), 20, fromString("twenty")),
                             GenericRow.of(
                                     12,
                                     GenericRow.of(34, fromString("56"), 78L),

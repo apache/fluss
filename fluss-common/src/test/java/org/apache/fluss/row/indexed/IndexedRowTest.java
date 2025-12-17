@@ -21,6 +21,7 @@ import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.row.BinaryWriter;
 import org.apache.fluss.row.Decimal;
 import org.apache.fluss.row.GenericArray;
+import org.apache.fluss.row.GenericMap;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalArray;
 import org.apache.fluss.row.InternalRow;
@@ -44,6 +45,7 @@ import static org.apache.fluss.row.BinaryRow.BinaryRowFormat.INDEXED;
 import static org.apache.fluss.row.BinaryString.fromString;
 import static org.apache.fluss.row.TestInternalRowGenerator.createAllTypes;
 import static org.apache.fluss.testutils.InternalArrayAssert.assertThatArray;
+import static org.apache.fluss.testutils.InternalMapAssert.assertThatMap;
 import static org.apache.fluss.testutils.InternalRowAssert.assertThatRow;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -75,7 +77,7 @@ public class IndexedRowTest {
 
         assertAllTypeEquals(row);
 
-        assertThat(row.getFieldCount()).isEqualTo(23);
+        assertThat(row.getFieldCount()).isEqualTo(24);
         assertThat(row.anyNull()).isFalse();
         assertThat(row.anyNull(new int[] {0, 1})).isFalse();
     }
@@ -217,10 +219,12 @@ public class IndexedRowTest {
                         null,
                         GenericArray.of(fromString("hello"), fromString("world"))));
 
+        GenericMap genericMap = GenericMap.of(0, null, 1, fromString("1"), 2, fromString("2"));
+        writers[22].writeValue(writer, 22, genericMap);
+
         GenericRow innerRow = GenericRow.of(22);
         GenericRow nestedRow = GenericRow.of(123, innerRow, fromString("Test"));
-        writers[22].writeValue(writer, 22, nestedRow);
-
+        writers[23].writeValue(writer, 23, nestedRow);
         return writer;
     }
 
@@ -259,9 +263,16 @@ public class IndexedRowTest {
                                 GenericArray.of(fromString("a"), null, fromString("c")),
                                 null,
                                 GenericArray.of(fromString("hello"), fromString("world"))));
+        assertThatMap(row.getMap(22))
+                .withMapType(DataTypes.MAP(DataTypes.INT(), DataTypes.STRING()))
+                .isEqualTo(
+                        GenericMap.of(
+                                0, null,
+                                1, fromString("1"),
+                                2, fromString("2")));
         GenericRow expectedInnerRow = GenericRow.of(22);
         GenericRow expectedNestedRow = GenericRow.of(123, expectedInnerRow, fromString("Test"));
-        assertThatRow(row.getRow(22, 3))
+        assertThatRow(row.getRow(23, 3))
                 .withSchema(
                         DataTypes.ROW(
                                 DataTypes.FIELD("u1", DataTypes.INT()),

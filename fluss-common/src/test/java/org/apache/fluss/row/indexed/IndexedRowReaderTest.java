@@ -120,8 +120,9 @@ public class IndexedRowReaderTest {
                                 GenericArray.of(fromString("a"), null, fromString("c")),
                                 null,
                                 GenericArray.of(fromString("hello"), fromString("world"))));
+        assertThat(reader.readMap().size()).isEqualTo(3);
         InternalRow nestedRow =
-                reader.readRow(dataTypes[22].getChildren().toArray(new DataType[0]));
+                reader.readRow(dataTypes[23].getChildren().toArray(new DataType[0]));
         GenericRow expectedInnerRow = GenericRow.of(22);
         GenericRow expectedNestedRow = GenericRow.of(123, expectedInnerRow, fromString("Test"));
         assertThatRow(nestedRow)

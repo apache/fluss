@@ -20,6 +20,7 @@ package org.apache.fluss.lake.paimon.utils;
 import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.Decimal;
 import org.apache.fluss.row.InternalArray;
+import org.apache.fluss.row.InternalMap;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
@@ -146,11 +147,10 @@ public class PaimonRowAsFlussRow implements InternalRow {
         return new PaimonArrayAsFlussArray(paimonRow.getArray(pos));
     }
 
-    // TODO: Add Map type support in future
-    // @Override
-    // public InternalMap getMap(int pos) {
-    //     return new PaimonMapAsFlussMap(paimonRow.getMap(pos));
-    // }
+    @Override
+    public InternalMap getMap(int pos) {
+        return new PaimonMapAsFlussMap(paimonRow.getMap(pos));
+    }
 
     @Override
     public InternalRow getRow(int pos, int numFields) {

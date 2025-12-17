@@ -125,12 +125,25 @@ class FlussRowToFlinkRowConverterTest {
             assertThat(stringArray2)
                     .isEqualTo(new BinaryString[] {fromString("hello"), fromString("world")});
 
+            // map
+            assertThat(flinkRow.getMap(22)).isNotNull();
+            assertThat(flinkRow.getMap(22).size()).isEqualTo(3);
+            org.apache.flink.table.data.MapData mapData = flinkRow.getMap(22);
+            org.apache.flink.table.data.ArrayData keyArray = mapData.keyArray();
+            org.apache.flink.table.data.ArrayData valueArray = mapData.valueArray();
+            assertThat(keyArray.getInt(0)).isEqualTo(0);
+            assertThat(valueArray.isNullAt(0)).isTrue();
+            assertThat(keyArray.getInt(1)).isEqualTo(1);
+            assertThat(valueArray.getString(1).toString()).isEqualTo("1");
+            assertThat(keyArray.getInt(2)).isEqualTo(2);
+            assertThat(valueArray.getString(2).toString()).isEqualTo("2");
+
             // nested row: ROW<u1: INT, u2: ROW<v1: INT>, u3: STRING>
-            assertThat(flinkRow.getRow(22, 3)).isNotNull();
-            assertThat(flinkRow.getRow(22, 3).getInt(0)).isEqualTo(123);
-            assertThat(flinkRow.getRow(22, 3).getRow(1, 1)).isNotNull();
-            assertThat(flinkRow.getRow(22, 3).getRow(1, 1).getInt(0)).isEqualTo(22);
-            assertThat(flinkRow.getRow(22, 3).getString(2).toString()).isEqualTo("Test");
+            assertThat(flinkRow.getRow(23, 3)).isNotNull();
+            assertThat(flinkRow.getRow(23, 3).getInt(0)).isEqualTo(123);
+            assertThat(flinkRow.getRow(23, 3).getRow(1, 1)).isNotNull();
+            assertThat(flinkRow.getRow(23, 3).getRow(1, 1).getInt(0)).isEqualTo(22);
+            assertThat(flinkRow.getRow(23, 3).getString(2).toString()).isEqualTo("Test");
         }
     }
 }
