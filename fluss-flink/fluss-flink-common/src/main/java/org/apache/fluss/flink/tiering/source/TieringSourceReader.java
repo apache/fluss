@@ -18,6 +18,7 @@
 package org.apache.fluss.flink.tiering.source;
 
 import org.apache.fluss.annotation.Internal;
+import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.client.Connection;
 import org.apache.fluss.flink.adapter.SingleThreadMultiplexSourceReaderBaseAdapter;
 import org.apache.fluss.flink.tiering.event.TieringReachMaxDurationEvent;
@@ -31,9 +32,12 @@ import org.apache.flink.api.connector.source.SourceReaderContext;
 import org.apache.flink.connector.base.source.reader.RecordsWithSplitIds;
 import org.apache.flink.connector.base.source.reader.synchronization.FutureCompletingBlockingQueue;
 
+import java.time.Duration;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+
+import static org.apache.fluss.flink.tiering.source.TieringSplitReader.DEFAULT_POLL_TIMEOUT;
 
 /** A {@link SourceReader} that read records from Fluss and write to lake. */
 @Internal
@@ -52,11 +56,22 @@ public final class TieringSourceReader<WriteResult>
             SourceReaderContext context,
             Connection connection,
             LakeTieringFactory<WriteResult, ?> lakeTieringFactory) {
+        this(elementsQueue, context, connection, lakeTieringFactory, DEFAULT_POLL_TIMEOUT);
+    }
+
+    @VisibleForTesting
+    TieringSourceReader(
+            FutureCompletingBlockingQueue<RecordsWithSplitIds<TableBucketWriteResult<WriteResult>>>
+                    elementsQueue,
+            SourceReaderContext context,
+            Connection connection,
+            LakeTieringFactory<WriteResult, ?> lakeTieringFactory,
+            Duration pollTimeout) {
         super(
                 elementsQueue,
                 new TieringSourceFetcherManager<>(
                         elementsQueue,
-                        () -> new TieringSplitReader<>(connection, lakeTieringFactory),
+                        () -> new TieringSplitReader<>(connection, lakeTieringFactory, pollTimeout),
                         context.getConfiguration(),
                         (ignore) -> {}),
                 new TableBucketWriteResultEmitter<>(),
@@ -107,7 +122,7 @@ public final class TieringSourceReader<WriteResult>
                     (TieringReachMaxDurationEvent) sourceEvent;
             long tableId = reachMaxDurationEvent.getTableId();
             ((TieringSourceFetcherManager<WriteResult>) splitFetcherManager)
-                    .markTableAsTieringTimeOut(tableId);
+                    .markTableReachTieringDeadline(tableId);
         }
     }
 

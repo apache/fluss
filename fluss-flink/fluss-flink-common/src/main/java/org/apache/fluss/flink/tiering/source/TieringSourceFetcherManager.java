@@ -50,28 +50,31 @@ public class TieringSourceFetcherManager<WriteResult>
         super(elementsQueue, splitReaderSupplier, configuration, splitFinishedHook);
     }
 
-    public void markTableAsTieringTimeOut(long tableId) {
-        SplitFetcher<TableBucketWriteResult<WriteResult>, TieringSplit> splitFetcher =
-                fetchers.get(0);
-        if (splitFetcher != null) {
+    public void markTableReachTieringDeadline(long tableId) {
+        if (!fetchers.isEmpty()) {
             // The fetcher thread is still running. This should be the majority of the cases.
-            enqueueMarkTableTieringTimeOutTask(splitFetcher, tableId);
+            fetchers.values()
+                    .forEach(
+                            splitFetcher ->
+                                    enqueueMarkTableReachTieringDeadlineTask(
+                                            splitFetcher, tableId));
         } else {
-            splitFetcher = createSplitFetcher();
-            enqueueMarkTableTieringTimeOutTask(splitFetcher, tableId);
+            SplitFetcher<TableBucketWriteResult<WriteResult>, TieringSplit> splitFetcher =
+                    createSplitFetcher();
+            enqueueMarkTableReachTieringDeadlineTask(splitFetcher, tableId);
             startFetcher(splitFetcher);
         }
     }
 
-    private void enqueueMarkTableTieringTimeOutTask(
+    private void enqueueMarkTableReachTieringDeadlineTask(
             SplitFetcher<TableBucketWriteResult<WriteResult>, TieringSplit> splitFetcher,
-            long tieringTimeOutTable) {
+            long reachTieringDeadlineTable) {
         splitFetcher.enqueueTask(
                 new SplitFetcherTask() {
                     @Override
                     public boolean run() {
                         ((TieringSplitReader<WriteResult>) splitFetcher.getSplitReader())
-                                .handleTableTimeout(tieringTimeOutTable);
+                                .handleTableReachTieringDeadline(reachTieringDeadlineTable);
                         return true;
                     }
 

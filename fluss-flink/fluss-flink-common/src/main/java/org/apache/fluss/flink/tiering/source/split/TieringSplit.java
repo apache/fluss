@@ -41,13 +41,14 @@ public abstract class TieringSplit implements SourceSplit {
     // the total number of splits in one round of tiering
     protected final int numberOfSplits;
 
-    protected boolean forceIgnore = false;
+    protected boolean forceIgnore;
 
     public TieringSplit(
             TablePath tablePath,
             TableBucket tableBucket,
             @Nullable String partitionName,
-            int numberOfSplits) {
+            int numberOfSplits,
+            boolean forceIgnore) {
         this.tablePath = tablePath;
         this.tableBucket = tableBucket;
         this.partitionName = partitionName;
@@ -57,6 +58,7 @@ public abstract class TieringSplit implements SourceSplit {
                     "Partition name and partition id must be both null or both not null.");
         }
         this.numberOfSplits = numberOfSplits;
+        this.forceIgnore = forceIgnore;
     }
 
     /** Checks whether this split is a primary key table split to tier. */

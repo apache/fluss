@@ -17,12 +17,6 @@
 
 package org.apache.fluss.flink.tiering.source.enumerator;
 
-import org.apache.flink.api.connector.source.SourceEvent;
-import org.apache.flink.api.connector.source.SplitEnumerator;
-import org.apache.flink.api.connector.source.SplitEnumeratorContext;
-import org.apache.flink.api.java.tuple.Tuple3;
-import org.apache.flink.metrics.groups.SplitEnumeratorMetricGroup;
-import org.apache.flink.util.FlinkRuntimeException;
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.client.Connection;
 import org.apache.fluss.client.ConnectionFactory;
@@ -49,10 +43,18 @@ import org.apache.fluss.rpc.metrics.ClientMetricGroup;
 import org.apache.fluss.utils.MapUtils;
 import org.apache.fluss.utils.clock.Clock;
 import org.apache.fluss.utils.clock.SystemClock;
+
+import org.apache.flink.api.connector.source.SourceEvent;
+import org.apache.flink.api.connector.source.SplitEnumerator;
+import org.apache.flink.api.connector.source.SplitEnumeratorContext;
+import org.apache.flink.api.java.tuple.Tuple3;
+import org.apache.flink.metrics.groups.SplitEnumeratorMetricGroup;
+import org.apache.flink.util.FlinkRuntimeException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
+
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -347,11 +349,6 @@ public class TieringSourceEnumerator
                     if (!pendingSplits.isEmpty()) {
                         TieringSplit tieringSplit = pendingSplits.remove(0);
                         context.assignSplit(tieringSplit, nextAwaitingReader);
-                        long tableId = tieringSplit.getTableBucket().getTableId();
-                        if (!tieringTablesDeadline.containsKey(tableId)) {
-                            tieringTablesDeadline.put(
-                                    tableId, clock.milliseconds() + tieringTableDurationMaxMs);
-                        }
                         readersAwaitingSplit.remove(nextAwaitingReader);
                     }
                 }
@@ -432,6 +429,8 @@ public class TieringSourceEnumerator
             } else {
                 tieringTableEpochs.put(tieringTable.f0, tieringTable.f1);
                 pendingSplits.addAll(tieringSplits);
+                tieringTablesDeadline.put(
+                        tieringTable.f0, clock.milliseconds() + tieringTableDurationMaxMs);
             }
         } catch (Exception e) {
             LOG.warn("Fail to generate Tiering splits for table {}.", tieringTable.f2, e);

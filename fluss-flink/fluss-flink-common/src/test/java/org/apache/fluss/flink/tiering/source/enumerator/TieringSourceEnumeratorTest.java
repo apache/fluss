@@ -17,10 +17,6 @@
 
 package org.apache.fluss.flink.tiering.source.enumerator;
 
-import org.apache.flink.api.connector.source.ReaderInfo;
-import org.apache.flink.api.connector.source.SourceEvent;
-import org.apache.flink.api.connector.source.SplitsAssignment;
-import org.apache.flink.api.connector.source.mocks.MockSplitEnumeratorContext;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.tiering.event.FailedTieringEvent;
 import org.apache.fluss.flink.tiering.event.FinishedTieringEvent;
@@ -37,12 +33,17 @@ import org.apache.fluss.rpc.messages.CommitLakeTableSnapshotRequest;
 import org.apache.fluss.rpc.messages.PbLakeTableOffsetForBucket;
 import org.apache.fluss.rpc.messages.PbLakeTableSnapshotInfo;
 import org.apache.fluss.utils.clock.ManualClock;
+
+import org.apache.flink.api.connector.source.ReaderInfo;
+import org.apache.flink.api.connector.source.SourceEvent;
+import org.apache.flink.api.connector.source.SplitsAssignment;
+import org.apache.flink.api.connector.source.mocks.MockSplitEnumeratorContext;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import javax.annotation.Nullable;
-import java.lang.reflect.Field;
+
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -755,26 +756,6 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
                 tieringTableDurationMaxMs,
                 tieringTableDurationDetectIntervalMs,
                 clock);
-    }
-
-    /**
-     * Get events sent to readers from MockSplitEnumeratorContext using reflection.
-     *
-     * @param context the MockSplitEnumeratorContext
-     * @return map of reader ID to list of events sent to that reader
-     */
-    @SuppressWarnings("unchecked")
-    private Map<Integer, List<SourceEvent>> getEventsToReaders(
-            MockSplitEnumeratorContext<TieringSplit> context) {
-        try {
-            Field eventsToReadersField =
-                    MockSplitEnumeratorContext.class.getDeclaredField("eventsToReaders");
-            eventsToReadersField.setAccessible(true);
-            return (Map<Integer, List<SourceEvent>>) eventsToReadersField.get(context);
-        } catch (NoSuchFieldException | IllegalAccessException e) {
-            // If reflection fails, return empty map - test will still verify splits behavior
-            return new HashMap<>();
-        }
     }
 
     @Test
