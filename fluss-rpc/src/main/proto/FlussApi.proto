@@ -462,7 +462,11 @@ message PbLakeTableSnapshotInfo {
 message PbLakeTableOffsetForBucket {
   optional int64 partition_id = 1;
   required int32 bucket_id = 2;
+  // Deprecated: log_start_offset is no longer used. Field number 3 is reserved for protocol compatibility.
+  // optional int64 log_start_offset = 3;
   optional int64 log_end_offset = 4;
+  // Deprecated: partition_name is no longer used. Field number 5 is reserved for protocol compatibility.
+  // optional string partition_name = 5;
   optional int64 max_timestamp = 6;
 }
 

@@ -89,24 +89,25 @@ class LakeTableSnapshotJsonSerdeTest extends JsonSerdeTestBase<LakeTableSnapshot
 
     @Override
     protected String[] expectedJsons() {
-        // Version 2 format (compact layout):
-        // - Non-partition table: "buckets": [100, 200, 300], array index = bucket id, value =
-        //   log_end_offset. Missing buckets are filled with -1.
-        // - Partition table: "buckets": {"1": [100, 200], "2": [300, 400]}, key = partition id,
-        //   array index = bucket id, value = log_end_offset. Missing buckets are filled with -1.
+        // Version 2 format (uses different property keys):
+        // - Non-partition table: "bucket_offsets": [100, 200, 300], array index = bucket id,
+        //   value = log_end_offset. Missing buckets are filled with -1.
+        // - Partition table: "partition_bucket_offsets": {"1": [100, 200], "2": [300, 400]},
+        //   key = partition id, array index = bucket id, value = log_end_offset. Missing buckets
+        //   are filled with -1.
         return new String[] {
             // Test case 1: Empty snapshot
             "{\"version\":2,\"snapshot_id\":1}",
             // Test case 2: Non-partition table with consecutive bucket ids [0, 1, 2]
-            "{\"version\":2,\"snapshot_id\":2,\"table_id\":4,\"buckets\":[100,200,300]}",
+            "{\"version\":2,\"snapshot_id\":2,\"table_id\":4,\"bucket_offsets\":[100,200,300]}",
             // Test case 3: Non-partition table with missing bucket ids [0, -1, 2, -1, 4]
-            "{\"version\":2,\"snapshot_id\":3,\"table_id\":5,\"buckets\":[100,-1,300,-1,500]}",
+            "{\"version\":2,\"snapshot_id\":3,\"table_id\":5,\"bucket_offsets\":[100,-1,300,-1,500]}",
             // Test case 4: Partition table with consecutive bucket ids
             "{\"version\":2,\"snapshot_id\":4,\"table_id\":6,"
-                    + "\"buckets\":{\"1\":[100,200],\"2\":[300,400]}}",
+                    + "\"partition_bucket_offsets\":{\"1\":[100,200],\"2\":[300,400]}}",
             // Test case 5: Partition table with missing bucket ids
             "{\"version\":2,\"snapshot_id\":5,\"table_id\":7,"
-                    + "\"buckets\":{\"1\":[100,-1,300],\"2\":[-1,400,-1,600]}}"
+                    + "\"partition_bucket_offsets\":{\"1\":[100,-1,300],\"2\":[-1,400,-1,600]}}"
         };
     }
 

@@ -55,10 +55,6 @@ class FlussTableLakeSnapshot {
         logEndOffsets.put(bucket, offset);
     }
 
-    public void addPartitionBucketOffset(TableBucket bucket, long offset) {
-        logEndOffsets.put(bucket, offset);
-    }
-
     public long getLogEndOffset(TableBucket bucket) {
         return logEndOffsets.get(bucket);
     }

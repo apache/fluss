@@ -46,19 +46,20 @@ import static org.apache.fluss.utils.Preconditions.checkState;
  * <ul>
  *   <li>Version 1 (legacy): Each bucket object contains full information including repeated
  *       partition names and partition_id in each bucket entry.
- *   <li>Version 2 (current): Compact format that optimizes layout:
+ *   <li>Version 2 (current): Compact format that uses different property keys for partitioned and
+ *       non-partitioned tables to simplify deserialization:
  *       <ul>
- *         <li>Non-partition table uses array format: "buckets": [100, 200, 300], where array index
+ *         <li>Non-partition table uses "bucket_offsets": [100, 200, 300], where array index
  *             represents bucket id (0, 1, 2) and value represents log_end_offset. For buckets
  *             without end offset, -1 is written. Missing bucket ids in the sequence are also filled
  *             with -1.
- *         <li>Partition table uses object format: "buckets": {"1": [100, 200], "2": [300, 400]},
+ *         <li>Partition table uses "partition_bucket_offsets": {"1": [100, 200], "2": [300, 400]},
  *             where key is partition id, array index represents bucket id (0, 1) and value
  *             represents log_end_offset. For buckets without end offset, -1 is written. Missing
  *             bucket ids in the sequence are also filled with -1.
  *       </ul>
- *       During deserialization, values of -1 are ignored and not added to the bucket log end *
- *       offset map.
+ *       During deserialization, values of -1 are ignored and not added to the bucket log end offset
+ *       map.
  * </ul>
  */
 public class LakeTableSnapshotJsonSerde
@@ -74,6 +75,8 @@ public class LakeTableSnapshotJsonSerde
     private static final String TABLE_ID = "table_id";
     private static final String PARTITION_ID = "partition_id";
     private static final String BUCKETS = "buckets";
+    private static final String BUCKET_OFFSETS = "bucket_offsets";
+    private static final String PARTITION_BUCKET_OFFSETS = "partition_bucket_offsets";
     private static final String BUCKET_ID = "bucket_id";
     private static final String LOG_END_OFFSET = "log_end_offset";
 
@@ -113,7 +116,7 @@ public class LakeTableSnapshotJsonSerde
                         nonPartitionBuckets.isEmpty(),
                         "nonPartitionBuckets must be empty when partitionBuckets is not empty");
                 // Partition table: object format grouped by partition_id
-                generator.writeObjectFieldStart(BUCKETS);
+                generator.writeObjectFieldStart(PARTITION_BUCKET_OFFSETS);
                 for (Map.Entry<Long, List<TableBucket>> entry : partitionBuckets.entrySet()) {
                     Long partitionId = entry.getKey();
                     List<TableBucket> buckets = entry.getValue();
@@ -128,7 +131,7 @@ public class LakeTableSnapshotJsonSerde
                         !nonPartitionBuckets.isEmpty(),
                         "nonPartitionBuckets must be not empty when partitionBuckets is empty");
                 // Non-partition table: array format, array index represents bucket id
-                generator.writeArrayFieldStart(BUCKETS);
+                generator.writeArrayFieldStart(BUCKET_OFFSETS);
                 serializeBucketLogEndOffset(bucketLogEndOffset, nonPartitionBuckets, generator);
                 generator.writeEndArray();
             }
@@ -190,27 +193,34 @@ public class LakeTableSnapshotJsonSerde
         return new LakeTableSnapshot(snapshotId, bucketLogEndOffset);
     }
 
-    /** Deserialize Version 2 format (compact layout). */
+    /**
+     * Deserialize Version 2 format (uses different property keys for partitioned and
+     * non-partitioned tables).
+     */
     private LakeTableSnapshot deserializeVersion2(JsonNode node) {
         long snapshotId = node.get(SNAPSHOT_ID).asLong();
-
         Map<TableBucket, Long> bucketLogEndOffset = new HashMap<>();
 
-        // Deserialize buckets: array format for non-partition table, object format for partition
-        // table
-        JsonNode bucketsNode = node.get(BUCKETS);
-        if (bucketsNode != null) {
-            // table_id is only present when there are buckets
+        // Check for bucket_offsets (non-partition table) or partition_bucket_offsets (partition
+        // table)
+        JsonNode bucketOffsetsNode = node.get(BUCKET_OFFSETS);
+        JsonNode partitionBucketOffsetsNode = node.get(PARTITION_BUCKET_OFFSETS);
+        if (bucketOffsetsNode != null || partitionBucketOffsetsNode != null) {
+            if (bucketOffsetsNode != null && partitionBucketOffsetsNode != null) {
+                throw new IllegalArgumentException(
+                        "Both bucket_offsets and partition_bucket_offsets cannot be present at the same time");
+            }
             JsonNode tableIdNode = node.get(TABLE_ID);
+            // Non-partition table: array format, array index represents bucket id
             if (tableIdNode == null) {
                 throw new IllegalArgumentException(
-                        "table_id is required when buckets are present in version 2 format");
+                        "table_id is required when bucket_offsets or partition_bucket_offsets is present in version 2 format");
             }
             long tableId = tableIdNode.asLong();
 
-            if (bucketsNode.isArray()) {
-                // Non-partition table: array format, array index represents bucket id
-                Iterator<JsonNode> elements = bucketsNode.elements();
+            if (bucketOffsetsNode != null) {
+
+                Iterator<JsonNode> elements = bucketOffsetsNode.elements();
                 int bucketId = 0;
                 while (elements.hasNext()) {
                     JsonNode logEndOffsetNode = elements.next();
@@ -222,8 +232,8 @@ public class LakeTableSnapshotJsonSerde
                     bucketId++;
                 }
             } else {
-                // Partition table: object format grouped by partition_id
-                Iterator<Map.Entry<String, JsonNode>> partitions = bucketsNode.fields();
+                Iterator<Map.Entry<String, JsonNode>> partitions =
+                        partitionBucketOffsetsNode.fields();
                 while (partitions.hasNext()) {
                     Map.Entry<String, JsonNode> entry = partitions.next();
                     String partitionKey = entry.getKey();

@@ -188,11 +188,10 @@ public class CoordinatorServer extends ServerBase {
 
             MetadataManager metadataManager =
                     new MetadataManager(zkClient, conf, lakeCatalogDynamicLoader);
-
-            int ioExecutorPoolSize = conf.get(ConfigOptions.COORDINATOR_IO_POOL_SIZE);
             this.ioExecutor =
                     Executors.newFixedThreadPool(
-                            ioExecutorPoolSize, new ExecutorThreadFactory("coordinator-io"));
+                            conf.get(ConfigOptions.SERVER_IO_POOL_SIZE),
+                            new ExecutorThreadFactory("coordinator-io"));
             this.coordinatorService =
                     new CoordinatorService(
                             conf,
@@ -399,9 +398,13 @@ public class CoordinatorServer extends ServerBase {
                 exception = ExceptionUtils.firstOrSuppressed(t, exception);
             }
 
-            if (ioExecutor != null) {
-                // shutdown io executor
-                ExecutorUtils.gracefulShutdown(5, TimeUnit.SECONDS, ioExecutor);
+            try {
+                if (ioExecutor != null) {
+                    // shutdown io executor
+                    ExecutorUtils.gracefulShutdown(5, TimeUnit.SECONDS, ioExecutor);
+                }
+            } catch (Throwable t) {
+                exception = ExceptionUtils.firstOrSuppressed(t, exception);
             }
 
             try {
@@ -516,11 +519,11 @@ public class CoordinatorServer extends ServerBase {
                             ConfigOptions.KV_MAX_RETAINED_SNAPSHOTS.key()));
         }
 
-        if (conf.get(ConfigOptions.COORDINATOR_IO_POOL_SIZE) < 1) {
+        if (conf.get(ConfigOptions.SERVER_IO_POOL_SIZE) < 1) {
             throw new IllegalConfigurationException(
                     String.format(
                             "Invalid configuration for %s, it must be greater than or equal 1.",
-                            ConfigOptions.COORDINATOR_IO_POOL_SIZE.key()));
+                            ConfigOptions.SERVER_IO_POOL_SIZE.key()));
         }
 
         if (conf.get(ConfigOptions.REMOTE_DATA_DIR) == null) {

@@ -242,6 +242,11 @@ public class TabletServer extends ServerBase {
                             rpcClient,
                             CoordinatorGateway.class);
 
+            this.ioExecutor =
+                    Executors.newFixedThreadPool(
+                            conf.get(ConfigOptions.SERVER_IO_POOL_SIZE),
+                            new ExecutorThreadFactory("tablet-server-io"));
+
             this.replicaManager =
                     new ReplicaManager(
                             conf,
@@ -257,13 +262,9 @@ public class TabletServer extends ServerBase {
                                     rpcClient, metadataCache, interListenerName),
                             this,
                             tabletServerMetricGroup,
-                            clock);
+                            clock,
+                            ioExecutor);
             replicaManager.startup();
-            int ioExecutorPoolSize = conf.get(ConfigOptions.TABLET_SERVER_IO_POOL_SIZE);
-
-            this.ioExecutor =
-                    Executors.newFixedThreadPool(
-                            ioExecutorPoolSize, new ExecutorThreadFactory("tablet-server-io"));
 
             this.tabletService =
                     new TabletService(

@@ -51,6 +51,7 @@ import org.apache.fluss.utils.clock.ManualClock;
 import org.apache.fluss.utils.concurrent.FlussScheduler;
 import org.apache.fluss.utils.concurrent.Scheduler;
 
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -65,6 +66,8 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.function.Consumer;
 
 import static org.apache.fluss.record.TestData.DATA1;
@@ -96,6 +99,7 @@ public class ReplicaFetcherThreadTest {
     private ServerNode leader;
     private ReplicaManager followerRM;
     private ReplicaFetcherThread followerFetcher;
+    private ExecutorService ioExecutor;
 
     @BeforeAll
     static void baseBeforeAll() {
@@ -126,10 +130,18 @@ public class ReplicaFetcherThreadTest {
                         followerRM,
                         new TestingLeaderEndpoint(conf, leaderRM, follower),
                         1000);
+        ioExecutor = Executors.newSingleThreadExecutor();
 
         registerTableInZkClient();
         // make the tb(table, 0) to be leader in leaderRM and to be follower in followerRM.
         makeLeaderAndFollower();
+    }
+
+    @AfterEach
+    public void tearDown() throws Exception {
+        if (ioExecutor != null) {
+            ioExecutor.shutdownNow();
+        }
     }
 
     @Test
@@ -420,7 +432,8 @@ public class ReplicaFetcherThreadTest {
                                         new LakeCatalogDynamicLoader(conf, null, true))),
                         RpcClient.create(conf, TestingClientMetricGroup.newInstance(), false),
                         TestingMetricGroups.TABLET_SERVER_METRICS,
-                        manualClock);
+                        manualClock,
+                        ioExecutor);
         replicaManager.startup();
         return replicaManager;
     }
@@ -440,7 +453,8 @@ public class ReplicaFetcherThreadTest {
                 TabletServerMetadataCache metadataCache,
                 RpcClient rpcClient,
                 TabletServerMetricGroup serverMetricGroup,
-                Clock clock)
+                Clock clock,
+                ExecutorService ioExecutor)
                 throws IOException {
             super(
                     conf,
@@ -455,7 +469,8 @@ public class ReplicaFetcherThreadTest {
                     new TestingCompletedKvSnapshotCommitter(),
                     NOPErrorHandler.INSTANCE,
                     serverMetricGroup,
-                    clock);
+                    clock,
+                    ioExecutor);
         }
 
         @Override

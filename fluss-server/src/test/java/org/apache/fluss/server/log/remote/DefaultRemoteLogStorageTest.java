@@ -37,6 +37,8 @@ import java.io.InputStream;
 import java.nio.file.StandardCopyOption;
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -44,16 +46,21 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 /** Test for {@link DefaultRemoteLogStorage}. */
 class DefaultRemoteLogStorageTest extends RemoteLogTestBase {
     private DefaultRemoteLogStorage remoteLogStorageManager;
+    private ExecutorService ioExecutor;
 
     @BeforeEach
     public void setup() throws Exception {
         super.setup();
-        remoteLogStorageManager = new DefaultRemoteLogStorage(conf);
+        ioExecutor = Executors.newSingleThreadExecutor();
+        remoteLogStorageManager = new DefaultRemoteLogStorage(conf, ioExecutor);
     }
 
     @AfterEach
     public void teardown() throws Exception {
         remoteLogStorageManager.close();
+        if (ioExecutor != null) {
+            ioExecutor.shutdown();
+        }
     }
 
     @ParameterizedTest

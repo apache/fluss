@@ -83,13 +83,14 @@ public class RemoteLogManager implements Closeable {
             Configuration conf,
             ZooKeeperClient zkClient,
             CoordinatorGateway coordinatorGateway,
-            Clock clock)
+            Clock clock,
+            ExecutorService ioExecutor)
             throws IOException {
         this(
                 conf,
                 zkClient,
                 coordinatorGateway,
-                new DefaultRemoteLogStorage(conf),
+                new DefaultRemoteLogStorage(conf, ioExecutor),
                 Executors.newScheduledThreadPool(
                         conf.getInt(ConfigOptions.REMOTE_LOG_MANAGER_THREAD_POOL_SIZE),
                         new ExecutorThreadFactory(RLM_SCHEDULED_THREAD_PREFIX)),

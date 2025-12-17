@@ -691,7 +691,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
                 lakeTableOffsetForBucket.setPartitionId(tb.getPartitionId());
             }
             lakeTableOffsetForBucket.setBucketId(tb.getBucket());
-            lakeTableOffsetForBucket.setLogEndOffset(bucketLogEndOffsets.get(bucketId));
+            lakeTableOffsetForBucket.setLogEndOffset(bucketLogEndOffset.getValue());
         }
         return commitLakeTableSnapshotRequest;
     }

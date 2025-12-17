@@ -267,6 +267,17 @@ public class ConfigOptions {
     public static final ConfigOption<List<String>> SERVER_SASL_ENABLED_MECHANISMS_CONFIG =
             key("security.sasl.enabled.mechanisms").stringType().asList().noDefaultValue();
 
+    public static final ConfigOption<Integer> SERVER_IO_POOL_SIZE =
+            key("server.io-pool.size")
+                    .intType()
+                    .defaultValue(10)
+                    .withDescription(
+                            "The size of the IO thread pool to run blocking operations for both coordinator and tablet servers. "
+                                    + "This includes discard unnecessary snapshot files, transfer kv snapshot files, "
+                                    + "and transfer remote log files. Increase this value if you experience slow IO operations. "
+                                    + "The default value is 10.")
+                    .withDeprecatedKeys("coordinator.io-pool.size");
+
     // ------------------------------------------------------------------------
     //  ConfigOptions for Coordinator Server
     // ------------------------------------------------------------------------
@@ -324,6 +335,11 @@ public class ConfigOptions {
                                     + " (“50100,50101”), ranges (“50100-50200”) or a combination of both."
                                     + "This option is deprecated. Please use bind.listeners instead, which provides a more flexible configuration for multiple ports");
 
+    /**
+     * @deprecated This option is deprecated. Please use {@link ConfigOptions#SERVER_IO_POOL_SIZE}
+     *     instead.
+     */
+    @Deprecated
     public static final ConfigOption<Integer> COORDINATOR_IO_POOL_SIZE =
             key("coordinator.io-pool.size")
                     .intType()
@@ -332,7 +348,8 @@ public class ConfigOptions {
                             "The size of the IO thread pool to run blocking operations for coordinator server. "
                                     + "This includes discard unnecessary snapshot files. "
                                     + "Increase this value if you experience slow unnecessary snapshot files clean. "
-                                    + "The default value is 10.");
+                                    + "The default value is 10. "
+                                    + "This option is deprecated. Please use server.io-pool.size instead.");
 
     // ------------------------------------------------------------------------
     //  ConfigOptions for Tablet Server
@@ -393,14 +410,6 @@ public class ConfigOptions {
                     .withDescription(
                             "The rack for the tabletServer. This will be used in rack aware bucket assignment "
                                     + "for fault tolerance. Examples: `RACK1`, `cn-hangzhou-server10`");
-
-    public static final ConfigOption<Integer> TABLET_SERVER_IO_POOL_SIZE =
-            key("tablet-server.io-pool.size")
-                    .intType()
-                    .defaultValue(3)
-                    .withDescription(
-                            "The size of the IO thread pool to run blocking operations for tablet server. "
-                                    + "The default value is 3.");
 
     public static final ConfigOption<String> DATA_DIR =
             key("data.dir")
@@ -777,13 +786,19 @@ public class ConfigOptions {
                             "Size of the thread pool used in scheduling tasks to copy segments, "
                                     + "fetch remote log indexes and clean up remote log segments.");
 
+    /**
+     * @deprecated This option is deprecated. Please use {@link ConfigOptions#SERVER_IO_POOL_SIZE}
+     *     instead.
+     */
+    @Deprecated
     public static final ConfigOption<Integer> REMOTE_LOG_DATA_TRANSFER_THREAD_NUM =
             key("remote.log.data-transfer-thread-num")
                     .intType()
                     .defaultValue(4)
                     .withDescription(
                             "The number of threads the server uses to transfer (download and upload) "
-                                    + "remote log file can be  data file, index file and remote log metadata file.");
+                                    + "remote log file can be  data file, index file and remote log metadata file. "
+                                    + "This option is deprecated. Please use server.io-pool.size instead.");
 
     // ------------------------------------------------------------------------
     //  Netty Settings
@@ -1449,12 +1464,18 @@ public class ConfigOptions {
                     .withDescription(
                             "The number of threads that the server uses to schedule snapshot kv data for all the replicas in the server.");
 
+    /**
+     * @deprecated This option is deprecated. Please use {@link ConfigOptions#SERVER_IO_POOL_SIZE}
+     *     instead.
+     */
+    @Deprecated
     public static final ConfigOption<Integer> KV_SNAPSHOT_TRANSFER_THREAD_NUM =
             key("kv.snapshot.transfer-thread-num")
                     .intType()
                     .defaultValue(4)
                     .withDescription(
-                            "The number of threads the server uses to transfer (download and upload) kv snapshot files.");
+                            "The number of threads the server uses to transfer (download and upload) kv snapshot files. "
+                                    + "This option is deprecated. Please use server.io-pool.size instead.");
 
     public static final ConfigOption<Integer> KV_MAX_RETAINED_SNAPSHOTS =
             key("kv.snapshot.num-retained")
