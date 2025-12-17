@@ -68,8 +68,9 @@ resources: {}
   #     memory: 128Mi
 
 serviceAccount:
-  enabled: false
+  create: false
   # If not set and create is true, a name is generated using the fullname template
   name: ""
-  # Useful for IRSA: eks.amazonaws.com/role-arn: arn:aws:iam::ACCOUNT_ID:role/ROLE_NAME
+  # Additional annotations to apply to the ServiceAccount.
+  # These can be useful, for example, to support integrations like workload identity.
   annotations: {}
