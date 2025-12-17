@@ -41,10 +41,7 @@ public class FlinkHistogram implements Histogram {
 
     @Override
     public HistogramStatistics getStatistics() {
-
-        wrapped.getStatistics();
-
-        return null;
+        return new FlinkHistogramStatistics(wrapped.getStatistics());
     }
 
     private static class FlinkHistogramStatistics extends HistogramStatistics {
