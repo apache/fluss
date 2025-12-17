@@ -229,12 +229,7 @@ public class TieringCommitOperator<WriteResult, Committable>
                     new FlussTableLakeSnapshot(tableId, committedSnapshotId);
             for (TableBucketWriteResult<WriteResult> writeResult : committableWriteResults) {
                 TableBucket tableBucket = writeResult.tableBucket();
-                if (writeResult.tableBucket().getPartitionId() == null) {
-                    flussTableLakeSnapshot.addBucketOffset(tableBucket, writeResult.logEndOffset());
-                } else {
-                    flussTableLakeSnapshot.addPartitionBucketOffset(
-                            tableBucket, writeResult.logEndOffset());
-                }
+                flussTableLakeSnapshot.addBucketOffset(tableBucket, writeResult.logEndOffset());
             }
             flussTableLakeSnapshotCommitter.commit(flussTableLakeSnapshot);
             return committable;

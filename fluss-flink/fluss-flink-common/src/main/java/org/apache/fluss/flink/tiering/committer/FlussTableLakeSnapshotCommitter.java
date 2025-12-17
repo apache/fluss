@@ -83,15 +83,9 @@ public class FlussTableLakeSnapshotCommitter implements AutoCloseable {
         for (Map.Entry<Tuple2<Long, Integer>, Long> entry :
                 committedLakeSnapshot.getLogEndOffsets().entrySet()) {
             Tuple2<Long, Integer> partitionBucket = entry.getKey();
-            TableBucket tableBucket;
             Long partitionId = partitionBucket.f0;
-            if (partitionId == null) {
-                tableBucket = new TableBucket(tableId, partitionBucket.f1);
-                flussTableLakeSnapshot.addBucketOffset(tableBucket, entry.getValue());
-            } else {
-                tableBucket = new TableBucket(tableId, partitionId, partitionBucket.f1);
-                flussTableLakeSnapshot.addPartitionBucketOffset(tableBucket, entry.getValue());
-            }
+            TableBucket tableBucket = new TableBucket(tableId, partitionId, partitionBucket.f1);
+            flussTableLakeSnapshot.addBucketOffset(tableBucket, entry.getValue());
         }
         commit(flussTableLakeSnapshot);
     }

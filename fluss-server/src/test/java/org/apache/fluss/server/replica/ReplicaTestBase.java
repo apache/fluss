@@ -141,6 +141,7 @@ public class ReplicaTestBase {
     protected TestingCompletedKvSnapshotCommitter snapshotReporter;
     protected TestCoordinatorGateway testCoordinatorGateway;
     private FlussScheduler scheduler;
+    private ExecutorService ioExecutor;
 
     // remote log related
     protected TestingRemoteLogStorage remoteLogStorage;
@@ -179,6 +180,7 @@ public class ReplicaTestBase {
 
         scheduler = new FlussScheduler(2);
         scheduler.startup();
+        ioExecutor = Executors.newSingleThreadExecutor();
 
         manualClock = new ManualClock(System.currentTimeMillis());
         logManager =
@@ -302,7 +304,8 @@ public class ReplicaTestBase {
                 NOPErrorHandler.INSTANCE,
                 TestingMetricGroups.TABLET_SERVER_METRICS,
                 remoteLogManager,
-                manualClock);
+                manualClock,
+                ioExecutor);
     }
 
     @AfterEach
@@ -335,6 +338,10 @@ public class ReplicaTestBase {
 
         if (scheduler != null) {
             scheduler.shutdown();
+        }
+
+        if (ioExecutor != null) {
+            ioExecutor.shutdown();
         }
 
         // clear zk environment.
@@ -477,7 +484,7 @@ public class ReplicaTestBase {
     }
 
     private void initRemoteLogEnv() throws Exception {
-        remoteLogStorage = new TestingRemoteLogStorage(conf);
+        remoteLogStorage = new TestingRemoteLogStorage(conf, ioExecutor);
         remoteLogTaskScheduler = new ManuallyTriggeredScheduledExecutorService();
         remoteLogManager =
                 new RemoteLogManager(

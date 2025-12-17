@@ -1155,11 +1155,9 @@ public class CoordinatorEventProcessor implements EventProcessor {
         for (Map.Entry<Long, LakeTableSnapshot> lakeTableSnapshotEntry :
                 lakeTableSnapshots.entrySet()) {
             LakeTableSnapshot lakeTableSnapshot = lakeTableSnapshotEntry.getValue();
-            for (Map.Entry<TableBucket, Long> bucketLogEndOffsetEntry :
-                    lakeTableSnapshot.getBucketLogEndOffset().entrySet()) {
-                TableBucket tb = bucketLogEndOffsetEntry.getKey();
+            for (TableBucket tb : lakeTableSnapshot.getBucketLogEndOffset().keySet()) {
                 coordinatorContext
-                        .getBucketLeaderAndIsr(bucketLogEndOffsetEntry.getKey())
+                        .getBucketLeaderAndIsr(tb)
                         .ifPresent(
                                 leaderAndIsr ->
                                         coordinatorRequestBatch

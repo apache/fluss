@@ -61,17 +61,18 @@ public class RemoteStorageCleaner {
         }
     }
 
-    public void asyncDeleteTableRemoteDir(
-            TablePath tablePath, boolean isKvTable, boolean isLakeEnabled, long tableId) {
+    public void asyncDeleteTableRemoteDir(TablePath tablePath, boolean isKvTable, long tableId) {
         if (isKvTable) {
             asyncDeleteDir(FlussPaths.remoteTableDir(remoteKvDir, tablePath, tableId));
         }
-        if (isLakeEnabled) {
-            asyncDeleteDir(
-                    FlussPaths.remoteLakeTableSnapshotMetadataDir(
-                            remoteDataDir, tablePath, tableId));
-        }
         asyncDeleteDir(FlussPaths.remoteTableDir(remoteLogDir, tablePath, tableId));
+
+        // Always delete lake snapshot metadata directory, regardless of isLakeEnabled flag.
+        // This is because if a table was enabled datalake but turned off later, and then the table
+        // was deleted, we may leave the lake snapshot metadata files behind if we only delete when
+        // isLakeEnabled is true. By always deleting, we ensure cleanup of any existing metadata
+        // files.
+        asyncDeleteDir(FlussPaths.remoteLakeTableSnapshotDir(remoteDataDir, tablePath, tableId));
     }
 
     public void asyncDeletePartitionRemoteDir(
