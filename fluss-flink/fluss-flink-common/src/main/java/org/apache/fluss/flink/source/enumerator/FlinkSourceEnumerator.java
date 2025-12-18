@@ -688,7 +688,6 @@ public class FlinkSourceEnumerator
                         t);
             }
         }
-        doHandleSplitsAdd(splits);
         if (isPartitioned) {
             if (!streaming || scanPartitionDiscoveryIntervalMs <= 0) {
                 // if not streaming or partition discovery is disabled
@@ -700,6 +699,7 @@ public class FlinkSourceEnumerator
             // so, noMoreNewPartitionSplits should be set to true
             noMoreNewSplits = true;
         }
+        doHandleSplitsAdd(splits);
     }
 
     private void doHandleSplitsAdd(List<SourceSplitBase> splits) {
