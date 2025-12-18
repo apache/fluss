@@ -24,7 +24,6 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.fluss.utils.json.BucketOffsetJsonSerde;
-
 import org.apache.paimon.CoreOptions;
 import org.apache.paimon.Snapshot;
 import org.apache.paimon.catalog.Catalog;
@@ -36,9 +35,10 @@ import org.apache.paimon.operation.FileStoreCommit;
 import org.apache.paimon.table.FileStoreTable;
 import org.apache.paimon.table.sink.CommitCallback;
 import org.apache.paimon.utils.SnapshotManager;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
-
 import java.io.IOException;
 import java.util.Collections;
 import java.util.List;
@@ -52,6 +52,8 @@ import static org.apache.paimon.table.sink.BatchWriteBuilder.COMMIT_IDENTIFIER;
 
 /** Implementation of {@link LakeCommitter} for Paimon. */
 public class PaimonLakeCommitter implements LakeCommitter<PaimonWriteResult, PaimonCommittable> {
+
+    private static final Logger LOG = LoggerFactory.getLogger(PaimonLakeCommitter.class);
 
     private final Catalog paimonCatalog;
     private final FileStoreTable fileStoreTable;
@@ -148,6 +150,16 @@ public class PaimonLakeCommitter implements LakeCommitter<PaimonWriteResult, Pai
         } else {
             String flussOffsetProperties =
                     lakeSnapshotProperties.get(FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY);
+            // todo: it's just a temporary quick fix, in the future we will
+            // write fluss offsets to a file and use paimon property to record this file
+            if (flussOffsetProperties == null) {
+                LOG.error(
+                        "Got snapshot {} that exists in Paimon, but not in Fluss."
+                                + " Can't resume from it via committing the snapshot to Fluss again since we can't get Fluss offset from the Paimon snapshot."
+                                + " It may cause data duplicated",
+                        latestLakeSnapshotOfLake.id());
+                return null;
+            }
             for (JsonNode node : OBJECT_MAPPER.readTree(flussOffsetProperties)) {
                 BucketOffset bucketOffset = BucketOffsetJsonSerde.INSTANCE.deserialize(node);
                 if (bucketOffset.getPartitionId() != null) {

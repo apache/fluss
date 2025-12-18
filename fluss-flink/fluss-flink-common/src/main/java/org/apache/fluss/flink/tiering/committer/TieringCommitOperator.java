@@ -17,10 +17,20 @@
 
 package org.apache.fluss.flink.tiering.committer;
 
+import org.apache.flink.runtime.operators.coordination.OperatorEventGateway;
+import org.apache.flink.runtime.source.event.SourceEventWrapper;
+import org.apache.flink.streaming.api.graph.StreamConfig;
+import org.apache.flink.streaming.api.operators.AbstractStreamOperator;
+import org.apache.flink.streaming.api.operators.OneInputStreamOperator;
+import org.apache.flink.streaming.api.operators.Output;
+import org.apache.flink.streaming.api.operators.StreamOperatorParameters;
+import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
+import org.apache.flink.streaming.runtime.tasks.StreamTask;
 import org.apache.fluss.client.Connection;
 import org.apache.fluss.client.ConnectionFactory;
 import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.client.metadata.LakeSnapshot;
+import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.LakeTableSnapshotNotExistException;
 import org.apache.fluss.flink.tiering.event.FailedTieringEvent;
@@ -42,18 +52,7 @@ import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.core.JsonGenerator
 import org.apache.fluss.utils.ExceptionUtils;
 import org.apache.fluss.utils.json.BucketOffsetJsonSerde;
 
-import org.apache.flink.runtime.operators.coordination.OperatorEventGateway;
-import org.apache.flink.runtime.source.event.SourceEventWrapper;
-import org.apache.flink.streaming.api.graph.StreamConfig;
-import org.apache.flink.streaming.api.operators.AbstractStreamOperator;
-import org.apache.flink.streaming.api.operators.OneInputStreamOperator;
-import org.apache.flink.streaming.api.operators.Output;
-import org.apache.flink.streaming.api.operators.StreamOperatorParameters;
-import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
-import org.apache.flink.streaming.runtime.tasks.StreamTask;
-
 import javax.annotation.Nullable;
-
 import java.io.IOException;
 import java.io.StringWriter;
 import java.util.ArrayList;
@@ -144,8 +143,7 @@ public class TieringCommitOperator<WriteResult, Committable>
     }
 
     @Override
-    public void processElement(StreamRecord<TableBucketWriteResult<WriteResult>> streamRecord)
-            throws Exception {
+    public void processElement(StreamRecord<TableBucketWriteResult<WriteResult>> streamRecord) {
         TableBucketWriteResult<WriteResult> tableBucketWriteResult = streamRecord.getValue();
         TableBucket tableBucket = tableBucketWriteResult.tableBucket();
         long tableId = tableBucket.getTableId();
@@ -211,15 +209,21 @@ public class TieringCommitOperator<WriteResult, Committable>
                             .map(TableBucketWriteResult::writeResult)
                             .collect(Collectors.toList());
 
+            TableInfo tableInfo = admin.getTableInfo(tablePath).get();
             LakeSnapshot flussCurrentLakeSnapshot = getLatestLakeSnapshot(tablePath);
             Map<String, String> logOffsetsProperty =
-                    toBucketOffsetsProperty(
-                            tablePath, flussCurrentLakeSnapshot, committableWriteResults);
+                    // if commit offset to snapshot is disabled,
+                    // return an empty map
+                    isCommitOffsetToSnapshotEnabled(tableInfo)
+                            ? toBucketOffsetsProperty(
+                                    tablePath, flussCurrentLakeSnapshot, committableWriteResults)
+                            : new HashMap<>();
             // to committable
             Committable committable = lakeCommitter.toCommittable(writeResults);
             // before commit to lake, check fluss not missing any lake snapshot committed by fluss
             checkFlussNotMissingLakeSnapshot(
                     tablePath,
+                    tableId,
                     lakeCommitter,
                     committable,
                     flussCurrentLakeSnapshot == null
@@ -339,6 +343,7 @@ public class TieringCommitOperator<WriteResult, Committable>
 
     private void checkFlussNotMissingLakeSnapshot(
             TablePath tablePath,
+            long tableId,
             LakeCommitter<WriteResult, Committable> lakeCommitter,
             Committable committable,
             Long flussCurrentLakeSnapshot)
@@ -354,9 +359,7 @@ public class TieringCommitOperator<WriteResult, Committable>
         // not to commit to lake to avoid data duplicated
         if (missingCommittedSnapshot != null) {
             // commit this missing snapshot to fluss
-            TableInfo tableInfo = admin.getTableInfo(tablePath).get();
-            flussTableLakeSnapshotCommitter.commit(
-                    tableInfo.getTableId(), missingCommittedSnapshot);
+            flussTableLakeSnapshotCommitter.commit(tableId, missingCommittedSnapshot);
             // abort this committable to delete the written files
             lakeCommitter.abort(committable);
             throw new IllegalStateException(
@@ -366,8 +369,8 @@ public class TieringCommitOperator<WriteResult, Committable>
                                     + " missing snapshot: %s.",
                             flussCurrentLakeSnapshot,
                             missingCommittedSnapshot.getLakeSnapshotId(),
-                            tableInfo.getTablePath(),
-                            tableInfo.getTableId(),
+                            tablePath,
+                            tableId,
                             missingCommittedSnapshot));
         }
     }
@@ -415,6 +418,12 @@ public class TieringCommitOperator<WriteResult, Committable>
         } else {
             return null;
         }
+    }
+
+    private boolean isCommitOffsetToSnapshotEnabled(TableInfo tableInfo) {
+        return tableInfo
+                .getProperties()
+                .getBoolean(ConfigOptions.TABLE_DATALAKE_COMMIT_OFFSET_TO_SNAPSHOT_ENABLED);
     }
 
     @Override

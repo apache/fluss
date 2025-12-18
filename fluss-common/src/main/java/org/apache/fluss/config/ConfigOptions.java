@@ -1381,6 +1381,12 @@ public class ConfigOptions {
                     .withDescription(
                             "If true, compaction will be triggered automatically when tiering service writes to the datalake. It is disabled by default.");
 
+    public static final ConfigOption<Boolean> TABLE_DATALAKE_COMMIT_OFFSET_TO_SNAPSHOT_ENABLED =
+            key("table.datalake.commit-offset-to-snapshot.enabled")
+                    .booleanType()
+                    .defaultValue(true)
+                    .withDescription("");
+
     public static final ConfigOption<MergeEngineType> TABLE_MERGE_ENGINE =
             key("table.merge-engine")
                     .enumType(MergeEngineType.class)

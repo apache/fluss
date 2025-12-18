@@ -25,7 +25,6 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.fluss.utils.json.BucketOffsetJsonSerde;
-
 import org.apache.iceberg.AppendFiles;
 import org.apache.iceberg.CatalogUtil;
 import org.apache.iceberg.ContentFile;
@@ -46,7 +45,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
-
 import java.io.IOException;
 import java.util.List;
 import java.util.Map;
@@ -258,9 +256,12 @@ public class IcebergLakeCommitter implements LakeCommitter<IcebergWriteResult, I
 
         String flussOffsetProperties = properties.get(FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY);
         if (flussOffsetProperties == null) {
-            throw new IllegalArgumentException(
-                    "Cannot resume tiering from snapshot without bucket offset properties. "
-                            + "The snapshot was committed to Iceberg but missing Fluss metadata.");
+            LOG.error(
+                    "Got snapshot {} that exists in Iceberg, but not in Fluss."
+                            + " Can't resume from it via committing the snapshot to Fluss again since we can't get Fluss offset from the Iceberg snapshot."
+                            + " It may cause data duplicated",
+                    latestLakeSnapshot.snapshotId());
+            return null;
         }
 
         for (JsonNode node : OBJECT_MAPPER.readTree(flussOffsetProperties)) {

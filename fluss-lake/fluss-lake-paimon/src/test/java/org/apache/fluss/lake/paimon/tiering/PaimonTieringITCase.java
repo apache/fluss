@@ -17,6 +17,8 @@
 
 package org.apache.fluss.lake.paimon.tiering;
 
+import org.apache.flink.core.execution.JobClient;
+import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.fluss.client.table.getter.PartitionGetter;
 import org.apache.fluss.config.AutoPartitionTimeUnit;
 import org.apache.fluss.config.ConfigOptions;
@@ -36,9 +38,7 @@ import org.apache.fluss.row.TimestampNtz;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.utils.types.Tuple2;
-
-import org.apache.flink.core.execution.JobClient;
-import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
+import org.apache.paimon.Snapshot;
 import org.apache.paimon.catalog.Catalog;
 import org.apache.paimon.catalog.Identifier;
 import org.apache.paimon.reader.RecordReader;
@@ -69,6 +69,7 @@ import java.util.stream.Stream;
 
 import static org.apache.fluss.lake.committer.BucketOffset.FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY;
 import static org.apache.fluss.testutils.DataTestUtils.row;
+import static org.apache.fluss.utils.Preconditions.checkNotNull;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** IT case for tiering tables to paimon. */
@@ -510,6 +511,40 @@ class PaimonTieringITCase extends FlinkPaimonTieringTestBase {
             assertReplicaStatus(new TableBucket(t1Id, 0), 3);
             // check data in paimon
             checkDataInPaimonPrimaryKeyTable(t1, rows);
+        } finally {
+            jobClient.cancel().get();
+        }
+    }
+
+    @Test
+    void testTieringWithoutCommitOffsetToSnapshot() throws Exception {
+        TablePath t1 = TablePath.of(DEFAULT_DB, "tiering_without_commit_offset");
+        long t1Id =
+                createPkTable(
+                        t1,
+                        Collections.singletonMap(
+                                ConfigOptions.TABLE_DATALAKE_COMMIT_OFFSET_TO_SNAPSHOT_ENABLED
+                                        .key(),
+                                "false"),
+                        Collections.emptyMap());
+        // write records
+        List<InternalRow> rows = Arrays.asList(row(1, "v1"), row(2, "v2"), row(3, "v3"));
+        writeRows(t1, rows, false);
+        waitUntilSnapshot(t1Id, 1, 0);
+
+        // then start tiering job
+        JobClient jobClient = buildTieringJob(execEnv);
+        try {
+            // check the status of replica after synced
+            assertReplicaStatus(new TableBucket(t1Id, 0), 3);
+            // check data in paimon
+            checkDataInPaimonPrimaryKeyTable(t1, rows);
+            Snapshot latestSnapshot = getLatestSnapshot(t1);
+            // assert bucket offset is null
+            assertThat(
+                            checkNotNull(latestSnapshot.properties())
+                                    .get(FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY))
+                    .isNull();
         } finally {
             jobClient.cancel().get();
         }

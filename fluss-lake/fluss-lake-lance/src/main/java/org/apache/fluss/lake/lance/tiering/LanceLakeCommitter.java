@@ -17,6 +17,12 @@
 
 package org.apache.fluss.lake.lance.tiering;
 
+import com.lancedb.lance.Dataset;
+import com.lancedb.lance.FragmentMetadata;
+import com.lancedb.lance.ReadOptions;
+import com.lancedb.lance.Transaction;
+import com.lancedb.lance.Version;
+import org.apache.arrow.memory.RootAllocator;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.lake.committer.BucketOffset;
 import org.apache.fluss.lake.committer.CommittedLakeSnapshot;
@@ -28,16 +34,10 @@ import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.fluss.utils.json.BucketOffsetJsonSerde;
 import org.apache.fluss.utils.types.Tuple2;
-
-import com.lancedb.lance.Dataset;
-import com.lancedb.lance.FragmentMetadata;
-import com.lancedb.lance.ReadOptions;
-import com.lancedb.lance.Transaction;
-import com.lancedb.lance.Version;
-import org.apache.arrow.memory.RootAllocator;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
-
 import java.io.IOException;
 import java.util.Collections;
 import java.util.HashMap;
@@ -50,6 +50,9 @@ import static org.apache.fluss.lake.writer.LakeTieringFactory.FLUSS_LAKE_TIERING
 
 /** Implementation of {@link LakeCommitter} for Lance. */
 public class LanceLakeCommitter implements LakeCommitter<LanceWriteResult, LanceCommittable> {
+
+    private static final Logger LOG = LoggerFactory.getLogger(LanceLakeCommitter.class);
+
     private final LanceConfig config;
     private static final String committerName = "commit-user";
     private final RootAllocator allocator = new RootAllocator();
@@ -116,6 +119,14 @@ public class LanceLakeCommitter implements LakeCommitter<LanceWriteResult, Lance
                         .f1
                         .transactionProperties()
                         .get(FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY);
+        if (flussOffsetProperties == null) {
+            LOG.error(
+                    "Got snapshot {} that exists in Lance, but not in Fluss."
+                            + " Can't resume from it via committing the snapshot to Fluss again since we can't get fluss offset from the Lance snapshot."
+                            + " It may cause data duplicated",
+                    latestLakeSnapshotIdOfLake.f0.getId());
+            return null;
+        }
         for (JsonNode node : OBJECT_MAPPER.readTree(flussOffsetProperties)) {
             BucketOffset bucketOffset = BucketOffsetJsonSerde.INSTANCE.deserialize(node);
             if (bucketOffset.getPartitionId() != null) {
