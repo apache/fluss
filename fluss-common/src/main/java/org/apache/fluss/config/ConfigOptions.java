@@ -1385,7 +1385,17 @@ public class ConfigOptions {
             key("table.datalake.commit-offset-to-snapshot.enabled")
                     .booleanType()
                     .defaultValue(true)
-                    .withDescription("");
+                    .withDescription(
+                            "Whether to record Fluss offset information in the snapshot properties of the datalake. "
+                                    + "When enabled, Fluss offset information is stored in the snapshot properties to ensure "
+                                    + "data consistency when commits to the datalake succeed but commits to Fluss fail. "
+                                    + "However, storing Fluss offset information can make the snapshot properties very large, "
+                                    + "and some datalake catalogs do not allow large properties. "
+                                    + "In such cases, you can temporarily disable this feature by setting this option to false. "
+                                    + "Note that disabling this option may lead to data consistency issues in extreme scenarios "
+                                    + "where commits to the datalake succeed but commits to Fluss fail. "
+                                    + "This is a temporary parameter and will be removed in the future when a systematic solution "
+                                    + "is implemented to address this issue. The default value is true.");
 
     public static final ConfigOption<MergeEngineType> TABLE_MERGE_ENGINE =
             key("table.merge-engine")

@@ -17,8 +17,6 @@
 
 package org.apache.fluss.lake.paimon.tiering;
 
-import org.apache.flink.core.execution.JobClient;
-import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.fluss.client.table.getter.PartitionGetter;
 import org.apache.fluss.config.AutoPartitionTimeUnit;
 import org.apache.fluss.config.ConfigOptions;
@@ -38,6 +36,9 @@ import org.apache.fluss.row.TimestampNtz;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.utils.types.Tuple2;
+
+import org.apache.flink.core.execution.JobClient;
+import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.paimon.Snapshot;
 import org.apache.paimon.catalog.Catalog;
 import org.apache.paimon.catalog.Identifier;
@@ -69,7 +70,6 @@ import java.util.stream.Stream;
 
 import static org.apache.fluss.lake.committer.BucketOffset.FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY;
 import static org.apache.fluss.testutils.DataTestUtils.row;
-import static org.apache.fluss.utils.Preconditions.checkNotNull;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** IT case for tiering tables to paimon. */
@@ -540,11 +540,9 @@ class PaimonTieringITCase extends FlinkPaimonTieringTestBase {
             // check data in paimon
             checkDataInPaimonPrimaryKeyTable(t1, rows);
             Snapshot latestSnapshot = getLatestSnapshot(t1);
-            // assert bucket offset is null
-            assertThat(
-                            checkNotNull(latestSnapshot.properties())
-                                    .get(FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY))
-                    .isNull();
+            // assert property is empty since we won't store any thing (fluss offsets)
+            // in paimon snapshot property
+            assertThat(latestSnapshot.properties()).isNull();
         } finally {
             jobClient.cancel().get();
         }

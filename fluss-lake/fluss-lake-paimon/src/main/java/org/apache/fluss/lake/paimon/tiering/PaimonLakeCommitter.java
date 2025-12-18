@@ -24,6 +24,7 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.fluss.utils.json.BucketOffsetJsonSerde;
+
 import org.apache.paimon.CoreOptions;
 import org.apache.paimon.Snapshot;
 import org.apache.paimon.catalog.Catalog;
@@ -39,6 +40,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
+
 import java.io.IOException;
 import java.util.Collections;
 import java.util.List;
@@ -134,44 +136,31 @@ public class PaimonLakeCommitter implements LakeCommitter<PaimonWriteResult, Pai
             throw new IOException("Failed to load committed lake snapshot properties from Paimon.");
         }
 
-        // if resume from an old tiering service v0.7 without paimon supporting snapshot properties,
-        // we can't get the properties. But once come into here, it must be that
-        // tiering service commit snapshot to lake, but fail to commit to fluss, we have to notify
-        // users to run old tiering service again to commit the snapshot to fluss again, and then
-        // it can resume tiering with new tiering service
         Map<String, String> lakeSnapshotProperties = latestLakeSnapshotOfLake.properties();
-        if (lakeSnapshotProperties == null) {
-            throw new IllegalArgumentException(
-                    "Cannot resume tiering from an old version(v0.7) of tiering service. "
-                            + "The snapshot was committed to the lake storage but failed to commit to Fluss. "
-                            + "To resolve this:\n"
-                            + "1. Run the old tiering service(v0.7) again to complete the Fluss commit\n"
-                            + "2. Then you can resume tiering with the newer version of tiering service");
-        } else {
-            String flussOffsetProperties =
-                    lakeSnapshotProperties.get(FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY);
-            // todo: it's just a temporary quick fix, in the future we will
-            // write fluss offsets to a file and use paimon property to record this file
-            if (flussOffsetProperties == null) {
-                LOG.error(
-                        "Got snapshot {} that exists in Paimon, but not in Fluss."
-                                + " Can't resume from it via committing the snapshot to Fluss again since we can't get Fluss offset from the Paimon snapshot."
-                                + " It may cause data duplicated",
-                        latestLakeSnapshotOfLake.id());
-                return null;
-            }
-            for (JsonNode node : OBJECT_MAPPER.readTree(flussOffsetProperties)) {
-                BucketOffset bucketOffset = BucketOffsetJsonSerde.INSTANCE.deserialize(node);
-                if (bucketOffset.getPartitionId() != null) {
-                    committedLakeSnapshot.addPartitionBucket(
-                            bucketOffset.getPartitionId(),
-                            bucketOffset.getPartitionQualifiedName(),
-                            bucketOffset.getBucket(),
-                            bucketOffset.getLogOffset());
-                } else {
-                    committedLakeSnapshot.addBucket(
-                            bucketOffset.getBucket(), bucketOffset.getLogOffset());
-                }
+        // todo: it's just a temporary quick fix, in the future we will
+        // write fluss offsets to a file and use paimon property to record this file
+        if (lakeSnapshotProperties == null
+                || lakeSnapshotProperties.get(FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY) == null) {
+            LOG.error(
+                    "Got snapshot {} that exists in Paimon, but not in Fluss."
+                            + " Can't resume from it via committing the snapshot to Fluss again since we can't get Fluss offset from the Paimon snapshot."
+                            + " It may cause data duplicated",
+                    latestLakeSnapshotOfLake.id());
+            return null;
+        }
+        String flussOffsetProperties =
+                lakeSnapshotProperties.get(FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY);
+        for (JsonNode node : OBJECT_MAPPER.readTree(flussOffsetProperties)) {
+            BucketOffset bucketOffset = BucketOffsetJsonSerde.INSTANCE.deserialize(node);
+            if (bucketOffset.getPartitionId() != null) {
+                committedLakeSnapshot.addPartitionBucket(
+                        bucketOffset.getPartitionId(),
+                        bucketOffset.getPartitionQualifiedName(),
+                        bucketOffset.getBucket(),
+                        bucketOffset.getLogOffset());
+            } else {
+                committedLakeSnapshot.addBucket(
+                        bucketOffset.getBucket(), bucketOffset.getLogOffset());
             }
         }
         return committedLakeSnapshot;
