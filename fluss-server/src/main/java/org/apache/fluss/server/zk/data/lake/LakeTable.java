@@ -30,6 +30,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.util.Collections;
 import java.util.List;
+import java.util.Objects;
 
 import static org.apache.fluss.metrics.registry.MetricRegistry.LOG;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
@@ -51,7 +52,7 @@ public class LakeTable {
 
     // Version 2 (current):
     // a list of lake snapshot metadata, record the metadata for different lake snapshots
-    @Nullable private final List<LakeSnapshotMetadata> lakeSnapshotMetadata;
+    @Nullable private final List<LakeSnapshotMetadata> lakeSnapshotMetadatas;
 
     // Version 1 (legacy): the full lake table snapshot info stored in ZK, will be null in version2
     @Nullable private final LakeTableSnapshot lakeTableSnapshot;
@@ -77,30 +78,30 @@ public class LakeTable {
     /**
      * Creates a LakeTable with a list of lake snapshot metadata (version 2 format).
      *
-     * @param lakeSnapshotMetadata the list of lake snapshot metadata
+     * @param lakeSnapshotMetadatas the list of lake snapshot metadata
      */
-    public LakeTable(List<LakeSnapshotMetadata> lakeSnapshotMetadata) {
-        this(null, lakeSnapshotMetadata);
+    public LakeTable(List<LakeSnapshotMetadata> lakeSnapshotMetadatas) {
+        this(null, lakeSnapshotMetadatas);
     }
 
     private LakeTable(
             @Nullable LakeTableSnapshot lakeTableSnapshot,
-            List<LakeSnapshotMetadata> lakeSnapshotMetadata) {
+            List<LakeSnapshotMetadata> lakeSnapshotMetadatas) {
         this.lakeTableSnapshot = lakeTableSnapshot;
-        this.lakeSnapshotMetadata = lakeSnapshotMetadata;
+        this.lakeSnapshotMetadatas = lakeSnapshotMetadatas;
     }
 
     @Nullable
-    public LakeSnapshotMetadata getLakeTableLatestSnapshot() {
-        if (lakeSnapshotMetadata != null && !lakeSnapshotMetadata.isEmpty()) {
-            return lakeSnapshotMetadata.get(0);
+    public LakeSnapshotMetadata getLatestLakeSnapshotMetadata() {
+        if (lakeSnapshotMetadatas != null && !lakeSnapshotMetadatas.isEmpty()) {
+            return lakeSnapshotMetadatas.get(0);
         }
         return null;
     }
 
     @Nullable
-    public List<LakeSnapshotMetadata> getLakeSnapshotMetadata() {
-        return lakeSnapshotMetadata;
+    public List<LakeSnapshotMetadata> getLakeSnapshotMetadatas() {
+        return lakeSnapshotMetadatas;
     }
 
     /**
@@ -116,7 +117,7 @@ public class LakeTable {
             return lakeTableSnapshot;
         }
         FsPath tieredOffsetsFilePath =
-                checkNotNull(getLakeTableLatestSnapshot()).tieredOffsetsFilePath;
+                checkNotNull(getLatestLakeSnapshotMetadata()).tieredOffsetsFilePath;
         FSDataInputStream inputStream =
                 tieredOffsetsFilePath.getFileSystem().open(tieredOffsetsFilePath);
         try (ByteArrayOutputStream outputStream = new ByteArrayOutputStream()) {
@@ -178,5 +179,52 @@ public class LakeTable {
                 LOG.warn("Error deleting filePath at {}", fsPath, e);
             }
         }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) {
+                return true;
+            }
+            if (!(o instanceof LakeSnapshotMetadata)) {
+                return false;
+            }
+            LakeSnapshotMetadata that = (LakeSnapshotMetadata) o;
+            return snapshotId == that.snapshotId
+                    && Objects.equals(tieredOffsetsFilePath, that.tieredOffsetsFilePath)
+                    && Objects.equals(readableOffsetsFilePath, that.readableOffsetsFilePath);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(snapshotId, tieredOffsetsFilePath, readableOffsetsFilePath);
+        }
+    }
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) {
+            return true;
+        }
+        if (!(o instanceof LakeTable)) {
+            return false;
+        }
+        LakeTable lakeTable = (LakeTable) o;
+        return Objects.equals(lakeSnapshotMetadatas, lakeTable.lakeSnapshotMetadatas)
+                && Objects.equals(lakeTableSnapshot, lakeTable.lakeTableSnapshot);
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(lakeSnapshotMetadatas, lakeTableSnapshot);
+    }
+
+    @Override
+    public String toString() {
+        return "LakeTable{"
+                + "lakeSnapshotMetadatas="
+                + lakeSnapshotMetadatas
+                + ", lakeTableSnapshot="
+                + lakeTableSnapshot
+                + '}';
     }
 }

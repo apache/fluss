@@ -98,7 +98,7 @@ public class LakeTableHelper {
         if (optPreviousLakeTable.isPresent()) {
             // discard previous latest lake snapshot
             LakeTable.LakeSnapshotMetadata previousLakeSnapshotMetadata =
-                    optPreviousLakeTable.get().getLakeTableLatestSnapshot();
+                    optPreviousLakeTable.get().getLatestLakeSnapshotMetadata();
             if (previousLakeSnapshotMetadata != null) {
                 previousLakeSnapshotMetadata.discard();
             }

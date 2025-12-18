@@ -66,7 +66,7 @@ public class LakeTableJsonSerde implements JsonSerializer<LakeTable>, JsonDeseri
 
         generator.writeArrayFieldStart(LAKE_SNAPSHOTS);
         for (LakeTable.LakeSnapshotMetadata lakeSnapshotMetadata :
-                checkNotNull(lakeTable.getLakeSnapshotMetadata())) {
+                checkNotNull(lakeTable.getLakeSnapshotMetadatas())) {
             generator.writeStartObject();
 
             generator.writeNumberField(SNAPSHOT_ID_KEY, lakeSnapshotMetadata.getSnapshotId());
@@ -100,22 +100,24 @@ public class LakeTableJsonSerde implements JsonSerializer<LakeTable>, JsonDeseri
                         "Invalid lake_snapshots field in version 2 format");
             }
 
-            List<LakeTable.LakeSnapshotMetadata> lakeSnapshotMetadata = new ArrayList<>();
+            List<LakeTable.LakeSnapshotMetadata> lakeSnapshotMetadatas = new ArrayList<>();
             Iterator<JsonNode> elements = lakeSnapshotsNode.elements();
             while (elements.hasNext()) {
                 JsonNode snapshotNode = elements.next();
                 long snapshotId = snapshotNode.get(SNAPSHOT_ID_KEY).asLong();
                 String tieredOffsetsPath = snapshotNode.get(TIERED_OFFSETS_KEY).asText();
-                String readableOffsetsPath = snapshotNode.get(READABLE_OFFSETS_KEY).asText();
+                JsonNode readableOffsetsNode = snapshotNode.get(READABLE_OFFSETS_KEY);
+                FsPath readableOffsetsPath =
+                        readableOffsetsNode != null
+                                ? new FsPath(readableOffsetsNode.asText())
+                                : null;
 
                 LakeTable.LakeSnapshotMetadata metadata =
                         new LakeTable.LakeSnapshotMetadata(
-                                snapshotId,
-                                new FsPath(tieredOffsetsPath),
-                                new FsPath(readableOffsetsPath));
-                lakeSnapshotMetadata.add(metadata);
+                                snapshotId, new FsPath(tieredOffsetsPath), readableOffsetsPath);
+                lakeSnapshotMetadatas.add(metadata);
             }
-            return new LakeTable(lakeSnapshotMetadata);
+            return new LakeTable(lakeSnapshotMetadatas);
         } else {
             throw new IllegalArgumentException("Unsupported version: " + version);
         }

@@ -168,7 +168,7 @@ public class ReplicaTestBase {
         conf.setString(ConfigOptions.DATA_DIR, tempDir.getAbsolutePath());
         conf.setString(ConfigOptions.COORDINATOR_HOST, "localhost");
         conf.set(ConfigOptions.REMOTE_DATA_DIR, tempDir.getAbsolutePath() + "/remote_data_dir");
-        conf.set(ConfigOptions.REMOTE_LOG_DATA_TRANSFER_THREAD_NUM, 1);
+        conf.set(ConfigOptions.SERVER_IO_POOL_SIZE, 2);
         // set snapshot interval to 1 seconds for test purpose
         conf.set(ConfigOptions.KV_SNAPSHOT_INTERVAL, Duration.ofSeconds(1));
 

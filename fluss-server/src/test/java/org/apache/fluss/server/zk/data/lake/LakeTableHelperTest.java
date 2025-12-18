@@ -140,12 +140,12 @@ class LakeTableHelperTest {
             Optional<LakeTable> optLakeTableAfter = zooKeeperClient.getLakeTable(tableId);
             assertThat(optLakeTableAfter).isPresent();
             LakeTable lakeTableAfter = optLakeTableAfter.get();
-            assertThat(lakeTableAfter.getLakeTableLatestSnapshot())
+            assertThat(lakeTableAfter.getLatestLakeSnapshotMetadata())
                     .isNotNull(); // Version 2 has file path
 
             // Verify: The lake snapshot file exists
             FsPath snapshot2FileHandle =
-                    lakeTableAfter.getLakeTableLatestSnapshot().getReadableOffsetsFilePath();
+                    lakeTableAfter.getLatestLakeSnapshotMetadata().getReadableOffsetsFilePath();
             FileSystem fileSystem = snapshot2FileHandle.getFileSystem();
             assertThat(fileSystem.exists(snapshot2FileHandle)).isTrue();
 
