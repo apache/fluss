@@ -99,7 +99,7 @@ public class HybridSnapshotLogSplit extends SnapshotSplit {
                 + partitionName
                 + "', snapshotId="
                 + snapshotId
-                + "isSnapshotFinished="
+                + ", isSnapshotFinished="
                 + isSnapshotFinished
                 + ", logStartingOffset="
                 + logStartingOffset
