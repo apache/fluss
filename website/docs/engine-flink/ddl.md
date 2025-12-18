@@ -247,7 +247,19 @@ The following example illustrates reset the `table.datalake.enabled` option to i
 ```sql title="Flink SQL"
 ALTER TABLE my_table RESET ('table.datalake.enabled');
 ```
+### Add Column At Last
+Currently, Fluss only supports adding Nullable columns at the end of the table.
+Below are examples demonstrating how to add columns:
+```sql title="Flink SQL"
+-- Add a single column at the end of the table
+ALTER TABLE my_table ADD user_email STRING COMMENT 'User email address';
 
+-- Add multiple columns at the end of the table
+ALTER TABLE MyTable ADD (
+    user_email STRING COMMENT 'User email address',
+    order_quantity INT
+);
+```
 
 ## Add Partition
 
