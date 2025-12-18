@@ -187,7 +187,7 @@ public class LakeSplitGenerator {
                                 lakeSplitsOfPartition,
                                 partitionName,
                                 // now, we can't get partition id for the partition only
-                                // in lake, set them to a arbitrary partition id, but
+                                // in lake, set them to an arbitrary partition id, but
                                 // make sure different partition have different partition id
                                 // to enable different partition can be distributed to different
                                 // tasks
@@ -235,7 +235,7 @@ public class LakeSplitGenerator {
                 Long snapshotLogOffset = tableBucketSnapshotLogOffset.get(tableBucket);
                 Long stoppingOffset = bucketEndOffset.get(bucket);
                 if (snapshotLogOffset == null) {
-                    // no any data commit to this bucket, scan from fluss log
+                    // no data commit to this bucket, scan from fluss log
                     splits.add(
                             new LogSplit(
                                     tableBucket, partitionName, EARLIEST_OFFSET, stoppingOffset));

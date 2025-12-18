@@ -72,4 +72,14 @@ public class PaimonSplit implements LakeSplit {
     public boolean isBucketUnAware() {
         return isBucketUnAware;
     }
+
+    @Override
+    public String toString() {
+        return "PaimonSplit{"
+                + "dataSplit="
+                + dataSplit
+                + ", isBucketUnAware="
+                + isBucketUnAware
+                + '}';
+    }
 }

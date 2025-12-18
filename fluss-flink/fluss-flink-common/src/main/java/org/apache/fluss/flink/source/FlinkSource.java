@@ -52,7 +52,7 @@ import javax.annotation.Nullable;
 
 /** Flink source for Fluss. */
 public class FlinkSource<OUT>
-        implements Source<OUT, SourceSplitBase, SourceEnumeratorState>, ResultTypeQueryable {
+        implements Source<OUT, SourceSplitBase, SourceEnumeratorState>, ResultTypeQueryable<OUT> {
     private static final long serialVersionUID = 1L;
 
     private final Configuration flussConf;
@@ -155,6 +155,8 @@ public class FlinkSource<OUT>
                 splitEnumeratorContext,
                 sourceEnumeratorState.getAssignedBuckets(),
                 sourceEnumeratorState.getAssignedPartitions(),
+                sourceEnumeratorState.getAssignedLakeBuckets(),
+                sourceEnumeratorState.getAssignedLakePartitions(),
                 sourceEnumeratorState.getRemainingHybridLakeFlussSplits(),
                 offsetsInitializer,
                 scanPartitionDiscoveryIntervalMs,

@@ -76,7 +76,7 @@ public class FlinkRecordsWithSplitIds implements RecordsWithSplitIds<RecordAndPo
                 flinkSourceReaderMetrics);
     }
 
-    // no any splits, just used to mark splits finished
+    // no splits, just used to mark splits finished
     public FlinkRecordsWithSplitIds(
             Set<String> finishedSplits, FlinkSourceReaderMetrics flinkSourceReaderMetrics) {
         this(

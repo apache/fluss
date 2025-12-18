@@ -19,6 +19,8 @@ package org.apache.fluss.lake.paimon.flink;
 
 import org.apache.fluss.config.AutoPartitionTimeUnit;
 import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.metadata.PartitionInfo;
+import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
@@ -62,7 +64,9 @@ import java.util.stream.Collectors;
 
 import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.assertResultsExactOrder;
 import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.assertRowResultsIgnoreOrder;
+import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.collectRowsWithTimeout;
 import static org.apache.fluss.testutils.DataTestUtils.row;
+import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** The IT case for Flink union data in lake and fluss for primary key table. */
@@ -760,6 +764,134 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
 
         // cancel jobs
         insertResult.getJobClient().get().cancel().get();
+        jobClient.cancel().get();
+    }
+
+    @Test
+    void testUnionReadPartitionsExistInPaimonButExpiredInFluss() throws Exception {
+        // first of all, start tiering
+        JobClient jobClient = buildTieringJob(execEnv);
+
+        String tableName = "expired_partition_pkTable";
+        TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
+        Map<TableBucket, Long> bucketLogEndOffset = new HashMap<>();
+        // create table & write initial data
+        long tableId =
+                preparePKTableFullType(tablePath, DEFAULT_BUCKET_NUM, true, bucketLogEndOffset);
+
+        // wait until records has been synced
+        waitUntilBucketSynced(tablePath, tableId, DEFAULT_BUCKET_NUM, true);
+
+        // Get all partitions
+        Map<Long, String> partitionNameByIds = waitUntilPartitions(tablePath);
+        assertThat(partitionNameByIds.size()).isGreaterThan(0);
+
+        // Build expected rows for all partitions
+        List<Row> expectedAllRows = new ArrayList<>();
+        for (String partition : partitionNameByIds.values()) {
+            expectedAllRows.add(
+                    Row.of(
+                            false,
+                            (byte) 1,
+                            (short) 2,
+                            3,
+                            4L,
+                            5.1f,
+                            6.0d,
+                            "string",
+                            Decimal.fromUnscaledLong(9, 5, 2),
+                            Decimal.fromBigDecimal(new java.math.BigDecimal(10), 20, 0),
+                            TimestampLtz.fromEpochMillis(1698235273182L),
+                            TimestampLtz.fromEpochMillis(1698235273182L, 5000),
+                            TimestampNtz.fromMillis(1698235273183L),
+                            TimestampNtz.fromMillis(1698235273183L, 6000),
+                            new byte[] {1, 2, 3, 4},
+                            partition));
+            expectedAllRows.add(
+                    Row.of(
+                            true,
+                            (byte) 10,
+                            (short) 20,
+                            30,
+                            40L,
+                            50.1f,
+                            60.0d,
+                            "another_string",
+                            Decimal.fromUnscaledLong(90, 5, 2),
+                            Decimal.fromBigDecimal(new java.math.BigDecimal(100), 20, 0),
+                            TimestampLtz.fromEpochMillis(1698235273200L),
+                            TimestampLtz.fromEpochMillis(1698235273200L, 5000),
+                            TimestampNtz.fromMillis(1698235273201L),
+                            TimestampNtz.fromMillis(1698235273201L, 6000),
+                            new byte[] {1, 2, 3, 4},
+                            partition));
+        }
+
+        // Select one partition to drop (expire in Fluss)
+        Long partitionToDropId = partitionNameByIds.keySet().iterator().next();
+        String partitionToDropName = partitionNameByIds.get(partitionToDropId);
+
+        // Filter rows that belong to the partition to be dropped
+        List<Row> rowsInExpiredPartition =
+                expectedAllRows.stream()
+                        .filter(row -> partitionToDropName.equals(row.getField(15)))
+                        .collect(Collectors.toList());
+        assertThat(rowsInExpiredPartition).isNotEmpty();
+
+        // Now drop the partition in Fluss (make it expired)
+        // The partition data still exists in Paimon
+        admin.dropPartition(
+                        tablePath,
+                        new PartitionSpec(Collections.singletonMap("c16", partitionToDropName)),
+                        false)
+                .get();
+
+        // Retry until partition dropped
+        retry(
+                Duration.ofSeconds(60),
+                () -> {
+                    List<PartitionInfo> remainingPartitions =
+                            admin.listPartitionInfos(tablePath).get();
+                    assertThat(remainingPartitions.size()).isEqualTo(1);
+                });
+
+        // Now query the table - it should read data from both:
+        // 1. Remaining partitions from Fluss
+        // 2. Expired partition from Paimon (union read)
+        CloseableIterator<Row> iterator =
+                streamTEnv
+                        .executeSql(
+                                "select * from "
+                                        + tableName
+                                        + " /*+ OPTIONS('scan.partition.discovery.interval'='100ms') */")
+                        .collect();
+        List<String> actual = collectRowsWithTimeout(iterator, expectedAllRows.size(), true);
+        assertThat(actual)
+                .containsExactlyInAnyOrderElementsOf(
+                        expectedAllRows.stream().map(Row::toString).collect(Collectors.toList()));
+
+        // Test partition filter - query only the expired partition
+        String sqlWithPartitionFilter =
+                "select"
+                        + " /*+ OPTIONS('scan.partition.discovery.interval'='100ms') */"
+                        + " * FROM "
+                        + tableName
+                        + " WHERE c16 = '"
+                        + partitionToDropName
+                        + "'";
+        iterator = streamTEnv.executeSql(sqlWithPartitionFilter).collect();
+        List<String> filteredActual =
+                collectRowsWithTimeout(iterator, rowsInExpiredPartition.size(), true);
+
+        // Should still be able to read data from expired partition via Paimon
+        assertThat(filteredActual)
+                .as("Should read expired partition data from Paimon when filtering by partition")
+                .containsExactlyInAnyOrderElementsOf(
+                        rowsInExpiredPartition.stream()
+                                .map(Row::toString)
+                                .collect(Collectors.toList()));
+
+        // cancel the tiering job
         jobClient.cancel().get();
     }
 

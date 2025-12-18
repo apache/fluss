@@ -18,14 +18,23 @@
 package org.apache.fluss.flink.source.reader;
 
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.flink.lake.split.LakeSnapshotSplit;
 import org.apache.fluss.flink.source.deserializer.DeserializerInitContextImpl;
 import org.apache.fluss.flink.source.deserializer.RowDataDeserializationSchema;
 import org.apache.fluss.flink.source.emitter.FlinkRecordEmitter;
+import org.apache.fluss.flink.source.event.PartitionBucketsFinishedEvent;
 import org.apache.fluss.flink.source.event.PartitionBucketsUnsubscribedEvent;
 import org.apache.fluss.flink.source.event.PartitionsRemovedEvent;
 import org.apache.fluss.flink.source.metrics.FlinkSourceReaderMetrics;
 import org.apache.fluss.flink.source.split.LogSplit;
+import org.apache.fluss.flink.source.split.SourceSplitBase;
 import org.apache.fluss.flink.utils.FlinkTestBase;
+import org.apache.fluss.lake.source.LakeSource;
+import org.apache.fluss.lake.source.LakeSplit;
+import org.apache.fluss.lake.source.TestingLakeSource;
+import org.apache.fluss.lake.source.TestingLakeSplit;
+import org.apache.fluss.metadata.PartitionInfo;
+import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
@@ -85,7 +94,8 @@ class FlinkSourceReaderTest extends FlinkTestBase {
                         clientConf,
                         tablePath,
                         tableDescriptor.getSchema().getRowType(),
-                        readerContext)) {
+                        readerContext,
+                        null)) {
 
             // first of all, add all splits of all partitions to the reader
             Map<Long, Set<TableBucket>> assignedBuckets = new HashMap<>();
@@ -155,11 +165,78 @@ class FlinkSourceReaderTest extends FlinkTestBase {
         }
     }
 
+    @Test
+    void testOnSplitFinished() throws Exception {
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "test_on_split_finished");
+
+        TableDescriptor tableDescriptor = DEFAULT_AUTO_PARTITIONED_PK_TABLE_DESCRIPTOR;
+        long tableId = createTable(tablePath, tableDescriptor);
+
+        // wait until partitions are created
+        ZooKeeperClient zooKeeperClient = FLUSS_CLUSTER_EXTENSION.getZooKeeperClient();
+        Map<Long, String> partitionNameByIds = waitUntilPartitions(zooKeeperClient, tablePath);
+
+        // Get the first partition for testing
+        Long testPartitionId = partitionNameByIds.keySet().iterator().next();
+        String testPartitionName = partitionNameByIds.get(testPartitionId);
+
+        // Create a reader context to capture events
+        TestingReaderContext readerContext = new TestingReaderContext();
+        ResolvedPartitionSpec partitionSpec =
+                ResolvedPartitionSpec.fromPartitionName(
+                        Collections.singletonList("date"), testPartitionName);
+        PartitionInfo partitionInfo = new PartitionInfo(testPartitionId, partitionSpec);
+        LakeSource<LakeSplit> lakeSource =
+                new TestingLakeSource(DEFAULT_BUCKET_NUM, Collections.singletonList(partitionInfo));
+        try (final FlinkSourceReader reader =
+                createReader(
+                        clientConf,
+                        tablePath,
+                        tableDescriptor.getSchema().getRowType(),
+                        readerContext,
+                        lakeSource)) {
+
+            TableBucket tableBucket = new TableBucket(tableId, testPartitionId, 0);
+            SourceSplitBase split =
+                    new LakeSnapshotSplit(
+                            tableBucket,
+                            testPartitionName,
+                            new TestingLakeSplit(0, Collections.singletonList(testPartitionName)),
+                            0);
+
+            reader.addSplits(Collections.singletonList(split));
+
+            // Poll until the split is finished
+            TestingReaderOutput<RowData> output = new TestingReaderOutput<>();
+
+            while (true) {
+                reader.pollNext(output);
+
+                // Check if the event has been sent
+                List<SourceEvent> sentEvents = readerContext.getSentEvents();
+                if (!sentEvents.isEmpty()) {
+                    break;
+                }
+            }
+
+            // Verify that PartitionBucketsFinishedEvent was sent
+            List<SourceEvent> sentEvents = readerContext.getSentEvents();
+            assertThat(sentEvents).hasSize(1);
+
+            SourceEvent event = sentEvents.get(0);
+            assertThat(event).isInstanceOf(PartitionBucketsFinishedEvent.class);
+
+            PartitionBucketsFinishedEvent finishedEvent = (PartitionBucketsFinishedEvent) event;
+            assertThat(finishedEvent.getFinishedTableBuckets()).containsExactly(tableBucket);
+        }
+    }
+
     private FlinkSourceReader createReader(
             Configuration flussConf,
             TablePath tablePath,
             RowType sourceOutputType,
-            SourceReaderContext context)
+            SourceReaderContext context,
+            LakeSource<LakeSplit> lakeSource)
             throws Exception {
         FutureCompletingBlockingQueue<RecordsWithSplitIds<RecordAndPos>> elementsQueue =
                 new FutureCompletingBlockingQueue<>();
@@ -181,6 +258,6 @@ class FlinkSourceReaderTest extends FlinkTestBase {
                 null,
                 new FlinkSourceReaderMetrics(context.metricGroup()),
                 recordEmitter,
-                null);
+                lakeSource);
     }
 }

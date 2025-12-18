@@ -24,11 +24,13 @@ import org.apache.fluss.client.metadata.KvSnapshots;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.lake.LakeSplitGenerator;
+import org.apache.fluss.flink.lake.split.LakeSnapshotSplit;
 import org.apache.fluss.flink.source.enumerator.initializer.BucketOffsetsRetrieverImpl;
 import org.apache.fluss.flink.source.enumerator.initializer.NoStoppingOffsetsInitializer;
 import org.apache.fluss.flink.source.enumerator.initializer.OffsetsInitializer;
 import org.apache.fluss.flink.source.enumerator.initializer.OffsetsInitializer.BucketOffsetsRetriever;
 import org.apache.fluss.flink.source.enumerator.initializer.SnapshotOffsetsInitializer;
+import org.apache.fluss.flink.source.event.PartitionBucketsFinishedEvent;
 import org.apache.fluss.flink.source.event.PartitionBucketsUnsubscribedEvent;
 import org.apache.fluss.flink.source.event.PartitionsRemovedEvent;
 import org.apache.fluss.flink.source.split.HybridSnapshotLogSplit;
@@ -83,7 +85,8 @@ import static org.apache.fluss.utils.Preconditions.checkState;
  * <p>The enumerator is responsible for:
  *
  * <ul>
- *   <li>Get the all splits(snapshot split + log split) for a table of Fluss to be read.
+ *   <li>Get the all splits(lake split + snapshot split + log split) for a table of Fluss to be
+ *       read.
  *   <li>Assign the splits to readers with the guarantee that the splits belong to the same bucket
  *       will be assigned to same reader.
  * </ul>
@@ -113,10 +116,23 @@ public class FlinkSourceEnumerator
      */
     private final Map<Long, String> assignedPartitions;
 
-    /** buckets that have been assigned to readers. */
+    /** Buckets that have been assigned to readers. */
     private final Set<TableBucket> assignedTableBuckets;
 
-    @Nullable private List<SourceSplitBase> pendingHybridLakeFlussSplits;
+    /**
+     * Partitions contains lake splits that have been assigned to readers, will be empty when the
+     * table is not partitioned. Mapping from partition id to partition name.
+     *
+     * <p>It's mainly used to help enumerator to prevent partitions containing lake splits from
+     * expiring prematurely. The enumerator does not need to actively expire partitions containing
+     * lake splits, as these partitions are not managed by Fluss.
+     */
+    private final Map<Long, String> assignedLakePartitions;
+
+    /** Buckets contains lake splits that have been assigned to readers. */
+    private final Set<TableBucket> assignedLakeTableBuckets;
+
+    @Nullable protected List<SourceSplitBase> pendingHybridLakeFlussSplits;
 
     private final long scanPartitionDiscoveryIntervalMs;
 
@@ -161,6 +177,8 @@ public class FlinkSourceEnumerator
                 context,
                 Collections.emptySet(),
                 Collections.emptyMap(),
+                Collections.emptySet(),
+                Collections.emptyMap(),
                 null,
                 startingOffsetsInitializer,
                 scanPartitionDiscoveryIntervalMs,
@@ -177,6 +195,8 @@ public class FlinkSourceEnumerator
             SplitEnumeratorContext<SourceSplitBase> context,
             Set<TableBucket> assignedTableBuckets,
             Map<Long, String> assignedPartitions,
+            Set<TableBucket> assignedLakeTableBuckets,
+            Map<Long, String> assignedLakePartitions,
             List<SourceSplitBase> pendingHybridLakeFlussSplits,
             OffsetsInitializer startingOffsetsInitializer,
             long scanPartitionDiscoveryIntervalMs,
@@ -191,6 +211,8 @@ public class FlinkSourceEnumerator
                 context,
                 assignedTableBuckets,
                 assignedPartitions,
+                assignedLakeTableBuckets,
+                assignedLakePartitions,
                 pendingHybridLakeFlussSplits,
                 startingOffsetsInitializer,
                 scanPartitionDiscoveryIntervalMs,
@@ -208,6 +230,8 @@ public class FlinkSourceEnumerator
             SplitEnumeratorContext<SourceSplitBase> context,
             Set<TableBucket> assignedTableBuckets,
             Map<Long, String> assignedPartitions,
+            Set<TableBucket> assignedLakeTableBuckets,
+            Map<Long, String> assignedLakePartitions,
             List<SourceSplitBase> pendingHybridLakeFlussSplits,
             OffsetsInitializer startingOffsetsInitializer,
             long scanPartitionDiscoveryIntervalMs,
@@ -222,12 +246,14 @@ public class FlinkSourceEnumerator
         this.context = checkNotNull(context);
         this.pendingSplitAssignment = new HashMap<>();
         this.assignedTableBuckets = new HashSet<>(assignedTableBuckets);
-        this.startingOffsetsInitializer = startingOffsetsInitializer;
         this.assignedPartitions = new HashMap<>(assignedPartitions);
+        this.assignedLakeTableBuckets = new HashSet<>(assignedLakeTableBuckets);
+        this.assignedLakePartitions = new HashMap<>(assignedLakePartitions);
         this.pendingHybridLakeFlussSplits =
                 pendingHybridLakeFlussSplits == null
                         ? null
                         : new LinkedList<>(pendingHybridLakeFlussSplits);
+        this.startingOffsetsInitializer = startingOffsetsInitializer;
         this.scanPartitionDiscoveryIntervalMs = scanPartitionDiscoveryIntervalMs;
         this.streaming = streaming;
         this.partitionFilters = partitionFilters;
@@ -258,6 +284,10 @@ public class FlinkSourceEnumerator
                     // we'll need to consider lake splits
                     List<SourceSplitBase> hybridLakeFlussSplits = generateHybridLakeFlussSplits();
                     if (hybridLakeFlussSplits != null) {
+                        LOG.info(
+                                "Generated {} hybrid lake splits for table {}.",
+                                hybridLakeFlussSplits.size(),
+                                tablePath);
                         // handle hybrid lake fluss splits firstly
                         handleSplitsAdd(hybridLakeFlussSplits, null);
                     }
@@ -477,8 +507,12 @@ public class FlinkSourceEnumerator
                                     checkNotNull(
                                             split.getPartitionName(),
                                             "partition name shouldn't be null for the splits of partitioned table.");
-                            assignedOrPendingPartitions.add(
-                                    new Partition(partitionId, partitionName));
+                            // don't add partition for a lake split, since enumerator don't need to
+                            // remove partitions have lake split
+                            if (!(split instanceof LakeSnapshotSplit)) {
+                                assignedOrPendingPartitions.add(
+                                        new Partition(partitionId, partitionName));
+                            }
                         });
 
         assignedOrPendingPartitions.forEach(
@@ -554,7 +588,8 @@ public class FlinkSourceEnumerator
                 // hybrid snapshot log split;
                 OptionalLong logOffset = snapshots.getLogOffset(bucketId);
                 checkState(
-                        logOffset.isPresent(), "Log offset should be present if snapshot id is.");
+                        logOffset.isPresent(),
+                        "Log offset should be present if snapshot id is present.");
                 splits.add(
                         new HybridSnapshotLogSplit(
                                 tb, partitionName, snapshotId.getAsLong(), logOffset.getAsLong()));
@@ -616,6 +651,7 @@ public class FlinkSourceEnumerator
         // should be restored from checkpoint, shouldn't
         // list splits again
         if (pendingHybridLakeFlussSplits != null) {
+            LOG.info("Still have pending lake fluss splits, shouldn't list splits again.");
             return pendingHybridLakeFlussSplits;
         }
         try {
@@ -735,7 +771,11 @@ public class FlinkSourceEnumerator
                 pendingAssignmentForReader.forEach(
                         split -> {
                             TableBucket tableBucket = split.getTableBucket();
-                            assignedTableBuckets.add(tableBucket);
+                            if (split instanceof LakeSnapshotSplit) {
+                                assignedLakeTableBuckets.add(tableBucket);
+                            } else {
+                                assignedTableBuckets.add(tableBucket);
+                            }
 
                             if (pendingHybridLakeFlussSplits != null) {
                                 // removed from the pendingHybridLakeFlussSplits
@@ -756,7 +796,11 @@ public class FlinkSourceEnumerator
                                         checkNotNull(
                                                 split.getPartitionName(),
                                                 "partition name shouldn't be null for the splits of partitioned table.");
-                                assignedPartitions.put(partitionId, partitionName);
+                                if (split instanceof LakeSnapshotSplit) {
+                                    assignedLakePartitions.put(partitionId, partitionName);
+                                } else {
+                                    assignedPartitions.put(partitionId, partitionName);
+                                }
                             }
                         });
             }
@@ -855,12 +899,69 @@ public class FlinkSourceEnumerator
             for (Long partitionToRemove : partitionsPendingRemove) {
                 assignedPartitions.remove(partitionToRemove);
             }
+        } else if (sourceEvent instanceof PartitionBucketsFinishedEvent) {
+            // PartitionBucketsFinishedEvent only contains finished buckets for lake splits
+
+            PartitionBucketsFinishedEvent finishedEvent =
+                    (PartitionBucketsFinishedEvent) sourceEvent;
+
+            Set<Long> partitionsPendingRemove = new HashSet<>();
+            // remove finished buckets from the assigned table buckets
+            for (TableBucket tableBucket : finishedEvent.getFinishedTableBuckets()) {
+                assignedLakeTableBuckets.remove(tableBucket);
+                Long partitionId = tableBucket.getPartitionId();
+                if (partitionId != null) {
+                    partitionsPendingRemove.add(partitionId);
+                }
+            }
+
+            // Check if all buckets of the partition have been finished
+            // (i.e., no buckets of the partition remain in assignedTableBuckets)
+            for (TableBucket tableBucket : assignedLakeTableBuckets) {
+                Long partitionId = tableBucket.getPartitionId();
+                if (partitionId != null) {
+                    // we shouldn't remove the partition if still there is buckets assigned.
+                    boolean removed = partitionsPendingRemove.remove(partitionId);
+                    if (removed && partitionsPendingRemove.isEmpty()) {
+                        // no need to check the rest of the buckets
+                        break;
+                    }
+                }
+            }
+
+            pendingSplitAssignment.forEach(
+                    (reader, splits) ->
+                            splits.forEach(
+                                    split -> {
+                                        Long partitionId = split.getTableBucket().getPartitionId();
+                                        if (partitionId != null) {
+                                            partitionsPendingRemove.remove(partitionId);
+                                        }
+                                    }));
+
+            // remove partitions if no assigned or pending buckets belong to the partition
+            for (Long partitionToRemove : partitionsPendingRemove) {
+                String partitionName = assignedLakePartitions.remove(partitionToRemove);
+                LOG.info(
+                        "Partition {} (id: {}) has been finished reading and removed from assignedPartitions.",
+                        partitionName,
+                        partitionToRemove);
+            }
         }
     }
 
     @VisibleForTesting
     Map<Long, String> getAssignedPartitions() {
         return assignedPartitions;
+    }
+
+    @VisibleForTesting
+    Map<Long, String> getAssignedLakePartitions() {
+        return assignedLakePartitions;
+    }
+
+    public Set<TableBucket> getAssignedLakeTableBuckets() {
+        return assignedLakeTableBuckets;
     }
 
     @Override
@@ -884,7 +985,11 @@ public class FlinkSourceEnumerator
     public SourceEnumeratorState snapshotState(long checkpointId) {
         final SourceEnumeratorState enumeratorState =
                 new SourceEnumeratorState(
-                        assignedTableBuckets, assignedPartitions, pendingHybridLakeFlussSplits);
+                        assignedTableBuckets,
+                        assignedPartitions,
+                        assignedLakeTableBuckets,
+                        assignedLakePartitions,
+                        pendingHybridLakeFlussSplits);
         LOG.debug("Source Checkpoint is {}", enumeratorState);
         return enumeratorState;
     }

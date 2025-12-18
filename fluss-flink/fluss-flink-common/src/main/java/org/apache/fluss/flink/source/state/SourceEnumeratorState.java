@@ -30,12 +30,19 @@ import java.util.Set;
 /** A checkpoint of the current state of the containing the buckets that is already assigned. */
 public class SourceEnumeratorState {
 
-    /** buckets that have been assigned to readers. */
+    /** Buckets that have been assigned to readers. */
     private final Set<TableBucket> assignedBuckets;
 
     // partitions that have been assigned to readers.
     // mapping from partition id to partition name
     private final Map<Long, String> assignedPartitions;
+
+    /** Buckets contains lake splits that have been assigned to readers. */
+    private final Set<TableBucket> assignedLakeBuckets;
+
+    // partitions contains lake splits that have been assigned to readers.
+    // mapping from partition id to partition name
+    private final Map<Long, String> assignedLakePartitions;
 
     // the unassigned lake splits of a lake snapshot and the fluss splits base on the
     // lake snapshot
@@ -44,9 +51,13 @@ public class SourceEnumeratorState {
     public SourceEnumeratorState(
             Set<TableBucket> assignedBuckets,
             Map<Long, String> assignedPartitions,
+            Set<TableBucket> assignedLakeBuckets,
+            Map<Long, String> assignedLakePartitions,
             @Nullable List<SourceSplitBase> remainingHybridLakeFlussSplits) {
         this.assignedBuckets = assignedBuckets;
         this.assignedPartitions = assignedPartitions;
+        this.assignedLakeBuckets = assignedLakeBuckets;
+        this.assignedLakePartitions = assignedLakePartitions;
         this.remainingHybridLakeFlussSplits = remainingHybridLakeFlussSplits;
     }
 
@@ -56,6 +67,14 @@ public class SourceEnumeratorState {
 
     public Map<Long, String> getAssignedPartitions() {
         return assignedPartitions;
+    }
+
+    public Set<TableBucket> getAssignedLakeBuckets() {
+        return assignedLakeBuckets;
+    }
+
+    public Map<Long, String> getAssignedLakePartitions() {
+        return assignedLakePartitions;
     }
 
     @Nullable
@@ -73,12 +92,21 @@ public class SourceEnumeratorState {
         }
         SourceEnumeratorState that = (SourceEnumeratorState) o;
         return Objects.equals(assignedBuckets, that.assignedBuckets)
-                && Objects.equals(assignedPartitions, that.assignedPartitions);
+                && Objects.equals(assignedPartitions, that.assignedPartitions)
+                && Objects.equals(assignedLakeBuckets, that.assignedLakeBuckets)
+                && Objects.equals(assignedLakePartitions, that.assignedLakePartitions)
+                && Objects.equals(
+                        remainingHybridLakeFlussSplits, that.remainingHybridLakeFlussSplits);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(assignedBuckets, assignedPartitions);
+        return Objects.hash(
+                assignedBuckets,
+                assignedPartitions,
+                assignedLakeBuckets,
+                assignedLakePartitions,
+                remainingHybridLakeFlussSplits);
     }
 
     @Override
@@ -88,6 +116,10 @@ public class SourceEnumeratorState {
                 + assignedBuckets
                 + ", assignedPartitions="
                 + assignedPartitions
+                + ", assignedLakeBuckets="
+                + assignedLakeBuckets
+                + ", assignedLakePartitions="
+                + assignedLakePartitions
                 + ", remainingHybridLakeFlussSplits="
                 + remainingHybridLakeFlussSplits
                 + '}';

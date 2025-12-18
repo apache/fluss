@@ -17,47 +17,53 @@
 
 package org.apache.fluss.flink.source.event;
 
+import org.apache.fluss.metadata.TableBucket;
+
 import org.apache.flink.api.connector.source.SourceEvent;
 
-import java.util.Map;
+import java.util.Collection;
 import java.util.Objects;
 
 /**
- * A source event to represent partitions is removed to send from enumerator to reader.
+ * An event sent from reader to enumerator to indicate that the splits of the partition buckets have
+ * been finished reading. It contains the table buckets that have been finished reading.
  *
- * <p>It contains the partition bucket of the removed partitions that has been assigned to the
- * reader.
+ * <p>This event is used to notify the enumerator that a bounded lake split has been completely
+ * read, so the enumerator can remove it from the {@code assignedLakePartitions} map.
  */
-public class PartitionsRemovedEvent implements SourceEvent {
+public class PartitionBucketsFinishedEvent implements SourceEvent {
 
     private static final long serialVersionUID = 1L;
 
-    private final Map<Long, String> removedPartitions;
+    private final Collection<TableBucket> finishedTableBuckets;
 
-    public PartitionsRemovedEvent(Map<Long, String> removedPartitions) {
-        this.removedPartitions = removedPartitions;
+    public PartitionBucketsFinishedEvent(Collection<TableBucket> finishedTableBuckets) {
+        this.finishedTableBuckets = finishedTableBuckets;
     }
 
-    public Map<Long, String> getRemovedPartitions() {
-        return removedPartitions;
+    public Collection<TableBucket> getFinishedTableBuckets() {
+        return finishedTableBuckets;
     }
 
     @Override
     public boolean equals(Object o) {
+        if (this == o) {
+            return true;
+        }
         if (o == null || getClass() != o.getClass()) {
             return false;
         }
-        PartitionsRemovedEvent that = (PartitionsRemovedEvent) o;
-        return Objects.equals(removedPartitions, that.removedPartitions);
+        PartitionBucketsFinishedEvent that = (PartitionBucketsFinishedEvent) o;
+        return Objects.equals(finishedTableBuckets, that.finishedTableBuckets);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hashCode(removedPartitions);
+        return Objects.hashCode(finishedTableBuckets);
     }
 
     @Override
     public String toString() {
-        return "PartitionsRemovedEvent{" + "removedPartitions=" + removedPartitions + '}';
+        return "PartitionFinishedEvent{" + "finishedTableBuckets=" + finishedTableBuckets + '}';
     }
 }

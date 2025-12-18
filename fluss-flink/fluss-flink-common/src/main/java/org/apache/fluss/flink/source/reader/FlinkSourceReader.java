@@ -20,7 +20,9 @@ package org.apache.fluss.flink.source.reader;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.adapter.SingleThreadMultiplexSourceReaderBaseAdapter;
 import org.apache.fluss.flink.lake.LakeSplitStateInitializer;
+import org.apache.fluss.flink.lake.split.LakeSnapshotSplit;
 import org.apache.fluss.flink.source.emitter.FlinkRecordEmitter;
+import org.apache.fluss.flink.source.event.PartitionBucketsFinishedEvent;
 import org.apache.fluss.flink.source.event.PartitionBucketsUnsubscribedEvent;
 import org.apache.fluss.flink.source.event.PartitionsRemovedEvent;
 import org.apache.fluss.flink.source.metrics.FlinkSourceReaderMetrics;
@@ -42,6 +44,8 @@ import org.apache.flink.connector.base.source.reader.synchronization.FutureCompl
 
 import javax.annotation.Nullable;
 
+import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.Consumer;
@@ -80,8 +84,24 @@ public class FlinkSourceReader<OUT>
     }
 
     @Override
-    protected void onSplitFinished(Map<String, SourceSplitState> map) {
-        // do nothing
+    protected void onSplitFinished(Map<String, SourceSplitState> finishedSplitStates) {
+        // Collect finished table buckets from completed splits
+        Collection<TableBucket> finishedTableBuckets = new ArrayList<>();
+        for (Map.Entry<String, SourceSplitState> entry : finishedSplitStates.entrySet()) {
+            SourceSplitBase finishedSplit = toSplitType(entry.getKey(), entry.getValue());
+            TableBucket tableBucket = finishedSplit.getTableBucket();
+            // Only send event for partitioned tables
+            if (tableBucket.getPartitionId() != null
+                    && finishedSplit instanceof LakeSnapshotSplit) {
+                finishedTableBuckets.add(tableBucket);
+            }
+        }
+
+        // Send event to enumerator if there are finished buckets from partitioned tables
+        if (!finishedTableBuckets.isEmpty()) {
+            context.sendSourceEventToCoordinator(
+                    new PartitionBucketsFinishedEvent(finishedTableBuckets));
+        }
     }
 
     @Override

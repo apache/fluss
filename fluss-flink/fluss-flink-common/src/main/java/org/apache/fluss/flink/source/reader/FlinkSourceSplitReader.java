@@ -102,7 +102,7 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
     private final Table table;
     private final FlinkMetricRegistry flinkMetricRegistry;
 
-    @Nullable private LakeSource<LakeSplit> lakeSource;
+    @Nullable private final LakeSource<LakeSplit> lakeSource;
 
     // table id, will be null when haven't received any split
     private Long tableId;
@@ -131,7 +131,6 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
         this.boundedSplits = new ArrayDeque<>();
         this.subscribedBuckets = new HashMap<>();
         this.projectedFields = projectedFields;
-        if (projectedFields == null) {}
 
         this.flinkSourceReaderMetrics = flinkSourceReaderMetrics;
         sanityCheck(table.getTableInfo().getRowType(), projectedFields);

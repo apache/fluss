@@ -31,6 +31,7 @@ import javax.annotation.Nullable;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -44,10 +45,11 @@ public class FlussSourceEnumeratorStateSerializer
     @Nullable private final LakeSource<LakeSplit> lakeSource;
 
     private static final int VERSION_0 = 0;
+    private static final int VERSION_1 = 1;
     private static final ThreadLocal<DataOutputSerializer> SERIALIZER_CACHE =
             ThreadLocal.withInitial(() -> new DataOutputSerializer(64));
 
-    private static final int CURRENT_VERSION = VERSION_0;
+    private static final int CURRENT_VERSION = VERSION_1;
 
     public FlussSourceEnumeratorStateSerializer(LakeSource<LakeSplit> lakeSource) {
         this.lakeSource = lakeSource;
@@ -62,8 +64,74 @@ public class FlussSourceEnumeratorStateSerializer
     public byte[] serialize(SourceEnumeratorState state) throws IOException {
         final DataOutputSerializer out = SERIALIZER_CACHE.get();
         // write assigned buckets
-        out.writeInt(state.getAssignedBuckets().size());
-        for (TableBucket tableBucket : state.getAssignedBuckets()) {
+        serializeAssignedBuckets(out, state.getAssignedBuckets());
+        // write assigned partitions
+        serializeAssignedPartitions(out, state.getAssignedPartitions());
+        // write assigned lake buckets
+        serializeAssignedBuckets(out, state.getAssignedLakeBuckets());
+        // write assigned lake partitions
+        serializeAssignedPartitions(out, state.getAssignedLakePartitions());
+
+        if (lakeSource != null) {
+            serializeRemainingHybridLakeFlussSplits(out, state);
+        }
+
+        final byte[] result = out.getCopyOfBuffer();
+        out.clear();
+        return result;
+    }
+
+    @Override
+    public SourceEnumeratorState deserialize(int version, byte[] serialized) throws IOException {
+        if (version == VERSION_0) {
+            return deserializeV0(serialized);
+        }
+        if (version != VERSION_1) {
+            throw new IOException("Unknown version or corrupt state: " + version);
+        }
+
+        final DataInputDeserializer in = new DataInputDeserializer(serialized);
+        // deserialize assigned buckets
+        Set<TableBucket> assignedBuckets = deserializeAssignedBuckets(in);
+        // deserialize assigned partitions
+        Map<Long, String> assignedPartitions = deserializeAssignedPartitions(in);
+        // deserialize assigned lake buckets
+        Set<TableBucket> assignedLakeBuckets = deserializeAssignedBuckets(in);
+        // deserialize assigned lake partitions
+        Map<Long, String> assignedLakePartitions = deserializeAssignedPartitions(in);
+
+        List<SourceSplitBase> remainingHybridLakeFlussSplits = null;
+        if (lakeSource != null) {
+            remainingHybridLakeFlussSplits = deserializeRemainingHybridLakeFlussSplits(in);
+        }
+
+        return new SourceEnumeratorState(
+                assignedBuckets,
+                assignedPartitions,
+                assignedLakeBuckets,
+                assignedLakePartitions,
+                remainingHybridLakeFlussSplits);
+    }
+
+    private SourceEnumeratorState deserializeV0(byte[] serialized) throws IOException {
+        final DataInputDeserializer in = new DataInputDeserializer(serialized);
+        // deserialize assigned buckets
+        Set<TableBucket> assignedBuckets = deserializeAssignedBuckets(in);
+        // deserialize assigned partitions
+        Map<Long, String> assignedPartitions = deserializeAssignedPartitions(in);
+
+        List<SourceSplitBase> remainingHybridLakeFlussSplits = null;
+        if (lakeSource != null) {
+            remainingHybridLakeFlussSplits = deserializeRemainingHybridLakeFlussSplits(in);
+        }
+
+        return new SourceEnumeratorState(assignedBuckets, assignedPartitions, Collections.emptySet(), Collections.emptyMap(), remainingHybridLakeFlussSplits);
+    }
+
+    private void serializeAssignedBuckets(
+            final DataOutputSerializer out, Set<TableBucket> assignedBuckets) throws IOException {
+        out.writeInt(assignedBuckets.size());
+        for (TableBucket tableBucket : assignedBuckets) {
             out.writeLong(tableBucket.getTableId());
 
             // write partition
@@ -77,29 +145,10 @@ public class FlussSourceEnumeratorStateSerializer
 
             out.writeInt(tableBucket.getBucket());
         }
-        // write assigned partitions
-        out.writeInt(state.getAssignedPartitions().size());
-        for (Map.Entry<Long, String> entry : state.getAssignedPartitions().entrySet()) {
-            out.writeLong(entry.getKey());
-            out.writeUTF(entry.getValue());
-        }
-
-        if (lakeSource != null) {
-            serializeRemainingHybridLakeFlussSplits(out, state);
-        }
-
-        final byte[] result = out.getCopyOfBuffer();
-        out.clear();
-        return result;
     }
 
-    @Override
-    public SourceEnumeratorState deserialize(int version, byte[] serialized) throws IOException {
-        if (version != VERSION_0) {
-            throw new IOException("Unknown version or corrupt state: " + version);
-        }
-        final DataInputDeserializer in = new DataInputDeserializer(serialized);
-        // deserialize assigned buckets
+    private Set<TableBucket> deserializeAssignedBuckets(final DataInputDeserializer in)
+            throws IOException {
         int assignedBucketsSize = in.readInt();
         Set<TableBucket> assignedBuckets = new HashSet<>(assignedBucketsSize);
         for (int i = 0; i < assignedBucketsSize; i++) {
@@ -113,8 +162,21 @@ public class FlussSourceEnumeratorStateSerializer
             int bucket = in.readInt();
             assignedBuckets.add(new TableBucket(tableId, partition, bucket));
         }
+        return assignedBuckets;
+    }
 
-        // deserialize assigned partitions
+    private void serializeAssignedPartitions(
+            final DataOutputSerializer out, Map<Long, String> assignedPartitions)
+            throws IOException {
+        out.writeInt(assignedPartitions.size());
+        for (Map.Entry<Long, String> entry : assignedPartitions.entrySet()) {
+            out.writeLong(entry.getKey());
+            out.writeUTF(entry.getValue());
+        }
+    }
+
+    private Map<Long, String> deserializeAssignedPartitions(final DataInputDeserializer in)
+            throws IOException {
         int assignedPartitionsSize = in.readInt();
         Map<Long, String> assignedPartitions = new HashMap<>(assignedPartitionsSize);
         for (int i = 0; i < assignedPartitionsSize; i++) {
@@ -122,15 +184,7 @@ public class FlussSourceEnumeratorStateSerializer
             String partition = in.readUTF();
             assignedPartitions.put(partitionId, partition);
         }
-
-        List<SourceSplitBase> remainingHybridLakeFlussSplits = null;
-        if (lakeSource != null) {
-            // todo: add a ut for serialize remaining hybrid lake fluss splits
-            remainingHybridLakeFlussSplits = deserializeRemainingHybridLakeFlussSplits(in);
-        }
-
-        return new SourceEnumeratorState(
-                assignedBuckets, assignedPartitions, remainingHybridLakeFlussSplits);
+        return assignedPartitions;
     }
 
     private void serializeRemainingHybridLakeFlussSplits(
