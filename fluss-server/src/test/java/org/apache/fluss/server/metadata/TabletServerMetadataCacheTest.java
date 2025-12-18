@@ -530,7 +530,8 @@ public class TabletServerMetadataCacheTest {
             super(
                     null,
                     new Configuration(),
-                    new LakeCatalogDynamicLoader(new Configuration(), null, true));
+                    new LakeCatalogDynamicLoader(new Configuration(), null, true),
+                    null);
             tableInfos.forEach(tableInfo -> tableInfoMap.put(tableInfo.getTablePath(), tableInfo));
         }
 

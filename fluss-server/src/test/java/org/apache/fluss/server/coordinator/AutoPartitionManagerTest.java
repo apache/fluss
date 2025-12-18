@@ -25,6 +25,7 @@ import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.server.DynamicConfigManager;
 import org.apache.fluss.server.testutils.TestingServerMetadataCache;
 import org.apache.fluss.server.zk.NOPErrorHandler;
 import org.apache.fluss.server.zk.ZooKeeperClient;
@@ -78,7 +79,8 @@ class AutoPartitionManagerTest {
                 new MetadataManager(
                         zookeeperClient,
                         new Configuration(),
-                        new LakeCatalogDynamicLoader(new Configuration(), null, true));
+                        new LakeCatalogDynamicLoader(new Configuration(), null, true),
+                        new DynamicConfigManager(zookeeperClient, new Configuration(), true));
     }
 
     @AfterEach
@@ -296,7 +298,9 @@ class AutoPartitionManagerTest {
                         new MetadataManager(
                                 zookeeperClient,
                                 new Configuration(),
-                                new LakeCatalogDynamicLoader(new Configuration(), null, true)),
+                                new LakeCatalogDynamicLoader(new Configuration(), null, true),
+                                new DynamicConfigManager(
+                                        zookeeperClient, new Configuration(), true)),
                         new Configuration(),
                         clock,
                         periodicExecutor);
@@ -374,7 +378,8 @@ class AutoPartitionManagerTest {
                 new MetadataManager(
                         zookeeperClient,
                         config,
-                        new LakeCatalogDynamicLoader(new Configuration(), null, true));
+                        new LakeCatalogDynamicLoader(new Configuration(), null, true),
+                        new DynamicConfigManager(zookeeperClient, new Configuration(), true));
 
         ZonedDateTime startTime =
                 LocalDateTime.parse("2024-09-10T00:00:00").atZone(ZoneId.systemDefault());
@@ -514,7 +519,8 @@ class AutoPartitionManagerTest {
                 new MetadataManager(
                         zookeeperClient,
                         config,
-                        new LakeCatalogDynamicLoader(new Configuration(), null, true));
+                        new LakeCatalogDynamicLoader(new Configuration(), null, true),
+                        new DynamicConfigManager(zookeeperClient, new Configuration(), true));
 
         ZonedDateTime startTime =
                 LocalDateTime.parse("2025-04-26T00:00:00").atZone(ZoneId.systemDefault());

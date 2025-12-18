@@ -23,6 +23,7 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableBucketReplica;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePartition;
+import org.apache.fluss.server.DynamicConfigManager;
 import org.apache.fluss.server.coordinator.event.CoordinatorEvent;
 import org.apache.fluss.server.coordinator.event.DeleteReplicaResponseReceivedEvent;
 import org.apache.fluss.server.coordinator.event.TestingEventManager;
@@ -129,7 +130,8 @@ class TableManagerTest {
                 new MetadataManager(
                         zookeeperClient,
                         new Configuration(),
-                        new LakeCatalogDynamicLoader(new Configuration(), null, true));
+                        new LakeCatalogDynamicLoader(new Configuration(), null, true),
+                        new DynamicConfigManager(zookeeperClient, new Configuration(), true));
         tableManager =
                 new TableManager(
                         metadataManager,

@@ -26,6 +26,7 @@ import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.TestData;
+import org.apache.fluss.server.DynamicConfigManager;
 import org.apache.fluss.server.coordinator.LakeCatalogDynamicLoader;
 import org.apache.fluss.server.coordinator.MetadataManager;
 import org.apache.fluss.server.zk.NOPErrorHandler;
@@ -73,7 +74,8 @@ class ZkBasedMetadataProviderTest {
                 new MetadataManager(
                         zookeeperClient,
                         new Configuration(),
-                        new LakeCatalogDynamicLoader(new Configuration(), null, true));
+                        new LakeCatalogDynamicLoader(new Configuration(), null, true),
+                        new DynamicConfigManager(zookeeperClient, new Configuration(), true));
         TabletServerMetadataCache metadataCache = new TabletServerMetadataCache(metadataManager);
         metadataProvider =
                 new TabletServerMetadataProvider(zookeeperClient, metadataManager, metadataCache);

@@ -17,13 +17,19 @@
 
 package org.apache.fluss.flink.catalog;
 
+import org.apache.fluss.client.Connection;
+import org.apache.fluss.client.ConnectionFactory;
+import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.cluster.AlterConfig;
+import org.apache.fluss.config.cluster.AlterConfigOpType;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.InvalidAlterTableException;
 import org.apache.fluss.exception.InvalidConfigException;
 import org.apache.fluss.exception.InvalidTableException;
+import org.apache.fluss.exception.TooManyBucketsException;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
@@ -447,6 +453,91 @@ abstract class FlinkCatalogITCase {
         showPartitionIterator =
                 tEnv.executeSql("show partitions test_auto_partitioned_table").collect();
         assertResultsIgnoreOrder(showPartitionIterator, expectedShowPartitionsResult, true);
+    }
+
+    @Test
+    void testDbLevelBucketLimitForNonPartitionedTableWithCatalog() throws Exception {
+        String dbName = "db_bucket_limit_np_sql";
+        tEnv.executeSql("create database " + dbName);
+        tEnv.executeSql("use " + dbName);
+
+        try (Connection conn =
+                ConnectionFactory.createConnection(FLUSS_CLUSTER_EXTENSION.getClientConfig())) {
+            Admin admin = conn.getAdmin();
+            admin.alterClusterConfigs(
+                            java.util.Collections.singletonList(
+                                    new AlterConfig(
+                                            "database.limits." + dbName + ".max.bucket.num",
+                                            "12",
+                                            AlterConfigOpType.SET)))
+                    .get();
+        }
+
+        assertThatThrownBy(
+                        () ->
+                                tEnv.executeSql(
+                                        "create table t_np_limit (a int, b string) with ('bucket.num' = '20')"))
+                .rootCause()
+                .isInstanceOf(TooManyBucketsException.class);
+
+        tEnv.executeSql("create table t_np_ok (a int, b string) with ('bucket.num' = '12')");
+    }
+
+    @Test
+    void testDbLevelBucketLimitForPartitionedTableWithCatalog() throws Exception {
+        String dbName = "db_bucket_limit_part_sql";
+        tEnv.executeSql("create database " + dbName);
+        tEnv.executeSql("use " + dbName);
+
+        try (Connection conn =
+                ConnectionFactory.createConnection(FLUSS_CLUSTER_EXTENSION.getClientConfig())) {
+            Admin admin = conn.getAdmin();
+            admin.alterClusterConfigs(
+                            java.util.Collections.singletonList(
+                                    new AlterConfig(
+                                            "database.limits." + dbName + ".max.bucket.num",
+                                            "25",
+                                            AlterConfigOpType.SET)))
+                    .get();
+        }
+
+        tEnv.executeSql(
+                "create table t_part_limit (a int, b string) partitioned by (b) with ('bucket.num' = '10')");
+
+        tEnv.executeSql("alter table t_part_limit add partition (b = '1')");
+        tEnv.executeSql("alter table t_part_limit add partition (b = '2')");
+
+        assertThatThrownBy(
+                        () -> tEnv.executeSql("alter table t_part_limit add partition (b = '3')"))
+                .rootCause()
+                .isInstanceOf(TooManyBucketsException.class);
+    }
+
+    @Test
+    void testDbLevelBucketLimitForAutoPartitionedTableWithCatalog() throws Exception {
+        String dbName = "db_bucket_limit_auto_sql";
+        tEnv.executeSql("create database " + dbName);
+        tEnv.executeSql("use " + dbName);
+
+        try (Connection conn =
+                ConnectionFactory.createConnection(FLUSS_CLUSTER_EXTENSION.getClientConfig())) {
+            Admin admin = conn.getAdmin();
+            admin.alterClusterConfigs(
+                            java.util.Collections.singletonList(
+                                    new AlterConfig(
+                                            "database.limits." + dbName + ".max.bucket.num",
+                                            "25",
+                                            AlterConfigOpType.SET)))
+                    .get();
+        }
+
+        assertThatThrownBy(
+                        () ->
+                                tEnv.executeSql(
+                                        "create table t_auto_limit (a int, b string) partitioned by (b) "
+                                                + "with ('bucket.num' = '10', 'table.auto-partition.enabled' = 'true', 'table.auto-partition.time-unit' = 'year')"))
+                .rootCause()
+                .isInstanceOf(TooManyBucketsException.class);
     }
 
     @Test
