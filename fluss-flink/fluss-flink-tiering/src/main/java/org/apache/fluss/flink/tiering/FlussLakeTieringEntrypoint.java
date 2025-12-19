@@ -19,8 +19,8 @@ package org.apache.fluss.flink.tiering;
 
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.flink.adapter.MultipleParameterToolAdapter;
 
-import org.apache.flink.api.java.utils.MultipleParameterTool;
 import org.apache.flink.configuration.JobManagerOptions;
 import org.apache.flink.core.execution.JobClient;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
@@ -39,7 +39,7 @@ public class FlussLakeTieringEntrypoint {
     public static void main(String[] args) throws Exception {
 
         // parse params
-        final MultipleParameterTool params = MultipleParameterTool.fromArgs(args);
+        final MultipleParameterToolAdapter params = MultipleParameterToolAdapter.fromArgs(args);
         Map<String, String> paramsMap = params.toMap();
 
         // extract fluss config
