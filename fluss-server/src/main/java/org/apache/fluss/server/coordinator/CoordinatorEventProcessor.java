@@ -90,6 +90,7 @@ import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.server.zk.data.TabletServerRegistration;
 import org.apache.fluss.server.zk.data.ZkData.PartitionIdsZNode;
 import org.apache.fluss.server.zk.data.ZkData.TableIdsZNode;
+import org.apache.fluss.server.zk.data.lake.LakeTable;
 import org.apache.fluss.server.zk.data.lake.LakeTableHelper;
 import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
 import org.apache.fluss.utils.types.Tuple2;
@@ -1222,6 +1223,48 @@ public class CoordinatorEventProcessor implements EventProcessor {
     }
 
     private void tryProcessCommitLakeTableSnapshot(
+            CommitLakeTableSnapshotEvent commitLakeTableSnapshotEvent,
+            CompletableFuture<CommitLakeTableSnapshotResponse> callback) {
+        CommitLakeTableSnapshotData commitLakeTableSnapshotData =
+                commitLakeTableSnapshotEvent.getCommitLakeTableSnapshotData();
+        if (commitLakeTableSnapshotData.getLakeTableSnapshotMetadatas().isEmpty()) {
+            handleCommitLakeTableSnapshotV1(commitLakeTableSnapshotEvent, callback);
+        } else {
+            Map<Long, LakeTable.LakeSnapshotMetadata> lakeSnapshotMetadatas =
+                    commitLakeTableSnapshotData.getLakeTableSnapshotMetadatas();
+            ioExecutor.execute(
+                    () -> {
+                        try {
+                            CommitLakeTableSnapshotResponse response =
+                                    new CommitLakeTableSnapshotResponse();
+                            for (Map.Entry<Long, LakeTable.LakeSnapshotMetadata>
+                                    lakeSnapshotMetadataEntry : lakeSnapshotMetadatas.entrySet()) {
+                                PbCommitLakeTableSnapshotRespForTable tableResp =
+                                        response.addTableResp();
+                                long tableId = lakeSnapshotMetadataEntry.getKey();
+                                tableResp.setTableId(tableId);
+                                try {
+                                    lakeTableHelper.addLakeTableSnapshotMetadata(
+                                            tableId, lakeSnapshotMetadataEntry.getValue());
+                                } catch (Exception e) {
+                                    ApiError error = ApiError.fromThrowable(e);
+                                    tableResp.setError(error.error().code(), error.message());
+                                }
+                            }
+                            coordinatorEventManager.put(
+                                    new NotifyLakeTableOffsetEvent(
+                                            commitLakeTableSnapshotData.getLakeTableSnapshot(),
+                                            commitLakeTableSnapshotData
+                                                    .getTableBucketsMaxTieredTimestamp()));
+                            callback.complete(response);
+                        } catch (Exception e) {
+                            callback.completeExceptionally(e);
+                        }
+                    });
+        }
+    }
+
+    private void handleCommitLakeTableSnapshotV1(
             CommitLakeTableSnapshotEvent commitLakeTableSnapshotEvent,
             CompletableFuture<CommitLakeTableSnapshotResponse> callback) {
         // commit the lake table snapshot asynchronously

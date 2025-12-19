@@ -67,7 +67,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.stream.Stream;
 
-import static org.apache.fluss.lake.committer.BucketOffset.FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY;
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -115,16 +114,7 @@ class PaimonTieringITCase extends FlinkPaimonTieringTestBase {
             assertReplicaStatus(t1Bucket, 3);
             // check data in paimon
             checkDataInPaimonPrimaryKeyTable(t1, rows);
-            // check snapshot property in paimon
-            Map<String, String> properties =
-                    new HashMap<String, String>() {
-                        {
-                            put(
-                                    FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY,
-                                    "[{\"bucket\":0,\"offset\":3}]");
-                        }
-                    };
-            checkSnapshotPropertyInPaimon(t1, properties);
+            checkFlussOffsetsInSnapshot(t1, Collections.singletonMap(new TableBucket(t1Id, 0), 3L));
 
             // then, create another log table
             TablePath t2 = TablePath.of(DEFAULT_DB, "logTable");
@@ -141,6 +131,8 @@ class PaimonTieringITCase extends FlinkPaimonTieringTestBase {
             // check the status of replica after synced;
             // note: we can't update log start offset for unaware bucket mode log table
             assertReplicaStatus(t2Bucket, 30);
+            assertThat(getLeaderReplica(t2Bucket).getLogTablet().getLakeMaxTimestamp())
+                    .isGreaterThan(-1);
 
             // check data in paimon
             checkDataInPaimonAppendOnlyTable(t2, flussRows, 0);
@@ -171,10 +163,13 @@ class PaimonTieringITCase extends FlinkPaimonTieringTestBase {
                             partitionedTablePath, partitionedTableDescriptor, partitionNameByIds);
             long tableId = tableIdAndDescriptor.f0;
 
+            Map<TableBucket, Long> expectedOffsets = new HashMap<>();
+
             // wait until synced to paimon
             for (Long partitionId : partitionNameByIds.keySet()) {
                 TableBucket tableBucket = new TableBucket(tableId, partitionId, 0);
                 assertReplicaStatus(tableBucket, 3);
+                expectedOffsets.put(tableBucket, 3L);
             }
 
             // now, let's check data in paimon per partition
@@ -187,16 +182,7 @@ class PaimonTieringITCase extends FlinkPaimonTieringTestBase {
                         writtenRowsByPartition.get(partitionName),
                         0);
             }
-
-            properties =
-                    new HashMap<String, String>() {
-                        {
-                            put(
-                                    FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY,
-                                    getPartitionOffsetStr(partitionNameByIds));
-                        }
-                    };
-            checkSnapshotPropertyInPaimon(partitionedTablePath, properties);
+            checkFlussOffsetsInSnapshot(partitionedTablePath, expectedOffsets);
         } finally {
             jobClient.cancel().get();
         }
@@ -328,18 +314,7 @@ class PaimonTieringITCase extends FlinkPaimonTieringTestBase {
                 assertThat(row.getTimestamp(16, 6).getMillisecond())
                         .isEqualTo(expectedRow.getTimestampLtz(16, 6).getEpochMillisecond());
 
-                // check snapshot in paimon
-                Map<String, String> properties =
-                        new HashMap<String, String>() {
-                            {
-                                put(
-                                        FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY,
-                                        String.format(
-                                                "[{\"partition_id\":%d,\"bucket\":0,\"offset\":1}]",
-                                                partitionId));
-                            }
-                        };
-                checkSnapshotPropertyInPaimon(t1, properties);
+                checkFlussOffsetsInSnapshot(t1, Collections.singletonMap(t1Bucket, 1L));
             }
         } finally {
             jobClient.cancel().get();
@@ -374,16 +349,7 @@ class PaimonTieringITCase extends FlinkPaimonTieringTestBase {
             assertReplicaStatus(t1Bucket, 3);
             // check data in paimon
             checkDataInPaimonPrimaryKeyTable(t1, rows);
-            // check snapshot property in paimon
-            Map<String, String> properties =
-                    new HashMap<String, String>() {
-                        {
-                            put(
-                                    FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY,
-                                    "[{\"bucket\":0,\"offset\":3}]");
-                        }
-                    };
-            checkSnapshotPropertyInPaimon(t1, properties);
+            checkFlussOffsetsInSnapshot(t1, Collections.singletonMap(t1Bucket, 3L));
 
             // then, create another log table
             TablePath t2 = TablePath.of(DEFAULT_DB, "logTableAlter");
@@ -444,9 +410,11 @@ class PaimonTieringITCase extends FlinkPaimonTieringTestBase {
             long tableId = tableIdAndDescriptor.f0;
 
             // wait until synced to paimon
+            Map<TableBucket, Long> expectedOffset = new HashMap<>();
             for (Long partitionId : partitionNameByIds.keySet()) {
                 TableBucket tableBucket = new TableBucket(tableId, partitionId, 0);
                 assertReplicaStatus(tableBucket, 3);
+                expectedOffset.put(tableBucket, 3L);
             }
 
             // now, let's check data in paimon per partition
@@ -460,33 +428,10 @@ class PaimonTieringITCase extends FlinkPaimonTieringTestBase {
                         0);
             }
 
-            properties =
-                    new HashMap<String, String>() {
-                        {
-                            put(
-                                    FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY,
-                                    getPartitionOffsetStr(partitionNameByIds));
-                        }
-                    };
-            checkSnapshotPropertyInPaimon(partitionedTablePath, properties);
+            checkFlussOffsetsInSnapshot(partitionedTablePath, expectedOffset);
         } finally {
             jobClient.cancel().get();
         }
-    }
-
-    private String getPartitionOffsetStr(Map<Long, String> partitionNameByIds) {
-        String raw = "{\"partition_id\":%s,\"bucket\":0,\"offset\":3}";
-        List<Long> partitionIds = new ArrayList<>(partitionNameByIds.keySet());
-        Collections.sort(partitionIds);
-        List<String> partitionOffsetStrs = new ArrayList<>();
-
-        for (Long partitionId : partitionIds) {
-            String partitionName = partitionNameByIds.get(partitionId);
-            String partitionOffsetStr = String.format(raw, partitionId, partitionName);
-            partitionOffsetStrs.add(partitionOffsetStr);
-        }
-
-        return "[" + String.join(",", partitionOffsetStrs) + "]";
     }
 
     @Test

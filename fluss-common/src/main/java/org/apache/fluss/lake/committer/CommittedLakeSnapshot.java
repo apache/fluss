@@ -27,7 +27,6 @@ import java.util.Objects;
 public class CommittedLakeSnapshot {
 
     private final long lakeSnapshotId;
-
     private final Map<String, String> snapshotProperties;
 
     public CommittedLakeSnapshot(long lakeSnapshotId, Map<String, String> snapshotProperties) {

@@ -102,6 +102,7 @@ import org.apache.fluss.rpc.messages.PbKvSnapshot;
 import org.apache.fluss.rpc.messages.PbLakeSnapshotForBucket;
 import org.apache.fluss.rpc.messages.PbLakeTableOffsetForBucket;
 import org.apache.fluss.rpc.messages.PbLakeTableSnapshotInfo;
+import org.apache.fluss.rpc.messages.PbLakeTableSnapshotMetadata;
 import org.apache.fluss.rpc.messages.PbListOffsetsRespForBucket;
 import org.apache.fluss.rpc.messages.PbLookupReqForBucket;
 import org.apache.fluss.rpc.messages.PbLookupRespForBucket;
@@ -165,9 +166,11 @@ import org.apache.fluss.server.metadata.ServerInfo;
 import org.apache.fluss.server.metadata.TableMetadata;
 import org.apache.fluss.server.zk.data.BucketSnapshot;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
+import org.apache.fluss.server.zk.data.lake.LakeTable;
 import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
 import org.apache.fluss.utils.json.DataTypeJsonSerde;
 import org.apache.fluss.utils.json.JsonSerdeUtils;
+import org.apache.fluss.utils.types.Tuple2;
 
 import javax.annotation.Nullable;
 
@@ -184,6 +187,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.Set;
+import java.util.function.Consumer;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -1544,37 +1548,77 @@ public class ServerRpcMessageUtils {
 
     public static CommitLakeTableSnapshotData getCommitLakeTableSnapshotData(
             CommitLakeTableSnapshotRequest request) {
+        // handle rpc before 0.9
         Map<Long, LakeTableSnapshot> lakeTableInfoByTableId = new HashMap<>();
         Map<TableBucket, Long> tableBucketsMaxTimestamp = new HashMap<>();
-        for (PbLakeTableSnapshotInfo pdLakeTableSnapshotInfo : request.getTablesReqsList()) {
-            long tableId = pdLakeTableSnapshotInfo.getTableId();
-            long snapshotId = pdLakeTableSnapshotInfo.getSnapshotId();
-            Map<TableBucket, Long> bucketLogEndOffset = new HashMap<>();
-
-            for (PbLakeTableOffsetForBucket lakeTableOffsetForBucket :
-                    pdLakeTableSnapshotInfo.getBucketsReqsList()) {
-                Long partitionId =
-                        lakeTableOffsetForBucket.hasPartitionId()
-                                ? lakeTableOffsetForBucket.getPartitionId()
-                                : null;
-                int bucketId = lakeTableOffsetForBucket.getBucketId();
-
-                TableBucket tableBucket = new TableBucket(tableId, partitionId, bucketId);
-                Long logEndOffset =
-                        lakeTableOffsetForBucket.hasLogEndOffset()
-                                ? lakeTableOffsetForBucket.getLogEndOffset()
-                                : null;
-                bucketLogEndOffset.put(tableBucket, logEndOffset);
-
-                if (lakeTableOffsetForBucket.hasMaxTimestamp()) {
-                    tableBucketsMaxTimestamp.put(
-                            tableBucket, lakeTableOffsetForBucket.getMaxTimestamp());
-                }
-            }
-            lakeTableInfoByTableId.put(
-                    tableId, new LakeTableSnapshot(snapshotId, bucketLogEndOffset));
+        for (PbLakeTableSnapshotInfo pbLakeTableSnapshotInfo : request.getTablesReqsList()) {
+            long tableId = pbLakeTableSnapshotInfo.getTableId();
+            Consumer<Tuple2<TableBucket, PbLakeTableOffsetForBucket>>
+                    pbLakeTableOffsetForBucketConsumer =
+                            (tableBucketAndOffset -> {
+                                if (tableBucketAndOffset.f1.hasMaxTimestamp()) {
+                                    tableBucketsMaxTimestamp.put(
+                                            tableBucketAndOffset.f0,
+                                            tableBucketAndOffset.f1.getMaxTimestamp());
+                                }
+                            });
+            LakeTableSnapshot lakeTableSnapshot =
+                    toLakeSnapshot(pbLakeTableSnapshotInfo, pbLakeTableOffsetForBucketConsumer);
+            lakeTableInfoByTableId.put(tableId, lakeTableSnapshot);
         }
-        return new CommitLakeTableSnapshotData(lakeTableInfoByTableId, tableBucketsMaxTimestamp);
+
+        // handle rpc since 0.9
+        Map<Long, LakeTable.LakeSnapshotMetadata> lakeSnapshotMetadatas = new HashMap<>();
+        for (PbLakeTableSnapshotMetadata pbLakeTableSnapshotMetadata :
+                request.getLakeTableSnapshotMetadatasList()) {
+            lakeSnapshotMetadatas.put(
+                    pbLakeTableSnapshotMetadata.getTableId(),
+                    new LakeTable.LakeSnapshotMetadata(
+                            pbLakeTableSnapshotMetadata.getSnapshotId(),
+                            new FsPath(pbLakeTableSnapshotMetadata.getTieredSnapshotFilePath()),
+                            pbLakeTableSnapshotMetadata.hasReadableSnapshotFilePath()
+                                    ? new FsPath(
+                                            pbLakeTableSnapshotMetadata
+                                                    .getReadableSnapshotFilePath())
+                                    : null));
+        }
+        return new CommitLakeTableSnapshotData(
+                lakeTableInfoByTableId, tableBucketsMaxTimestamp, lakeSnapshotMetadatas);
+    }
+
+    public static LakeTableSnapshot toLakeSnapshot(
+            PbLakeTableSnapshotInfo pbLakeTableSnapshotInfo) {
+        return toLakeSnapshot(pbLakeTableSnapshotInfo, null);
+    }
+
+    private static LakeTableSnapshot toLakeSnapshot(
+            PbLakeTableSnapshotInfo pbLakeTableSnapshotInfo,
+            @Nullable
+                    Consumer<Tuple2<TableBucket, PbLakeTableOffsetForBucket>>
+                            pbLakeTableOffsetForBucketConsumer) {
+        long tableId = pbLakeTableSnapshotInfo.getTableId();
+        long snapshotId = pbLakeTableSnapshotInfo.getSnapshotId();
+        Map<TableBucket, Long> bucketLogEndOffset = new HashMap<>();
+        for (PbLakeTableOffsetForBucket lakeTableOffsetForBucket :
+                pbLakeTableSnapshotInfo.getBucketsReqsList()) {
+            Long partitionId =
+                    lakeTableOffsetForBucket.hasPartitionId()
+                            ? lakeTableOffsetForBucket.getPartitionId()
+                            : null;
+            int bucketId = lakeTableOffsetForBucket.getBucketId();
+
+            TableBucket tableBucket = new TableBucket(tableId, partitionId, bucketId);
+            Long logEndOffset =
+                    lakeTableOffsetForBucket.hasLogEndOffset()
+                            ? lakeTableOffsetForBucket.getLogEndOffset()
+                            : null;
+            if (pbLakeTableOffsetForBucketConsumer != null) {
+                pbLakeTableOffsetForBucketConsumer.accept(
+                        Tuple2.of(tableBucket, lakeTableOffsetForBucket));
+            }
+            bucketLogEndOffset.put(tableBucket, logEndOffset);
+        }
+        return new LakeTableSnapshot(snapshotId, bucketLogEndOffset);
     }
 
     public static PbNotifyLakeTableOffsetReqForBucket makeNotifyLakeTableOffsetForBucket(

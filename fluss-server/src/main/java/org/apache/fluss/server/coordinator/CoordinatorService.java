@@ -186,7 +186,8 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                 metadataManager,
                 authorizer,
                 dynamicConfigManager,
-                ioExecutor);
+                ioExecutor,
+                conf);
         this.defaultBucketNumber = conf.getInt(ConfigOptions.DEFAULT_BUCKET_NUMBER);
         this.defaultReplicationFactor = conf.getInt(ConfigOptions.DEFAULT_REPLICATION_FACTOR);
         this.logTableAllowCreation = conf.getBoolean(ConfigOptions.LOG_TABLE_ALLOW_CREATION);

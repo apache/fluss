@@ -27,6 +27,7 @@ import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.utils.FlussPaths;
 
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
@@ -105,6 +106,39 @@ public class LakeTableHelper {
         }
     }
 
+    public void addLakeTableSnapshotMetadata(
+            long tableId, LakeTable.LakeSnapshotMetadata lakeSnapshotMetadata) throws Exception {
+        Optional<LakeTable> optPreviousLakeTable = zkClient.getLakeTable(tableId);
+        List<LakeTable.LakeSnapshotMetadata> previousLakeSnapshotMetadatas = null;
+        if (optPreviousLakeTable.isPresent()) {
+            previousLakeSnapshotMetadatas = optPreviousLakeTable.get().getLakeSnapshotMetadatas();
+        }
+        // currently, we always keep only one snapshot metadata
+        LakeTable lakeTable = new LakeTable(lakeSnapshotMetadata);
+        try {
+            zkClient.upsertLakeTable(tableId, lakeTable, optPreviousLakeTable.isPresent());
+        } catch (Exception e) {
+            LOG.warn("Failed to upsert lake table snapshot to zk.", e);
+            throw e;
+        }
+
+        // discard previous lake snapshot metadata
+        if (previousLakeSnapshotMetadatas != null) {
+            previousLakeSnapshotMetadatas.forEach(LakeTable.LakeSnapshotMetadata::discard);
+        }
+    }
+
+    public LakeTableSnapshot upsertLakeTableSnapshot(
+            long tableId, LakeTableSnapshot newLakeTableSnapshot) throws Exception {
+        Optional<LakeTable> optPreviousLakeTable = zkClient.getLakeTable(tableId);
+        // Merge with previous snapshot if exists
+        if (optPreviousLakeTable.isPresent()) {
+            return mergeLakeTable(
+                    optPreviousLakeTable.get().getLatestTableSnapshot(), newLakeTableSnapshot);
+        }
+        return newLakeTableSnapshot;
+    }
+
     private LakeTableSnapshot mergeLakeTable(
             LakeTableSnapshot previousLakeTableSnapshot, LakeTableSnapshot newLakeTableSnapshot) {
         // Merge current snapshot with previous one since the current snapshot request
@@ -119,7 +153,7 @@ public class LakeTableHelper {
         return new LakeTableSnapshot(newLakeTableSnapshot.getSnapshotId(), bucketLogEndOffset);
     }
 
-    private FsPath storeLakeTableSnapshot(
+    public FsPath storeLakeTableSnapshot(
             long tableId, TablePath tablePath, LakeTableSnapshot lakeTableSnapshot)
             throws Exception {
         // get the remote file path to store the lake table snapshot information

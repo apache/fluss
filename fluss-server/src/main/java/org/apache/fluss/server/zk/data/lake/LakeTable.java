@@ -21,6 +21,7 @@ package org.apache.fluss.server.zk.data.lake;
 import org.apache.fluss.fs.FSDataInputStream;
 import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.fs.FsPath;
+import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.server.zk.data.ZkData;
 import org.apache.fluss.utils.IOUtils;
 
@@ -30,6 +31,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 
 import static org.apache.fluss.metrics.registry.MetricRegistry.LOG;
@@ -116,13 +118,16 @@ public class LakeTable {
         if (lakeTableSnapshot != null) {
             return lakeTableSnapshot;
         }
-        FsPath tieredOffsetsFilePath =
-                checkNotNull(getLatestLakeSnapshotMetadata()).tieredOffsetsFilePath;
+        LakeSnapshotMetadata lakeSnapshotMetadata = getLatestLakeSnapshotMetadata();
+        FsPath tieredOffsetsFilePath = checkNotNull(lakeSnapshotMetadata).tieredOffsetsFilePath;
         FSDataInputStream inputStream =
                 tieredOffsetsFilePath.getFileSystem().open(tieredOffsetsFilePath);
         try (ByteArrayOutputStream outputStream = new ByteArrayOutputStream()) {
             IOUtils.copyBytes(inputStream, outputStream, true);
-            return LakeTableSnapshotJsonSerde.fromJson(outputStream.toByteArray());
+            Map<TableBucket, Long> logOffsets =
+                    LakeTableSnapshotJsonSerde.fromJson(outputStream.toByteArray())
+                            .getBucketLogEndOffset();
+            return new LakeTableSnapshot(lakeSnapshotMetadata.snapshotId, logOffsets);
         }
     }
 

@@ -78,27 +78,38 @@ class FlussTableLakeSnapshotCommitterTest extends FlinkTestBase {
             partitions = new ArrayList<>(partitionNameAndIds.keySet());
         }
 
-        Map<TableBucket, Long> logEndOffsets = new HashMap<>();
+        Map<TableBucket, Long> expectedOffsets = new HashMap<>();
         for (int bucket = 0; bucket < 3; bucket++) {
             long bucketOffset = bucket * bucket;
             for (String partitionName : partitions) {
                 if (partitionName == null) {
-                    logEndOffsets.put(new TableBucket(tableId, bucket), bucketOffset);
+                    expectedOffsets.put(new TableBucket(tableId, bucket), bucketOffset);
                 } else {
                     long partitionId = partitionNameAndIds.get(partitionName);
-                    logEndOffsets.put(new TableBucket(tableId, partitionId, bucket), bucketOffset);
+                    expectedOffsets.put(
+                            new TableBucket(tableId, partitionId, bucket), bucketOffset);
                 }
             }
         }
 
-        long snapshotId = 3;
+        long lakeSnapshotId = 3;
+
+        String lakeSnapshotFilePath =
+                flussTableLakeSnapshotCommitter.prepareCommit(tableId, tablePath, expectedOffsets);
+
         // commit offsets
-        flussTableLakeSnapshotCommitter.commit(tableId, snapshotId, logEndOffsets);
+        flussTableLakeSnapshotCommitter.commit(
+                tableId,
+                lakeSnapshotId,
+                lakeSnapshotFilePath,
+                // don't care end offsets, maxTieredTimestamps
+                Collections.emptyMap(),
+                Collections.emptyMap());
         LakeSnapshot lakeSnapshot = admin.getLatestLakeSnapshot(tablePath).get();
         assertThat(lakeSnapshot.getSnapshotId()).isEqualTo(3);
 
         // get and check the offsets
         Map<TableBucket, Long> bucketLogOffsets = lakeSnapshot.getTableBucketsOffset();
-        assertThat(bucketLogOffsets).isEqualTo(logEndOffsets);
+        assertThat(bucketLogOffsets).isEqualTo(expectedOffsets);
     }
 }

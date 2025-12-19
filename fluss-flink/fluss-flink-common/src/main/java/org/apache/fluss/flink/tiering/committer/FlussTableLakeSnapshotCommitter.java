@@ -21,20 +21,45 @@ import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.metrics.registry.MetricRegistry;
 import org.apache.fluss.rpc.GatewayClientProxy;
 import org.apache.fluss.rpc.RpcClient;
 import org.apache.fluss.rpc.gateway.CoordinatorGateway;
 import org.apache.fluss.rpc.messages.CommitLakeTableSnapshotRequest;
+import org.apache.fluss.rpc.messages.PbCommitLakeTableSnapshotRespForTable;
 import org.apache.fluss.rpc.messages.PbLakeTableOffsetForBucket;
 import org.apache.fluss.rpc.messages.PbLakeTableSnapshotInfo;
+import org.apache.fluss.rpc.messages.PbLakeTableSnapshotMetadata;
+import org.apache.fluss.rpc.messages.PbPrepareCommitLakeTableRespForTable;
+import org.apache.fluss.rpc.messages.PrepareCommitLakeTableSnapshotRequest;
+import org.apache.fluss.rpc.messages.PrepareCommitLakeTableSnapshotResponse;
 import org.apache.fluss.rpc.metrics.ClientMetricGroup;
+import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.utils.ExceptionUtils;
 
 import java.io.IOException;
+import java.util.List;
 import java.util.Map;
 
-/** Committer to commit {@link FlussTableLakeSnapshot} of lake to Fluss. */
+import static org.apache.fluss.utils.Preconditions.checkNotNull;
+import static org.apache.fluss.utils.Preconditions.checkState;
+
+/**
+ * Committer to commit lake table snapshots to Fluss cluster.
+ *
+ * <p>This committer implements a two-phase commit protocol to record lake table snapshot
+ * information in Fluss:
+ *
+ * <ul>
+ *   <li><b>Prepare phase</b> ({@link #prepareCommit}): Sends log end offsets to the FLuss cluster,
+ *       which merges them with the previous log end offsets and stores the merged snapshot data in
+ *       a file. Returns the file path where the snapshot metadata is stored.
+ *   <li><b>Commit phase</b> ({@link #commit}): Sends the lake snapshot metadata (including snapshot
+ *       ID and file paths) to the coordinator to finalize the commit. Also includes log end offsets
+ *       and max tiered timestamps for metrics reporting to tablet servers.
+ * </ul>
+ */
 public class FlussTableLakeSnapshotCommitter implements AutoCloseable {
 
     private final Configuration flussConf;
@@ -59,49 +84,170 @@ public class FlussTableLakeSnapshotCommitter implements AutoCloseable {
                         metadataUpdater::getCoordinatorServer, rpcClient, CoordinatorGateway.class);
     }
 
-    void commit(FlussTableLakeSnapshot flussTableLakeSnapshot) throws IOException {
+    String prepareCommit(long tableId, TablePath tablePath, Map<TableBucket, Long> logEndOffsets)
+            throws IOException {
+        PbPrepareCommitLakeTableRespForTable prepareCommitResp = null;
+        Exception exception = null;
         try {
-            CommitLakeTableSnapshotRequest request =
-                    toCommitLakeTableSnapshotRequest(flussTableLakeSnapshot);
-            coordinatorGateway.commitLakeTableSnapshot(request).get();
+            PrepareCommitLakeTableSnapshotRequest prepareCommitLakeTableSnapshotRequest =
+                    toPrepareCommitLakeTableSnapshotRequest(tableId, tablePath, logEndOffsets);
+            PrepareCommitLakeTableSnapshotResponse prepareCommitLakeTableSnapshotResponse =
+                    coordinatorGateway
+                            .prepareCommitLakeTableSnapshot(prepareCommitLakeTableSnapshotRequest)
+                            .get();
+            List<PbPrepareCommitLakeTableRespForTable> pbPrepareCommitLakeTableRespForTables =
+                    prepareCommitLakeTableSnapshotResponse.getPrepareCommitLakeTableRespsList();
+            checkState(pbPrepareCommitLakeTableRespForTables.size() == 1);
+            prepareCommitResp = pbPrepareCommitLakeTableRespForTables.get(0);
+            if (prepareCommitResp.hasErrorCode()) {
+                exception = ApiError.fromErrorMessage(prepareCommitResp).exception();
+            }
         } catch (Exception e) {
+            exception = e;
+        }
+
+        if (exception != null) {
             throw new IOException(
                     String.format(
-                            "Fail to commit table lake snapshot %s to Fluss.",
-                            flussTableLakeSnapshot),
-                    ExceptionUtils.stripExecutionException(e));
+                            "Fail to prepare commit table lake snapshot for %s to Fluss.",
+                            tablePath),
+                    ExceptionUtils.stripExecutionException(exception));
         }
+        return checkNotNull(prepareCommitResp).getLakeTableSnapshotFilePath();
     }
 
-    public void commit(long tableId, long snapshotId, Map<TableBucket, Long> logEndOffsets)
+    void commit(
+            long tableId,
+            long lakeSnapshotId,
+            String lakeSnapshotPath,
+            Map<TableBucket, Long> logEndOffsets,
+            Map<TableBucket, Long> logMaxTieredTimestamps)
             throws IOException {
-        // construct lake snapshot to commit to Fluss
-        FlussTableLakeSnapshot flussTableLakeSnapshot =
-                new FlussTableLakeSnapshot(tableId, snapshotId);
-        for (Map.Entry<TableBucket, Long> entry : logEndOffsets.entrySet()) {
-            flussTableLakeSnapshot.addBucketOffset(entry.getKey(), entry.getValue());
+        Exception exception = null;
+        try {
+            CommitLakeTableSnapshotRequest request =
+                    toCommitLakeTableSnapshotRequest(
+                            tableId,
+                            lakeSnapshotId,
+                            lakeSnapshotPath,
+                            logEndOffsets,
+                            logMaxTieredTimestamps);
+            List<PbCommitLakeTableSnapshotRespForTable> commitLakeTableSnapshotRespForTables =
+                    coordinatorGateway.commitLakeTableSnapshot(request).get().getTableRespsList();
+            checkState(commitLakeTableSnapshotRespForTables.size() == 1);
+            PbCommitLakeTableSnapshotRespForTable commitLakeTableSnapshotRes =
+                    commitLakeTableSnapshotRespForTables.get(0);
+            if (commitLakeTableSnapshotRes.hasErrorCode()) {
+                exception = ApiError.fromErrorMessage(commitLakeTableSnapshotRes).exception();
+            }
+        } catch (Exception e) {
+            exception = e;
         }
-        commit(flussTableLakeSnapshot);
+
+        if (exception != null) {
+            throw new IOException(
+                    String.format(
+                            "Fail to commit table lake snapshot id %d of table %d to Fluss.",
+                            lakeSnapshotId, tableId),
+                    ExceptionUtils.stripExecutionException(exception));
+        }
     }
 
-    private CommitLakeTableSnapshotRequest toCommitLakeTableSnapshotRequest(
-            FlussTableLakeSnapshot flussTableLakeSnapshot) {
-        CommitLakeTableSnapshotRequest commitLakeTableSnapshotRequest =
-                new CommitLakeTableSnapshotRequest();
+    /**
+     * Converts the prepare commit parameters to a {@link PrepareCommitLakeTableSnapshotRequest}.
+     *
+     * @param tableId the table ID
+     * @param tablePath the table path
+     * @param logEndOffsets the log end offsets for each bucket
+     * @return the prepared commit request
+     */
+    private PrepareCommitLakeTableSnapshotRequest toPrepareCommitLakeTableSnapshotRequest(
+            long tableId, TablePath tablePath, Map<TableBucket, Long> logEndOffsets) {
+        PrepareCommitLakeTableSnapshotRequest prepareCommitLakeTableSnapshotRequest =
+                new PrepareCommitLakeTableSnapshotRequest();
         PbLakeTableSnapshotInfo pbLakeTableSnapshotInfo =
-                commitLakeTableSnapshotRequest.addTablesReq();
+                prepareCommitLakeTableSnapshotRequest.addTablesReq();
+        pbLakeTableSnapshotInfo.setTableId(tableId);
 
-        pbLakeTableSnapshotInfo.setTableId(flussTableLakeSnapshot.tableId());
-        pbLakeTableSnapshotInfo.setSnapshotId(flussTableLakeSnapshot.lakeSnapshotId());
-        for (TableBucket tableBucket : flussTableLakeSnapshot.tableBuckets()) {
+        // in prepare phase, we don't know the snapshot id,
+        // set -1 since the field is required
+        pbLakeTableSnapshotInfo.setSnapshotId(-1L);
+        for (Map.Entry<TableBucket, Long> logEndOffsetEntry : logEndOffsets.entrySet()) {
             PbLakeTableOffsetForBucket pbLakeTableOffsetForBucket =
                     pbLakeTableSnapshotInfo.addBucketsReq();
-            long endOffset = flussTableLakeSnapshot.getLogEndOffset(tableBucket);
+            TableBucket tableBucket = logEndOffsetEntry.getKey();
+            pbLakeTableSnapshotInfo
+                    .setTablePath()
+                    .setDatabaseName(tablePath.getDatabaseName())
+                    .setTableName(tablePath.getTableName());
             if (tableBucket.getPartitionId() != null) {
                 pbLakeTableOffsetForBucket.setPartitionId(tableBucket.getPartitionId());
             }
             pbLakeTableOffsetForBucket.setBucketId(tableBucket.getBucket());
-            pbLakeTableOffsetForBucket.setLogEndOffset(endOffset);
+            pbLakeTableOffsetForBucket.setLogEndOffset(logEndOffsetEntry.getValue());
+        }
+        return prepareCommitLakeTableSnapshotRequest;
+    }
+
+    /**
+     * Converts the commit parameters to a {@link CommitLakeTableSnapshotRequest}.
+     *
+     * <p>This method creates a request that includes:
+     *
+     * <ul>
+     *   <li>Lake table snapshot metadata (snapshot ID, table ID, file paths)
+     *   <li>PbLakeTableSnapshotInfo for metrics reporting (log end offsets and max tiered
+     *       timestamps)
+     * </ul>
+     *
+     * @param tableId the table ID
+     * @param snapshotId the lake snapshot ID
+     * @param lakeSnapshotPath the file path where the snapshot metadata is stored
+     * @param logEndOffsets the log end offsets for each bucket
+     * @param logMaxTieredTimestamps the max tiered timestamps for each bucket
+     * @return the commit request
+     */
+    private CommitLakeTableSnapshotRequest toCommitLakeTableSnapshotRequest(
+            long tableId,
+            long snapshotId,
+            String lakeSnapshotPath,
+            Map<TableBucket, Long> logEndOffsets,
+            Map<TableBucket, Long> logMaxTieredTimestamps) {
+        CommitLakeTableSnapshotRequest commitLakeTableSnapshotRequest =
+                new CommitLakeTableSnapshotRequest();
+
+        // Add lake table snapshot metadata
+        PbLakeTableSnapshotMetadata pbLakeTableSnapshotMetadata =
+                commitLakeTableSnapshotRequest.addLakeTableSnapshotMetadata();
+        pbLakeTableSnapshotMetadata.setSnapshotId(snapshotId);
+        pbLakeTableSnapshotMetadata.setTableId(tableId);
+        // tiered snapshot file path is equal to readable snapshot currently
+        pbLakeTableSnapshotMetadata.setTieredSnapshotFilePath(lakeSnapshotPath);
+        pbLakeTableSnapshotMetadata.setReadableSnapshotFilePath(lakeSnapshotPath);
+
+        // Add PbLakeTableSnapshotInfo for metrics reporting (to notify tablet servers about
+        // synchronized log end offsets and max timestamps)
+        if (!logEndOffsets.isEmpty()) {
+            PbLakeTableSnapshotInfo pbLakeTableSnapshotInfo =
+                    commitLakeTableSnapshotRequest.addTablesReq();
+            pbLakeTableSnapshotInfo.setTableId(tableId);
+            pbLakeTableSnapshotInfo.setSnapshotId(snapshotId);
+            for (Map.Entry<TableBucket, Long> logEndOffsetEntry : logEndOffsets.entrySet()) {
+                TableBucket tableBucket = logEndOffsetEntry.getKey();
+                PbLakeTableOffsetForBucket pbLakeTableOffsetForBucket =
+                        pbLakeTableSnapshotInfo.addBucketsReq();
+
+                if (tableBucket.getPartitionId() != null) {
+                    pbLakeTableOffsetForBucket.setPartitionId(tableBucket.getPartitionId());
+                }
+                pbLakeTableOffsetForBucket.setBucketId(tableBucket.getBucket());
+                pbLakeTableOffsetForBucket.setLogEndOffset(logEndOffsetEntry.getValue());
+
+                Long maxTimestamp = logMaxTieredTimestamps.get(tableBucket);
+                if (maxTimestamp != null) {
+                    pbLakeTableOffsetForBucket.setMaxTimestamp(maxTimestamp);
+                }
+            }
         }
         return commitLakeTableSnapshotRequest;
     }

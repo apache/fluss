@@ -19,6 +19,8 @@ package org.apache.fluss.server;
 
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.ServerType;
+import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.cluster.ConfigEntry;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.KvSnapshotNotExistException;
@@ -29,6 +31,7 @@ import org.apache.fluss.exception.SecurityDisabledException;
 import org.apache.fluss.exception.SecurityTokenException;
 import org.apache.fluss.exception.TableNotPartitionedException;
 import org.apache.fluss.fs.FileSystem;
+import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.fs.token.ObtainedSecurityToken;
 import org.apache.fluss.metadata.DatabaseInfo;
 import org.apache.fluss.metadata.PhysicalTablePath;
@@ -71,12 +74,18 @@ import org.apache.fluss.rpc.messages.ListTablesResponse;
 import org.apache.fluss.rpc.messages.MetadataRequest;
 import org.apache.fluss.rpc.messages.MetadataResponse;
 import org.apache.fluss.rpc.messages.PbApiVersion;
+import org.apache.fluss.rpc.messages.PbLakeTableSnapshotInfo;
+import org.apache.fluss.rpc.messages.PbPrepareCommitLakeTableRespForTable;
 import org.apache.fluss.rpc.messages.PbTablePath;
+import org.apache.fluss.rpc.messages.PrepareCommitLakeTableSnapshotRequest;
+import org.apache.fluss.rpc.messages.PrepareCommitLakeTableSnapshotResponse;
 import org.apache.fluss.rpc.messages.TableExistsRequest;
 import org.apache.fluss.rpc.messages.TableExistsResponse;
 import org.apache.fluss.rpc.netty.server.Session;
+import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.rpc.protocol.ApiKeys;
 import org.apache.fluss.rpc.protocol.ApiManager;
+import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.security.acl.AclBinding;
 import org.apache.fluss.security.acl.AclBindingFilter;
 import org.apache.fluss.security.acl.OperationType;
@@ -93,6 +102,7 @@ import org.apache.fluss.server.tablet.TabletService;
 import org.apache.fluss.server.utils.ServerRpcMessageUtils;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.BucketSnapshot;
+import org.apache.fluss.server.zk.data.lake.LakeTableHelper;
 import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
 
 import org.slf4j.Logger;
@@ -120,6 +130,7 @@ import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeGetLatestL
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeKvSnapshotMetadataResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeListAclsResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toGetFileSystemSecurityTokenResponse;
+import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toLakeSnapshot;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toListPartitionInfosResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toPbConfigEntries;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toTablePath;
@@ -141,6 +152,7 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
     protected final MetadataManager metadataManager;
     protected final @Nullable Authorizer authorizer;
     protected final DynamicConfigManager dynamicConfigManager;
+    private final LakeTableHelper lakeTableHelper;
 
     private long tokenLastUpdateTimeMs = 0;
     private ObtainedSecurityToken securityToken = null;
@@ -154,7 +166,8 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
             MetadataManager metadataManager,
             @Nullable Authorizer authorizer,
             DynamicConfigManager dynamicConfigManager,
-            ExecutorService ioExecutor) {
+            ExecutorService ioExecutor,
+            Configuration config) {
         this.remoteFileSystem = remoteFileSystem;
         this.provider = provider;
         this.apiManager = new ApiManager(provider);
@@ -163,6 +176,8 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
         this.authorizer = authorizer;
         this.dynamicConfigManager = dynamicConfigManager;
         this.ioExecutor = ioExecutor;
+        this.lakeTableHelper =
+                new LakeTableHelper(zkClient, config.get(ConfigOptions.REMOTE_DATA_DIR));
     }
 
     @Override
@@ -590,5 +605,51 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
                 new HashSet<>(metadataCache.getAllAliveTabletServers(listenerName).values());
         return buildMetadataResponse(
                 coordinatorServer, aliveTabletServers, tablesMetadata, partitionsMetadata);
+    }
+
+    @Override
+    public CompletableFuture<PrepareCommitLakeTableSnapshotResponse> prepareCommitLakeTableSnapshot(
+            PrepareCommitLakeTableSnapshotRequest request) {
+        CompletableFuture<PrepareCommitLakeTableSnapshotResponse> future =
+                new CompletableFuture<>();
+        ioExecutor.submit(
+                () -> {
+                    PrepareCommitLakeTableSnapshotResponse response =
+                            new PrepareCommitLakeTableSnapshotResponse();
+                    try {
+                        for (PbLakeTableSnapshotInfo pbLakeTableSnapshotInfo :
+                                request.getTablesReqsList()) {
+                            PbPrepareCommitLakeTableRespForTable
+                                    pbPrepareCommitLakeTableRespForTable =
+                                            response.addPrepareCommitLakeTableResp();
+                            try {
+                                // upsert lake table snapshot, need to merge the snapshot with
+                                // previous
+                                // latest snapshot
+                                LakeTableSnapshot lakeTableSnapshot =
+                                        lakeTableHelper.upsertLakeTableSnapshot(
+                                                pbLakeTableSnapshotInfo.getTableId(),
+                                                toLakeSnapshot(pbLakeTableSnapshotInfo));
+                                TablePath tablePath =
+                                        toTablePath(pbLakeTableSnapshotInfo.getTablePath());
+                                FsPath fsPath =
+                                        lakeTableHelper.storeLakeTableSnapshot(
+                                                pbLakeTableSnapshotInfo.getTableId(),
+                                                tablePath,
+                                                lakeTableSnapshot);
+                                pbPrepareCommitLakeTableRespForTable.setLakeTableSnapshotFilePath(
+                                        fsPath.toString());
+                            } catch (Exception e) {
+                                Errors error = ApiError.fromThrowable(e).error();
+                                pbPrepareCommitLakeTableRespForTable.setError(
+                                        error.code(), error.message());
+                            }
+                        }
+                        future.complete(response);
+                    } catch (Exception e) {
+                        future.completeExceptionally(e);
+                    }
+                });
+        return future;
     }
 }
