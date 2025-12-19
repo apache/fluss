@@ -35,6 +35,7 @@ import org.apache.flink.table.api.TableEnvironment;
 import org.apache.flink.table.api.ValidationException;
 import org.apache.flink.table.api.config.TableConfigOptions;
 import org.apache.flink.table.catalog.Catalog;
+import org.apache.flink.table.catalog.CatalogBaseTable;
 import org.apache.flink.table.catalog.CatalogTable;
 import org.apache.flink.table.catalog.ObjectPath;
 import org.apache.flink.table.catalog.exceptions.CatalogException;
@@ -819,7 +820,7 @@ abstract class FlinkCatalogITCase {
     }
 
     @Test
-    void testCreateCatalogWithLakeProperties() {
+    void testCreateCatalogWithLakeProperties() throws Exception {
         Map<String, String> properties = new HashMap<>();
         properties.put("paimon.jdbc.password", "pass");
         tEnv.executeSql(
@@ -830,6 +831,18 @@ abstract class FlinkCatalogITCase {
                 (FlinkCatalog) tEnv.getCatalog("test_catalog_with_lake_properties").get();
 
         assertOptionsEqual(catalog.getLakeCatalogProperties(), properties);
+
+        String ddl =
+                "create table test_get_lake_table ("
+                        + "a string, "
+                        + "b int) "
+                        + "with ('bucket.num' = '5', 'table.datalake.enabled' = 'true')";
+        tEnv.executeSql(ddl);
+
+        CatalogBaseTable catalogTable =
+                catalog.getTable(new ObjectPath(DEFAULT_DB, "test_get_lake_table"));
+        assertThat(catalogTable.getOptions())
+                .containsEntry("table.datalake.paimon.jdbc.password", "pass");
     }
 
     /**

@@ -335,6 +335,14 @@ public class FlinkCatalog extends AbstractCatalog {
             Map<String, String> newOptions = new HashMap<>(catalogBaseTable.getOptions());
             newOptions.put(BOOTSTRAP_SERVERS.key(), bootstrapServers);
             newOptions.putAll(securityConfigs);
+            // add lake properties
+            if (tableInfo.getTableConfig().isDataLakeEnabled()) {
+                for (Map.Entry<String, String> lakePropertyEntry :
+                        getLakeCatalogProperties().entrySet()) {
+                    String key = "table.datalake." + lakePropertyEntry.getKey();
+                    newOptions.put(key, lakePropertyEntry.getValue());
+                }
+            }
             if (CatalogBaseTable.TableKind.TABLE == catalogBaseTable.getTableKind()) {
                 return ((CatalogTable) catalogBaseTable).copy(newOptions);
             } else if (CatalogBaseTable.TableKind.MATERIALIZED_TABLE
