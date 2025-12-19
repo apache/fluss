@@ -207,6 +207,7 @@ public class KvPreWriteBuffer implements AutoCloseable {
      *     be flushed
      */
     public void flush(long exclusiveUpToLogSequenceNumber) throws IOException {
+        long start = System.nanoTime();
         int flushedCount = 0;
         for (Iterator<KvEntry> it = allKvEntries.iterator(); it.hasNext(); ) {
             KvEntry entry = it.next();
@@ -236,7 +237,6 @@ public class KvPreWriteBuffer implements AutoCloseable {
         }
         // flush to underlying kv tablet
         if (flushedCount > 0) {
-            long start = System.nanoTime();
             kvBatchWriter.flush();
             flushCount.inc();
             flushLatencyHistogram.update((System.nanoTime() - start) / 1_000_000);
