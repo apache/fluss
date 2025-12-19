@@ -17,8 +17,10 @@
 
 package org.apache.fluss.lake.paimon.tiering;
 
+import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.lake.committer.BucketOffset;
 import org.apache.fluss.lake.committer.CommittedLakeSnapshot;
+import org.apache.fluss.lake.committer.CommitterInitContext;
 import org.apache.fluss.lake.committer.LakeCommitter;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
@@ -32,15 +34,15 @@ import org.apache.paimon.manifest.IndexManifestEntry;
 import org.apache.paimon.manifest.ManifestCommittable;
 import org.apache.paimon.manifest.ManifestEntry;
 import org.apache.paimon.manifest.SimpleFileEntry;
-import org.apache.paimon.operation.FileStoreCommit;
 import org.apache.paimon.table.FileStoreTable;
 import org.apache.paimon.table.sink.CommitCallback;
+import org.apache.paimon.table.sink.TableCommitImpl;
 import org.apache.paimon.utils.SnapshotManager;
 
 import javax.annotation.Nullable;
 
 import java.io.IOException;
-import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -55,14 +57,25 @@ public class PaimonLakeCommitter implements LakeCommitter<PaimonWriteResult, Pai
 
     private final Catalog paimonCatalog;
     private final FileStoreTable fileStoreTable;
-    private FileStoreCommit fileStoreCommit;
+    private TableCommitImpl tableCommit;
+
     private static final ThreadLocal<Long> currentCommitSnapshotId = new ThreadLocal<>();
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
-    public PaimonLakeCommitter(PaimonCatalogProvider paimonCatalogProvider, TablePath tablePath)
+    public PaimonLakeCommitter(
+            PaimonCatalogProvider paimonCatalogProvider, CommitterInitContext committerInitContext)
             throws IOException {
         this.paimonCatalog = paimonCatalogProvider.get();
-        this.fileStoreTable = getTable(tablePath);
+        this.fileStoreTable =
+                getTable(
+                        committerInitContext.tablePath(),
+                        committerInitContext
+                                        .tableInfo()
+                                        .getTableConfig()
+                                        .isDataLakeAutoExpireSnapshot()
+                                || committerInitContext
+                                        .lakeTieringConfig()
+                                        .get(ConfigOptions.LAKE_TIERING_AUTO_EXPIRE_SNAPSHOT));
     }
 
     @Override
@@ -82,19 +95,17 @@ public class PaimonLakeCommitter implements LakeCommitter<PaimonWriteResult, Pai
         snapshotProperties.forEach(manifestCommittable::addProperty);
 
         try {
-            fileStoreCommit =
-                    fileStoreTable
-                            .store()
-                            .newCommit(FLUSS_LAKE_TIERING_COMMIT_USER, fileStoreTable);
-            fileStoreCommit.commit(manifestCommittable, false);
+            tableCommit = fileStoreTable.newCommit(FLUSS_LAKE_TIERING_COMMIT_USER);
+            tableCommit.commit(manifestCommittable);
+
             Long commitSnapshotId = currentCommitSnapshotId.get();
             currentCommitSnapshotId.remove();
 
             return checkNotNull(commitSnapshotId, "Paimon committed snapshot id must be non-null.");
         } catch (Throwable t) {
-            if (fileStoreCommit != null) {
+            if (tableCommit != null) {
                 // if any error happen while commit, abort the commit to clean committable
-                fileStoreCommit.abort(manifestCommittable.fileCommittables());
+                tableCommit.abort(manifestCommittable.fileCommittables());
             }
             throw new IOException(t);
         }
@@ -102,9 +113,8 @@ public class PaimonLakeCommitter implements LakeCommitter<PaimonWriteResult, Pai
 
     @Override
     public void abort(PaimonCommittable committable) throws IOException {
-        fileStoreCommit =
-                fileStoreTable.store().newCommit(FLUSS_LAKE_TIERING_COMMIT_USER, fileStoreTable);
-        fileStoreCommit.abort(committable.manifestCommittable().fileCommittables());
+        tableCommit = fileStoreTable.newCommit(FLUSS_LAKE_TIERING_COMMIT_USER);
+        tableCommit.abort(committable.manifestCommittable().fileCommittables());
     }
 
     @Nullable
@@ -190,8 +200,8 @@ public class PaimonLakeCommitter implements LakeCommitter<PaimonWriteResult, Pai
     @Override
     public void close() throws Exception {
         try {
-            if (fileStoreCommit != null) {
-                fileStoreCommit.close();
+            if (tableCommit != null) {
+                tableCommit.close();
             }
             if (paimonCatalog != null) {
                 paimonCatalog.close();
@@ -201,19 +211,20 @@ public class PaimonLakeCommitter implements LakeCommitter<PaimonWriteResult, Pai
         }
     }
 
-    private FileStoreTable getTable(TablePath tablePath) throws IOException {
+    private FileStoreTable getTable(TablePath tablePath, boolean isAutoSnapshotExpiration)
+            throws IOException {
         try {
-            FileStoreTable table =
-                    (FileStoreTable)
-                            paimonCatalog
-                                    .getTable(toPaimon(tablePath))
-                                    .copy(
-                                            Collections.singletonMap(
-                                                    CoreOptions.COMMIT_CALLBACKS.key(),
-                                                    PaimonLakeCommitter.PaimonCommitCallback.class
-                                                            .getName()));
+            FileStoreTable table = (FileStoreTable) paimonCatalog.getTable(toPaimon(tablePath));
 
-            return table;
+            Map<String, String> dynamicOptions = new HashMap<>();
+            dynamicOptions.put(
+                    CoreOptions.COMMIT_CALLBACKS.key(),
+                    PaimonLakeCommitter.PaimonCommitCallback.class.getName());
+            dynamicOptions.put(
+                    CoreOptions.WRITE_ONLY.key(),
+                    isAutoSnapshotExpiration ? Boolean.FALSE.toString() : Boolean.TRUE.toString());
+
+            return table.copy(dynamicOptions);
         } catch (Exception e) {
             throw new IOException("Failed to get table " + tablePath + " in Paimon.", e);
         }

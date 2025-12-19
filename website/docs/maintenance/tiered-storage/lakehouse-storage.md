@@ -103,3 +103,11 @@ Another option `table.datalake.freshness`, allows per-table configuration of dat
 It defines the maximum amount of time that the datalake table's content should lag behind updates to the Fluss table. 
 Based on this target freshness, the Fluss tiering service automatically moves data from the Fluss table and updates to the datalake table, so that the data in the datalake table is kept up to date within this target.
 The default is `3min`, if the data does not need to be as fresh, you can specify a longer target freshness time to reduce costs.
+
+# Datalake Tiering Service Options
+
+The following table lists the options that can be used to configure the datalake tiering service.
+
+| Option                                  | Type     | Default | Description                                                                                                                                                         |
+|-----------------------------------------|----------|---------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| lake.tiering.auto-expire-snapshot       | Boolean  | false   | If true, snapshot expiration will be triggered automatically when tiering service commits to the datalake, event if `table.datalake.auto-expire-snapshot` is false. |

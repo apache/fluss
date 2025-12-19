@@ -415,6 +415,9 @@
                                         <exclude>org.apache.fluss.flink.tiering.committer.CommittableMessageTypeInfo*
                                         </exclude>
                                         <exclude>
+                                            org.apache.fluss.flink.tiering.committer.TieringCommitterInitContext
+                                        </exclude>
+                                        <exclude>
                                             org.apache.fluss.flink.tiering.LakeTieringJobBuilder
                                         </exclude>
                                         <exclude>org.apache.fluss.flink.tiering.FlussLakeTieringEntrypoint</exclude>

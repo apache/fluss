@@ -101,6 +101,11 @@ public class TableConfig {
         return config.get(ConfigOptions.TABLE_DATALAKE_AUTO_COMPACTION);
     }
 
+    /** Whether auto expire snapshot is enabled. */
+    public boolean isDataLakeAutoExpireSnapshot() {
+        return config.get(ConfigOptions.TABLE_DATALAKE_AUTO_EXPIRE_SNAPSHOT);
+    }
+
     /** Gets the optional merge engine type of the table. */
     public Optional<MergeEngineType> getMergeEngineType() {
         return config.getOptional(ConfigOptions.TABLE_MERGE_ENGINE);

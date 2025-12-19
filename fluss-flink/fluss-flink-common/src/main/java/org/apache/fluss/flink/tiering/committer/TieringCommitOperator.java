@@ -89,6 +89,7 @@ public class TieringCommitOperator<WriteResult, Committable>
     private static final long serialVersionUID = 1L;
 
     private final Configuration flussConfig;
+    private final Configuration lakeTieringConfig;
     private final LakeTieringFactory<WriteResult, Committable> lakeTieringFactory;
     private final FlussTableLakeSnapshotCommitter flussTableLakeSnapshotCommitter;
     private Connection connection;
@@ -105,11 +106,13 @@ public class TieringCommitOperator<WriteResult, Committable>
     public TieringCommitOperator(
             StreamOperatorParameters<CommittableMessage<Committable>> parameters,
             Configuration flussConf,
+            Configuration lakeTieringConfig,
             LakeTieringFactory<WriteResult, Committable> lakeTieringFactory) {
         this.lakeTieringFactory = lakeTieringFactory;
         this.flussTableLakeSnapshotCommitter = new FlussTableLakeSnapshotCommitter(flussConf);
         this.collectedTableBucketWriteResults = new HashMap<>();
         this.flussConfig = flussConf;
+        this.lakeTieringConfig = lakeTieringConfig;
         this.operatorEventGateway =
                 parameters
                         .getOperatorEventDispatcher()
@@ -204,7 +207,10 @@ public class TieringCommitOperator<WriteResult, Committable>
         }
         try (LakeCommitter<WriteResult, Committable> lakeCommitter =
                 lakeTieringFactory.createLakeCommitter(
-                        new TieringCommitterInitContext(tablePath))) {
+                        new TieringCommitterInitContext(
+                                tablePath,
+                                admin.getTableInfo(tablePath).get(),
+                                lakeTieringConfig))) {
             List<WriteResult> writeResults =
                     committableWriteResults.stream()
                             .map(TableBucketWriteResult::writeResult)

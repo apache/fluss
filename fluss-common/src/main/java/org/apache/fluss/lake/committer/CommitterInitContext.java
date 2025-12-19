@@ -18,11 +18,13 @@
 package org.apache.fluss.lake.committer;
 
 import org.apache.fluss.annotation.PublicEvolving;
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 
 /**
  * The CommitterInitContext interface provides the context needed to create a LakeCommitter. It
- * includes methods to obtain the table path.
+ * includes methods to obtain the table path, table info and lake tiering configs.
  *
  * @since 0.7
  */
@@ -35,4 +37,18 @@ public interface CommitterInitContext {
      * @return the table path
      */
     TablePath tablePath();
+
+    /**
+     * Returns the table info.
+     *
+     * @return the table info
+     */
+    TableInfo tableInfo();
+
+    /**
+     * Returns the lake tiering config.
+     *
+     * @return the lake tiering config
+     */
+    Configuration lakeTieringConfig();
 }

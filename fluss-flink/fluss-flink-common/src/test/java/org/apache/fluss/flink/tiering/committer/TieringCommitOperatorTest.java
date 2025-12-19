@@ -85,6 +85,7 @@ class TieringCommitOperatorTest extends FlinkTestBase {
                 new TieringCommitOperator<>(
                         parameters,
                         FLUSS_CLUSTER_EXTENSION.getClientConfig(),
+                        new org.apache.fluss.config.Configuration(),
                         new TestingLakeTieringFactory());
         committerOperator.open();
     }
@@ -261,6 +262,7 @@ class TieringCommitOperatorTest extends FlinkTestBase {
                 new TieringCommitOperator<>(
                         parameters,
                         FLUSS_CLUSTER_EXTENSION.getClientConfig(),
+                        new org.apache.fluss.config.Configuration(),
                         new TestingLakeTieringFactory(testingLakeCommitter));
         committerOperator.open();
 
@@ -321,6 +323,7 @@ class TieringCommitOperatorTest extends FlinkTestBase {
                 new TieringCommitOperator<>(
                         parameters,
                         FLUSS_CLUSTER_EXTENSION.getClientConfig(),
+                        new org.apache.fluss.config.Configuration(),
                         new TestingLakeTieringFactory(testingLakeCommitter));
         committerOperator.open();
 

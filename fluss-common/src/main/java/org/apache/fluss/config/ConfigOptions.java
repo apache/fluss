@@ -1405,6 +1405,13 @@ public class ConfigOptions {
                     .withDescription(
                             "If true, compaction will be triggered automatically when tiering service writes to the datalake. It is disabled by default.");
 
+    public static final ConfigOption<Boolean> TABLE_DATALAKE_AUTO_EXPIRE_SNAPSHOT =
+            key("table.datalake.auto-expire-snapshot")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription(
+                            "If true, snapshot expiration will be triggered automatically when tiering service commits to the datalake. It is disabled by default.");
+
     public static final ConfigOption<MergeEngineType> TABLE_MERGE_ENGINE =
             key("table.merge-engine")
                     .enumType(MergeEngineType.class)
@@ -1776,6 +1783,20 @@ public class ConfigOptions {
                     .withDescription(
                             "The datalake format used by of Fluss to be as lakehouse storage. Currently, supported formats are Paimon, Iceberg, and Lance. "
                                     + "In the future, more kinds of data lake format will be supported, such as DeltaLake or Hudi.");
+
+    // ------------------------------------------------------------------------
+    //  ConfigOptions for tiering service
+    // ------------------------------------------------------------------------
+
+    public static final ConfigOption<Boolean> LAKE_TIERING_AUTO_EXPIRE_SNAPSHOT =
+            key("lake.tiering.auto-expire-snapshot")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription(
+                            "If true, snapshot expiration will be triggered automatically when tiering service commits to the datalake, "
+                                    + "even if "
+                                    + ConfigOptions.TABLE_DATALAKE_AUTO_EXPIRE_SNAPSHOT
+                                    + " is false.");
 
     // ------------------------------------------------------------------------
     //  ConfigOptions for fluss kafka

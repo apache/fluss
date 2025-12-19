@@ -161,6 +161,7 @@ public class FlinkIcebergTieringTestBase {
                         execEnv,
                         flussConfig,
                         Configuration.fromMap(getIcebergCatalogConf()),
+                        new Configuration(),
                         DataLakeFormat.ICEBERG.toString())
                 .build();
     }

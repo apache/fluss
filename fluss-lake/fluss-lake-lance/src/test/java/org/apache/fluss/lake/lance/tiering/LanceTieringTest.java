@@ -20,6 +20,7 @@ package org.apache.fluss.lake.lance.tiering;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.lake.committer.CommittedLakeSnapshot;
+import org.apache.fluss.lake.committer.CommitterInitContext;
 import org.apache.fluss.lake.committer.LakeCommitter;
 import org.apache.fluss.lake.lance.LanceConfig;
 import org.apache.fluss.lake.lance.utils.LanceArrowUtils;
@@ -114,7 +115,7 @@ class LanceTieringTest {
                 lanceLakeTieringFactory.getCommittableSerializer();
 
         try (LakeCommitter<LanceWriteResult, LanceCommittable> lakeCommitter =
-                createLakeCommitter(tablePath)) {
+                createLakeCommitter(tablePath, tableInfo)) {
             // should no any missing snapshot
             assertThat(lakeCommitter.getMissingLakeSnapshot(2L)).isNull();
         }
@@ -159,7 +160,7 @@ class LanceTieringTest {
 
         // second, commit data
         try (LakeCommitter<LanceWriteResult, LanceCommittable> lakeCommitter =
-                createLakeCommitter(tablePath)) {
+                createLakeCommitter(tablePath, tableInfo)) {
             // serialize/deserialize committable
             LanceCommittable lanceCommittable = lakeCommitter.toCommittable(lanceWriteResults);
             byte[] serialized = committableSerializer.serialize(lanceCommittable);
@@ -196,7 +197,7 @@ class LanceTieringTest {
 
         // then, let's verify getMissingLakeSnapshot works
         try (LakeCommitter<LanceWriteResult, LanceCommittable> lakeCommitter =
-                createLakeCommitter(tablePath)) {
+                createLakeCommitter(tablePath, tableInfo)) {
             // use snapshot id 1 as the known snapshot id
             CommittedLakeSnapshot committedLakeSnapshot = lakeCommitter.getMissingLakeSnapshot(1L);
             assertThat(committedLakeSnapshot).isNotNull();
@@ -242,8 +243,24 @@ class LanceTieringTest {
     }
 
     private LakeCommitter<LanceWriteResult, LanceCommittable> createLakeCommitter(
-            TablePath tablePath) throws IOException {
-        return lanceLakeTieringFactory.createLakeCommitter(() -> tablePath);
+            TablePath tablePath, TableInfo tableInfo) throws IOException {
+        return lanceLakeTieringFactory.createLakeCommitter(
+                new CommitterInitContext() {
+                    @Override
+                    public TablePath tablePath() {
+                        return tablePath;
+                    }
+
+                    @Override
+                    public TableInfo tableInfo() {
+                        return tableInfo;
+                    }
+
+                    @Override
+                    public Configuration lakeTieringConfig() {
+                        return new Configuration();
+                    }
+                });
     }
 
     private LakeWriter<LanceWriteResult> createLakeWriter(

@@ -20,6 +20,7 @@ package org.apache.fluss.lake.paimon.tiering;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.lake.committer.CommittedLakeSnapshot;
+import org.apache.fluss.lake.committer.CommitterInitContext;
 import org.apache.fluss.lake.committer.LakeCommitter;
 import org.apache.fluss.lake.serializer.SimpleVersionedSerializer;
 import org.apache.fluss.lake.writer.LakeWriter;
@@ -49,6 +50,7 @@ import org.apache.paimon.table.source.ReadBuilder;
 import org.apache.paimon.table.source.Split;
 import org.apache.paimon.types.DataTypes;
 import org.apache.paimon.utils.CloseableIterator;
+import org.apache.paimon.utils.SnapshotManager;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -106,6 +108,18 @@ class PaimonTieringTest {
                 Arguments.of(false, false));
     }
 
+    private static Stream<Arguments> snapshotExpireArgs() {
+        return Stream.of(
+                Arguments.of(true, true, true),
+                Arguments.of(true, true, false),
+                Arguments.of(true, false, true),
+                Arguments.of(true, false, false),
+                Arguments.of(false, true, true),
+                Arguments.of(false, true, false),
+                Arguments.of(false, false, true),
+                Arguments.of(false, false, false));
+    }
+
     @ParameterizedTest
     @MethodSource("tieringWriteArgs")
     void testTieringWriteTable(boolean isPrimaryKeyTable, boolean isPartitioned) throws Exception {
@@ -118,7 +132,11 @@ class PaimonTieringTest {
                                 isPrimaryKeyTable ? "primary_key" : "log",
                                 isPartitioned ? "partitioned" : "non_partitioned"));
         createTable(
-                tablePath, isPrimaryKeyTable, isPartitioned, isPrimaryKeyTable ? bucketNum : null);
+                tablePath,
+                isPrimaryKeyTable,
+                isPartitioned,
+                isPrimaryKeyTable ? bucketNum : null,
+                Collections.emptyMap());
         TableDescriptor descriptor =
                 TableDescriptor.builder()
                         .schema(
@@ -132,14 +150,8 @@ class PaimonTieringTest {
                         .build();
         TableInfo tableInfo = TableInfo.of(tablePath, 0, 1, descriptor, 1L, 1L);
 
-        List<PaimonWriteResult> paimonWriteResults = new ArrayList<>();
-        SimpleVersionedSerializer<PaimonWriteResult> writeResultSerializer =
-                paimonLakeTieringFactory.getWriteResultSerializer();
-        SimpleVersionedSerializer<PaimonCommittable> committableSerializer =
-                paimonLakeTieringFactory.getCommittableSerializer();
-
         try (LakeCommitter<PaimonWriteResult, PaimonCommittable> lakeCommitter =
-                createLakeCommitter(tablePath)) {
+                createLakeCommitter(tablePath, tableInfo, new Configuration())) {
             // should no any missing snapshot
             assertThat(lakeCommitter.getMissingLakeSnapshot(1L)).isNull();
         }
@@ -155,49 +167,9 @@ class PaimonTieringTest {
                             }
                         }
                         : Collections.singletonMap(null, null);
-        Map<TableBucket, Long> tableBucketOffsets = new HashMap<>();
-        // first, write data
-        for (int bucket = 0; bucket < bucketNum; bucket++) {
-            for (Map.Entry<Long, String> entry : partitionIdAndName.entrySet()) {
-                String partition = entry.getValue();
-                try (LakeWriter<PaimonWriteResult> lakeWriter =
-                        createLakeWriter(tablePath, bucket, partition, entry.getKey(), tableInfo)) {
-                    Tuple2<String, Integer> partitionBucket = Tuple2.of(partition, bucket);
-                    Tuple2<List<LogRecord>, List<LogRecord>> writeAndExpectRecords =
-                            isPrimaryKeyTable
-                                    ? genPrimaryKeyTableRecords(partition, bucket)
-                                    : genLogTableRecords(partition, bucket, 10);
-                    List<LogRecord> writtenRecords = writeAndExpectRecords.f0;
-                    List<LogRecord> expectRecords = writeAndExpectRecords.f1;
-                    recordsByBucket.put(partitionBucket, expectRecords);
-                    tableBucketOffsets.put(new TableBucket(0, entry.getKey(), bucket), 10L);
-                    for (LogRecord logRecord : writtenRecords) {
-                        lakeWriter.write(logRecord);
-                    }
-                    // serialize/deserialize writeResult
-                    PaimonWriteResult paimonWriteResult = lakeWriter.complete();
-                    byte[] serialized = writeResultSerializer.serialize(paimonWriteResult);
-                    paimonWriteResults.add(
-                            writeResultSerializer.deserialize(
-                                    writeResultSerializer.getVersion(), serialized));
-                }
-            }
-        }
 
-        // second, commit data
-        try (LakeCommitter<PaimonWriteResult, PaimonCommittable> lakeCommitter =
-                createLakeCommitter(tablePath)) {
-            // serialize/deserialize committable
-            PaimonCommittable paimonCommittable = lakeCommitter.toCommittable(paimonWriteResults);
-            byte[] serialized = committableSerializer.serialize(paimonCommittable);
-            paimonCommittable =
-                    committableSerializer.deserialize(
-                            committableSerializer.getVersion(), serialized);
-            long snapshot =
-                    lakeCommitter.commit(
-                            paimonCommittable, toBucketOffsetsProperty(tableBucketOffsets));
-            assertThat(snapshot).isEqualTo(1);
-        }
+        // firstly, write some data
+        writeData(tableInfo, recordsByBucket, partitionIdAndName);
 
         // then, check data
         for (int bucket = 0; bucket < 3; bucket++) {
@@ -212,7 +184,7 @@ class PaimonTieringTest {
 
         // then, let's verify getMissingLakeSnapshot works
         try (LakeCommitter<PaimonWriteResult, PaimonCommittable> lakeCommitter =
-                createLakeCommitter(tablePath)) {
+                createLakeCommitter(tablePath, tableInfo, new Configuration())) {
             // use snapshot id 0 as the known snapshot id
             CommittedLakeSnapshot committedLakeSnapshot = lakeCommitter.getMissingLakeSnapshot(0L);
             assertThat(committedLakeSnapshot).isNotNull();
@@ -292,7 +264,7 @@ class PaimonTieringTest {
 
         // Commit all data
         try (LakeCommitter<PaimonWriteResult, PaimonCommittable> lakeCommitter =
-                createLakeCommitter(tablePath)) {
+                createLakeCommitter(tablePath, tableInfo, new Configuration())) {
             PaimonCommittable committable = lakeCommitter.toCommittable(paimonWriteResults);
             long snapshot =
                     lakeCommitter.commit(committable, toBucketOffsetsProperty(tableBucketOffsets));
@@ -364,7 +336,7 @@ class PaimonTieringTest {
         // Commit all data
         long snapshot;
         try (LakeCommitter<PaimonWriteResult, PaimonCommittable> lakeCommitter =
-                createLakeCommitter(tablePath)) {
+                createLakeCommitter(tablePath, tableInfo, new Configuration())) {
             PaimonCommittable committable = lakeCommitter.toCommittable(paimonWriteResults);
             snapshot =
                     lakeCommitter.commit(committable, toBucketOffsetsProperty(tableBucketOffsets));
@@ -384,6 +356,77 @@ class PaimonTieringTest {
             CloseableIterator<InternalRow> actualRecords =
                     getPaimonRowsThreePartition(tablePath, partition);
             verifyLogTableRecordsThreePartition(actualRecords, expectRecords, bucket);
+        }
+    }
+
+    @ParameterizedTest
+    @MethodSource("snapshotExpireArgs")
+    void testSnapshotExpiration(
+            boolean isPartitioned,
+            boolean isTableAutoExpireSnapshot,
+            boolean isLakeTieringExpireSnapshot)
+            throws Exception {
+        int bucketNum = 3;
+        TablePath tablePath =
+                TablePath.of(
+                        "paimon",
+                        String.format(
+                                "test_tiering_snapshot_expiration_table_%s",
+                                isPartitioned ? "partitioned" : "non_partitioned"));
+        Map<String, String> options = new HashMap<>();
+        options.put(CoreOptions.SNAPSHOT_NUM_RETAINED_MIN.key(), "1");
+        options.put(CoreOptions.SNAPSHOT_NUM_RETAINED_MAX.key(), "2");
+        createTable(tablePath, false, isPartitioned, null, options);
+        TableDescriptor descriptor =
+                TableDescriptor.builder()
+                        .schema(
+                                org.apache.fluss.metadata.Schema.newBuilder()
+                                        .column("c1", org.apache.fluss.types.DataTypes.INT())
+                                        .column("c2", org.apache.fluss.types.DataTypes.STRING())
+                                        .column("c3", org.apache.fluss.types.DataTypes.STRING())
+                                        .build())
+                        .distributedBy(bucketNum)
+                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
+                        .property(
+                                ConfigOptions.TABLE_DATALAKE_AUTO_EXPIRE_SNAPSHOT,
+                                isTableAutoExpireSnapshot)
+                        .build();
+        TableInfo tableInfo = TableInfo.of(tablePath, 0, 1, descriptor, 1L, 1L);
+        // Get the FileStoreTable to verify snapshots
+        FileStoreTable fileStoreTable =
+                (FileStoreTable) paimonCatalog.getTable(toPaimon(tablePath));
+        SnapshotManager snapshotManager = fileStoreTable.snapshotManager();
+
+        Map<Long, String> partitionIdAndName =
+                isPartitioned
+                        ? new HashMap<Long, String>() {
+                            {
+                                put(1L, "p1");
+                                put(2L, "p2");
+                                put(3L, "p3");
+                            }
+                        }
+                        : Collections.singletonMap(null, null);
+
+        Configuration lakeTieringConfig = new Configuration();
+        lakeTieringConfig.set(
+                ConfigOptions.LAKE_TIERING_AUTO_EXPIRE_SNAPSHOT, isLakeTieringExpireSnapshot);
+
+        // Write some data to generate 2 snapshots
+        writeData(tableInfo, lakeTieringConfig, new HashMap<>(), partitionIdAndName);
+        writeData(tableInfo, lakeTieringConfig, new HashMap<>(), partitionIdAndName);
+        assertThat(snapshotManager.snapshotCount()).isEqualTo(2);
+
+        // write more data
+        for (int i = 0; i < 5; i++) {
+            writeData(tableInfo, lakeTieringConfig, new HashMap<>(), partitionIdAndName);
+            if (isTableAutoExpireSnapshot || isLakeTieringExpireSnapshot) {
+                // if auto snapshot expiration is enabled, snapshot should be expired
+                assertThat(snapshotManager.snapshotCount()).isEqualTo(2);
+            } else {
+                // if auto snapshot expiration is disabled, snapshot should never be expired
+                assertThat(snapshotManager.snapshotCount()).isGreaterThan(2);
+            }
         }
     }
 
@@ -704,15 +747,33 @@ class PaimonTieringTest {
     }
 
     private LakeCommitter<PaimonWriteResult, PaimonCommittable> createLakeCommitter(
-            TablePath tablePath) throws IOException {
-        return paimonLakeTieringFactory.createLakeCommitter(() -> tablePath);
+            TablePath tablePath, TableInfo tableInfo, Configuration lakeTieringConfig)
+            throws IOException {
+        return paimonLakeTieringFactory.createLakeCommitter(
+                new CommitterInitContext() {
+                    @Override
+                    public TablePath tablePath() {
+                        return tablePath;
+                    }
+
+                    @Override
+                    public TableInfo tableInfo() {
+                        return tableInfo;
+                    }
+
+                    @Override
+                    public Configuration lakeTieringConfig() {
+                        return lakeTieringConfig;
+                    }
+                });
     }
 
     private void createTable(
             TablePath tablePath,
             boolean isPrimaryTable,
             boolean isPartitioned,
-            @Nullable Integer numBuckets)
+            @Nullable Integer numBuckets,
+            Map<String, String> options)
             throws Exception {
         Schema.Builder builder =
                 Schema.newBuilder()
@@ -735,6 +796,7 @@ class PaimonTieringTest {
         if (numBuckets != null) {
             builder.option(CoreOptions.BUCKET.key(), String.valueOf(numBuckets));
         }
+        builder.options(options);
         doCreatePaimonTable(tablePath, builder);
     }
 
@@ -783,5 +845,71 @@ class PaimonTieringTest {
                 .snapshot(snapshotId)
                 .properties()
                 .get(FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY);
+    }
+
+    private void writeData(
+            TableInfo tableInfo,
+            Map<Tuple2<String, Integer>, List<LogRecord>> recordsByBucket,
+            Map<Long, String> partitionIdAndName)
+            throws Exception {
+        writeData(tableInfo, new Configuration(), recordsByBucket, partitionIdAndName);
+    }
+
+    private void writeData(
+            TableInfo tableInfo,
+            Configuration lakeTieringConfig,
+            Map<Tuple2<String, Integer>, List<LogRecord>> recordsByBucket,
+            Map<Long, String> partitionIdAndName)
+            throws Exception {
+        TablePath tablePath = tableInfo.getTablePath();
+        int bucketNum = tableInfo.getNumBuckets();
+        boolean isPrimaryKeyTable = tableInfo.hasPrimaryKey();
+
+        List<PaimonWriteResult> paimonWriteResults = new ArrayList<>();
+        SimpleVersionedSerializer<PaimonWriteResult> writeResultSerializer =
+                paimonLakeTieringFactory.getWriteResultSerializer();
+        SimpleVersionedSerializer<PaimonCommittable> committableSerializer =
+                paimonLakeTieringFactory.getCommittableSerializer();
+
+        Map<TableBucket, Long> tableBucketOffsets = new HashMap<>();
+        // first, write data
+        for (int bucket = 0; bucket < bucketNum; bucket++) {
+            for (Map.Entry<Long, String> entry : partitionIdAndName.entrySet()) {
+                String partition = entry.getValue();
+                try (LakeWriter<PaimonWriteResult> lakeWriter =
+                        createLakeWriter(tablePath, bucket, partition, entry.getKey(), tableInfo)) {
+                    Tuple2<String, Integer> partitionBucket = Tuple2.of(partition, bucket);
+                    Tuple2<List<LogRecord>, List<LogRecord>> writeAndExpectRecords =
+                            isPrimaryKeyTable
+                                    ? genPrimaryKeyTableRecords(partition, bucket)
+                                    : genLogTableRecords(partition, bucket, 10);
+                    List<LogRecord> writtenRecords = writeAndExpectRecords.f0;
+                    List<LogRecord> expectRecords = writeAndExpectRecords.f1;
+                    recordsByBucket.put(partitionBucket, expectRecords);
+                    tableBucketOffsets.put(new TableBucket(0, entry.getKey(), bucket), 10L);
+                    for (LogRecord logRecord : writtenRecords) {
+                        lakeWriter.write(logRecord);
+                    }
+                    // serialize/deserialize writeResult
+                    PaimonWriteResult paimonWriteResult = lakeWriter.complete();
+                    byte[] serialized = writeResultSerializer.serialize(paimonWriteResult);
+                    paimonWriteResults.add(
+                            writeResultSerializer.deserialize(
+                                    writeResultSerializer.getVersion(), serialized));
+                }
+            }
+        }
+
+        // second, commit data
+        try (LakeCommitter<PaimonWriteResult, PaimonCommittable> lakeCommitter =
+                createLakeCommitter(tablePath, tableInfo, lakeTieringConfig)) {
+            // serialize/deserialize committable
+            PaimonCommittable paimonCommittable = lakeCommitter.toCommittable(paimonWriteResults);
+            byte[] serialized = committableSerializer.serialize(paimonCommittable);
+            paimonCommittable =
+                    committableSerializer.deserialize(
+                            committableSerializer.getVersion(), serialized);
+            lakeCommitter.commit(paimonCommittable, toBucketOffsetsProperty(tableBucketOffsets));
+        }
     }
 }
