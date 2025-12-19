@@ -21,7 +21,13 @@ import org.apache.flink.api.java.utils.MultipleParameterTool;
 
 import java.util.Map;
 
-/** A adapter for flink 1.x {@link MultipleParameterTool} . */
+/**
+ * An adapter for Flink {@link MultipleParameterTool} class. The {@link MultipleParameterTool} is
+ * moved to a new package since Flink 2.x, so this adapter helps to bridge compatibility for
+ * different Flink versions.
+ *
+ * <p>TODO: remove this class when no longer support all the Flink 1.x series.
+ */
 public class MultipleParameterToolAdapter {
 
     private MultipleParameterToolAdapter() {}
