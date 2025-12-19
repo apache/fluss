@@ -18,14 +18,10 @@
 package org.apache.fluss.lake.paimon.tiering;
 
 import org.apache.fluss.config.ConfigOptions;
-import org.apache.fluss.lake.committer.BucketOffset;
 import org.apache.fluss.lake.committer.CommittedLakeSnapshot;
 import org.apache.fluss.lake.committer.CommitterInitContext;
 import org.apache.fluss.lake.committer.LakeCommitter;
 import org.apache.fluss.metadata.TablePath;
-import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
-import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.ObjectMapper;
-import org.apache.fluss.utils.json.BucketOffsetJsonSerde;
 
 import org.apache.paimon.CoreOptions;
 import org.apache.paimon.Snapshot;
@@ -46,7 +42,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-import static org.apache.fluss.lake.committer.BucketOffset.FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY;
 import static org.apache.fluss.lake.paimon.tiering.PaimonLakeTieringFactory.FLUSS_LAKE_TIERING_COMMIT_USER;
 import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toPaimon;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
@@ -60,7 +55,6 @@ public class PaimonLakeCommitter implements LakeCommitter<PaimonWriteResult, Pai
     private TableCommitImpl tableCommit;
 
     private static final ThreadLocal<Long> currentCommitSnapshotId = new ThreadLocal<>();
-    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
     public PaimonLakeCommitter(
             PaimonCatalogProvider paimonCatalogProvider, CommitterInitContext committerInitContext)
@@ -135,9 +129,6 @@ public class PaimonLakeCommitter implements LakeCommitter<PaimonWriteResult, Pai
             return null;
         }
 
-        CommittedLakeSnapshot committedLakeSnapshot =
-                new CommittedLakeSnapshot(latestLakeSnapshotOfLake.id());
-
         if (latestLakeSnapshotOfLake.properties() == null) {
             throw new IOException("Failed to load committed lake snapshot properties from Paimon.");
         }
@@ -155,23 +146,8 @@ public class PaimonLakeCommitter implements LakeCommitter<PaimonWriteResult, Pai
                             + "To resolve this:\n"
                             + "1. Run the old tiering service(v0.7) again to complete the Fluss commit\n"
                             + "2. Then you can resume tiering with the newer version of tiering service");
-        } else {
-            String flussOffsetProperties =
-                    lakeSnapshotProperties.get(FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY);
-            for (JsonNode node : OBJECT_MAPPER.readTree(flussOffsetProperties)) {
-                BucketOffset bucketOffset = BucketOffsetJsonSerde.INSTANCE.deserialize(node);
-                if (bucketOffset.getPartitionId() != null) {
-                    committedLakeSnapshot.addPartitionBucket(
-                            bucketOffset.getPartitionId(),
-                            bucketOffset.getBucket(),
-                            bucketOffset.getLogOffset());
-                } else {
-                    committedLakeSnapshot.addBucket(
-                            bucketOffset.getBucket(), bucketOffset.getLogOffset());
-                }
-            }
         }
-        return committedLakeSnapshot;
+        return new CommittedLakeSnapshot(latestLakeSnapshotOfLake.id(), lakeSnapshotProperties);
     }
 
     @Nullable

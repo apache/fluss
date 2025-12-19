@@ -20,7 +20,6 @@ package org.apache.fluss.flink.tiering.committer;
 import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
-import org.apache.fluss.lake.committer.CommittedLakeSnapshot;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metrics.registry.MetricRegistry;
 import org.apache.fluss.rpc.GatewayClientProxy;
@@ -31,7 +30,6 @@ import org.apache.fluss.rpc.messages.PbLakeTableOffsetForBucket;
 import org.apache.fluss.rpc.messages.PbLakeTableSnapshotInfo;
 import org.apache.fluss.rpc.metrics.ClientMetricGroup;
 import org.apache.fluss.utils.ExceptionUtils;
-import org.apache.fluss.utils.types.Tuple2;
 
 import java.io.IOException;
 import java.util.Map;
@@ -75,17 +73,13 @@ public class FlussTableLakeSnapshotCommitter implements AutoCloseable {
         }
     }
 
-    public void commit(long tableId, CommittedLakeSnapshot committedLakeSnapshot)
+    public void commit(long tableId, long snapshotId, Map<TableBucket, Long> logEndOffsets)
             throws IOException {
         // construct lake snapshot to commit to Fluss
         FlussTableLakeSnapshot flussTableLakeSnapshot =
-                new FlussTableLakeSnapshot(tableId, committedLakeSnapshot.getLakeSnapshotId());
-        for (Map.Entry<Tuple2<Long, Integer>, Long> entry :
-                committedLakeSnapshot.getLogEndOffsets().entrySet()) {
-            Tuple2<Long, Integer> partitionBucket = entry.getKey();
-            Long partitionId = partitionBucket.f0;
-            TableBucket tableBucket = new TableBucket(tableId, partitionId, partitionBucket.f1);
-            flussTableLakeSnapshot.addBucketOffset(tableBucket, entry.getValue());
+                new FlussTableLakeSnapshot(tableId, snapshotId);
+        for (Map.Entry<TableBucket, Long> entry : logEndOffsets.entrySet()) {
+            flussTableLakeSnapshot.addBucketOffset(entry.getKey(), entry.getValue());
         }
         commit(flussTableLakeSnapshot);
     }

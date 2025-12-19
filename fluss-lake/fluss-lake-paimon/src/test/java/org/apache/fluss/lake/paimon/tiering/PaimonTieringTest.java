@@ -71,6 +71,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.stream.Stream;
 
+import static org.apache.fluss.flink.tiering.committer.TieringCommitOperator.fromLogOffsetProperty;
 import static org.apache.fluss.flink.tiering.committer.TieringCommitOperator.toBucketOffsetsProperty;
 import static org.apache.fluss.lake.committer.BucketOffset.FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY;
 import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toPaimon;
@@ -188,11 +189,18 @@ class PaimonTieringTest {
             // use snapshot id 0 as the known snapshot id
             CommittedLakeSnapshot committedLakeSnapshot = lakeCommitter.getMissingLakeSnapshot(0L);
             assertThat(committedLakeSnapshot).isNotNull();
-            Map<Tuple2<Long, Integer>, Long> offsets = committedLakeSnapshot.getLogEndOffsets();
+            long tableId = tableInfo.getTableId();
+            Map<TableBucket, Long> offsets =
+                    fromLogOffsetProperty(
+                            tableId,
+                            committedLakeSnapshot
+                                    .getSnapshotProperties()
+                                    .get(FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY));
             for (int bucket = 0; bucket < 3; bucket++) {
                 for (Long partitionId : partitionIdAndName.keySet()) {
                     // we only write 10 records, so expected log offset should be 10
-                    assertThat(offsets.get(Tuple2.of(partitionId, bucket))).isEqualTo(10);
+                    assertThat(offsets.get(new TableBucket(tableId, partitionId, bucket)))
+                            .isEqualTo(10);
                 }
             }
             assertThat(committedLakeSnapshot.getLakeSnapshotId()).isOne();

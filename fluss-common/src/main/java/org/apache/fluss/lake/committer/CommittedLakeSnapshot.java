@@ -17,41 +17,30 @@
 
 package org.apache.fluss.lake.committer;
 
-import org.apache.fluss.utils.types.Tuple2;
-
-import java.util.HashMap;
 import java.util.Map;
 import java.util.Objects;
 
 /**
- * The lake already committed snapshot, containing the lake snapshot id and the bucket end offsets
- * in this snapshot.
+ * The lake already committed snapshot, containing the lake snapshot id and the properties stored in
+ * this snapshot.
  */
 public class CommittedLakeSnapshot {
 
     private final long lakeSnapshotId;
-    // <partition_id, bucket> -> log offset, partition_id will be null if it's not a
-    // partition bucket
-    private final Map<Tuple2<Long, Integer>, Long> logEndOffsets = new HashMap<>();
 
-    public CommittedLakeSnapshot(long lakeSnapshotId) {
+    private final Map<String, String> snapshotProperties;
+
+    public CommittedLakeSnapshot(long lakeSnapshotId, Map<String, String> snapshotProperties) {
         this.lakeSnapshotId = lakeSnapshotId;
+        this.snapshotProperties = snapshotProperties;
     }
 
     public long getLakeSnapshotId() {
         return lakeSnapshotId;
     }
 
-    public void addBucket(int bucketId, long offset) {
-        logEndOffsets.put(Tuple2.of(null, bucketId), offset);
-    }
-
-    public void addPartitionBucket(Long partitionId, int bucketId, long offset) {
-        logEndOffsets.put(Tuple2.of(partitionId, bucketId), offset);
-    }
-
-    public Map<Tuple2<Long, Integer>, Long> getLogEndOffsets() {
-        return logEndOffsets;
+    public Map<String, String> getSnapshotProperties() {
+        return snapshotProperties;
     }
 
     @Override
@@ -64,12 +53,12 @@ public class CommittedLakeSnapshot {
         }
         CommittedLakeSnapshot that = (CommittedLakeSnapshot) o;
         return lakeSnapshotId == that.lakeSnapshotId
-                && Objects.equals(logEndOffsets, that.logEndOffsets);
+                && Objects.equals(snapshotProperties, that.snapshotProperties);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(lakeSnapshotId, logEndOffsets);
+        return Objects.hash(lakeSnapshotId, snapshotProperties);
     }
 
     @Override
@@ -77,8 +66,8 @@ public class CommittedLakeSnapshot {
         return "CommittedLakeSnapshot{"
                 + "lakeSnapshotId="
                 + lakeSnapshotId
-                + ", logEndOffsets="
-                + logEndOffsets
+                + ", snapshotProperties="
+                + snapshotProperties
                 + '}';
     }
 }

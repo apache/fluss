@@ -18,15 +18,11 @@
 package org.apache.fluss.lake.lance.tiering;
 
 import org.apache.fluss.config.Configuration;
-import org.apache.fluss.lake.committer.BucketOffset;
 import org.apache.fluss.lake.committer.CommittedLakeSnapshot;
 import org.apache.fluss.lake.committer.LakeCommitter;
 import org.apache.fluss.lake.lance.LanceConfig;
 import org.apache.fluss.lake.lance.utils.LanceDatasetAdapter;
 import org.apache.fluss.metadata.TablePath;
-import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
-import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.ObjectMapper;
-import org.apache.fluss.utils.json.BucketOffsetJsonSerde;
 import org.apache.fluss.utils.types.Tuple2;
 
 import com.lancedb.lance.Dataset;
@@ -45,7 +41,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 
-import static org.apache.fluss.lake.committer.BucketOffset.FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY;
 import static org.apache.fluss.lake.writer.LakeTieringFactory.FLUSS_LAKE_TIERING_COMMIT_USER;
 
 /** Implementation of {@link LakeCommitter} for Lance. */
@@ -53,7 +48,6 @@ public class LanceLakeCommitter implements LakeCommitter<LanceWriteResult, Lance
     private final LanceConfig config;
     private static final String committerName = "commit-user";
     private final RootAllocator allocator = new RootAllocator();
-    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
     public LanceLakeCommitter(Configuration options, TablePath tablePath) {
         this.config =
@@ -109,26 +103,9 @@ public class LanceLakeCommitter implements LakeCommitter<LanceWriteResult, Lance
             return null;
         }
 
-        CommittedLakeSnapshot committedLakeSnapshot =
-                new CommittedLakeSnapshot(latestLakeSnapshotIdOfLake.f0.getId());
-        String flussOffsetProperties =
-                latestLakeSnapshotIdOfLake
-                        .f1
-                        .transactionProperties()
-                        .get(FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY);
-        for (JsonNode node : OBJECT_MAPPER.readTree(flussOffsetProperties)) {
-            BucketOffset bucketOffset = BucketOffsetJsonSerde.INSTANCE.deserialize(node);
-            if (bucketOffset.getPartitionId() != null) {
-                committedLakeSnapshot.addPartitionBucket(
-                        bucketOffset.getPartitionId(),
-                        bucketOffset.getBucket(),
-                        bucketOffset.getLogOffset());
-            } else {
-                committedLakeSnapshot.addBucket(
-                        bucketOffset.getBucket(), bucketOffset.getLogOffset());
-            }
-        }
-        return committedLakeSnapshot;
+        return new CommittedLakeSnapshot(
+                latestLakeSnapshotIdOfLake.f0.getId(),
+                latestLakeSnapshotIdOfLake.f1.transactionProperties());
     }
 
     @Nullable

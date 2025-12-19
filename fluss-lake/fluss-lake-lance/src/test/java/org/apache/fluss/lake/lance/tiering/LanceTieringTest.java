@@ -64,7 +64,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.stream.Stream;
 
+import static org.apache.fluss.flink.tiering.committer.TieringCommitOperator.fromLogOffsetProperty;
 import static org.apache.fluss.flink.tiering.committer.TieringCommitOperator.toBucketOffsetsProperty;
+import static org.apache.fluss.lake.committer.BucketOffset.FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** The UT for tiering to Lance via {@link LanceLakeTieringFactory}. */
@@ -201,11 +203,19 @@ class LanceTieringTest {
             // use snapshot id 1 as the known snapshot id
             CommittedLakeSnapshot committedLakeSnapshot = lakeCommitter.getMissingLakeSnapshot(1L);
             assertThat(committedLakeSnapshot).isNotNull();
-            Map<Tuple2<Long, Integer>, Long> offsets = committedLakeSnapshot.getLogEndOffsets();
+            long tableId = tableInfo.getTableId();
+            Map<TableBucket, Long> offsets =
+                    fromLogOffsetProperty(
+                            tableInfo.getTableId(),
+                            committedLakeSnapshot
+                                    .getSnapshotProperties()
+                                    .get(FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY));
+
             for (int bucket = 0; bucket < 3; bucket++) {
                 for (Long partitionId : partitionIdAndName.keySet()) {
                     // we only write 10 records, so expected log offset should be 10
-                    assertThat(offsets.get(Tuple2.of(partitionId, bucket))).isEqualTo(10);
+                    assertThat(offsets.get(new TableBucket(tableId, partitionId, bucket)))
+                            .isEqualTo(10);
                 }
             }
             assertThat(committedLakeSnapshot.getLakeSnapshotId()).isEqualTo(2L);

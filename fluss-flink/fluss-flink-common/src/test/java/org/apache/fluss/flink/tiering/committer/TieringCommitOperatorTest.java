@@ -28,7 +28,6 @@ import org.apache.fluss.flink.utils.FlinkTestBase;
 import org.apache.fluss.lake.committer.CommittedLakeSnapshot;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
-import org.apache.fluss.utils.types.Tuple2;
 
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.runtime.jobgraph.OperatorID;
@@ -50,12 +49,16 @@ import org.junit.jupiter.api.Test;
 
 import javax.annotation.Nullable;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import static org.apache.fluss.flink.tiering.committer.TieringCommitOperator.fromLogOffsetProperty;
+import static org.apache.fluss.flink.tiering.committer.TieringCommitOperator.toBucketOffsetsProperty;
+import static org.apache.fluss.lake.committer.BucketOffset.FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY;
 import static org.apache.fluss.record.TestData.DATA1_PARTITIONED_TABLE_DESCRIPTOR;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -254,8 +257,12 @@ class TieringCommitOperatorTest extends FlinkTestBase {
 
     @Test
     void testTableCommitWhenFlussMissingLakeSnapshot() throws Exception {
+        TablePath tablePath = TablePath.of("fluss", "test_commit_when_fluss_missing_lake_snapshot");
+        long tableId = createTable(tablePath, DEFAULT_PK_TABLE_DESCRIPTOR);
+        int numberOfWriteResults = 3;
+
         CommittedLakeSnapshot mockCommittedSnapshot =
-                mockCommittedLakeSnapshot(Collections.singletonList(null), 2);
+                mockCommittedLakeSnapshot(Collections.singletonList(null), tableId, 2);
         TestingLakeTieringFactory.TestingLakeCommitter testingLakeCommitter =
                 new TestingLakeTieringFactory.TestingLakeCommitter(mockCommittedSnapshot);
         committerOperator =
@@ -265,10 +272,6 @@ class TieringCommitOperatorTest extends FlinkTestBase {
                         new org.apache.fluss.config.Configuration(),
                         new TestingLakeTieringFactory(testingLakeCommitter));
         committerOperator.open();
-
-        TablePath tablePath = TablePath.of("fluss", "test_commit_when_fluss_missing_lake_snapshot");
-        long tableId = createTable(tablePath, DEFAULT_PK_TABLE_DESCRIPTOR);
-        int numberOfWriteResults = 3;
 
         for (int bucket = 0; bucket < 3; bucket++) {
             TableBucket tableBucket = new TableBucket(tableId, bucket);
@@ -316,7 +319,7 @@ class TieringCommitOperatorTest extends FlinkTestBase {
                 FLUSS_CLUSTER_EXTENSION.waitUntilPartitionAllReady(tablePath);
 
         CommittedLakeSnapshot mockCommittedSnapshot =
-                mockCommittedLakeSnapshot(Collections.singletonList(null), 3);
+                mockCommittedLakeSnapshot(Collections.singletonList(null), tableId, 3);
         TestingLakeTieringFactory.TestingLakeCommitter testingLakeCommitter =
                 new TestingLakeTieringFactory.TestingLakeCommitter(mockCommittedSnapshot);
         committerOperator =
@@ -359,36 +362,24 @@ class TieringCommitOperatorTest extends FlinkTestBase {
                         mockCommittedSnapshot));
     }
 
-    private CommittedLakeSnapshot mockCommittedLakeSnapshot(List<Long> partitions, int snapshotId) {
-        CommittedLakeSnapshot mockCommittedSnapshot = new CommittedLakeSnapshot(snapshotId);
+    private CommittedLakeSnapshot mockCommittedLakeSnapshot(
+            List<Long> partitions, long tableId, int snapshotId) throws IOException {
+        Map<TableBucket, Long> logEndOffsets = new HashMap<>();
         for (Long partition : partitions) {
             for (int bucket = 0; bucket < DEFAULT_BUCKET_NUM; bucket++) {
-                if (partition == null) {
-                    mockCommittedSnapshot.addBucket(bucket, bucket + 1);
-                } else {
-                    mockCommittedSnapshot.addPartitionBucket(partition, bucket, bucket + 1);
-                }
+                logEndOffsets.put(new TableBucket(tableId, partition, bucket), bucket + 1L);
             }
         }
-        return mockCommittedSnapshot;
+        return new CommittedLakeSnapshot(snapshotId, toBucketOffsetsProperty(logEndOffsets));
     }
 
     private Map<TableBucket, Long> getExpectedLogEndOffsets(
-            long tableId, CommittedLakeSnapshot committedLakeSnapshot) {
-        Map<TableBucket, Long> expectedLogEndOffsets = new HashMap<>();
-        for (Map.Entry<Tuple2<Long, Integer>, Long> entry :
-                committedLakeSnapshot.getLogEndOffsets().entrySet()) {
-            Tuple2<Long, Integer> partitionBucket = entry.getKey();
-            if (partitionBucket.f0 == null) {
-                expectedLogEndOffsets.put(
-                        new TableBucket(tableId, partitionBucket.f1), entry.getValue());
-            } else {
-                expectedLogEndOffsets.put(
-                        new TableBucket(tableId, partitionBucket.f0, partitionBucket.f1),
-                        entry.getValue());
-            }
-        }
-        return expectedLogEndOffsets;
+            long tableId, CommittedLakeSnapshot committedLakeSnapshot) throws IOException {
+        return fromLogOffsetProperty(
+                tableId,
+                committedLakeSnapshot
+                        .getSnapshotProperties()
+                        .get(FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY));
     }
 
     private StreamRecord<TableBucketWriteResult<TestingWriteResult>>

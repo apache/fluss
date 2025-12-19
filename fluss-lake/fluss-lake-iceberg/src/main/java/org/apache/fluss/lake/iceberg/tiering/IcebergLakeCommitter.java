@@ -17,14 +17,10 @@
 
 package org.apache.fluss.lake.iceberg.tiering;
 
-import org.apache.fluss.lake.committer.BucketOffset;
 import org.apache.fluss.lake.committer.CommittedLakeSnapshot;
 import org.apache.fluss.lake.committer.LakeCommitter;
 import org.apache.fluss.lake.iceberg.maintenance.RewriteDataFileResult;
 import org.apache.fluss.metadata.TablePath;
-import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
-import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.ObjectMapper;
-import org.apache.fluss.utils.json.BucketOffsetJsonSerde;
 
 import org.apache.iceberg.AppendFiles;
 import org.apache.iceberg.CatalogUtil;
@@ -52,7 +48,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 
-import static org.apache.fluss.lake.committer.BucketOffset.FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY;
 import static org.apache.fluss.lake.iceberg.utils.IcebergConversions.toIceberg;
 import static org.apache.fluss.lake.writer.LakeTieringFactory.FLUSS_LAKE_TIERING_COMMIT_USER;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
@@ -66,7 +61,6 @@ public class IcebergLakeCommitter implements LakeCommitter<IcebergWriteResult, I
 
     private final Catalog icebergCatalog;
     private final Table icebergTable;
-    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
     private static final ThreadLocal<Long> currentCommitSnapshotId = new ThreadLocal<>();
 
     public IcebergLakeCommitter(IcebergCatalogProvider icebergCatalogProvider, TablePath tablePath)
@@ -222,7 +216,6 @@ public class IcebergLakeCommitter implements LakeCommitter<IcebergWriteResult, I
     @Override
     public CommittedLakeSnapshot getMissingLakeSnapshot(@Nullable Long latestLakeSnapshotIdOfFluss)
             throws IOException {
-        // todo: may refactor to common methods?
         Snapshot latestLakeSnapshot =
                 getCommittedLatestSnapshotOfLake(FLUSS_LAKE_TIERING_COMMIT_USER);
 
@@ -246,9 +239,6 @@ public class IcebergLakeCommitter implements LakeCommitter<IcebergWriteResult, I
             }
         }
 
-        CommittedLakeSnapshot committedLakeSnapshot =
-                new CommittedLakeSnapshot(latestLakeSnapshot.snapshotId());
-
         // Reconstruct bucket offsets from snapshot properties
         Map<String, String> properties = latestLakeSnapshot.summary();
         if (properties == null) {
@@ -256,27 +246,7 @@ public class IcebergLakeCommitter implements LakeCommitter<IcebergWriteResult, I
                     "Failed to load committed lake snapshot properties from Iceberg.");
         }
 
-        String flussOffsetProperties = properties.get(FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY);
-        if (flussOffsetProperties == null) {
-            throw new IllegalArgumentException(
-                    "Cannot resume tiering from snapshot without bucket offset properties. "
-                            + "The snapshot was committed to Iceberg but missing Fluss metadata.");
-        }
-
-        for (JsonNode node : OBJECT_MAPPER.readTree(flussOffsetProperties)) {
-            BucketOffset bucketOffset = BucketOffsetJsonSerde.INSTANCE.deserialize(node);
-            if (bucketOffset.getPartitionId() != null) {
-                committedLakeSnapshot.addPartitionBucket(
-                        bucketOffset.getPartitionId(),
-                        bucketOffset.getBucket(),
-                        bucketOffset.getLogOffset());
-            } else {
-                committedLakeSnapshot.addBucket(
-                        bucketOffset.getBucket(), bucketOffset.getLogOffset());
-            }
-        }
-
-        return committedLakeSnapshot;
+        return new CommittedLakeSnapshot(latestLakeSnapshot.snapshotId(), properties);
     }
 
     @Override

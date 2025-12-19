@@ -19,7 +19,6 @@ package org.apache.fluss.flink.tiering.committer;
 
 import org.apache.fluss.client.metadata.LakeSnapshot;
 import org.apache.fluss.flink.utils.FlinkTestBase;
-import org.apache.fluss.lake.committer.CommittedLakeSnapshot;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
 
@@ -71,7 +70,6 @@ class FlussTableLakeSnapshotCommitterTest extends FlinkTestBase {
 
         List<String> partitions;
         Map<String, Long> partitionNameAndIds = new HashMap<>();
-        Map<Long, String> expectedPartitionNameById = new HashMap<>();
         if (!isPartitioned) {
             FLUSS_CLUSTER_EXTENSION.waitUntilTableReady(tableId);
             partitions = Collections.singletonList(null);
@@ -80,32 +78,27 @@ class FlussTableLakeSnapshotCommitterTest extends FlinkTestBase {
             partitions = new ArrayList<>(partitionNameAndIds.keySet());
         }
 
-        CommittedLakeSnapshot committedLakeSnapshot = new CommittedLakeSnapshot(3);
-
-        Map<TableBucket, Long> expectedOffsets = new HashMap<>();
+        Map<TableBucket, Long> logEndOffsets = new HashMap<>();
         for (int bucket = 0; bucket < 3; bucket++) {
             long bucketOffset = bucket * bucket;
             for (String partitionName : partitions) {
                 if (partitionName == null) {
-                    committedLakeSnapshot.addBucket(bucket, bucketOffset);
-                    expectedOffsets.put(new TableBucket(tableId, bucket), bucketOffset);
+                    logEndOffsets.put(new TableBucket(tableId, bucket), bucketOffset);
                 } else {
                     long partitionId = partitionNameAndIds.get(partitionName);
-                    committedLakeSnapshot.addPartitionBucket(partitionId, bucket, bucketOffset);
-                    expectedOffsets.put(
-                            new TableBucket(tableId, partitionId, bucket), bucketOffset);
-                    expectedPartitionNameById.put(partitionId, partitionName);
+                    logEndOffsets.put(new TableBucket(tableId, partitionId, bucket), bucketOffset);
                 }
             }
         }
 
+        long snapshotId = 3;
         // commit offsets
-        flussTableLakeSnapshotCommitter.commit(tableId, committedLakeSnapshot);
+        flussTableLakeSnapshotCommitter.commit(tableId, snapshotId, logEndOffsets);
         LakeSnapshot lakeSnapshot = admin.getLatestLakeSnapshot(tablePath).get();
         assertThat(lakeSnapshot.getSnapshotId()).isEqualTo(3);
 
         // get and check the offsets
         Map<TableBucket, Long> bucketLogOffsets = lakeSnapshot.getTableBucketsOffset();
-        assertThat(bucketLogOffsets).isEqualTo(expectedOffsets);
+        assertThat(bucketLogOffsets).isEqualTo(logEndOffsets);
     }
 }

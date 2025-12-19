@@ -34,10 +34,11 @@ import org.apache.fluss.lake.committer.LakeCommitter;
 import org.apache.fluss.lake.writer.LakeTieringFactory;
 import org.apache.fluss.lake.writer.LakeWriter;
 import org.apache.fluss.metadata.TableBucket;
-import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.core.JsonFactory;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.core.JsonGenerator;
+import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
+import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.fluss.utils.ExceptionUtils;
 import org.apache.fluss.utils.json.BucketOffsetJsonSerde;
 
@@ -85,6 +86,8 @@ public class TieringCommitOperator<WriteResult, Committable>
         extends AbstractStreamOperator<CommittableMessage<Committable>>
         implements OneInputStreamOperator<
                 TableBucketWriteResult<WriteResult>, CommittableMessage<Committable>> {
+
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
     private static final long serialVersionUID = 1L;
 
@@ -223,6 +226,7 @@ public class TieringCommitOperator<WriteResult, Committable>
             Committable committable = lakeCommitter.toCommittable(writeResults);
             // before commit to lake, check fluss not missing any lake snapshot committed by fluss
             checkFlussNotMissingLakeSnapshot(
+                    tableId,
                     tablePath,
                     lakeCommitter,
                     committable,
@@ -303,6 +307,7 @@ public class TieringCommitOperator<WriteResult, Committable>
     }
 
     private void checkFlussNotMissingLakeSnapshot(
+            long tableId,
             TablePath tablePath,
             LakeCommitter<WriteResult, Committable> lakeCommitter,
             Committable committable,
@@ -318,10 +323,33 @@ public class TieringCommitOperator<WriteResult, Committable>
         // known lake snapshot, which means the data already has been committed to lake,
         // not to commit to lake to avoid data duplicated
         if (missingCommittedSnapshot != null) {
+            if (missingCommittedSnapshot.getSnapshotProperties() == null
+                    || missingCommittedSnapshot
+                                    .getSnapshotProperties()
+                                    .get(FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY)
+                            == null) {
+                throw new IllegalStateException(
+                        String.format(
+                                "Missing required log offsets property '%s' in lake snapshot %d for table: ‘tablePath=%s, tableId=%d’. "
+                                        + "This property is required to commit the missing snapshot to Fluss. "
+                                        + "The snapshot may have been created by an older version of Fluss that did not store this information, "
+                                        + "or the snapshot properties may be corrupted.",
+                                FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY,
+                                missingCommittedSnapshot.getLakeSnapshotId(),
+                                tablePath,
+                                tableId));
+            }
+
+            String logOffsetsProperty =
+                    missingCommittedSnapshot
+                            .getSnapshotProperties()
+                            .get(FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY);
+
             // commit this missing snapshot to fluss
-            TableInfo tableInfo = admin.getTableInfo(tablePath).get();
             flussTableLakeSnapshotCommitter.commit(
-                    tableInfo.getTableId(), missingCommittedSnapshot);
+                    tableId,
+                    missingCommittedSnapshot.getLakeSnapshotId(),
+                    fromLogOffsetProperty(tableId, logOffsetsProperty));
             // abort this committable to delete the written files
             lakeCommitter.abort(committable);
             throw new IllegalStateException(
@@ -331,10 +359,23 @@ public class TieringCommitOperator<WriteResult, Committable>
                                     + " missing snapshot: %s.",
                             flussCurrentLakeSnapshot,
                             missingCommittedSnapshot.getLakeSnapshotId(),
-                            tableInfo.getTablePath(),
-                            tableInfo.getTableId(),
+                            tablePath,
+                            tableId,
                             missingCommittedSnapshot));
         }
+    }
+
+    public static Map<TableBucket, Long> fromLogOffsetProperty(
+            long tableId, String logOffsetsProperty) throws IOException {
+        Map<TableBucket, Long> logEndOffsets = new HashMap<>();
+        for (JsonNode node : OBJECT_MAPPER.readTree(logOffsetsProperty)) {
+            BucketOffset bucketOffset = BucketOffsetJsonSerde.INSTANCE.deserialize(node);
+            TableBucket tableBucket =
+                    new TableBucket(
+                            tableId, bucketOffset.getPartitionId(), bucketOffset.getBucket());
+            logEndOffsets.put(tableBucket, bucketOffset.getLogOffset());
+        }
+        return logEndOffsets;
     }
 
     private void registerTableBucketWriteResult(
