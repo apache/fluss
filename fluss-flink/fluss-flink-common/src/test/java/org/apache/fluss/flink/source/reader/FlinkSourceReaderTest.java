@@ -26,6 +26,8 @@ import org.apache.fluss.flink.source.event.PartitionsRemovedEvent;
 import org.apache.fluss.flink.source.metrics.FlinkSourceReaderMetrics;
 import org.apache.fluss.flink.source.split.LogSplit;
 import org.apache.fluss.flink.utils.FlinkTestBase;
+import org.apache.fluss.lake.source.LakeSource;
+import org.apache.fluss.lake.source.LakeSplit;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
@@ -85,7 +87,8 @@ class FlinkSourceReaderTest extends FlinkTestBase {
                         clientConf,
                         tablePath,
                         tableDescriptor.getSchema().getRowType(),
-                        readerContext)) {
+                        readerContext,
+                        null)) {
 
             // first of all, add all splits of all partitions to the reader
             Map<Long, Set<TableBucket>> assignedBuckets = new HashMap<>();
@@ -159,7 +162,8 @@ class FlinkSourceReaderTest extends FlinkTestBase {
             Configuration flussConf,
             TablePath tablePath,
             RowType sourceOutputType,
-            SourceReaderContext context)
+            SourceReaderContext context,
+            LakeSource<LakeSplit> lakeSource)
             throws Exception {
         FutureCompletingBlockingQueue<RecordsWithSplitIds<RecordAndPos>> elementsQueue =
                 new FutureCompletingBlockingQueue<>();
@@ -181,6 +185,6 @@ class FlinkSourceReaderTest extends FlinkTestBase {
                 null,
                 new FlinkSourceReaderMetrics(context.metricGroup()),
                 recordEmitter,
-                null);
+                lakeSource);
     }
 }

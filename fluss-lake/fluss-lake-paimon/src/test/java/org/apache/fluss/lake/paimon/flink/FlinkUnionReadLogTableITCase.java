@@ -17,6 +17,8 @@
 
 package org.apache.fluss.lake.paimon.flink;
 
+import org.apache.fluss.metadata.PartitionInfo;
+import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.Decimal;
 import org.apache.fluss.row.InternalRow;
@@ -31,6 +33,7 @@ import org.apache.flink.types.Row;
 import org.apache.flink.util.CloseableIterator;
 import org.apache.flink.util.CollectionUtil;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -38,10 +41,12 @@ import org.junit.jupiter.params.provider.ValueSource;
 import javax.annotation.Nullable;
 
 import java.io.File;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
@@ -50,7 +55,9 @@ import java.util.stream.Collectors;
 import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.assertResultsExactOrder;
 import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.assertResultsIgnoreOrder;
 import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.assertRowResultsIgnoreOrder;
+import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.collectRowsWithTimeout;
 import static org.apache.fluss.testutils.DataTestUtils.row;
+import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** The IT case for Flink union data in lake and fluss for log table. */
@@ -239,6 +246,90 @@ class FlinkUnionReadLogTableITCase extends FlinkUnionReadTestBase {
 
         // cancel jobs
         insertResult.getJobClient().get().cancel().get();
+        jobClient.cancel().get();
+    }
+
+    @Test
+    void testUnionReadPartitionsExistInPaimonButExpiredInFluss() throws Exception {
+        // first of all, start tiering
+        JobClient jobClient = buildTieringJob(execEnv);
+
+        String tableName = "expired_partition_logTable";
+        TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
+        List<Row> writtenRows = new ArrayList<>();
+        long tableId = prepareLogTable(tablePath, DEFAULT_BUCKET_NUM, true, writtenRows);
+        // wait until records has been synced
+        waitUntilBucketSynced(tablePath, tableId, DEFAULT_BUCKET_NUM, true);
+
+        // Get all partitions
+        Map<Long, String> partitionNameByIds = waitUntilPartitions(tablePath);
+        assertThat(partitionNameByIds.size()).isGreaterThan(0);
+
+        // Select one partition to drop (expire in Fluss)
+        Long partitionToDropId = partitionNameByIds.keySet().iterator().next();
+        String partitionToDropName = partitionNameByIds.get(partitionToDropId);
+
+        // Filter rows that belong to the partition to be dropped
+        List<Row> rowsInExpiredPartition =
+                writtenRows.stream()
+                        .filter(row -> partitionToDropName.equals(row.getField(15)))
+                        .collect(Collectors.toList());
+        assertThat(rowsInExpiredPartition).isNotEmpty();
+
+        // Now drop the partition in Fluss (make it expired)
+        // The partition data still exists in Paimon
+        admin.dropPartition(
+                        tablePath,
+                        new PartitionSpec(Collections.singletonMap("p", partitionToDropName)),
+                        false)
+                .get();
+
+        // Retry until partition dropped
+        retry(
+                Duration.ofSeconds(60),
+                () -> {
+                    List<PartitionInfo> remainingPartitions =
+                            admin.listPartitionInfos(tablePath).get();
+                    assertThat(remainingPartitions.size()).isEqualTo(1);
+                });
+
+        // Now query the table - it should read data from both:
+        // 1. Remaining partitions from Fluss
+        // 2. Expired partition from Paimon (union read)
+        CloseableIterator<Row> iterator =
+                streamTEnv
+                        .executeSql(
+                                "select * from "
+                                        + tableName
+                                        + " /*+ OPTIONS('scan.partition.discovery.interval'='100ms') */")
+                        .collect();
+        List<String> actual = collectRowsWithTimeout(iterator, writtenRows.size(), true);
+        assertThat(actual)
+                .containsExactlyInAnyOrderElementsOf(
+                        writtenRows.stream().map(Row::toString).collect(Collectors.toList()));
+
+        // Test partition filter - query only the expired partition
+        String sqlWithPartitionFilter =
+                "select"
+                        + " /*+ OPTIONS('scan.partition.discovery.interval'='100ms') */"
+                        + " * FROM "
+                        + tableName
+                        + " WHERE p = '"
+                        + partitionToDropName
+                        + "'";
+        iterator = streamTEnv.executeSql(sqlWithPartitionFilter).collect();
+        List<String> filteredActual =
+                collectRowsWithTimeout(iterator, rowsInExpiredPartition.size(), true);
+
+        // Should still be able to read data from expired partition via Paimon
+        assertThat(filteredActual)
+                .as("Should read expired partition data from Paimon when filtering by partition")
+                .containsExactlyInAnyOrderElementsOf(
+                        rowsInExpiredPartition.stream()
+                                .map(Row::toString)
+                                .collect(Collectors.toList()));
+
+        // cancel the tiering job
         jobClient.cancel().get();
     }
 

@@ -23,6 +23,7 @@ import org.apache.fluss.flink.lake.split.LakeSnapshotSplit;
 import org.apache.fluss.flink.source.split.SourceSplitBase;
 import org.apache.fluss.lake.serializer.SimpleVersionedSerializer;
 import org.apache.fluss.lake.source.LakeSplit;
+import org.apache.fluss.lake.source.TestingLakeSplit;
 import org.apache.fluss.metadata.TableBucket;
 
 import org.apache.flink.core.memory.DataInputDeserializer;
@@ -31,7 +32,6 @@ import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
 import java.util.Collections;
-import java.util.List;
 
 import static org.apache.fluss.client.table.scanner.log.LogScanner.EARLIEST_OFFSET;
 import static org.apache.fluss.flink.lake.split.LakeSnapshotAndFlussLogSplit.LAKE_SNAPSHOT_FLUSS_LOG_SPLIT_KIND;
@@ -47,7 +47,7 @@ class LakeSplitSerializerTest {
     private static final int STOPPING_OFFSET = 1024;
 
     private static final LakeSplit LAKE_SPLIT =
-            new TestLakeSplit(0, Collections.singletonList("2025-08-18"));
+            new TestingLakeSplit(0, Collections.singletonList("2025-08-18"));
 
     private final SimpleVersionedSerializer<LakeSplit> sourceSplitSerializer =
             new TestSimpleVersionedSerializer();
@@ -203,38 +203,12 @@ class LakeSplitSerializerTest {
             if (version < V2) {
                 return LAKE_SPLIT;
             }
-            return new TestLakeSplit(0, Collections.singletonList("2025-08-19"));
+            return new TestingLakeSplit(0, Collections.singletonList("2025-08-19"));
         }
 
         @Override
         public int getVersion() {
             return V2;
-        }
-    }
-
-    private static class TestLakeSplit implements LakeSplit {
-
-        private final int bucket;
-        private final List<String> partition;
-
-        public TestLakeSplit(int bucket, List<String> partition) {
-            this.bucket = bucket;
-            this.partition = partition;
-        }
-
-        @Override
-        public String toString() {
-            return "TestLakeSplit";
-        }
-
-        @Override
-        public int bucket() {
-            return bucket;
-        }
-
-        @Override
-        public List<String> partition() {
-            return partition;
         }
     }
 }

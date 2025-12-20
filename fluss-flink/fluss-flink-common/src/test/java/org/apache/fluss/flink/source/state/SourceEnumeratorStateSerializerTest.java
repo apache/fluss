@@ -17,14 +17,23 @@
 
 package org.apache.fluss.flink.source.state;
 
+import org.apache.fluss.flink.lake.split.LakeSnapshotAndFlussLogSplit;
+import org.apache.fluss.flink.source.split.HybridSnapshotLogSplit;
+import org.apache.fluss.flink.source.split.LogSplit;
+import org.apache.fluss.flink.source.split.SourceSplitBase;
+import org.apache.fluss.lake.source.LakeSplit;
+import org.apache.fluss.lake.source.TestingLakeSource;
+import org.apache.fluss.lake.source.TestingLakeSplit;
 import org.apache.fluss.metadata.TableBucket;
 
 import org.junit.jupiter.api.Test;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
@@ -38,7 +47,7 @@ class SourceEnumeratorStateSerializerTest {
     @Test
     void testPendingSplitsCheckpointSerde() throws Exception {
         FlussSourceEnumeratorStateSerializer serializer =
-                new FlussSourceEnumeratorStateSerializer(null);
+                new FlussSourceEnumeratorStateSerializer(new TestingLakeSource());
 
         Set<TableBucket> assignedBuckets =
                 new HashSet<>(Arrays.asList(new TableBucket(1, 0), new TableBucket(1, 4L, 1)));
@@ -46,13 +55,37 @@ class SourceEnumeratorStateSerializerTest {
         assignedPartitions.put(1L, "partition1");
         assignedPartitions.put(2L, "partition2");
 
+        // Create remaining hybrid lake fluss splits with different types
+        List<SourceSplitBase> remainingHybridLakeFlussSplits = new ArrayList<>();
+
+        // Add a LogSplit
+        TableBucket logSplitBucket = new TableBucket(1, 0);
+        LogSplit logSplit = new LogSplit(logSplitBucket, null, 100L);
+        remainingHybridLakeFlussSplits.add(logSplit);
+
+        // Add a HybridSnapshotLogSplit
+        TableBucket hybridSplitBucket = new TableBucket(1, 1);
+        HybridSnapshotLogSplit hybridSplit =
+                new HybridSnapshotLogSplit(hybridSplitBucket, null, 200L, 50L);
+        remainingHybridLakeFlussSplits.add(hybridSplit);
+
+        // Add a LakeSnapshotAndFlussLogSplit
+        TableBucket lakeHybridSplitBucket = new TableBucket(1, 100L, 2);
+        List<LakeSplit> lakeSplits =
+                Collections.singletonList(
+                        new TestingLakeSplit(2, Collections.singletonList("2024-01-01")));
+        LakeSnapshotAndFlussLogSplit lakeHybridSplit =
+                new LakeSnapshotAndFlussLogSplit(
+                        lakeHybridSplitBucket, "2024-01-01", lakeSplits, 300L, Long.MIN_VALUE);
+        remainingHybridLakeFlussSplits.add(lakeHybridSplit);
+
         SourceEnumeratorState sourceEnumeratorState =
                 new SourceEnumeratorState(
-                        assignedBuckets, assignedPartitions, Collections.emptyList());
+                        assignedBuckets, assignedPartitions, remainingHybridLakeFlussSplits);
 
-        // serialize assigned buckets
+        // serialize state with remaining hybrid lake fluss splits
         byte[] serialized = serializer.serialize(sourceEnumeratorState);
-        // deserialize assigned buckets
+        // deserialize state
         SourceEnumeratorState deserializedSourceEnumeratorState =
                 serializer.deserialize(serializer.getVersion(), serialized);
 
