@@ -29,6 +29,7 @@ public class Flink22CatalogFactory extends FlinkCatalogFactory {
                 catalog.defaultDatabase,
                 catalog.bootstrapServers,
                 catalog.classLoader,
-                catalog.securityConfigs);
+                catalog.securityConfigs,
+                catalog.lakeCatalogPropertiesSupplier);
     }
 }

@@ -18,6 +18,8 @@
 
 package org.apache.fluss.flink.catalog;
 
+import org.apache.fluss.annotation.VisibleForTesting;
+import org.apache.fluss.flink.lake.LakeFlinkCatalog;
 import org.apache.fluss.metadata.TableInfo;
 
 import org.apache.flink.table.api.Schema;
@@ -31,6 +33,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.function.Supplier;
 
 /** A {@link FlinkCatalog} used for Flink 2.2. */
 public class Flink22Catalog extends FlinkCatalog {
@@ -40,15 +43,42 @@ public class Flink22Catalog extends FlinkCatalog {
             String defaultDatabase,
             String bootstrapServers,
             ClassLoader classLoader,
-            Map<String, String> securityConfigs) {
-        super(name, defaultDatabase, bootstrapServers, classLoader, securityConfigs);
+            Map<String, String> securityConfigs,
+            Supplier<Map<String, String>> lakeCatalogPropertiesSupplier) {
+        super(
+                name,
+                defaultDatabase,
+                bootstrapServers,
+                classLoader,
+                securityConfigs,
+                lakeCatalogPropertiesSupplier);
+    }
+
+    @VisibleForTesting
+    public Flink22Catalog(
+            String name,
+            String defaultDatabase,
+            String bootstrapServers,
+            ClassLoader classLoader,
+            Map<String, String> securityConfigs,
+            Supplier<Map<String, String>> lakeCatalogPropertiesSupplier,
+            LakeFlinkCatalog lakeFlinkCatalog) {
+        super(
+                name,
+                defaultDatabase,
+                bootstrapServers,
+                classLoader,
+                securityConfigs,
+                lakeCatalogPropertiesSupplier,
+                lakeFlinkCatalog);
     }
 
     @Override
     public CatalogBaseTable getTable(ObjectPath objectPath)
             throws TableNotExistException, CatalogException {
         CatalogBaseTable catalogBaseTable = super.getTable(objectPath);
-        if (!(catalogBaseTable instanceof CatalogTable)) {
+        if (!(catalogBaseTable instanceof CatalogTable)
+                || objectPath.getObjectName().contains(LAKE_TABLE_SPLITTER)) {
             return catalogBaseTable;
         }
 
@@ -67,7 +97,8 @@ public class Flink22Catalog extends FlinkCatalog {
         // Judge whether we can do prefix lookup.
         TableInfo tableInfo = connection.getTable(toTablePath(objectPath)).getTableInfo();
         List<String> bucketKeys = tableInfo.getBucketKeys();
-        // For partition table, the physical primary key is the primary key that excludes the
+        // For partition table, the physical primary key is the primary key that
+        // excludes the
         // partition key
         List<String> physicalPrimaryKeys = tableInfo.getPhysicalPrimaryKeys();
         List<String> indexKeys = new ArrayList<>();
