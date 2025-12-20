@@ -58,14 +58,16 @@ class FlinkSink<InputT> implements Sink<InputT>, SupportsPreWriteTopology<InputT
     @Deprecated
     @Override
     public SinkWriter<InputT> createWriter(InitContext context) throws IOException {
-        FlinkSinkWriter<InputT> flinkSinkWriter = builder.createWriter(context.getMailboxExecutor());
+        FlinkSinkWriter<InputT> flinkSinkWriter =
+                builder.createWriter(context.getMailboxExecutor());
         flinkSinkWriter.initialize(InternalSinkWriterMetricGroup.wrap(context.metricGroup()));
         return flinkSinkWriter;
     }
 
     @Override
     public SinkWriter<InputT> createWriter(WriterInitContext context) throws IOException {
-        FlinkSinkWriter<InputT> flinkSinkWriter = builder.createWriter(context.getMailboxExecutor());
+        FlinkSinkWriter<InputT> flinkSinkWriter =
+                builder.createWriter(context.getMailboxExecutor());
         flinkSinkWriter.initialize(InternalSinkWriterMetricGroup.wrap(context.metricGroup()));
         return flinkSinkWriter;
     }
