@@ -36,7 +36,7 @@ import static org.apache.fluss.utils.PropertiesUtils.extractPrefix;
 public class FlussLakeTieringEntrypoint {
 
     private static final String FLUSS_CONF_PREFIX = "fluss.";
-    private static final String LAKE_TIERING_CONFIG_PREFIX = "lake.teiring.";
+    private static final String LAKE_TIERING_CONFIG_PREFIX = "lake.tiering.";
 
     public static void main(String[] args) throws Exception {
 

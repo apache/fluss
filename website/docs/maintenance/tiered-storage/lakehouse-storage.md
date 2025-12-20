@@ -108,6 +108,6 @@ The default is `3min`, if the data does not need to be as fresh, you can specify
 
 The following table lists the options that can be used to configure the datalake tiering service.
 
-| Option                                  | Type     | Default | Description                                                                                                                                                         |
-|-----------------------------------------|----------|---------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| lake.tiering.auto-expire-snapshot       | Boolean  | false   | If true, snapshot expiration will be triggered automatically when tiering service commits to the datalake, event if `table.datalake.auto-expire-snapshot` is false. |
+| Option                                  | Type     | Default | Description                                                                                                                                                        |
+|-----------------------------------------|----------|---------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| lake.tiering.auto-expire-snapshot       | Boolean  | false   | If true, snapshot expiration will be triggered automatically when tiering service commits to the datalake, even if `table.datalake.auto-expire-snapshot` is false. |
