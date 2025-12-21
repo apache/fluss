@@ -32,14 +32,15 @@ import org.apache.fluss.utils.MurmurHashUtils;
 import java.io.IOException;
 
 import static org.apache.fluss.record.LogRecordBatchFormat.LENGTH_LENGTH;
+
 /**
- * An immutable log record for @CompactedRow which can be directly persisted. The on-wire schema is
- * identical to IndexedLogRecord but the row payload uses the CompactedRow binary format:
+ * An immutable log record for {@link CompactedRow} which can be directly persisted. The on-wire
+ * schema is identical to IndexedLogRecord but the row payload uses the CompactedRow binary format:
  *
  * <ul>
- *   <li>Length => int32 (total number of bytes following this length field)</li>
- *   <li>Attributes => int8 (low 4 bits encode {@link ChangeType})</li>
- *   <li>Value => {@link CompactedRow} (bytes in compacted row format)</li>
+ *   <li>Length => int32 (total number of bytes following this length field)
+ *   <li>Attributes => int8 (low 4 bits encode {@link ChangeType})
+ *   <li>Value => {@link CompactedRow} (bytes in compacted row format)
  * </ul>
  *
  * <p>Differences vs {@link IndexedLogRecord}: - Uses CompactedRow encoding which is space-optimized
@@ -48,12 +49,6 @@ import static org.apache.fluss.record.LogRecordBatchFormat.LENGTH_LENGTH;
  * in a CompactedRow with a {@link CompactedRowDeserializer} and only decode to object values when a
  * field is accessed. - The record header (Length + Attributes) layout and attribute semantics are
  * the same.
- * Differences vs {@link IndexedLogRecord}:
- * - Uses CompactedRow encoding which is space-optimized (VLQ for ints/longs, per-row null bitset) and
- *   trades CPU for smaller storage; random access to fields is not supported without decoding.
- * - Deserialization is lazy: we wrap the underlying bytes in a CompactedRow with a
- *   {@link CompactedRowDeserializer} and only decode to object values when a field is accessed.
- * - The record header (Length + Attributes) layout and attribute semantics are the same.
  *
  * <p>The offset computes the difference relative to the base offset of the batch containing this
  * record.
@@ -170,11 +165,7 @@ public class CompactedLogRecord implements LogRecord {
         int size = 1; // one byte for attributes
         size += row.getSizeInBytes();
         return size;
-        int rowOffset = LENGTH_LENGTH + ATTRIBUTES_LENGTH;
-        return deserializeCompactedRow(
-                sizeInBytes - rowOffset, segment, offset + rowOffset, fieldTypes, LogFormat.COMPACTED);
     }
-
 
     private static InternalRow deserializeCompactedRow(
             int length,
@@ -183,11 +174,13 @@ public class CompactedLogRecord implements LogRecord {
             DataType[] fieldTypes,
             LogFormat logFormat) {
         if (logFormat == LogFormat.COMPACTED) {
-            CompactedRow compactedRow = new CompactedRow(fieldTypes.length, compactedDeserializer);
+            CompactedRow compactedRow =
+                    new CompactedRow(fieldTypes.length, new CompactedRowDeserializer(fieldTypes));
             compactedRow.pointTo(segment, position, length);
             return compactedRow;
         } else {
-            throw new IllegalArgumentException("No such compacted row deserializer for: " + logFormat);
+            throw new IllegalArgumentException(
+                    "No such compacted row deserializer for: " + logFormat);
         }
     }
 }
