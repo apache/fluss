@@ -19,7 +19,6 @@ package org.apache.fluss.security.auth.sasl.jaas;
 
 import org.apache.fluss.security.auth.sasl.gssapi.GssapiServerCallbackHandler;
 import org.apache.fluss.security.auth.sasl.plain.PlainServerCallbackHandler;
-
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -29,7 +28,6 @@ import javax.security.sasl.Sasl;
 import javax.security.sasl.SaslClient;
 import javax.security.sasl.SaslException;
 import javax.security.sasl.SaslServer;
-
 import java.security.PrivilegedActionException;
 import java.security.PrivilegedExceptionAction;
 import java.util.Arrays;
@@ -99,7 +97,7 @@ public class SaslServerFactory {
                 (PrivilegedExceptionAction<SaslClient>)
                         () -> {
                             String[] mechs = {mechanism};
-                            String serviceName = loginManager.serviceName();
+                            String serviceName = "fluss";
                             LOG.debug(
                                     "Creating SaslClient: service={};mechs={}",
                                     serviceName,
