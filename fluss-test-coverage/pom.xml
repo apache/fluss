@@ -126,6 +126,7 @@
                                                 <exclude>fluss-test-coverage/**</exclude>
                                                 <exclude>fluss-test-utils/**</exclude>
                                                 <exclude>fluss-flink/**</exclude>
+                                                <exclude>fluss-spark/**</exclude>
                                                 <exclude>fluss-lake/**</exclude>
                                             </excludes>
                                         </resource>
@@ -167,6 +168,44 @@
                                                 <exclude>fluss-test-utils/**</exclude>
                                                 <!-- exclude adapter classes to avoid Jacoco error: "Can't add different class with same name" -->
                                                 <exclude>fluss-flink/**/target/classes/org/apache/fluss/flink/adapter/**</exclude>
+                                            </excludes>
+                                        </resource>
+                                    </resources>
+                                    <outputDirectory>${project.build.directory}/classes</outputDirectory>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+
+        <profile>
+            <id>test-spark3</id>
+            <build>
+                <plugins>
+                    <!-- required by jacoco for the goal: check to work -->
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-resources-plugin</artifactId>
+                        <executions>
+                            <execution>
+                                <id>copy-class-files</id>
+                                <phase>generate-resources</phase>
+                                <goals>
+                                    <goal>copy-resources</goal>
+                                </goals>
+                                <configuration>
+                                    <overwrite>false</overwrite>
+                                    <resources>
+                                        <resource>
+                                            <directory>${project.basedir}/../</directory>
+                                            <includes>
+                                                <include>fluss-spark/**/target/classes/**</include>
+                                            </includes>
+                                            <excludes>
+                                                <exclude>fluss-test-coverage/**</exclude>
+                                                <exclude>fluss-test-utils/**</exclude>
                                             </excludes>
                                         </resource>
                                     </resources>
@@ -288,6 +327,8 @@
                                         </limit>
                                     </limits>
                                     <excludes>
+                                        <exclude>org.apache.fluss.spark.*</exclude>
+                                        <exclude>org.apache.spark.sql.*</exclude>
                                         <exclude>org.apache.fluss.protogen.*</exclude>
                                         <exclude>org.apache.fluss.memory.*</exclude>
                                         <exclude>org.apache.fluss.utils.*</exclude>

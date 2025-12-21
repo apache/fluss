@@ -19,6 +19,7 @@
 
 STAGE_CORE="core"
 STAGE_FLINK="flink"
+STAGE_SPARK="spark3"
 STAGE_LAKE="lake"
 
 MODULES_FLINK="\
@@ -26,6 +27,20 @@ fluss-flink,\
 fluss-flink/fluss-flink-common,\
 fluss-flink/fluss-flink-2.2,\
 fluss-flink/fluss-flink-1.20,\
+"
+
+MODULES_COMMON_SPARK="\
+fluss-spark,\
+fluss-spark/fluss-spark-common,\
+fluss-spark/fluss-spark-ut,\
+"
+
+MODULES_SPARK3="\
+fluss-spark,\
+fluss-spark/fluss-spark-common,\
+fluss-spark/fluss-spark-ut,\
+fluss-spark/fluss-spark-3.5,\
+fluss-spark/fluss-spark-3.4,\
 "
 
 # we move Flink legacy version tests to "lake" module for balancing testing time
@@ -42,10 +57,12 @@ function get_test_modules_for_stage() {
     local stage=$1
 
     local modules_flink=$MODULES_FLINK
+    local modules_spark3=$MODULES_SPARK3
     local modules_lake=$MODULES_LAKE
     local negated_flink=\!${MODULES_FLINK//,/,\!}
+    local negated_spark=\!${MODULES_COMMON_SPARK//,/,\!}
     local negated_lake=\!${MODULES_LAKE//,/,\!}
-    local modules_core="$negated_flink,$negated_lake"
+    local modules_core="$negated_flink,$negated_spark,$negated_lake"
 
     case ${stage} in
         (${STAGE_CORE})
@@ -53,6 +70,9 @@ function get_test_modules_for_stage() {
         ;;
         (${STAGE_FLINK})
             echo "-pl fluss-test-coverage,$modules_flink"
+        ;;
+        (${STAGE_SPARK})
+            echo "-Pspark3 -pl fluss-test-coverage,$modules_spark3"
         ;;
         (${STAGE_LAKE})
             echo "-pl fluss-test-coverage,$modules_lake"
