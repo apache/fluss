@@ -69,7 +69,8 @@ public class GssapiServerCallbackHandler implements AuthenticateCallbackHandler 
                     throw new IOException("Authentication ID cannot be null or empty");
                 }
                 if (authorizationId == null || authorizationId.isEmpty()) {
-                    throw new IOException("Authorization ID cannot be null or empty");
+                    // if authorizationId is not specified, use authenticationId
+                    authorizationId = authenticationId;
                 }
 
                 LOG.info(
@@ -79,8 +80,10 @@ public class GssapiServerCallbackHandler implements AuthenticateCallbackHandler 
 
                 if (isAuthorizedActAs(authenticationId, authorizationId)) {
                     ac.setAuthorized(true);
-                    ac.setAuthorizedID(authorizationId);
-                    LOG.info("Successfully authorized client: {}", authorizationId);
+                    // set the authorized ID to the short name (without realm)
+                    String shortName = getShortName(authenticationId);
+                    ac.setAuthorizedID(shortName);
+                    LOG.info("Successfully authorized client: {}", shortName);
                 } else {
                     ac.setAuthorized(false);
                     LOG.warn(
@@ -98,8 +101,26 @@ public class GssapiServerCallbackHandler implements AuthenticateCallbackHandler 
     /** Checks if the authenticated user has the permission to act as the authorization user. */
     private boolean isAuthorizedActAs(String authnId, String authzId) {
         // Default policy: allow the authenticated user to act as themselves.
-        boolean isSameUser = Objects.equals(authnId, authzId);
+        // 1. Exact match
+        if (Objects.equals(authnId, authzId)) {
+            return true;
+        }
 
-        return isSameUser;
+        // 2. Check if authnId is "user@REALM" and authzId is "user" or "user@REALM"
+        String shortAuthnId = getShortName(authnId);
+        String shortAuthzId = getShortName(authzId);
+
+        return Objects.equals(shortAuthnId, shortAuthzId);
+    }
+
+    private String getShortName(String principal) {
+        if (principal == null) {
+            return null;
+        }
+        int realmIndex = principal.indexOf('@');
+        if (realmIndex > 0) {
+            return principal.substring(0, realmIndex);
+        }
+        return principal;
     }
 }
