@@ -17,6 +17,7 @@
 
 package org.apache.fluss.security.auth.sasl.jaas;
 
+import org.apache.fluss.security.auth.sasl.gssapi.GssapiServerCallbackHandler;
 import org.apache.fluss.security.auth.sasl.plain.PlainServerCallbackHandler;
 
 import org.slf4j.Logger;
@@ -56,6 +57,8 @@ public class SaslServerFactory {
             AuthenticateCallbackHandler callbackHandler;
             if (mechanism.equals("PLAIN")) {
                 callbackHandler = new PlainServerCallbackHandler();
+            } else if (mechanism.equals("GSSAPI")) {
+                callbackHandler = new GssapiServerCallbackHandler();
             } else {
                 throw new IllegalArgumentException("Unsupported mechanism: " + mechanism);
             }

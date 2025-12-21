@@ -76,6 +76,22 @@ public class FlinkConnectorOptions {
                             "A list of host/port pairs to use for establishing the initial connection to the Fluss cluster. "
                                     + "The list should be in the form host1:port1,host2:port2,....");
 
+    public static final ConfigOption<String> CLIENT_KERBEROS_KEYTAB =
+            ConfigOptions.key("client.security.kerberos.keytab")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "Path to the keytab file for Kerberos authentication. "
+                                    + "If set, it will be used to generate the JAAS configuration for GSSAPI.");
+
+    public static final ConfigOption<String> CLIENT_KERBEROS_PRINCIPAL =
+            ConfigOptions.key("client.security.kerberos.principal")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "Kerberos principal name for Kerberos authentication. "
+                                    + "If set, it will be used to generate the JAAS configuration for GSSAPI.");
+
     // --------------------------------------------------------------------------------------------
     // Lookup specific options
     // --------------------------------------------------------------------------------------------

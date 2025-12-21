@@ -1207,7 +1207,8 @@ public class ConfigOptions {
                     .stringType()
                     .defaultValue("PLAIN")
                     .withDescription(
-                            "SASL mechanism to use for authentication.Currently, we only support plain.");
+                            "SASL mechanism to use for authentication. "
+                                    + "Currently, we only support PLAIN and GSSAPI (Kerberos).");
 
     public static final ConfigOption<String> CLIENT_SASL_JAAS_CONFIG =
             key("client.security.sasl.jaas.config")
