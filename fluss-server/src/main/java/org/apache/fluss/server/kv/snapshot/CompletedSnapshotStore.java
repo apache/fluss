@@ -26,6 +26,8 @@ import org.apache.fluss.metadata.TableBucket;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.annotation.concurrent.ThreadSafe;
+
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -35,8 +37,10 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.Executor;
+import java.util.concurrent.locks.ReentrantLock;
 
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
+import static org.apache.fluss.utils.concurrent.LockUtils.inLock;
 
 /* This file is based on source code of Apache Flink Project (https://flink.apache.org/), licensed by the Apache
  * Software Foundation (ASF) under the Apache License, Version 2.0. See the NOTICE file distributed with this work for
@@ -47,6 +51,7 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
  * managing the completed snapshots including store/subsume/get completed snapshots for single one
  * table bucket.
  */
+@ThreadSafe
 public class CompletedSnapshotStore {
 
     private static final Logger LOG = LoggerFactory.getLogger(CompletedSnapshotStore.class);
@@ -61,6 +66,8 @@ public class CompletedSnapshotStore {
 
     private final Executor ioExecutor;
     private final SnapshotsCleaner snapshotsCleaner;
+
+    private final ReentrantLock lock = new ReentrantLock();
 
     /**
      * Local copy of the completed snapshots in snapshot store. This is restored from snapshot
@@ -84,7 +91,11 @@ public class CompletedSnapshotStore {
     }
 
     public void add(final CompletedSnapshot completedSnapshot) throws Exception {
-        addSnapshotAndSubsumeOldestOne(completedSnapshot, snapshotsCleaner, () -> {});
+        inLock(
+                lock,
+                () ->
+                        addSnapshotAndSubsumeOldestOne(
+                                completedSnapshot, snapshotsCleaner, () -> {}));
     }
 
     public long getPhysicalStorageRemoteKvSize() {
@@ -92,7 +103,7 @@ public class CompletedSnapshotStore {
     }
 
     public long getNumSnapshots() {
-        return completedSnapshots.size();
+        return inLock(lock, () -> completedSnapshots.size());
     }
 
     /**
@@ -117,34 +128,43 @@ public class CompletedSnapshotStore {
                 snapshot.getTableBucket(), snapshot.getSnapshotID(), completedSnapshotHandle);
 
         // Now add the new one. If it fails, we don't want to lose existing data.
-        completedSnapshots.addLast(snapshot);
+        return inLock(
+                lock,
+                () -> {
+                    completedSnapshots.addLast(snapshot);
 
-        // Remove completed snapshot from queue and snapshotStateHandleStore, not discard.
-        Optional<CompletedSnapshot> subsume =
-                subsume(
-                        completedSnapshots,
-                        maxNumberOfSnapshotsToRetain,
-                        completedSnapshot -> {
-                            remove(
-                                    completedSnapshot.getTableBucket(),
-                                    completedSnapshot.getSnapshotID());
-                            snapshotsCleaner.addSubsumedSnapshot(completedSnapshot);
-                        });
+                    // Remove completed snapshot from queue and snapshotStateHandleStore, not
+                    // discard.
+                    Optional<CompletedSnapshot> subsume =
+                            subsume(
+                                    completedSnapshots,
+                                    maxNumberOfSnapshotsToRetain,
+                                    completedSnapshot -> {
+                                        remove(
+                                                completedSnapshot.getTableBucket(),
+                                                completedSnapshot.getSnapshotID());
+                                        snapshotsCleaner.addSubsumedSnapshot(completedSnapshot);
+                                    });
 
-        findLowest(completedSnapshots)
-                .ifPresent(
-                        id -> {
-                            // unregister the unused kv file, which will then cause the kv file
-                            // deletion
-                            sharedKvFileRegistry.unregisterUnusedKvFile(id);
-                            snapshotsCleaner.cleanSubsumedSnapshots(
-                                    id, Collections.emptySet(), postCleanup, ioExecutor);
-                        });
-        return subsume.orElse(null);
+                    findLowest(completedSnapshots)
+                            .ifPresent(
+                                    id -> {
+                                        // unregister the unused kv file, which will then cause the
+                                        // kv file
+                                        // deletion
+                                        sharedKvFileRegistry.unregisterUnusedKvFile(id);
+                                        snapshotsCleaner.cleanSubsumedSnapshots(
+                                                id,
+                                                Collections.emptySet(),
+                                                postCleanup,
+                                                ioExecutor);
+                                    });
+                    return subsume.orElse(null);
+                });
     }
 
     public List<CompletedSnapshot> getAllSnapshots() {
-        return new ArrayList<>(completedSnapshots);
+        return inLock(lock, () -> new ArrayList<>(completedSnapshots));
     }
 
     private static Optional<CompletedSnapshot> subsume(
@@ -211,7 +231,7 @@ public class CompletedSnapshotStore {
      * added.
      */
     public Optional<CompletedSnapshot> getLatestSnapshot() {
-        return Optional.ofNullable(completedSnapshots.peekLast());
+        return inLock(lock, () -> Optional.ofNullable(completedSnapshots.peekLast()));
     }
 
     /**
