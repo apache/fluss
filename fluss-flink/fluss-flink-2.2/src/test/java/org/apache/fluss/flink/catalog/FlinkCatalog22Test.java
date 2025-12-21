@@ -28,7 +28,7 @@ import org.apache.flink.table.catalog.UniqueConstraint;
 import java.util.Arrays;
 import java.util.Collections;
 
-/** Test for {@link Flink21Catalog}. */
+/** Test for {@link Flink22Catalog}. */
 public class FlinkCatalog22Test extends FlinkCatalogTest {
 
     @Override

@@ -17,5 +17,6 @@
 
 package org.apache.fluss.flink.security.acl;
 
-/** IT case for authorization in Flink 2.1. */
-public class Flink22AuthorizationITCase extends FlinkAuthorizationITCase {}
+/** IT case for authorization in Flink 2.2. */
+public class Flink22AuthorizationITCase extends FlinkAuthorizationITCase {
+}

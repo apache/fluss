@@ -17,5 +17,6 @@
 
 package org.apache.fluss.flink.source;
 
-/** IT case for source failover and recovery in Flink 2.1. */
-public class Flink22TableSourceFailOverITCase extends FlinkTableSourceFailOverITCase {}
+/** IT case for source failover and recovery in Flink 2.2. */
+public class Flink22TableSourceFailOverITCase extends FlinkTableSourceFailOverITCase {
+}
