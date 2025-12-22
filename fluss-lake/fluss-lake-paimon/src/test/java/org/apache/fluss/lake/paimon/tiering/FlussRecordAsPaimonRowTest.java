@@ -40,6 +40,7 @@ import static org.apache.fluss.record.ChangeType.INSERT;
 import static org.apache.fluss.record.ChangeType.UPDATE_AFTER;
 import static org.apache.fluss.record.ChangeType.UPDATE_BEFORE;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link FlussRecordAsPaimonRow}. */
 class FlussRecordAsPaimonRowTest {
@@ -199,6 +200,7 @@ class FlussRecordAsPaimonRowTest {
 
     @Test
     void testFlussRecordWiderThanPaimonSchema() {
+        // With "Lake First" strategy, Fluss record wider than Paimon schema should throw exception
         int tableBucket = 0;
         RowType tableRowType =
                 RowType.of(
@@ -217,13 +219,12 @@ class FlussRecordAsPaimonRowTest {
         genericRow.setField(0, true);
         genericRow.setField(1, BinaryString.fromString("extra"));
         LogRecord logRecord = new GenericRecord(logOffset, timeStamp, APPEND_ONLY, genericRow);
-        flussRecordAsPaimonRow.setFlussRecord(logRecord);
 
-        assertThat(flussRecordAsPaimonRow.getFieldCount()).isEqualTo(4);
-        assertThat(flussRecordAsPaimonRow.getBoolean(0)).isTrue();
-        assertThat(flussRecordAsPaimonRow.getInt(1)).isEqualTo(tableBucket);
-        assertThat(flussRecordAsPaimonRow.getLong(2)).isEqualTo(logOffset);
-        assertThat(flussRecordAsPaimonRow.getLong(3)).isEqualTo(timeStamp);
+        // Should throw exception instead of silently truncating data
+        assertThatThrownBy(() -> flussRecordAsPaimonRow.setFlussRecord(logRecord))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining(
+                        "Fluss record has 2 fields but Paimon schema only has 1 business fields");
     }
 
     @Test

@@ -51,7 +51,18 @@ public class FlussRecordAsPaimonRow extends FlussRowAsPaimonRow {
     public void setFlussRecord(LogRecord logRecord) {
         this.logRecord = logRecord;
         this.internalRow = logRecord.getRow();
-        this.originRowFieldCount = Math.min(internalRow.getFieldCount(), businessFieldCount);
+        int flussFieldCount = internalRow.getFieldCount();
+        if (flussFieldCount > businessFieldCount) {
+            // Fluss record is wider than Paimon schema, which means Lake schema is not yet
+            // synchronized. With "Lake First" strategy, this should not happen in normal cases.
+            throw new IllegalStateException(
+                    String.format(
+                            "Fluss record has %d fields but Paimon schema only has %d business fields. "
+                                    + "This indicates the lake schema is not yet synchronized. "
+                                    + "Please retry the schema change operation.",
+                            flussFieldCount, businessFieldCount));
+        }
+        this.originRowFieldCount = flussFieldCount;
     }
 
     @Override

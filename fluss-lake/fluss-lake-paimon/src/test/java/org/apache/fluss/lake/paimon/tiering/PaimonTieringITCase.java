@@ -603,6 +603,63 @@ class PaimonTieringITCase extends FlinkPaimonTieringTestBase {
         return reader.toCloseableIterator();
     }
 
+    @Test
+    void testTieringWithAddColumn() throws Exception {
+        // Test ADD COLUMN during tiering with "Lake First" strategy
+
+        // 1. Create a datalake enabled table with initial schema (c1: INT, c2: STRING)
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "addColumnTable");
+        long tableId = createLogTable(tablePath);
+        TableBucket tableBucket = new TableBucket(tableId, 0);
+
+        // 2. Write initial data before ADD COLUMN
+        List<InternalRow> initialRows = Arrays.asList(row(1, "v1"), row(2, "v2"), row(3, "v3"));
+        writeRows(tablePath, initialRows, true);
+
+        // 3. Start tiering job
+        JobClient jobClient = buildTieringJob(execEnv);
+
+        try {
+            // 4. Wait for initial data to be tiered
+            assertReplicaStatus(tableBucket, 3);
+
+            // 5. Execute ADD COLUMN (c3: INT, nullable)
+            List<TableChange> addColumnChanges =
+                    Collections.singletonList(
+                            TableChange.addColumn(
+                                    "c3",
+                                    DataTypes.INT(),
+                                    "new column",
+                                    TableChange.ColumnPosition.last()));
+            admin.alterTable(tablePath, addColumnChanges, false).get();
+
+            // 6. Write more data after ADD COLUMN (with new column value)
+            List<InternalRow> newRows = Arrays.asList(row(4, "v4"), row(5, "v5"), row(6, "v6"));
+            writeRows(tablePath, newRows, true);
+
+            // 7. Wait for new data to be tiered
+            assertReplicaStatus(tableBucket, 6);
+
+            // 8. Verify Paimon table has the new column
+            Identifier tableIdentifier =
+                    Identifier.create(tablePath.getDatabaseName(), tablePath.getTableName());
+            FileStoreTable paimonTable = (FileStoreTable) paimonCatalog.getTable(tableIdentifier);
+            List<String> fieldNames = paimonTable.rowType().getFieldNames();
+
+            // Should have: c1, c2, c3, __bucket, __offset, __timestamp
+            assertThat(fieldNames).contains("c1", "c2", "c3");
+
+            // 9. Verify all data is present in Paimon (no data loss)
+            List<InternalRow> allRows = new ArrayList<>();
+            allRows.addAll(initialRows);
+            allRows.addAll(newRows);
+            checkDataInPaimonAppendOnlyTable(tablePath, allRows, 0);
+
+        } finally {
+            jobClient.cancel().get();
+        }
+    }
+
     @Override
     protected FlussClusterExtension getFlussClusterExtension() {
         return FLUSS_CLUSTER_EXTENSION;

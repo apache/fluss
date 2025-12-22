@@ -335,13 +335,15 @@ public class MetadataManager {
             // validate the table column changes
             if (!schemaChanges.isEmpty()) {
                 Schema newSchema = SchemaUpdate.applySchemaChanges(table, schemaChanges);
-                // update the schema in Fluss (ZK) first - Fluss is the source of truth
+
+                // Lake First: sync to Lake before updating Fluss schema
+                syncSchemaChangesToLake(
+                        tablePath, table, schemaChanges, lakeCatalog, lakeCatalogContext);
+
+                // Update Fluss schema (ZK) after Lake sync succeeds
                 if (!newSchema.equals(table.getSchema())) {
                     zookeeperClient.registerSchema(tablePath, newSchema, table.getSchemaId() + 1);
                 }
-
-                syncSchemaChangesToLake(
-                        tablePath, table, schemaChanges, lakeCatalog, lakeCatalogContext);
             }
         } catch (Exception e) {
             if (e instanceof TableNotExistException) {
