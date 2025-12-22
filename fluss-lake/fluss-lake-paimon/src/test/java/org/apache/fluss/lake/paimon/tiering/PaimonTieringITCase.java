@@ -634,7 +634,9 @@ class PaimonTieringITCase extends FlinkPaimonTieringTestBase {
             admin.alterTable(tablePath, addColumnChanges, false).get();
 
             // 6. Write more data after ADD COLUMN (with new column value)
-            List<InternalRow> newRows = Arrays.asList(row(4, "v4"), row(5, "v5"), row(6, "v6"));
+            // schema now has 3 business columns (c1, c2, c3), so provide value for the new column
+            List<InternalRow> newRows =
+                    Arrays.asList(row(4, "v4", 40), row(5, "v5", 50), row(6, "v6", 60));
             writeRows(tablePath, newRows, true);
 
             // 7. Wait for new data to be tiered
