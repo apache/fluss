@@ -66,7 +66,6 @@ class GssapiSaslAuthTest {
 
         // Overwrite the default krb5.conf if it exists. MiniKdc defaults to "localhost",
         // but we enforce "127.0.0.1" and TCP (udp_preference_limit=1) to ensure stable connections.
-        System.out.println("krb5Conf = " + krb5Conf);
         if (krb5Conf.exists()) {
             String krb5Content =
                     "[libdefaults]\n"
@@ -103,7 +102,6 @@ class GssapiSaslAuthTest {
             kdc.stop();
         }
         System.clearProperty("java.security.krb5.conf");
-        System.clearProperty("java.net.preferIPv4Stack");
         deleteDir(workDir);
     }
 
