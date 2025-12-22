@@ -25,9 +25,10 @@ import org.apache.fluss.security.auth.sasl.jaas.LoginManager;
 import org.apache.fluss.security.auth.sasl.plain.PlainSaslServer;
 
 import javax.annotation.Nullable;
+import javax.security.auth.Subject;
 import javax.security.auth.login.LoginException;
 import javax.security.sasl.SaslClient;
-
+import java.security.PrivilegedExceptionAction;
 import java.util.Map;
 
 import static org.apache.fluss.config.ConfigOptions.CLIENT_SASL_JAAS_CONFIG;
@@ -77,7 +78,9 @@ public class SaslClientAuthenticator implements ClientAuthenticator {
     @Override
     public byte[] authenticate(byte[] data) throws AuthenticationException {
         try {
-            return saslClient.evaluateChallenge(data);
+            return Subject.doAs(
+                    loginManager.subject(),
+                    (PrivilegedExceptionAction<byte[]>) () -> saslClient.evaluateChallenge(data));
         } catch (Exception e) {
             throw new AuthenticationException("Failed to evaluate SASL challenge", e);
         }
