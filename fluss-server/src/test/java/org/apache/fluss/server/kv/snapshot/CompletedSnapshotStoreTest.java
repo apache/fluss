@@ -466,7 +466,7 @@ class CompletedSnapshotStoreTest {
                                     CompletedSnapshot snapshot = getSnapshot(operationId + 1);
                                     completedSnapshotStore.add(snapshot);
                                 } else {
-                                    // Read reapshot
+                                    // Read snapshot
                                     long numSnapshots = completedSnapshotStore.getNumSnapshots();
                                     List<CompletedSnapshot> allSnapshots =
                                             completedSnapshotStore.getAllSnapshots();
