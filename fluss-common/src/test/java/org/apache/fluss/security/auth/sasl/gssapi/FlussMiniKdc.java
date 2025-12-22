@@ -27,7 +27,7 @@ import java.nio.file.Path;
 import java.util.Properties;
 import java.util.UUID;
 
-/** A wrapper around {@link MiniKdc} for running Kerberos KDC in tests. */
+/** A wrapper around {@link MiniKdc} for running Kerberos KDC in Fluss. */
 public class FlussMiniKdc {
     private static final Logger LOG = LoggerFactory.getLogger(FlussMiniKdc.class);
     private final File workDir;
@@ -70,6 +70,7 @@ public class FlussMiniKdc {
         }
 
         // If not found, search subdirectories (MiniKdc might create timestamped dirs)
+        // e.g. fluss-kdc-.../1766418063091/krb5.conf
         File[] files = workDir.listFiles();
         if (files != null) {
             for (File file : files) {

@@ -21,7 +21,6 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.security.auth.ServerAuthenticator;
 import org.apache.fluss.security.auth.sasl.authenticator.SaslClientAuthenticator;
 import org.apache.fluss.security.auth.sasl.authenticator.SaslServerAuthenticator;
-
 import org.apache.hadoop.minikdc.MiniKdc;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -67,6 +66,7 @@ class GssapiSaslAuthTest {
 
         // Overwrite the default krb5.conf if it exists. MiniKdc defaults to "localhost",
         // but we enforce "127.0.0.1" and TCP (udp_preference_limit=1) to ensure stable connections.
+        System.out.println("krb5Conf = " + krb5Conf);
         if (krb5Conf.exists()) {
             String krb5Content =
                     "[libdefaults]\n"
@@ -114,20 +114,19 @@ class GssapiSaslAuthTest {
         String clientPrincipal = String.format("client/127.0.0.1@%s", realm);
 
         Configuration serverConf = new Configuration();
-
         serverConf.setString(SERVER_SASL_ENABLED_MECHANISMS_CONFIG.key(), "GSSAPI");
 
+        // Create server jass config
         String serverJaas =
                 String.format(
                         "com.sun.security.auth.module.Krb5LoginModule required "
                                 + "useKeyTab=true storeKey=true useTicketCache=false "
                                 + "keyTab=\"%s\" principal=\"%s\";",
                         keytab.getAbsolutePath(), serverPrincipal);
-
         serverConf.setString("security.sasl.gssapi.jaas.config", serverJaas);
 
+        // Initialize Server-Side Authenticator
         SaslServerAuthenticator serverAuth = new SaslServerAuthenticator(serverConf);
-
         serverAuth.initialize(
                 new ServerAuthenticator.AuthenticateContext() {
 
@@ -144,13 +143,7 @@ class GssapiSaslAuthTest {
                     }
                 });
 
-        // [Step 7] Initialize Client-Side Authenticator
-
-        // WHAT: Configure and initialize the client authenticator.
-
-        // WHY:  The client needs a TGT (Ticket Granting Ticket) to request a Service Ticket for the
-        // server.
-
+        // Configure and initialize the client authenticator.
         Configuration clientConf = new Configuration();
         clientConf.setString(CLIENT_SASL_MECHANISM, "GSSAPI");
         String clientJaas =
@@ -169,10 +162,10 @@ class GssapiSaslAuthTest {
 
         while (!clientAuth.isCompleted() || !serverAuth.isCompleted()) {
             if (challenge != null) {
-                // 1. Server validates client's token and generates a response/challenge.
+                // Server validates client's token and generates a response/challenge.
                 byte[] response = serverAuth.evaluateResponse(challenge);
 
-                // 2. Client validates server's response (Mutual Authentication).
+                // Client validates server's response (Mutual Authentication).
                 challenge = (response != null) ? clientAuth.authenticate(response) : null;
 
             } else {
