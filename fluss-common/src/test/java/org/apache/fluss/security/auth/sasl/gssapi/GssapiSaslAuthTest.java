@@ -18,16 +18,13 @@
 package org.apache.fluss.security.auth.sasl.gssapi;
 
 import org.apache.fluss.config.Configuration;
-import org.apache.fluss.security.auth.ClientAuthenticator;
 import org.apache.fluss.security.auth.ServerAuthenticator;
 import org.apache.fluss.security.auth.sasl.authenticator.SaslClientAuthenticator;
 import org.apache.fluss.security.auth.sasl.authenticator.SaslServerAuthenticator;
-
 import org.apache.hadoop.minikdc.MiniKdc;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import sun.security.krb5.Config;
 
 import java.io.File;
 import java.nio.file.Files;
@@ -40,7 +37,11 @@ import static org.apache.fluss.config.ConfigOptions.CLIENT_SASL_MECHANISM;
 import static org.apache.fluss.config.ConfigOptions.SERVER_SASL_ENABLED_MECHANISMS_CONFIG;
 import static org.assertj.core.api.Assertions.assertThat;
 
-/** Integration test for SASL/GSSAPI (Kerberos) authentication using {@link MiniKdc}. */
+/**
+ * Integration test for verifying the full flow of Kerberos (GSSAPI) authentication. It spins up a
+ * local MiniKdc to simulate ticket issuance and mutual authentication between a Fluss client and
+ * server.
+ */
 class GssapiSaslAuthTest {
     private FlussMiniKdc kdc;
     private File workDir;
@@ -48,29 +49,30 @@ class GssapiSaslAuthTest {
 
     @BeforeEach
     void setup() throws Exception {
-        // Ensure JVM uses IPv4 for localhost to avoid connection issues with MiniKdc
-        System.setProperty("java.net.preferIPv4Stack", "true");
-
+        // Initialize and start an KDC server to simulate a real Kerberos environment locally.
         Properties conf = MiniKdc.createConf();
         kdc = new FlussMiniKdc(conf);
         kdc.start();
 
+        // Prepare a temporary workspace and define the Keytab file path.
+        // Kerberos authentication requires a physical Keytab file for password-less login.
         Path tempDir = Files.createTempDirectory("fluss-gssapi-test-" + UUID.randomUUID());
         workDir = tempDir.toFile();
-        keytab = new File(workDir, "test.keytab");
+        keytab = new File(workDir, "fluss.keytab");
         File krb5Conf = kdc.getKrb5Conf();
 
-        // Create principals: fluss and client (simple names to avoid hostname issues)
-        kdc.createPrincipal(keytab, "fluss", "client");
+        // Generate principals for both server ('fluss') and client ('client') bound to 127.0.0.1.
+        kdc.createPrincipal(keytab, "fluss/127.0.0.1", "client/127.0.0.1");
 
+        // Overwrite the default krb5.conf if it exists. MiniKdc defaults to "localhost",
+        // but we enforce "127.0.0.1" and TCP (udp_preference_limit=1) to ensure stable connections.
         if (krb5Conf.exists()) {
-            // Rewrite krb5.conf completely to force 127.0.0.1 and correct port
             String krb5Content =
                     "[libdefaults]\n"
                             + "    default_realm = "
                             + kdc.getRealm()
                             + "\n"
-                            + "    udp_preference_limit = 1\n"
+                            + "    udp_preference_limit = 1\n" // Force TCP usage
                             + "    kdc_tcp_port = "
                             + kdc.getPort()
                             + "\n"
@@ -87,13 +89,11 @@ class GssapiSaslAuthTest {
                             + "\n"
                             + "    }\n";
 
-            // Write to a NEW unique file to force Config reload
+            // Save to a unique filename to bypass JVM's internal configuration caching
+            // and force it to recognize the new settings.
             File customKrb5Conf = new File(workDir, "krb5-custom-" + UUID.randomUUID() + ".conf");
             Files.write(customKrb5Conf.toPath(), krb5Content.getBytes());
-            System.setProperty("java.security.krb5.conf", customKrb5Conf.getAbsolutePath());
         }
-
-        refreshKrb5Config();
     }
 
     @AfterEach
@@ -108,25 +108,28 @@ class GssapiSaslAuthTest {
 
     @Test
     void testGssapiAuthentication() throws Exception {
-        // 1. Configure Server
+        String realm = kdc.getRealm();
+        String serverPrincipal = String.format("fluss/127.0.0.1@%s", realm);
+        String clientPrincipal = String.format("client/127.0.0.1@%s", realm);
+
         Configuration serverConf = new Configuration();
+
         serverConf.setString(SERVER_SASL_ENABLED_MECHANISMS_CONFIG.key(), "GSSAPI");
 
-        String realm = kdc.getRealm();
-        String serverPrincipal = String.format("fluss@%s", realm);
-        String clientPrincipal = String.format("client@%s", realm);
-
-        // Set server JAAS config (using keytab)
         String serverJaas =
                 String.format(
                         "com.sun.security.auth.module.Krb5LoginModule required "
-                                + "useKeyTab=true storeKey=true keyTab=\"%s\" principal=\"%s\";",
+                                + "useKeyTab=true storeKey=true useTicketCache=false "
+                                + "keyTab=\"%s\" principal=\"%s\";",
                         keytab.getAbsolutePath(), serverPrincipal);
+
         serverConf.setString("security.sasl.gssapi.jaas.config", serverJaas);
 
         SaslServerAuthenticator serverAuth = new SaslServerAuthenticator(serverConf);
-        ServerAuthenticator.AuthenticateContext serverContext =
+
+        serverAuth.initialize(
                 new ServerAuthenticator.AuthenticateContext() {
+
                     public String ipAddress() {
                         return "127.0.0.1";
                     }
@@ -138,69 +141,53 @@ class GssapiSaslAuthTest {
                     public String protocol() {
                         return "GSSAPI";
                     }
-                };
-        serverAuth.initialize(serverContext);
+                });
 
-        // 2. Configure Client
+        // [Step 7] Initialize Client-Side Authenticator
+
+        // WHAT: Configure and initialize the client authenticator.
+
+        // WHY:  The client needs a TGT (Ticket Granting Ticket) to request a Service Ticket for the
+        // server.
+
         Configuration clientConf = new Configuration();
         clientConf.setString(CLIENT_SASL_MECHANISM, "GSSAPI");
-        // Set client JAAS config (using keytab)
         String clientJaas =
                 String.format(
                         "com.sun.security.auth.module.Krb5LoginModule required "
-                                + "useKeyTab=true storeKey=true keyTab=\"%s\" principal=\"%s\";",
+                                + "useKeyTab=true storeKey=true useTicketCache=false "
+                                + "keyTab=\"%s\" principal=\"%s\";",
                         keytab.getAbsolutePath(), clientPrincipal);
+
         clientConf.setString(CLIENT_SASL_JAAS_CONFIG, clientJaas);
-
         SaslClientAuthenticator clientAuth = new SaslClientAuthenticator(clientConf);
-        ClientAuthenticator.AuthenticateContext clientContext = () -> "127.0.0.1";
-        clientAuth.initialize(clientContext);
+        clientAuth.initialize(() -> "127.0.0.1");
 
-        // 3. Handshake Loop
-        byte[] challenge = new byte[0]; // Initial empty challenge for client
-        if (clientAuth.hasInitialTokenResponse()) {
-            challenge = clientAuth.authenticate(challenge);
-        }
+        byte[] challenge =
+                clientAuth.hasInitialTokenResponse() ? clientAuth.authenticate(new byte[0]) : null;
 
-        // Simulate network exchange
-        while (!clientAuth.isCompleted() && !serverAuth.isCompleted()) {
-            // Server evaluates client's token
+        while (!clientAuth.isCompleted() || !serverAuth.isCompleted()) {
             if (challenge != null) {
+                // 1. Server validates client's token and generates a response/challenge.
                 byte[] response = serverAuth.evaluateResponse(challenge);
-                if (serverAuth.isCompleted()) {
-                    challenge = null; // Done
-                    break;
-                }
 
-                // Client evaluates server's challenge
-                challenge = clientAuth.authenticate(response);
+                // 2. Client validates server's response (Mutual Authentication).
+                challenge = (response != null) ? clientAuth.authenticate(response) : null;
+
             } else {
+                // If tokens run out but authentication isn't finished, it's a failure scenario.
                 break;
             }
         }
 
-        // 4. Verification
-        assertThat(serverAuth.isCompleted()).isTrue();
-        assertThat(clientAuth.isCompleted()).isTrue();
-        assertThat(serverAuth.createPrincipal().getName()).startsWith("client");
+        assertThat(serverAuth.isCompleted()).as("Server should be fully authenticated").isTrue();
+        assertThat(clientAuth.isCompleted()).as("Client should be fully authenticated").isTrue();
+        assertThat(serverAuth.createPrincipal().getName())
+                .as("Authenticated principal name should match the client's identity")
+                .startsWith("client/127.0.0.1");
 
         serverAuth.close();
         clientAuth.close();
-    }
-
-    private void refreshKrb5Config() throws Exception {
-        try {
-            Class<?> configClass = Class.forName("sun.security.krb5.Config");
-            java.lang.reflect.Field singletonField = configClass.getDeclaredField("singleton");
-            singletonField.setAccessible(true);
-            singletonField.set(null, null);
-
-            java.lang.reflect.Method refreshMethod = configClass.getMethod("refresh");
-            refreshMethod.invoke(null);
-        } catch (Exception e) {
-            // Fallback to standard refresh if reflection fails (e.g. JDK 16+ restrictions)
-            Config.refresh();
-        }
     }
 
     private void deleteDir(File file) {

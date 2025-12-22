@@ -36,8 +36,6 @@ public class FlussMiniKdc {
 
     public FlussMiniKdc(Properties conf) throws Exception {
         this.conf = conf;
-        // Force binding to 127.0.0.1 to avoid connection refused on dual-stack systems
-        this.conf.setProperty(MiniKdc.KDC_BIND_ADDRESS, "127.0.0.1");
         Path tempDir = Files.createTempDirectory("fluss-kdc-" + UUID.randomUUID());
         this.workDir = tempDir.toFile();
     }
