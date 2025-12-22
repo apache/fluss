@@ -93,6 +93,9 @@ class GssapiSaslAuthTest {
             // and force it to recognize the new settings.
             File customKrb5Conf = new File(workDir, "krb5-custom-" + UUID.randomUUID() + ".conf");
             Files.write(customKrb5Conf.toPath(), krb5Content.getBytes());
+
+            // Point the JVM to use our custom krb5.conf for Kerberos operations.
+            System.setProperty("java.security.krb5.conf", customKrb5Conf.getAbsolutePath());
         }
     }
 
