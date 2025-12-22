@@ -61,7 +61,7 @@ class GssapiSaslAuthTest {
         keytab = new File(workDir, "fluss.keytab");
         File krb5Conf = kdc.getKrb5Conf();
 
-        // Generate principals for both server ('fluss') and client ('client') bound to 127.0.0.1.
+        // Generate principals for both server ('fluss') bound to 127.0.0.1 and client ('client').
         kdc.createPrincipal(keytab, "fluss/127.0.0.1", "client");
 
         // Overwrite the default krb5.conf if it exists. MiniKdc defaults to "localhost",
@@ -117,7 +117,7 @@ class GssapiSaslAuthTest {
         Configuration serverConf = new Configuration();
         serverConf.setString(SERVER_SASL_ENABLED_MECHANISMS_CONFIG.key(), "GSSAPI");
 
-        // Create server jass config
+        // Create server jaas config
         String serverJaas =
                 String.format(
                         "com.sun.security.auth.module.Krb5LoginModule required "
@@ -163,10 +163,10 @@ class GssapiSaslAuthTest {
 
         while (!clientAuth.isCompleted() || !serverAuth.isCompleted()) {
             if (challenge != null) {
-                // Server validates client's token and generates a response/challenge.
+                // Server process client's token and generates a response/challenge.
                 byte[] response = serverAuth.evaluateResponse(challenge);
 
-                // Client validates server's response (Mutual Authentication).
+                // Client validates server's response (mutual authentication).
                 challenge = (response != null) ? clientAuth.authenticate(response) : null;
 
             } else {
