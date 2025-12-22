@@ -18,5 +18,4 @@
 package org.apache.fluss.flink.procedure;
 
 /** IT case for procedure in Flink 2.2. */
-public class Flink22ProcedureITCase extends FlinkProcedureITCase {
-}
+public class Flink22ProcedureITCase extends FlinkProcedureITCase {}

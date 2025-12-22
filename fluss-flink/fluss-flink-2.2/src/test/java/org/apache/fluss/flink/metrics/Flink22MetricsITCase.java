@@ -18,5 +18,4 @@
 package org.apache.fluss.flink.metrics;
 
 /** IT case for metrics in Flink 2.2. */
-public class Flink22MetricsITCase extends FlinkMetricsITCase {
-}
+public class Flink22MetricsITCase extends FlinkMetricsITCase {}

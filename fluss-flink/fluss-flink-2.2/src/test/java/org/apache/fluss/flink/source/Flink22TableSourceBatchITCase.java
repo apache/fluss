@@ -18,5 +18,4 @@
 package org.apache.fluss.flink.source;
 
 /** IT case for batch source in Flink 2.2. */
-public class Flink22TableSourceBatchITCase extends FlinkTableSourceBatchITCase {
-}
+public class Flink22TableSourceBatchITCase extends FlinkTableSourceBatchITCase {}

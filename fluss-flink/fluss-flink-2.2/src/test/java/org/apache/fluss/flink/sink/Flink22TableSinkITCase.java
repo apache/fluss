@@ -18,5 +18,4 @@
 package org.apache.fluss.flink.sink;
 
 /** IT case for {@link FlinkTableSink} in Flink 2.2. */
-public class Flink22TableSinkITCase extends FlinkTableSinkITCase {
-}
+public class Flink22TableSinkITCase extends FlinkTableSinkITCase {}
