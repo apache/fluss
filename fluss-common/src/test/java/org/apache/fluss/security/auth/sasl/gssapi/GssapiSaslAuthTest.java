@@ -62,7 +62,7 @@ class GssapiSaslAuthTest {
         File krb5Conf = kdc.getKrb5Conf();
 
         // Generate principals for both server ('fluss') and client ('client') bound to 127.0.0.1.
-        kdc.createPrincipal(keytab, "fluss/127.0.0.1", "client/127.0.0.1");
+        kdc.createPrincipal(keytab, "fluss/127.0.0.1", "client");
 
         // Overwrite the default krb5.conf if it exists. MiniKdc defaults to "localhost",
         // but we enforce "127.0.0.1" and TCP (udp_preference_limit=1) to ensure stable connections.
@@ -112,7 +112,7 @@ class GssapiSaslAuthTest {
     void testGssapiAuthentication() throws Exception {
         String realm = kdc.getRealm();
         String serverPrincipal = String.format("fluss/127.0.0.1@%s", realm);
-        String clientPrincipal = String.format("client/127.0.0.1@%s", realm);
+        String clientPrincipal = String.format("client@%s", realm);
 
         Configuration serverConf = new Configuration();
         serverConf.setString(SERVER_SASL_ENABLED_MECHANISMS_CONFIG.key(), "GSSAPI");
@@ -179,7 +179,7 @@ class GssapiSaslAuthTest {
         assertThat(clientAuth.isCompleted()).as("Client should be fully authenticated").isTrue();
         assertThat(serverAuth.createPrincipal().getName())
                 .as("Authenticated principal name should match the client's identity")
-                .startsWith("client/127.0.0.1");
+                .startsWith("client");
 
         serverAuth.close();
         clientAuth.close();
