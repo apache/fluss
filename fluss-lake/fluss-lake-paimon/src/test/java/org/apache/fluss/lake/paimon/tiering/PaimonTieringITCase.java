@@ -648,8 +648,8 @@ class PaimonTieringITCase extends FlinkPaimonTieringTestBase {
             FileStoreTable paimonTable = (FileStoreTable) paimonCatalog.getTable(tableIdentifier);
             List<String> fieldNames = paimonTable.rowType().getFieldNames();
 
-            // Should have: c1, c2, c3, __bucket, __offset, __timestamp
-            assertThat(fieldNames).contains("c1", "c2", "c3");
+            // Should have: a, b, c3, __bucket, __offset, __timestamp
+            assertThat(fieldNames).contains("a", "b", "c3");
 
             // 9. Verify all data is present in Paimon (no data loss)
             List<InternalRow> allRows = new ArrayList<>();
