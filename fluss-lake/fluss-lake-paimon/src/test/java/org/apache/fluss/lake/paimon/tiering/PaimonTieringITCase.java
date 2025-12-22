@@ -559,8 +559,9 @@ class PaimonTieringITCase extends FlinkPaimonTieringTestBase {
             InternalRow flussRow = flussRowIterator.next();
             assertThat(row.getInt(0)).isEqualTo(flussRow.getInt(0));
             assertThat(row.getString(1).toString()).isEqualTo(flussRow.getString(1).toString());
-            // the idx 2 is __bucket, so use 3
-            assertThat(row.getLong(3)).isEqualTo(startingOffset++);
+            // system columns are always the last three: __bucket, __offset, __timestamp
+            int offsetIndex = row.getFieldCount() - 2;
+            assertThat(row.getLong(offsetIndex)).isEqualTo(startingOffset++);
         }
         assertThat(flussRowIterator.hasNext()).isFalse();
     }
