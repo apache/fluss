@@ -23,12 +23,14 @@ import org.apache.fluss.security.acl.FlussPrincipal;
 import org.apache.fluss.security.auth.ServerAuthenticator;
 import org.apache.fluss.security.auth.sasl.jaas.JaasContext;
 import org.apache.fluss.security.auth.sasl.jaas.LoginManager;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
 import javax.security.auth.Subject;
 import javax.security.sasl.SaslServer;
+
 import java.io.IOException;
 import java.security.PrivilegedExceptionAction;
 import java.util.List;
