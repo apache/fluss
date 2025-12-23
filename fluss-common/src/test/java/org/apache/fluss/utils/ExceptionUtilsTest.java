@@ -145,9 +145,72 @@ public class ExceptionUtilsTest {
         Assertions.assertDoesNotThrow(() -> recursivelyProcessSuppressedExceptions(exceptionA));
     }
 
+    @Test
+    void testFirstOrSuppressedCyclePreventionThroughCauseChain() {
+        // create two test exceptions linked through cause chain
+        Exception exceptionA = new Exception("Exception A");
+        Exception exceptionB = new Exception("Exception B");
+
+        // associate through cause chain (A has B as cause)
+        exceptionA.initCause(exceptionB);
+        assertThat(exceptionA.getCause()).isEqualTo(exceptionB);
+
+        // attempt to create a cycle by trying to suppress A into B
+        // Since B is already in A's cause chain, this should be prevented
+        Exception result = ExceptionUtils.firstOrSuppressed(exceptionA, exceptionB);
+        assertThat(result).isEqualTo(exceptionB);
+
+        // verify the exception cycle was prevented (B should not have A suppressed)    
+        assertThat(exceptionB.getSuppressed()).doesNotContain(exceptionA);
+        assertThat(exceptionA.getCause()).isEqualTo(exceptionB);
+
+        // verify that processing the cause chain no longer causes StackOverflowError
+        Assertions.assertDoesNotThrow(() -> recursivelyProcessCauseChain(exceptionA));
+    }
+
+    @Test
+    void testFirstOrSuppressedCyclePreventionThroughBidirectionalCauseChain() {
+        // create two test exceptions
+        Exception exceptionA = new Exception("Exception A");
+        Exception exceptionB = new Exception("Exception B");
+
+        // create a bidirectional cause chain scenario
+        // A has B as cause, then attempt to suppress A into B
+        exceptionA.initCause(exceptionB);
+        assertThat(exceptionA.getCause()).isEqualTo(exceptionB);
+
+        // attempt to create a cycle (B -> A via cause, then A -> B via suppression)
+        Exception result = ExceptionUtils.firstOrSuppressed(exceptionA, exceptionB);
+        assertThat(result).isEqualTo(exceptionB);
+
+        // verify the cycle was prevented
+        assertThat(exceptionA.getCause()).isEqualTo(exceptionB);
+        assertThat(exceptionB.getSuppressed()).doesNotContain(exceptionA);
+
+        // Now test the reverse: B has A as cause, then attempt to suppress B into A
+        Exception exceptionC = new Exception("Exception C");
+        Exception exceptionD = new Exception("Exception D");
+        exceptionD.initCause(exceptionC);
+
+        // attempt to create a cycle (C -> D via cause, then D -> C via suppression)
+        Exception result2 = ExceptionUtils.firstOrSuppressed(exceptionD, exceptionC);
+        assertThat(result2).isEqualTo(exceptionC);
+
+        // verify the cycle was prevented
+        assertThat(exceptionD.getCause()).isEqualTo(exceptionC);
+        assertThat(exceptionC.getSuppressed()).doesNotContain(exceptionD);
+    }
+
     private void recursivelyProcessSuppressedExceptions(Throwable throwable) {
         for (Throwable suppressed : throwable.getSuppressed()) {
             recursivelyProcessSuppressedExceptions(suppressed);
+        }
+    }
+
+    private void recursivelyProcessCauseChain(Throwable throwable) {
+        Throwable cause = throwable.getCause();
+        if (cause != null) {
+            recursivelyProcessCauseChain(cause);
         }
     }
 
