@@ -38,6 +38,7 @@ import org.apache.fluss.utils.ExceptionUtils;
 import org.apache.fluss.utils.IOUtils;
 
 import org.apache.flink.annotation.VisibleForTesting;
+import org.apache.flink.table.api.Schema;
 import org.apache.flink.table.catalog.AbstractCatalog;
 import org.apache.flink.table.catalog.CatalogBaseTable;
 import org.apache.flink.table.catalog.CatalogDatabase;
@@ -86,6 +87,8 @@ import java.util.stream.Collectors;
 import static org.apache.flink.util.Preconditions.checkArgument;
 import static org.apache.fluss.config.ConfigOptions.BOOTSTRAP_SERVERS;
 import static org.apache.fluss.flink.FlinkConnectorOptions.ALTER_DISALLOW_OPTIONS;
+import static org.apache.fluss.flink.adapter.SchemaAdapter.supportIndex;
+import static org.apache.fluss.flink.adapter.SchemaAdapter.withIndex;
 import static org.apache.fluss.flink.utils.CatalogExceptionUtils.isPartitionAlreadyExists;
 import static org.apache.fluss.flink.utils.CatalogExceptionUtils.isPartitionInvalid;
 import static org.apache.fluss.flink.utils.CatalogExceptionUtils.isPartitionNotExist;
@@ -344,7 +347,11 @@ public class FlinkCatalog extends AbstractCatalog {
                 }
             }
             if (CatalogBaseTable.TableKind.TABLE == catalogBaseTable.getTableKind()) {
-                return ((CatalogTable) catalogBaseTable).copy(newOptions);
+                CatalogTable table = ((CatalogTable) catalogBaseTable).copy(newOptions);
+                if (supportIndex()) {
+                    table = wrapWithIndexes(table, tableInfo);
+                }
+                return table;
             } else if (CatalogBaseTable.TableKind.MATERIALIZED_TABLE
                     == catalogBaseTable.getTableKind()) {
                 return ((CatalogMaterializedTable) catalogBaseTable).copy(newOptions);
@@ -805,5 +812,57 @@ public class FlinkCatalog extends AbstractCatalog {
             }
         }
         return lakeCatalogProperties;
+    }
+
+    private CatalogTable wrapWithIndexes(CatalogTable table, TableInfo tableInfo) {
+
+        Optional<Schema.UnresolvedPrimaryKey> pkOp = table.getUnresolvedSchema().getPrimaryKey();
+        // If there is no pk, return directly.
+        if (!pkOp.isPresent()) {
+            return table;
+        }
+
+        List<List<String>> indexes = new ArrayList<>();
+        // Pk is always an index.
+        indexes.add(pkOp.get().getColumnNames());
+
+        // Judge whether we can do prefix lookup.
+        List<String> bucketKeys = tableInfo.getBucketKeys();
+        // For partition table, the physical primary key is the primary key that
+        // excludes the
+        // partition key
+        List<String> physicalPrimaryKeys = tableInfo.getPhysicalPrimaryKeys();
+        List<String> indexKeys = new ArrayList<>();
+        if (isPrefixList(physicalPrimaryKeys, bucketKeys)) {
+            indexKeys.addAll(bucketKeys);
+            if (tableInfo.isPartitioned()) {
+                indexKeys.addAll(tableInfo.getPartitionKeys());
+            }
+        }
+
+        if (!indexKeys.isEmpty()) {
+            indexes.add(indexKeys);
+        }
+        return CatalogTable.newBuilder()
+                .schema(withIndex(table.getUnresolvedSchema(), indexes))
+                .comment(table.getComment())
+                .partitionKeys(table.getPartitionKeys())
+                .options(table.getOptions())
+                .snapshot(table.getSnapshot().orElse(null))
+                .distribution(table.getDistribution().orElse(null))
+                .build();
+    }
+
+    private static boolean isPrefixList(List<String> fullList, List<String> prefixList) {
+        if (fullList.size() <= prefixList.size()) {
+            return false;
+        }
+
+        for (int i = 0; i < prefixList.size(); i++) {
+            if (!fullList.get(i).equals(prefixList.get(i))) {
+                return false;
+            }
+        }
+        return true;
     }
 }

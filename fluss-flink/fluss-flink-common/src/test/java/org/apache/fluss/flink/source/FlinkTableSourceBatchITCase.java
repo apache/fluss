@@ -315,7 +315,7 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
                         "Currently, Fluss only support queries on table with datalake enabled or point queries on primary key when it's in batch execution mode.");
     }
 
-    private String prepareSourceTable(String[] keys, String partitionedKey) throws Exception {
+    protected String prepareSourceTable(String[] keys, String partitionedKey) throws Exception {
         String tableName =
                 String.format("test_%s_%s", String.join("_", keys), RandomUtils.nextInt());
         if (partitionedKey == null) {
@@ -371,7 +371,7 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
         return tableName;
     }
 
-    private String prepareLogTable() throws Exception {
+    protected String prepareLogTable() throws Exception {
         String tableName = String.format("test_log_table_%s", RandomUtils.nextInt());
         tEnv.executeSql(
                 String.format(
@@ -401,7 +401,7 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
         return tableName;
     }
 
-    private String preparePartitionedLogTable() throws Exception {
+    protected String preparePartitionedLogTable() throws Exception {
         String tableName = String.format("test_partitioned_log_table_%s", RandomUtils.nextInt());
         tEnv.executeSql(
                 String.format(

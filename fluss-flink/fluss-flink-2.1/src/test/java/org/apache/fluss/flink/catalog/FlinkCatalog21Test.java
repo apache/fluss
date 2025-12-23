@@ -17,8 +17,6 @@
 
 package org.apache.fluss.flink.catalog;
 
-import org.apache.fluss.flink.lake.LakeFlinkCatalog;
-
 import org.apache.flink.table.api.DataTypes;
 import org.apache.flink.table.catalog.Column;
 import org.apache.flink.table.catalog.DefaultIndex;
@@ -28,24 +26,8 @@ import org.apache.flink.table.catalog.UniqueConstraint;
 import java.util.Arrays;
 import java.util.Collections;
 
-/** Test for {@link Flink21Catalog}. */
+/** Test for {@link FlinkCatalog}. */
 public class FlinkCatalog21Test extends FlinkCatalogTest {
-
-    @Override
-    protected FlinkCatalog initCatalog(
-            String catalogName,
-            String databaseName,
-            String bootstrapServers,
-            LakeFlinkCatalog lakeFlinkCatalog) {
-        return new Flink21Catalog(
-                catalogName,
-                databaseName,
-                bootstrapServers,
-                Thread.currentThread().getContextClassLoader(),
-                Collections.emptyMap(),
-                Collections::emptyMap,
-                lakeFlinkCatalog);
-    }
 
     protected ResolvedSchema createSchema() {
         return new ResolvedSchema(

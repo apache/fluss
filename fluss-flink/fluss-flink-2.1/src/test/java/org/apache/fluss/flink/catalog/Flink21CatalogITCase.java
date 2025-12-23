@@ -21,31 +21,12 @@ import org.apache.flink.table.api.DataTypes;
 import org.apache.flink.table.api.Schema;
 import org.apache.flink.table.catalog.CatalogTable;
 import org.apache.flink.table.catalog.ObjectPath;
-import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** IT case for catalog in Flink 2.1. */
 public class Flink21CatalogITCase extends FlinkCatalogITCase {
-
-    @BeforeAll
-    static void beforeAll() {
-        FlinkCatalogITCase.beforeAll();
-
-        // close the old one and open a new one later
-        catalog.close();
-
-        catalog =
-                new Flink21Catalog(
-                        catalog.catalogName,
-                        catalog.defaultDatabase,
-                        catalog.bootstrapServers,
-                        catalog.classLoader,
-                        catalog.securityConfigs,
-                        catalog.lakeCatalogPropertiesSupplier);
-        catalog.open();
-    }
 
     @Test
     void testGetTableWithIndex() throws Exception {
