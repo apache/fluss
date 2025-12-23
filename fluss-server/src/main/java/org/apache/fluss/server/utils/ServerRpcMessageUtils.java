@@ -1574,7 +1574,13 @@ public class ServerRpcMessageUtils {
             lakeTableInfoByTableId.put(
                     tableId, new LakeTableSnapshot(snapshotId, bucketLogEndOffset));
         }
-        return new CommitLakeTableSnapshotData(lakeTableInfoByTableId, tableBucketsMaxTimestamp);
+
+        Integer serializationVersion =
+                request.hasLakeSnapshotSerializationVersion()
+                        ? request.getLakeSnapshotSerializationVersion()
+                        : null;
+        return new CommitLakeTableSnapshotData(
+                lakeTableInfoByTableId, tableBucketsMaxTimestamp, serializationVersion);
     }
 
     public static PbNotifyLakeTableOffsetReqForBucket makeNotifyLakeTableOffsetForBucket(

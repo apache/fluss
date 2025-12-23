@@ -31,6 +31,7 @@ import org.apache.fluss.utils.types.Tuple2;
 
 import javax.annotation.Nullable;
 
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
 
@@ -587,6 +588,14 @@ public final class ZkData {
          */
         public static String path(long tableId) {
             return TableIdZNode.path(tableId) + "/laketable";
+        }
+
+        /**
+         * Encodes a {@link LakeTable} to JSON bytes using Version 1 format (legacy) for storage in
+         * ZooKeeper.
+         */
+        public static byte[] encodeV1(long tableId, LakeTable lakeTable) throws IOException {
+            return LakeTableJsonSerde.serializeV1(tableId, lakeTable);
         }
 
         /**

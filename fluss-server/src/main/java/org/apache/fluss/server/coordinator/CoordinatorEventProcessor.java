@@ -1260,10 +1260,14 @@ public class CoordinatorEventProcessor implements EventProcessor {
                                                     + tableId
                                                     + " not found in coordinator context.");
                                 }
-
-                                // this involves IO operation (ZK), so we do it in ioExecutor
-                                lakeTableHelper.upsertLakeTable(
-                                        tableId, tablePath, lakeTableSnapshotEntry.getValue());
+                                if (commitLakeTableSnapshotData.getSerializationVersion() == null) {
+                                    lakeTableHelper.upsertLakeTableV1(
+                                            tableId, lakeTableSnapshotEntry.getValue());
+                                } else {
+                                    // this involves IO operation (ZK), so we do it in ioExecutor
+                                    lakeTableHelper.upsertLakeTable(
+                                            tableId, tablePath, lakeTableSnapshotEntry.getValue());
+                                }
                             } catch (Exception e) {
                                 ApiError error = ApiError.fromThrowable(e);
                                 tableResp.setError(error.error().code(), error.message());

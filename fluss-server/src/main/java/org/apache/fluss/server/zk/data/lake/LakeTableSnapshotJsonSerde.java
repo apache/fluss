@@ -18,7 +18,6 @@
 
 package org.apache.fluss.server.zk.data.lake;
 
-import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.core.JsonGenerator;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
@@ -173,7 +172,7 @@ public class LakeTableSnapshotJsonSerde
     }
 
     /** Deserialize Version 1 format (legacy). */
-    private LakeTableSnapshot deserializeVersion1(JsonNode node) {
+    public LakeTableSnapshot deserializeVersion1(JsonNode node) {
         long snapshotId = node.get(SNAPSHOT_ID).asLong();
         long tableId = node.get(TABLE_ID).asLong();
         Iterator<JsonNode> buckets = node.get(BUCKETS).elements();
@@ -263,7 +262,6 @@ public class LakeTableSnapshotJsonSerde
     }
 
     /** Serialize the {@link LakeTableSnapshot} to json bytes using Version 1 format. */
-    @VisibleForTesting
     public static byte[] toJsonVersion1(LakeTableSnapshot lakeTableSnapshot, long tableId) {
         return JsonSerdeUtils.writeValueAsBytes(lakeTableSnapshot, new Version1Serializer(tableId));
     }

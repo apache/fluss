@@ -451,6 +451,19 @@ message NotifyRemoteLogOffsetsResponse {
 
 message CommitLakeTableSnapshotRequest {
   repeated PbLakeTableSnapshotInfo tables_req = 1;
+  // The version number for serializing lake_snapshot. This field tells the coordinator server
+  // which version to use when serializing the lake snapshot data.
+  //
+  // Legacy tiering services (before this field was introduced) do not set this field. This field
+  // is primarily used to handle compatibility during Fluss upgrades:
+  //
+  // - During upgrade: Fluss may use a new serialization format, but some tablet servers may not
+  //   have been upgraded yet and cannot deserialize the new format. The coordinator server can
+  //   check this field to determine which serialization format to use.
+  // - After upgrade: Once all Fluss components are upgraded, tiering services can be updated to
+  //   use the new format. The coordinator server will recognize this field and use the new
+  //   serialization method, and all tablet servers will be able to deserialize the new format.
+  optional int32 lake_snapshot_serialization_version = 2;
 }
 
 message PbLakeTableSnapshotInfo {

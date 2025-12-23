@@ -17,6 +17,7 @@
 
 package org.apache.fluss.flink.tiering.committer;
 
+import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
@@ -36,6 +37,10 @@ import java.util.Map;
 
 /** Committer to commit {@link FlussTableLakeSnapshot} of lake to Fluss. */
 public class FlussTableLakeSnapshotCommitter implements AutoCloseable {
+
+    // current version for commit lake snapshot is 2,
+    // coordinator should use v2 to serialize lake snapshot
+    private static final int CURRENT_VERSION_FOR_COMMIT_LAKE_SNAPSHOT = 2;
 
     private final Configuration flussConf;
 
@@ -63,6 +68,7 @@ public class FlussTableLakeSnapshotCommitter implements AutoCloseable {
         try {
             CommitLakeTableSnapshotRequest request =
                     toCommitLakeTableSnapshotRequest(flussTableLakeSnapshot);
+            request.setLakeSnapshotSerializationVersion(CURRENT_VERSION_FOR_COMMIT_LAKE_SNAPSHOT);
             coordinatorGateway.commitLakeTableSnapshot(request).get();
         } catch (Exception e) {
             throw new IOException(
@@ -84,7 +90,8 @@ public class FlussTableLakeSnapshotCommitter implements AutoCloseable {
         commit(flussTableLakeSnapshot);
     }
 
-    private CommitLakeTableSnapshotRequest toCommitLakeTableSnapshotRequest(
+    @VisibleForTesting
+    static CommitLakeTableSnapshotRequest toCommitLakeTableSnapshotRequest(
             FlussTableLakeSnapshot flussTableLakeSnapshot) {
         CommitLakeTableSnapshotRequest commitLakeTableSnapshotRequest =
                 new CommitLakeTableSnapshotRequest();
@@ -104,6 +111,11 @@ public class FlussTableLakeSnapshotCommitter implements AutoCloseable {
             pbLakeTableOffsetForBucket.setLogEndOffset(endOffset);
         }
         return commitLakeTableSnapshotRequest;
+    }
+
+    @VisibleForTesting
+    CoordinatorGateway getCoordinatorGateway() {
+        return coordinatorGateway;
     }
 
     @Override

@@ -85,6 +85,17 @@ public class LakeTableJsonSerde implements JsonSerializer<LakeTable>, JsonDeseri
         generator.writeEndObject();
     }
 
+    /**
+     * Serializes a {@link LakeTable} to JSON bytes using Version 1 format (legacy).
+     *
+     * <p>This method is used for backward compatibility when the coordinator receives a commit
+     * request without a serialization version (from legacy tiering services).
+     */
+    public static byte[] serializeV1(long tableId, LakeTable lakeTable) throws IOException {
+        return LakeTableSnapshotJsonSerde.toJsonVersion1(
+                lakeTable.getLatestTableSnapshot(), tableId);
+    }
+
     @Override
     public LakeTable deserialize(JsonNode node) {
         int version = node.get(VERSION_KEY).asInt();

@@ -1027,9 +1027,15 @@ public class ZooKeeperClient implements AutoCloseable {
     }
 
     /** Upsert the {@link LakeTable} to Zk Node. */
-    public void upsertLakeTable(long tableId, LakeTable lakeTable, boolean isUpdate)
+    public void upsertLakeTable(
+            long tableId, LakeTable lakeTable, boolean isUpdate, boolean isLegacyVersion)
             throws Exception {
-        byte[] zkData = LakeTableZNode.encode(lakeTable);
+        byte[] zkData;
+        if (isLegacyVersion) {
+            zkData = LakeTableZNode.encodeV1(tableId, lakeTable);
+        } else {
+            zkData = LakeTableZNode.encode(lakeTable);
+        }
         String zkPath = LakeTableZNode.path(tableId);
         if (isUpdate) {
             zkClient.setData().forPath(zkPath, zkData);

@@ -44,6 +44,26 @@ public class LakeTableHelper {
     }
 
     /**
+     * Upserts a lake table snapshot for the given table, stored in v1 format.
+     *
+     * @param tableId the table ID
+     * @param lakeTableSnapshot the new snapshot to upsert
+     * @throws Exception if the operation fails
+     */
+    public void upsertLakeTableV1(long tableId, LakeTableSnapshot lakeTableSnapshot)
+            throws Exception {
+        Optional<LakeTable> optPreviousLakeTable = zkClient.getLakeTable(tableId);
+        // Merge with previous snapshot if exists
+        if (optPreviousLakeTable.isPresent()) {
+            lakeTableSnapshot =
+                    mergeLakeTable(
+                            optPreviousLakeTable.get().getLatestTableSnapshot(), lakeTableSnapshot);
+        }
+        zkClient.upsertLakeTable(
+                tableId, new LakeTable(lakeTableSnapshot), optPreviousLakeTable.isPresent(), true);
+    }
+
+    /**
      * Upserts a lake table snapshot for the given table.
      *
      * <p>This method merges the new snapshot with the existing one (if any) and stores it (data in
@@ -87,7 +107,7 @@ public class LakeTableHelper {
         // metadata
         LakeTable lakeTable = new LakeTable(lakeSnapshotMetadata);
         try {
-            zkClient.upsertLakeTable(tableId, lakeTable, optPreviousLakeTable.isPresent());
+            zkClient.upsertLakeTable(tableId, lakeTable, optPreviousLakeTable.isPresent(), false);
         } catch (Exception e) {
             LOG.warn("Failed to upsert lake table snapshot to zk.", e);
             // discard the new lake snapshot metadata

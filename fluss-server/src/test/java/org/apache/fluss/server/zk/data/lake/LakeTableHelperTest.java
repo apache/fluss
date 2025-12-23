@@ -30,7 +30,6 @@ import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperExtension;
 import org.apache.fluss.server.zk.ZooKeeperUtils;
 import org.apache.fluss.server.zk.data.TableRegistration;
-import org.apache.fluss.server.zk.data.ZkData;
 import org.apache.fluss.testutils.common.AllCallbackWrapper;
 
 import org.junit.jupiter.api.AfterAll;
@@ -110,16 +109,9 @@ class LakeTableHelperTest {
 
             LakeTableSnapshot lakeTableSnapshot =
                     new LakeTableSnapshot(snapshotId, bucketLogEndOffset);
-            // Write version 1 format data directly to ZK (simulating old system behavior)
-            String zkPath = ZkData.LakeTableZNode.path(tableId);
-            byte[] version1Data =
-                    LakeTableSnapshotJsonSerde.toJsonVersion1(lakeTableSnapshot, tableId);
-            zooKeeperClient
-                    .getCuratorClient()
-                    .create()
-                    .creatingParentsIfNeeded()
-                    .forPath(zkPath, version1Data);
 
+            // Write version 1 format (simulating old system behavior)
+            lakeTableHelper.upsertLakeTableV1(tableId, lakeTableSnapshot);
             // Verify version 1 data can be read
             Optional<LakeTable> optionalLakeTable = zooKeeperClient.getLakeTable(tableId);
             assertThat(optionalLakeTable).isPresent();
