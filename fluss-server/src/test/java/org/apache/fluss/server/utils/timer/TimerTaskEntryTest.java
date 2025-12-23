@@ -75,15 +75,20 @@ public class TimerTaskEntryTest {
                             try {
                                 // Wait for the initial removal to complete
                                 latch.await();
-                                // Add the entry from our separate list while the removal thread is
+                                // Add the entry to our separate list while the removal thread is
                                 // still verifying the condition (resulting in our null list within
                                 // the internal removal call, and our exception)
                                 for (int i = 0; i < 10000; i++) {
                                     // Determine which list to add to the task
                                     // (backwards-oscillation)
-                                    if (entry.list == null) {
+                                    TimerTaskList currentList = entry.list;
+                                    if (currentList == null || currentList == primaryList) {
+                                        // If the entry is not in any list or in the primary list,
+                                        // move it to the secondary list
                                         secondaryList.add(entry);
-                                    } else if (entry.list == secondaryList) {
+                                    } else if (currentList == secondaryList) {
+                                        // If the entry is in the secondary list, move it to the
+                                        // primary list
                                         primaryList.add(entry);
                                     }
                                     Thread.yield();
