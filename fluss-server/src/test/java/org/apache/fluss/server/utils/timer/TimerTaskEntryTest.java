@@ -109,6 +109,14 @@ public class TimerTaskEntryTest {
         removalThread.join();
         additionThread.join();
 
+        // Attempt to remove the last entry (to ensure empty list)
+        entry.remove();
+
+        // Verify the list is empty after entry removal and ensure
+        // counter reflects the correct state
+        assertThat(entry.list).isNull();
+        assertThat(sharedTaskCounter.get()).isEqualTo(0);
+
         // Assert that no exception was originated
         assertThat(thrownException.get()).isNull();
     }
