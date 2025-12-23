@@ -111,6 +111,7 @@ check_prerequisites() {
         "$PROJECT_ROOT/fluss-lake/fluss-lake-paimon/target"
         "$PROJECT_ROOT/fluss-lake/fluss-lake-iceberg/target"
         "$PROJECT_ROOT/fluss-flink/fluss-flink-tiering/target"
+        "$PROJECT_ROOT/fluss-filesystems/fluss-fs-hdfs/target"
     )
 
     for dir in "${required_dirs[@]}"; do
@@ -182,6 +183,10 @@ main() {
     log_info "Preparing lake tiering JAR..."
     copy_jar "$PROJECT_ROOT/fluss-flink/fluss-flink-tiering/target/fluss-flink-tiering-*.jar" "./opt" "fluss-flink-tiering"
 
+    # Prepare FileSystem hdfs JAR
+    log_info "Preparing FileSystem hdfs JAR..."
+    copy_jar "$PROJECT_ROOT/fluss-filesystems/fluss-fs-hdfs/target/fluss-fs-hdfs-*.jar" "./lib" "fluss-fs-hdfs connector"
+
     # Final verification
     verify_jars
 
@@ -198,6 +203,7 @@ verify_jars() {
         "fluss-flink-1.20-*.jar"
         "fluss-lake-paimon-*.jar"
         "fluss-lake-iceberg-*.jar"
+        "fluss-fs-hdfs-*.jar"
         "flink-faker-0.5.3.jar"
         "hadoop-apache-3.3.5-2.jar"
         "paimon-flink-1.20-1.2.0.jar"
@@ -255,6 +261,7 @@ show_summary() {
     echo "  ✓ Hadoop Apache (v3.3.5-2)"
     echo "  ✓ Flink Faker (v0.5.3)"
     echo "  ✓ Fluss Tiering service"
+    echo "  ✓ Fluss FileSystem HDFS storage"
 }
 
 # Run main function
