@@ -873,6 +873,20 @@ public class ConfigOptions {
                                     + "Since these servers are just used for the initial connection to discover the full cluster membership (which may change dynamically), "
                                     + "this list need not contain the full set of servers (you may want more than one, though, in case a server is down) ");
 
+    public static final ConfigOption<Integer> CLIENT_METADATA_RETRY_TIMES =
+            key("client.metadata.retry.times")
+                    .intType()
+                    .defaultValue(3)
+                    .withDescription(
+                            "The number of times the client reconnects to retrieve metadata, default is 3.");
+
+    public static final ConfigOption<Integer> CLIENT_METADATA_RETRY_INTERVAL =
+            key("client.metadata.retry.interval")
+                    .intType()
+                    .defaultValue(100)
+                    .withDescription(
+                            "The interval of the client retrieves metadata when reconnecting, default is 100.");
+
     public static final ConfigOption<MemorySize> CLIENT_WRITER_BUFFER_MEMORY_SIZE =
             key("client.writer.buffer.memory-size")
                     .memoryType()

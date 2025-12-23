@@ -65,13 +65,12 @@ import static org.apache.fluss.utils.ExceptionUtils.stripExecutionException;
 public class MetadataUpdater {
     private static final Logger LOG = LoggerFactory.getLogger(MetadataUpdater.class);
 
-    private static final int MAX_RETRY_TIMES = 3;
-    private static final int RETRY_INTERVAL_MS = 100;
-
     private final Configuration conf;
     private final RpcClient rpcClient;
     private final Set<Integer> unavailableTabletServerIds = new CopyOnWriteArraySet<>();
     protected volatile Cluster cluster;
+    private final int retryTimes;
+    private final int retryInterval;
 
     public MetadataUpdater(Configuration conf, RpcClient rpcClient) {
         this(rpcClient, conf, initializeCluster(conf, rpcClient));
@@ -82,6 +81,8 @@ public class MetadataUpdater {
         this.rpcClient = rpcClient;
         this.conf = conf;
         this.cluster = cluster;
+        this.retryTimes = conf.get(ConfigOptions.CLIENT_METADATA_RETRY_TIMES);
+        this.retryInterval = conf.get(ConfigOptions.CLIENT_METADATA_RETRY_INTERVAL);
     }
 
     public Cluster getCluster() {
@@ -107,7 +108,7 @@ public class MetadataUpdater {
     public int leaderFor(TablePath tablePath, TableBucket tableBucket) {
         Integer serverNode = cluster.leaderFor(tableBucket);
         if (serverNode == null) {
-            for (int i = 0; i < MAX_RETRY_TIMES; i++) {
+            for (int i = 0; i < this.retryTimes; i++) {
                 // check if bucket is for a partition
                 if (tableBucket.getPartitionId() != null) {
                     updateMetadata(
@@ -126,7 +127,7 @@ public class MetadataUpdater {
             if (serverNode == null) {
                 throw new FlussRuntimeException(
                         "Leader not found after retry  "
-                                + MAX_RETRY_TIMES
+                                + this.retryTimes
                                 + " times for table bucket: "
                                 + tableBucket);
             }
@@ -300,6 +301,9 @@ public class MetadataUpdater {
     private static Cluster initializeCluster(Configuration conf, RpcClient rpcClient) {
         List<InetSocketAddress> inetSocketAddresses =
                 ClientUtils.parseAndValidateAddresses(conf.get(ConfigOptions.BOOTSTRAP_SERVERS));
+        Integer retryTimes = conf.get(ConfigOptions.CLIENT_METADATA_RETRY_TIMES);
+        Integer retryInterval = conf.get(ConfigOptions.CLIENT_METADATA_RETRY_INTERVAL);
+
         Cluster cluster = null;
         Exception lastException = null;
         for (InetSocketAddress address : inetSocketAddresses) {
@@ -319,7 +323,11 @@ public class MetadataUpdater {
                     // if there is only one bootstrap server, we can retry to connect to it.
                     cluster =
                             tryToInitializeClusterWithRetries(
-                                    rpcClient, serverNode, adminReadOnlyGateway, MAX_RETRY_TIMES);
+                                    rpcClient,
+                                    serverNode,
+                                    adminReadOnlyGateway,
+                                    retryTimes,
+                                    retryInterval);
                 } else {
                     cluster = tryToInitializeCluster(adminReadOnlyGateway);
                     break;
@@ -356,7 +364,8 @@ public class MetadataUpdater {
             RpcClient rpcClient,
             ServerNode serverNode,
             AdminReadOnlyGateway gateway,
-            int maxRetryTimes)
+            int maxRetryTimes,
+            int retryInterval)
             throws Exception {
         int retryCount = 0;
         while (retryCount <= maxRetryTimes) {
@@ -376,7 +385,7 @@ public class MetadataUpdater {
                 // retry can rebuild the connection.
                 rpcClient.disconnect(serverNode.uid());
 
-                long delayMs = (long) (RETRY_INTERVAL_MS * Math.pow(2, retryCount));
+                long delayMs = (long) (retryInterval * Math.pow(2, retryCount));
                 LOG.warn(
                         "Failed to connect to bootstrap server: {} (retry {}/{}). Retrying in {} ms.",
                         serverNode,

@@ -55,7 +55,8 @@ public class MetadataUpdaterTest {
         // retry lower than max retry count.
         AdminReadOnlyGateway gateway = new TestingAdminReadOnlyGateway(2);
         Cluster cluster =
-                MetadataUpdater.tryToInitializeClusterWithRetries(rpcClient, CS_NODE, gateway, 3);
+                MetadataUpdater.tryToInitializeClusterWithRetries(
+                        rpcClient, CS_NODE, gateway, 3, 100);
         assertThat(cluster).isNotNull();
         assertThat(cluster.getCoordinatorServer()).isEqualTo(CS_NODE);
         assertThat(cluster.getAliveTabletServerList()).containsExactly(TS_NODE);
@@ -65,7 +66,7 @@ public class MetadataUpdaterTest {
         assertThatThrownBy(
                         () ->
                                 MetadataUpdater.tryToInitializeClusterWithRetries(
-                                        rpcClient, CS_NODE, gateway2, 3))
+                                        rpcClient, CS_NODE, gateway2, 3, 100))
                 .isInstanceOf(StaleMetadataException.class)
                 .hasMessageContaining("The metadata is stale.");
     }
