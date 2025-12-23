@@ -316,6 +316,10 @@ public final class FlussClusterExtension
         tabletServerConf.set(ConfigOptions.DATA_DIR, dataDir);
         tabletServerConf.setString(
                 ConfigOptions.ZOOKEEPER_ADDRESS, zooKeeperServer.getConnectString());
+        tabletServerConf.setString(
+                ConfigOptions.KV_PRE_WRITE_BUFFER_MEMORY_POOL_SIZE.key(), "20MB");
+        tabletServerConf.setString(
+                ConfigOptions.KV_PRE_WRITE_BUFFER_MEMORY_POOL_SIZ_PER_BUCKET.key(), "5MB");
         tabletServerConf.setString(ConfigOptions.BIND_LISTENERS, tabletServerListeners);
         if (overwriteConfig != null) {
             tabletServerConf.addAll(overwriteConfig);

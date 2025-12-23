@@ -32,7 +32,9 @@ import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.metrics.MetricNames;
 import org.apache.fluss.server.TabletManagerBase;
+import org.apache.fluss.server.kv.prewrite.KvPreWriteBufferMemoryPool;
 import org.apache.fluss.server.kv.rowmerger.RowMerger;
 import org.apache.fluss.server.log.LogManager;
 import org.apache.fluss.server.log.LogTablet;
@@ -76,6 +78,8 @@ public final class KvManager extends TabletManagerBase {
 
     private final Map<TableBucket, KvTablet> currentKvs = MapUtils.newConcurrentHashMap();
 
+    private final KvPreWriteBufferMemoryPool kvPreWriteBufferMemoryPool;
+
     /**
      * For arrow log format. The buffer allocator to allocate memory for arrow write batch of
      * changelog records.
@@ -104,7 +108,9 @@ public final class KvManager extends TabletManagerBase {
         this.zkClient = zkClient;
         this.remoteKvDir = FlussPaths.remoteKvDir(conf);
         this.remoteFileSystem = remoteKvDir.getFileSystem();
+        this.kvPreWriteBufferMemoryPool = new KvPreWriteBufferMemoryPool(conf);
         this.serverMetricGroup = tabletServerMetricGroup;
+        registerMetrics();
     }
 
     public static KvManager create(
@@ -124,6 +130,18 @@ public final class KvManager extends TabletManagerBase {
                 tabletServerMetricGroup);
     }
 
+    private void registerMetrics() {
+        serverMetricGroup.gauge(
+                MetricNames.KV_PRE_WRITE_BUFFER_MEMORY_POOL_USAGE_SIZE,
+                kvPreWriteBufferMemoryPool::getTotalUsed);
+        serverMetricGroup.gauge(
+                MetricNames.KV_PRE_WRITE_BUFFER_MEMORY_POOL_MAX_SIZE_PER_BUCKET,
+                kvPreWriteBufferMemoryPool::getMaxMemorySizePerBucket);
+        serverMetricGroup.gauge(
+                MetricNames.KV_PRE_WRITE_BUFFER_MEMORY_POOL_MAX_SIZE,
+                kvPreWriteBufferMemoryPool::getMaxMemorySize);
+    }
+
     public void startup() {
         // should do nothing now
     }
@@ -140,6 +158,7 @@ public final class KvManager extends TabletManagerBase {
         }
         arrowBufferAllocator.close();
         memorySegmentPool.close();
+        kvPreWriteBufferMemoryPool.close();
         LOG.info("Shut down KvManager complete.");
     }
 
@@ -186,7 +205,8 @@ public final class KvManager extends TabletManagerBase {
                                     merger,
                                     arrowCompressionInfo,
                                     schemaGetter,
-                                    tableConfig.getChangelogImage());
+                                    tableConfig.getChangelogImage(),
+                                    kvPreWriteBufferMemoryPool);
                     currentKvs.put(tableBucket, tablet);
 
                     LOG.info(
@@ -294,7 +314,8 @@ public final class KvManager extends TabletManagerBase {
                         rowMerger,
                         tableConfig.getArrowCompressionInfo(),
                         schemaGetter,
-                        tableConfig.getChangelogImage());
+                        tableConfig.getChangelogImage(),
+                        kvPreWriteBufferMemoryPool);
         if (this.currentKvs.containsKey(tableBucket)) {
             throw new IllegalStateException(
                     String.format(

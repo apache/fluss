@@ -130,6 +130,12 @@ public class MetricNames {
             "preWriteBufferTruncateAsDuplicatedPerSecond";
     public static final String KV_PRE_WRITE_BUFFER_TRUNCATE_AS_ERROR_RATE =
             "preWriteBufferTruncateAsErrorPerSecond";
+    public static final String KV_PRE_WRITE_BUFFER_MEMORY_POOL_MAX_SIZE =
+            "preWriteBufferMemoryPoolMaxSize";
+    public static final String KV_PRE_WRITE_BUFFER_MEMORY_POOL_MAX_SIZE_PER_BUCKET =
+            "preWriteBufferMemoryPoolMaxSizePerBucket";
+    public static final String KV_PRE_WRITE_BUFFER_MEMORY_POOL_USAGE_SIZE =
+            "preWriteBufferMemoryPoolUsageSize";
 
     // --------------------------------------------------------------------------------------------
     // metrics for table bucket

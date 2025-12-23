@@ -1576,6 +1576,25 @@ public class ConfigOptions {
                             "The max size of the consumed memory for RocksDB batch write, "
                                     + "will flush just based on item count if this config set to 0.");
 
+    public static final ConfigOption<MemorySize> KV_PRE_WRITE_BUFFER_MEMORY_POOL_SIZE =
+            key("kv.preWriteBuffer.memory-pool-size")
+                    .memoryType()
+                    .defaultValue(MemorySize.parse("2gb"))
+                    .withDescription(
+                            "The max size of the off-heap memory pool for pre-write buffer. "
+                                    + "All buckets will share the same buffer pool in one tabletServer. "
+                                    + "If the used memory exceeds this config, PreWriteBufferFullException will be thrown. "
+                                    + "The default value is 2GB.");
+
+    public static final ConfigOption<MemorySize> KV_PRE_WRITE_BUFFER_MEMORY_POOL_SIZ_PER_BUCKET =
+            key("kv.preWriteBuffer.memory-pool-size-per-bucket")
+                    .memoryType()
+                    .defaultValue(MemorySize.parse("200mb"))
+                    .withDescription(
+                            "The max size of the off-heap memory buffer pool for pre-write buffer of each table bucket. "
+                                    + "If there is a table bucket who use the buffer size exceeds this config, "
+                                    + "PreWriteBufferFullException will be thrown. The default value is 200MB.");
+
     // --------------------------------------------------------------------------
     // Provided configurable ColumnFamilyOptions within Fluss
     // --------------------------------------------------------------------------

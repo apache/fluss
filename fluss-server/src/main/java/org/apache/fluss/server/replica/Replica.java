@@ -265,6 +265,12 @@ public final class Replica {
         logicalStorageMetrics.gauge(
                 MetricNames.LOCAL_STORAGE_LOG_SIZE, this::logicalStorageLogSize);
         logicalStorageMetrics.gauge(MetricNames.LOCAL_STORAGE_KV_SIZE, this::logicalStorageKvSize);
+
+        // PreWriteBufferSize.
+        MetricGroup kvMetrics = bucketMetricGroup.addGroup("kv");
+        kvMetrics.gauge(
+                MetricNames.KV_PRE_WRITE_BUFFER_MEMORY_POOL_USAGE_SIZE,
+                this::kvPreWriteBufferMemoryPoolUsage);
     }
 
     public long logicalStorageLogSize() {
@@ -282,6 +288,14 @@ public final class Replica {
             return kvSnapshotManager.getSnapshotSize();
         } else {
             // follower doesn't need to report the logical storage size.
+            return 0L;
+        }
+    }
+
+    public long kvPreWriteBufferMemoryPoolUsage() {
+        if (isLeader() && isKvTable()) {
+            return kvTablet.getPreWriteBufferMemoryPoolUsage();
+        } else {
             return 0L;
         }
     }
