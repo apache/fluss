@@ -17,5 +17,5 @@
 
 package org.apache.fluss.flink.sink;
 
-/** Integration tests for Array type support in Flink 2.1. */
+/** Integration tests for Array type support in Flink 2.2. */
 public class Flink22ComplexTypeITCase extends FlinkComplexTypeITCase {}

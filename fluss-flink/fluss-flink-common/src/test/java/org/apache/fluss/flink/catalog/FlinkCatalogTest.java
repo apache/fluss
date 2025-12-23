@@ -139,7 +139,7 @@ class FlinkCatalogTest {
         return new ResolvedCatalogTable(origin, resolvedSchema);
     }
 
-    private CatalogMaterializedTable newCatalogMaterializedTable(
+    protected CatalogMaterializedTable newCatalogMaterializedTable(
             ResolvedSchema resolvedSchema,
             CatalogMaterializedTable.RefreshMode refreshMode,
             Map<String, String> options) {
@@ -306,7 +306,8 @@ class FlinkCatalogTest {
         assertThatThrownBy(() -> catalog.renameTable(this.tableInDefaultDb, "newName", false))
                 .isInstanceOf(UnsupportedOperationException.class);
 
-        // Test lake table handling - should throw TableNotExistException for non-existent lake
+        // Test lake table handling - should throw TableNotExistException for
+        // non-existent lake
         // table
         ObjectPath lakePath = new ObjectPath(DEFAULT_DB, "regularTable$lake");
         assertThatThrownBy(() -> catalog.getTable(lakePath))
@@ -332,7 +333,8 @@ class FlinkCatalogTest {
         // drop fluss table
         catalog.dropTable(lakeTablePath, false);
         assertThat(catalog.tableExists(lakeTablePath)).isFalse();
-        // create the table again should be ok, because the existing lake table is matched
+        // create the table again should be ok, because the existing lake table is
+        // matched
         catalog.createTable(lakeTablePath, table, false);
     }
 
@@ -547,7 +549,8 @@ class FlinkCatalogTest {
                         this.createSchema(),
                         CatalogMaterializedTable.RefreshMode.FULL,
                         Collections.emptyMap());
-        // Fluss doesn't support insert overwrite in batch mode now, so full refresh mode is not
+        // Fluss doesn't support insert overwrite in batch mode now, so full refresh
+        // mode is not
         // supported now.
         assertThatThrownBy(
                         () ->
@@ -615,7 +618,8 @@ class FlinkCatalogTest {
                 .hasMessage("Database %s in catalog %s is not empty.", "db1", CATALOG_NAME);
         // should be ok since we set cascade = true
         catalog.dropDatabase("db1", false, true);
-        // drop it again, should throw exception since db1 is not exist and we set ignoreIfNotExists
+        // drop it again, should throw exception since db1 is not exist and we set
+        // ignoreIfNotExists
         // = false
         assertThatThrownBy(() -> catalog.dropDatabase("db1", false, true))
                 .isInstanceOf(DatabaseNotExistException.class)
@@ -627,7 +631,8 @@ class FlinkCatalogTest {
         catalog.dropDatabase("db2", false, true);
         // should be empty
         assertThat(catalog.listDatabases()).isEqualTo(Collections.singletonList(DEFAULT_DB));
-        // should throw exception since the db is not exist and we set ignoreIfNotExists = false
+        // should throw exception since the db is not exist and we set ignoreIfNotExists
+        // = false
         assertThatThrownBy(() -> catalog.listTables("unknown"))
                 .isInstanceOf(DatabaseNotExistException.class)
                 .hasMessage("Database %s does not exist in Catalog %s.", "unknown", CATALOG_NAME);
@@ -846,7 +851,7 @@ class FlinkCatalogTest {
 
     @Test
     void testStatisticsOperations() throws Exception {
-        //  Statistics testing
+        // Statistics testing
         CatalogTable table = newCatalogTable(Collections.emptyMap());
         ObjectPath tablePath = new ObjectPath(DEFAULT_DB, "statsTable");
         catalog.createTable(tablePath, table, false);

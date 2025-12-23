@@ -166,6 +166,8 @@
                                                 <exclude>fluss-test-utils/**</exclude>
                                                 <!-- exclude adapter classes to avoid Jacoco error: "Can't add different class with same name" -->
                                                 <exclude>fluss-flink/**/target/classes/org/apache/fluss/flink/adapter/**</exclude>
+                                                <!-- exclude FlinkSink from flink 2.2 to avoid Jacoco duplicate class error -->
+                                                <exclude>fluss-flink/fluss-flink-2.2/target/classes/org/apache/fluss/flink/sink/FlinkSink*</exclude>
                                             </excludes>
                                         </resource>
                                     </resources>
@@ -208,6 +210,8 @@
                                                 <exclude>fluss-test-utils/**</exclude>
                                                 <!-- exclude adapter classes to avoid Jacoco error: "Can't add different class with same name" -->
                                                 <exclude>fluss-flink/**/target/classes/org/apache/fluss/flink/adapter/**</exclude>
+                                                <!-- exclude FlinkSink from flink 2.2 to avoid Jacoco duplicate class error -->
+                                                <exclude>fluss-flink/fluss-flink-2.2/target/classes/org/apache/fluss/flink/sink/FlinkSink*</exclude>
                                             </excludes>
                                         </resource>
                                     </resources>

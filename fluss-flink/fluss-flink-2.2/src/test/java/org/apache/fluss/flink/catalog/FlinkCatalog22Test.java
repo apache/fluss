@@ -59,4 +59,46 @@ public class FlinkCatalog22Test extends FlinkCatalogTest {
                         DefaultIndex.newIndex(
                                 "INDEX_first_third", Arrays.asList("first", "third"))));
     }
+
+    @Override
+    protected org.apache.flink.table.catalog.CatalogMaterializedTable newCatalogMaterializedTable(
+            ResolvedSchema resolvedSchema,
+            org.apache.flink.table.catalog.CatalogMaterializedTable.RefreshMode refreshMode,
+            java.util.Map<String, String> options) {
+        org.apache.flink.table.catalog.CatalogMaterializedTable origin =
+                org.apache.flink.table.catalog.CatalogMaterializedTable.newBuilder()
+                        .schema(
+                                org.apache.flink.table.api.Schema.newBuilder()
+                                        .fromResolvedSchema(resolvedSchema)
+                                        .build())
+                        .comment("test comment")
+                        .options(options)
+                        .partitionKeys(Collections.emptyList())
+                        .definitionQuery("select first, second, third from t")
+                        .freshness(
+                                org.apache.flink.table.catalog.IntervalFreshness.of(
+                                        "5",
+                                        org.apache.flink.table.catalog.IntervalFreshness.TimeUnit
+                                                .SECOND))
+                        .logicalRefreshMode(
+                                refreshMode
+                                                == org.apache.flink.table.catalog
+                                                        .CatalogMaterializedTable.RefreshMode
+                                                        .CONTINUOUS
+                                        ? org.apache.flink.table.catalog.CatalogMaterializedTable
+                                                .LogicalRefreshMode.CONTINUOUS
+                                        : org.apache.flink.table.catalog.CatalogMaterializedTable
+                                                .LogicalRefreshMode.FULL)
+                        .refreshMode(refreshMode)
+                        .refreshStatus(
+                                org.apache.flink.table.catalog.CatalogMaterializedTable
+                                        .RefreshStatus.INITIALIZING)
+                        .build();
+        return new org.apache.flink.table.catalog.ResolvedCatalogMaterializedTable(
+                origin,
+                resolvedSchema,
+                refreshMode,
+                org.apache.flink.table.catalog.IntervalFreshness.of(
+                        "5", org.apache.flink.table.catalog.IntervalFreshness.TimeUnit.SECOND));
+    }
 }
