@@ -160,7 +160,7 @@ public class ExceptionUtilsTest {
         Exception result = ExceptionUtils.firstOrSuppressed(exceptionA, exceptionB);
         assertThat(result).isEqualTo(exceptionB);
 
-        // verify the exception cycle was prevented (B should not have A suppressed)    
+        // verify the exception cycle was prevented (B should not have A suppressed)
         assertThat(exceptionB.getSuppressed()).doesNotContain(exceptionA);
         assertThat(exceptionA.getCause()).isEqualTo(exceptionB);
 

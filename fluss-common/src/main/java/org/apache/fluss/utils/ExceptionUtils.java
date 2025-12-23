@@ -383,35 +383,37 @@ public final class ExceptionUtils {
     }
 
     /**
-     * Checks whether the given {@code exception} throwable exception exists anywhere within the
-     * exception chain of {@code previous}. This includes both the cause chain and all suppressed
-     * exceptions. A visited set is used to avoid cycles and redundant traversal.
+     * Checks whether the given {@code targetException} exists anywhere within the exception chain
+     * of {@code exceptionChain}. This includes both the cause chain and all suppressed exceptions.
+     * A visited set is used to avoid cycles and redundant traversal.
      *
-     * @param exception The throwable exception to search for.
-     * @param previous The previous throwable exception chain to search in.
-     * @return True, if the exception is found within the suppressed chain, false otherwise.
+     * @param targetException The throwable exception to search for.
+     * @param exceptionChain The previous throwable exception chain to search in.
+     * @return {@code true}, if the exception is found within the exception chain (suppressed or
+     *     cause), {@code false} otherwise.
      */
-    private static boolean existsInExceptionChain(Throwable exception, Throwable previous) {
-        if (exception == null || previous == null) {
+    private static boolean existsInExceptionChain(
+            Throwable targetException, Throwable exceptionChain) {
+        if (targetException == null || exceptionChain == null) {
             return false;
         }
-        if (exception == previous) {
+        if (targetException == exceptionChain) {
             return true;
         }
 
         // Apply cycle prevention through a graph-like traversal of existing
         // suppressed or cause chain exceptions
-        Set<Throwable> previousExceptions = new HashSet<>();
+        Set<Throwable> visitedExceptions = new HashSet<>();
         Deque<Throwable> exceptionStack = new ArrayDeque<>();
-        exceptionStack.push(previous);
+        exceptionStack.push(exceptionChain);
 
         while (!exceptionStack.isEmpty()) {
             Throwable currentException = exceptionStack.pop();
-            if (!previousExceptions.add(currentException)) {
+            if (!visitedExceptions.add(currentException)) {
                 continue;
             }
 
-            if (currentException == exception) {
+            if (currentException == targetException) {
                 return true;
             }
 
