@@ -24,7 +24,6 @@ STAGE_LAKE="lake"
 MODULES_FLINK="\
 fluss-flink,\
 fluss-flink/fluss-flink-common,\
-fluss-flink/fluss-flink-2.1,\
 fluss-flink/fluss-flink-2.2,\
 fluss-flink/fluss-flink-1.20,\
 "
