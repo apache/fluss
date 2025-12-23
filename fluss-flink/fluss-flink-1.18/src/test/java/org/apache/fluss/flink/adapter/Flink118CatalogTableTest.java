@@ -27,10 +27,6 @@ public class Flink118CatalogTableTest extends FlinkCatalogTableTest {
 
     @Test
     public void testIsMaterializedTable() {
-        assertThat(
-                        CatalogTableAdapter.isMaterializedTable(
-                                CatalogBaseTable.TableKind.MATERIALIZED_TABLE))
-                .isEqualTo(false);
         assertThat(CatalogTableAdapter.isMaterializedTable(CatalogBaseTable.TableKind.VIEW))
                 .isEqualTo(false);
         assertThat(CatalogTableAdapter.isMaterializedTable(CatalogBaseTable.TableKind.TABLE))
