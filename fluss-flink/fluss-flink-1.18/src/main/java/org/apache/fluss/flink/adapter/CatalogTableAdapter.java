@@ -27,8 +27,8 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * A adapter for {@link CatalogTable} constructor. TODO: remove this class when no longer support
- * flink 1.18 and 1.19.
+ * A adapter for {@link CatalogTable} constructor, and adapter MATERIALIZED_TABLE for {@link
+ * CatalogBaseTable.TableKind} TODO: remove this class when no longer support flink 1.18 and 1.19.
  */
 public class CatalogTableAdapter {
     public static CatalogTable toCatalogTable(
