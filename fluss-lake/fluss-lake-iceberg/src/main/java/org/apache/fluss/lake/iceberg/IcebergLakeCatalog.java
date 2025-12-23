@@ -162,6 +162,17 @@ public class IcebergLakeCatalog implements LakeCatalog {
         }
     }
 
+    @Override
+    public void renameTable(
+            TablePath fromTablePath,
+            TablePath toTablePath,
+            TableDescriptor tableDescriptor,
+            Context context)
+            throws TableAlreadyExistException {
+        throw new UnsupportedOperationException(
+                "Rename table is not supported for Iceberg at the moment");
+    }
+
     private TableIdentifier toIcebergTableIdentifier(TablePath tablePath) {
         return TableIdentifier.of(tablePath.getDatabaseName(), tablePath.getTableName());
     }

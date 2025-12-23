@@ -303,9 +303,6 @@ class FlinkCatalogTest {
 
         checkEqualsRespectSchema((CatalogTable) tableCreated, expectedTable);
 
-        assertThatThrownBy(() -> catalog.renameTable(this.tableInDefaultDb, "newName", false))
-                .isInstanceOf(UnsupportedOperationException.class);
-
         // Test lake table handling - should throw TableNotExistException for non-existent lake
         // table
         ObjectPath lakePath = new ObjectPath(DEFAULT_DB, "regularTable$lake");
@@ -915,6 +912,29 @@ class FlinkCatalogTest {
         catalog.dropPartition(partTablePath, partSpec, false);
         catalog.dropTable(partTablePath, false);
         catalog.dropTable(tablePath, false);
+    }
+
+    @Test
+    void testRenameTable() throws Exception {
+        Map<String, String> options = new HashMap<>();
+        CatalogTable table = this.newCatalogTable(options);
+        catalog.createTable(this.tableInDefaultDb, table, false);
+        assertThat(catalog.tableExists(this.tableInDefaultDb)).isTrue();
+        // rename table name from 't1' to 't2'.
+        catalog.renameTable(this.tableInDefaultDb, "t2", false);
+        ObjectPath t2InDefaultDb = new ObjectPath(DEFAULT_DB, "t2");
+        assertThat(catalog.tableExists(t2InDefaultDb)).isTrue();
+        assertThat(catalog.tableExists(this.tableInDefaultDb)).isFalse();
+
+        // rename an existing table from 't2' to 't3', should throw exception.
+        ObjectPath t3InDefaultDb = new ObjectPath(DEFAULT_DB, "t3");
+        catalog.createTable(t3InDefaultDb, table, false);
+        assertThatThrownBy(() -> catalog.renameTable(t2InDefaultDb, "t3", false))
+                .isInstanceOf(TableAlreadyExistException.class)
+                .hasMessage(
+                        String.format(
+                                "Table (or view) %s already exists in Catalog %s.",
+                                t3InDefaultDb, CATALOG_NAME));
     }
 
     @Test

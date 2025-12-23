@@ -92,6 +92,16 @@ public class TestingPaimonStoragePlugin implements LakeStoragePlugin {
             // do nothing
         }
 
+        @Override
+        public void renameTable(
+                TablePath fromTablePath,
+                TablePath toTablePath,
+                TableDescriptor tableDescriptor,
+                Context context)
+                throws TableAlreadyExistException {
+            // do nothing
+        }
+
         public TableDescriptor getTable(TablePath tablePath) {
             return tableByPath.get(tablePath);
         }

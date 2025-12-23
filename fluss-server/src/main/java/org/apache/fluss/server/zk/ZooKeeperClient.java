@@ -91,10 +91,12 @@ import org.slf4j.LoggerFactory;
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -606,6 +608,13 @@ public class ZooKeeperClient implements AutoCloseable {
         // path 'table_path/schemas/schema_id' to store the schema, so we can't use the path of
         // table 'table_path' exist or not to check the table exist or not.
         return stat != null && stat.getDataLength() > 0;
+    }
+
+    /** Rename the table in ZK. */
+    public void renameTable(TablePath fromTablePath, TablePath toTablePath) throws Exception {
+        copyPath(TableZNode.path(fromTablePath), TableZNode.path(toTablePath));
+        deleteTable(fromTablePath);
+        LOG.info("Renamed table {} to {}.", fromTablePath, toTablePath);
     }
 
     /** Get the partitions of a table in ZK. */
@@ -1221,6 +1230,33 @@ public class ZooKeeperClient implements AutoCloseable {
         try {
             zkClient.delete().forPath(path);
         } catch (KeeperException.NoNodeException ignored) {
+        }
+    }
+
+    /** Copy a path recursively from fromPath to toPath. */
+    public void copyPath(String fromPath, String toPath) throws Exception {
+        Deque<Tuple2<String, String>> stack = new ArrayDeque<>();
+        stack.push(Tuple2.of(fromPath, toPath));
+
+        while (!stack.isEmpty()) {
+            Tuple2<String, String> zkNode = stack.pop();
+            Optional<Stat> fromStat = getStat(zkNode.f0);
+            if (!fromStat.isPresent()) {
+                continue;
+            }
+
+            byte[] data = zkClient.getData().forPath(zkNode.f0);
+
+            zkClient.create()
+                    .creatingParentsIfNeeded()
+                    .withMode(CreateMode.PERSISTENT)
+                    .forPath(zkNode.f1, data);
+
+            List<String> children = zkClient.getChildren().forPath(zkNode.f0);
+            for (int i = children.size() - 1; i >= 0; i--) {
+                String child = children.get(i);
+                stack.push(Tuple2.of(zkNode.f0 + "/" + child, zkNode.f1 + "/" + child));
+            }
         }
     }
 

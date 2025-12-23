@@ -84,6 +84,8 @@ import org.apache.fluss.rpc.messages.ListTablesRequest;
 import org.apache.fluss.rpc.messages.ListTablesResponse;
 import org.apache.fluss.rpc.messages.MetadataRequest;
 import org.apache.fluss.rpc.messages.MetadataResponse;
+import org.apache.fluss.rpc.messages.RenameTableRequest;
+import org.apache.fluss.rpc.messages.RenameTableResponse;
 import org.apache.fluss.rpc.messages.TableExistsRequest;
 import org.apache.fluss.rpc.messages.TableExistsResponse;
 import org.apache.fluss.rpc.protocol.ApiError;
@@ -150,6 +152,11 @@ public class TestCoordinatorGateway implements CoordinatorGateway {
 
     @Override
     public CompletableFuture<AlterTableResponse> alterTable(AlterTableRequest request) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public CompletableFuture<RenameTableResponse> renameTable(RenameTableRequest request) {
         throw new UnsupportedOperationException();
     }
 

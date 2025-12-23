@@ -416,9 +416,27 @@ public class FlinkCatalog extends AbstractCatalog {
     }
 
     @Override
-    public void renameTable(ObjectPath objectPath, String s, boolean b)
+    public void renameTable(ObjectPath objectPath, String newTableName, boolean ignoreIfNotExists)
             throws TableNotExistException, TableAlreadyExistException, CatalogException {
-        throw new UnsupportedOperationException();
+        TablePath fromTablePath = toTablePath(objectPath);
+        ObjectPath toObjectPath = new ObjectPath(objectPath.getDatabaseName(), newTableName);
+        TablePath toTablePath = toTablePath(toObjectPath);
+        try {
+            admin.renameTable(fromTablePath, toTablePath, ignoreIfNotExists).get();
+        } catch (Exception e) {
+            Throwable t = ExceptionUtils.stripExecutionException(e);
+            if (isTableNotExist(t)) {
+                throw new TableNotExistException(getName(), objectPath);
+            } else if (CatalogExceptionUtils.isTableAlreadyExist(t)) {
+                throw new TableAlreadyExistException(getName(), toObjectPath);
+            } else {
+                throw new CatalogException(
+                        String.format(
+                                "Failed to rename table %s to %s in %s",
+                                objectPath, toObjectPath, getName()),
+                        t);
+            }
+        }
     }
 
     @Override

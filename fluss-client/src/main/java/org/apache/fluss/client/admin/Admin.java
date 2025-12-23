@@ -261,6 +261,25 @@ public interface Admin extends AutoCloseable {
             TablePath tablePath, List<TableChange> tableChanges, boolean ignoreIfNotExists);
 
     /**
+     * Rename the table with the given table path asynchronously.
+     *
+     * <p>The following exceptions can be anticipated when calling {@code get()} on returned future.
+     *
+     * <ul>
+     *   <li>{@link TableNotExistException} if the source table does not exist and {@code
+     *       ignoreIfNotExists} is false.
+     *   <li>{@link TableAlreadyExistException} if the target table already exists.
+     * </ul>
+     *
+     * @param fromTablePath The source table path of the table.
+     * @param toTablePath The target table path of the table.
+     * @param ignoreIfNotExists Flag to specify behavior when a table with the given name does not
+     *     exist: if set to false, throw a TableNotExistException, if set to true, do nothing.
+     */
+    CompletableFuture<Void> renameTable(
+            TablePath fromTablePath, TablePath toTablePath, boolean ignoreIfNotExists);
+
+    /**
      * List all partitions in the given table in fluss cluster asynchronously.
      *
      * <p>The following exceptions can be anticipated when calling {@code get()} on returned future.
