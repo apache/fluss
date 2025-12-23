@@ -17,7 +17,6 @@
 
 package org.apache.fluss.utils;
 
-import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
 import java.util.concurrent.CompletionException;
@@ -142,7 +141,13 @@ public class ExceptionUtilsTest {
         assertThat(exceptionB.getSuppressed()).isEmpty();
 
         // verify that processing suppressed exceptions no longer causes StackOverflowError
-        Assertions.assertDoesNotThrow(() -> recursivelyProcessSuppressedExceptions(exceptionA));
+        Throwable thrown = null;
+        try {
+            recursivelyProcessSuppressedExceptions(exceptionA);
+        } catch (Throwable t) {
+            thrown = t;
+        }
+        assertThat(thrown).isNull();
     }
 
     @Test
@@ -165,7 +170,13 @@ public class ExceptionUtilsTest {
         assertThat(exceptionA.getCause()).isEqualTo(exceptionB);
 
         // verify that processing the cause chain no longer causes StackOverflowError
-        Assertions.assertDoesNotThrow(() -> recursivelyProcessCauseChain(exceptionA));
+        Throwable thrown = null;
+        try {
+            recursivelyProcessCauseChain(exceptionA);
+        } catch (Throwable t) {
+            thrown = t;
+        }
+        assertThat(thrown).isNull();
     }
 
     @Test
