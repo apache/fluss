@@ -20,6 +20,7 @@ package org.apache.fluss.client.metadata;
 import org.apache.fluss.cluster.Cluster;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.ServerType;
+import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.StaleMetadataException;
 import org.apache.fluss.rpc.RpcClient;
@@ -51,12 +52,14 @@ public class MetadataUpdaterTest {
         Configuration configuration = new Configuration();
         RpcClient rpcClient =
                 RpcClient.create(configuration, TestingClientMetricGroup.newInstance(), false);
+        int times = configuration.getInt(ConfigOptions.CLIENT_METADATA_RETRY_TIMES);
+        int interval = configuration.getInt(ConfigOptions.CLIENT_METADATA_RETRY_INTERVAL);
 
         // retry lower than max retry count.
         AdminReadOnlyGateway gateway = new TestingAdminReadOnlyGateway(2);
         Cluster cluster =
                 MetadataUpdater.tryToInitializeClusterWithRetries(
-                        rpcClient, CS_NODE, gateway, 3, 100);
+                        rpcClient, CS_NODE, gateway, times, interval);
         assertThat(cluster).isNotNull();
         assertThat(cluster.getCoordinatorServer()).isEqualTo(CS_NODE);
         assertThat(cluster.getAliveTabletServerList()).containsExactly(TS_NODE);
@@ -66,7 +69,7 @@ public class MetadataUpdaterTest {
         assertThatThrownBy(
                         () ->
                                 MetadataUpdater.tryToInitializeClusterWithRetries(
-                                        rpcClient, CS_NODE, gateway2, 3, 100))
+                                        rpcClient, CS_NODE, gateway2, times, interval))
                 .isInstanceOf(StaleMetadataException.class)
                 .hasMessageContaining("The metadata is stale.");
     }
