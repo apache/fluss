@@ -61,28 +61,35 @@ public class LakeTableJsonSerde implements JsonSerializer<LakeTable>, JsonDeseri
 
     @Override
     public void serialize(LakeTable lakeTable, JsonGenerator generator) throws IOException {
-        generator.writeStartObject();
-        generator.writeNumberField(VERSION_KEY, CURRENT_VERSION);
-
-        generator.writeArrayFieldStart(LAKE_SNAPSHOTS);
-        for (LakeTable.LakeSnapshotMetadata lakeSnapshotMetadata :
-                checkNotNull(lakeTable.getLakeSnapshotMetadatas())) {
+        // if lake table snapshot is null, it must be version 1
+        if (lakeTable.getLakeTableSnapshot() != null) {
+            // Version 1: ZK node contains full snapshot data, use LakeTableSnapshotJsonSerde
+            LakeTableSnapshotJsonSerde.INSTANCE.serialize(
+                    lakeTable.getLakeTableSnapshot(), generator);
+        } else {
             generator.writeStartObject();
+            generator.writeNumberField(VERSION_KEY, CURRENT_VERSION);
 
-            generator.writeNumberField(SNAPSHOT_ID_KEY, lakeSnapshotMetadata.getSnapshotId());
-            generator.writeStringField(
-                    TIERED_OFFSETS_KEY, lakeSnapshotMetadata.getTieredOffsetsFilePath().toString());
-            if (lakeSnapshotMetadata.getReadableOffsetsFilePath() != null) {
+            generator.writeArrayFieldStart(LAKE_SNAPSHOTS);
+            for (LakeTable.LakeSnapshotMetadata lakeSnapshotMetadata :
+                    checkNotNull(lakeTable.getLakeSnapshotMetadatas())) {
+                generator.writeStartObject();
+
+                generator.writeNumberField(SNAPSHOT_ID_KEY, lakeSnapshotMetadata.getSnapshotId());
                 generator.writeStringField(
-                        READABLE_OFFSETS_KEY,
-                        lakeSnapshotMetadata.getReadableOffsetsFilePath().toString());
+                        TIERED_OFFSETS_KEY,
+                        lakeSnapshotMetadata.getTieredOffsetsFilePath().toString());
+                if (lakeSnapshotMetadata.getReadableOffsetsFilePath() != null) {
+                    generator.writeStringField(
+                            READABLE_OFFSETS_KEY,
+                            lakeSnapshotMetadata.getReadableOffsetsFilePath().toString());
+                }
+                generator.writeEndObject();
             }
+            generator.writeEndArray();
+
             generator.writeEndObject();
         }
-
-        generator.writeEndArray();
-
-        generator.writeEndObject();
     }
 
     @Override

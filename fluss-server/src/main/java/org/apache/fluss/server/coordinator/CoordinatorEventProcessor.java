@@ -1305,8 +1305,8 @@ public class CoordinatorEventProcessor implements EventProcessor {
                                 }
 
                                 // this involves IO operation (ZK), so we do it in ioExecutor
-                                lakeTableHelper.upsertLakeTable(
-                                        tableId, tablePath, lakeTableSnapshotEntry.getValue());
+                                lakeTableHelper.upsertLakeTableV1(
+                                        tableId, lakeTableSnapshotEntry.getValue());
                             } catch (Exception e) {
                                 ApiError error = ApiError.fromThrowable(e);
                                 tableResp.setError(error.error().code(), error.message());

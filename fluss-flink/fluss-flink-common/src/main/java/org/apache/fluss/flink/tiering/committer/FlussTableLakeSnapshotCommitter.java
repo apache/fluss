@@ -17,6 +17,7 @@
 
 package org.apache.fluss.flink.tiering.committer;
 
+import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
@@ -228,28 +229,50 @@ public class FlussTableLakeSnapshotCommitter implements AutoCloseable {
         // Add PbLakeTableSnapshotInfo for metrics reporting (to notify tablet servers about
         // synchronized log end offsets and max timestamps)
         if (!logEndOffsets.isEmpty()) {
-            PbLakeTableSnapshotInfo pbLakeTableSnapshotInfo =
-                    commitLakeTableSnapshotRequest.addTablesReq();
-            pbLakeTableSnapshotInfo.setTableId(tableId);
-            pbLakeTableSnapshotInfo.setSnapshotId(snapshotId);
-            for (Map.Entry<TableBucket, Long> logEndOffsetEntry : logEndOffsets.entrySet()) {
-                TableBucket tableBucket = logEndOffsetEntry.getKey();
-                PbLakeTableOffsetForBucket pbLakeTableOffsetForBucket =
-                        pbLakeTableSnapshotInfo.addBucketsReq();
+            commitLakeTableSnapshotRequest =
+                    addLogEndOffsets(
+                            commitLakeTableSnapshotRequest,
+                            tableId,
+                            snapshotId,
+                            logEndOffsets,
+                            logMaxTieredTimestamps);
+        }
+        return commitLakeTableSnapshotRequest;
+    }
 
-                if (tableBucket.getPartitionId() != null) {
-                    pbLakeTableOffsetForBucket.setPartitionId(tableBucket.getPartitionId());
-                }
-                pbLakeTableOffsetForBucket.setBucketId(tableBucket.getBucket());
-                pbLakeTableOffsetForBucket.setLogEndOffset(logEndOffsetEntry.getValue());
+    @VisibleForTesting
+    protected CommitLakeTableSnapshotRequest addLogEndOffsets(
+            CommitLakeTableSnapshotRequest commitLakeTableSnapshotRequest,
+            long tableId,
+            long snapshotId,
+            Map<TableBucket, Long> logEndOffsets,
+            Map<TableBucket, Long> logMaxTieredTimestamps) {
+        PbLakeTableSnapshotInfo pbLakeTableSnapshotInfo =
+                commitLakeTableSnapshotRequest.addTablesReq();
+        pbLakeTableSnapshotInfo.setTableId(tableId);
+        pbLakeTableSnapshotInfo.setSnapshotId(snapshotId);
+        for (Map.Entry<TableBucket, Long> logEndOffsetEntry : logEndOffsets.entrySet()) {
+            TableBucket tableBucket = logEndOffsetEntry.getKey();
+            PbLakeTableOffsetForBucket pbLakeTableOffsetForBucket =
+                    pbLakeTableSnapshotInfo.addBucketsReq();
 
-                Long maxTimestamp = logMaxTieredTimestamps.get(tableBucket);
-                if (maxTimestamp != null) {
-                    pbLakeTableOffsetForBucket.setMaxTimestamp(maxTimestamp);
-                }
+            if (tableBucket.getPartitionId() != null) {
+                pbLakeTableOffsetForBucket.setPartitionId(tableBucket.getPartitionId());
+            }
+            pbLakeTableOffsetForBucket.setBucketId(tableBucket.getBucket());
+            pbLakeTableOffsetForBucket.setLogEndOffset(logEndOffsetEntry.getValue());
+
+            Long maxTimestamp = logMaxTieredTimestamps.get(tableBucket);
+            if (maxTimestamp != null) {
+                pbLakeTableOffsetForBucket.setMaxTimestamp(maxTimestamp);
             }
         }
         return commitLakeTableSnapshotRequest;
+    }
+
+    @VisibleForTesting
+    CoordinatorGateway getCoordinatorGateway() {
+        return coordinatorGateway;
     }
 
     @Override

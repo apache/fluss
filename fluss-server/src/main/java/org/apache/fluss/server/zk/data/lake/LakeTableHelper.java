@@ -25,6 +25,9 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.utils.FlussPaths;
+import org.apache.fluss.utils.json.JsonSerdeUtils;
+import org.apache.fluss.utils.json.TableBucketOffsets;
+import org.apache.fluss.utils.json.TableBucketOffsetsJsonSerde;
 
 import java.util.HashMap;
 import java.util.List;
@@ -42,6 +45,26 @@ public class LakeTableHelper {
     public LakeTableHelper(ZooKeeperClient zkClient, String remoteDataDir) {
         this.zkClient = zkClient;
         this.remoteDataDir = remoteDataDir;
+    }
+
+    /**
+     * Upserts a lake table snapshot for the given table, stored in v1 format.
+     *
+     * @param tableId the table ID
+     * @param lakeTableSnapshot the new snapshot to upsert
+     * @throws Exception if the operation fails
+     */
+    public void upsertLakeTableV1(long tableId, LakeTableSnapshot lakeTableSnapshot)
+            throws Exception {
+        Optional<LakeTable> optPreviousLakeTable = zkClient.getLakeTable(tableId);
+        // Merge with previous snapshot if exists
+        if (optPreviousLakeTable.isPresent()) {
+            lakeTableSnapshot =
+                    mergeLakeTable(
+                            optPreviousLakeTable.get().getLatestTableSnapshot(), lakeTableSnapshot);
+        }
+        zkClient.upsertLakeTable(
+                tableId, new LakeTable(lakeTableSnapshot), optPreviousLakeTable.isPresent());
     }
 
     /**
@@ -156,21 +179,25 @@ public class LakeTableHelper {
     public FsPath storeLakeTableSnapshot(
             long tableId, TablePath tablePath, LakeTableSnapshot lakeTableSnapshot)
             throws Exception {
-        // get the remote file path to store the lake table snapshot information
-        FsPath remoteLakeTableSnapshotManifestPath =
-                FlussPaths.remoteLakeTableSnapshotManifestPath(remoteDataDir, tablePath, tableId);
+        // get the remote file path to store the lake table snapshot offset information
+        FsPath remoteLakeTableSnapshotOffsetPath =
+                FlussPaths.remoteLakeTableSnapshotOffsetPath(remoteDataDir, tablePath, tableId);
         // check whether the parent directory exists, if not, create the directory
-        FileSystem fileSystem = remoteLakeTableSnapshotManifestPath.getFileSystem();
-        if (!fileSystem.exists(remoteLakeTableSnapshotManifestPath.getParent())) {
-            fileSystem.mkdirs(remoteLakeTableSnapshotManifestPath.getParent());
+        FileSystem fileSystem = remoteLakeTableSnapshotOffsetPath.getFileSystem();
+        if (!fileSystem.exists(remoteLakeTableSnapshotOffsetPath.getParent())) {
+            fileSystem.mkdirs(remoteLakeTableSnapshotOffsetPath.getParent());
         }
-        // serialize table snapshot to json bytes, and write to file
-        byte[] jsonBytes = LakeTableSnapshotJsonSerde.toJson(lakeTableSnapshot);
+        // serialize table offsets to json bytes, and write to file
+        byte[] jsonBytes =
+                JsonSerdeUtils.writeValueAsBytes(
+                        new TableBucketOffsets(tableId, lakeTableSnapshot.getBucketLogEndOffset()),
+                        TableBucketOffsetsJsonSerde.INSTANCE);
+
         try (FSDataOutputStream outputStream =
                 fileSystem.create(
-                        remoteLakeTableSnapshotManifestPath, FileSystem.WriteMode.OVERWRITE)) {
+                        remoteLakeTableSnapshotOffsetPath, FileSystem.WriteMode.OVERWRITE)) {
             outputStream.write(jsonBytes);
         }
-        return remoteLakeTableSnapshotManifestPath;
+        return remoteLakeTableSnapshotOffsetPath;
     }
 }
