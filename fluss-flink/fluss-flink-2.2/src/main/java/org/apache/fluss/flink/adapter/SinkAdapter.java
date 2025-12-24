@@ -30,7 +30,7 @@ import java.io.IOException;
  *
  * <p>TODO: remove this class when no longer support all the Flink 1.x series.
  */
-public abstract class FlinkSinkAdapter<InputT> implements Sink<InputT> {
+public abstract class SinkAdapter<InputT> implements Sink<InputT> {
 
     @Override
     public SinkWriter<InputT> createWriter(WriterInitContext writerInitContext) throws IOException {

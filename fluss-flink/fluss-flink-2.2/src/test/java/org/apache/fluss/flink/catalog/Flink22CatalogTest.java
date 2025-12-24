@@ -18,21 +18,16 @@
 package org.apache.fluss.flink.catalog;
 
 import org.apache.flink.table.api.DataTypes;
-import org.apache.flink.table.api.Schema;
-import org.apache.flink.table.catalog.CatalogMaterializedTable;
 import org.apache.flink.table.catalog.Column;
 import org.apache.flink.table.catalog.DefaultIndex;
-import org.apache.flink.table.catalog.IntervalFreshness;
-import org.apache.flink.table.catalog.ResolvedCatalogMaterializedTable;
 import org.apache.flink.table.catalog.ResolvedSchema;
 import org.apache.flink.table.catalog.UniqueConstraint;
 
 import java.util.Arrays;
 import java.util.Collections;
-import java.util.Map;
 
 /** Test for {@link FlinkCatalog}. */
-public class FlinkCatalog22Test extends FlinkCatalogTest {
+public class Flink22CatalogTest extends FlinkCatalogTest {
 
     protected ResolvedSchema createSchema() {
         return new ResolvedSchema(
@@ -45,31 +40,5 @@ public class FlinkCatalog22Test extends FlinkCatalogTest {
                 Collections.singletonList(
                         DefaultIndex.newIndex(
                                 "INDEX_first_third", Arrays.asList("first", "third"))));
-    }
-
-    protected CatalogMaterializedTable newCatalogMaterializedTable(
-            ResolvedSchema resolvedSchema,
-            CatalogMaterializedTable.RefreshMode refreshMode,
-            Map<String, String> options) {
-        CatalogMaterializedTable origin =
-                CatalogMaterializedTable.newBuilder()
-                        .schema(Schema.newBuilder().fromResolvedSchema(resolvedSchema).build())
-                        .comment("test comment")
-                        .options(options)
-                        .partitionKeys(Collections.emptyList())
-                        .definitionQuery("select first, second, third from t")
-                        .freshness(IntervalFreshness.of("5", IntervalFreshness.TimeUnit.SECOND))
-                        .logicalRefreshMode(
-                                refreshMode == CatalogMaterializedTable.RefreshMode.CONTINUOUS
-                                        ? CatalogMaterializedTable.LogicalRefreshMode.CONTINUOUS
-                                        : CatalogMaterializedTable.LogicalRefreshMode.FULL)
-                        .refreshMode(refreshMode)
-                        .refreshStatus(CatalogMaterializedTable.RefreshStatus.INITIALIZING)
-                        .build();
-        return new ResolvedCatalogMaterializedTable(
-                origin,
-                resolvedSchema,
-                refreshMode,
-                IntervalFreshness.of("5", IntervalFreshness.TimeUnit.SECOND));
     }
 }
