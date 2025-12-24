@@ -46,13 +46,14 @@ public class LakeTableHelper {
     }
 
     /**
-     * Upserts a lake table snapshot for the given table, stored in v1 format.
+     * Upserts a lake table snapshot for the given table, stored in v1 format. Note: this method is
+     * just for back compatibility.
      *
      * @param tableId the table ID
      * @param lakeTableSnapshot the new snapshot to upsert
      * @throws Exception if the operation fails
      */
-    public void upsertLakeTableV1(long tableId, LakeTableSnapshot lakeTableSnapshot)
+    public void upsertLakeTable(long tableId, LakeTableSnapshot lakeTableSnapshot)
             throws Exception {
         Optional<LakeTable> optPreviousLakeTable = zkClient.getLakeTable(tableId);
         // Merge with previous snapshot if exists
@@ -75,7 +76,6 @@ public class LakeTableHelper {
         if (optPreviousLakeTable.isPresent()) {
             previousLakeSnapshotMetadatas = optPreviousLakeTable.get().getLakeSnapshotMetadatas();
         }
-        // currently, we always keep only one snapshot metadata
         LakeTable lakeTable = new LakeTable(lakeSnapshotMetadata);
         try {
             zkClient.upsertLakeTable(tableId, lakeTable, optPreviousLakeTable.isPresent());

@@ -211,12 +211,6 @@ public interface AdminReadOnlyGateway extends RpcGateway {
      *   <li>Returns the file path where the snapshot is stored
      * </ul>
      *
-     * <p>The returned file path points to a file that stores the bucket log end offset information
-     * for the table. This file path will be used in the subsequent commit phase to reference the
-     * stored snapshot. If any error occurs during processing for a specific table, an error
-     * response will be set for that table in the response, while other tables will continue to be
-     * processed.
-     *
      * @param request the request containing lake table snapshot information for one or more tables
      * @return a future that completes with a response containing the file paths where snapshots
      *     (containing bucket log end offset information) are stored, or error information for

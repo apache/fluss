@@ -120,7 +120,7 @@ public class LakeTable {
      *
      * @return the LakeTableSnapshot
      */
-    public LakeTableSnapshot getLatestTableSnapshot() throws Exception {
+    public LakeTableSnapshot getLatestTableSnapshot() throws IOException {
         if (lakeTableSnapshot != null) {
             return lakeTableSnapshot;
         }

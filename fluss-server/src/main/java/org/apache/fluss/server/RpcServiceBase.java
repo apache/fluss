@@ -633,7 +633,7 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
                                 FsPath fsPath =
                                         lakeTableHelper.storeLakeTableBucketOffsets(
                                                 tablePath, tableBucketOffsets);
-                                pbPrepareCommitLakeTableRespForTable.setLakeTableSnapshotFilePath(
+                                pbPrepareCommitLakeTableRespForTable.setLakeTableBucketOffsetsPath(
                                         fsPath.toString());
                             } catch (Exception e) {
                                 Errors error = ApiError.fromThrowable(e).error();

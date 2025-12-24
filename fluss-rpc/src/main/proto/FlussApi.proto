@@ -1019,8 +1019,8 @@ message PbRebalancePlanForBucket {
 message PbLakeTableSnapshotMetadata {
   required int64 table_id = 1;
   required int64 snapshot_id = 2;
-  required string tiered_snapshot_file_path = 3;
-  optional string readable_snapshot_file_path = 4;
+  required string tiered_bucket_offsets_file_path = 3;
+  optional string readable_bucket_offsets_file_path = 4;
 }
 
 message PbLakeTableSnapshotInfo {
@@ -1043,7 +1043,7 @@ message PbLakeTableOffsetForBucket {
 }
 
 message PbPrepareCommitLakeTableRespForTable {
-  optional string lake_table_snapshot_file_path = 1;
+  optional string lake_table_bucket_offsets_path = 1;
   optional int32 error_code = 2;
   optional string error_message = 3;
 }

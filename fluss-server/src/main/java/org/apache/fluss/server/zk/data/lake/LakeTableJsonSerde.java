@@ -61,11 +61,11 @@ public class LakeTableJsonSerde implements JsonSerializer<LakeTable>, JsonDeseri
 
     @Override
     public void serialize(LakeTable lakeTable, JsonGenerator generator) throws IOException {
-        // if lake table snapshot is not null, it must be version 1
-        if (lakeTable.getLakeTableSnapshot() != null) {
+        // if lake table snapshot metadata is null, it must be version 1
+        if (lakeTable.getLakeSnapshotMetadatas() == null) {
             // Version 1: ZK node contains full snapshot data, use LakeTableSnapshotJsonSerde
             LakeTableSnapshotJsonSerde.INSTANCE.serialize(
-                    lakeTable.getLakeTableSnapshot(), generator);
+                    lakeTable.getLatestTableSnapshot(), generator);
         } else {
             generator.writeStartObject();
             generator.writeNumberField(VERSION_KEY, CURRENT_VERSION);

@@ -58,7 +58,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
-import static org.apache.fluss.lake.committer.BucketOffset.FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY;
+import static org.apache.fluss.lake.committer.LakeCommitter.FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY;
 import static org.apache.fluss.utils.Preconditions.checkState;
 
 /**
@@ -231,22 +231,21 @@ public class TieringCommitOperator<WriteResult, Committable>
                             ? null
                             : flussCurrentLakeSnapshot.getSnapshotId());
 
-            // get the lake snapshot file storing the log end offsets
-            String lakeSnapshotMetadataFile =
+            // get the lake bucket offsets file storing the log end offsets
+            String lakeBucketOffsetsFile =
                     flussTableLakeSnapshotCommitter.prepareCommit(
                             tableId, tablePath, logEndOffsets);
 
-            // record the lake snapshot metadata file to snapshot property
+            // record the lake snapshot bucket offsets file to snapshot property
             long committedSnapshotId =
                     lakeCommitter.commit(
                             committable,
                             Collections.singletonMap(
-                                    FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY,
-                                    lakeSnapshotMetadataFile));
+                                    FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY, lakeBucketOffsetsFile));
             flussTableLakeSnapshotCommitter.commit(
                     tableId,
                     committedSnapshotId,
-                    lakeSnapshotMetadataFile,
+                    lakeBucketOffsetsFile,
                     logEndOffsets,
                     logMaxTieredTimestamps);
             return committable;
@@ -304,7 +303,7 @@ public class TieringCommitOperator<WriteResult, Committable>
             // since this code path should be rare, we do not consider backward compatibility
             // and throw IllegalStateException directly
             String trimmedPath = lakeSnapshotOffsetPath.trim();
-            if (trimmedPath.startsWith("{")) {
+            if (trimmedPath.contains("{")) {
                 throw new IllegalStateException(
                         String.format(
                                 "The %s field in snapshot property is a JSON string (tiered by v0.8), "

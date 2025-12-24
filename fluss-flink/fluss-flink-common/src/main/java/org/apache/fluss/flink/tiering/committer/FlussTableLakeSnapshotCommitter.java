@@ -56,7 +56,7 @@ import static org.apache.fluss.utils.Preconditions.checkState;
  * information in Fluss:
  *
  * <ul>
- *   <li><b>Prepare phase</b> ({@link #prepareCommit}): Sends log end offsets to the FLuss cluster,
+ *   <li><b>Prepare phase</b> ({@link #prepareCommit}): Sends log end offsets to the Fluss cluster,
  *       which merges them with the previous log end offsets and stores the merged snapshot data in
  *       a file. Returns the file path where the snapshot metadata is stored.
  *   <li><b>Commit phase</b> ({@link #commit}): Sends the lake snapshot metadata (including snapshot
@@ -112,7 +112,7 @@ public class FlussTableLakeSnapshotCommitter implements AutoCloseable {
             if (prepareCommitResp.hasErrorCode()) {
                 throw ApiError.fromErrorMessage(prepareCommitResp).exception();
             } else {
-                return checkNotNull(prepareCommitResp).getLakeTableSnapshotFilePath();
+                return checkNotNull(prepareCommitResp).getLakeTableBucketOffsetsPath();
             }
         } catch (Exception e) {
             throw new IOException(
@@ -126,7 +126,7 @@ public class FlussTableLakeSnapshotCommitter implements AutoCloseable {
     void commit(
             long tableId,
             long lakeSnapshotId,
-            String lakeSnapshotPath,
+            String lakeBucketOffsetsPath,
             Map<TableBucket, Long> logEndOffsets,
             Map<TableBucket, Long> logMaxTieredTimestamps)
             throws IOException {
@@ -135,7 +135,7 @@ public class FlussTableLakeSnapshotCommitter implements AutoCloseable {
                     toCommitLakeTableSnapshotRequest(
                             tableId,
                             lakeSnapshotId,
-                            lakeSnapshotPath,
+                            lakeBucketOffsetsPath,
                             logEndOffsets,
                             logMaxTieredTimestamps);
             List<PbCommitLakeTableSnapshotRespForTable> commitLakeTableSnapshotRespForTables =
@@ -200,7 +200,7 @@ public class FlussTableLakeSnapshotCommitter implements AutoCloseable {
      *
      * @param tableId the table ID
      * @param snapshotId the lake snapshot ID
-     * @param lakeSnapshotPath the file path where the snapshot metadata is stored
+     * @param bucketOffsetsPath the file path where the bucket offsets is stored
      * @param logEndOffsets the log end offsets for each bucket
      * @param logMaxTieredTimestamps the max tiered timestamps for each bucket
      * @return the commit request
@@ -208,7 +208,7 @@ public class FlussTableLakeSnapshotCommitter implements AutoCloseable {
     private CommitLakeTableSnapshotRequest toCommitLakeTableSnapshotRequest(
             long tableId,
             long snapshotId,
-            String lakeSnapshotPath,
+            String bucketOffsetsPath,
             Map<TableBucket, Long> logEndOffsets,
             Map<TableBucket, Long> logMaxTieredTimestamps) {
         CommitLakeTableSnapshotRequest commitLakeTableSnapshotRequest =
@@ -220,8 +220,8 @@ public class FlussTableLakeSnapshotCommitter implements AutoCloseable {
         pbLakeTableSnapshotMetadata.setSnapshotId(snapshotId);
         pbLakeTableSnapshotMetadata.setTableId(tableId);
         // tiered snapshot file path is equal to readable snapshot currently
-        pbLakeTableSnapshotMetadata.setTieredSnapshotFilePath(lakeSnapshotPath);
-        pbLakeTableSnapshotMetadata.setReadableSnapshotFilePath(lakeSnapshotPath);
+        pbLakeTableSnapshotMetadata.setTieredBucketOffsetsFilePath(bucketOffsetsPath);
+        pbLakeTableSnapshotMetadata.setReadableBucketOffsetsFilePath(bucketOffsetsPath);
 
         // Add PbLakeTableSnapshotInfo for metrics reporting (to notify tablet servers about
         // synchronized log end offsets and max timestamps)

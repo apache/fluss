@@ -111,7 +111,7 @@ class LakeTableHelperTest {
             LakeTableSnapshot lakeTableSnapshot =
                     new LakeTableSnapshot(snapshotId, bucketLogEndOffset);
             // Write version 1 format data(simulating old system behavior)
-            lakeTableHelper.upsertLakeTableV1(tableId, lakeTableSnapshot);
+            lakeTableHelper.upsertLakeTable(tableId, lakeTableSnapshot);
 
             // Verify version 1 data can be read
             Optional<LakeTable> optionalLakeTable = zooKeeperClient.getLakeTable(tableId);

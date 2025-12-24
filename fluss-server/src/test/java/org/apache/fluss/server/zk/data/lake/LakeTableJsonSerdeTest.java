@@ -24,6 +24,7 @@ import org.apache.fluss.utils.json.JsonSerdeUtils;
 
 import org.junit.jupiter.api.Test;
 
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -108,7 +109,7 @@ class LakeTableJsonSerdeTest extends JsonSerdeTestBase<LakeTable> {
     }
 
     @Test
-    void testVersion1Compatibility() {
+    void testVersion1Compatibility() throws IOException {
         // Test that Version 1 format can be deserialized correctly
         // Test case 1: Non-partition table
         String version1Json1 =
@@ -124,7 +125,7 @@ class LakeTableJsonSerdeTest extends JsonSerdeTestBase<LakeTable> {
         expectedBuckets1.put(new TableBucket(4L, 0), 100L);
         expectedBuckets1.put(new TableBucket(4L, 1), 200L);
         LakeTableSnapshot expectedSnapshot1 = new LakeTableSnapshot(10L, expectedBuckets1);
-        assertThat(actual1.getLakeTableSnapshot()).isEqualTo(expectedSnapshot1);
+        assertThat(actual1.getLatestTableSnapshot()).isEqualTo(expectedSnapshot1);
 
         // Test case 2: Partition table
         String version1Json2 =
@@ -143,6 +144,6 @@ class LakeTableJsonSerdeTest extends JsonSerdeTestBase<LakeTable> {
         expectedBuckets2.put(new TableBucket(5L, 1L, 1), 200L);
         expectedBuckets2.put(new TableBucket(5L, 2L, 0), 300L);
         LakeTableSnapshot expectedSnapshot2 = new LakeTableSnapshot(11L, expectedBuckets2);
-        assertThat(actual2.getLakeTableSnapshot()).isEqualTo(expectedSnapshot2);
+        assertThat(actual2.getLatestTableSnapshot()).isEqualTo(expectedSnapshot2);
     }
 }
