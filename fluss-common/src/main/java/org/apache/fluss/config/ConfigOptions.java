@@ -1458,6 +1458,16 @@ public class ConfigOptions {
                                     + "The auto increment column can only be used in primary-key table. The data type of the auto increment column must be INT or BIGINT."
                                     + "Currently a table can have only one auto-increment column.");
 
+    public static final ConfigOption<Long> TABLE_AUTO_INC_BATCH_SIZE =
+            key("table.auto-inc.batch-size")
+                    .longType()
+                    .defaultValue(100000L)
+                    .withDescription(
+                            "The batch size of auto-increment IDs fetched from the distributed counter each time. "
+                                    + "This value determines the length of the locally cached ID segment. Default: 100000. "
+                                    + "A larger batch size may cause significant auto-increment ID gaps, especially when unused cached ID segments are discarded due to TabletServer restarts or abnormal terminations. "
+                                    + "Conversely, a smaller batch size increases the frequency of ID fetch requests to the distributed counter, introducing extra network overhead and reducing write throughput and performance.");
+
     public static final ConfigOption<ChangelogImage> TABLE_CHANGELOG_IMAGE =
             key("table.changelog.image")
                     .enumType(ChangelogImage.class)
