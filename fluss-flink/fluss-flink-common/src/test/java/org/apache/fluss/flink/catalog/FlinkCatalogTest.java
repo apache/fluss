@@ -139,7 +139,7 @@ class FlinkCatalogTest {
         return new ResolvedCatalogTable(origin, resolvedSchema);
     }
 
-    protected CatalogMaterializedTable newCatalogMaterializedTable(
+    private CatalogMaterializedTable newCatalogMaterializedTable(
             ResolvedSchema resolvedSchema,
             CatalogMaterializedTable.RefreshMode refreshMode,
             Map<String, String> options) {
