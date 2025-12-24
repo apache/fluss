@@ -39,8 +39,7 @@ public class Flink22TableSourceITCase extends FlinkTableSourceITCase {
 
     @Test
     void testDeltaJoin() throws Exception {
-        // start two jobs for this test: one for DML involving the delta join, and the
-        // other for DQL
+        // start two jobs for this test: one for DML involving the delta join, and the other for DQL
         // to query the results of the sink table
         tEnv.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 2);
 
@@ -148,8 +147,7 @@ public class Flink22TableSourceITCase extends FlinkTableSourceITCase {
 
     @Test
     void testDeltaJoinWithProjectionAndFilter() throws Exception {
-        // start two jobs for this test: one for DML involving the delta join, and the
-        // other for DQL
+        // start two jobs for this test: one for DML involving the delta join, and the other for DQL
         // to query the results of the sink table
         tEnv.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 2);
 

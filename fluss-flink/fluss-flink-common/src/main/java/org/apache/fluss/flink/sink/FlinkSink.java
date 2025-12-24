@@ -124,8 +124,7 @@ class FlinkSink<InputT> extends FlinkSinkAdapter<InputT>
 
         @Override
         public DataStream<InputT> addPreWriteTopology(DataStream<InputT> input) {
-            // For append only sink, we will do bucket shuffle only if bucket keys are not
-            // empty.
+            // For append only sink, we will do bucket shuffle only if bucket keys are not empty.
             if (!bucketKeys.isEmpty() && shuffleByBucketId) {
                 return partition(
                         input,

@@ -828,8 +828,7 @@ public class FlinkCatalog extends AbstractCatalog {
 
         // Judge whether we can do prefix lookup.
         List<String> bucketKeys = tableInfo.getBucketKeys();
-        // For partition table, the physical primary key is the primary key that
-        // excludes the
+        // For partition table, the physical primary key is the primary key that excludes the
         // partition key
         List<String> physicalPrimaryKeys = tableInfo.getPhysicalPrimaryKeys();
         List<String> indexKeys = new ArrayList<>();

@@ -332,8 +332,7 @@ class FlinkCatalogTest {
         // drop fluss table
         catalog.dropTable(lakeTablePath, false);
         assertThat(catalog.tableExists(lakeTablePath)).isFalse();
-        // create the table again should be ok, because the existing lake table is
-        // matched
+        // create the table again should be ok, because the existing lake table is matched
         catalog.createTable(lakeTablePath, table, false);
     }
 
@@ -847,7 +846,7 @@ class FlinkCatalogTest {
 
     @Test
     void testStatisticsOperations() throws Exception {
-        // Statistics testing
+        //  Statistics testing
         CatalogTable table = newCatalogTable(Collections.emptyMap());
         ObjectPath tablePath = new ObjectPath(DEFAULT_DB, "statsTable");
         catalog.createTable(tablePath, table, false);
