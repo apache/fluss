@@ -20,7 +20,6 @@ package org.apache.fluss.flink.adapter;
 import org.apache.flink.api.common.operators.MailboxExecutor;
 import org.apache.flink.api.connector.sink2.Sink;
 import org.apache.flink.api.connector.sink2.SinkWriter;
-import org.apache.flink.api.connector.sink2.WriterInitContext;
 import org.apache.flink.metrics.groups.SinkWriterMetricGroup;
 
 import java.io.IOException;
@@ -30,17 +29,11 @@ import java.io.IOException;
  *
  * <p>TODO: remove this class when no longer support all the Flink 1.x series.
  */
-public abstract class FlinkSinkAdapter<InputT> implements Sink<InputT> {
+public abstract class SinkAdapter<InputT> implements Sink<InputT> {
 
     @Override
     public SinkWriter<InputT> createWriter(InitContext initContext) throws IOException {
         return createWriter(initContext.getMailboxExecutor(), initContext.metricGroup());
-    }
-
-    @Override
-    public SinkWriter<InputT> createWriter(WriterInitContext writerInitContext) throws IOException {
-        return createWriter(
-                writerInitContext.getMailboxExecutor(), writerInitContext.metricGroup());
     }
 
     protected abstract SinkWriter<InputT> createWriter(

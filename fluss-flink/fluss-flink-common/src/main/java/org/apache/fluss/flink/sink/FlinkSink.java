@@ -19,7 +19,7 @@ package org.apache.fluss.flink.sink;
 
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.config.Configuration;
-import org.apache.fluss.flink.adapter.FlinkSinkAdapter;
+import org.apache.fluss.flink.adapter.SinkAdapter;
 import org.apache.fluss.flink.sink.serializer.FlussSerializationSchema;
 import org.apache.fluss.flink.sink.writer.AppendSinkWriter;
 import org.apache.fluss.flink.sink.writer.FlinkSinkWriter;
@@ -44,8 +44,7 @@ import static org.apache.fluss.flink.sink.FlinkStreamPartitioner.partition;
 import static org.apache.fluss.flink.utils.FlinkConversions.toFlussRowType;
 
 /** Flink sink for Fluss. */
-class FlinkSink<InputT> extends FlinkSinkAdapter<InputT>
-        implements SupportsPreWriteTopology<InputT> {
+class FlinkSink<InputT> extends SinkAdapter<InputT> implements SupportsPreWriteTopology<InputT> {
 
     private static final long serialVersionUID = 1L;
 

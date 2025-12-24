@@ -22,6 +22,7 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.IllegalConfigurationException;
 import org.apache.fluss.exception.InvalidPartitionException;
 import org.apache.fluss.exception.InvalidTableException;
+import org.apache.fluss.flink.adapter.ResolvedCatalogMaterializedTableAdapter;
 import org.apache.fluss.flink.lake.LakeFlinkCatalog;
 import org.apache.fluss.flink.utils.FlinkConversionsTest;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
@@ -40,7 +41,6 @@ import org.apache.flink.table.catalog.Column;
 import org.apache.flink.table.catalog.GenericInMemoryCatalog;
 import org.apache.flink.table.catalog.IntervalFreshness;
 import org.apache.flink.table.catalog.ObjectPath;
-import org.apache.flink.table.catalog.ResolvedCatalogMaterializedTable;
 import org.apache.flink.table.catalog.ResolvedCatalogTable;
 import org.apache.flink.table.catalog.ResolvedSchema;
 import org.apache.flink.table.catalog.TableChange;
@@ -158,7 +158,11 @@ class FlinkCatalogTest {
                         .refreshMode(refreshMode)
                         .refreshStatus(CatalogMaterializedTable.RefreshStatus.INITIALIZING)
                         .build();
-        return new ResolvedCatalogMaterializedTable(origin, resolvedSchema);
+        return ResolvedCatalogMaterializedTableAdapter.create(
+                origin,
+                resolvedSchema,
+                refreshMode,
+                IntervalFreshness.of("5", IntervalFreshness.TimeUnit.SECOND));
     }
 
     protected FlinkCatalog initCatalog(
