@@ -76,6 +76,24 @@ public class TableBucketOffsets {
         return offsets;
     }
 
+    /**
+     * Serialize to a JSON byte array.
+     *
+     * @see TableBucketOffsetsJsonSerde
+     */
+    public byte[] toJsonBytes() {
+        return JsonSerdeUtils.writeValueAsBytes(this, TableBucketOffsetsJsonSerde.INSTANCE);
+    }
+
+    /**
+     * Deserialize from JSON byte array to an instance of {@link TableBucketOffsets}.
+     *
+     * @see TableBucketOffsets
+     */
+    public static TableBucketOffsets fromJsonBytes(byte[] json) {
+        return JsonSerdeUtils.readValue(json, TableBucketOffsetsJsonSerde.INSTANCE);
+    }
+
     @Override
     public boolean equals(Object o) {
         if (this == o) {

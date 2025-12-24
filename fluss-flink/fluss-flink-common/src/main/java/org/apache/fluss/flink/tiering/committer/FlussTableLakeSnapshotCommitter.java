@@ -26,13 +26,16 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.metrics.registry.MetricRegistry;
 import org.apache.fluss.rpc.GatewayClientProxy;
 import org.apache.fluss.rpc.RpcClient;
+import org.apache.fluss.rpc.gateway.AdminReadOnlyGateway;
 import org.apache.fluss.rpc.gateway.CoordinatorGateway;
 import org.apache.fluss.rpc.messages.CommitLakeTableSnapshotRequest;
+import org.apache.fluss.rpc.messages.PbBucketOffset;
 import org.apache.fluss.rpc.messages.PbCommitLakeTableSnapshotRespForTable;
 import org.apache.fluss.rpc.messages.PbLakeTableOffsetForBucket;
 import org.apache.fluss.rpc.messages.PbLakeTableSnapshotInfo;
 import org.apache.fluss.rpc.messages.PbLakeTableSnapshotMetadata;
 import org.apache.fluss.rpc.messages.PbPrepareCommitLakeTableRespForTable;
+import org.apache.fluss.rpc.messages.PbTableBucketOffsets;
 import org.apache.fluss.rpc.messages.PrepareCommitLakeTableSnapshotRequest;
 import org.apache.fluss.rpc.messages.PrepareCommitLakeTableSnapshotResponse;
 import org.apache.fluss.rpc.metrics.ClientMetricGroup;
@@ -66,6 +69,7 @@ public class FlussTableLakeSnapshotCommitter implements AutoCloseable {
     private final Configuration flussConf;
 
     private CoordinatorGateway coordinatorGateway;
+    private AdminReadOnlyGateway readOnlyGateway;
     private RpcClient rpcClient;
 
     public FlussTableLakeSnapshotCommitter(Configuration flussConf) {
@@ -83,17 +87,22 @@ public class FlussTableLakeSnapshotCommitter implements AutoCloseable {
         this.coordinatorGateway =
                 GatewayClientProxy.createGatewayProxy(
                         metadataUpdater::getCoordinatorServer, rpcClient, CoordinatorGateway.class);
+
+        this.readOnlyGateway =
+                GatewayClientProxy.createGatewayProxy(
+                        metadataUpdater::getRandomTabletServer,
+                        rpcClient,
+                        AdminReadOnlyGateway.class);
     }
 
     String prepareCommit(long tableId, TablePath tablePath, Map<TableBucket, Long> logEndOffsets)
             throws IOException {
-        PbPrepareCommitLakeTableRespForTable prepareCommitResp = null;
-        Exception exception = null;
+        PbPrepareCommitLakeTableRespForTable prepareCommitResp;
         try {
             PrepareCommitLakeTableSnapshotRequest prepareCommitLakeTableSnapshotRequest =
                     toPrepareCommitLakeTableSnapshotRequest(tableId, tablePath, logEndOffsets);
             PrepareCommitLakeTableSnapshotResponse prepareCommitLakeTableSnapshotResponse =
-                    coordinatorGateway
+                    readOnlyGateway
                             .prepareCommitLakeTableSnapshot(prepareCommitLakeTableSnapshotRequest)
                             .get();
             List<PbPrepareCommitLakeTableRespForTable> pbPrepareCommitLakeTableRespForTables =
@@ -101,20 +110,17 @@ public class FlussTableLakeSnapshotCommitter implements AutoCloseable {
             checkState(pbPrepareCommitLakeTableRespForTables.size() == 1);
             prepareCommitResp = pbPrepareCommitLakeTableRespForTables.get(0);
             if (prepareCommitResp.hasErrorCode()) {
-                exception = ApiError.fromErrorMessage(prepareCommitResp).exception();
+                throw ApiError.fromErrorMessage(prepareCommitResp).exception();
+            } else {
+                return checkNotNull(prepareCommitResp).getLakeTableSnapshotFilePath();
             }
         } catch (Exception e) {
-            exception = e;
-        }
-
-        if (exception != null) {
             throw new IOException(
                     String.format(
                             "Fail to prepare commit table lake snapshot for %s to Fluss.",
                             tablePath),
-                    ExceptionUtils.stripExecutionException(exception));
+                    ExceptionUtils.stripExecutionException(e));
         }
-        return checkNotNull(prepareCommitResp).getLakeTableSnapshotFilePath();
     }
 
     void commit(
@@ -124,7 +130,6 @@ public class FlussTableLakeSnapshotCommitter implements AutoCloseable {
             Map<TableBucket, Long> logEndOffsets,
             Map<TableBucket, Long> logMaxTieredTimestamps)
             throws IOException {
-        Exception exception = null;
         try {
             CommitLakeTableSnapshotRequest request =
                     toCommitLakeTableSnapshotRequest(
@@ -139,13 +144,9 @@ public class FlussTableLakeSnapshotCommitter implements AutoCloseable {
             PbCommitLakeTableSnapshotRespForTable commitLakeTableSnapshotRes =
                     commitLakeTableSnapshotRespForTables.get(0);
             if (commitLakeTableSnapshotRes.hasErrorCode()) {
-                exception = ApiError.fromErrorMessage(commitLakeTableSnapshotRes).exception();
+                throw ApiError.fromErrorMessage(commitLakeTableSnapshotRes).exception();
             }
-        } catch (Exception e) {
-            exception = e;
-        }
-
-        if (exception != null) {
+        } catch (Exception exception) {
             throw new IOException(
                     String.format(
                             "Fail to commit table lake snapshot id %d of table %d to Fluss.",
@@ -166,26 +167,22 @@ public class FlussTableLakeSnapshotCommitter implements AutoCloseable {
             long tableId, TablePath tablePath, Map<TableBucket, Long> logEndOffsets) {
         PrepareCommitLakeTableSnapshotRequest prepareCommitLakeTableSnapshotRequest =
                 new PrepareCommitLakeTableSnapshotRequest();
-        PbLakeTableSnapshotInfo pbLakeTableSnapshotInfo =
-                prepareCommitLakeTableSnapshotRequest.addTablesReq();
-        pbLakeTableSnapshotInfo.setTableId(tableId);
+        PbTableBucketOffsets pbTableBucketOffsets =
+                prepareCommitLakeTableSnapshotRequest.addBucketOffset();
+        pbTableBucketOffsets.setTableId(tableId);
+        pbTableBucketOffsets
+                .setTablePath()
+                .setDatabaseName(tablePath.getDatabaseName())
+                .setTableName(tablePath.getTableName());
 
-        // in prepare phase, we don't know the snapshot id,
-        // set -1 since the field is required
-        pbLakeTableSnapshotInfo.setSnapshotId(-1L);
         for (Map.Entry<TableBucket, Long> logEndOffsetEntry : logEndOffsets.entrySet()) {
-            PbLakeTableOffsetForBucket pbLakeTableOffsetForBucket =
-                    pbLakeTableSnapshotInfo.addBucketsReq();
+            PbBucketOffset pbBucketOffset = pbTableBucketOffsets.addBucketOffset();
             TableBucket tableBucket = logEndOffsetEntry.getKey();
-            pbLakeTableSnapshotInfo
-                    .setTablePath()
-                    .setDatabaseName(tablePath.getDatabaseName())
-                    .setTableName(tablePath.getTableName());
             if (tableBucket.getPartitionId() != null) {
-                pbLakeTableOffsetForBucket.setPartitionId(tableBucket.getPartitionId());
+                pbBucketOffset.setPartitionId(tableBucket.getPartitionId());
             }
-            pbLakeTableOffsetForBucket.setBucketId(tableBucket.getBucket());
-            pbLakeTableOffsetForBucket.setLogEndOffset(logEndOffsetEntry.getValue());
+            pbBucketOffset.setBucketId(tableBucket.getBucket());
+            pbBucketOffset.setLogEndOffset(logEndOffsetEntry.getValue());
         }
         return prepareCommitLakeTableSnapshotRequest;
     }

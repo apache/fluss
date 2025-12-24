@@ -31,6 +31,7 @@ import org.apache.fluss.server.zk.ZooKeeperExtension;
 import org.apache.fluss.server.zk.ZooKeeperUtils;
 import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.testutils.common.AllCallbackWrapper;
+import org.apache.fluss.utils.json.TableBucketOffsets;
 
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
@@ -125,8 +126,13 @@ class LakeTableHelperTest {
             newBucketLogEndOffset.put(new TableBucket(tableId, 1), 2000L); // new offset
 
             long snapshot2Id = 2L;
-            LakeTableSnapshot snapshot2 = new LakeTableSnapshot(snapshot2Id, newBucketLogEndOffset);
-            lakeTableHelper.upsertLakeTable(tableId, tablePath, snapshot2);
+            FsPath tieredOffsetsPath =
+                    lakeTableHelper.storeLakeTableBucketOffsets(
+                            tablePath, new TableBucketOffsets(tableId, newBucketLogEndOffset));
+            lakeTableHelper.addLakeTableSnapshotMetadata(
+                    tableId,
+                    new LakeTable.LakeSnapshotMetadata(
+                            snapshot2Id, tieredOffsetsPath, tieredOffsetsPath));
 
             // Verify: New version 2 data can be read
             Optional<LakeTable> optLakeTableAfter = zooKeeperClient.getLakeTable(tableId);
@@ -155,8 +161,13 @@ class LakeTableHelperTest {
 
             // add a new snapshot 3 again, verify snapshot
             long snapshot3Id = 3L;
-            LakeTableSnapshot snapshot3 = new LakeTableSnapshot(snapshot3Id, newBucketLogEndOffset);
-            lakeTableHelper.upsertLakeTable(tableId, tablePath, snapshot3);
+            tieredOffsetsPath =
+                    lakeTableHelper.storeLakeTableBucketOffsets(
+                            tablePath, new TableBucketOffsets(tableId, newBucketLogEndOffset));
+            lakeTableHelper.addLakeTableSnapshotMetadata(
+                    tableId,
+                    new LakeTable.LakeSnapshotMetadata(
+                            snapshot3Id, tieredOffsetsPath, tieredOffsetsPath));
             // verify snapshot 3 is discarded
             assertThat(fileSystem.exists(snapshot2FileHandle)).isFalse();
         }

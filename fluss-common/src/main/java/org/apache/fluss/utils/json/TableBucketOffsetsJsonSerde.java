@@ -26,7 +26,6 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
@@ -54,7 +53,7 @@ import static org.apache.fluss.utils.Preconditions.checkState;
  * <p>The serialized format includes:
  *
  * <ul>
- *   <li>"version": 1 - the format version
+ *   <li>"version": the format version
  *   <li>"table_id": the table ID that all buckets belong to
  *   <li>"bucket_offsets": array of offsets for non-partitioned table buckets (optional)
  *   <li>"partition_offsets": array of partition offset objects for partitioned table buckets
@@ -74,72 +73,6 @@ public class TableBucketOffsetsJsonSerde
 
     private static final int VERSION = 1;
     private static final long UNKNOWN_OFFSET = -1;
-
-    /**
-     * Deserializes a JSON node to a {@link TableBucketOffsets} object.
-     *
-     * <p>This method reads the JSON format and reconstructs the table bucket offsets map. The array
-     * index in "bucket_offsets" represents the bucket id, and the value represents the offset.
-     *
-     * @param node the JSON node to deserialize
-     * @return the deserialized {@link TableBucketOffsets} object
-     * @throws IllegalArgumentException if the version is not supported
-     */
-    @Override
-    public TableBucketOffsets deserialize(JsonNode node) {
-        int version = node.get(VERSION_KEY).asInt();
-        if (version != VERSION) {
-            throw new IllegalArgumentException("Unsupported version: " + version);
-        }
-
-        long tableId = node.get(TABLE_ID_KEY).asLong();
-        Map<TableBucket, Long> offsets = new HashMap<>();
-
-        // Deserialize non-partitioned table bucket offsets
-        JsonNode bucketOffsetsNode = node.get(BUCKET_OFFSETS_KEY);
-        JsonNode partitionBucketOffsetsNode = node.get(PARTITION_OFFSETS_KEY);
-        if (bucketOffsetsNode != null || partitionBucketOffsetsNode != null) {
-            if (bucketOffsetsNode != null && partitionBucketOffsetsNode != null) {
-                throw new IllegalArgumentException(
-                        "Both bucket_offsets and partition_bucket_offsets cannot be present at the same time");
-            }
-
-            if (bucketOffsetsNode != null) {
-                int bucketId = 0;
-                for (JsonNode bucketOffsetNode : bucketOffsetsNode) {
-                    long offset = bucketOffsetNode.asLong();
-                    // Ignore unknown offsets (filled for missing bucket ids)
-                    if (offset != UNKNOWN_OFFSET) {
-                        TableBucket tableBucket = new TableBucket(tableId, bucketId);
-                        offsets.put(tableBucket, offset);
-                    }
-                    bucketId++;
-                }
-            } else {
-                for (JsonNode partitionOffsetNode : partitionBucketOffsetsNode) {
-                    long partitionId = partitionOffsetNode.get(PARTITION_ID_KEY).asLong();
-                    JsonNode bucketOffsetsArray = partitionOffsetNode.get(BUCKET_OFFSETS_KEY);
-                    if (bucketOffsetsArray != null && bucketOffsetsArray.isArray()) {
-                        Iterator<JsonNode> elements = bucketOffsetsArray.elements();
-                        int bucketId = 0;
-                        while (elements.hasNext()) {
-                            JsonNode offsetNode = elements.next();
-                            long offset = offsetNode.asLong();
-                            // Ignore unknown offsets (filled for missing bucket ids)
-                            if (offset != UNKNOWN_OFFSET) {
-                                TableBucket tableBucket =
-                                        new TableBucket(tableId, partitionId, bucketId);
-                                offsets.put(tableBucket, offset);
-                            }
-                            bucketId++;
-                        }
-                    }
-                }
-            }
-        }
-
-        return new TableBucketOffsets(tableId, offsets);
-    }
 
     /**
      * Serializes a {@link TableBucketOffsets} object to JSON format.
@@ -217,6 +150,68 @@ public class TableBucketOffsetsJsonSerde
         }
 
         generator.writeEndObject();
+    }
+
+    /**
+     * Deserializes a JSON node to a {@link TableBucketOffsets} object.
+     *
+     * <p>This method reads the JSON format and reconstructs the table bucket offsets map. The array
+     * index in "bucket_offsets" represents the bucket id, and the value represents the offset.
+     *
+     * @param node the JSON node to deserialize
+     * @return the deserialized {@link TableBucketOffsets} object
+     * @throws IllegalArgumentException if the version is not supported
+     */
+    @Override
+    public TableBucketOffsets deserialize(JsonNode node) {
+        int version = node.get(VERSION_KEY).asInt();
+        if (version != VERSION) {
+            throw new IllegalArgumentException("Unsupported version: " + version);
+        }
+
+        long tableId = node.get(TABLE_ID_KEY).asLong();
+        Map<TableBucket, Long> offsets = new HashMap<>();
+
+        // Deserialize non-partitioned table bucket offsets
+        JsonNode bucketOffsetsNode = node.get(BUCKET_OFFSETS_KEY);
+        JsonNode partitionBucketOffsetsNode = node.get(PARTITION_OFFSETS_KEY);
+        if (bucketOffsetsNode != null || partitionBucketOffsetsNode != null) {
+            if (bucketOffsetsNode != null && partitionBucketOffsetsNode != null) {
+                throw new IllegalArgumentException(
+                        "Both bucket_offsets and partition_bucket_offsets cannot be present at the same time");
+            }
+
+            if (bucketOffsetsNode != null) {
+                int bucketId = 0;
+                for (JsonNode bucketOffsetNode : bucketOffsetsNode) {
+                    long offset = bucketOffsetNode.asLong();
+                    // Ignore unknown offsets (filled for missing bucket ids)
+                    if (offset != UNKNOWN_OFFSET) {
+                        TableBucket tableBucket = new TableBucket(tableId, bucketId);
+                        offsets.put(tableBucket, offset);
+                    }
+                    bucketId++;
+                }
+            } else {
+                for (JsonNode partitionOffsetNode : partitionBucketOffsetsNode) {
+                    long partitionId = partitionOffsetNode.get(PARTITION_ID_KEY).asLong();
+                    JsonNode bucketOffsetsArray = partitionOffsetNode.get(BUCKET_OFFSETS_KEY);
+                    int bucketId = 0;
+                    for (JsonNode bucketOffsetNode : bucketOffsetsArray) {
+                        long offset = bucketOffsetNode.asLong();
+                        // Ignore unknown offsets (filled for missing bucket ids)
+                        if (offset != UNKNOWN_OFFSET) {
+                            TableBucket tableBucket =
+                                    new TableBucket(tableId, partitionId, bucketId);
+                            offsets.put(tableBucket, offset);
+                        }
+                        bucketId++;
+                    }
+                }
+            }
+        }
+
+        return new TableBucketOffsets(tableId, offsets);
     }
 
     private void serializeBucketLogEndOffset(

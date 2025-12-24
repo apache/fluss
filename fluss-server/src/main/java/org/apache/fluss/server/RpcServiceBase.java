@@ -74,8 +74,8 @@ import org.apache.fluss.rpc.messages.ListTablesResponse;
 import org.apache.fluss.rpc.messages.MetadataRequest;
 import org.apache.fluss.rpc.messages.MetadataResponse;
 import org.apache.fluss.rpc.messages.PbApiVersion;
-import org.apache.fluss.rpc.messages.PbLakeTableSnapshotInfo;
 import org.apache.fluss.rpc.messages.PbPrepareCommitLakeTableRespForTable;
+import org.apache.fluss.rpc.messages.PbTableBucketOffsets;
 import org.apache.fluss.rpc.messages.PbTablePath;
 import org.apache.fluss.rpc.messages.PrepareCommitLakeTableSnapshotRequest;
 import org.apache.fluss.rpc.messages.PrepareCommitLakeTableSnapshotResponse;
@@ -104,6 +104,7 @@ import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.BucketSnapshot;
 import org.apache.fluss.server.zk.data.lake.LakeTableHelper;
 import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
+import org.apache.fluss.utils.json.TableBucketOffsets;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -130,9 +131,9 @@ import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeGetLatestL
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeKvSnapshotMetadataResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeListAclsResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toGetFileSystemSecurityTokenResponse;
-import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toLakeSnapshot;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toListPartitionInfosResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toPbConfigEntries;
+import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toTableBucketOffsets;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toTablePath;
 import static org.apache.fluss.utils.Preconditions.checkState;
 
@@ -617,26 +618,21 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
                     PrepareCommitLakeTableSnapshotResponse response =
                             new PrepareCommitLakeTableSnapshotResponse();
                     try {
-                        for (PbLakeTableSnapshotInfo pbLakeTableSnapshotInfo :
-                                request.getTablesReqsList()) {
+                        for (PbTableBucketOffsets bucketOffsets : request.getBucketOffsetsList()) {
                             PbPrepareCommitLakeTableRespForTable
                                     pbPrepareCommitLakeTableRespForTable =
                                             response.addPrepareCommitLakeTableResp();
                             try {
                                 // upsert lake table snapshot, need to merge the snapshot with
-                                // previous
-                                // latest snapshot
-                                LakeTableSnapshot lakeTableSnapshot =
-                                        lakeTableHelper.upsertLakeTableSnapshot(
-                                                pbLakeTableSnapshotInfo.getTableId(),
-                                                toLakeSnapshot(pbLakeTableSnapshotInfo));
-                                TablePath tablePath =
-                                        toTablePath(pbLakeTableSnapshotInfo.getTablePath());
+                                // previous latest snapshot
+                                TableBucketOffsets tableBucketOffsets =
+                                        lakeTableHelper.upsertTableBucketOffsets(
+                                                bucketOffsets.getTableId(),
+                                                toTableBucketOffsets(bucketOffsets));
+                                TablePath tablePath = toTablePath(bucketOffsets.getTablePath());
                                 FsPath fsPath =
-                                        lakeTableHelper.storeLakeTableSnapshot(
-                                                pbLakeTableSnapshotInfo.getTableId(),
-                                                tablePath,
-                                                lakeTableSnapshot);
+                                        lakeTableHelper.storeLakeTableBucketOffsets(
+                                                tablePath, tableBucketOffsets);
                                 pbPrepareCommitLakeTableRespForTable.setLakeTableSnapshotFilePath(
                                         fsPath.toString());
                             } catch (Exception e) {

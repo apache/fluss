@@ -88,6 +88,7 @@ import org.apache.fluss.rpc.messages.PbAdjustIsrRespForBucket;
 import org.apache.fluss.rpc.messages.PbAdjustIsrRespForTable;
 import org.apache.fluss.rpc.messages.PbAlterConfig;
 import org.apache.fluss.rpc.messages.PbBucketMetadata;
+import org.apache.fluss.rpc.messages.PbBucketOffset;
 import org.apache.fluss.rpc.messages.PbCreateAclRespInfo;
 import org.apache.fluss.rpc.messages.PbDescribeConfig;
 import org.apache.fluss.rpc.messages.PbDropAclsFilterResult;
@@ -126,6 +127,7 @@ import org.apache.fluss.rpc.messages.PbServerNode;
 import org.apache.fluss.rpc.messages.PbStopReplicaReqForBucket;
 import org.apache.fluss.rpc.messages.PbStopReplicaRespForBucket;
 import org.apache.fluss.rpc.messages.PbTableBucket;
+import org.apache.fluss.rpc.messages.PbTableBucketOffsets;
 import org.apache.fluss.rpc.messages.PbTableMetadata;
 import org.apache.fluss.rpc.messages.PbTablePath;
 import org.apache.fluss.rpc.messages.PbValue;
@@ -170,6 +172,7 @@ import org.apache.fluss.server.zk.data.lake.LakeTable;
 import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
 import org.apache.fluss.utils.json.DataTypeJsonSerde;
 import org.apache.fluss.utils.json.JsonSerdeUtils;
+import org.apache.fluss.utils.json.TableBucketOffsets;
 import org.apache.fluss.utils.types.Tuple2;
 
 import javax.annotation.Nullable;
@@ -1586,9 +1589,21 @@ public class ServerRpcMessageUtils {
                 lakeTableInfoByTableId, tableBucketsMaxTimestamp, lakeSnapshotMetadatas);
     }
 
-    public static LakeTableSnapshot toLakeSnapshot(
-            PbLakeTableSnapshotInfo pbLakeTableSnapshotInfo) {
-        return toLakeSnapshot(pbLakeTableSnapshotInfo, null);
+    public static TableBucketOffsets toTableBucketOffsets(
+            PbTableBucketOffsets pbTableBucketOffsets) {
+        Map<TableBucket, Long> bucketOffsets = new HashMap<>();
+        long tableId = pbTableBucketOffsets.getTableId();
+        for (PbBucketOffset pbBucketOffset : pbTableBucketOffsets.getBucketOffsetsList()) {
+            TableBucket tableBucket =
+                    new TableBucket(
+                            tableId,
+                            pbBucketOffset.hasPartitionId()
+                                    ? pbBucketOffset.getPartitionId()
+                                    : null,
+                            pbBucketOffset.getBucketId());
+            bucketOffsets.put(tableBucket, pbBucketOffset.getLogEndOffset());
+        }
+        return new TableBucketOffsets(tableId, bucketOffsets);
     }
 
     private static LakeTableSnapshot toLakeSnapshot(

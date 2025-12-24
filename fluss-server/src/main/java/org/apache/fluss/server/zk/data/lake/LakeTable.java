@@ -24,8 +24,7 @@ import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.server.zk.data.ZkData;
 import org.apache.fluss.utils.IOUtils;
-import org.apache.fluss.utils.json.JsonSerdeUtils;
-import org.apache.fluss.utils.json.TableBucketOffsetsJsonSerde;
+import org.apache.fluss.utils.json.TableBucketOffsets;
 
 import javax.annotation.Nullable;
 
@@ -132,10 +131,7 @@ public class LakeTable {
         try (ByteArrayOutputStream outputStream = new ByteArrayOutputStream()) {
             IOUtils.copyBytes(inputStream, outputStream, true);
             Map<TableBucket, Long> logOffsets =
-                    JsonSerdeUtils.readValue(
-                                    outputStream.toByteArray(),
-                                    TableBucketOffsetsJsonSerde.INSTANCE)
-                            .getOffsets();
+                    TableBucketOffsets.fromJsonBytes(outputStream.toByteArray()).getOffsets();
             return new LakeTableSnapshot(lakeSnapshotMetadata.snapshotId, logOffsets);
         }
     }

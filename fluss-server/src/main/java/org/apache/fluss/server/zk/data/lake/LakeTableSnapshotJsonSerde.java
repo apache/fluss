@@ -28,7 +28,28 @@ import java.io.IOException;
 import java.util.HashMap;
 import java.util.Map;
 
-/** Json serializer and deserializer for {@link LakeTableSnapshot}. */
+/**
+ * Json serializer and deserializer for {@link LakeTableSnapshot}.
+ *
+ * <p><b>Note:</b> This class is primarily used for backward compatibility to deserialize legacy
+ * version 1 lake snapshot data stored in ZooKeeper. The current storage format (version 2) stores
+ * only file paths in ZooKeeper, with actual snapshot data stored in remote files. This serde is
+ * used by {@link LakeTableJsonSerde} to handle version 1 format deserialization.
+ *
+ * <p>The version 1 format stores the full {@link LakeTableSnapshot} data directly in the ZooKeeper
+ * node, which includes:
+ *
+ * <ul>
+ *   <li>version: 1
+ *   <li>snapshot_id: the snapshot ID
+ *   <li>table_id: the table ID (derived from the first bucket)
+ *   <li>buckets: array of bucket objects, each containing bucket_id, optional partition_id, and
+ *       log_end_offset
+ * </ul>
+ *
+ * @see LakeTableJsonSerde for the current format (version 2) that uses this serde for legacy
+ *     compatibility
+ */
 public class LakeTableSnapshotJsonSerde
         implements JsonSerializer<LakeTableSnapshot>, JsonDeserializer<LakeTableSnapshot> {
 
