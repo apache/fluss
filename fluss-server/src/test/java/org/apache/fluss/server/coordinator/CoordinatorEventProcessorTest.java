@@ -847,7 +847,7 @@ class CoordinatorEventProcessorTest {
         // make sure all request to gateway should be successful
         initCoordinatorChannel();
         // create a table,
-        TablePath t1 = TablePath.of(defaultDatabase, "create_process_adjust_isr");
+        TablePath t1 = TablePath.of(defaultDatabase, "create_schema_change");
         int nBuckets = 1;
         int replicationFactor = 3;
         TableAssignment tableAssignment =
