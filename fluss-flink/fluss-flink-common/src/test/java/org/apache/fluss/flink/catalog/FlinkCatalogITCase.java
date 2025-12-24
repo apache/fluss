@@ -627,7 +627,7 @@ abstract class FlinkCatalogITCase {
             Map<String, String> expectedTableProperties = new HashMap<>();
             expectedTableProperties.put("table.datalake.format", "paimon");
             expectedTableProperties.put("table.replication.factor", "1");
-            assertThat(tableInfo.getTableConfig()).isEqualTo(expectedTableProperties);
+            assertThat(tableInfo.getProperties().toMap()).isEqualTo(expectedTableProperties);
 
             Map<String, String> expectedCustomProperties = new HashMap<>();
             expectedCustomProperties.put("k1", "v1");
@@ -635,12 +635,12 @@ abstract class FlinkCatalogITCase {
             expectedCustomProperties.put(
                     "schema.watermark.0.strategy.expr", "`order_time` - INTERVAL '5' SECOND");
             expectedCustomProperties.put("schema.watermark.0.rowtime", "order_time");
-            expectedCustomProperties.put("schema.watermark.0.data-type", "TIMESTAMP(3)");
+            expectedCustomProperties.put("schema.watermark.0.strategy.data-type", "TIMESTAMP(3)");
             expectedCustomProperties.put("schema.4.name", "cost");
             expectedCustomProperties.put("schema.4.expr", "`price` * `quantity`");
             expectedCustomProperties.put("schema.4.data-type", "DOUBLE");
             expectedCustomProperties.put("bucket.num", "2");
-            assertThat(tableInfo.getCustomProperties()).isEqualTo(expectedCustomProperties);
+            assertThat(tableInfo.getCustomProperties().toMap()).isEqualTo(expectedCustomProperties);
         }
     }
 
