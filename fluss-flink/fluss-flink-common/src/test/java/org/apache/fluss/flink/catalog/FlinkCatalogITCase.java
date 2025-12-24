@@ -17,6 +17,9 @@
 
 package org.apache.fluss.flink.catalog;
 
+import org.apache.fluss.client.Connection;
+import org.apache.fluss.client.ConnectionFactory;
+import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
@@ -25,6 +28,7 @@ import org.apache.fluss.exception.InvalidAlterTableException;
 import org.apache.fluss.exception.InvalidConfigException;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.metadata.DataLakeFormat;
+import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 
@@ -586,7 +590,9 @@ abstract class FlinkCatalogITCase {
                         + "    cost AS price * quantity,\n"
                         + "    order_time TIMESTAMP(3),\n"
                         + "    WATERMARK FOR order_time AS order_time - INTERVAL '5' SECOND\n"
-                        + ") with ('k1' = 'v1')");
+                        + ") with ('k1' = 'v1', 'bucket.num' = '2', "
+                        + "'table.datalake.format' = 'paimon', "
+                        + "'client.connect-timeout' = '120s')");
         CatalogTable table =
                 (CatalogTable) catalog.getTable(new ObjectPath(DEFAULT_DB, "expression_test"));
         Schema.Builder schemaBuilder = Schema.newBuilder();
@@ -606,9 +612,36 @@ abstract class FlinkCatalogITCase {
         Map<String, String> expectedOptions = new HashMap<>();
         expectedOptions.put("k1", "v1");
         expectedOptions.put(BUCKET_KEY.key(), "user");
-        expectedOptions.put(BUCKET_NUMBER.key(), "1");
+        expectedOptions.put(BUCKET_NUMBER.key(), "2");
         expectedOptions.put("table.datalake.format", "paimon");
+        expectedOptions.put("client.connect-timeout", "120s");
         assertOptionsEqual(table.getOptions(), expectedOptions);
+
+        // assert the stored table/custom configs
+        Configuration clientConfig = FLUSS_CLUSTER_EXTENSION.getClientConfig();
+        try (Connection conn = ConnectionFactory.createConnection(clientConfig)) {
+            Admin admin = conn.getAdmin();
+            TableInfo tableInfo =
+                    admin.getTableInfo(TablePath.of(DEFAULT_DB, "expression_test")).get();
+
+            Map<String, String> expectedTableProperties = new HashMap<>();
+            expectedTableProperties.put("table.datalake.format", "paimon");
+            expectedTableProperties.put("table.replication.factor", "1");
+            assertThat(tableInfo.getTableConfig()).isEqualTo(expectedTableProperties);
+
+            Map<String, String> expectedCustomProperties = new HashMap<>();
+            expectedCustomProperties.put("k1", "v1");
+            expectedCustomProperties.put("client.connect-timeout", "120s");
+            expectedCustomProperties.put(
+                    "schema.watermark.0.strategy.expr", "`order_time` - INTERVAL '5' SECOND");
+            expectedCustomProperties.put("schema.watermark.0.rowtime", "order_time");
+            expectedCustomProperties.put("schema.watermark.0.data-type", "TIMESTAMP(3)");
+            expectedCustomProperties.put("schema.4.name", "cost");
+            expectedCustomProperties.put("schema.4.expr", "`price` * `quantity`");
+            expectedCustomProperties.put("schema.4.data-type", "DOUBLE");
+            expectedCustomProperties.put("bucket.num", "2");
+            assertThat(tableInfo.getCustomProperties()).isEqualTo(expectedCustomProperties);
+        }
     }
 
     @Test
