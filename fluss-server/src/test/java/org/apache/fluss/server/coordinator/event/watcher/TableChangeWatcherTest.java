@@ -106,6 +106,7 @@ class TableChangeWatcherTest {
         if (tableChangeWatcher != null) {
             tableChangeWatcher.stop();
         }
+        eventManager.clearEvents();
     }
 
     @Test
