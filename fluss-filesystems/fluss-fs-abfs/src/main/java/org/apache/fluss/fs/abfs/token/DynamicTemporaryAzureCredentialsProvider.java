@@ -43,8 +43,6 @@ public class DynamicTemporaryAzureCredentialsProvider extends AccessTokenProvide
 
     public static final String COMPONENT = "Dynamic session credentials for Fluss";
 
-    private volatile AzureADToken azureADToken;
-
     private static final Logger LOG =
             LoggerFactory.getLogger(DynamicTemporaryAzureCredentialsProvider.class);
 
