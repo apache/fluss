@@ -36,7 +36,7 @@ public class AzureFileSystem extends HadoopFileSystem {
     private final String scheme;
     private final Configuration conf;
 
-    private AzureDelegationTokenProvider delegationTokenProvider;
+    private volatile AzureDelegationTokenProvider delegationTokenProvider;
 
     /**
      * Wraps the given Hadoop File System object as a Flink File System object. The given Hadoop
