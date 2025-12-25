@@ -21,6 +21,7 @@ import org.apache.fluss.config.ConfigBuilder;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.fs.FileSystemPlugin;
+import org.apache.fluss.fs.abfs.token.AzureDelegationTokenReceiver;
 
 import org.apache.hadoop.fs.azurebfs.AzureBlobFileSystem;
 import org.slf4j.Logger;
@@ -28,6 +29,10 @@ import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.net.URI;
+import java.util.Objects;
+
+import static org.apache.fluss.fs.abfs.token.AzureDelegationTokenProvider.CLIENT_ID;
+import static org.apache.fluss.fs.abfs.token.AzureDelegationTokenReceiver.PROVIDER_CONFIG_NAME;
 
 /** Simple factory for the Azure File System. */
 public class AbfsFileSystemPlugin implements FileSystemPlugin {
@@ -47,10 +52,34 @@ public class AbfsFileSystemPlugin implements FileSystemPlugin {
     public FileSystem create(URI fsUri, Configuration flussConfig) throws IOException {
         org.apache.hadoop.conf.Configuration hadoopConfig = getHadoopConfiguration(flussConfig);
 
+        setCredentialProvider(hadoopConfig);
+
         // create the Google Hadoop FileSystem
         org.apache.hadoop.fs.FileSystem fs = new AzureBlobFileSystem();
         fs.initialize(getInitURI(fsUri, hadoopConfig), hadoopConfig);
         return new AzureFileSystem(getScheme(), fs, hadoopConfig);
+    }
+
+    private void setCredentialProvider(org.apache.hadoop.conf.Configuration hadoopConfig) {
+        if (hadoopConfig.get(CLIENT_ID) == null) {
+            if (Objects.equals(getScheme(), "abfs")) {
+                AzureDelegationTokenReceiver.updateHadoopConfig(hadoopConfig);
+            } else if (Objects.equals(getScheme(), "abfss")) {
+                AzureDelegationTokenReceiver.updateHadoopConfig(hadoopConfig);
+            } else if (Objects.equals(getScheme(), "wasb")) {
+                AzureDelegationTokenReceiver.updateHadoopConfig(hadoopConfig);
+            } else if (Objects.equals(getScheme(), "wasbs")) {
+                AzureDelegationTokenReceiver.updateHadoopConfig(hadoopConfig);
+            } else {
+                throw new IllegalArgumentException("Unsupported scheme: " + getScheme());
+            }
+            LOG.info(
+                    "{} is not set, using credential provider {}.",
+                    CLIENT_ID,
+                    hadoopConfig.get(PROVIDER_CONFIG_NAME));
+        } else {
+            LOG.info("{} is set, using provided access key id and secret.", CLIENT_ID);
+        }
     }
 
     org.apache.hadoop.conf.Configuration getHadoopConfiguration(Configuration flussConfig) {

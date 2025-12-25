@@ -36,7 +36,7 @@ public class AzureDelegationTokenProvider {
 
     private static final Logger LOG = LoggerFactory.getLogger(AzureDelegationTokenProvider.class);
 
-    private static final String CLIENT_ID = "fs.azure.account.oauth2.client.id";
+    public static final String CLIENT_ID = "fs.azure.account.oauth2.client.id";
     private static final String CLIENT_SECRET = "fs.azure.account.oauth2.client.secret";
 
     private static final String ENDPOINT_KEY = "fs.azure.account.oauth2.client.endpoint";
