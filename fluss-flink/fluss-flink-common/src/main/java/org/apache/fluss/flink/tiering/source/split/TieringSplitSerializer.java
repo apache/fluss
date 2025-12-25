@@ -158,8 +158,8 @@ public class TieringSplitSerializer implements SimpleVersionedSerializer<Tiering
                     partitionName,
                     startingOffset,
                     stoppingOffset,
-                    numberOfSplits,
-                    forceIgnore);
+                    forceIgnore,
+                    numberOfSplits);
         }
     }
 }

@@ -121,7 +121,7 @@ class TieringSplitSerializerTest {
 
         // Test TieringLogSplit with forceIgnore set at creation
         TieringLogSplit logSplitWithForceIgnore =
-                new TieringLogSplit(tablePath, tableBucket, null, 100, 200, 40, true);
+                new TieringLogSplit(tablePath, tableBucket, null, 100, 200, true, 40);
         serialized = serializer.serialize(logSplitWithForceIgnore);
         TieringLogSplit deserializedLogSplit =
                 (TieringLogSplit) serializer.deserialize(serializer.getVersion(), serialized);
@@ -141,7 +141,7 @@ class TieringSplitSerializerTest {
 
         // Test TieringLogSplit with forceIgnore set after creation
         TieringLogSplit logSplit =
-                new TieringLogSplit(tablePath, tableBucket, null, 100, 200, 40, false);
+                new TieringLogSplit(tablePath, tableBucket, null, 100, 200, false, 40);
         assertThat(logSplit.isForceIgnore()).isFalse();
         logSplit.forceIgnore();
         assertThat(logSplit.isForceIgnore()).isTrue();

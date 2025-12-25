@@ -38,7 +38,7 @@ public class TieringSourceOptions {
     public static final ConfigOption<Duration> TIERING_TABLE_DURATION_MAX =
             key("tiering.table.duration.max")
                     .durationType()
-                    .defaultValue(Duration.ofMinutes(10))
+                    .defaultValue(Duration.ofMinutes(30))
                     .withDescription(
                             "The maximum duration for tiering a single table. If tiering a table exceeds this duration, "
                                     + "it will be force completed: the tiering will be finalized and committed to the data lake "
