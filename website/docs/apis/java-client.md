@@ -170,8 +170,7 @@ List<User> users = List.of(
 );
 ```
 
-**Note:** Currently data in Fluss is written in the form of `rows`, so we need to convert our POJO to `GenericRow`, while the Fluss community is working to provide
-a more user-friendly API for writing data.
+**Note:** Currently data in Fluss is written in the form of `rows`, so we need to convert our POJO to `GenericRow`. For a more user-friendly API for writing data, please refer to the [Java Typed API](./java-typed-api.md) documentation.
 ```java
 Table table = connection.getTable(tablePath);
 
