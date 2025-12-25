@@ -22,6 +22,7 @@ import org.apache.fluss.memory.AbstractPagedOutputView;
 import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.record.ChangeType;
+import org.apache.fluss.record.MemoryLogRecordsRowBuilder;
 import org.apache.fluss.record.bytesview.BytesView;
 import org.apache.fluss.row.InternalRow;
 
@@ -38,32 +39,8 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
  */
 abstract class AbstractRowLogWriteBatch<R> extends WriteBatch {
 
-    interface RecordsBuilderAdapter<T> {
-        boolean hasRoomFor(T row);
-
-        void append(ChangeType changeType, T row) throws Exception;
-
-        BytesView build() throws IOException;
-
-        boolean isClosed();
-
-        void close() throws Exception;
-
-        void setWriterState(long writerId, int batchSequence);
-
-        long writerId();
-
-        int batchSequence();
-
-        void abort();
-
-        void resetWriterState(long writerId, int batchSequence);
-
-        int getSizeInBytes();
-    }
-
     private final AbstractPagedOutputView outputView;
-    private final RecordsBuilderAdapter<R> builder;
+    private final MemoryLogRecordsRowBuilder<R> recordsBuilder;
     private final String buildErrorMessage;
 
     protected AbstractRowLogWriteBatch(
@@ -71,11 +48,11 @@ abstract class AbstractRowLogWriteBatch<R> extends WriteBatch {
             PhysicalTablePath physicalTablePath,
             long createdMs,
             AbstractPagedOutputView outputView,
-            RecordsBuilderAdapter<R> builder,
+            MemoryLogRecordsRowBuilder<R> recordsBuilder,
             String buildErrorMessage) {
         super(bucketId, physicalTablePath, createdMs);
         this.outputView = outputView;
-        this.builder = builder;
+        this.recordsBuilder = recordsBuilder;
         this.buildErrorMessage = buildErrorMessage;
     }
 
@@ -90,10 +67,10 @@ abstract class AbstractRowLogWriteBatch<R> extends WriteBatch {
                 "target columns must be null for log record");
 
         R row = requireAndCastRow(rowObj);
-        if (!builder.hasRoomFor(row) || isClosed()) {
+        if (!recordsBuilder.hasRoomFor(row) || isClosed()) {
             return false;
         }
-        builder.append(ChangeType.APPEND_ONLY, row);
+        recordsBuilder.append(ChangeType.APPEND_ONLY, row);
         recordCount++;
         callbacks.add(callback);
         return true;
@@ -102,9 +79,14 @@ abstract class AbstractRowLogWriteBatch<R> extends WriteBatch {
     protected abstract R requireAndCastRow(InternalRow row);
 
     @Override
+    public boolean isLogBatch() {
+        return true;
+    }
+
+    @Override
     public BytesView build() {
         try {
-            return builder.build();
+            return recordsBuilder.build();
         } catch (IOException e) {
             throw new FlussRuntimeException(buildErrorMessage, e);
         }
@@ -112,12 +94,12 @@ abstract class AbstractRowLogWriteBatch<R> extends WriteBatch {
 
     @Override
     public boolean isClosed() {
-        return builder.isClosed();
+        return recordsBuilder.isClosed();
     }
 
     @Override
     public void close() throws Exception {
-        builder.close();
+        recordsBuilder.close();
         reopened = false;
     }
 
@@ -128,32 +110,32 @@ abstract class AbstractRowLogWriteBatch<R> extends WriteBatch {
 
     @Override
     public void setWriterState(long writerId, int batchSequence) {
-        builder.setWriterState(writerId, batchSequence);
+        recordsBuilder.setWriterState(writerId, batchSequence);
     }
 
     @Override
     public long writerId() {
-        return builder.writerId();
+        return recordsBuilder.writerId();
     }
 
     @Override
     public int batchSequence() {
-        return builder.batchSequence();
+        return recordsBuilder.batchSequence();
     }
 
     @Override
     public void abortRecordAppends() {
-        builder.abort();
+        recordsBuilder.abort();
     }
 
     @Override
     public void resetWriterState(long writerId, int batchSequence) {
         super.resetWriterState(writerId, batchSequence);
-        builder.resetWriterState(writerId, batchSequence);
+        recordsBuilder.resetWriterState(writerId, batchSequence);
     }
 
     @Override
     public int estimatedSizeInBytes() {
-        return builder.getSizeInBytes();
+        return recordsBuilder.getSizeInBytes();
     }
 }

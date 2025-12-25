@@ -581,59 +581,81 @@ public final class RecordAccumulator {
         PreAllocatedPagedOutputView outputView = new PreAllocatedPagedOutputView(segments);
         int schemaId = tableInfo.getSchemaId();
         WriteFormat writeFormat = writeRecord.getWriteFormat();
-        // If the table is kv table we need to create a kv batch, otherwise we create a log batch.
-        final WriteBatch batch;
-        if (writeFormat == WriteFormat.KV) {
-            batch =
-                    new KvWriteBatch(
-                            bucketId,
-                            physicalTablePath,
-                            tableInfo.getSchemaId(),
-                            tableInfo.getTableConfig().getKvFormat(),
-                            outputView.getPreAllocatedSize(),
-                            outputView,
-                            writeRecord.getTargetColumns(),
-                            clock.milliseconds());
-        } else if (writeFormat == WriteFormat.ARROW_LOG) {
-            ArrowWriter arrowWriter =
-                    arrowWriterPool.getOrCreateWriter(
-                            tableInfo.getTableId(),
-                            schemaId,
-                            outputView.getPreAllocatedSize(),
-                            tableInfo.getRowType(),
-                            tableInfo.getTableConfig().getArrowCompressionInfo());
-            batch =
-                    new ArrowLogWriteBatch(
-                            bucketId,
-                            physicalTablePath,
-                            tableInfo.getSchemaId(),
-                            arrowWriter,
-                            outputView,
-                            clock.milliseconds());
-        } else if (writeFormat == WriteFormat.COMPACTED_LOG) {
-            batch =
-                    new CompactedLogWriteBatch(
-                            bucketId,
-                            physicalTablePath,
-                            schemaId,
-                            outputView.getPreAllocatedSize(),
-                            outputView,
-                            clock.milliseconds());
-        } else {
-            batch =
-                    new IndexedLogWriteBatch(
-                            bucketId,
-                            physicalTablePath,
-                            tableInfo.getSchemaId(),
-                            outputView.getPreAllocatedSize(),
-                            outputView,
-                            clock.milliseconds());
-        }
+        final WriteBatch batch =
+                createWriteBatch(
+                        writeRecord,
+                        bucketId,
+                        tableInfo,
+                        writeFormat,
+                        physicalTablePath,
+                        outputView,
+                        schemaId);
 
         batch.tryAppend(writeRecord, callback);
         deque.addLast(batch);
         incomplete.add(batch);
         return new RecordAppendResult(deque.size() > 1 || batch.isClosed(), true, false);
+    }
+
+    private WriteBatch createWriteBatch(
+            WriteRecord writeRecord,
+            int bucketId,
+            TableInfo tableInfo,
+            WriteFormat writeFormat,
+            PhysicalTablePath physicalTablePath,
+            PreAllocatedPagedOutputView outputView,
+            int schemaId) {
+        // If the table is kv table we need to create a kv batch, otherwise we create a log batch.
+        switch (writeFormat) {
+            case COMPACTED_KV:
+            case INDEXED_KV:
+                return new KvWriteBatch(
+                        bucketId,
+                        physicalTablePath,
+                        tableInfo.getSchemaId(),
+                        writeFormat.toKvFormat(),
+                        outputView.getPreAllocatedSize(),
+                        outputView,
+                        writeRecord.getTargetColumns(),
+                        clock.milliseconds());
+
+            case ARROW_LOG:
+                ArrowWriter arrowWriter =
+                        arrowWriterPool.getOrCreateWriter(
+                                tableInfo.getTableId(),
+                                schemaId,
+                                outputView.getPreAllocatedSize(),
+                                tableInfo.getRowType(),
+                                tableInfo.getTableConfig().getArrowCompressionInfo());
+                return new ArrowLogWriteBatch(
+                        bucketId,
+                        physicalTablePath,
+                        tableInfo.getSchemaId(),
+                        arrowWriter,
+                        outputView,
+                        clock.milliseconds());
+
+            case COMPACTED_LOG:
+                return new CompactedLogWriteBatch(
+                        bucketId,
+                        physicalTablePath,
+                        schemaId,
+                        outputView.getPreAllocatedSize(),
+                        outputView,
+                        clock.milliseconds());
+
+            case INDEXED_LOG:
+                return new IndexedLogWriteBatch(
+                        bucketId,
+                        physicalTablePath,
+                        tableInfo.getSchemaId(),
+                        outputView.getPreAllocatedSize(),
+                        outputView,
+                        clock.milliseconds());
+
+            default:
+                throw new UnsupportedOperationException("Unsupported write format: " + writeFormat);
+        }
     }
 
     private RecordAppendResult tryAppend(

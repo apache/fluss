@@ -17,6 +17,7 @@
 
 package org.apache.fluss.client.table.writer;
 
+import org.apache.fluss.client.write.WriteFormat;
 import org.apache.fluss.client.write.WriteRecord;
 import org.apache.fluss.client.write.WriterClient;
 import org.apache.fluss.metadata.DataLakeFormat;
@@ -50,6 +51,7 @@ class UpsertWriterImpl extends AbstractTableWriter implements UpsertWriter {
     private final KeyEncoder bucketKeyEncoder;
 
     private final KvFormat kvFormat;
+    private final WriteFormat writeFormat;
     private final RowEncoder rowEncoder;
     private final FieldGetter[] fieldGetters;
     private final TableInfo tableInfo;
@@ -78,6 +80,7 @@ class UpsertWriterImpl extends AbstractTableWriter implements UpsertWriter {
                         : KeyEncoder.of(rowType, tableInfo.getBucketKeys(), lakeFormat);
 
         this.kvFormat = tableInfo.getTableConfig().getKvFormat();
+        this.writeFormat = WriteFormat.fromKvFormat(this.kvFormat);
         this.rowEncoder = RowEncoder.create(kvFormat, rowType);
         this.fieldGetters = InternalRow.createFieldGetters(rowType);
         this.tableInfo = tableInfo;
@@ -164,6 +167,7 @@ class UpsertWriterImpl extends AbstractTableWriter implements UpsertWriter {
                         encodeRow(row),
                         key,
                         bucketKey,
+                        writeFormat,
                         targetColumns);
         return send(record).thenApply(ignored -> UPSERT_SUCCESS);
     }
@@ -182,7 +186,12 @@ class UpsertWriterImpl extends AbstractTableWriter implements UpsertWriter {
                 bucketKeyEncoder == primaryKeyEncoder ? key : bucketKeyEncoder.encodeKey(row);
         WriteRecord record =
                 WriteRecord.forDelete(
-                        tableInfo, getPhysicalPath(row), key, bucketKey, targetColumns);
+                        tableInfo,
+                        getPhysicalPath(row),
+                        key,
+                        bucketKey,
+                        writeFormat,
+                        targetColumns);
         return send(record).thenApply(ignored -> DELETE_SUCCESS);
     }
 

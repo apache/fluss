@@ -20,16 +20,12 @@ package org.apache.fluss.client.write;
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.memory.AbstractPagedOutputView;
 import org.apache.fluss.metadata.PhysicalTablePath;
-import org.apache.fluss.record.ChangeType;
 import org.apache.fluss.record.MemoryLogRecordsCompactedBuilder;
-import org.apache.fluss.record.bytesview.BytesView;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.compacted.CompactedRow;
 import org.apache.fluss.rpc.messages.ProduceLogRequest;
 
 import javax.annotation.concurrent.NotThreadSafe;
-
-import java.io.IOException;
 
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 
@@ -55,72 +51,8 @@ public final class CompactedLogWriteBatch extends AbstractRowLogWriteBatch<Compa
                 physicalTablePath,
                 createdMs,
                 outputView,
-                new RecordsBuilderAdapter<CompactedRow>() {
-                    private final MemoryLogRecordsCompactedBuilder delegate =
-                            MemoryLogRecordsCompactedBuilder.builder(
-                                    schemaId, writeLimit, outputView, true);
-
-                    @Override
-                    public boolean hasRoomFor(CompactedRow row) {
-                        return delegate.hasRoomFor(row);
-                    }
-
-                    @Override
-                    public void append(ChangeType changeType, CompactedRow row) throws Exception {
-                        delegate.append(changeType, row);
-                    }
-
-                    @Override
-                    public BytesView build() throws IOException {
-                        return delegate.build();
-                    }
-
-                    @Override
-                    public boolean isClosed() {
-                        return delegate.isClosed();
-                    }
-
-                    @Override
-                    public void close() throws Exception {
-                        delegate.close();
-                    }
-
-                    @Override
-                    public void setWriterState(long writerId, int batchSequence) {
-                        delegate.setWriterState(writerId, batchSequence);
-                    }
-
-                    @Override
-                    public long writerId() {
-                        return delegate.writerId();
-                    }
-
-                    @Override
-                    public int batchSequence() {
-                        return delegate.batchSequence();
-                    }
-
-                    @Override
-                    public void abort() {
-                        delegate.abort();
-                    }
-
-                    @Override
-                    public void resetWriterState(long writerId, int batchSequence) {
-                        delegate.resetWriterState(writerId, batchSequence);
-                    }
-
-                    @Override
-                    public int getSizeInBytes() {
-                        return delegate.getSizeInBytes();
-                    }
-                },
+                MemoryLogRecordsCompactedBuilder.builder(schemaId, writeLimit, outputView, true),
                 "Failed to build compacted log record batch.");
-    }
-
-    @Override
-    public boolean isLogBatch() {
-        return true;
     }
 
     @Override

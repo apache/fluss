@@ -30,8 +30,7 @@ import static org.apache.fluss.record.LogRecordBatch.CURRENT_LOG_MAGIC_VALUE;
  * Default builder for {@link MemoryLogRecords} of log records in {@link LogFormat#COMPACTED}
  * format.
  */
-public class MemoryLogRecordsCompactedBuilder
-        extends AbstractRowMemoryLogRecordsBuilder<CompactedRow> {
+public class MemoryLogRecordsCompactedBuilder extends MemoryLogRecordsRowBuilder<CompactedRow> {
 
     private MemoryLogRecordsCompactedBuilder(
             long baseLogOffset,

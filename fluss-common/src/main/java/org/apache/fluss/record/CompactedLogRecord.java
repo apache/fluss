@@ -63,7 +63,6 @@ public class CompactedLogRecord implements LogRecord {
     private final long logOffset;
     private final long timestamp;
     private final DataType[] fieldTypes;
-    private final CompactedRowDeserializer compactedDeserializer;
 
     private MemorySegment segment;
     private int offset;
@@ -73,7 +72,6 @@ public class CompactedLogRecord implements LogRecord {
         this.logOffset = logOffset;
         this.timestamp = timestamp;
         this.fieldTypes = fieldTypes;
-        this.compactedDeserializer = new CompactedRowDeserializer(fieldTypes);
     }
 
     private void pointTo(MemorySegment segment, int offset, int sizeInBytes) {
@@ -165,22 +163,5 @@ public class CompactedLogRecord implements LogRecord {
         int size = 1; // one byte for attributes
         size += row.getSizeInBytes();
         return size;
-    }
-
-    private static InternalRow deserializeCompactedRow(
-            int length,
-            MemorySegment segment,
-            int position,
-            DataType[] fieldTypes,
-            LogFormat logFormat) {
-        if (logFormat == LogFormat.COMPACTED) {
-            CompactedRow compactedRow =
-                    new CompactedRow(fieldTypes.length, new CompactedRowDeserializer(fieldTypes));
-            compactedRow.pointTo(segment, position, length);
-            return compactedRow;
-        } else {
-            throw new IllegalArgumentException(
-                    "No such compacted row deserializer for: " + logFormat);
-        }
     }
 }

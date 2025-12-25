@@ -207,6 +207,7 @@ class KvWriteBatchTest {
                 row,
                 key,
                 key,
+                WriteFormat.COMPACTED_KV,
                 null);
     }
 

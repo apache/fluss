@@ -1451,28 +1451,52 @@ class FlussTableITCase extends ClientToServerITCaseBase {
             }
             upsertWriter.flush();
 
-            LogScanner logScanner = createLogScanner(table);
-            subscribeFromBeginning(logScanner, table);
-            int count = 0;
-            while (count < expectedSize) {
-                ScanRecords scanRecords = logScanner.poll(Duration.ofSeconds(1));
-                for (ScanRecord scanRecord : scanRecords) {
-                    assertThat(scanRecord.getChangeType()).isEqualTo(ChangeType.INSERT);
-                    InternalRow rr = scanRecord.getRow();
-                    assertThat(rr.getFieldCount()).isEqualTo(4);
-                    assertThat(rr.getInt(0)).isEqualTo(count);
-                    assertThat(rr.getInt(1)).isEqualTo(100);
-                    if (count % 2 == 0) {
-                        assertThat(rr.getString(2).toString()).isEqualTo("hello, friend" + count);
-                    } else {
-                        assertThat(rr.isNullAt(2)).isTrue();
+            // normal scan
+            try (LogScanner logScanner = createLogScanner(table)) {
+                subscribeFromBeginning(logScanner, table);
+                int count = 0;
+                while (count < expectedSize) {
+                    ScanRecords scanRecords = logScanner.poll(Duration.ofSeconds(1));
+                    for (ScanRecord scanRecord : scanRecords) {
+                        assertThat(scanRecord.getChangeType()).isEqualTo(ChangeType.INSERT);
+                        InternalRow rr = scanRecord.getRow();
+                        assertThat(rr.getFieldCount()).isEqualTo(4);
+                        assertThat(rr.getInt(0)).isEqualTo(count);
+                        assertThat(rr.getInt(1)).isEqualTo(100);
+                        if (count % 2 == 0) {
+                            assertThat(rr.getString(2).toString())
+                                    .isEqualTo("hello, friend" + count);
+                        } else {
+                            assertThat(rr.isNullAt(2)).isTrue();
+                        }
+                        assertThat(rr.getLong(3)).isEqualTo(count * 10L);
+                        count++;
                     }
-                    assertThat(rr.getLong(3)).isEqualTo(count * 10L);
-                    count++;
                 }
+                assertThat(count).isEqualTo(expectedSize);
             }
-            assertThat(count).isEqualTo(expectedSize);
-            logScanner.close();
+
+            // Creating a projected log scanner for COMPACTED should work
+            try (LogScanner scanner = createLogScanner(table, new int[] {0, 2})) {
+                subscribeFromBeginning(scanner, table);
+                int count = 0;
+                while (count < expectedSize) {
+                    ScanRecords records = scanner.poll(Duration.ofSeconds(1));
+                    for (ScanRecord record : records) {
+                        InternalRow row = record.getRow();
+                        assertThat(row.getFieldCount()).isEqualTo(2);
+                        assertThat(row.getInt(0)).isEqualTo(count);
+                        if (count % 2 == 0) {
+                            assertThat(row.getString(1).toString())
+                                    .isEqualTo("hello, friend" + count);
+                        } else {
+                            assertThat(row.isNullAt(1)).isTrue();
+                        }
+                        count++;
+                    }
+                }
+                assertThat(count).isEqualTo(expectedSize);
+            }
         }
     }
 
@@ -1521,71 +1545,18 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                     assertThat(r.getChangeType()).isEqualTo(expected[seen]);
                     InternalRow row = r.getRow();
                     assertThat(row.getInt(0)).isEqualTo(1);
-                    if (expected[seen] == ChangeType.INSERT
-                            || expected[seen] == ChangeType.UPDATE_BEFORE
-                            || expected[seen] == ChangeType.UPDATE_AFTER) {
-                        // value field present
-                        if (expected[seen] == ChangeType.UPDATE_AFTER) {
-                            assertThat(row.getInt(1)).isEqualTo(20);
-                        } else {
-                            assertThat(row.getInt(1)).isEqualTo(10);
-                        }
+                    // value field present
+                    if (expected[seen] == ChangeType.UPDATE_AFTER
+                            || expected[seen] == ChangeType.DELETE) {
+                        assertThat(row.getInt(1)).isEqualTo(20);
+                    } else {
+                        assertThat(row.getInt(1)).isEqualTo(10);
                     }
                     seen++;
                 }
             }
             assertThat(seen).isEqualTo(expected.length);
             scanner.close();
-        }
-    }
-
-    @Test
-    void testPkCompactedProject() throws Exception {
-        Schema schema =
-                Schema.newBuilder()
-                        .column("a", DataTypes.INT())
-                        .column("b", DataTypes.INT())
-                        .column("c", DataTypes.STRING())
-                        .primaryKey("a")
-                        .build();
-        TableDescriptor td =
-                TableDescriptor.builder()
-                        .schema(schema)
-                        .kvFormat(KvFormat.COMPACTED)
-                        .logFormat(LogFormat.COMPACTED)
-                        .build();
-        TablePath path = TablePath.of("test_db_1", "test_pk_compacted_project");
-        createTable(path, td, false);
-
-        try (Table table = conn.getTable(path)) {
-            UpsertWriter upsert = table.newUpsert().createWriter();
-            for (int i = 0; i < 10; i++) {
-                String v = i % 2 == 0 ? "v" + i : null;
-                upsert.upsert(row(i, 100 + i, v));
-            }
-            upsert.flush();
-
-            // Creating a projected log scanner for COMPACTED should work
-            try (LogScanner scanner = createLogScanner(table, new int[] {0, 2})) {
-                subscribeFromBeginning(scanner, table);
-                int seen = 0;
-                while (seen < 10) {
-                    ScanRecords records = scanner.poll(Duration.ofSeconds(5));
-                    for (ScanRecord record : records) {
-                        InternalRow row = record.getRow();
-                        assertThat(row.getFieldCount()).isEqualTo(2);
-                        int a = row.getInt(0);
-                        assertThat(a).isEqualTo(seen);
-                        if (a % 2 == 0) {
-                            assertThat(row.getString(1).toString()).isEqualTo("v" + a);
-                        } else {
-                            assertThat(row.isNullAt(1)).isTrue();
-                        }
-                        seen++;
-                    }
-                }
-                assertThat(seen).isEqualTo(10);
-            }
         }
     }
 
@@ -1625,41 +1596,17 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                     seen++;
                 }
             }
-            scanner.close();
-        }
-    }
 
-    @Test
-    void testPkDeleteNonExistentEmitsNoRecords() throws Exception {
-        Schema schema =
-                Schema.newBuilder()
-                        .column("a", DataTypes.INT())
-                        .column("b", DataTypes.INT())
-                        .primaryKey("a")
-                        .build();
-        TableDescriptor td =
-                TableDescriptor.builder()
-                        .schema(schema)
-                        .kvFormat(KvFormat.COMPACTED)
-                        .logFormat(LogFormat.COMPACTED)
-                        .build();
-        TablePath path = TablePath.of("test_db_1", "test_pk_compacted_delete_missing");
-        createTable(path, td, false);
-
-        try (Table table = conn.getTable(path)) {
-            UpsertWriter upsert = table.newUpsert().createWriter();
             // delete non-existent key
             upsert.delete(row(42, 0));
             upsert.flush();
-
-            LogScanner scanner = createLogScanner(table);
-            subscribeFromBeginning(scanner, table);
-            int total = 0;
             // poll a few times to ensure no accidental records
+            int total = 0;
             for (int i = 0; i < 3; i++) {
                 total += scanner.poll(Duration.ofSeconds(1)).count();
             }
             assertThat(total).isEqualTo(0);
+
             scanner.close();
         }
     }

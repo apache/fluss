@@ -26,7 +26,6 @@ import org.apache.fluss.utils.crc.Crc32C;
 
 import java.io.IOException;
 
-import static org.apache.fluss.record.LogRecordBatch.CURRENT_LOG_MAGIC_VALUE;
 import static org.apache.fluss.record.LogRecordBatchFormat.BASE_OFFSET_LENGTH;
 import static org.apache.fluss.record.LogRecordBatchFormat.LENGTH_LENGTH;
 import static org.apache.fluss.record.LogRecordBatchFormat.LOG_MAGIC_VALUE_V1;
@@ -40,7 +39,7 @@ import static org.apache.fluss.record.LogRecordBatchFormat.schemaIdOffset;
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 
 /** Abstract base builder for row-based MemoryLogRecords builders sharing common logic. */
-abstract class AbstractRowMemoryLogRecordsBuilder<T> implements AutoCloseable {
+public abstract class MemoryLogRecordsRowBuilder<T> implements AutoCloseable {
     protected static final int BUILDER_DEFAULT_OFFSET = 0;
 
     protected final long baseLogOffset;
@@ -60,7 +59,7 @@ abstract class AbstractRowMemoryLogRecordsBuilder<T> implements AutoCloseable {
     private volatile boolean isClosed;
     private boolean aborted = false;
 
-    protected AbstractRowMemoryLogRecordsBuilder(
+    protected MemoryLogRecordsRowBuilder(
             long baseLogOffset,
             int schemaId,
             int writeLimit,
@@ -86,17 +85,6 @@ abstract class AbstractRowMemoryLogRecordsBuilder<T> implements AutoCloseable {
         int headerSize = recordBatchHeaderSize(magic);
         this.pagedOutputView.setPosition(headerSize);
         this.sizeInBytes = headerSize;
-    }
-
-    protected AbstractRowMemoryLogRecordsBuilder(
-            int schemaId, int writeLimit, AbstractPagedOutputView outputView, boolean appendOnly) {
-        this(
-                BUILDER_DEFAULT_OFFSET,
-                schemaId,
-                writeLimit,
-                CURRENT_LOG_MAGIC_VALUE,
-                outputView,
-                appendOnly);
     }
 
     /** Implement to return size of the record (including length field). */

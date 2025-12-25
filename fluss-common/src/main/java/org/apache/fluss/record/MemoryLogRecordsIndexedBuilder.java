@@ -29,7 +29,7 @@ import static org.apache.fluss.record.LogRecordBatch.CURRENT_LOG_MAGIC_VALUE;
  * Default builder for {@link MemoryLogRecords} of log records in {@link
  * org.apache.fluss.metadata.LogFormat#INDEXED} format.
  */
-public class MemoryLogRecordsIndexedBuilder extends AbstractRowMemoryLogRecordsBuilder<IndexedRow> {
+public class MemoryLogRecordsIndexedBuilder extends MemoryLogRecordsRowBuilder<IndexedRow> {
 
     private MemoryLogRecordsIndexedBuilder(
             long baseLogOffset,
