@@ -27,6 +27,7 @@ import org.apache.paimon.data.InternalMap;
 import org.apache.paimon.data.InternalRow;
 import org.apache.paimon.data.Timestamp;
 import org.apache.paimon.data.variant.Variant;
+import org.apache.paimon.types.ArrayType;
 import org.apache.paimon.types.DataType;
 import org.apache.paimon.types.RowKind;
 import org.apache.paimon.types.RowType;
@@ -160,7 +161,11 @@ public class FlussRowAsPaimonRow implements InternalRow {
     @Override
     public InternalArray getArray(int pos) {
         org.apache.fluss.row.InternalArray flussArray = internalRow.getArray(pos);
-        return flussArray == null ? null : new FlussArrayAsPaimonArray(flussArray);
+        return flussArray == null
+                ? null
+                : new FlussArrayAsPaimonArray(
+                        flussArray,
+                        ((ArrayType) tableRowType.getField(pos).type()).getElementType());
     }
 
     @Override

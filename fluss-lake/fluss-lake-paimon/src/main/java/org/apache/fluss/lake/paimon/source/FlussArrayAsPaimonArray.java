@@ -17,6 +17,7 @@
 
 package org.apache.fluss.lake.paimon.source;
 
+import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
 
 import org.apache.paimon.data.BinaryString;
@@ -26,14 +27,19 @@ import org.apache.paimon.data.InternalMap;
 import org.apache.paimon.data.InternalRow;
 import org.apache.paimon.data.Timestamp;
 import org.apache.paimon.data.variant.Variant;
+import org.apache.paimon.types.ArrayType;
+import org.apache.paimon.types.DataType;
 
 /** Adapter class for converting Fluss InternalArray to Paimon InternalArray. */
 public class FlussArrayAsPaimonArray implements InternalArray {
 
     private final org.apache.fluss.row.InternalArray flussArray;
+    private final DataType elementType;
 
-    public FlussArrayAsPaimonArray(org.apache.fluss.row.InternalArray flussArray) {
+    public FlussArrayAsPaimonArray(
+            org.apache.fluss.row.InternalArray flussArray, DataType elementType) {
         this.flussArray = flussArray;
+        this.elementType = elementType;
     }
 
     @Override
@@ -99,13 +105,36 @@ public class FlussArrayAsPaimonArray implements InternalArray {
     @Override
     public Timestamp getTimestamp(int pos, int precision) {
         // Default to TIMESTAMP_WITHOUT_TIME_ZONE behavior for arrays
-        if (TimestampNtz.isCompact(precision)) {
-            return Timestamp.fromEpochMillis(
-                    flussArray.getTimestampNtz(pos, precision).getMillisecond());
-        } else {
-            TimestampNtz timestampNtz = flussArray.getTimestampNtz(pos, precision);
-            return Timestamp.fromEpochMillis(
-                    timestampNtz.getMillisecond(), timestampNtz.getNanoOfMillisecond());
+        switch (elementType.getTypeRoot()) {
+            case TIMESTAMP_WITHOUT_TIME_ZONE:
+                if (TimestampNtz.isCompact(precision)) {
+                    return Timestamp.fromEpochMillis(
+                            flussArray.getTimestampNtz(pos, precision).getMillisecond());
+                } else {
+                    TimestampNtz timestampNtz = flussArray.getTimestampNtz(pos, precision);
+                    return Timestamp.fromEpochMillis(
+                            timestampNtz.getMillisecond(), timestampNtz.getNanoOfMillisecond());
+                }
+
+            case TIMESTAMP_WITH_LOCAL_TIME_ZONE:
+                if (TimestampLtz.isCompact(precision)) {
+                    return Timestamp.fromEpochMillis(
+                            flussArray.getTimestampLtz(pos, precision).getEpochMillisecond());
+                } else {
+                    TimestampLtz timestampLtz = flussArray.getTimestampLtz(pos, precision);
+                    return Timestamp.fromEpochMillis(
+                            timestampLtz.getEpochMillisecond(),
+                            timestampLtz.getNanoOfMillisecond());
+                }
+            default:
+                throw new UnsupportedOperationException(
+                        "Unsupported array element type for getTimestamp. "
+                                + "Only TIMESTAMP_WITHOUT_TIME_ZONE and "
+                                + "TIMESTAMP_WITH_LOCAL_TIME_ZONE are supported, but got: "
+                                + elementType.getTypeRoot()
+                                + " ("
+                                + elementType
+                                + ").");
         }
     }
 
@@ -123,7 +152,10 @@ public class FlussArrayAsPaimonArray implements InternalArray {
     @Override
     public InternalArray getArray(int pos) {
         org.apache.fluss.row.InternalArray innerArray = flussArray.getArray(pos);
-        return innerArray == null ? null : new FlussArrayAsPaimonArray(innerArray);
+        return innerArray == null
+                ? null
+                : new FlussArrayAsPaimonArray(
+                        innerArray, ((ArrayType) elementType).getElementType());
     }
 
     @Override
