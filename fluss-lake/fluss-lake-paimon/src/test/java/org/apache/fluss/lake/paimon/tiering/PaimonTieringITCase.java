@@ -50,6 +50,7 @@ import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
@@ -487,6 +488,89 @@ class PaimonTieringITCase extends FlinkPaimonTieringTestBase {
         }
 
         return "[" + String.join(",", partitionOffsetStrs) + "]";
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testTieringForNestedRow(boolean isPrimaryKeyTable) throws Exception {
+        TablePath t1 =
+                TablePath.of(
+                        DEFAULT_DB,
+                        isPrimaryKeyTable ? "pkTableForNestedRow" : "logTableForNestedRow");
+
+        Schema.Builder builder =
+                Schema.newBuilder()
+                        .column("c0", DataTypes.INT())
+                        .column("c1", DataTypes.STRING())
+                        .column(
+                                "c2",
+                                DataTypes.ROW(
+                                        DataTypes.FIELD("nested_int", DataTypes.INT()),
+                                        DataTypes.FIELD("nested_string", DataTypes.STRING()),
+                                        DataTypes.FIELD("nested_double", DataTypes.DOUBLE())));
+
+        if (isPrimaryKeyTable) {
+            builder.primaryKey("c0", "c1");
+        }
+
+        TableDescriptor.Builder tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(builder.build())
+                        .distributedBy(1, "c0")
+                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "true")
+                        .property(ConfigOptions.TABLE_DATALAKE_FRESHNESS, Duration.ofMillis(500));
+        tableDescriptor.customProperties(Collections.emptyMap());
+        tableDescriptor.properties(Collections.emptyMap());
+        long t1Id = createTable(t1, tableDescriptor.build());
+        TableBucket t1Bucket = new TableBucket(t1Id, 0);
+
+        List<InternalRow> rows =
+                Collections.singletonList(
+                        row(
+                                builder.build().getRowType(),
+                                1,
+                                "outer_value",
+                                new Object[] {100, "nested_value", 3.14}));
+        writeRows(t1, rows, !isPrimaryKeyTable);
+
+        if (isPrimaryKeyTable) {
+            waitUntilSnapshot(t1Id, 1, 0);
+        }
+
+        JobClient jobClient = buildTieringJob(execEnv);
+
+        try {
+            assertReplicaStatus(t1Bucket, 1);
+
+            Iterator<org.apache.paimon.data.InternalRow> paimonRowIterator =
+                    getPaimonRowCloseableIterator(t1);
+            for (InternalRow expectedRow : rows) {
+                org.apache.paimon.data.InternalRow row = paimonRowIterator.next();
+                assertThat(row.getInt(0)).isEqualTo(expectedRow.getInt(0));
+                assertThat(row.getString(1).toString())
+                        .isEqualTo(expectedRow.getString(1).toString());
+
+                org.apache.paimon.data.InternalRow paimonNestedRow = row.getRow(2, 3);
+                assertThat(paimonNestedRow).isNotNull();
+                org.apache.fluss.row.InternalRow flussNestedRow = expectedRow.getRow(2, 3);
+                assertThat(paimonNestedRow.getInt(0)).isEqualTo(flussNestedRow.getInt(0));
+                assertThat(paimonNestedRow.getString(1).toString())
+                        .isEqualTo(flussNestedRow.getString(1).toString());
+                assertThat(paimonNestedRow.getDouble(2)).isEqualTo(flussNestedRow.getDouble(2));
+            }
+
+            Map<String, String> properties =
+                    new HashMap<String, String>() {
+                        {
+                            put(
+                                    FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY,
+                                    "[{\"bucket\":0,\"offset\":1}]");
+                        }
+                    };
+            checkSnapshotPropertyInPaimon(t1, properties);
+        } finally {
+            jobClient.cancel().get();
+        }
     }
 
     @Test

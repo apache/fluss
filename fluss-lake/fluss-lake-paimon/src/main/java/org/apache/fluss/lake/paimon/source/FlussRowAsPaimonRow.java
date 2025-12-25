@@ -175,8 +175,12 @@ public class FlussRowAsPaimonRow implements InternalRow {
     }
 
     @Override
-    public InternalRow getRow(int pos, int pos1) {
-        throw new UnsupportedOperationException(
-                "getRow is not support for Fluss record currently.");
+    public InternalRow getRow(int pos, int numFields) {
+        org.apache.fluss.row.InternalRow nestedFlussRow = internalRow.getRow(pos, numFields);
+        return nestedFlussRow == null
+                ? null
+                : new FlussRowAsPaimonRow(
+                        nestedFlussRow,
+                        (org.apache.paimon.types.RowType) tableRowType.getField(pos).type());
     }
 }

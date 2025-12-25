@@ -166,8 +166,11 @@ public class FlussArrayAsPaimonArray implements InternalArray {
 
     @Override
     public InternalRow getRow(int pos, int numFields) {
-        throw new UnsupportedOperationException(
-                "getRow is not supported for Fluss array currently.");
+        org.apache.fluss.row.InternalRow nestedFlussRow = flussArray.getRow(pos, numFields);
+        return nestedFlussRow == null
+                ? null
+                : new FlussRowAsPaimonRow(
+                        nestedFlussRow, (org.apache.paimon.types.RowType) elementType);
     }
 
     @Override
