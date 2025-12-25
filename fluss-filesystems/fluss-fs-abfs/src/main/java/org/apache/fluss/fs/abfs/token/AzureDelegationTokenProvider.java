@@ -27,7 +27,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
-import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -56,7 +56,7 @@ public class AzureDelegationTokenProvider {
         this.authEndpoint = conf.get(ENDPOINT_KEY);
         this.additionInfos = new HashMap<>();
 
-        for (String key : Arrays.asList(ENDPOINT_KEY)) {
+        for (String key : Collections.singleton(ENDPOINT_KEY)) {
             if (conf.get(key) != null) {
                 additionInfos.put(key, conf.get(key));
             }
