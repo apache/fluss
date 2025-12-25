@@ -50,6 +50,9 @@ import org.apache.flink.core.io.SimpleVersionedSerializer;
 
 import javax.annotation.Nullable;
 
+import static org.apache.fluss.config.ConfigOptions.CLIENT_SCANNER_IO_TMP_DIR;
+import static org.apache.fluss.flink.utils.FlinkConnectorOptionsUtils.getClientScannerIoTmpDir;
+
 /** Flink source for Fluss. */
 public class FlinkSource<OUT>
         implements Source<OUT, SourceSplitBase, SourceEnumeratorState>, ResultTypeQueryable {
@@ -181,6 +184,9 @@ public class FlinkSource<OUT>
         FlinkSourceReaderMetrics flinkSourceReaderMetrics =
                 new FlinkSourceReaderMetrics(context.metricGroup());
 
+        flussConf.set(
+                CLIENT_SCANNER_IO_TMP_DIR,
+                getClientScannerIoTmpDir(flussConf, context.getConfiguration()));
         deserializationSchema.open(
                 new DeserializerInitContextImpl(
                         context.metricGroup().addGroup("deserializer"),
