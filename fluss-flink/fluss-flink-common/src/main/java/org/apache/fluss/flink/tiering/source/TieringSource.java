@@ -44,9 +44,9 @@ import org.apache.flink.streaming.api.graph.StreamGraphHasherV2;
 
 import java.nio.charset.StandardCharsets;
 
+import static org.apache.fluss.config.ConfigOptions.LAKE_TIERING_TABLE_DURATION_DETECT_INTERVAL;
+import static org.apache.fluss.config.ConfigOptions.LAKE_TIERING_TABLE_DURATION_MAX;
 import static org.apache.fluss.flink.tiering.source.TieringSourceOptions.POLL_TIERING_TABLE_INTERVAL;
-import static org.apache.fluss.flink.tiering.source.TieringSourceOptions.TIERING_TABLE_DURATION_DETECT_INTERVAL;
-import static org.apache.fluss.flink.tiering.source.TieringSourceOptions.TIERING_TABLE_DURATION_MAX;
 
 /**
  * The flink source implementation for tiering data from Fluss to downstream lake.
@@ -147,9 +147,9 @@ public class TieringSource<WriteResult>
         private long pollTieringTableIntervalMs =
                 POLL_TIERING_TABLE_INTERVAL.defaultValue().toMillis();
         private long tieringTableDurationMaxMs =
-                TIERING_TABLE_DURATION_MAX.defaultValue().toMillis();
+                LAKE_TIERING_TABLE_DURATION_MAX.defaultValue().toMillis();
         private long tieringTableDurationDetectIntervalMs =
-                TIERING_TABLE_DURATION_DETECT_INTERVAL.defaultValue().toMillis();
+                LAKE_TIERING_TABLE_DURATION_DETECT_INTERVAL.defaultValue().toMillis();
 
         public Builder(
                 Configuration flussConf, LakeTieringFactory<WriteResult, ?> lakeTieringFactory) {

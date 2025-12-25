@@ -160,14 +160,14 @@ public class TestingPaimonStoragePlugin implements LakeStoragePlugin {
 
     private static class TestingPaimonWriter implements LakeWriter<TestingPaimonWriteResult> {
 
-        static ConfigOption<Duration> WRITE_PAUSE =
+        static ConfigOption<Duration> writePauseOption =
                 key("write-pause").durationType().noDefaultValue();
 
         private int writtenRecords = 0;
         private final Duration writePause;
 
         private TestingPaimonWriter(TableInfo tableInfo) {
-            this.writePause = tableInfo.getCustomProperties().get(WRITE_PAUSE);
+            this.writePause = tableInfo.getCustomProperties().get(writePauseOption);
         }
 
         @Override
@@ -178,6 +178,7 @@ public class TestingPaimonStoragePlugin implements LakeStoragePlugin {
                 }
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
+                throw new IOException("Interrupted while pausing before write", e);
             }
             writtenRecords += 1;
         }
@@ -243,7 +244,7 @@ public class TestingPaimonStoragePlugin implements LakeStoragePlugin {
         public long commit(
                 TestPaimonCommittable committable, Map<String, String> snapshotProperties)
                 throws IOException {
-            // do nothing, and always return 1 as commited snapshot
+            // do nothing, and always return 1 as committed snapshot
             return 1;
         }
 

@@ -72,7 +72,7 @@ public class TieringLogSplit extends TieringSplit {
             long stoppingOffset,
             boolean forceIgnore,
             int numberOfSplits) {
-        super(tablePath, tableBucket, partitionName, numberOfSplits, forceIgnore);
+        super(tablePath, tableBucket, partitionName, forceIgnore, numberOfSplits);
         this.startingOffset = startingOffset;
         this.stoppingOffset = stoppingOffset;
     }

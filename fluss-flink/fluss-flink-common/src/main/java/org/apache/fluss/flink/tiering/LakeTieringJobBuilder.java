@@ -34,10 +34,10 @@ import org.apache.flink.streaming.api.datastream.DataStreamSource;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.streaming.api.functions.sink.v2.DiscardingSink;
 
+import static org.apache.fluss.config.ConfigOptions.LAKE_TIERING_TABLE_DURATION_DETECT_INTERVAL;
+import static org.apache.fluss.config.ConfigOptions.LAKE_TIERING_TABLE_DURATION_MAX;
 import static org.apache.fluss.flink.tiering.source.TieringSource.TIERING_SOURCE_TRANSFORMATION_UID;
 import static org.apache.fluss.flink.tiering.source.TieringSourceOptions.POLL_TIERING_TABLE_INTERVAL;
-import static org.apache.fluss.flink.tiering.source.TieringSourceOptions.TIERING_TABLE_DURATION_DETECT_INTERVAL;
-import static org.apache.fluss.flink.tiering.source.TieringSourceOptions.TIERING_TABLE_DURATION_MAX;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /** The builder to build Flink lake tiering job. */
@@ -92,14 +92,14 @@ public class LakeTieringJobBuilder {
                     flussConfig.get(POLL_TIERING_TABLE_INTERVAL).toMillis());
         }
 
-        if (flussConfig.get(TIERING_TABLE_DURATION_MAX) != null) {
+        if (lakeTieringConfig.get(LAKE_TIERING_TABLE_DURATION_MAX) != null) {
             tieringSourceBuilder.withTieringTableDurationMax(
-                    flussConfig.get(TIERING_TABLE_DURATION_MAX).toMillis());
+                    lakeTieringConfig.get(LAKE_TIERING_TABLE_DURATION_MAX).toMillis());
         }
 
-        if (flussConfig.get(TIERING_TABLE_DURATION_DETECT_INTERVAL) != null) {
+        if (lakeTieringConfig.get(LAKE_TIERING_TABLE_DURATION_DETECT_INTERVAL) != null) {
             tieringSourceBuilder.withTieringTableDurationDetectInterval(
-                    flussConfig.get(TIERING_TABLE_DURATION_DETECT_INTERVAL).toMillis());
+                    lakeTieringConfig.get(LAKE_TIERING_TABLE_DURATION_DETECT_INTERVAL).toMillis());
         }
 
         TieringSource<?> tieringSource = tieringSourceBuilder.build();

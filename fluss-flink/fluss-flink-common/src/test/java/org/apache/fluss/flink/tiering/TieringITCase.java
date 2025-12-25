@@ -58,8 +58,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
-import static org.apache.fluss.flink.tiering.source.TieringSourceOptions.TIERING_TABLE_DURATION_DETECT_INTERVAL;
-import static org.apache.fluss.flink.tiering.source.TieringSourceOptions.TIERING_TABLE_DURATION_MAX;
+import static org.apache.fluss.config.ConfigOptions.LAKE_TIERING_TABLE_DURATION_DETECT_INTERVAL;
+import static org.apache.fluss.config.ConfigOptions.LAKE_TIERING_TABLE_DURATION_MAX;
 import static org.apache.fluss.testutils.common.CommonTestUtils.waitValue;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -233,15 +233,13 @@ class TieringITCase {
 
     private JobClient buildTieringJob(StreamExecutionEnvironment execEnv) throws Exception {
         Configuration lakeTieringConfig = new Configuration();
-        lakeTieringConfig.set(TIERING_TABLE_DURATION_MAX, Duration.ofSeconds(1));
-        lakeTieringConfig.set(TIERING_TABLE_DURATION_DETECT_INTERVAL, Duration.ofMillis(100));
+        lakeTieringConfig.set(LAKE_TIERING_TABLE_DURATION_MAX, Duration.ofSeconds(1));
+        lakeTieringConfig.set(LAKE_TIERING_TABLE_DURATION_DETECT_INTERVAL, Duration.ofMillis(100));
 
         Configuration flussConfig = new Configuration();
         flussConfig.setString(
                 ConfigOptions.BOOTSTRAP_SERVERS.key(),
                 FLUSS_CLUSTER_EXTENSION.getBootstrapServers());
-        flussConfig.set(TIERING_TABLE_DURATION_MAX, Duration.ofSeconds(1));
-        flussConfig.set(TIERING_TABLE_DURATION_DETECT_INTERVAL, Duration.ofMillis(100));
         return LakeTieringJobBuilder.newBuilder(
                         execEnv,
                         flussConfig,

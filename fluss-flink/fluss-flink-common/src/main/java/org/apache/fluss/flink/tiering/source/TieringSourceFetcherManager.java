@@ -33,8 +33,8 @@ import java.util.function.Consumer;
 import java.util.function.Supplier;
 
 /**
- * The SplitFetcherManager for Fluss source. This class is needed to help notify a table reaches to
- * deadline of tiering to {@link TieringSplitReader}.
+ * The SplitFetcherManager for tiering source. This class is needed to help notify a table reaches
+ * to deadline of tiering to {@link TieringSplitReader}.
  */
 public class TieringSourceFetcherManager<WriteResult>
         extends SingleThreadFetcherManagerAdapter<
@@ -50,23 +50,23 @@ public class TieringSourceFetcherManager<WriteResult>
         super(elementsQueue, splitReaderSupplier, configuration, splitFinishedHook);
     }
 
-    public void markTableReachTieringDeadline(long tableId) {
+    public void markTableReachTieringMaxDuration(long tableId) {
         if (!fetchers.isEmpty()) {
             // The fetcher thread is still running. This should be the majority of the cases.
             fetchers.values()
                     .forEach(
                             splitFetcher ->
-                                    enqueueMarkTableReachTieringDeadlineTask(
+                                    enqueueMarkTableReachTieringMaxDurationTask(
                                             splitFetcher, tableId));
         } else {
             SplitFetcher<TableBucketWriteResult<WriteResult>, TieringSplit> splitFetcher =
                     createSplitFetcher();
-            enqueueMarkTableReachTieringDeadlineTask(splitFetcher, tableId);
+            enqueueMarkTableReachTieringMaxDurationTask(splitFetcher, tableId);
             startFetcher(splitFetcher);
         }
     }
 
-    private void enqueueMarkTableReachTieringDeadlineTask(
+    private void enqueueMarkTableReachTieringMaxDurationTask(
             SplitFetcher<TableBucketWriteResult<WriteResult>, TieringSplit> splitFetcher,
             long reachTieringDeadlineTable) {
         splitFetcher.enqueueTask(
@@ -74,7 +74,7 @@ public class TieringSourceFetcherManager<WriteResult>
                     @Override
                     public boolean run() {
                         ((TieringSplitReader<WriteResult>) splitFetcher.getSplitReader())
-                                .handleTableReachTieringDeadline(reachTieringDeadlineTable);
+                                .handleTableReachTieringMaxDuration(reachTieringDeadlineTable);
                         return true;
                     }
 

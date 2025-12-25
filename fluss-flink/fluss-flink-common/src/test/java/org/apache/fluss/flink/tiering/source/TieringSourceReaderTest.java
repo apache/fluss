@@ -89,6 +89,7 @@ class TieringSourceReaderTest extends FlinkTestBase {
                         () -> {
                             TestingReaderOutput<TableBucketWriteResult<TestingWriteResult>> output =
                                     new TestingReaderOutput<>();
+                            // should force to finish, the write result is null
                             reader.pollNext(output);
                             assertThat(output.getEmittedRecords()).hasSize(1);
                             TableBucketWriteResult<TestingWriteResult> result =
@@ -108,6 +109,8 @@ class TieringSourceReaderTest extends FlinkTestBase {
                                 new TableBucket(tableId, 2),
                                 null,
                                 EARLIEST_OFFSET,
+                                // use 100L as end offset, so that
+                                // tiering won't be finished if no tiering reach max duration logic
                                 100L);
 
                 reader.addSplits(Collections.singletonList(split));
@@ -116,6 +119,8 @@ class TieringSourceReaderTest extends FlinkTestBase {
                 FutureCompletingBlockingQueue<
                                 RecordsWithSplitIds<TableBucketWriteResult<TestingWriteResult>>>
                         blockingQueue = getElementsQueue(reader);
+                // wait blockingQueue is not empty to make sure we have one fetch
+                // in tiering source reader
                 waitUntil(
                         () -> !blockingQueue.isEmpty(),
                         Duration.ofSeconds(30),
@@ -132,6 +137,8 @@ class TieringSourceReaderTest extends FlinkTestBase {
                         () -> {
                             TestingReaderOutput<TableBucketWriteResult<TestingWriteResult>>
                                     output1 = new TestingReaderOutput<>();
+
+                            // should force to finish, the write result isn't null
                             reader.pollNext(output1);
                             assertThat(output1.getEmittedRecords()).hasSize(1);
                             TableBucketWriteResult<TestingWriteResult> result =
@@ -157,6 +164,7 @@ class TieringSourceReaderTest extends FlinkTestBase {
                         () -> {
                             TestingReaderOutput<TableBucketWriteResult<TestingWriteResult>>
                                     output1 = new TestingReaderOutput<>();
+                            // should force to finish, and the result is null
                             reader.pollNext(output1);
                             assertThat(output1.getEmittedRecords()).hasSize(1);
                             TableBucketWriteResult<TestingWriteResult> result =

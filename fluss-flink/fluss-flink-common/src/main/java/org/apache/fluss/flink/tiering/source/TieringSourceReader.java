@@ -122,7 +122,7 @@ public final class TieringSourceReader<WriteResult>
                     (TieringReachMaxDurationEvent) sourceEvent;
             long tableId = reachMaxDurationEvent.getTableId();
             ((TieringSourceFetcherManager<WriteResult>) splitFetcherManager)
-                    .markTableReachTieringDeadline(tableId);
+                    .markTableReachTieringMaxDuration(tableId);
         }
     }
 

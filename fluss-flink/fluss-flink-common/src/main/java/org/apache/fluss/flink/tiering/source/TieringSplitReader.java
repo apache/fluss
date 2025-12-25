@@ -57,6 +57,7 @@ import java.util.Set;
 
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
+import static org.apache.fluss.utils.Preconditions.checkState;
 
 /** The {@link SplitReader} implementation which will read Fluss and write to lake. */
 public class TieringSplitReader<WriteResult>
@@ -81,7 +82,7 @@ public class TieringSplitReader<WriteResult>
     // the table_id to the pending splits
     private final Map<Long, Set<TieringSplit>> pendingTieringSplits;
 
-    private final Set<Long> reachTieringDeadlineTables;
+    private final Set<Long> reachTieringMaxDurationTables;
 
     private final Map<TableBucket, LakeWriter<WriteResult>> lakeWriters;
     private final Connection connection;
@@ -124,7 +125,7 @@ public class TieringSplitReader<WriteResult>
         this.currentTableSplitsByBucket = new HashMap<>();
         this.lakeWriters = new HashMap<>();
         this.currentPendingSnapshotSplits = new ArrayDeque<>();
-        this.reachTieringDeadlineTables = new HashSet<>();
+        this.reachTieringMaxDurationTables = new HashSet<>();
         this.pollTimeout = pollTimeout;
     }
 
@@ -157,11 +158,11 @@ public class TieringSplitReader<WriteResult>
             }
         } else {
             if (currentLogScanner != null) {
-                if (reachTieringDeadlineTables.contains(currentTableId)) {
+                // force to complete records
+                if (reachTieringMaxDurationTables.contains(currentTableId)) {
                     return forceCompleteTieringLogRecords();
                 }
                 ScanRecords scanRecords = currentLogScanner.poll(pollTimeout);
-                // force to complete records
                 return forLogRecords(scanRecords);
             } else {
                 return emptyTableBucketWriteResultWithSplitIds();
@@ -182,6 +183,9 @@ public class TieringSplitReader<WriteResult>
             if (split.isForceIgnore()) {
                 // if the split is forced to ignore,
                 // mark it as empty
+                LOG.info(
+                        "ignore split {} since the split is set to force to ignore",
+                        split.splitId());
                 currentEmptySplits.add(split);
                 continue;
             }
@@ -300,7 +304,7 @@ public class TieringSplitReader<WriteResult>
                 long logEndOffset =
                         logOffsetAndTimestamp == null
                                 ? UNKNOWN_BUCKET_OFFSET
-                                // logEngOffset is equal to offset tiered + 1
+                                // logEndOffset is equal to offset tiered + 1
                                 : logOffsetAndTimestamp.logOffset + 1;
                 long timestamp =
                         logOffsetAndTimestamp == null
@@ -309,15 +313,26 @@ public class TieringSplitReader<WriteResult>
                 TableBucketWriteResult<WriteResult> bucketWriteResult =
                         completeLakeWriter(
                                 bucket, split.getPartitionName(), logEndOffset, timestamp);
+
+                if (logEndOffset == UNKNOWN_BUCKET_OFFSET) {
+                    // when the log end offset is unknown, the write result must be
+                    // null, otherwise, we should throw exception directly to avoid data
+                    // inconsistent
+                    checkState(
+                            bucketWriteResult.writeResult() == null,
+                            "bucketWriteResult must be null when log end offset is unknown when tiering "
+                                    + split);
+                }
+
                 writeResults.put(bucket, bucketWriteResult);
                 finishedSplitIds.put(bucket, split.splitId());
                 LOG.info(
-                        "Split {} is forced to be finished due to tiering timeout.",
+                        "Split {} is forced to be finished due to tiering reach max duration.",
                         split.splitId());
                 currentTieringSplitsIterator.remove();
             }
         }
-        reachTieringDeadlineTables.remove(this.currentTableId);
+        reachTieringMaxDurationTables.remove(this.currentTableId);
         mayFinishCurrentTable();
         return new TableBucketWriteResultWithSplitIds(writeResults, finishedSplitIds);
     }
@@ -530,13 +545,13 @@ public class TieringSplitReader<WriteResult>
     }
 
     /**
-     * Handle a table reach tiered deadline. This will mark the current table as timed out, and it
-     * will be force completed in the next fetch cycle.
+     * Handle a table reach max tiering duration. This will mark the current table as reaching max
+     * duration, and it will be force completed in the next fetch cycle.
      */
-    public void handleTableReachTieringDeadline(long tableId) {
-        if ((currentTableId != null && currentTableId.equals(tableId)
-                || pendingTieringSplits.containsKey(tableId))) {
-            reachTieringDeadlineTables.add(tableId);
+    public void handleTableReachTieringMaxDuration(long tableId) {
+        if ((currentTableId != null && currentTableId.equals(tableId))
+                || pendingTieringSplits.containsKey(tableId)) {
+            reachTieringMaxDurationTables.add(tableId);
         }
     }
 
