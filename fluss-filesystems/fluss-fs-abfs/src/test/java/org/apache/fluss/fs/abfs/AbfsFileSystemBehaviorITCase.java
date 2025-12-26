@@ -42,46 +42,33 @@ class AbfsFileSystemBehaviorITCase extends FileSystemBehaviorTestSuite {
     public static final String ABFS_FS_PATH = "abfs://flus@test.dfs.core.windows.net/test";
 
     private static MockAuthServer mockGSServer;
-    private static FileSystem fileSystem;
 
     @BeforeAll
-    static void setup() throws IOException {
+    static void setup() {
         mockGSServer = MockAuthServer.create();
-        fileSystem = createFileSystem();
-    }
-
-    void testPathAndScheme() throws Exception {}
-
-    @Override
-    protected FileSystem getFileSystem() {
-        return fileSystem;
-    }
-
-    @Override
-    protected FsPath getBasePath() {
-        return new FsPath(ABFS_FS_PATH);
-    }
-
-    private static FileSystem createFileSystem() throws IOException {
-        AbfsFileSystemPlugin abfsFileSystemPlugin = new AbfsFileSystemPlugin();
-        Configuration configuration = new Configuration();
-        configuration.setString(CONFIG_PREFIX + ".oauth2.id", CLIENT_ID);
-        configuration.setString(CONFIG_PREFIX + ".oauth2.secret", CLIENT_SECRET);
-        configuration.setString(CONFIG_PREFIX + ".oauth2.endpoint", ENDPOINT_KEY);
+        final Configuration configuration = new Configuration();
+        configuration.setString(CONFIG_PREFIX + ".oauth2.client.id", CLIENT_ID);
+        configuration.setString(CONFIG_PREFIX + ".oauth2.client.secret", CLIENT_SECRET);
+        configuration.setString(CONFIG_PREFIX + ".oauth2.client.endpoint", ENDPOINT_KEY);
         configuration.setString(CONFIG_PREFIX + ".key", AZURE_ACCOUNT_KEY);
+        FileSystem.initialize(configuration, null);
+    }
 
-        FileSystem fileSystem =
-                abfsFileSystemPlugin.create(
-                        URI.create("abfs://flus@test.dfs.core.windows.net/test"), configuration);
+    @Override
+    protected FileSystem getFileSystem() throws IOException {
+        return getBasePath().getFileSystem();
+    }
 
-        applyMockStorage(fileSystem);
-
-        return fileSystem;
+    @Override
+    protected FsPath getBasePath() throws IOException {
+        FsPath fsPath = new FsPath(ABFS_FS_PATH);
+        applyMockStorage(fsPath.getFileSystem());
+        return fsPath;
     }
 
     private static void applyMockStorage(FileSystem fileSystem) throws IOException {
         try {
-            MemoryFileSystem memoryFileSystem = new MemoryFileSystem();
+            MemoryFileSystem memoryFileSystem = new MemoryFileSystem(URI.create(ABFS_FS_PATH));
             FieldUtils.writeField(fileSystem, "fs", memoryFileSystem, true);
         } catch (IllegalAccessException e) {
             throw new RuntimeException(e);

@@ -41,9 +41,14 @@ import java.util.Set;
 /** Util file system abstraction. */
 public class MemoryFileSystem extends FileSystem {
 
+    private final URI uri;
     private final Map<Path, byte[]> files = MapUtils.newConcurrentHashMap();
     private final Set<Path> directories =
             Collections.newSetFromMap(MapUtils.newConcurrentHashMap());
+
+    public MemoryFileSystem(URI uri) {
+        this.uri = uri;
+    }
 
     @Override
     public boolean exists(Path f) throws IOException {
@@ -52,7 +57,7 @@ public class MemoryFileSystem extends FileSystem {
 
     @Override
     public URI getUri() {
-        throw new UnsupportedOperationException();
+        return uri;
     }
 
     @Override
