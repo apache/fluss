@@ -75,8 +75,8 @@ object SparkToFlussTypeVisitor {
         new DoubleType()
       case dt: org.apache.spark.sql.types.DecimalType =>
         new DecimalType(dt.precision, dt.scale)
-      case _: org.apache.spark.sql.types.BinaryType =>
-        new BinaryType(BinaryType.MAX_LENGTH)
+      case x: org.apache.spark.sql.types.BinaryType =>
+        new BytesType()
       case _: org.apache.spark.sql.types.VarcharType =>
         new StringType()
       case ct: org.apache.spark.sql.types.CharType =>
