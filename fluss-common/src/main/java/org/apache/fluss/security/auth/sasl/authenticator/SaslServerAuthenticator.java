@@ -144,7 +144,7 @@ public class SaslServerAuthenticator implements ServerAuthenticator {
                     (PrivilegedExceptionAction<byte[]>) () -> saslServer.evaluateResponse(token));
         } catch (Exception e) {
             throw new AuthenticationException(
-                    String.format("Failed to evaluate SASL response，reason is %s", e.getMessage()));
+                    String.format("Failed to evaluate SASL response: %s", e.getMessage()));
         }
     }
 
