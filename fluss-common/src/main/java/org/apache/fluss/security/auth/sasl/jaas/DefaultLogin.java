@@ -25,8 +25,11 @@ import org.slf4j.LoggerFactory;
 import javax.annotation.Nullable;
 import javax.security.auth.Subject;
 import javax.security.auth.callback.UnsupportedCallbackException;
+import javax.security.auth.kerberos.KerberosPrincipal;
 import javax.security.auth.login.LoginContext;
 import javax.security.auth.login.LoginException;
+
+import java.util.Set;
 
 /* This file is based on source code of Apache Kafka Project (https://kafka.apache.org/), licensed by the Apache
  * Software Foundation (ASF) under the Apache License, Version 2.0. See the NOTICE file distributed with this work for
@@ -73,6 +76,23 @@ public class DefaultLogin implements Login {
 
     @Override
     public String serviceName() {
+        if (loginContext != null && loginContext.getSubject() != null) {
+            Set<KerberosPrincipal> principals =
+                    loginContext.getSubject().getPrincipals(KerberosPrincipal.class);
+            if (!principals.isEmpty()) {
+                KerberosPrincipal principal = principals.iterator().next();
+                String name = principal.getName();
+                int slash = name.indexOf('/');
+                if (slash > 0) {
+                    return name.substring(0, slash);
+                }
+                int at = name.indexOf('@');
+                if (at > 0) {
+                    return name.substring(0, at);
+                }
+                return name;
+            }
+        }
         return contextName;
     }
 
