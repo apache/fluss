@@ -59,8 +59,10 @@
         <module>fluss-filesystems</module>
         <module>fluss-test-utils</module>
         <module>fluss-test-coverage</module>
+        <module>fluss-e2e-tests</module>
         <module>fluss-server</module>
         <module>fluss-flink</module>
+        <module>fluss-trino</module>
         <module>fluss-protogen</module>
         <module>fluss-jmh</module>
         <module>fluss-lake</module>
