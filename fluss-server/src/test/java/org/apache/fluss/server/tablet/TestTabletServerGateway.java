@@ -77,8 +77,6 @@ import org.apache.fluss.rpc.messages.PbStopReplicaRespForBucket;
 import org.apache.fluss.rpc.messages.PbTableBucket;
 import org.apache.fluss.rpc.messages.PrefixLookupRequest;
 import org.apache.fluss.rpc.messages.PrefixLookupResponse;
-import org.apache.fluss.rpc.messages.PrepareCommitLakeTableSnapshotRequest;
-import org.apache.fluss.rpc.messages.PrepareCommitLakeTableSnapshotResponse;
 import org.apache.fluss.rpc.messages.ProduceLogRequest;
 import org.apache.fluss.rpc.messages.ProduceLogResponse;
 import org.apache.fluss.rpc.messages.PutKvRequest;
@@ -332,12 +330,6 @@ public class TestTabletServerGateway implements TabletServerGateway {
     @Override
     public CompletableFuture<DescribeClusterConfigsResponse> describeClusterConfigs(
             DescribeClusterConfigsRequest request) {
-        throw new UnsupportedOperationException();
-    }
-
-    @Override
-    public CompletableFuture<PrepareCommitLakeTableSnapshotResponse> prepareCommitLakeTableSnapshot(
-            PrepareCommitLakeTableSnapshotRequest request) {
         throw new UnsupportedOperationException();
     }
 

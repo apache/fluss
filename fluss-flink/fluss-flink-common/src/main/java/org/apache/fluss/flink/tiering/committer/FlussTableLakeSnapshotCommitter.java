@@ -26,7 +26,6 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.metrics.registry.MetricRegistry;
 import org.apache.fluss.rpc.GatewayClientProxy;
 import org.apache.fluss.rpc.RpcClient;
-import org.apache.fluss.rpc.gateway.AdminReadOnlyGateway;
 import org.apache.fluss.rpc.gateway.CoordinatorGateway;
 import org.apache.fluss.rpc.messages.CommitLakeTableSnapshotRequest;
 import org.apache.fluss.rpc.messages.PbBucketOffset;
@@ -69,7 +68,6 @@ public class FlussTableLakeSnapshotCommitter implements AutoCloseable {
     private final Configuration flussConf;
 
     private CoordinatorGateway coordinatorGateway;
-    private AdminReadOnlyGateway readOnlyGateway;
     private RpcClient rpcClient;
 
     public FlussTableLakeSnapshotCommitter(Configuration flussConf) {
@@ -87,12 +85,6 @@ public class FlussTableLakeSnapshotCommitter implements AutoCloseable {
         this.coordinatorGateway =
                 GatewayClientProxy.createGatewayProxy(
                         metadataUpdater::getCoordinatorServer, rpcClient, CoordinatorGateway.class);
-
-        this.readOnlyGateway =
-                GatewayClientProxy.createGatewayProxy(
-                        metadataUpdater::getRandomTabletServer,
-                        rpcClient,
-                        AdminReadOnlyGateway.class);
     }
 
     String prepareCommit(long tableId, TablePath tablePath, Map<TableBucket, Long> logEndOffsets)
@@ -102,7 +94,7 @@ public class FlussTableLakeSnapshotCommitter implements AutoCloseable {
             PrepareCommitLakeTableSnapshotRequest prepareCommitLakeTableSnapshotRequest =
                     toPrepareCommitLakeTableSnapshotRequest(tableId, tablePath, logEndOffsets);
             PrepareCommitLakeTableSnapshotResponse prepareCommitLakeTableSnapshotResponse =
-                    readOnlyGateway
+                    coordinatorGateway
                             .prepareCommitLakeTableSnapshot(prepareCommitLakeTableSnapshotRequest)
                             .get();
             List<PbPrepareCommitLakeTableRespForTable> pbPrepareCommitLakeTableRespForTables =

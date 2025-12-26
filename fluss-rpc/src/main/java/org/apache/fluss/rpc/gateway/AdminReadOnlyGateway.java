@@ -46,8 +46,6 @@ import org.apache.fluss.rpc.messages.ListTablesRequest;
 import org.apache.fluss.rpc.messages.ListTablesResponse;
 import org.apache.fluss.rpc.messages.MetadataRequest;
 import org.apache.fluss.rpc.messages.MetadataResponse;
-import org.apache.fluss.rpc.messages.PrepareCommitLakeTableSnapshotRequest;
-import org.apache.fluss.rpc.messages.PrepareCommitLakeTableSnapshotResponse;
 import org.apache.fluss.rpc.messages.TableExistsRequest;
 import org.apache.fluss.rpc.messages.TableExistsResponse;
 import org.apache.fluss.rpc.protocol.ApiKeys;
@@ -195,28 +193,4 @@ public interface AdminReadOnlyGateway extends RpcGateway {
     @RPC(api = ApiKeys.DESCRIBE_CLUSTER_CONFIGS)
     CompletableFuture<DescribeClusterConfigsResponse> describeClusterConfigs(
             DescribeClusterConfigsRequest request);
-
-    /**
-     * Prepares to commit lake table snapshots by merging them with existing snapshots and storing
-     * them to the file system.
-     *
-     * <p>This method is called during the two-phase commit process for lake table snapshots. It
-     * performs the following operations for each table in the request:
-     *
-     * <ul>
-     *   <li>Merges the new snapshot with the previous latest snapshot (if exists) to ensure
-     *       completeness
-     *   <li>Stores the merged snapshot to the remote file system. The stored file contains the log
-     *       end offset information for each bucket in the table
-     *   <li>Returns the file path where the snapshot is stored
-     * </ul>
-     *
-     * @param request the request containing lake table snapshot information for one or more tables
-     * @return a future that completes with a response containing the file paths where snapshots
-     *     (containing bucket log end offset information) are stored, or error information for
-     *     tables that failed to process
-     */
-    @RPC(api = ApiKeys.PRECOMMIT_LAKE_TABLE_SNAPSHOT)
-    CompletableFuture<PrepareCommitLakeTableSnapshotResponse> prepareCommitLakeTableSnapshot(
-            PrepareCommitLakeTableSnapshotRequest request);
 }

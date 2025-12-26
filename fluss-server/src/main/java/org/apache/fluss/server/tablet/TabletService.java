@@ -18,7 +18,6 @@
 package org.apache.fluss.server.tablet;
 
 import org.apache.fluss.cluster.ServerType;
-import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.AuthorizationException;
 import org.apache.fluss.exception.UnknownTableOrBucketException;
 import org.apache.fluss.fs.FileSystem;
@@ -138,8 +137,7 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
             MetadataManager metadataManager,
             @Nullable Authorizer authorizer,
             DynamicConfigManager dynamicConfigManager,
-            ExecutorService ioExecutor,
-            Configuration conf) {
+            ExecutorService ioExecutor) {
         super(
                 remoteFileSystem,
                 ServerType.TABLET_SERVER,
@@ -147,8 +145,7 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
                 metadataManager,
                 authorizer,
                 dynamicConfigManager,
-                ioExecutor,
-                conf);
+                ioExecutor);
         this.serviceName = "server-" + serverId;
         this.replicaManager = replicaManager;
         this.metadataCache = metadataCache;

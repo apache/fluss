@@ -33,6 +33,7 @@ import org.apache.fluss.exception.SecurityDisabledException;
 import org.apache.fluss.exception.TableAlreadyExistException;
 import org.apache.fluss.exception.TableNotPartitionedException;
 import org.apache.fluss.fs.FileSystem;
+import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.lake.lakestorage.LakeCatalog;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.DatabaseDescriptor;
@@ -87,12 +88,17 @@ import org.apache.fluss.rpc.messages.MetadataResponse;
 import org.apache.fluss.rpc.messages.PbAlterConfig;
 import org.apache.fluss.rpc.messages.PbHeartbeatReqForTable;
 import org.apache.fluss.rpc.messages.PbHeartbeatRespForTable;
+import org.apache.fluss.rpc.messages.PbPrepareCommitLakeTableRespForTable;
+import org.apache.fluss.rpc.messages.PbTableBucketOffsets;
+import org.apache.fluss.rpc.messages.PrepareCommitLakeTableSnapshotRequest;
+import org.apache.fluss.rpc.messages.PrepareCommitLakeTableSnapshotResponse;
 import org.apache.fluss.rpc.messages.RebalanceRequest;
 import org.apache.fluss.rpc.messages.RebalanceResponse;
 import org.apache.fluss.rpc.messages.RemoveServerTagRequest;
 import org.apache.fluss.rpc.messages.RemoveServerTagResponse;
 import org.apache.fluss.rpc.netty.server.Session;
 import org.apache.fluss.rpc.protocol.ApiError;
+import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.security.acl.AclBinding;
 import org.apache.fluss.security.acl.AclBindingFilter;
 import org.apache.fluss.security.acl.FlussPrincipal;
@@ -122,8 +128,10 @@ import org.apache.fluss.server.zk.data.BucketAssignment;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
 import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.server.zk.data.TableRegistration;
+import org.apache.fluss.server.zk.data.lake.LakeTableHelper;
 import org.apache.fluss.utils.IOUtils;
 import org.apache.fluss.utils.concurrent.FutureUtils;
+import org.apache.fluss.utils.json.TableBucketOffsets;
 
 import javax.annotation.Nullable;
 
@@ -148,6 +156,7 @@ import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeCreateAcls
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeDropAclsResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toAlterTableConfigChanges;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toAlterTableSchemaChanges;
+import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toTableBucketOffsets;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toTablePath;
 import static org.apache.fluss.server.utils.TableAssignmentUtils.generateAssignment;
 import static org.apache.fluss.utils.PartitionUtils.validatePartitionSpec;
@@ -166,6 +175,8 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
 
     private final LakeTableTieringManager lakeTableTieringManager;
     private final LakeCatalogDynamicLoader lakeCatalogDynamicLoader;
+    private final ExecutorService ioExecutor;
+    private final LakeTableHelper lakeTableHelper;
 
     public CoordinatorService(
             Configuration conf,
@@ -186,8 +197,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                 metadataManager,
                 authorizer,
                 dynamicConfigManager,
-                ioExecutor,
-                conf);
+                ioExecutor);
         this.defaultBucketNumber = conf.getInt(ConfigOptions.DEFAULT_BUCKET_NUMBER);
         this.defaultReplicationFactor = conf.getInt(ConfigOptions.DEFAULT_REPLICATION_FACTOR);
         this.logTableAllowCreation = conf.getBoolean(ConfigOptions.LOG_TABLE_ALLOW_CREATION);
@@ -199,6 +209,9 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         this.lakeTableTieringManager = lakeTableTieringManager;
         this.metadataCache = metadataCache;
         this.lakeCatalogDynamicLoader = lakeCatalogDynamicLoader;
+        this.ioExecutor = ioExecutor;
+        this.lakeTableHelper =
+                new LakeTableHelper(zkClient, conf.getString(ConfigOptions.REMOTE_DATA_DIR));
     }
 
     @Override
@@ -710,6 +723,47 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                                 request.getTabletServerEpoch(),
                                 response));
         return response;
+    }
+
+    @Override
+    public CompletableFuture<PrepareCommitLakeTableSnapshotResponse> prepareCommitLakeTableSnapshot(
+            PrepareCommitLakeTableSnapshotRequest request) {
+        CompletableFuture<PrepareCommitLakeTableSnapshotResponse> future =
+                new CompletableFuture<>();
+        ioExecutor.submit(
+                () -> {
+                    PrepareCommitLakeTableSnapshotResponse response =
+                            new PrepareCommitLakeTableSnapshotResponse();
+                    try {
+                        for (PbTableBucketOffsets bucketOffsets : request.getBucketOffsetsList()) {
+                            PbPrepareCommitLakeTableRespForTable
+                                    pbPrepareCommitLakeTableRespForTable =
+                                            response.addPrepareCommitLakeTableResp();
+                            try {
+                                // upsert lake table snapshot, need to merge the snapshot with
+                                // previous latest snapshot
+                                TableBucketOffsets tableBucketOffsets =
+                                        lakeTableHelper.upsertTableBucketOffsets(
+                                                bucketOffsets.getTableId(),
+                                                toTableBucketOffsets(bucketOffsets));
+                                TablePath tablePath = toTablePath(bucketOffsets.getTablePath());
+                                FsPath fsPath =
+                                        lakeTableHelper.storeLakeTableBucketOffsets(
+                                                tablePath, tableBucketOffsets);
+                                pbPrepareCommitLakeTableRespForTable.setLakeTableBucketOffsetsPath(
+                                        fsPath.toString());
+                            } catch (Exception e) {
+                                Errors error = ApiError.fromThrowable(e).error();
+                                pbPrepareCommitLakeTableRespForTable.setError(
+                                        error.code(), error.message());
+                            }
+                        }
+                        future.complete(response);
+                    } catch (Exception e) {
+                        future.completeExceptionally(e);
+                    }
+                });
+        return future;
     }
 
     @Override

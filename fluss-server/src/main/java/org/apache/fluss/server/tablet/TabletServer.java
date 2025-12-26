@@ -286,8 +286,7 @@ public class TabletServer extends ServerBase {
                             metadataManager,
                             authorizer,
                             dynamicConfigManager,
-                            ioExecutor,
-                            conf);
+                            ioExecutor);
 
             RequestsMetrics requestsMetrics =
                     RequestsMetrics.createTabletServerRequestMetrics(tabletServerMetricGroup);
