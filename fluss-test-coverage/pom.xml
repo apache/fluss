@@ -406,6 +406,7 @@
                                         <exclude>org.apache.fluss.fs.hdfs.HdfsSecurityTokenReceiver</exclude>
                                         <exclude>org.apache.fluss.fs.oss.*</exclude>
                                         <exclude>org.apache.fluss.fs.s3.*</exclude>
+                                        <exclude>org.apache.fluss.fs.abfs.*</exclude>
                                         <exclude>org.apache.fluss.fs.obs.*</exclude>
                                         <exclude>com.amazonaws.services.s3.model.transform.XmlResponsesSaxParser*
                                         </exclude>
