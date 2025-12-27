@@ -635,7 +635,8 @@ class FlussRecordAsPaimonRowTest {
         assertThat(flussRecordAsPaimonRow.isNullAt(1)).isTrue();
         assertThat(flussRecordAsPaimonRow.getInt(2)).isEqualTo(tableBucket);
         assertThat(flussRecordAsPaimonRow.getLong(3)).isEqualTo(logOffset);
-        assertThat(flussRecordAsPaimonRow.getLong(4)).isEqualTo(timeStamp);
+        assertThat(flussRecordAsPaimonRow.getTimestamp(4, 3))
+                .isEqualTo(Timestamp.fromEpochMillis(timeStamp));
     }
 
     @Test
