@@ -109,13 +109,85 @@ public class PaimonLakeCatalog implements LakeCatalog {
             throws TableNotExistException {
         try {
             List<SchemaChange> paimonSchemaChanges = toPaimonSchemaChanges(tableChanges);
-            alterTable(tablePath, paimonSchemaChanges);
+
+            // Compare current Paimon table schema with expected target schema before altering
+            if (shouldAlterTable(tablePath, tableChanges)) {
+                alterTable(tablePath, paimonSchemaChanges);
+            }
+            // If schemas already match, treat as idempotent success
         } catch (Catalog.ColumnAlreadyExistException e) {
-            // Column already exists, treat as idempotent success for retry scenarios.
+            // This shouldn't happen if shouldAlterTable works correctly, but keep as safeguard
+            throw new RuntimeException("Unexpected ColumnAlreadyExistException", e);
         } catch (Catalog.ColumnNotExistException e) {
             // This shouldn't happen for AddColumn operations
             throw new RuntimeException(e);
         }
+    }
+
+    private boolean shouldAlterTable(TablePath tablePath, List<TableChange> tableChanges)
+            throws TableNotExistException {
+        try {
+            Table table = paimonCatalog.getTable(toPaimon(tablePath));
+            FileStoreTable fileStoreTable = (FileStoreTable) table;
+            Schema currentSchema = fileStoreTable.schema().toSchema();
+
+            for (TableChange change : tableChanges) {
+                if (change instanceof TableChange.AddColumn) {
+                    TableChange.AddColumn addColumn = (TableChange.AddColumn) change;
+                    if (!isColumnAlreadyExists(currentSchema, addColumn)) {
+                        return true;
+                    }
+                } else {
+                    return true;
+                }
+            }
+
+            return false;
+        } catch (Catalog.TableNotExistException e) {
+            throw new TableNotExistException("Table " + tablePath + " does not exist.");
+        }
+    }
+
+    private boolean isColumnAlreadyExists(Schema currentSchema, TableChange.AddColumn addColumn) {
+        String columnName = addColumn.getName();
+
+        for (org.apache.paimon.types.DataField field : currentSchema.fields()) {
+            if (field.name().equals(columnName)) {
+                org.apache.paimon.types.DataType expectedType =
+                        addColumn
+                                .getDataType()
+                                .accept(
+                                        org.apache.fluss.lake.paimon.utils
+                                                .FlussDataTypeToPaimonDataType.INSTANCE);
+
+                if (!field.type().equals(expectedType)) {
+                    throw new IllegalStateException(
+                            String.format(
+                                    "Column %s already exists but with different type. "
+                                            + "Existing: %s, Expected: %s",
+                                    columnName, field.type(), expectedType));
+                }
+                String existingComment = field.description();
+                String expectedComment = addColumn.getComment();
+
+                boolean commentsMatch =
+                        (existingComment == null && expectedComment == null)
+                                || (existingComment != null
+                                        && existingComment.equals(expectedComment));
+
+                if (!commentsMatch) {
+                    throw new IllegalStateException(
+                            String.format(
+                                    "Column %s already exists but with different comment. "
+                                            + "Existing: %s, Expected: %s",
+                                    columnName, existingComment, expectedComment));
+                }
+
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private void createTable(TablePath tablePath, Schema schema, boolean isCreatingFlussTable)

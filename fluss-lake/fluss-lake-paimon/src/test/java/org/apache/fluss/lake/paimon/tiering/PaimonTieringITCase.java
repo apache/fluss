@@ -643,20 +643,30 @@ class PaimonTieringITCase extends FlinkPaimonTieringTestBase {
             // 7. Wait for new data to be tiered
             assertReplicaStatus(tableBucket, 6);
 
-            // 8. Verify Paimon table has the new column
+            // 8. Verify Paimon table has the new column with exact field names and order
             Identifier tableIdentifier =
                     Identifier.create(tablePath.getDatabaseName(), tablePath.getTableName());
             FileStoreTable paimonTable = (FileStoreTable) paimonCatalog.getTable(tableIdentifier);
             List<String> fieldNames = paimonTable.rowType().getFieldNames();
 
-            // Should have: a, b, c3, __bucket, __offset, __timestamp
-            assertThat(fieldNames).contains("a", "b", "c3");
+            // Should have exact fields in order: a, b, c3, __bucket, __offset, __timestamp
+            assertThat(fieldNames)
+                    .containsExactly("a", "b", "c3", "__bucket", "__offset", "__timestamp");
 
-            // 9. Verify all data is present in Paimon (no data loss)
-            List<InternalRow> allRows = new ArrayList<>();
-            allRows.addAll(initialRows);
-            allRows.addAll(newRows);
-            checkDataInPaimonAppendOnlyTable(tablePath, allRows, 0);
+            // 9. Verify both schema evolution and data correctness
+            // For initial rows (before ADD COLUMN), c3 should be NULL
+            // For new rows (after ADD COLUMN), c3 should have the provided values
+            List<InternalRow> expectedRows = new ArrayList<>();
+            // Initial rows with NULL for c3
+            expectedRows.add(row(1, "v1", null));
+            expectedRows.add(row(2, "v2", null));
+            expectedRows.add(row(3, "v3", null));
+            // New rows with c3 values
+            expectedRows.add(row(4, "v4", 40));
+            expectedRows.add(row(5, "v5", 50));
+            expectedRows.add(row(6, "v6", 60));
+
+            checkDataInPaimonAppendOnlyTable(tablePath, expectedRows, 0);
 
         } finally {
             jobClient.cancel().get();
