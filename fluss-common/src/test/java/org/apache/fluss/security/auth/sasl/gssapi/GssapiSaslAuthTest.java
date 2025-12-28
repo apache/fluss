@@ -21,7 +21,7 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.security.auth.ServerAuthenticator;
 import org.apache.fluss.security.auth.sasl.authenticator.SaslClientAuthenticator;
 import org.apache.fluss.security.auth.sasl.authenticator.SaslServerAuthenticator;
-
+import org.apache.fluss.security.auth.sasl.jaas.DefaultLogin;
 import org.apache.hadoop.minikdc.MiniKdc;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -32,6 +32,9 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Properties;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.apache.fluss.config.ConfigOptions.CLIENT_SASL_JAAS_CONFIG;
 import static org.apache.fluss.config.ConfigOptions.CLIENT_SASL_MECHANISM;
@@ -186,6 +189,59 @@ class GssapiSaslAuthTest {
         clientAuth.close();
     }
 
+    @Test
+    void testTicketRenewal() throws Exception {
+        String principal = "client@" + kdc.getRealm();
+
+        // Manually construct a JAAS Configuration object to inject specific options required for
+        // renewal testing.
+        javax.security.auth.login.Configuration config =
+                new javax.security.auth.login.Configuration() {
+                    @Override
+                    public javax.security.auth.login.AppConfigurationEntry[]
+                            getAppConfigurationEntry(String name) {
+                        java.util.Map<String, String> options = new java.util.HashMap<>();
+                        options.put("useKeyTab", "true");
+                        options.put("storeKey", "true");
+                        options.put("useTicketCache", "false");
+                        options.put("keyTab", keytab.getAbsolutePath());
+                        options.put("principal", principal);
+                        options.put("doNotPrompt", "true");
+                        // Ensure the configuration is refreshed to pick up any changes in the KDC
+                        // environment.
+                        options.put("refreshKrb5Config", "true");
+                        options.put("isInitiator", "true");
+
+                        return new javax.security.auth.login.AppConfigurationEntry[] {
+                            new javax.security.auth.login.AppConfigurationEntry(
+                                    "com.sun.security.auth.module.Krb5LoginModule",
+                                    javax.security.auth.login.AppConfigurationEntry
+                                            .LoginModuleControlFlag.REQUIRED,
+                                    options)
+                        };
+                    }
+                };
+
+        // Use TestableDefaultLogin to hook into the renewal process and override timing parameters.
+        TestableDefaultLogin login = new TestableDefaultLogin();
+        login.configure("Client", config);
+        login.login();
+
+        // Wait for the background renewal thread to trigger a re-login.
+        // The renewal window and jitter are set to 0.0 in TestableDefaultLogin,
+        // causing the renewal to happen almost immediately.
+        boolean renewed = login.renewLatch.await(10, TimeUnit.SECONDS);
+
+        if (login.lastException != null) {
+            throw new AssertionError("Ticket renewal failed with exception", login.lastException);
+        }
+
+        assertThat(renewed).as("Ticket should have been renewed").isTrue();
+        assertThat(login.reLoginCount.get()).isGreaterThan(0);
+
+        login.close();
+    }
+
     private void deleteDir(File file) {
         if (file.isDirectory()) {
             File[] files = file.listFiles();
@@ -196,5 +252,41 @@ class GssapiSaslAuthTest {
             }
         }
         file.delete();
+    }
+
+    static class TestableDefaultLogin extends DefaultLogin {
+        final AtomicInteger reLoginCount = new AtomicInteger(0);
+        final CountDownLatch renewLatch = new CountDownLatch(1);
+        volatile Exception lastException;
+
+        @Override
+        protected long getMinTimeBeforeRelogin() {
+            return 100L; // 100ms
+        }
+
+        @Override
+        protected double getTicketRenewWindowFactor() {
+            // Set factor to 0.0 to trigger renewal immediately after login for deterministic
+            // testing.
+            return 0.0;
+        }
+
+        @Override
+        protected double getTicketRenewJitter() {
+            // Disable jitter to avoid non-deterministic delays that could exceed the test timeout.
+            return 0.0;
+        }
+
+        @Override
+        protected void onRenewComplete() {
+            reLoginCount.incrementAndGet();
+            renewLatch.countDown();
+        }
+
+        @Override
+        protected void onRenewFailure(Exception e) {
+            lastException = e;
+            renewLatch.countDown();
+        }
     }
 }
