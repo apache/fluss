@@ -169,24 +169,25 @@ There is a known issue ([FLINK-38399](https://issues.apache.org/jira/browse/FLIN
 
 #### Supported Features
 
-- Support for optimizing a dual-stream join from CDC sources that do not include delete messages into a delta join.
-  - Disable delete on the source table to guarantee there is no delete message in the table, by adding the option `'table.delete.behavior' = 'IGNORE'` or `'DISABLE'` on the table.
-  - The source table is no more required to be a `first_row` merge engine table since this version.
-- Support `Project` and `Filter` between source and delta join.
-- Support cache in delta join.
+- CDC sources are now supported in delta join, provided they do not produce DELETE messages.
+  - Set `'table.delete.behavior' = 'IGNORE'` or `'DISABLE'` on the source table to suppress deletes.
+  - The `'table.merge-engine' = 'first_row'` option is no longer required.
+- Projection and filter operations are now supported between source and delta join.
+- Lookup cache is now supported in delta join.
 
 #### Limitations
 
 - The primary key or the prefix key of the tables must be included as part of the equivalence conditions in the join.
-- The join must be a INNER join.
+- The join must be an INNER join. LEFT JOIN, RIGHT JOIN, and FULL OUTER JOIN are not supported.
+- Cascade joins (e.g., `A JOIN B JOIN C`) are not supported. Each join input must come directly from a table source.
 - The downstream node of the join must support idempotent updates, typically it's an upsert sink and should not have a `SinkUpsertMaterializer` node before it.
-  - Flink planner automatically inserts a `SinkUpsertMaterializer` when the sink’s primary key does not fully cover the upstream update key.
+  - Flink planner automatically inserts a `SinkUpsertMaterializer` when the sink's primary key does not fully cover the upstream update key.
   - You can learn more details about `SinkUpsertMaterializer` by reading this [blog](https://www.ververica.com/blog/flink-sql-secrets-mastering-the-art-of-changelog-events).
 - Since delta join does not support to handle update-before messages, it is necessary to ensure that the entire pipeline can safely discard update-before messages. That means when consuming a CDC stream:
   - The join key used in the delta join must be part of the primary key.
   - The sink's primary key must be the same as the upstream update key.
-  - All filters must be applied on the upsert key.
-- Neither filters nor projections should contain non-deterministic functions.
+  - All filters (including non-equi join conditions) must be applied on the upsert key.
+- Filters, projections, and non-equi join conditions must not contain non-deterministic functions.
 
 ## Future Plan
 
