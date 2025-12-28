@@ -44,12 +44,16 @@ import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.gateway.CoordinatorGateway;
+import org.apache.fluss.rpc.messages.AddServerTagRequest;
+import org.apache.fluss.rpc.messages.AddServerTagResponse;
 import org.apache.fluss.rpc.messages.AdjustIsrRequest;
 import org.apache.fluss.rpc.messages.AdjustIsrResponse;
 import org.apache.fluss.rpc.messages.AlterClusterConfigsRequest;
 import org.apache.fluss.rpc.messages.AlterClusterConfigsResponse;
 import org.apache.fluss.rpc.messages.AlterTableRequest;
 import org.apache.fluss.rpc.messages.AlterTableResponse;
+import org.apache.fluss.rpc.messages.CancelRebalanceRequest;
+import org.apache.fluss.rpc.messages.CancelRebalanceResponse;
 import org.apache.fluss.rpc.messages.CommitKvSnapshotRequest;
 import org.apache.fluss.rpc.messages.CommitKvSnapshotResponse;
 import org.apache.fluss.rpc.messages.CommitLakeTableSnapshotRequest;
@@ -76,11 +80,17 @@ import org.apache.fluss.rpc.messages.DropTableRequest;
 import org.apache.fluss.rpc.messages.DropTableResponse;
 import org.apache.fluss.rpc.messages.LakeTieringHeartbeatRequest;
 import org.apache.fluss.rpc.messages.LakeTieringHeartbeatResponse;
+import org.apache.fluss.rpc.messages.ListRebalanceProgressRequest;
+import org.apache.fluss.rpc.messages.ListRebalanceProgressResponse;
 import org.apache.fluss.rpc.messages.MetadataRequest;
 import org.apache.fluss.rpc.messages.MetadataResponse;
 import org.apache.fluss.rpc.messages.PbAlterConfig;
 import org.apache.fluss.rpc.messages.PbHeartbeatReqForTable;
 import org.apache.fluss.rpc.messages.PbHeartbeatRespForTable;
+import org.apache.fluss.rpc.messages.RebalanceRequest;
+import org.apache.fluss.rpc.messages.RebalanceResponse;
+import org.apache.fluss.rpc.messages.RemoveServerTagRequest;
+import org.apache.fluss.rpc.messages.RemoveServerTagResponse;
 import org.apache.fluss.rpc.netty.server.Session;
 import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.security.acl.AclBinding;
@@ -738,6 +748,34 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                         });
         eventManagerSupplier.get().put(accessContextEvent);
         return future;
+    }
+
+    @Override
+    public CompletableFuture<AddServerTagResponse> addServerTag(AddServerTagRequest request) {
+        throw new UnsupportedOperationException("Support soon!");
+    }
+
+    @Override
+    public CompletableFuture<RemoveServerTagResponse> removeServerTag(
+            RemoveServerTagRequest request) {
+        throw new UnsupportedOperationException("Support soon!");
+    }
+
+    @Override
+    public CompletableFuture<RebalanceResponse> rebalance(RebalanceRequest request) {
+        throw new UnsupportedOperationException("Support soon!");
+    }
+
+    @Override
+    public CompletableFuture<ListRebalanceProgressResponse> listRebalanceProgress(
+            ListRebalanceProgressRequest request) {
+        throw new UnsupportedOperationException("Support soon!");
+    }
+
+    @Override
+    public CompletableFuture<CancelRebalanceResponse> cancelRebalance(
+            CancelRebalanceRequest request) {
+        throw new UnsupportedOperationException("Support soon!");
     }
 
     @VisibleForTesting

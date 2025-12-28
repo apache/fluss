@@ -574,6 +574,44 @@ message AlterClusterConfigsRequest{
 message AlterClusterConfigsResponse{
 }
 
+message AddServerTagRequest {
+  repeated int32 server_ids = 1 [packed = true];
+  required int32 server_tag = 2;
+}
+
+message AddServerTagResponse {
+}
+
+message RemoveServerTagRequest {
+  repeated int32 server_ids = 1 [packed = true];
+  required int32 server_tag = 2;
+}
+
+message RemoveServerTagResponse {
+}
+
+message RebalanceRequest {
+  repeated int32 goals = 1 [packed = true];
+  required bool dry_run = 2;
+}
+
+message RebalanceResponse {
+  repeated PbRebalancePlanForTable table_plan = 1;
+}
+
+message ListRebalanceProgressRequest {
+}
+
+message ListRebalanceProgressResponse {
+  repeated PbRebalanceProgressForTable table_progress = 1;
+}
+
+message CancelRebalanceRequest {
+}
+
+message CancelRebalanceResponse {
+}
+
 
 
 // --------------- Inner classes ----------------
@@ -939,7 +977,6 @@ message PbRenameColumn {
   required string new_column_name = 2;
 }
 
-
 message PbModifyColumn {
   required string column_name = 1;
   optional bytes data_type_json = 2;
@@ -947,11 +984,32 @@ message PbModifyColumn {
   optional int32 column_position_type = 4; // LAST=0,FIRST=1,AFTER=3
 }
 
-
-
 message PbDescribeConfig {
   required string config_key = 1;
   optional string config_value = 2;
   required string config_source = 3;
 }
 
+message PbRebalancePlanForTable {
+  required int64 table_id = 1;
+  repeated PbRebalancePlanForBucket buckets_plan = 2;
+}
+
+message PbRebalanceProgressForTable {
+  required int64 table_id = 1;
+  repeated PbRebalanceProgressForBucket buckets_progress = 2;
+}
+
+message PbRebalanceProgressForBucket {
+  required PbRebalancePlanForBucket rebalance_plan = 1;
+  required int32 rebalance_status = 2;
+}
+
+message PbRebalancePlanForBucket {
+  optional int64 partition_id = 1;
+  required int32 bucket_id = 2;
+  optional int32 original_leader = 3;
+  optional int32 new_leader = 4;
+  repeated int32 original_replicas = 5 [packed = true];
+  repeated int32 new_replicas = 6 [packed = true];
+}

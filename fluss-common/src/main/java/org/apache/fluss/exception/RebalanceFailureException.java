@@ -17,16 +17,22 @@
 
 package org.apache.fluss.exception;
 
-import org.apache.fluss.annotation.PublicEvolving;
+import org.apache.fluss.annotation.VisibleForTesting;
 
 /**
- * Thrown when the tabletServer is not available.
+ * This exception is thrown if rebalance failed.
  *
  * @since 0.9
  */
-@PublicEvolving
-public class TabletServerNotAvailableException extends ApiException {
-    public TabletServerNotAvailableException(String message) {
+@VisibleForTesting
+public class RebalanceFailureException extends ApiException {
+    private static final long serialVersionUID = 1L;
+
+    public RebalanceFailureException(String message) {
         super(message);
+    }
+
+    public RebalanceFailureException(String message, Throwable cause) {
+        super(message, cause);
     }
 }

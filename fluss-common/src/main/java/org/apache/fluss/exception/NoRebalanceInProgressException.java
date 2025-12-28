@@ -20,13 +20,15 @@ package org.apache.fluss.exception;
 import org.apache.fluss.annotation.PublicEvolving;
 
 /**
- * Thrown when the tabletServer is not available.
+ * Thrown if there are no rebalance tasks in progress when list rebalance process.
  *
  * @since 0.9
  */
 @PublicEvolving
-public class TabletServerNotAvailableException extends ApiException {
-    public TabletServerNotAvailableException(String message) {
+public class NoRebalanceInProgressException extends ApiException {
+    private static final long serialVersionUID = 1L;
+
+    public NoRebalanceInProgressException(String message) {
         super(message);
     }
 }

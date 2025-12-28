@@ -42,8 +42,10 @@ import org.apache.fluss.server.zk.data.CoordinatorAddress;
 import org.apache.fluss.server.zk.data.DatabaseRegistration;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
+import org.apache.fluss.server.zk.data.RebalancePlan;
 import org.apache.fluss.server.zk.data.RemoteLogManifestHandle;
 import org.apache.fluss.server.zk.data.ResourceAcl;
+import org.apache.fluss.server.zk.data.ServerTags;
 import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.server.zk.data.TabletServerRegistration;
@@ -63,11 +65,13 @@ import org.apache.fluss.server.zk.data.ZkData.PartitionIdZNode;
 import org.apache.fluss.server.zk.data.ZkData.PartitionSequenceIdZNode;
 import org.apache.fluss.server.zk.data.ZkData.PartitionZNode;
 import org.apache.fluss.server.zk.data.ZkData.PartitionsZNode;
+import org.apache.fluss.server.zk.data.ZkData.RebalanceZNode;
 import org.apache.fluss.server.zk.data.ZkData.ResourceAclNode;
 import org.apache.fluss.server.zk.data.ZkData.SchemaZNode;
 import org.apache.fluss.server.zk.data.ZkData.SchemasZNode;
 import org.apache.fluss.server.zk.data.ZkData.ServerIdZNode;
 import org.apache.fluss.server.zk.data.ZkData.ServerIdsZNode;
+import org.apache.fluss.server.zk.data.ZkData.ServerTagsZNode;
 import org.apache.fluss.server.zk.data.ZkData.TableIdZNode;
 import org.apache.fluss.server.zk.data.ZkData.TableSequenceIdZNode;
 import org.apache.fluss.server.zk.data.ZkData.TableZNode;
@@ -1186,6 +1190,46 @@ public class ZooKeeperClient implements AutoCloseable {
                 .forPath(
                         ZkData.ConfigEntityChangeNotificationSequenceZNode.pathPrefix(),
                         ZkData.ConfigEntityChangeNotificationSequenceZNode.encode());
+    }
+
+    // --------------------------------------------------------------------------------------------
+    // Maintenance
+    // --------------------------------------------------------------------------------------------
+
+    public void registerServerTags(ServerTags newServerTags) throws Exception {
+        String path = ServerTagsZNode.path();
+        zkClient.create()
+                .creatingParentsIfNeeded()
+                .withMode(CreateMode.PERSISTENT)
+                .forPath(path, ServerTagsZNode.encode(newServerTags));
+    }
+
+    public void updateServerTags(ServerTags newServerTags) throws Exception {
+        String path = ServerTagsZNode.path();
+        zkClient.setData().forPath(path, ServerTagsZNode.encode(newServerTags));
+    }
+
+    public Optional<ServerTags> getServerTags() throws Exception {
+        String path = ServerTagsZNode.path();
+        return getOrEmpty(path).map(ServerTagsZNode::decode);
+    }
+
+    public void registerRebalancePlan(RebalancePlan rebalancePlan) throws Exception {
+        String path = RebalanceZNode.path();
+        zkClient.create()
+                .creatingParentsIfNeeded()
+                .withMode(CreateMode.PERSISTENT)
+                .forPath(path, RebalanceZNode.encode(rebalancePlan));
+    }
+
+    public void updateRebalancePlan(RebalancePlan rebalancePlan) throws Exception {
+        String path = RebalanceZNode.path();
+        zkClient.setData().forPath(path, RebalanceZNode.encode(rebalancePlan));
+    }
+
+    public Optional<RebalancePlan> getRebalancePlan() throws Exception {
+        String path = RebalanceZNode.path();
+        return getOrEmpty(path).map(RebalanceZNode::decode);
     }
 
     // --------------------------------------------------------------------------------------------

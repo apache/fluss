@@ -15,18 +15,38 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.exception;
+package org.apache.fluss.cluster.rebalance;
 
 import org.apache.fluss.annotation.PublicEvolving;
 
 /**
- * Thrown when the tabletServer is not available.
+ * Rebalance status.
  *
  * @since 0.9
  */
 @PublicEvolving
-public class TabletServerNotAvailableException extends ApiException {
-    public TabletServerNotAvailableException(String message) {
-        super(message);
+public enum RebalanceStatus {
+    NOT_STARTED(1),
+    REBALANCING(2),
+    FAILED(3),
+    COMPLETED(4);
+
+    private final int code;
+
+    RebalanceStatus(int code) {
+        this.code = code;
+    }
+
+    public int getCode() {
+        return code;
+    }
+
+    public static RebalanceStatus of(int code) {
+        for (RebalanceStatus status : RebalanceStatus.values()) {
+            if (status.code == code) {
+                return status;
+            }
+        }
+        return null;
     }
 }

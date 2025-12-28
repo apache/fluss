@@ -20,13 +20,15 @@ package org.apache.fluss.exception;
 import org.apache.fluss.annotation.PublicEvolving;
 
 /**
- * Thrown when the tabletServer is not available.
+ * Thrown if a server does not exist in the cluster.
  *
  * @since 0.9
  */
 @PublicEvolving
-public class TabletServerNotAvailableException extends ApiException {
-    public TabletServerNotAvailableException(String message) {
+public class ServerNotExistException extends ApiException {
+    private static final long serialVersionUID = 1L;
+
+    public ServerNotExistException(String message) {
         super(message);
     }
 }

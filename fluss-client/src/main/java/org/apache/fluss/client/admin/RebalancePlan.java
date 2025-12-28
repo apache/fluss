@@ -15,18 +15,27 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.exception;
+package org.apache.fluss.client.admin;
 
-import org.apache.fluss.annotation.PublicEvolving;
+import org.apache.fluss.cluster.rebalance.RebalancePlanForBucket;
+import org.apache.fluss.metadata.TableBucket;
+
+import java.util.Map;
 
 /**
- * Thrown when the tabletServer is not available.
+ * The rebalance plan.
  *
  * @since 0.9
  */
-@PublicEvolving
-public class TabletServerNotAvailableException extends ApiException {
-    public TabletServerNotAvailableException(String message) {
-        super(message);
+public class RebalancePlan {
+
+    private final Map<TableBucket, RebalancePlanForBucket> planForBucketMap;
+
+    public RebalancePlan(Map<TableBucket, RebalancePlanForBucket> planForBucketMap) {
+        this.planForBucketMap = planForBucketMap;
+    }
+
+    public Map<TableBucket, RebalancePlanForBucket> getPlanForBucketMap() {
+        return planForBucketMap;
     }
 }
