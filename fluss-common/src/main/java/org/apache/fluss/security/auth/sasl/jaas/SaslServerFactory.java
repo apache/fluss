@@ -91,7 +91,11 @@ public class SaslServerFactory {
     }
 
     public static SaslClient createSaslClient(
-            String mechanism, String hostAddress, Map<String, ?> props, LoginManager loginManager)
+            String mechanism,
+            String hostAddress,
+            Map<String, ?> props,
+            LoginManager loginManager,
+            String serviceName)
             throws PrivilegedActionException {
 
         return Subject.doAs(
@@ -99,9 +103,6 @@ public class SaslServerFactory {
                 (PrivilegedExceptionAction<SaslClient>)
                         () -> {
                             String[] mechs = {mechanism};
-                            // The serviceName here is the name of the service we are connecting to.
-                            // It is NOT the name of the client principal.
-                            String serviceName = "fluss";
                             LOG.debug(
                                     "Creating SaslClient: service={};mechs={}",
                                     serviceName,
