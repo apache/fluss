@@ -131,7 +131,7 @@ This command automatically starts all the containers defined in the Docker Compo
 
 Run 
 ```shell
-docker container ls -a
+docker compose ps
 ```
 to check whether all containers are running properly.
 
