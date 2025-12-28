@@ -22,6 +22,7 @@ import org.apache.fluss.security.auth.ServerAuthenticator;
 import org.apache.fluss.security.auth.sasl.authenticator.SaslClientAuthenticator;
 import org.apache.fluss.security.auth.sasl.authenticator.SaslServerAuthenticator;
 import org.apache.fluss.security.auth.sasl.jaas.DefaultLogin;
+
 import org.apache.hadoop.minikdc.MiniKdc;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
