@@ -133,7 +133,7 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
         String partitionName =
                 isPartitioned ? waitUntilPartitions(t1).values().iterator().next() : null;
         if (partitionName != null) {
-            queryFilterStr = queryFilterStr + " and c17= '" + partitionName + "'";
+            queryFilterStr = queryFilterStr + " and c18= '" + partitionName + "'";
         }
 
         List<Row> expectedRows = new ArrayList<>();
@@ -157,6 +157,7 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
                                 TimestampNtz.fromMillis(1698235273183L, 6000),
                                 new byte[] {1, 2, 3, 4},
                                 new float[] {1.1f, 1.2f, 1.3f},
+                                Row.of(100, "nested_value_1", 3.14),
                                 partition));
 
                 expectedRows.add(
@@ -177,6 +178,7 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
                                 TimestampNtz.fromMillis(1698235273201L, 6000),
                                 new byte[] {1, 2, 3, 4},
                                 new float[] {1.1f, 1.2f, 1.3f},
+                                Row.of(200, "nested_value_2", 6.28),
                                 partition));
             }
         } else {
@@ -199,6 +201,7 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
                                     TimestampNtz.fromMillis(1698235273183L, 6000),
                                     new byte[] {1, 2, 3, 4},
                                     new float[] {1.1f, 1.2f, 1.3f},
+                                    Row.of(100, "nested_value_1", 3.14),
                                     null),
                             Row.of(
                                     true,
@@ -217,6 +220,7 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
                                     TimestampNtz.fromMillis(1698235273201L, 6000),
                                     new byte[] {1, 2, 3, 4},
                                     new float[] {1.1f, 1.2f, 1.3f},
+                                    Row.of(200, "nested_value_2", 6.28),
                                     null));
         }
         tableResult =
@@ -230,7 +234,7 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
                                 row -> {
                                     boolean isMatch = row.getField(3).equals(30);
                                     if (partitionName != null) {
-                                        isMatch = isMatch && row.getField(16).equals(partitionName);
+                                        isMatch = isMatch && row.getField(17).equals(partitionName);
                                     }
                                     return isMatch;
                                 })
@@ -306,6 +310,7 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
                                 TimestampNtz.fromMillis(1698235273183L, 6000),
                                 new byte[] {1, 2, 3, 4},
                                 new float[] {1.1f, 1.2f, 1.3f},
+                                Row.of(100, "nested_value_1", 3.14),
                                 partition));
 
                 expectedRows.add(
@@ -326,6 +331,7 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
                                 TimestampNtz.fromMillis(1698235273501L, 8000),
                                 new byte[] {5, 6, 7, 8},
                                 new float[] {2.1f, 2.2f, 2.3f},
+                                Row.of(300, "nested_value_3", 9.99),
                                 partition));
             }
         } else {
@@ -348,6 +354,7 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
                                     TimestampNtz.fromMillis(1698235273183L, 6000),
                                     new byte[] {1, 2, 3, 4},
                                     new float[] {1.1f, 1.2f, 1.3f},
+                                    Row.of(100, "nested_value_1", 3.14),
                                     null),
                             Row.of(
                                     true,
@@ -366,6 +373,7 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
                                     TimestampNtz.fromMillis(1698235273501L, 8000),
                                     new byte[] {5, 6, 7, 8},
                                     new float[] {2.1f, 2.2f, 2.3f},
+                                    Row.of(300, "nested_value_3", 9.99),
                                     null));
         }
 
@@ -483,6 +491,7 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
                                 TimestampNtz.fromMillis(1698235273183L, 6000),
                                 new byte[] {1, 2, 3, 4},
                                 new float[] {1.1f, 1.2f, 1.3f},
+                                Row.of(100, "nested_value_1", 3.14),
                                 partition));
                 expectedRows.add(
                         Row.of(
@@ -502,6 +511,7 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
                                 TimestampNtz.fromMillis(1698235273201L, 6000),
                                 new byte[] {1, 2, 3, 4},
                                 new float[] {1.1f, 1.2f, 1.3f},
+                                Row.of(200, "nested_value_2", 6.28),
                                 partition));
             }
         } else {
@@ -524,6 +534,7 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
                                     TimestampNtz.fromMillis(1698235273183L, 6000),
                                     new byte[] {1, 2, 3, 4},
                                     new float[] {1.1f, 1.2f, 1.3f},
+                                    Row.of(100, "nested_value_1", 3.14),
                                     null),
                             Row.of(
                                     true,
@@ -542,6 +553,7 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
                                     TimestampNtz.fromMillis(1698235273201L, 6000),
                                     new byte[] {1, 2, 3, 4},
                                     new float[] {1.1f, 1.2f, 1.3f},
+                                    Row.of(200, "nested_value_2", 6.28),
                                     null));
         }
 
@@ -585,6 +597,7 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
                                 TimestampNtz.fromMillis(1698235273201L, 6000),
                                 new byte[] {1, 2, 3, 4},
                                 new float[] {1.1f, 1.2f, 1.3f},
+                                Row.of(200, "nested_value_2", 6.28),
                                 partition));
                 expectedRows2.add(
                         Row.ofKind(
@@ -605,6 +618,7 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
                                 TimestampNtz.fromMillis(1698235273501L, 8000),
                                 new byte[] {5, 6, 7, 8},
                                 new float[] {2.1f, 2.2f, 2.3f},
+                                Row.of(300, "nested_value_3", 9.99),
                                 partition));
             }
         } else {
@@ -627,6 +641,7 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
                             TimestampNtz.fromMillis(1698235273201L, 6000),
                             new byte[] {1, 2, 3, 4},
                             new float[] {1.1f, 1.2f, 1.3f},
+                            Row.of(200, "nested_value_2", 6.28),
                             null));
             expectedRows2.add(
                     Row.ofKind(
@@ -647,6 +662,7 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
                             TimestampNtz.fromMillis(1698235273501L, 8000),
                             new byte[] {5, 6, 7, 8},
                             new float[] {2.1f, 2.2f, 2.3f},
+                            Row.of(300, "nested_value_3", 9.99),
                             null));
         }
 
@@ -979,21 +995,21 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
                         + "2023-10-25T12:01:13.182005Z, "
                         + "2023-10-25T12:01:13.183, "
                         + "2023-10-25T12:01:13.183006, "
-                        + "[1, 2, 3, 4], [1.1, 1.2, 1.3], %s]");
+                        + "[1, 2, 3, 4], [1.1, 1.2, 1.3], +I[100, nested_value_1, 3.14], %s]");
         records.add(
                 "+I[true, 10, 20, 30, 40, 50.1, 60.0, another_string, 0.90, 100, "
                         + "2023-10-25T12:01:13.200Z, "
                         + "2023-10-25T12:01:13.200005Z, "
                         + "2023-10-25T12:01:13.201, "
                         + "2023-10-25T12:01:13.201006, "
-                        + "[1, 2, 3, 4], [1.1, 1.2, 1.3], %s]");
+                        + "[1, 2, 3, 4], [1.1, 1.2, 1.3], +I[200, nested_value_2, 6.28], %s]");
         records.add(
                 "+I[true, 100, 200, 30, 400, 500.1, 600.0, another_string_2, 9.00, 1000, "
                         + "2023-10-25T12:01:13.400Z, "
                         + "2023-10-25T12:01:13.400007Z, "
                         + "2023-10-25T12:01:13.501, "
                         + "2023-10-25T12:01:13.501008, "
-                        + "[5, 6, 7, 8], [2.1, 2.2, 2.3], %s]");
+                        + "[5, 6, 7, 8], [2.1, 2.2, 2.3], +I[300, nested_value_3, 9.99], %s]");
 
         if (isPartitioned) {
             return String.format(
@@ -1030,9 +1046,15 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
                         .column("c14", DataTypes.TIMESTAMP(6))
                         .column("c15", DataTypes.BINARY(4))
                         .column("c16", DataTypes.ARRAY(DataTypes.FLOAT()))
-                        .column("c17", DataTypes.STRING());
+                        .column(
+                                "c17",
+                                DataTypes.ROW(
+                                        DataTypes.FIELD("nested_int", DataTypes.INT()),
+                                        DataTypes.FIELD("nested_string", DataTypes.STRING()),
+                                        DataTypes.FIELD("nested_double", DataTypes.DOUBLE())))
+                        .column("c18", DataTypes.STRING());
 
-        return createPkTable(tablePath, bucketNum, isPartitioned, true, schemaBuilder, "c4", "c17");
+        return createPkTable(tablePath, bucketNum, isPartitioned, true, schemaBuilder, "c4", "c18");
     }
 
     protected long createSimplePkTable(
@@ -1098,6 +1120,7 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
                                 TimestampNtz.fromMillis(1698235273501L, 8000),
                                 new byte[] {5, 6, 7, 8},
                                 new GenericArray(new float[] {2.1f, 2.2f, 2.3f}),
+                                GenericRow.of(300, BinaryString.fromString("nested_value_3"), 9.99),
                                 partition));
         writeRows(tablePath, rows, false);
     }
@@ -1121,6 +1144,7 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
                         TimestampNtz.fromMillis(1698235273183L, 6000),
                         new byte[] {1, 2, 3, 4},
                         new GenericArray(new float[] {1.1f, 1.2f, 1.3f}),
+                        GenericRow.of(100, BinaryString.fromString("nested_value_1"), 3.14),
                         partition),
                 row(
                         true,
@@ -1139,6 +1163,7 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
                         TimestampNtz.fromMillis(1698235273201L, 6000),
                         new byte[] {1, 2, 3, 4},
                         new GenericArray(new float[] {1.1f, 1.2f, 1.3f}),
+                        GenericRow.of(200, BinaryString.fromString("nested_value_2"), 6.28),
                         partition));
     }
 }
