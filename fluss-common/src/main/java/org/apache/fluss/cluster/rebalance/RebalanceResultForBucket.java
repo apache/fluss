@@ -22,6 +22,8 @@ import org.apache.fluss.metadata.TableBucket;
 
 import java.util.List;
 
+import static org.apache.fluss.utils.Preconditions.checkNotNull;
+
 /**
  * Status of rebalance process for a tabletBucket.
  *
@@ -34,8 +36,8 @@ public class RebalanceResultForBucket {
 
     public RebalanceResultForBucket(
             RebalancePlanForBucket rebalancePlanForBucket, RebalanceStatus rebalanceStatus) {
-        this.rebalancePlanForBucket = rebalancePlanForBucket;
-        this.rebalanceStatus = rebalanceStatus;
+        this.rebalancePlanForBucket = checkNotNull(rebalancePlanForBucket);
+        this.rebalanceStatus = checkNotNull(rebalanceStatus);
     }
 
     public TableBucket tableBucket() {
@@ -64,7 +66,7 @@ public class RebalanceResultForBucket {
         return "RebalanceResultForBucket{"
                 + "rebalancePlanForBucket="
                 + rebalancePlanForBucket
-                + ", rebalanceStatusForBucket="
+                + ", rebalanceStatus="
                 + rebalanceStatus
                 + '}';
     }

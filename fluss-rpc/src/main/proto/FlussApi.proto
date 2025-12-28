@@ -603,7 +603,7 @@ message ListRebalanceProgressRequest {
 }
 
 message ListRebalanceProgressResponse {
-  repeated PbRebalanceProgressForTable table_process = 1;
+  repeated PbRebalanceProgressForTable table_progress = 1;
 }
 
 message CancelRebalanceRequest {
@@ -1001,7 +1001,7 @@ message PbRebalanceProgressForTable {
 }
 
 message PbRebalanceProgressForBucket {
-  required PbRebalancePlanForBucket reblance_plan = 1;
+  required PbRebalancePlanForBucket rebalance_plan = 1;
   required int32 rebalance_status = 2;
 }
 

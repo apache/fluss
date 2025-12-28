@@ -23,6 +23,8 @@ import org.apache.fluss.metadata.TableBucket;
 
 import java.util.Map;
 
+import static org.apache.fluss.utils.Preconditions.checkNotNull;
+
 /**
  * The rebalance progress.
  *
@@ -37,15 +39,16 @@ public class RebalanceProgress {
     private final double progress;
 
     /** The rebalance progress for each tabletBucket. */
-    private final Map<TableBucket, RebalanceResultForBucket> processForBucketMap;
+    private final Map<TableBucket, RebalanceResultForBucket> progressForBucketMap;
 
     public RebalanceProgress(
             RebalanceStatus rebalanceStatus,
             double progress,
-            Map<TableBucket, RebalanceResultForBucket> processForBucketMap) {
-        this.rebalanceStatus = rebalanceStatus;
+            Map<TableBucket, RebalanceResultForBucket> progressForBucketMap) {
+        // TODO: we may derive the overall progress and status from progressForBucketMap
+        this.rebalanceStatus = checkNotNull(rebalanceStatus);
         this.progress = progress;
-        this.processForBucketMap = processForBucketMap;
+        this.progressForBucketMap = checkNotNull(progressForBucketMap);
     }
 
     public RebalanceStatus status() {
@@ -56,7 +59,7 @@ public class RebalanceProgress {
         return progress;
     }
 
-    public Map<TableBucket, RebalanceResultForBucket> processForBucketMap() {
-        return processForBucketMap;
+    public Map<TableBucket, RebalanceResultForBucket> progressForBucketMap() {
+        return progressForBucketMap;
     }
 }

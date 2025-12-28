@@ -25,7 +25,7 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
 
-import static org.apache.fluss.cluster.rebalance.RebalanceStatus.PENDING;
+import static org.apache.fluss.cluster.rebalance.RebalanceStatus.NOT_STARTED;
 
 /** Test for {@link RebalancePlanJsonSerde}. */
 public class RebalancePlanJsonSerdeTest extends JsonSerdeTestBase<RebalancePlan> {
@@ -79,7 +79,7 @@ public class RebalancePlanJsonSerdeTest extends JsonSerdeTestBase<RebalancePlan>
                         3,
                         Arrays.asList(0, 1, 2),
                         Arrays.asList(3, 4, 5)));
-        return new RebalancePlan[] {new RebalancePlan(PENDING, bucketPlan)};
+        return new RebalancePlan[] {new RebalancePlan(NOT_STARTED, bucketPlan)};
     }
 
     @Override

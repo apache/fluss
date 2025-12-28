@@ -26,7 +26,7 @@ import org.apache.fluss.annotation.PublicEvolving;
  */
 @PublicEvolving
 public enum RebalanceStatus {
-    PENDING(1),
+    NOT_STARTED(1),
     REBALANCING(2),
     FAILED(3),
     COMPLETED(4);

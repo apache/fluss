@@ -68,7 +68,7 @@ import java.util.Set;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.cluster.rebalance.RebalanceStatus.COMPLETED;
-import static org.apache.fluss.cluster.rebalance.RebalanceStatus.PENDING;
+import static org.apache.fluss.cluster.rebalance.RebalanceStatus.NOT_STARTED;
 import static org.apache.fluss.server.utils.TableAssignmentUtils.generateAssignment;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -613,9 +613,9 @@ class ZooKeeperClientTest {
                         1,
                         Arrays.asList(0, 1, 2),
                         Arrays.asList(1, 2, 3)));
-        zookeeperClient.registerRebalancePlan(new RebalancePlan(PENDING, bucketPlan));
+        zookeeperClient.registerRebalancePlan(new RebalancePlan(NOT_STARTED, bucketPlan));
         assertThat(zookeeperClient.getRebalancePlan())
-                .hasValue(new RebalancePlan(PENDING, bucketPlan));
+                .hasValue(new RebalancePlan(NOT_STARTED, bucketPlan));
 
         bucketPlan = new HashMap<>();
         bucketPlan.put(
@@ -626,9 +626,9 @@ class ZooKeeperClientTest {
                         3,
                         Arrays.asList(0, 1, 2),
                         Arrays.asList(3, 4, 5)));
-        zookeeperClient.updateRebalancePlan(new RebalancePlan(PENDING, bucketPlan));
+        zookeeperClient.updateRebalancePlan(new RebalancePlan(NOT_STARTED, bucketPlan));
         assertThat(zookeeperClient.getRebalancePlan())
-                .hasValue(new RebalancePlan(PENDING, bucketPlan));
+                .hasValue(new RebalancePlan(NOT_STARTED, bucketPlan));
 
         zookeeperClient.updateRebalancePlan(new RebalancePlan(COMPLETED, bucketPlan));
         assertThat(zookeeperClient.getRebalancePlan())

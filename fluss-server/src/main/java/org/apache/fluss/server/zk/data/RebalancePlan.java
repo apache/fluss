@@ -37,8 +37,8 @@ import java.util.Objects;
  */
 public class RebalancePlan {
 
-    /** The rebalance status. */
-    private RebalanceStatus rebalanceStatus;
+    /** The rebalance status for the overall rebalance. */
+    private final RebalanceStatus rebalanceStatus;
 
     /** A mapping from tableBucket to RebalancePlanForBuckets of none-partitioned table. */
     private final Map<Long, List<RebalancePlanForBucket>> planForBuckets;
@@ -72,10 +72,6 @@ public class RebalancePlan {
 
     public RebalanceStatus getRebalanceStatus() {
         return rebalanceStatus;
-    }
-
-    public void setRebalanceStatus(RebalanceStatus rebalanceStatus) {
-        this.rebalanceStatus = rebalanceStatus;
     }
 
     public Map<Long, List<RebalancePlanForBucket>> getPlanForBuckets() {
