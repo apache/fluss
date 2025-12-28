@@ -51,5 +51,5 @@ See bundled license files for details.
 This project bundles the following dependencies under BSD License (https://opensource.org/licenses/bsd-license.php).
 See bundled license files for details.
 
-- com.github.luben:zstd-jni:1.5.7-1
+- com.github.luben:zstd-jni:1.5.7-6
 - org.threeten:threeten-extra:1.7.1

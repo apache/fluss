@@ -13,7 +13,7 @@ This project bundles the following dependencies under the Apache Software Licens
 - commons-cli:commons-cli:1.5.0
 - org.apache.commons:commons-lang3:3.18.0
 - org.apache.commons:commons-math3:3.6.1
-- org.lz4:lz4-java:1.8.0
+- at.yawk.lz4:lz4-java:1.10.2
 - org.xerial.snappy:snappy-java:1.1.10.4
 
 This project bundles the following dependencies under the MIT (https://opensource.org/licenses/MIT)
@@ -25,6 +25,6 @@ See bundled license files for details.
 This project bundles the following dependencies under BSD License (https://opensource.org/licenses/bsd-license.php).
 See bundled license files for details.
 
-- com.github.luben:zstd-jni:1.5.7-1
+- com.github.luben:zstd-jni:1.5.7-6
 
 
