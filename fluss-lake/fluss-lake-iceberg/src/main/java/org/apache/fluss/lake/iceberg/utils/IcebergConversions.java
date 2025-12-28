@@ -125,6 +125,9 @@ public class IcebergConversions {
         } else if (icebergType instanceof Types.DecimalType) {
             Types.DecimalType decimalType = (Types.DecimalType) icebergType;
             return DataTypes.DECIMAL(decimalType.precision(), decimalType.scale());
+        } else if (icebergType instanceof Types.ListType) {
+            Types.ListType listType = (Types.ListType) icebergType;
+            return DataTypes.ARRAY(convertIcebergTypeToFlussType(listType.elementType()));
         }
         throw new UnsupportedOperationException(
                 "Unsupported data type conversion for Iceberg type: "

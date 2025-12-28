@@ -32,6 +32,7 @@ import org.apache.fluss.record.ChangeType;
 import org.apache.fluss.record.GenericRecord;
 import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.row.BinaryString;
+import org.apache.fluss.row.GenericArray;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.utils.types.Tuple2;
@@ -423,6 +424,258 @@ class IcebergTieringTest {
             assertThat(actualRecord.get(0)).isEqualTo(expectRecord.getRow().getInt(0));
             assertThat(actualRecord.get(1, String.class))
                     .isEqualTo(expectRecord.getRow().getString(1).toString());
+            assertThat(actualRecord.get(2, String.class))
+                    .isEqualTo(expectRecord.getRow().getString(2).toString());
+            if (partition != null) {
+                assertThat(actualRecord.get(2, String.class)).isEqualTo(partition);
+            }
+
+            // check system columns: __bucket, __offset, __timestamp
+            assertThat(actualRecord.get(3)).isEqualTo(expectBucket);
+            assertThat(actualRecord.get(4)).isEqualTo(expectRecord.logOffset());
+            assertThat(
+                            actualRecord
+                                    .get(5, OffsetDateTime.class)
+                                    .atZoneSameInstant(ZoneOffset.UTC)
+                                    .toInstant()
+                                    .toEpochMilli())
+                    .isEqualTo(expectRecord.timestamp());
+        }
+    }
+
+    @ParameterizedTest
+    @MethodSource("tieringWriteArgs")
+    void testTieringWriteTableWithArrayType(boolean isPrimaryKeyTable, boolean isPartitionedTable)
+            throws Exception {
+        TablePath tablePath =
+                TablePath.of(
+                        "iceberg",
+                        String.format(
+                                "test_tiering_array_%s_%s",
+                                isPrimaryKeyTable ? "pk" : "log",
+                                isPartitionedTable ? "partitioned" : "unpartitioned"));
+        createTableWithArrayType(tablePath, isPrimaryKeyTable, isPartitionedTable);
+
+        TableDescriptor descriptor =
+                TableDescriptor.builder()
+                        .schema(
+                                org.apache.fluss.metadata.Schema.newBuilder()
+                                        .column("c1", DataTypes.INT())
+                                        .column("c2", DataTypes.ARRAY(DataTypes.INT()))
+                                        .column("c3", DataTypes.STRING())
+                                        .build())
+                        .distributedBy(BUCKET_NUM)
+                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
+                        .build();
+        TableInfo tableInfo = TableInfo.of(tablePath, 0, 1, descriptor, 1L, 1L);
+
+        Table icebergTable = icebergCatalog.loadTable(toIceberg(tablePath));
+
+        Map<Tuple2<String, Integer>, List<LogRecord>> recordsByBucket = new HashMap<>();
+        Map<Long, String> partitionIdAndName =
+                isPartitionedTable
+                        ? new HashMap<Long, String>() {
+                            {
+                                put(1L, "p1");
+                                put(2L, "p2");
+                            }
+                        }
+                        : Collections.singletonMap(null, null);
+
+        List<IcebergWriteResult> icebergWriteResults = new ArrayList<>();
+        SimpleVersionedSerializer<IcebergWriteResult> writeResultSerializer =
+                icebergLakeTieringFactory.getWriteResultSerializer();
+        SimpleVersionedSerializer<IcebergCommittable> committableSerializer =
+                icebergLakeTieringFactory.getCommittableSerializer();
+
+        // write data
+        for (int bucket = 0; bucket < BUCKET_NUM; bucket++) {
+            for (Map.Entry<Long, String> entry : partitionIdAndName.entrySet()) {
+                String partition = entry.getValue();
+                try (LakeWriter<IcebergWriteResult> writer =
+                        createLakeWriter(tablePath, bucket, partition, entry.getKey(), tableInfo)) {
+                    Tuple2<String, Integer> partitionBucket = Tuple2.of(partition, bucket);
+                    Tuple2<List<LogRecord>, List<LogRecord>> writeAndExpectRecords =
+                            isPrimaryKeyTable
+                                    ? genArrayTypePrimaryKeyTableRecords(partition, bucket)
+                                    : Tuple2.of(
+                                            genArrayTypeLogTableRecords(partition, bucket, 5),
+                                            genArrayTypeLogTableRecords(partition, bucket, 5));
+
+                    List<LogRecord> writtenRecords = writeAndExpectRecords.f0;
+                    List<LogRecord> expectRecords = writeAndExpectRecords.f1;
+                    recordsByBucket.put(partitionBucket, expectRecords);
+
+                    for (LogRecord record : writtenRecords) {
+                        writer.write(record);
+                    }
+                    IcebergWriteResult result = writer.complete();
+                    byte[] serialized = writeResultSerializer.serialize(result);
+                    icebergWriteResults.add(
+                            writeResultSerializer.deserialize(
+                                    writeResultSerializer.getVersion(), serialized));
+                }
+            }
+        }
+
+        // commit data
+        try (LakeCommitter<IcebergWriteResult, IcebergCommittable> lakeCommitter =
+                createLakeCommitter(tablePath, tableInfo)) {
+            IcebergCommittable icebergCommittable =
+                    lakeCommitter.toCommittable(icebergWriteResults);
+            byte[] serialized = committableSerializer.serialize(icebergCommittable);
+            icebergCommittable =
+                    committableSerializer.deserialize(
+                            committableSerializer.getVersion(), serialized);
+            long snapshot =
+                    lakeCommitter.commit(icebergCommittable, Collections.singletonMap("k1", "v1"));
+            icebergTable.refresh();
+            Snapshot icebergSnapshot = icebergTable.currentSnapshot();
+            assertThat(snapshot).isEqualTo(icebergSnapshot.snapshotId());
+        }
+
+        // verify data
+        for (int bucket = 0; bucket < BUCKET_NUM; bucket++) {
+            for (String partition : partitionIdAndName.values()) {
+                Tuple2<String, Integer> partitionBucket = Tuple2.of(partition, bucket);
+                List<LogRecord> expectRecords = recordsByBucket.get(partitionBucket);
+                CloseableIterator<Record> actualRecords =
+                        getIcebergRows(icebergTable, partition, bucket);
+                verifyArrayTypeRecords(actualRecords, expectRecords, bucket, partition);
+            }
+        }
+    }
+
+    private List<LogRecord> genArrayTypeLogTableRecords(
+            @Nullable String partition, int bucket, int numRecords) {
+        List<LogRecord> logRecords = new ArrayList<>();
+        for (int i = 0; i < numRecords; i++) {
+            GenericRow genericRow = new GenericRow(3);
+            genericRow.setField(0, i);
+            genericRow.setField(1, new GenericArray(new int[] {i, i + 1, i + 2}));
+            if (partition != null) {
+                genericRow.setField(2, BinaryString.fromString(partition));
+            } else {
+                genericRow.setField(2, BinaryString.fromString("bucket" + bucket));
+            }
+
+            LogRecord logRecord =
+                    new GenericRecord(
+                            i, System.currentTimeMillis(), ChangeType.APPEND_ONLY, genericRow);
+            logRecords.add(logRecord);
+        }
+        return logRecords;
+    }
+
+    private Tuple2<List<LogRecord>, List<LogRecord>> genArrayTypePrimaryKeyTableRecords(
+            @Nullable String partition, int bucket) {
+        int offset = -1;
+        List<LogRecord> writtenLogRecords = new ArrayList<>();
+        List<LogRecord> expectLogRecords = new ArrayList<>();
+
+        // gen +I
+        GenericRow insertRow = genArrayTypeKvRow(partition, bucket, 0, 0);
+        writtenLogRecords.add(toRecord(++offset, insertRow, INSERT));
+        expectLogRecords.add(writtenLogRecords.get(writtenLogRecords.size() - 1));
+
+        // gen +U (update)
+        GenericRow updateRow = genArrayTypeKvRow(partition, bucket, 0, 1);
+        writtenLogRecords.add(toRecord(++offset, updateRow, UPDATE_AFTER));
+        expectLogRecords.set(0, writtenLogRecords.get(writtenLogRecords.size() - 1));
+
+        // gen +I (another key)
+        GenericRow insertRow2 = genArrayTypeKvRow(partition, bucket, 1, 2);
+        writtenLogRecords.add(toRecord(++offset, insertRow2, INSERT));
+        expectLogRecords.add(writtenLogRecords.get(writtenLogRecords.size() - 1));
+
+        return Tuple2.of(writtenLogRecords, expectLogRecords);
+    }
+
+    private GenericRow genArrayTypeKvRow(
+            @Nullable String partition, int bucket, int key, int arrayBase) {
+        GenericRow genericRow = new GenericRow(3);
+        genericRow.setField(0, key);
+        genericRow.setField(
+                1, new GenericArray(new int[] {arrayBase, arrayBase + 1, arrayBase + 2}));
+        if (partition != null) {
+            genericRow.setField(2, BinaryString.fromString(partition));
+        } else {
+            genericRow.setField(2, BinaryString.fromString("bucket" + bucket));
+        }
+        return genericRow;
+    }
+
+    private void createTableWithArrayType(
+            TablePath tablePath, boolean isPrimaryTable, boolean isPartitionedTable) {
+        Namespace namespace = Namespace.of(tablePath.getDatabaseName());
+        if (icebergCatalog instanceof SupportsNamespaces) {
+            SupportsNamespaces ns = (SupportsNamespaces) icebergCatalog;
+            if (!ns.namespaceExists(namespace)) {
+                ns.createNamespace(namespace);
+            }
+        }
+
+        Set<Integer> identifierFieldIds = new HashSet<>();
+        if (isPrimaryTable) {
+            identifierFieldIds.add(1);
+            if (isPartitionedTable) {
+                identifierFieldIds.add(3);
+            }
+        }
+
+        org.apache.iceberg.Schema schema =
+                new org.apache.iceberg.Schema(
+                        Arrays.asList(
+                                Types.NestedField.required(1, "c1", Types.IntegerType.get()),
+                                Types.NestedField.optional(
+                                        2,
+                                        "c2",
+                                        Types.ListType.ofRequired(7, Types.IntegerType.get())),
+                                Types.NestedField.required(3, "c3", Types.StringType.get()),
+                                Types.NestedField.required(
+                                        4, BUCKET_COLUMN_NAME, Types.IntegerType.get()),
+                                Types.NestedField.required(
+                                        5, OFFSET_COLUMN_NAME, Types.LongType.get()),
+                                Types.NestedField.required(
+                                        6, TIMESTAMP_COLUMN_NAME, Types.TimestampType.withZone())),
+                        identifierFieldIds);
+
+        PartitionSpec.Builder builder = PartitionSpec.builderFor(schema);
+        if (isPartitionedTable) {
+            builder.identity("c3");
+        }
+
+        PartitionSpec partitionSpec;
+        if (isPrimaryTable) {
+            partitionSpec = builder.bucket("c1", BUCKET_NUM).build();
+        } else {
+            partitionSpec = builder.identity(BUCKET_COLUMN_NAME).build();
+        }
+
+        TableIdentifier tableId =
+                TableIdentifier.of(tablePath.getDatabaseName(), tablePath.getTableName());
+        icebergCatalog.createTable(tableId, schema, partitionSpec);
+    }
+
+    private void verifyArrayTypeRecords(
+            CloseableIterator<Record> actualRecords,
+            List<LogRecord> expectRecords,
+            int expectBucket,
+            @Nullable String partition) {
+        for (LogRecord expectRecord : expectRecords) {
+            Record actualRecord = actualRecords.next();
+            // check business columns:
+            assertThat(actualRecord.get(0)).isEqualTo(expectRecord.getRow().getInt(0));
+
+            // check array column
+            List<?> actualArray = (List<?>) actualRecord.get(1);
+            org.apache.fluss.row.InternalArray expectedArray = expectRecord.getRow().getArray(1);
+            assertThat(actualArray).isNotNull();
+            assertThat(actualArray.size()).isEqualTo(expectedArray.size());
+            for (int i = 0; i < expectedArray.size(); i++) {
+                assertThat(actualArray.get(i)).isEqualTo(expectedArray.getInt(i));
+            }
+
             assertThat(actualRecord.get(2, String.class))
                     .isEqualTo(expectRecord.getRow().getString(2).toString());
             if (partition != null) {

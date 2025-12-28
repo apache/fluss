@@ -129,7 +129,7 @@ public class FlussDataTypeToIcebergDataType implements DataTypeVisitor<Type> {
 
     @Override
     public Type visit(ArrayType arrayType) {
-        throw new UnsupportedOperationException("Unsupported array type");
+        return Types.ListType.ofOptional(0, arrayType.getElementType().accept(this));
     }
 
     @Override
