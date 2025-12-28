@@ -17,45 +17,8 @@
 
 package org.apache.fluss.flink.tiering.committer;
 
-import org.apache.fluss.flink.tiering.TestingLakeTieringFactory;
-
-import org.apache.flink.configuration.Configuration;
-import org.apache.flink.runtime.operators.coordination.MockOperatorEventGateway;
-import org.apache.flink.runtime.operators.testutils.DummyEnvironment;
-import org.apache.flink.streaming.api.operators.StreamOperatorParameters;
-import org.apache.flink.streaming.runtime.tasks.SourceOperatorStreamTask;
-import org.apache.flink.streaming.util.MockOutput;
-import org.apache.flink.streaming.util.MockStreamConfig;
-import org.junit.jupiter.api.BeforeEach;
-
-import java.util.ArrayList;
-
 /**
  * UT for {@link TieringCommitOperator}. Test the compatibility of the `getAttemptNumber` method in
  * flink 1.18.
  */
-public class Flink118TieringCommitOperatorTest extends TieringCommitOperatorTest {
-
-    @BeforeEach
-    @Override
-    void beforeEach() throws Exception {
-        mockOperatorEventGateway = new MockOperatorEventGateway();
-        MockOperatorEventDispatcher mockOperatorEventDispatcher =
-                new MockOperatorEventDispatcher(mockOperatorEventGateway);
-        parameters =
-                new StreamOperatorParameters<>(
-                        new SourceOperatorStreamTask<String>(new DummyEnvironment()),
-                        new MockStreamConfig(new Configuration(), 1),
-                        new MockOutput<>(new ArrayList<>()),
-                        null,
-                        mockOperatorEventDispatcher);
-
-        committerOperator =
-                new TieringCommitOperator<>(
-                        parameters,
-                        FLUSS_CLUSTER_EXTENSION.getClientConfig(),
-                        new org.apache.fluss.config.Configuration(),
-                        new TestingLakeTieringFactory());
-        committerOperator.open();
-    }
-}
+public class Flink118TieringCommitOperatorTest extends TieringCommitOperatorTest {}

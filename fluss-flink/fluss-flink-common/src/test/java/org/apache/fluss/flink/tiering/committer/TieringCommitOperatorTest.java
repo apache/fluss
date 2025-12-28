@@ -19,6 +19,7 @@ package org.apache.fluss.flink.tiering.committer;
 
 import org.apache.fluss.client.metadata.LakeSnapshot;
 import org.apache.fluss.exception.LakeTableSnapshotNotExistException;
+import org.apache.fluss.flink.adapter.StreamOperatorParametersAdapter;
 import org.apache.fluss.flink.tiering.TestingLakeTieringFactory;
 import org.apache.fluss.flink.tiering.TestingWriteResult;
 import org.apache.fluss.flink.tiering.event.FailedTieringEvent;
@@ -66,9 +67,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 /** UT for {@link TieringCommitOperator}. */
 class TieringCommitOperatorTest extends FlinkTestBase {
 
-    TieringCommitOperator<TestingWriteResult, TestingCommittable> committerOperator;
-    MockOperatorEventGateway mockOperatorEventGateway;
-    StreamOperatorParameters<CommittableMessage<TestingCommittable>> parameters;
+    private TieringCommitOperator<TestingWriteResult, TestingCommittable> committerOperator;
+    private MockOperatorEventGateway mockOperatorEventGateway;
+    private StreamOperatorParameters<CommittableMessage<TestingCommittable>> parameters;
 
     @BeforeEach
     void beforeEach() throws Exception {
@@ -76,7 +77,7 @@ class TieringCommitOperatorTest extends FlinkTestBase {
         MockOperatorEventDispatcher mockOperatorEventDispatcher =
                 new MockOperatorEventDispatcher(mockOperatorEventGateway);
         parameters =
-                new StreamOperatorParameters<>(
+                StreamOperatorParametersAdapter.create(
                         new SourceOperatorStreamTask<String>(new DummyEnvironment()),
                         new MockStreamConfig(new Configuration(), 1),
                         new MockOutput<>(new ArrayList<>()),
@@ -467,7 +468,7 @@ class TieringCommitOperatorTest extends FlinkTestBase {
         assertThat(finishTieringEvent.failReason()).contains(failedReason);
     }
 
-    static class MockOperatorEventDispatcher implements OperatorEventDispatcher {
+    private static class MockOperatorEventDispatcher implements OperatorEventDispatcher {
 
         private final OperatorEventGateway operatorEventGateway;
 
