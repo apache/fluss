@@ -25,8 +25,6 @@ import org.apache.fluss.client.utils.ClientRpcMessageUtils;
 import org.apache.fluss.cluster.Cluster;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.rebalance.GoalType;
-import org.apache.fluss.cluster.rebalance.RebalancePlanForBucket;
-import org.apache.fluss.cluster.rebalance.RebalanceResultForBucket;
 import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.config.cluster.AlterConfig;
 import org.apache.fluss.config.cluster.ConfigEntry;
@@ -547,13 +545,13 @@ public class FlussAdmin implements Admin {
     }
 
     @Override
-    public CompletableFuture<Map<TableBucket, RebalancePlanForBucket>> rebalance(
+    public CompletableFuture<RebalancePlan> rebalance(
             List<GoalType> priorityGoals, boolean dryRun) {
         throw new UnsupportedOperationException("Support soon");
     }
 
     @Override
-    public CompletableFuture<Map<TableBucket, RebalanceResultForBucket>> listRebalanceProcess() {
+    public CompletableFuture<RebalanceProgress> listRebalanceProgress() {
         throw new UnsupportedOperationException("Support soon");
     }
 

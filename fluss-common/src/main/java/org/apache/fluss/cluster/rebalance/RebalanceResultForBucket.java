@@ -25,25 +25,24 @@ import java.util.List;
 /**
  * Status of rebalance process for a tabletBucket.
  *
- * @since 0.8
+ * @since 0.9
  */
 @PublicEvolving
 public class RebalanceResultForBucket {
     private final RebalancePlanForBucket rebalancePlanForBucket;
-    private RebalanceStatusForBucket rebalanceStatusForBucket;
+    private final RebalanceStatus rebalanceStatus;
 
     public RebalanceResultForBucket(
-            RebalancePlanForBucket rebalancePlanForBucket,
-            RebalanceStatusForBucket rebalanceStatusForBucket) {
+            RebalancePlanForBucket rebalancePlanForBucket, RebalanceStatus rebalanceStatus) {
         this.rebalancePlanForBucket = rebalancePlanForBucket;
-        this.rebalanceStatusForBucket = rebalanceStatusForBucket;
+        this.rebalanceStatus = rebalanceStatus;
     }
 
     public TableBucket tableBucket() {
         return rebalancePlanForBucket.getTableBucket();
     }
 
-    public RebalancePlanForBucket planForBucket() {
+    public RebalancePlanForBucket plan() {
         return rebalancePlanForBucket;
     }
 
@@ -51,17 +50,12 @@ public class RebalanceResultForBucket {
         return rebalancePlanForBucket.getNewReplicas();
     }
 
-    public RebalanceResultForBucket setNewStatus(RebalanceStatusForBucket status) {
-        this.rebalanceStatusForBucket = status;
-        return this;
-    }
-
-    public RebalanceStatusForBucket status() {
-        return rebalanceStatusForBucket;
+    public RebalanceStatus status() {
+        return rebalanceStatus;
     }
 
     public static RebalanceResultForBucket of(
-            RebalancePlanForBucket planForBucket, RebalanceStatusForBucket status) {
+            RebalancePlanForBucket planForBucket, RebalanceStatus status) {
         return new RebalanceResultForBucket(planForBucket, status);
     }
 
@@ -71,7 +65,7 @@ public class RebalanceResultForBucket {
                 + "rebalancePlanForBucket="
                 + rebalancePlanForBucket
                 + ", rebalanceStatusForBucket="
-                + rebalanceStatusForBucket
+                + rebalanceStatus
                 + '}';
     }
 }

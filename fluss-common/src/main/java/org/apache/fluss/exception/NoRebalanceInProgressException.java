@@ -22,7 +22,7 @@ import org.apache.fluss.annotation.PublicEvolving;
 /**
  * Thrown if there are no rebalance tasks in progress when list rebalance process.
  *
- * @since 0.8
+ * @since 0.9
  */
 @PublicEvolving
 public class NoRebalanceInProgressException extends ApiException {

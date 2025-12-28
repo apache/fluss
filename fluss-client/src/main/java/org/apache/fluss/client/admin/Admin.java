@@ -23,8 +23,6 @@ import org.apache.fluss.client.metadata.KvSnapshots;
 import org.apache.fluss.client.metadata.LakeSnapshot;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.rebalance.GoalType;
-import org.apache.fluss.cluster.rebalance.RebalancePlanForBucket;
-import org.apache.fluss.cluster.rebalance.RebalanceResultForBucket;
 import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.cluster.AlterConfig;
@@ -70,7 +68,6 @@ import org.apache.fluss.security.acl.AclBindingFilter;
 
 import java.util.Collection;
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 
 /**
@@ -509,13 +506,16 @@ public interface Admin extends AutoCloseable {
      *
      * <p>If one tabletServer failed adding tag, none of the tags will take effect.
      *
+     * <p>If one tabletServer already has a serverTag, and the serverTag is same with the existing
+     * one, this operation will be ignored.
+     *
      * <ul>
      *   <li>{@link AuthorizationException} If the authenticated user doesn't have cluster
      *       permissions.
      *   <li>{@link ServerNotExistException} If the tabletServer in {@code tabletServers} does not
      *       exist.
      *   <li>{@link ServerTagAlreadyExistException} If the server tag already exists for any one of
-     *       the tabletServers.
+     *       the tabletServers, and the server tag is different from the existing one.
      * </ul>
      *
      * @param tabletServers the tabletServers we want to add server tags.
@@ -527,6 +527,8 @@ public interface Admin extends AutoCloseable {
      * Remove server tag from the specified tabletServers.
      *
      * <p>If one tabletServer failed removing tag, none of the tags will be removed.
+     *
+     * <p>No exception will be thrown if the server already has no any server tag now.
      *
      * <ul>
      *   <li>{@link AuthorizationException} If the authenticated user doesn't have cluster
@@ -563,11 +565,10 @@ public interface Admin extends AutoCloseable {
      *     it.
      * @return the generated rebalance plan for all the tableBuckets which need to do rebalance.
      */
-    CompletableFuture<Map<TableBucket, RebalancePlanForBucket>> rebalance(
-            List<GoalType> priorityGoals, boolean dryRun);
+    CompletableFuture<RebalancePlan> rebalance(List<GoalType> priorityGoals, boolean dryRun);
 
     /**
-     * List the rebalance process.
+     * List the rebalance progress.
      *
      * <ul>
      *   <li>{@link AuthorizationException} If the authenticated user doesn't have cluster
@@ -575,9 +576,9 @@ public interface Admin extends AutoCloseable {
      *   <li>{@link NoRebalanceInProgressException} If there are no rebalance tasks in progress.
      * </ul>
      *
-     * @return the rebalance process for all the tableBuckets doing rebalance.
+     * @return the rebalance process.
      */
-    CompletableFuture<Map<TableBucket, RebalanceResultForBucket>> listRebalanceProcess();
+    CompletableFuture<RebalanceProgress> listRebalanceProgress();
 
     /**
      * Cannel the rebalance task.

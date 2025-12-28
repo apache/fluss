@@ -22,7 +22,7 @@ import org.apache.fluss.annotation.PublicEvolving;
 /**
  * Thrown when the tabletServer is not available.
  *
- * @since 0.8
+ * @since 0.9
  */
 @PublicEvolving
 public class TabletServerNotAvailableException extends ApiException {

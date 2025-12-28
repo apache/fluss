@@ -1198,14 +1198,15 @@ public class ZooKeeperClient implements AutoCloseable {
 
     public void registerServerTags(ServerTags newServerTags) throws Exception {
         String path = ServerTagsZNode.path();
-        if (getOrEmpty(path).isPresent()) {
-            zkClient.setData().forPath(path, ServerTagsZNode.encode(newServerTags));
-        } else {
-            zkClient.create()
-                    .creatingParentsIfNeeded()
-                    .withMode(CreateMode.PERSISTENT)
-                    .forPath(path, ServerTagsZNode.encode(newServerTags));
-        }
+        zkClient.create()
+                .creatingParentsIfNeeded()
+                .withMode(CreateMode.PERSISTENT)
+                .forPath(path, ServerTagsZNode.encode(newServerTags));
+    }
+
+    public void updateServerTags(ServerTags newServerTags) throws Exception {
+        String path = ServerTagsZNode.path();
+        zkClient.setData().forPath(path, ServerTagsZNode.encode(newServerTags));
     }
 
     public Optional<ServerTags> getServerTags() throws Exception {
@@ -1215,24 +1216,20 @@ public class ZooKeeperClient implements AutoCloseable {
 
     public void registerRebalancePlan(RebalancePlan rebalancePlan) throws Exception {
         String path = RebalanceZNode.path();
-        if (getOrEmpty(path).isPresent()) {
-            zkClient.setData().forPath(path, RebalanceZNode.encode(rebalancePlan));
-        } else {
-            zkClient.create()
-                    .creatingParentsIfNeeded()
-                    .withMode(CreateMode.PERSISTENT)
-                    .forPath(path, RebalanceZNode.encode(rebalancePlan));
-        }
+        zkClient.create()
+                .creatingParentsIfNeeded()
+                .withMode(CreateMode.PERSISTENT)
+                .forPath(path, RebalanceZNode.encode(rebalancePlan));
+    }
+
+    public void updateRebalancePlan(RebalancePlan rebalancePlan) throws Exception {
+        String path = RebalanceZNode.path();
+        zkClient.setData().forPath(path, RebalanceZNode.encode(rebalancePlan));
     }
 
     public Optional<RebalancePlan> getRebalancePlan() throws Exception {
         String path = RebalanceZNode.path();
         return getOrEmpty(path).map(RebalanceZNode::decode);
-    }
-
-    public void deleteRebalancePlan() throws Exception {
-        String path = RebalanceZNode.path();
-        deletePath(path);
     }
 
     // --------------------------------------------------------------------------------------------

@@ -26,7 +26,7 @@ import java.util.Objects;
 /**
  * a generated rebalance plan for a tableBucket.
  *
- * @since 0.8
+ * @since 0.9
  */
 @PublicEvolving
 public class RebalancePlanForBucket {

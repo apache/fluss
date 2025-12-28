@@ -24,7 +24,7 @@ import java.util.Arrays;
 /**
  * The type of goal to optimize.
  *
- * @since 0.8
+ * @since 0.9
  */
 @PublicEvolving
 public enum GoalType {
@@ -38,7 +38,7 @@ public enum GoalType {
      * Goal to generate leadership movement and leader replica movement tasks to ensure that the
      * number of leader replicas on each tabletServer is near balanced.
      */
-    LEADER_REPLICA_DISTRIBUTION_GOAL(1);
+    LEADER_DISTRIBUTION_GOAL(1);
 
     public final int value;
 
@@ -49,8 +49,8 @@ public enum GoalType {
     public static GoalType valueOf(int value) {
         if (value == REPLICA_DISTRIBUTION_GOAL.value) {
             return REPLICA_DISTRIBUTION_GOAL;
-        } else if (value == LEADER_REPLICA_DISTRIBUTION_GOAL.value) {
-            return LEADER_REPLICA_DISTRIBUTION_GOAL;
+        } else if (value == LEADER_DISTRIBUTION_GOAL.value) {
+            return LEADER_DISTRIBUTION_GOAL;
         } else {
             throw new IllegalArgumentException(
                     String.format(

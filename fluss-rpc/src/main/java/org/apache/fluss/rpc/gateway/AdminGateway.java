@@ -41,8 +41,8 @@ import org.apache.fluss.rpc.messages.DropPartitionRequest;
 import org.apache.fluss.rpc.messages.DropPartitionResponse;
 import org.apache.fluss.rpc.messages.DropTableRequest;
 import org.apache.fluss.rpc.messages.DropTableResponse;
-import org.apache.fluss.rpc.messages.ListRebalanceProcessRequest;
-import org.apache.fluss.rpc.messages.ListRebalanceProcessResponse;
+import org.apache.fluss.rpc.messages.ListRebalanceProgressRequest;
+import org.apache.fluss.rpc.messages.ListRebalanceProgressResponse;
 import org.apache.fluss.rpc.messages.RebalanceRequest;
 import org.apache.fluss.rpc.messages.RebalanceResponse;
 import org.apache.fluss.rpc.messages.RemoveServerTagRequest;
@@ -139,9 +139,9 @@ public interface AdminGateway extends AdminReadOnlyGateway {
     @RPC(api = ApiKeys.REBALANCE)
     CompletableFuture<RebalanceResponse> rebalance(RebalanceRequest request);
 
-    @RPC(api = ApiKeys.LIST_REBALANCE_PROCESS)
-    CompletableFuture<ListRebalanceProcessResponse> listRebalanceProcess(
-            ListRebalanceProcessRequest request);
+    @RPC(api = ApiKeys.LIST_REBALANCE_PROGRESS)
+    CompletableFuture<ListRebalanceProgressResponse> listRebalanceProgress(
+            ListRebalanceProgressRequest request);
 
     @RPC(api = ApiKeys.CANCEL_REBALANCE)
     CompletableFuture<CancelRebalanceResponse> cancelRebalance(CancelRebalanceRequest request);

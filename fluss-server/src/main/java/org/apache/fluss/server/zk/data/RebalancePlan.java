@@ -18,6 +18,7 @@
 package org.apache.fluss.server.zk.data;
 
 import org.apache.fluss.cluster.rebalance.RebalancePlanForBucket;
+import org.apache.fluss.cluster.rebalance.RebalanceStatus;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePartition;
 
@@ -36,6 +37,9 @@ import java.util.Objects;
  */
 public class RebalancePlan {
 
+    /** The rebalance status. */
+    private RebalanceStatus rebalanceStatus;
+
     /** A mapping from tableBucket to RebalancePlanForBuckets of none-partitioned table. */
     private final Map<Long, List<RebalancePlanForBucket>> planForBuckets;
 
@@ -43,7 +47,9 @@ public class RebalancePlan {
     private final Map<TablePartition, List<RebalancePlanForBucket>>
             planForBucketsOfPartitionedTable;
 
-    public RebalancePlan(Map<TableBucket, RebalancePlanForBucket> bucketPlan) {
+    public RebalancePlan(
+            RebalanceStatus rebalanceStatus, Map<TableBucket, RebalancePlanForBucket> bucketPlan) {
+        this.rebalanceStatus = rebalanceStatus;
         this.planForBuckets = new HashMap<>();
         this.planForBucketsOfPartitionedTable = new HashMap<>();
 
@@ -64,6 +70,14 @@ public class RebalancePlan {
         }
     }
 
+    public RebalanceStatus getRebalanceStatus() {
+        return rebalanceStatus;
+    }
+
+    public void setRebalanceStatus(RebalanceStatus rebalanceStatus) {
+        this.rebalanceStatus = rebalanceStatus;
+    }
+
     public Map<Long, List<RebalancePlanForBucket>> getPlanForBuckets() {
         return planForBuckets;
     }
@@ -75,6 +89,8 @@ public class RebalancePlan {
     @Override
     public String toString() {
         return "RebalancePlan{"
+                + "rebalanceStatus="
+                + rebalanceStatus
                 + "planForBuckets="
                 + planForBuckets
                 + ", planForBucketsOfPartitionedTable="
@@ -92,16 +108,14 @@ public class RebalancePlan {
         }
 
         RebalancePlan that = (RebalancePlan) o;
-
-        if (!Objects.equals(planForBuckets, that.planForBuckets)) {
-            return false;
-        }
-        return Objects.equals(
-                planForBucketsOfPartitionedTable, that.planForBucketsOfPartitionedTable);
+        return rebalanceStatus == that.rebalanceStatus
+                && Objects.equals(planForBuckets, that.planForBuckets)
+                && Objects.equals(
+                        planForBucketsOfPartitionedTable, that.planForBucketsOfPartitionedTable);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(planForBuckets, planForBucketsOfPartitionedTable);
+        return Objects.hash(rebalanceStatus, planForBuckets, planForBucketsOfPartitionedTable);
     }
 }

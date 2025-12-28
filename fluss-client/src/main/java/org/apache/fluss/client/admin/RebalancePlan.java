@@ -15,34 +15,27 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.cluster.rebalance;
+package org.apache.fluss.client.admin;
 
-import org.apache.fluss.annotation.PublicEvolving;
+import org.apache.fluss.cluster.rebalance.RebalancePlanForBucket;
+import org.apache.fluss.metadata.TableBucket;
+
+import java.util.Map;
 
 /**
- * Rebalance status for single bucket.
+ * The rebalance plan.
  *
- * @since 0.8
+ * @since 0.9
  */
-@PublicEvolving
-public enum RebalanceStatusForBucket {
-    PENDING(1),
-    REBALANCING(2),
-    FAILED(3),
-    COMPLETED(4);
+public class RebalancePlan {
 
-    private final int code;
+    private final Map<TableBucket, RebalancePlanForBucket> planForBucketMap;
 
-    RebalanceStatusForBucket(int code) {
-        this.code = code;
+    public RebalancePlan(Map<TableBucket, RebalancePlanForBucket> planForBucketMap) {
+        this.planForBucketMap = planForBucketMap;
     }
 
-    public static RebalanceStatusForBucket of(int code) {
-        for (RebalanceStatusForBucket status : RebalanceStatusForBucket.values()) {
-            if (status.code == code) {
-                return status;
-            }
-        }
-        return null;
+    public Map<TableBucket, RebalancePlanForBucket> getPlanForBucketMap() {
+        return planForBucketMap;
     }
 }

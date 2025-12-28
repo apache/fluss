@@ -18,6 +18,7 @@
 package org.apache.fluss.server.zk.data;
 
 import org.apache.fluss.cluster.rebalance.RebalancePlanForBucket;
+import org.apache.fluss.cluster.rebalance.RebalanceStatus;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.core.JsonGenerator;
@@ -39,6 +40,7 @@ public class RebalancePlanJsonSerde
     public static final RebalancePlanJsonSerde INSTANCE = new RebalancePlanJsonSerde();
 
     private static final String VERSION_KEY = "version";
+    private static final String REBALANCE_STATUS = "rebalance_status";
     private static final String REBALANCE_PLAN = "rebalance_plan";
 
     private static final String TABLE_ID = "table_id";
@@ -57,6 +59,7 @@ public class RebalancePlanJsonSerde
     public void serialize(RebalancePlan rebalancePlan, JsonGenerator generator) throws IOException {
         generator.writeStartObject();
         generator.writeNumberField(VERSION_KEY, VERSION);
+        generator.writeNumberField(REBALANCE_STATUS, rebalancePlan.getRebalanceStatus().getCode());
 
         generator.writeArrayFieldStart(REBALANCE_PLAN);
         // first to write none-partitioned tables.
@@ -94,8 +97,10 @@ public class RebalancePlanJsonSerde
     @Override
     public RebalancePlan deserialize(JsonNode node) {
         JsonNode rebalancePlanNode = node.get(REBALANCE_PLAN);
-        Map<TableBucket, RebalancePlanForBucket> planForBuckets = new HashMap<>();
 
+        RebalanceStatus rebalanceStatus = RebalanceStatus.of(node.get(REBALANCE_STATUS).asInt());
+
+        Map<TableBucket, RebalancePlanForBucket> planForBuckets = new HashMap<>();
         for (JsonNode tablePartitionPlanNode : rebalancePlanNode) {
             long tableId = tablePartitionPlanNode.get(TABLE_ID).asLong();
 
@@ -132,7 +137,7 @@ public class RebalancePlanJsonSerde
             }
         }
 
-        return new RebalancePlan(planForBuckets);
+        return new RebalancePlan(rebalanceStatus, planForBuckets);
     }
 
     private void serializeRebalancePlanForBucket(

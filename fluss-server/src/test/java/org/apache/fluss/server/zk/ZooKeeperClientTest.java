@@ -67,6 +67,8 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 
+import static org.apache.fluss.cluster.rebalance.RebalanceStatus.COMPLETED;
+import static org.apache.fluss.cluster.rebalance.RebalanceStatus.PENDING;
 import static org.apache.fluss.server.utils.TableAssignmentUtils.generateAssignment;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -568,10 +570,10 @@ class ZooKeeperClientTest {
         // update server tags.
         serverTags.put(0, ServerTag.TEMPORARY_OFFLINE);
         serverTags.remove(1);
-        zookeeperClient.registerServerTags(new ServerTags(serverTags));
+        zookeeperClient.updateServerTags(new ServerTags(serverTags));
         assertThat(zookeeperClient.getServerTags()).hasValue(new ServerTags(serverTags));
 
-        zookeeperClient.registerServerTags(new ServerTags(Collections.emptyMap()));
+        zookeeperClient.updateServerTags(new ServerTags(Collections.emptyMap()));
         assertThat(zookeeperClient.getServerTags())
                 .hasValue(new ServerTags(Collections.emptyMap()));
     }
@@ -611,8 +613,9 @@ class ZooKeeperClientTest {
                         1,
                         Arrays.asList(0, 1, 2),
                         Arrays.asList(1, 2, 3)));
-        zookeeperClient.registerRebalancePlan(new RebalancePlan(bucketPlan));
-        assertThat(zookeeperClient.getRebalancePlan()).hasValue(new RebalancePlan(bucketPlan));
+        zookeeperClient.registerRebalancePlan(new RebalancePlan(PENDING, bucketPlan));
+        assertThat(zookeeperClient.getRebalancePlan())
+                .hasValue(new RebalancePlan(PENDING, bucketPlan));
 
         bucketPlan = new HashMap<>();
         bucketPlan.put(
@@ -623,11 +626,13 @@ class ZooKeeperClientTest {
                         3,
                         Arrays.asList(0, 1, 2),
                         Arrays.asList(3, 4, 5)));
-        zookeeperClient.registerRebalancePlan(new RebalancePlan(bucketPlan));
-        assertThat(zookeeperClient.getRebalancePlan()).hasValue(new RebalancePlan(bucketPlan));
+        zookeeperClient.updateRebalancePlan(new RebalancePlan(PENDING, bucketPlan));
+        assertThat(zookeeperClient.getRebalancePlan())
+                .hasValue(new RebalancePlan(PENDING, bucketPlan));
 
-        zookeeperClient.deleteRebalancePlan();
-        assertThat(zookeeperClient.getRebalancePlan()).isEmpty();
+        zookeeperClient.updateRebalancePlan(new RebalancePlan(COMPLETED, bucketPlan));
+        assertThat(zookeeperClient.getRebalancePlan())
+                .hasValue(new RebalancePlan(COMPLETED, bucketPlan));
     }
 
     @Test

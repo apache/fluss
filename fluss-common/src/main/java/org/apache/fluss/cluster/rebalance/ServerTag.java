@@ -24,11 +24,17 @@ import java.util.Arrays;
 /**
  * The tag of tabletServer.
  *
- * @since 0.8
+ * @since 0.9
  */
 @PublicEvolving
 public enum ServerTag {
+    /**
+     * The tabletServer is permanently offline. Such as the host where the tabletServer on is
+     * upcoming decommissioning.
+     */
     PERMANENT_OFFLINE(0),
+
+    /** The tabletServer is temporarily offline. Such as the tabletServer is upcoming upgrading. */
     TEMPORARY_OFFLINE(1);
 
     public final int value;

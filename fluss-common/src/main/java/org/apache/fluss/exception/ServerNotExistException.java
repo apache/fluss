@@ -22,7 +22,7 @@ import org.apache.fluss.annotation.PublicEvolving;
 /**
  * Thrown if a server does not exist in the cluster.
  *
- * @since 0.8
+ * @since 0.9
  */
 @PublicEvolving
 public class ServerNotExistException extends ApiException {

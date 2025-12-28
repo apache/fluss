@@ -15,24 +15,38 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.exception;
+package org.apache.fluss.cluster.rebalance;
 
-import org.apache.fluss.annotation.VisibleForTesting;
+import org.apache.fluss.annotation.PublicEvolving;
 
 /**
- * This exception is thrown if rebalance failed.
+ * Rebalance status.
  *
  * @since 0.9
  */
-@VisibleForTesting
-public class RebalanceFailureException extends ApiException {
-    private static final long serialVersionUID = 1L;
+@PublicEvolving
+public enum RebalanceStatus {
+    PENDING(1),
+    REBALANCING(2),
+    FAILED(3),
+    COMPLETED(4);
 
-    public RebalanceFailureException(String message) {
-        super(message);
+    private final int code;
+
+    RebalanceStatus(int code) {
+        this.code = code;
     }
 
-    public RebalanceFailureException(String message, Throwable cause) {
-        super(message, cause);
+    public int getCode() {
+        return code;
+    }
+
+    public static RebalanceStatus of(int code) {
+        for (RebalanceStatus status : RebalanceStatus.values()) {
+            if (status.code == code) {
+                return status;
+            }
+        }
+        return null;
     }
 }
