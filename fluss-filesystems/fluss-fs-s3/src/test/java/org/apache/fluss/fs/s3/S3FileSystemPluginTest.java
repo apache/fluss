@@ -49,24 +49,28 @@ public class S3FileSystemPluginTest {
             Configuration configuration;
             boolean isClient;
             // Client
-            // Example: Activated token delegation on server side
+            // No options provided
             configuration = new Configuration();
             isClient = S3FileSystemPlugin.isClient(configuration);
             assertThat(isClient).isTrue();
 
-            // Example: S3-compatible object storage (e.g., MinIO); Token delegation must be
-            // deactivated on server side
+            // Options provided with "client.fs." prefix
             configuration = new Configuration();
             configuration.setString("client.fs.s3.access-key", "fluss");
             configuration.setString("client.fs.s3.secret-key", "12345678");
-            configuration.setString(
-                    "client.fs.s3.aws.credentials.provider",
-                    "org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider");
             isClient = S3FileSystemPlugin.isClient(configuration);
             assertThat(isClient).isTrue();
 
             // Server
-            // Example: Activated token delegation
+            // Activated token delegation
+            configuration = new Configuration();
+            configuration.setString("s3.access-key", "fluss");
+            configuration.setString("s3.secret-key", "12345678");
+            configuration.setString("s3.endpoint", "s3://fluss-data/");
+            configuration.setString("s3.region", "us-east-1");
+            isClient = S3FileSystemPlugin.isClient(configuration);
+            assertThat(isClient).isFalse();
+
             configuration = new Configuration();
             configuration.setBoolean(ConfigOptions.FILE_SYSTEM_S3_ENABLE_TOKEN_DELEGATION, true);
             configuration.setString("s3.access-key", "fluss");
@@ -76,15 +80,18 @@ public class S3FileSystemPluginTest {
             isClient = S3FileSystemPlugin.isClient(configuration);
             assertThat(isClient).isFalse();
 
-            // Example: Deactivate token delegation with S3-compatible object storage (e.g., MinIO)
+            // Example: Deactivated token delegation
             configuration = new Configuration();
+            configuration.setBoolean(ConfigOptions.FILE_SYSTEM_S3_ENABLE_TOKEN_DELEGATION, false);
+            isClient = S3FileSystemPlugin.isClient(configuration);
+            assertThat(isClient).isFalse();
+
+            configuration = new Configuration();
+            configuration.setBoolean(ConfigOptions.FILE_SYSTEM_S3_ENABLE_TOKEN_DELEGATION, false);
             configuration.setString("s3.access-key", "fluss");
             configuration.setString("s3.secret-key", "12345678");
             configuration.setString("s3.endpoint", "http://minio:9000");
             configuration.setString("s3.path-style-access", "true");
-            configuration.setString(
-                    "s3.aws.credentials.provider",
-                    "org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider");
             isClient = S3FileSystemPlugin.isClient(configuration);
             assertThat(isClient).isFalse();
 
@@ -124,14 +131,6 @@ public class S3FileSystemPluginTest {
             assertThat(fileSystem).isInstanceOf(S3FileSystem.class);
             assertThat(((S3FileSystem) fileSystem).s3DelegationTokenProvider.getType())
                     .isEqualTo(S3DelegationTokenProvider.Type.NO_TOKEN);
-        }
-
-        @Test
-        void testDefaultProviderChainIsEmpty() throws IOException {
-            org.apache.hadoop.conf.Configuration hadoopConfig;
-            Configuration config = new Configuration();
-            hadoopConfig = s3FileSystemPlugin.getHadoopConfiguration(config);
-            assertThat(hadoopConfig.get("fs.s3a.aws.credentials.provider")).isEmpty();
         }
 
         @ParameterizedTest

@@ -40,16 +40,16 @@ public class S3DelegationTokenReceiverTest {
 
     @Test
     void testUpdateCredentialProviders() {
-        org.apache.hadoop.conf.Configuration hadoopConfig;
+        org.apache.hadoop.conf.Configuration hadoopConfig =
+                new org.apache.hadoop.conf.Configuration();
+        // We start with an empty provider list and iteratively add providers
+        hadoopConfig.set("fs.s3a.aws.credentials.provider", "");
 
         // On an empty list, no changes should be made
-        hadoopConfig = new org.apache.hadoop.conf.Configuration();
-        hadoopConfig.set("fs.s3a.aws.credentials.provider", "");
         S3DelegationTokenReceiver.updateHadoopConfigCredentialProviders(
                 hadoopConfig, Collections.emptyList());
         assertThat(hadoopConfig.get("fs.s3a.aws.credentials.provider")).isEqualTo("");
 
-        hadoopConfig = new org.apache.hadoop.conf.Configuration();
         hadoopConfig.set(
                 "fs.s3a.aws.credentials.provider",
                 "software.amazon.awssdk.auth.credentials.EnvironmentVariableCredentialsProvider");

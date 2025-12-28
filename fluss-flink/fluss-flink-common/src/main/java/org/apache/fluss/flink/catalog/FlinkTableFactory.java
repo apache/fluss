@@ -247,16 +247,16 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
                     }
                 });
 
-      // pass through all fluss options from flink config
-      try {
-        PropertiesUtils.extractAndRemovePrefix(flinkConfig.toMap(), FLUSS_PREFIX)
-          .forEach(flussConfig::setString);
-      } catch (NoSuchMethodError e) {
-        // Flink 1.18 does not have the toMap() method yet, see
-        // https://nightlies.apache.org/flink/flink-docs-release-1.18/api/java//org/apache/flink/configuration/ReadableConfig.html
-        LOG.warn(
-          "Passing config options with prefix 'fluss' via Flink config is only supported with Fluss Flink Connector 1.19 and higher. All config options with prefix 'fluss' will be ignored.");
-      }
+        // pass through all fluss options from flink config
+        try {
+            PropertiesUtils.extractAndRemovePrefix(flinkConfig.toMap(), FLUSS_PREFIX)
+                    .forEach(flussConfig::setString);
+        } catch (NoSuchMethodError e) {
+            // Flink 1.18 does not have the toMap() method yet, see
+            // https://nightlies.apache.org/flink/flink-docs-release-1.18/api/java//org/apache/flink/configuration/ReadableConfig.html
+            LOG.warn(
+                    "Passing config options with prefix 'fluss' via Flink config is only supported with Fluss Flink Connector 1.19 and higher. All config options with prefix 'fluss' will be ignored.");
+        }
 
         // Todo support LookupOptions.MAX_RETRIES. Currently, Fluss doesn't support connector level
         // retry. The option 'client.lookup.max-retries' is only for dealing with the

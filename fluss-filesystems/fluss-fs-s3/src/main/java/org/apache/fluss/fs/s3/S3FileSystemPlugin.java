@@ -77,9 +77,6 @@ public class S3FileSystemPlugin implements FileSystemPlugin {
                             "aws.credentials.provider",
                             "assumed.role.credentials.provider"));
 
-    private static final List<String> TOKEN_DELEGATION_DEFAULT_CREDENTIAL_PROVIDER =
-            Collections.singletonList("org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider");
-
     @Override
     public String getScheme() {
         return "s3";
@@ -94,11 +91,12 @@ public class S3FileSystemPlugin implements FileSystemPlugin {
         final boolean useTokenDelegation;
 
         if (isClient) {
-            // Only used on the server side, default to false
+            // Only relevant on the server side, default to false
             useTokenDelegation = false;
             // We do not know if token delegation on the server will be activated or deactivated.
             // Hence, we just add the Fluss credential provider for token delegation
-            // to the provider chain.
+            // to the provider chain and the file system will figure out a valid provider
+            // at runtime.
             setCredentialProviders(
                     hadoopConfig,
                     Collections.singletonList(DynamicTemporaryAWSCredentialsProvider.NAME));
@@ -143,10 +141,6 @@ public class S3FileSystemPlugin implements FileSystemPlugin {
     @VisibleForTesting
     org.apache.hadoop.conf.Configuration getHadoopConfiguration(Configuration flussConfig) {
         org.apache.hadoop.conf.Configuration conf = new org.apache.hadoop.conf.Configuration();
-
-        // Credential providers must be explicitly set by the user
-        conf.set(S3ConfigOptions.CREDENTIALS_PROVIDER_CONFIG_NAME, "");
-        conf.set(S3ConfigOptions.ASSUMED_ROLE_CREDENTIALS_PROVIDER_CONFIG_NAME, "");
 
         if (flussConfig == null) {
             return conf;
@@ -229,20 +223,15 @@ public class S3FileSystemPlugin implements FileSystemPlugin {
     }
 
     /**
-     * Determines whether the file system is initialized by a client or a server.
+     * Determines whether the file system is initialized on the client or server side.
      *
      * <p>The file system is considered client-initialized if:
      *
      * <ol>
      *   <li>All configuration options start with the prefix {@link
      *       S3FileSystemPlugin#CLIENT_PREFIX}, or
-     *   <li>No configuration options are provided.
+     *   <li>no configuration options are provided.
      * </ol>
-     *
-     * <p>The second case (no configuration options) is only valid when token delegation ({@link
-     * ConfigOptions#FILE_SYSTEM_S3_ENABLE_TOKEN_DELEGATION}) is <i>enabled</i> on the server. If
-     * token delegation is <i>disabled</i>, the client must provide at least one configuration
-     * option (e.g., a credential provider). Otherwise, the setup is invalid.
      *
      * <p>The file system is considered server-initialized if:
      *
@@ -251,16 +240,18 @@ public class S3FileSystemPlugin implements FileSystemPlugin {
      *   <li>None of the options start with the prefix {@link S3FileSystemPlugin#CLIENT_PREFIX}.
      * </ol>
      *
-     * <p>On the server side, there will always be at least one configuration option:
+     * <p>Any other scenario is invalid.
+     *
+     * <p>Note that on the server side, there will always be at least one configuration option:
      *
      * <ul>
-     *   <li>If {@link ConfigOptions#FILE_SYSTEM_S3_ENABLE_TOKEN_DELEGATION} is <code>true</code>
-     *       (default), then access key, secret key, endpoint, and region must be configured.
-     *   <li>If {@link ConfigOptions#FILE_SYSTEM_S3_ENABLE_TOKEN_DELEGATION} is <code>false</code>,
-     *       a credential provider must be configured.
+     *   <li>If token delegation is activated ({@link
+     *       ConfigOptions#FILE_SYSTEM_S3_ENABLE_TOKEN_DELEGATION} is <code>true</code>, which is
+     *       the default), then access key, secret key, endpoint, and region must be configured, or
+     *   <li>If token delegation is deactivated, {@link
+     *       ConfigOptions#FILE_SYSTEM_S3_ENABLE_TOKEN_DELEGATION} has to be explicitly set to
+     *       <code>false</code>.
      * </ul>
-     *
-     * <p>Any other scenario is invalid.
      *
      * @param config The configuration.
      * @return {@code true} if initialized by a client, {@code false} if initialized by a server.
@@ -285,7 +276,7 @@ public class S3FileSystemPlugin implements FileSystemPlugin {
         } else {
             LOG.error("Detected invalid configuration: {}", config);
             throw new InvalidConfigException(
-                    "Cannot initialize file system due to invalid configuration.");
+                    "Cannot initialize file system due to invalid configuration. If this exception occurs on the server side, make sure to provide access key, secret key, endpoint, and region when token delegation is activated.");
         }
     }
 
