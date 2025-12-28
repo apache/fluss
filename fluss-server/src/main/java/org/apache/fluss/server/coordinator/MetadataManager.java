@@ -322,24 +322,33 @@ public class MetadataManager {
     }
 
     public void alterTableSchema(
-            TablePath tablePath, List<TableChange> schemaChanges, boolean ignoreIfNotExists)
+            TablePath tablePath,
+            List<TableChange> schemaChanges,
+            boolean ignoreIfNotExists,
+            @Nullable LakeCatalog lakeCatalog,
+            LakeCatalog.Context lakeCatalogContext)
             throws TableNotExistException, TableNotPartitionedException {
         try {
 
             TableInfo table = getTable(tablePath);
 
-            // TODO: remote this after lake enable table support schema evolution, track by
-            // https://github.com/apache/fluss/issues/2128
-            if (table.getTableConfig().isDataLakeEnabled()) {
-                throw new InvalidAlterTableException(
-                        "Schema evolution is currently not supported for tables with datalake enabled.");
-            }
-
             // validate the table column changes
             if (!schemaChanges.isEmpty()) {
                 Schema newSchema = SchemaUpdate.applySchemaChanges(table, schemaChanges);
-                // update the schema
-                zookeeperClient.registerSchema(tablePath, newSchema, table.getSchemaId() + 1);
+
+                // Lake First: sync to Lake before updating Fluss schema
+                syncSchemaChangesToLake(
+                        tablePath, table, schemaChanges, lakeCatalog, lakeCatalogContext);
+
+                // Update Fluss schema (ZK) after Lake sync succeeds
+                if (!newSchema.equals(table.getSchema())) {
+                    zookeeperClient.registerSchema(tablePath, newSchema, table.getSchemaId() + 1);
+                } else {
+                    LOG.info(
+                            "Skipping schema evolution for table {} because the column(s) to add {} already exist.",
+                            tablePath,
+                            schemaChanges);
+                }
             }
         } catch (Exception e) {
             if (e instanceof TableNotExistException) {
@@ -352,6 +361,34 @@ public class MetadataManager {
             } else {
                 throw new FlussRuntimeException("Failed to alter table schema: " + tablePath, e);
             }
+        }
+    }
+
+    private void syncSchemaChangesToLake(
+            TablePath tablePath,
+            TableInfo tableInfo,
+            List<TableChange> schemaChanges,
+            @Nullable LakeCatalog lakeCatalog,
+            LakeCatalog.Context lakeCatalogContext) {
+        if (!isDataLakeEnabled(tableInfo.toTableDescriptor())) {
+            return;
+        }
+
+        if (lakeCatalog == null) {
+            throw new InvalidAlterTableException(
+                    "Cannot alter schema for datalake enabled table "
+                            + tablePath
+                            + ", because the Fluss cluster doesn't enable datalake tables.");
+        }
+
+        try {
+            lakeCatalog.alterTable(tablePath, schemaChanges, lakeCatalogContext);
+        } catch (TableNotExistException e) {
+            throw new FlussRuntimeException(
+                    "Lake table doesn't exist for lake-enabled table "
+                            + tablePath
+                            + ", which shouldn't happen. Please check if the lake table was deleted manually.",
+                    e);
         }
     }
 

@@ -26,6 +26,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /** Schema update. */
@@ -83,9 +84,16 @@ public class SchemaUpdate {
     }
 
     private SchemaUpdate addColumn(TableChange.AddColumn addColumn) {
-        if (existedColumns.containsKey(addColumn.getName())) {
-            throw new IllegalArgumentException(
-                    "Column " + addColumn.getName() + " already exists.");
+        Schema.Column existingColumn = existedColumns.get(addColumn.getName());
+        if (existingColumn != null) {
+            // Allow idempotent retries: if column name/type/comment match existing, treat as no-op
+            if (!existingColumn.getDataType().equals(addColumn.getDataType())
+                    || !Objects.equals(
+                            existingColumn.getComment().orElse(null), addColumn.getComment())) {
+                throw new IllegalArgumentException(
+                        "Column " + addColumn.getName() + " already exists.");
+            }
+            return this;
         }
 
         TableChange.ColumnPosition position = addColumn.getPosition();

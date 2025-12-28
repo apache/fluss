@@ -128,6 +128,31 @@ public class PaimonConversions {
                 schemaChanges.add(
                         SchemaChange.removeOption(
                                 convertFlussPropertyKeyToPaimon(resetOption.getKey())));
+            } else if (tableChange instanceof TableChange.AddColumn) {
+                TableChange.AddColumn addColumn = (TableChange.AddColumn) tableChange;
+
+                if (!(addColumn.getPosition() instanceof TableChange.Last)) {
+                    throw new UnsupportedOperationException(
+                            "Only support to add column at last for paimon table.");
+                }
+
+                org.apache.fluss.types.DataType flussDataType = addColumn.getDataType();
+                if (!flussDataType.isNullable()) {
+                    throw new UnsupportedOperationException(
+                            "Only support to add nullable column for paimon table.");
+                }
+
+                org.apache.paimon.types.DataType paimonDataType =
+                        flussDataType.accept(FlussDataTypeToPaimonDataType.INSTANCE);
+
+                String firstSystemColumnName = SYSTEM_COLUMNS.keySet().iterator().next();
+                schemaChanges.add(
+                        SchemaChange.addColumn(
+                                addColumn.getName(),
+                                paimonDataType,
+                                addColumn.getComment(),
+                                SchemaChange.Move.before(
+                                        addColumn.getName(), firstSystemColumnName)));
             } else {
                 throw new UnsupportedOperationException(
                         "Unsupported table change: " + tableChange.getClass());

@@ -301,7 +301,9 @@ class TableChangeWatcherTest {
                                     DataTypes.INT(),
                                     null,
                                     TableChange.ColumnPosition.last())),
-                    false);
+                    false,
+                    null,
+                    null);
             Schema newSchema =
                     Schema.newBuilder()
                             .fromSchema(tableInfo.getSchema())

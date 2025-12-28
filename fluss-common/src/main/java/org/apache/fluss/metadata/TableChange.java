@@ -257,6 +257,22 @@ public interface TableChange {
         public ColumnPosition getPosition() {
             return position;
         }
+
+        @Override
+        public String toString() {
+            return "AddColumn{"
+                    + "name='"
+                    + name
+                    + '\''
+                    + ", dataType="
+                    + dataType
+                    + ", comment='"
+                    + comment
+                    + '\''
+                    + ", position="
+                    + position
+                    + '}';
+        }
     }
 
     /** A table change to drop a column. */
@@ -269,6 +285,11 @@ public interface TableChange {
 
         public String getName() {
             return name;
+        }
+
+        @Override
+        public String toString() {
+            return "DropColumn{" + "name='" + name + '\'' + '}';
         }
     }
 
@@ -308,6 +329,22 @@ public interface TableChange {
         public ColumnPosition getNewPosition() {
             return newPosition;
         }
+
+        @Override
+        public String toString() {
+            return "ModifyColumn{"
+                    + "name='"
+                    + name
+                    + '\''
+                    + ", dataType="
+                    + dataType
+                    + ", comment='"
+                    + comment
+                    + '\''
+                    + ", newPosition="
+                    + newPosition
+                    + '}';
+        }
     }
 
     /** A table change to modify a column's name. */
@@ -326,6 +363,18 @@ public interface TableChange {
 
         public String getNewColumnName() {
             return newColumnName;
+        }
+
+        @Override
+        public String toString() {
+            return "RenameColumn{"
+                    + "oldColumnName='"
+                    + oldColumnName
+                    + '\''
+                    + ", newColumnName='"
+                    + newColumnName
+                    + '\''
+                    + '}';
         }
     }
 

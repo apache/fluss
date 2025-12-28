@@ -40,6 +40,7 @@ import static org.apache.fluss.record.ChangeType.INSERT;
 import static org.apache.fluss.record.ChangeType.UPDATE_AFTER;
 import static org.apache.fluss.record.ChangeType.UPDATE_BEFORE;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link FlussRecordAsPaimonRow}. */
 class FlussRecordAsPaimonRowTest {
@@ -544,5 +545,65 @@ class FlussRecordAsPaimonRowTest {
         InternalArray array = flussRecordAsPaimonRow.getArray(0);
         assertThat(array).isNotNull();
         assertThat(array.size()).isEqualTo(0);
+    }
+
+    @Test
+    void testPaimonSchemaWiderThanFlussRecord() {
+        int tableBucket = 0;
+        RowType tableRowType =
+                RowType.of(
+                        new org.apache.paimon.types.BooleanType(),
+                        new org.apache.paimon.types.VarCharType(),
+                        // append three system columns: __bucket, __offset,__timestamp
+                        new org.apache.paimon.types.IntType(),
+                        new org.apache.paimon.types.BigIntType(),
+                        new org.apache.paimon.types.LocalZonedTimestampType(3));
+
+        FlussRecordAsPaimonRow flussRecordAsPaimonRow =
+                new FlussRecordAsPaimonRow(tableBucket, tableRowType);
+
+        long logOffset = 7L;
+        long timeStamp = System.currentTimeMillis();
+        GenericRow genericRow = new GenericRow(1);
+        genericRow.setField(0, true);
+        LogRecord logRecord = new GenericRecord(logOffset, timeStamp, APPEND_ONLY, genericRow);
+        flussRecordAsPaimonRow.setFlussRecord(logRecord);
+
+        assertThat(flussRecordAsPaimonRow.getFieldCount()).isEqualTo(5);
+
+        assertThat(flussRecordAsPaimonRow.getBoolean(0)).isTrue();
+        assertThat(flussRecordAsPaimonRow.isNullAt(1)).isTrue();
+        assertThat(flussRecordAsPaimonRow.getInt(2)).isEqualTo(tableBucket);
+        assertThat(flussRecordAsPaimonRow.getLong(3)).isEqualTo(logOffset);
+        assertThat(flussRecordAsPaimonRow.getTimestamp(4, 3))
+                .isEqualTo(Timestamp.fromEpochMillis(timeStamp));
+    }
+
+    @Test
+    void testFlussRecordWiderThanPaimonSchema() {
+        int tableBucket = 0;
+        RowType tableRowType =
+                RowType.of(
+                        new org.apache.paimon.types.BooleanType(),
+                        // append three system columns: __bucket, __offset,__timestamp
+                        new org.apache.paimon.types.IntType(),
+                        new org.apache.paimon.types.BigIntType(),
+                        new org.apache.paimon.types.LocalZonedTimestampType(3));
+
+        FlussRecordAsPaimonRow flussRecordAsPaimonRow =
+                new FlussRecordAsPaimonRow(tableBucket, tableRowType);
+
+        long logOffset = 7L;
+        long timeStamp = System.currentTimeMillis();
+        GenericRow genericRow = new GenericRow(2);
+        genericRow.setField(0, true);
+        genericRow.setField(1, BinaryString.fromString("extra"));
+        LogRecord logRecord = new GenericRecord(logOffset, timeStamp, APPEND_ONLY, genericRow);
+
+        // Should throw exception instead of silently truncating data
+        assertThatThrownBy(() -> flussRecordAsPaimonRow.setFlussRecord(logRecord))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining(
+                        "Fluss record has 2 fields but Paimon schema only has 1 business fields");
     }
 }

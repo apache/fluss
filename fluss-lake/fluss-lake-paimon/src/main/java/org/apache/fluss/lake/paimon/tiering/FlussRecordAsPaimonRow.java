@@ -27,7 +27,6 @@ import org.apache.paimon.types.RowType;
 
 import static org.apache.fluss.lake.paimon.PaimonLakeCatalog.SYSTEM_COLUMNS;
 import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toRowKind;
-import static org.apache.fluss.utils.Preconditions.checkState;
 
 /** To wrap Fluss {@link LogRecord} as paimon {@link InternalRow}. */
 public class FlussRecordAsPaimonRow extends FlussRowAsPaimonRow {
@@ -35,27 +34,42 @@ public class FlussRecordAsPaimonRow extends FlussRowAsPaimonRow {
     private final int bucket;
     private LogRecord logRecord;
     private int originRowFieldCount;
+    private final int businessFieldCount;
+    private final int bucketFieldIndex;
+    private final int offsetFieldIndex;
+    private final int timestampFieldIndex;
 
     public FlussRecordAsPaimonRow(int bucket, RowType tableTowType) {
         super(tableTowType);
         this.bucket = bucket;
+        this.businessFieldCount = tableRowType.getFieldCount() - SYSTEM_COLUMNS.size();
+        this.bucketFieldIndex = businessFieldCount;
+        this.offsetFieldIndex = businessFieldCount + 1;
+        this.timestampFieldIndex = businessFieldCount + 2;
     }
 
     public void setFlussRecord(LogRecord logRecord) {
         this.logRecord = logRecord;
         this.internalRow = logRecord.getRow();
-        this.originRowFieldCount = internalRow.getFieldCount();
-        checkState(
-                originRowFieldCount == tableRowType.getFieldCount() - SYSTEM_COLUMNS.size(),
-                "The paimon table fields count must equals to LogRecord's fields count.");
+        int flussFieldCount = internalRow.getFieldCount();
+        if (flussFieldCount > businessFieldCount) {
+            // Fluss record is wider than Paimon schema, which means Lake schema is not yet
+            // synchronized. With "Lake First" strategy, this should not happen in normal cases.
+            throw new IllegalStateException(
+                    String.format(
+                            "Fluss record has %d fields but Paimon schema only has %d business fields. "
+                                    + "This indicates the lake schema is not yet synchronized. "
+                                    + "Please retry the schema change operation.",
+                            flussFieldCount, businessFieldCount));
+        }
+        this.originRowFieldCount = flussFieldCount;
     }
 
     @Override
     public int getFieldCount() {
-        return
-        //  business (including partitions) + system (three system fields: bucket, offset,
+        // business (including partitions) + system (three system fields: bucket, offset,
         // timestamp)
-        originRowFieldCount + SYSTEM_COLUMNS.size();
+        return tableRowType.getFieldCount();
     }
 
     @Override
@@ -68,27 +82,43 @@ public class FlussRecordAsPaimonRow extends FlussRowAsPaimonRow {
         if (pos < originRowFieldCount) {
             return super.isNullAt(pos);
         }
+        if (pos < businessFieldCount) {
+            // Padding NULL for missing business fields when Paimon schema is wider than Fluss
+            return true;
+        }
         // is the last three system fields: bucket, offset, timestamp which are never null
         return false;
     }
 
     @Override
     public int getInt(int pos) {
-        if (pos == originRowFieldCount) {
+        if (pos == bucketFieldIndex) {
             // bucket system column
             return bucket;
+        }
+        if (pos >= originRowFieldCount) {
+            throw new IllegalStateException(
+                    String.format(
+                            "Field %s is NULL because Paimon schema is wider than Fluss record.",
+                            pos));
         }
         return super.getInt(pos);
     }
 
     @Override
     public long getLong(int pos) {
-        if (pos == originRowFieldCount + 1) {
+        if (pos == offsetFieldIndex) {
             //  offset system column
             return logRecord.logOffset();
-        } else if (pos == originRowFieldCount + 2) {
+        } else if (pos == timestampFieldIndex) {
             //  timestamp system column
             return logRecord.timestamp();
+        }
+        if (pos >= originRowFieldCount) {
+            throw new IllegalStateException(
+                    String.format(
+                            "Field %s is NULL because Paimon schema is wider than Fluss record.",
+                            pos));
         }
         //  the origin RowData
         return super.getLong(pos);
@@ -97,8 +127,14 @@ public class FlussRecordAsPaimonRow extends FlussRowAsPaimonRow {
     @Override
     public Timestamp getTimestamp(int pos, int precision) {
         // it's timestamp system column
-        if (pos == originRowFieldCount + 2) {
+        if (pos == timestampFieldIndex) {
             return Timestamp.fromEpochMillis(logRecord.timestamp());
+        }
+        if (pos >= originRowFieldCount) {
+            throw new IllegalStateException(
+                    String.format(
+                            "Field %s is NULL because Paimon schema is wider than Fluss record.",
+                            pos));
         }
         return super.getTimestamp(pos, precision);
     }
