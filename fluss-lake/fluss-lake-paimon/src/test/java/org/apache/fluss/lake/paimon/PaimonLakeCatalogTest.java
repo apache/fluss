@@ -18,6 +18,7 @@
 package org.apache.fluss.lake.paimon;
 
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.InvalidAlterTableException;
 import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.lake.lakestorage.TestingLakeCatalogContext;
 import org.apache.fluss.metadata.Schema;
@@ -189,6 +190,57 @@ class PaimonLakeCatalogTest {
                                         tablePath, changes, new TestingLakeCatalogContext()))
                 .isInstanceOf(UnsupportedOperationException.class)
                 .hasMessage("Only support to add nullable column for paimon table.");
+    }
+
+    @Test
+    void testAlterTableAddExistingColumn() {
+        String database = "test_alter_table_add_existing_column_db";
+        String tableName = "test_alter_table_add_existing_column_table";
+        TablePath tablePath = TablePath.of(database, tableName);
+        createTable(database, tableName);
+
+        List<TableChange> changes =
+                Collections.singletonList(
+                        TableChange.addColumn(
+                                "address",
+                                DataTypes.STRING(),
+                                null,
+                                TableChange.ColumnPosition.last()));
+
+        // no exception thrown when adding existing column
+        flussPaimonCatalog.alterTable(tablePath, changes, new TestingLakeCatalogContext());
+
+        List<TableChange> changes2 =
+                Collections.singletonList(
+                        TableChange.addColumn(
+                                "address",
+                                DataTypes.INT(),
+                                null,
+                                TableChange.ColumnPosition.last()));
+
+        assertThatThrownBy(
+                        () ->
+                                flussPaimonCatalog.alterTable(
+                                        tablePath, changes2, new TestingLakeCatalogContext()))
+                .isInstanceOf(InvalidAlterTableException.class)
+                .hasMessage(
+                        "Column 'address' already exists but with different type. Existing: STRING, Expected: INT");
+
+        List<TableChange> changes3 =
+                Collections.singletonList(
+                        TableChange.addColumn(
+                                "address",
+                                DataTypes.STRING(),
+                                "the address comment",
+                                TableChange.ColumnPosition.last()));
+
+        assertThatThrownBy(
+                        () ->
+                                flussPaimonCatalog.alterTable(
+                                        tablePath, changes3, new TestingLakeCatalogContext()))
+                .isInstanceOf(InvalidAlterTableException.class)
+                .hasMessage(
+                        "Column address already exists but with different comment. Existing: null, Expected: the address comment");
     }
 
     private void createTable(String database, String tableName) {

@@ -343,6 +343,11 @@ public class MetadataManager {
                 // Update Fluss schema (ZK) after Lake sync succeeds
                 if (!newSchema.equals(table.getSchema())) {
                     zookeeperClient.registerSchema(tablePath, newSchema, table.getSchemaId() + 1);
+                } else {
+                    LOG.info(
+                            "Skipping schema evolution for table {} because the column(s) to add {} already exist.",
+                            tablePath,
+                            schemaChanges);
                 }
             }
         } catch (Exception e) {

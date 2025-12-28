@@ -19,6 +19,7 @@ package org.apache.fluss.lake.paimon;
 
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.InvalidAlterTableException;
 import org.apache.fluss.exception.TableAlreadyExistException;
 import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.lake.lakestorage.LakeCatalog;
@@ -38,6 +39,8 @@ import org.apache.paimon.table.FileStoreTable;
 import org.apache.paimon.table.Table;
 import org.apache.paimon.types.DataType;
 import org.apache.paimon.types.DataTypes;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -54,6 +57,7 @@ import static org.apache.fluss.metadata.TableDescriptor.TIMESTAMP_COLUMN_NAME;
 /** A Paimon implementation of {@link LakeCatalog}. */
 public class PaimonLakeCatalog implements LakeCatalog {
 
+    private static final Logger LOG = LoggerFactory.getLogger(PaimonLakeCatalog.class);
     public static final LinkedHashMap<String, DataType> SYSTEM_COLUMNS = new LinkedHashMap<>();
 
     static {
@@ -113,14 +117,19 @@ public class PaimonLakeCatalog implements LakeCatalog {
             // Compare current Paimon table schema with expected target schema before altering
             if (shouldAlterTable(tablePath, tableChanges)) {
                 alterTable(tablePath, paimonSchemaChanges);
+            } else {
+                // If schemas already match, treat as idempotent success
+                LOG.info(
+                        "Skipping schema evolution for Paimon table {} because the column(s) to add {} already exist.",
+                        tablePath,
+                        tableChanges);
             }
-            // If schemas already match, treat as idempotent success
         } catch (Catalog.ColumnAlreadyExistException e) {
             // This shouldn't happen if shouldAlterTable works correctly, but keep as safeguard
-            throw new RuntimeException("Unexpected ColumnAlreadyExistException", e);
+            throw new InvalidAlterTableException(e.getMessage());
         } catch (Catalog.ColumnNotExistException e) {
             // This shouldn't happen for AddColumn operations
-            throw new RuntimeException(e);
+            throw new InvalidAlterTableException(e.getMessage());
         }
     }
 
@@ -161,9 +170,9 @@ public class PaimonLakeCatalog implements LakeCatalog {
                                                 .FlussDataTypeToPaimonDataType.INSTANCE);
 
                 if (!field.type().equals(expectedType)) {
-                    throw new IllegalStateException(
+                    throw new InvalidAlterTableException(
                             String.format(
-                                    "Column %s already exists but with different type. "
+                                    "Column '%s' already exists but with different type. "
                                             + "Existing: %s, Expected: %s",
                                     columnName, field.type(), expectedType));
                 }
@@ -176,7 +185,7 @@ public class PaimonLakeCatalog implements LakeCatalog {
                                         && existingComment.equals(expectedComment));
 
                 if (!commentsMatch) {
-                    throw new IllegalStateException(
+                    throw new InvalidAlterTableException(
                             String.format(
                                     "Column %s already exists but with different comment. "
                                             + "Existing: %s, Expected: %s",
@@ -208,7 +217,7 @@ public class PaimonLakeCatalog implements LakeCatalog {
                 }
             } catch (Catalog.TableNotExistException tableNotExistException) {
                 // shouldn't happen in normal cases
-                throw new RuntimeException(
+                throw new InvalidAlterTableException(
                         String.format(
                                 "Failed to create table %s in Paimon. The table already existed "
                                         + "during the initial creation attempt, but subsequently "

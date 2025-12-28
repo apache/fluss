@@ -88,7 +88,8 @@ public class SchemaUpdate {
         if (existingColumn != null) {
             // Allow idempotent retries: if column name/type/comment match existing, treat as no-op
             if (!existingColumn.getDataType().equals(addColumn.getDataType())
-                    || !Objects.equals(existingColumn.getComment(), addColumn.getComment())) {
+                    || !Objects.equals(
+                            existingColumn.getComment().orElse(null), addColumn.getComment())) {
                 throw new IllegalArgumentException(
                         "Column " + addColumn.getName() + " already exists.");
             }
