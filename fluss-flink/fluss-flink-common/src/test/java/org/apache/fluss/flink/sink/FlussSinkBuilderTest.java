@@ -18,6 +18,7 @@
 package org.apache.fluss.flink.sink;
 
 import org.apache.fluss.flink.sink.serializer.OrderSerializationSchema;
+import org.apache.fluss.flink.sink.shuffle.DistributionMode;
 import org.apache.fluss.flink.source.testutils.Order;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -136,17 +137,21 @@ class FlussSinkBuilderTest {
     @Test
     void testShuffleByBucketId() throws Exception {
         // Default should be true
-        boolean shuffleByBucketId = getFieldValue(builder, "shuffleByBucketId");
-        assertThat(shuffleByBucketId).isTrue();
+        DistributionMode shuffleMode = getFieldValue(builder, "distributionMode");
+        assertThat(shuffleMode).isEqualTo(DistributionMode.BUCKET_SHUFFLE);
 
         // Test setting to false
         builder.setShuffleByBucketId(false);
-        shuffleByBucketId = getFieldValue(builder, "shuffleByBucketId");
-        assertThat(shuffleByBucketId).isFalse();
+        shuffleMode = getFieldValue(builder, "distributionMode");
+        assertThat(shuffleMode).isEqualTo(DistributionMode.NONE);
 
         builder.setShuffleByBucketId(true);
-        shuffleByBucketId = getFieldValue(builder, "shuffleByBucketId");
-        assertThat(shuffleByBucketId).isTrue();
+        shuffleMode = getFieldValue(builder, "distributionMode");
+        assertThat(shuffleMode).isEqualTo(DistributionMode.BUCKET_SHUFFLE);
+
+        builder.setDistributionMode(DistributionMode.DYNAMIC_SHUFFLE);
+        shuffleMode = getFieldValue(builder, "distributionMode");
+        assertThat(shuffleMode).isEqualTo(DistributionMode.DYNAMIC_SHUFFLE);
     }
 
     @Test

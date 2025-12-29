@@ -18,6 +18,7 @@
 package org.apache.fluss.flink.adapter;
 
 import org.apache.flink.api.common.functions.RuntimeContext;
+import org.apache.flink.streaming.api.operators.StreamingRuntimeContext;
 
 /**
  * An adapter for Flink {@link RuntimeContext} class. The {@link RuntimeContext} class added the
@@ -30,5 +31,9 @@ public class RuntimeContextAdapter {
 
     public static int getAttemptNumber(RuntimeContext runtimeContext) {
         return runtimeContext.getAttemptNumber();
+    }
+
+    public static int getIndexOfThisSubtask(StreamingRuntimeContext runtimeContext) {
+        return runtimeContext.getIndexOfThisSubtask();
     }
 }

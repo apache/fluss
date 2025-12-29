@@ -15,25 +15,20 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.flink.adapter;
+package org.apache.fluss.flink.sink.shuffle;
 
-import org.apache.flink.api.common.functions.RuntimeContext;
-import org.apache.flink.streaming.api.operators.StreamingRuntimeContext;
+import org.apache.fluss.annotation.Internal;
+import org.apache.fluss.row.InternalRow;
 
 /**
- * An adapter for Flink {@link RuntimeContext} class. The {@link RuntimeContext} class added the
- * `getJobInfo` and `getTaskInfo` methods in version 1.19 and deprecated many methods, such as
- * `getAttemptNumber`.
+ * Assignment for a partition key, used to compute the target subtask for a record with a given
+ * partition key.
  *
- * <p>TODO: remove this class when no longer support flink 1.18.
+ * <p>Implementations of this interface determine how records with specific partition keys are
+ * routed to downstream subtasks, enabling various distribution strategies such as round-robin,
+ * key-hash, or weighted-random assignment.
  */
-public class RuntimeContextAdapter {
-
-    public static int getAttemptNumber(RuntimeContext runtimeContext) {
-        return runtimeContext.getTaskInfo().getAttemptNumber();
-    }
-
-    public static int getIndexOfThisSubtask(StreamingRuntimeContext runtimeContext) {
-        return runtimeContext.getTaskInfo().getIndexOfThisSubtask();
-    }
+@Internal
+public interface PartitionAssignment {
+    int select(InternalRow row);
 }
