@@ -173,7 +173,10 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
                                                                     new TableBucket(tableId + 1, 0),
                                                                     null,
                                                                     0)))))
-                    .hasMessageContaining("table id not equal across splits");
+                    .hasMessageContaining(
+                            String.format(
+                                    "the same name table `%s` is dropped and recreated before the job restarted, which maybe cause inconsistency, please restarted the job without savepoint or checkpoint",
+                                    tablePath));
         }
     }
 

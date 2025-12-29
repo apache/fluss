@@ -189,8 +189,10 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
             LOG.info("add split {}", sourceSplitBase.splitId());
             checkArgument(
                     tableId.equals(sourceSplitBase.getTableBucket().getTableId()),
-                    "table id not equal across splits {}",
-                    splitsChanges.splits());
+                    "table id %s is different with table id %s from splits, the same name table `%s` is dropped and recreated before the job restarted, which maybe cause inconsistency, please restarted the job without savepoint or checkpoint ",
+                    tableId,
+                    sourceSplitBase.getTableBucket().getTableId(),
+                    table.getTableInfo().getTablePath());
 
             if (sourceSplitBase.isHybridSnapshotLogSplit()) {
                 HybridSnapshotLogSplit hybridSnapshotLogSplit =
