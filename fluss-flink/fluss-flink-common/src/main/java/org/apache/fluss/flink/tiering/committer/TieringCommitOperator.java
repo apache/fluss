@@ -23,6 +23,7 @@ import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.client.metadata.LakeSnapshot;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.LakeTableSnapshotNotExistException;
+import org.apache.fluss.flink.adapter.RuntimeContextAdapter;
 import org.apache.fluss.flink.tiering.event.FailedTieringEvent;
 import org.apache.fluss.flink.tiering.event.FinishedTieringEvent;
 import org.apache.fluss.flink.tiering.event.TieringFailOverEvent;
@@ -132,7 +133,7 @@ public class TieringCommitOperator<WriteResult, Committable>
             StreamConfig config,
             Output<StreamRecord<CommittableMessage<Committable>>> output) {
         super.setup(containingTask, config, output);
-        int attemptNumber = getRuntimeContext().getAttemptNumber();
+        int attemptNumber = RuntimeContextAdapter.getAttemptNumber(getRuntimeContext());
         if (attemptNumber > 0) {
             LOG.info("Send TieringFailoverEvent, current attempt number: {}", attemptNumber);
             // attempt number is greater than zero, the job must failover
