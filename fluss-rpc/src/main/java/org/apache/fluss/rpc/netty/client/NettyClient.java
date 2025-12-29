@@ -21,6 +21,7 @@ import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.NetworkException;
 import org.apache.fluss.rpc.RpcClient;
 import org.apache.fluss.rpc.messages.ApiMessage;
 import org.apache.fluss.rpc.metrics.ClientMetricGroup;
@@ -46,6 +47,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Function;
 import java.util.function.Supplier;
 
 import static org.apache.fluss.utils.Preconditions.checkArgument;
@@ -83,6 +85,9 @@ public final class NettyClient implements RpcClient {
     private final boolean isInnerClient;
 
     private volatile boolean isClosed = false;
+
+    /** retry delay time (Unit: milliseconds). */
+    private final int delayMs = 100;
 
     public NettyClient(
             Configuration conf, ClientMetricGroup clientMetricGroup, boolean isInnerClient) {
@@ -165,6 +170,72 @@ public final class NettyClient implements RpcClient {
             ServerNode node, ApiKeys apiKey, ApiMessage request) {
         checkArgument(!isClosed, "Netty client is closed.");
         return getOrCreateConnection(node).send(apiKey, request);
+    }
+
+    @Override
+    public CompletableFuture<ApiMessage> sendRequestWithRetries(
+            ServerNode node, ApiKeys apiKey, ApiMessage request, int maxRetries) {
+        int attempt = 0;
+        CompletableFuture<ApiMessage> future = getOrCreateConnection(node).send(apiKey, request);
+
+        return future.handle(
+                        (response, throwable) -> {
+                            if (throwable == null) {
+                                return CompletableFuture.completedFuture(response);
+                            }
+
+                            Throwable rootCause = FutureUtils.unwrapCompletionException(throwable);
+
+                            if (isTransientNetworkError(rootCause) && attempt < maxRetries) {
+                                int nextAttempt = maxRetries + 1;
+
+                                LOG.warn(
+                                        "Request to {} failed (attempt {}/{}, cause: {}). Retrying in {} ms.",
+                                        node,
+                                        nextAttempt,
+                                        maxRetries,
+                                        rootCause.getMessage(),
+                                        delayMs);
+
+                                CompletableFuture<ApiMessage> retryFuture =
+                                        new CompletableFuture<>();
+                                // delay retry
+                                eventGroup.schedule(
+                                        () ->
+                                                sendRequestWithRetries(
+                                                                node, apiKey, request, nextAttempt)
+                                                        .whenComplete(
+                                                                (res, err) -> {
+                                                                    if (err != null) {
+                                                                        retryFuture
+                                                                                .completeExceptionally(
+                                                                                        err);
+                                                                    } else {
+                                                                        retryFuture.complete(res);
+                                                                    }
+                                                                }),
+                                        delayMs,
+                                        TimeUnit.MILLISECONDS);
+
+                                return retryFuture;
+                            } else {
+                                LOG.error(
+                                        "Request to {} failed permanently after {} attempts. Giving up.",
+                                        node,
+                                        attempt + 1,
+                                        rootCause);
+                                CompletableFuture<ApiMessage> failedFuture =
+                                        new CompletableFuture<>();
+                                failedFuture.completeExceptionally(rootCause);
+                                return failedFuture;
+                            }
+                        })
+                .thenCompose(Function.identity());
+    }
+
+    private boolean isTransientNetworkError(Throwable cause) {
+        // network exception require a retry
+        return cause instanceof NetworkException;
     }
 
     @Override

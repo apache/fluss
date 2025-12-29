@@ -18,6 +18,7 @@
 package org.apache.fluss.rpc;
 
 import org.apache.fluss.cluster.ServerNode;
+import org.apache.fluss.rpc.gateway.AdminReadOnlyGateway;
 import org.apache.fluss.rpc.messages.ApiMessage;
 import org.apache.fluss.rpc.protocol.ApiManager;
 import org.apache.fluss.rpc.protocol.ApiMethod;
@@ -32,10 +33,12 @@ public class GatewayClientProxy implements InvocationHandler {
 
     private final Supplier<ServerNode> nodeSupplier;
     private final RpcClient client;
+    private final Class<?> gatewayClass;
 
-    GatewayClientProxy(Supplier<ServerNode> nodeSupplier, RpcClient client) {
+    GatewayClientProxy(Supplier<ServerNode> nodeSupplier, RpcClient client, Class<?> gatewayClass) {
         this.nodeSupplier = nodeSupplier;
         this.client = client;
+        this.gatewayClass = gatewayClass;
     }
 
     /**
@@ -56,7 +59,7 @@ public class GatewayClientProxy implements InvocationHandler {
                         Proxy.newProxyInstance(
                                 classLoader,
                                 new Class<?>[] {gatewayClass},
-                                new GatewayClientProxy(nodeSupplier, client));
+                                new GatewayClientProxy(nodeSupplier, client, gatewayClass));
         return proxy;
     }
 
@@ -76,6 +79,11 @@ public class GatewayClientProxy implements InvocationHandler {
         ApiMethod apiMethod = ApiManager.forMethodName(methodName);
         if (apiMethod == null) {
             throw new IllegalArgumentException("Unknown RPC method: " + methodName);
+        }
+        // add retry to idempotent interfaces
+        if (gatewayClass == AdminReadOnlyGateway.class) {
+            return client.sendRequestWithRetries(
+                    nodeSupplier.get(), apiMethod.getApiKey(), request, 3);
         }
         return client.sendRequest(nodeSupplier.get(), apiMethod.getApiKey(), request);
     }
