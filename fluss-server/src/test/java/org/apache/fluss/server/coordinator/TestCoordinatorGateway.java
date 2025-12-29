@@ -90,12 +90,12 @@ import org.apache.fluss.rpc.messages.ListTablesRequest;
 import org.apache.fluss.rpc.messages.ListTablesResponse;
 import org.apache.fluss.rpc.messages.MetadataRequest;
 import org.apache.fluss.rpc.messages.MetadataResponse;
+import org.apache.fluss.rpc.messages.PrepareLakeTableSnapshotRequest;
+import org.apache.fluss.rpc.messages.PrepareLakeTableSnapshotResponse;
 import org.apache.fluss.rpc.messages.RebalanceRequest;
 import org.apache.fluss.rpc.messages.RebalanceResponse;
 import org.apache.fluss.rpc.messages.RemoveServerTagRequest;
 import org.apache.fluss.rpc.messages.RemoveServerTagResponse;
-import org.apache.fluss.rpc.messages.PrepareCommitLakeTableSnapshotRequest;
-import org.apache.fluss.rpc.messages.PrepareCommitLakeTableSnapshotResponse;
 import org.apache.fluss.rpc.messages.TableExistsRequest;
 import org.apache.fluss.rpc.messages.TableExistsResponse;
 import org.apache.fluss.rpc.protocol.ApiError;
@@ -340,8 +340,8 @@ public class TestCoordinatorGateway implements CoordinatorGateway {
     }
 
     @Override
-    public CompletableFuture<PrepareCommitLakeTableSnapshotResponse> prepareCommitLakeTableSnapshot(
-            PrepareCommitLakeTableSnapshotRequest request) {
+    public CompletableFuture<PrepareLakeTableSnapshotResponse> prepareLakeTableSnapshot(
+            PrepareLakeTableSnapshotRequest request) {
         throw new UnsupportedOperationException();
     }
 

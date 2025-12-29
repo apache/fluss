@@ -449,12 +449,12 @@ message NotifyRemoteLogOffsetsRequest {
 message NotifyRemoteLogOffsetsResponse {
 }
 
-message PrepareCommitLakeTableSnapshotRequest {
-  repeated PbTableBucketOffsets bucket_offsets = 1;
+message PrepareLakeTableSnapshotRequest {
+  repeated PbTableOffsets bucket_offsets = 1;
 }
 
-message PrepareCommitLakeTableSnapshotResponse {
-  repeated PbPrepareCommitLakeTableRespForTable prepare_commit_lake_table_resp = 1;
+message PrepareLakeTableSnapshotResponse {
+  repeated PbPrepareLakeTableRespForTable prepare_lake_table_resp = 1;
 }
 
 message CommitLakeTableSnapshotRequest {
@@ -477,9 +477,9 @@ message CommitLakeTableSnapshotResponse {
 }
 
 message PbCommitLakeTableSnapshotRespForTable {
-  required int64 table_id = 1;
-  optional int32 error_code = 2;
-  optional string error_message = 3;
+  optional int32 error_code = 1;
+  optional string error_message = 2;
+  required int64 table_id = 3;
 }
 
 message NotifyLakeTableOffsetRequest {
@@ -1042,13 +1042,14 @@ message PbLakeTableOffsetForBucket {
   optional int64 max_timestamp = 6;
 }
 
-message PbPrepareCommitLakeTableRespForTable {
-  optional string lake_table_bucket_offsets_path = 1;
-  optional int32 error_code = 2;
-  optional string error_message = 3;
+message PbPrepareLakeTableRespForTable {
+  optional int32 error_code = 1;
+  optional string error_message = 2;
+  optional int64 table_id = 3;
+  optional string lake_table_bucket_offsets_path = 4;
 }
 
-message PbTableBucketOffsets {
+message PbTableOffsets {
   required int64 table_id = 1;
   required PbTablePath table_path = 2;
   repeated PbBucketOffset bucket_offsets = 3;

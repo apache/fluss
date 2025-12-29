@@ -76,7 +76,7 @@ class LakeTableHelperTest {
     }
 
     @Test
-    void testUpsertLakeTableCompatible(@TempDir Path tempDir) throws Exception {
+    void testRegisterLakeTableSnapshotCompatibility(@TempDir Path tempDir) throws Exception {
         // Create a ZooKeeperClient with REMOTE_DATA_DIR configuration
         Configuration conf = new Configuration();
         conf.setString(
@@ -111,13 +111,13 @@ class LakeTableHelperTest {
             LakeTableSnapshot lakeTableSnapshot =
                     new LakeTableSnapshot(snapshotId, bucketLogEndOffset);
             // Write version 1 format data(simulating old system behavior)
-            lakeTableHelper.upsertLakeTable(tableId, lakeTableSnapshot);
+            lakeTableHelper.registerLakeTableSnapshotV1(tableId, lakeTableSnapshot);
 
             // Verify version 1 data can be read
             Optional<LakeTable> optionalLakeTable = zooKeeperClient.getLakeTable(tableId);
             assertThat(optionalLakeTable).isPresent();
             LakeTable lakeTable = optionalLakeTable.get();
-            assertThat(lakeTable.getLatestTableSnapshot()).isEqualTo(lakeTableSnapshot);
+            assertThat(lakeTable.getOrReadLatestTableSnapshot()).isEqualTo(lakeTableSnapshot);
 
             // Test: Call upsertLakeTableSnapshot with new snapshot data
             // This should read the old version 1 data, merge it, and write as version 2
@@ -127,9 +127,9 @@ class LakeTableHelperTest {
 
             long snapshot2Id = 2L;
             FsPath tieredOffsetsPath =
-                    lakeTableHelper.storeLakeTableBucketOffsets(
+                    lakeTableHelper.storeLakeTableOffsetsFile(
                             tablePath, new TableBucketOffsets(tableId, newBucketLogEndOffset));
-            lakeTableHelper.addLakeTableSnapshotMetadata(
+            lakeTableHelper.registerLakeTableSnapshotV2(
                     tableId,
                     new LakeTable.LakeSnapshotMetadata(
                             snapshot2Id, tieredOffsetsPath, tieredOffsetsPath));
@@ -162,9 +162,9 @@ class LakeTableHelperTest {
             // add a new snapshot 3 again, verify snapshot
             long snapshot3Id = 3L;
             tieredOffsetsPath =
-                    lakeTableHelper.storeLakeTableBucketOffsets(
+                    lakeTableHelper.storeLakeTableOffsetsFile(
                             tablePath, new TableBucketOffsets(tableId, newBucketLogEndOffset));
-            lakeTableHelper.addLakeTableSnapshotMetadata(
+            lakeTableHelper.registerLakeTableSnapshotV2(
                     tableId,
                     new LakeTable.LakeSnapshotMetadata(
                             snapshot3Id, tieredOffsetsPath, tieredOffsetsPath));

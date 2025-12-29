@@ -127,8 +127,8 @@ import org.apache.fluss.rpc.messages.PbServerNode;
 import org.apache.fluss.rpc.messages.PbStopReplicaReqForBucket;
 import org.apache.fluss.rpc.messages.PbStopReplicaRespForBucket;
 import org.apache.fluss.rpc.messages.PbTableBucket;
-import org.apache.fluss.rpc.messages.PbTableBucketOffsets;
 import org.apache.fluss.rpc.messages.PbTableMetadata;
+import org.apache.fluss.rpc.messages.PbTableOffsets;
 import org.apache.fluss.rpc.messages.PbTablePath;
 import org.apache.fluss.rpc.messages.PbValue;
 import org.apache.fluss.rpc.messages.PbValueList;
@@ -1599,11 +1599,10 @@ public class ServerRpcMessageUtils {
                 lakeTableInfoByTableId, tableBucketsMaxTimestamp, lakeSnapshotMetadatas);
     }
 
-    public static TableBucketOffsets toTableBucketOffsets(
-            PbTableBucketOffsets pbTableBucketOffsets) {
+    public static TableBucketOffsets toTableBucketOffsets(PbTableOffsets pbTableOffsets) {
         Map<TableBucket, Long> bucketOffsets = new HashMap<>();
-        long tableId = pbTableBucketOffsets.getTableId();
-        for (PbBucketOffset pbBucketOffset : pbTableBucketOffsets.getBucketOffsetsList()) {
+        long tableId = pbTableOffsets.getTableId();
+        for (PbBucketOffset pbBucketOffset : pbTableOffsets.getBucketOffsetsList()) {
             TableBucket tableBucket =
                     new TableBucket(
                             tableId,

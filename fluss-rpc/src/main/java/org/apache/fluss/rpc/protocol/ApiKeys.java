@@ -80,7 +80,7 @@ public enum ApiKeys {
     REBALANCE(1049, 0, 0, PUBLIC),
     LIST_REBALANCE_PROGRESS(1050, 0, 0, PUBLIC),
     CANCEL_REBALANCE(1051, 0, 0, PUBLIC),
-    PRECOMMIT_LAKE_TABLE_SNAPSHOT(1052, 0, 0, PRIVATE);
+    PRE_LAKE_TABLE_SNAPSHOT(1052, 0, 0, PRIVATE);
 
     private static final Map<Integer, ApiKeys> ID_TO_TYPE =
             Arrays.stream(ApiKeys.values())

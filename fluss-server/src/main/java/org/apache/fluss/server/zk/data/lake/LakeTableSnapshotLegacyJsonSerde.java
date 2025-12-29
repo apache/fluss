@@ -50,10 +50,11 @@ import java.util.Map;
  * @see LakeTableJsonSerde for the current format (version 2) that uses this serde for legacy
  *     compatibility
  */
-public class LakeTableSnapshotJsonSerde
+public class LakeTableSnapshotLegacyJsonSerde
         implements JsonSerializer<LakeTableSnapshot>, JsonDeserializer<LakeTableSnapshot> {
 
-    public static final LakeTableSnapshotJsonSerde INSTANCE = new LakeTableSnapshotJsonSerde();
+    public static final LakeTableSnapshotLegacyJsonSerde INSTANCE =
+            new LakeTableSnapshotLegacyJsonSerde();
 
     private static final String VERSION_KEY = "version";
 

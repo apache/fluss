@@ -233,7 +233,7 @@ public class TieringCommitOperator<WriteResult, Committable>
 
             // get the lake bucket offsets file storing the log end offsets
             String lakeBucketOffsetsFile =
-                    flussTableLakeSnapshotCommitter.prepareCommit(
+                    flussTableLakeSnapshotCommitter.prepareLakeSnapshot(
                             tableId, tablePath, logEndOffsets);
 
             // record the lake snapshot bucket offsets file to snapshot property

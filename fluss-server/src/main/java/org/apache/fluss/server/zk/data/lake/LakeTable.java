@@ -113,14 +113,14 @@ public class LakeTable {
     }
 
     /**
-     * Get the latest table snapshot for the lake table.
+     * Get or read the latest table snapshot for the lake table.
      *
      * <p>If this LakeTable was created from a LakeTableSnapshot (version 1), returns it directly.
      * Otherwise, reads the snapshot data from the lake snapshot file.
      *
      * @return the LakeTableSnapshot
      */
-    public LakeTableSnapshot getLatestTableSnapshot() throws IOException {
+    public LakeTableSnapshot getOrReadLatestTableSnapshot() throws IOException {
         if (lakeTableSnapshot != null) {
             return lakeTableSnapshot;
         }

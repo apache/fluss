@@ -25,7 +25,7 @@ import org.apache.fluss.rpc.messages.CommitLakeTableSnapshotRequest;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.ZkData;
 import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
-import org.apache.fluss.server.zk.data.lake.LakeTableSnapshotJsonSerde;
+import org.apache.fluss.server.zk.data.lake.LakeTableSnapshotLegacyJsonSerde;
 import org.apache.fluss.utils.json.JsonSerdeUtils;
 import org.apache.fluss.utils.types.Tuple2;
 
@@ -76,7 +76,8 @@ class FlussTableLakeSnapshotCommitterTest extends FlinkTestBase {
         long lakeSnapshotId = 3;
 
         String lakeSnapshotFilePath =
-                flussTableLakeSnapshotCommitter.prepareCommit(tableId, tablePath, expectedOffsets);
+                flussTableLakeSnapshotCommitter.prepareLakeSnapshot(
+                        tableId, tablePath, expectedOffsets);
 
         // commit offsets
         flussTableLakeSnapshotCommitter.commit(
@@ -129,7 +130,7 @@ class FlussTableLakeSnapshotCommitterTest extends FlinkTestBase {
         byte[] jsonBytes = zkClient.getOrEmpty(ZkData.LakeTableZNode.path(tableId)).get();
 
         LakeTableSnapshot lakeTableSnapshot =
-                JsonSerdeUtils.readValue(jsonBytes, LakeTableSnapshotJsonSerde.INSTANCE);
+                JsonSerdeUtils.readValue(jsonBytes, LakeTableSnapshotLegacyJsonSerde.INSTANCE);
         assertThat(lakeTableSnapshot.getSnapshotId()).isEqualTo(snapshotId);
         assertThat(lakeTableSnapshot.getBucketLogEndOffset()).isEqualTo(logEndOffsets);
     }

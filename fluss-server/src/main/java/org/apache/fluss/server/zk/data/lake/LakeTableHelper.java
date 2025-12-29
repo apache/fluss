@@ -53,7 +53,7 @@ public class LakeTableHelper {
      * @param lakeTableSnapshot the new snapshot to upsert
      * @throws Exception if the operation fails
      */
-    public void upsertLakeTable(long tableId, LakeTableSnapshot lakeTableSnapshot)
+    public void registerLakeTableSnapshotV1(long tableId, LakeTableSnapshot lakeTableSnapshot)
             throws Exception {
         Optional<LakeTable> optPreviousLakeTable = zkClient.getLakeTable(tableId);
         // Merge with previous snapshot if exists
@@ -69,7 +69,7 @@ public class LakeTableHelper {
                 tableId, new LakeTable(lakeTableSnapshot), optPreviousLakeTable.isPresent());
     }
 
-    public void addLakeTableSnapshotMetadata(
+    public void registerLakeTableSnapshotV2(
             long tableId, LakeTable.LakeSnapshotMetadata lakeSnapshotMetadata) throws Exception {
         Optional<LakeTable> optPreviousLakeTable = zkClient.getLakeTable(tableId);
         List<LakeTable.LakeSnapshotMetadata> previousLakeSnapshotMetadatas = null;
@@ -93,17 +93,7 @@ public class LakeTableHelper {
         }
     }
 
-    public TableBucketOffsets upsertTableBucketOffsets(
-            long tableId, TableBucketOffsets newTableBucketOffsets) throws Exception {
-        Optional<LakeTable> optPreviousLakeTable = zkClient.getLakeTable(tableId);
-        // Merge with previous snapshot if exists
-        if (optPreviousLakeTable.isPresent()) {
-            return mergeTableBucketOffsets(optPreviousLakeTable.get(), newTableBucketOffsets);
-        }
-        return newTableBucketOffsets;
-    }
-
-    private TableBucketOffsets mergeTableBucketOffsets(
+    public TableBucketOffsets mergeTableBucketOffsets(
             LakeTable previousLakeTable, TableBucketOffsets newTableBucketOffsets)
             throws Exception {
         // Merge current  with previous one since the current request
@@ -112,12 +102,13 @@ public class LakeTableHelper {
 
         // merge log end offsets, current will override the previous
         Map<TableBucket, Long> bucketLogEndOffset =
-                new HashMap<>(previousLakeTable.getLatestTableSnapshot().getBucketLogEndOffset());
+                new HashMap<>(
+                        previousLakeTable.getOrReadLatestTableSnapshot().getBucketLogEndOffset());
         bucketLogEndOffset.putAll(newTableBucketOffsets.getOffsets());
         return new TableBucketOffsets(newTableBucketOffsets.getTableId(), bucketLogEndOffset);
     }
 
-    public FsPath storeLakeTableBucketOffsets(
+    public FsPath storeLakeTableOffsetsFile(
             TablePath tablePath, TableBucketOffsets tableBucketOffsets) throws Exception {
         // get the remote file path to store the lake table snapshot offset information
         long tableId = tableBucketOffsets.getTableId();

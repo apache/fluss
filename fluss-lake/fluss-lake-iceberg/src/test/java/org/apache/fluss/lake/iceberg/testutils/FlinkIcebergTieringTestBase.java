@@ -485,7 +485,7 @@ public class FlinkIcebergTieringTestBase {
                                 new LakeTable.LakeSnapshotMetadata(
                                         // don't care about snapshot id
                                         -1, new FsPath(offsetFile), null))
-                        .getLatestTableSnapshot()
+                        .getOrReadLatestTableSnapshot()
                         .getBucketLogEndOffset();
         assertThat(recordedOffsets).isEqualTo(expectedOffsets);
     }

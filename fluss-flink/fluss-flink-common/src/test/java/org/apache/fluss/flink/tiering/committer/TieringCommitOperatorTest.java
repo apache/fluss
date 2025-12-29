@@ -468,7 +468,7 @@ class TieringCommitOperatorTest extends FlinkTestBase {
                 new FlussTableLakeSnapshotCommitter(FLUSS_CLUSTER_EXTENSION.getClientConfig())) {
             lakeSnapshotCommitter.open();
             String lakeSnapshotFile =
-                    lakeSnapshotCommitter.prepareCommit(tableId, tablePath, logEndOffsets);
+                    lakeSnapshotCommitter.prepareLakeSnapshot(tableId, tablePath, logEndOffsets);
             return new CommittedLakeSnapshot(
                     snapshotId,
                     Collections.singletonMap(
