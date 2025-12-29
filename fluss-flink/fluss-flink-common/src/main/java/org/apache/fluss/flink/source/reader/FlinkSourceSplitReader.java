@@ -104,8 +104,7 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
 
     @Nullable private final LakeSource<LakeSplit> lakeSource;
 
-    // table id, will be null when haven't received any split
-    private Long tableId;
+    private final Long tableId;
 
     private final Map<TableBucket, Long> stoppingOffsets;
     private LakeSplitReaderGenerator lakeSplitReaderGenerator;
@@ -127,6 +126,7 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
                 new FlinkMetricRegistry(flinkSourceReaderMetrics.getSourceReaderMetricGroup());
         this.connection = ConnectionFactory.createConnection(flussConf, flinkMetricRegistry);
         this.table = connection.getTable(tablePath);
+        this.tableId = table.getTableInfo().getTableId();
         this.sourceOutputType = sourceOutputType;
         this.boundedSplits = new ArrayDeque<>();
         this.subscribedBuckets = new HashMap<>();
@@ -187,15 +187,15 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
         }
         for (SourceSplitBase sourceSplitBase : splitsChanges.splits()) {
             LOG.info("add split {}", sourceSplitBase.splitId());
-            // init table id
-            if (tableId == null) {
-                tableId = sourceSplitBase.getTableBucket().getTableId();
-            } else {
-                checkArgument(
-                        tableId.equals(sourceSplitBase.getTableBucket().getTableId()),
-                        "table id not equal across splits {}",
-                        splitsChanges.splits());
-            }
+            checkArgument(
+                    tableId.equals(sourceSplitBase.getTableBucket().getTableId()),
+                    "Table ID mismatch: expected %s, but split contains %s for table '%s'. "
+                            + "This usually happens when a table with the same name was dropped and recreated "
+                            + "between job runs, causing metadata inconsistency. "
+                            + "To resolve this, please restart the job **without** using the previous savepoint or checkpoint.",
+                    tableId,
+                    sourceSplitBase.getTableBucket().getTableId(),
+                    table.getTableInfo().getTablePath());
 
             if (sourceSplitBase.isHybridSnapshotLogSplit()) {
                 HybridSnapshotLogSplit hybridSnapshotLogSplit =

@@ -158,6 +158,29 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
         }
     }
 
+    @Test
+    void testTableIdChange() throws Exception {
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "test-only-snapshot-table");
+        long tableId = createTable(tablePath, DEFAULT_PK_TABLE_DESCRIPTOR);
+        try (FlinkSourceSplitReader splitReader =
+                createSplitReader(tablePath, DEFAULT_PK_TABLE_SCHEMA.getRowType())) {
+            assertThatThrownBy(
+                            () ->
+                                    splitReader.handleSplitsChanges(
+                                            new SplitsAddition<>(
+                                                    Collections.singletonList(
+                                                            new LogSplit(
+                                                                    new TableBucket(tableId + 1, 0),
+                                                                    null,
+                                                                    0)))))
+                    .hasMessageContaining(
+                            "Table ID mismatch: expected 0, but split contains 1 for table 'test-flink-db.test-only-snapshot-table'. "
+                                    + "This usually happens when a table with the same name was dropped and recreated between job runs, "
+                                    + "causing metadata inconsistency. To resolve this, please restart the job **without** using "
+                                    + "the previous savepoint or checkpoint.");
+        }
+    }
+
     private Map<String, List<RecordAndPos>> constructRecords(
             Map<TableBucket, List<InternalRow>> rows) {
         Map<String, List<RecordAndPos>> expectedRecords = new HashMap<>();
