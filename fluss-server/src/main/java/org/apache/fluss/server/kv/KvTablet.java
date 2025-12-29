@@ -326,7 +326,6 @@ public final class KvTablet {
 
     private void validateSchemaId(short schemaIdOfNewData, short latestSchemaId) {
         if (schemaIdOfNewData > latestSchemaId || schemaIdOfNewData < 0) {
-            // TODO: we may need to support retriable exception here
             throw new SchemaNotExistException(
                     "Invalid schema id: "
                             + schemaIdOfNewData

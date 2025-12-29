@@ -173,7 +173,6 @@ class FlinkLookupFunctionTest extends FlinkTestBase {
                                         TableChange.ColumnPosition.last())),
                         false)
                 .get();
-        FLUSS_CLUSTER_EXTENSION.waitAllSchemaSync(tablePath, 2);
 
         try (Table table = conn.getTable(tablePath)) {
             UpsertWriter upsertWriter = table.newUpsert().createWriter();

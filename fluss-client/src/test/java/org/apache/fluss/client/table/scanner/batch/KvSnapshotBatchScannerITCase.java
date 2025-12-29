@@ -139,7 +139,6 @@ class KvSnapshotBatchScannerITCase extends ClientToServerITCaseBase {
                                         TableChange.ColumnPosition.last())),
                         false)
                 .get();
-        FLUSS_CLUSTER_EXTENSION.waitAllSchemaSync(tablePath, 2);
 
         Schema newSchema =
                 Schema.newBuilder()
