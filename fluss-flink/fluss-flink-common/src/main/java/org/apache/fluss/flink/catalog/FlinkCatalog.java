@@ -23,6 +23,7 @@ import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.InvalidTableException;
+import org.apache.fluss.flink.adapter.CatalogTableAdapter;
 import org.apache.fluss.flink.lake.LakeFlinkCatalog;
 import org.apache.fluss.flink.procedure.ProcedureManager;
 import org.apache.fluss.flink.utils.CatalogExceptionUtils;
@@ -842,14 +843,11 @@ public class FlinkCatalog extends AbstractCatalog {
         if (!indexKeys.isEmpty()) {
             indexes.add(indexKeys);
         }
-        return CatalogTable.newBuilder()
-                .schema(withIndex(table.getUnresolvedSchema(), indexes))
-                .comment(table.getComment())
-                .partitionKeys(table.getPartitionKeys())
-                .options(table.getOptions())
-                .snapshot(table.getSnapshot().orElse(null))
-                .distribution(table.getDistribution().orElse(null))
-                .build();
+        return CatalogTableAdapter.toCatalogTable(
+                withIndex(table.getUnresolvedSchema(), indexes),
+                table.getComment(),
+                table.getPartitionKeys(),
+                table.getOptions());
     }
 
     private static boolean isPrefixList(List<String> fullList, List<String> prefixList) {
