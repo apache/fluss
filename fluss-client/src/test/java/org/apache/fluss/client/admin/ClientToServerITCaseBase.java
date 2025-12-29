@@ -248,10 +248,6 @@ public abstract class ClientToServerITCaseBase {
         }
     }
 
-    public static void waitAllSchemaSync(TablePath tablePath, int schemaId) {
-        FLUSS_CLUSTER_EXTENSION.waitAllSchemaSync(tablePath, schemaId);
-    }
-
     protected static void verifyRows(
             RowType rowType,
             Map<Long, List<InternalRow>> actualRows,

@@ -188,7 +188,6 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
         CloseableIterator<Row> rowIter = tEnv.executeSql("select * from sink_test").collect();
         // add new column
         tEnv.executeSql("alter table sink_test add add_column int").await();
-        FLUSS_CLUSTER_EXTENSION.waitAllSchemaSync(TablePath.of(DEFAULT_DB, "sink_test"), 2);
         tEnv.executeSql(
                         "INSERT INTO sink_test "
                                 + "VALUES (4, 3504, 'jerry', 4), "
@@ -417,7 +416,6 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
         CloseableIterator<Row> rowIter = tEnv.executeSql("select * from sink_test").collect();
         // add new column
         tEnv.executeSql("alter table sink_test add add_column int").await();
-        FLUSS_CLUSTER_EXTENSION.waitAllSchemaSync(TablePath.of(DEFAULT_DB, "sink_test"), 2);
         tEnv.executeSql(
                         "INSERT INTO sink_test "
                                 + "VALUES (4, 3504, 'jerry', 4), "
@@ -505,7 +503,6 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
         CloseableIterator<Row> rowIter = tEnv.executeSql("select * from sink_test").collect();
         // add new column
         tEnv.executeSql("alter table sink_test add add_column string").await();
-        FLUSS_CLUSTER_EXTENSION.waitAllSchemaSync(TablePath.of(DEFAULT_DB, "sink_test"), 2);
         tEnv.executeSql(
                         "INSERT INTO sink_test(add_column, a ) VALUES ('new_value', 1), ('new_value', 2)")
                 .await();
@@ -819,7 +816,6 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
         tBatchEnv
                 .executeSql(String.format("alter table %s add new_added_column int", tableName))
                 .await();
-        FLUSS_CLUSTER_EXTENSION.waitAllSchemaSync(TablePath.of(DEFAULT_DB, tableName), 2);
         tBatchEnv
                 .executeSql("UPDATE " + tableName + " SET new_added_column = 2 WHERE a = 4")
                 .await();

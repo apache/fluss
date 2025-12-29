@@ -275,7 +275,6 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                                         TableChange.ColumnPosition.last())),
                         false)
                 .get();
-        waitAllSchemaSync(tablePath, 2);
         Table newSchemaTable = conn.getTable(tableInfo.getTablePath());
         // schema change case1: read new data with new schema.
         verifyPutAndLookup(newSchemaTable, new Object[] {2, "b", "bb"});
@@ -363,7 +362,6 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                                         TableChange.ColumnPosition.last())),
                         false)
                 .get();
-        waitAllSchemaSync(tablePath, 2);
         try (Connection connection = ConnectionFactory.createConnection(clientConf);
                 Table newSchemaTable = connection.getTable(tableInfo.getTablePath())) {
             // schema change case1: read new data with new schema.
@@ -1056,7 +1054,6 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                                             TableChange.ColumnPosition.last())),
                             false)
                     .get();
-            waitAllSchemaSync(tablePath, 2);
             try (Connection connection = ConnectionFactory.createConnection(clientConf);
                     Table newSchemaTable = connection.getTable(tablePath)) {
                 UpsertWriter oldSchemaUpsertWriter = table.newUpsert().createWriter();
