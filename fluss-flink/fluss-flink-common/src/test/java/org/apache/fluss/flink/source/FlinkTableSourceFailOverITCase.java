@@ -165,7 +165,9 @@ abstract class FlinkTableSourceFailOverITCase {
         // drop and recreate the table.
         tEnv.executeSql(String.format("drop table %s", tablePath.getTableName()));
         tEnv.executeSql(
-                String.format("create table %s (a int, b varchar)", tablePath.getTableName()));
+                String.format(
+                        "create table %s (" + "a int, b varchar" + ") partitioned by (b) ",
+                        tablePath.getTableName()));
 
         TableResult insertResult =
                 tEnv.executeSql(
