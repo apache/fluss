@@ -189,7 +189,10 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
             LOG.info("add split {}", sourceSplitBase.splitId());
             checkArgument(
                     tableId.equals(sourceSplitBase.getTableBucket().getTableId()),
-                    "table id %s is different with table id %s from splits, the same name table `%s` is dropped and recreated before the job restarted, which maybe cause inconsistency, please restarted the job without savepoint or checkpoint ",
+                    "Table ID mismatch: expected %s, but split contains %s for table '%s'. "
+                            + "This usually happens when a table with the same name was dropped and recreated "
+                            + "between job runs, causing metadata inconsistency. "
+                            + "To resolve this, please restart the job **without** using the previous savepoint or checkpoint.",
                     tableId,
                     sourceSplitBase.getTableBucket().getTableId(),
                     table.getTableInfo().getTablePath());
