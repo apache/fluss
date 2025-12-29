@@ -1214,6 +1214,10 @@ public class ZooKeeperClient implements AutoCloseable {
         return getOrEmpty(path).map(ServerTagsZNode::decode);
     }
 
+    public void deleteServerTags() throws Exception {
+        deletePath(ServerTagsZNode.path());
+    }
+
     public void registerRebalancePlan(RebalancePlan rebalancePlan) throws Exception {
         String path = RebalanceZNode.path();
         zkClient.create()

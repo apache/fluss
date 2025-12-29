@@ -71,7 +71,9 @@ public class ProcedureManager {
         DROP_ACL("sys.drop_acl", DropAclProcedure.class),
         List_ACL("sys.list_acl", ListAclProcedure.class),
         SET_CLUSTER_CONFIG("sys.set_cluster_config", SetClusterConfigProcedure.class),
-        GET_CLUSTER_CONFIG("sys.get_cluster_config", GetClusterConfigProcedure.class);
+        GET_CLUSTER_CONFIG("sys.get_cluster_config", GetClusterConfigProcedure.class),
+        ADD_SERVER_TAG("sys.add_server_tag", AddServerTagProcedure.class),
+        REMOVE_SERVER_TAG("sys.remove_server_tag", RemoveServerTagProcedure.class);
 
         private final String path;
         private final Class<? extends ProcedureBase> procedureClass;
