@@ -70,7 +70,7 @@ public interface CoordinatorGateway extends RpcGateway, AdminGateway {
 
     /**
      * Prepares lake table snapshots by merging them with existing snapshots and storing them to the
-     * file system.
+     * remote file system.
      *
      * <p>This method is called during the two-phase commit process for lake table snapshots. It
      * performs the following operations for each table in the request:
@@ -81,6 +81,8 @@ public interface CoordinatorGateway extends RpcGateway, AdminGateway {
      *   <li>Stores the merged snapshot to the remote file system. The stored file contains the log
      *       end offset information for each bucket in the table
      *   <li>Returns the file path where the snapshot is stored
+     *   <li>Call {@link #commitLakeTableSnapshot(CommitLakeTableSnapshotRequest)} with the offset
+     *       file path to finalize the snapshot commit to ZooKeeper in the second phase.
      * </ul>
      *
      * @param request the request containing lake table snapshot information for one or more tables
@@ -88,7 +90,7 @@ public interface CoordinatorGateway extends RpcGateway, AdminGateway {
      *     (containing bucket log end offset information) are stored, or error information for
      *     tables that failed to process
      */
-    @RPC(api = ApiKeys.PRE_LAKE_TABLE_SNAPSHOT)
+    @RPC(api = ApiKeys.PREPARE_LAKE_TABLE_SNAPSHOT)
     CompletableFuture<PrepareLakeTableSnapshotResponse> prepareLakeTableSnapshot(
             PrepareLakeTableSnapshotRequest request);
 

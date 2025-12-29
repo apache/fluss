@@ -1046,7 +1046,7 @@ message PbPrepareLakeTableRespForTable {
   optional int32 error_code = 1;
   optional string error_message = 2;
   optional int64 table_id = 3;
-  optional string lake_table_bucket_offsets_path = 4;
+  optional string lake_table_offsets_path = 4;
 }
 
 message PbTableOffsets {

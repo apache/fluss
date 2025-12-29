@@ -110,7 +110,7 @@ public class FlussTableLakeSnapshotCommitter implements AutoCloseable {
             if (prepareResp.hasErrorCode()) {
                 throw ApiError.fromErrorMessage(prepareResp).exception();
             } else {
-                return checkNotNull(prepareResp).getLakeTableBucketOffsetsPath();
+                return checkNotNull(prepareResp).getLakeTableOffsetsPath();
             }
         } catch (Exception e) {
             throw new IOException(

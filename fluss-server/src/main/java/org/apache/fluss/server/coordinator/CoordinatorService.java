@@ -672,7 +672,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                                         lakeTableHelper.storeLakeTableOffsetsFile(
                                                 tablePath, tableBucketOffsets);
                                 pbPrepareLakeTableRespForTable.setTableId(tableId);
-                                pbPrepareLakeTableRespForTable.setLakeTableBucketOffsetsPath(
+                                pbPrepareLakeTableRespForTable.setLakeTableOffsetsPath(
                                         fsPath.toString());
                             } catch (Exception e) {
                                 Errors error = ApiError.fromThrowable(e).error();

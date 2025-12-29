@@ -1551,11 +1551,12 @@ public class ServerRpcMessageUtils {
             CommitLakeTableSnapshotRequest request) {
         // handle rpc before 0.9
         Map<Long, LakeTableSnapshot> lakeTableInfoByTableId = new HashMap<>();
-        Map<TableBucket, Long> tableBucketsMaxTimestamp = new HashMap<>();
+        Map<Long, Map<TableBucket, Long>> tableBucketsMaxTimestamp = new HashMap<>();
         for (PbLakeTableSnapshotInfo pbLakeTableSnapshotInfo : request.getTablesReqsList()) {
             long tableId = pbLakeTableSnapshotInfo.getTableId();
             long snapshotId = pbLakeTableSnapshotInfo.getSnapshotId();
             Map<TableBucket, Long> bucketLogEndOffset = new HashMap<>();
+            Map<TableBucket, Long> bucketLogMaxTimestamp = new HashMap<>();
             for (PbLakeTableOffsetForBucket lakeTableOffsetForBucket :
                     pbLakeTableSnapshotInfo.getBucketsReqsList()) {
                 Long partitionId =
@@ -1569,7 +1570,7 @@ public class ServerRpcMessageUtils {
                                 ? lakeTableOffsetForBucket.getLogEndOffset()
                                 : null;
                 if (lakeTableOffsetForBucket.hasMaxTimestamp()) {
-                    tableBucketsMaxTimestamp.put(
+                    bucketLogMaxTimestamp.put(
                             tableBucket, lakeTableOffsetForBucket.getMaxTimestamp());
                 }
                 bucketLogEndOffset.put(tableBucket, logEndOffset);
@@ -1577,6 +1578,7 @@ public class ServerRpcMessageUtils {
             LakeTableSnapshot lakeTableSnapshot =
                     new LakeTableSnapshot(snapshotId, bucketLogEndOffset);
             lakeTableInfoByTableId.put(tableId, lakeTableSnapshot);
+            tableBucketsMaxTimestamp.put(tableId, bucketLogMaxTimestamp);
         }
 
         // handle rpc since 0.9

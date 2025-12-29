@@ -26,20 +26,20 @@ import java.util.Map;
 public class NotifyLakeTableOffsetEvent implements CoordinatorEvent {
 
     private final Map<Long, LakeTableSnapshot> lakeTableSnapshots;
-    private final Map<TableBucket, Long> tableBucketMaxTieredTimestamps;
+    private final Map<Long, Map<TableBucket, Long>> tableMaxTieredTimestamps;
 
     public NotifyLakeTableOffsetEvent(
             Map<Long, LakeTableSnapshot> lakeTableSnapshots,
-            Map<TableBucket, Long> tableBucketMaxTieredTimestamps) {
+            Map<Long, Map<TableBucket, Long>> tableMaxTieredTimestamps) {
         this.lakeTableSnapshots = lakeTableSnapshots;
-        this.tableBucketMaxTieredTimestamps = tableBucketMaxTieredTimestamps;
+        this.tableMaxTieredTimestamps = tableMaxTieredTimestamps;
     }
 
     public Map<Long, LakeTableSnapshot> getLakeTableSnapshots() {
         return lakeTableSnapshots;
     }
 
-    public Map<TableBucket, Long> getTableBucketMaxTieredTimestamps() {
-        return tableBucketMaxTieredTimestamps;
+    public Map<Long, Map<TableBucket, Long>> getTableMaxTieredTimestamps() {
+        return tableMaxTieredTimestamps;
     }
 }

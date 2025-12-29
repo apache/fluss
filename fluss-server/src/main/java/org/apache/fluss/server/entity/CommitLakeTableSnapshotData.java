@@ -42,17 +42,17 @@ public class CommitLakeTableSnapshotData {
      * future, we plan to have the tiering service directly report metrics, and this field will be
      * removed.
      */
-    private final Map<TableBucket, Long> tableBucketsMaxTieredTimestamp;
+    private final Map<Long, Map<TableBucket, Long>> tableMaxTieredTimestamps;
 
     // the following field only non-empty since 0.9
     private final Map<Long, LakeTable.LakeSnapshotMetadata> lakeTableSnapshotMetadatas;
 
     public CommitLakeTableSnapshotData(
             Map<Long, LakeTableSnapshot> lakeTableSnapshots,
-            Map<TableBucket, Long> tableBucketsMaxTieredTimestamp,
+            Map<Long, Map<TableBucket, Long>> tableMaxTieredTimestamps,
             Map<Long, LakeTable.LakeSnapshotMetadata> lakeTableSnapshotMetadatas) {
         this.lakeTableSnapshots = lakeTableSnapshots;
-        this.tableBucketsMaxTieredTimestamp = tableBucketsMaxTieredTimestamp;
+        this.tableMaxTieredTimestamps = tableMaxTieredTimestamps;
         this.lakeTableSnapshotMetadatas = lakeTableSnapshotMetadatas;
     }
 
@@ -60,8 +60,8 @@ public class CommitLakeTableSnapshotData {
         return lakeTableSnapshots;
     }
 
-    public Map<TableBucket, Long> getTableBucketsMaxTieredTimestamp() {
-        return tableBucketsMaxTieredTimestamp;
+    public Map<Long, Map<TableBucket, Long>> getTableMaxTieredTimestamps() {
+        return tableMaxTieredTimestamps;
     }
 
     public Map<Long, LakeTable.LakeSnapshotMetadata> getLakeTableSnapshotMetadatas() {
@@ -78,15 +78,14 @@ public class CommitLakeTableSnapshotData {
         }
         CommitLakeTableSnapshotData that = (CommitLakeTableSnapshotData) o;
         return Objects.equals(lakeTableSnapshots, that.lakeTableSnapshots)
-                && Objects.equals(
-                        tableBucketsMaxTieredTimestamp, that.tableBucketsMaxTieredTimestamp)
+                && Objects.equals(tableMaxTieredTimestamps, that.tableMaxTieredTimestamps)
                 && Objects.equals(lakeTableSnapshotMetadatas, that.lakeTableSnapshotMetadatas);
     }
 
     @Override
     public int hashCode() {
         return Objects.hash(
-                lakeTableSnapshots, tableBucketsMaxTieredTimestamp, lakeTableSnapshotMetadatas);
+                lakeTableSnapshots, tableMaxTieredTimestamps, lakeTableSnapshotMetadatas);
     }
 
     @Override
@@ -94,8 +93,8 @@ public class CommitLakeTableSnapshotData {
         return "CommitLakeTableSnapshotData{"
                 + "lakeTableSnapshots="
                 + lakeTableSnapshots
-                + ", tableBucketsMaxTieredTimestamp="
-                + tableBucketsMaxTieredTimestamp
+                + ", tableMaxTieredTimestamps="
+                + tableMaxTieredTimestamps
                 + ", lakeTableSnapshotMetadatas="
                 + lakeTableSnapshotMetadatas
                 + '}';

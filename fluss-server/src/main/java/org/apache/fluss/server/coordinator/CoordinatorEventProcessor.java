@@ -1150,12 +1150,15 @@ public class CoordinatorEventProcessor implements EventProcessor {
 
     private void processNotifyLakeTableOffsetEvent(NotifyLakeTableOffsetEvent event) {
         Map<Long, LakeTableSnapshot> lakeTableSnapshots = event.getLakeTableSnapshots();
-        Map<TableBucket, Long> tableBucketMaxTieredTimestamps =
-                event.getTableBucketMaxTieredTimestamps();
+        Map<Long, Map<TableBucket, Long>> tableMaxTieredTimestamps =
+                event.getTableMaxTieredTimestamps();
         coordinatorRequestBatch.newBatch();
         for (Map.Entry<Long, LakeTableSnapshot> lakeTableSnapshotEntry :
                 lakeTableSnapshots.entrySet()) {
             LakeTableSnapshot lakeTableSnapshot = lakeTableSnapshotEntry.getValue();
+            Map<TableBucket, Long> tableBucketMaxTieredTimestamps =
+                    tableMaxTieredTimestamps.getOrDefault(
+                            lakeTableSnapshotEntry.getKey(), Collections.emptyMap());
             for (TableBucket tb : lakeTableSnapshot.getBucketLogEndOffset().keySet()) {
                 coordinatorContext
                         .getBucketLeaderAndIsr(tb)
@@ -1257,6 +1260,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
                     try {
                         CommitLakeTableSnapshotResponse response =
                                 new CommitLakeTableSnapshotResponse();
+                        Set<Long> failedTableIds = new HashSet<>();
                         for (Map.Entry<Long, LakeTableSnapshot> lakeTableSnapshotEntry :
                                 lakeTableSnapshots.entrySet()) {
                             Long tableId = lakeTableSnapshotEntry.getKey();
@@ -1277,18 +1281,24 @@ public class CoordinatorEventProcessor implements EventProcessor {
                                 // this involves IO operation (ZK), so we do it in ioExecutor
                                 lakeTableHelper.registerLakeTableSnapshotV1(
                                         tableId, lakeTableSnapshotEntry.getValue());
-                                // send notify lakehouse data request to all replicas via
-                                // coordinator event
-                                coordinatorEventManager.put(
-                                        new NotifyLakeTableOffsetEvent(
-                                                lakeTableSnapshots,
-                                                commitLakeTableSnapshotData
-                                                        .getTableBucketsMaxTieredTimestamp()));
                             } catch (Exception e) {
+                                failedTableIds.add(tableId);
                                 ApiError error = ApiError.fromThrowable(e);
                                 tableResp.setError(error.error().code(), error.message());
                             }
                         }
+
+                        // remove failed tables
+                        Map<Long, LakeTableSnapshot> commitlakeTableSnapshots =
+                                commitLakeTableSnapshotData.getLakeTableSnapshot();
+                        commitlakeTableSnapshots.keySet().removeAll(failedTableIds);
+                        Map<Long, Map<TableBucket, Long>> tableMaxTieredTimestamps =
+                                commitLakeTableSnapshotData.getTableMaxTieredTimestamps();
+                        tableMaxTieredTimestamps.keySet().removeAll(failedTableIds);
+
+                        coordinatorEventManager.put(
+                                new NotifyLakeTableOffsetEvent(
+                                        commitlakeTableSnapshots, tableMaxTieredTimestamps));
                         callback.complete(response);
                     } catch (Exception e) {
                         callback.completeExceptionally(e);
@@ -1308,6 +1318,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
                     try {
                         CommitLakeTableSnapshotResponse response =
                                 new CommitLakeTableSnapshotResponse();
+                        Set<Long> failedTableIds = new HashSet<>();
                         for (Map.Entry<Long, LakeTable.LakeSnapshotMetadata>
                                 lakeSnapshotMetadataEntry : lakeSnapshotMetadatas.entrySet()) {
                             PbCommitLakeTableSnapshotRespForTable tableResp =
@@ -1317,16 +1328,23 @@ public class CoordinatorEventProcessor implements EventProcessor {
                             try {
                                 lakeTableHelper.registerLakeTableSnapshotV2(
                                         tableId, lakeSnapshotMetadataEntry.getValue());
-                                coordinatorEventManager.put(
-                                        new NotifyLakeTableOffsetEvent(
-                                                commitLakeTableSnapshotData.getLakeTableSnapshot(),
-                                                commitLakeTableSnapshotData
-                                                        .getTableBucketsMaxTieredTimestamp()));
                             } catch (Exception e) {
+                                failedTableIds.add(tableId);
                                 ApiError error = ApiError.fromThrowable(e);
                                 tableResp.setError(error.error().code(), error.message());
                             }
                         }
+                        // remove failed tables
+                        Map<Long, LakeTableSnapshot> lakeTableSnapshots =
+                                commitLakeTableSnapshotData.getLakeTableSnapshot();
+                        lakeTableSnapshots.keySet().removeAll(failedTableIds);
+                        Map<Long, Map<TableBucket, Long>> tableMaxTieredTimestamps =
+                                commitLakeTableSnapshotData.getTableMaxTieredTimestamps();
+                        tableMaxTieredTimestamps.keySet().removeAll(failedTableIds);
+
+                        coordinatorEventManager.put(
+                                new NotifyLakeTableOffsetEvent(
+                                        lakeTableSnapshots, tableMaxTieredTimestamps));
                         callback.complete(response);
                     } catch (Exception e) {
                         callback.completeExceptionally(e);
