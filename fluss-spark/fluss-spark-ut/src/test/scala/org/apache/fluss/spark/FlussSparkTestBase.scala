@@ -19,7 +19,9 @@ package org.apache.fluss.spark
 
 import org.apache.fluss.client.{Connection, ConnectionFactory}
 import org.apache.fluss.client.admin.Admin
+import org.apache.fluss.client.table.Table
 import org.apache.fluss.config.{ConfigOptions, Configuration}
+import org.apache.fluss.metadata.{TableDescriptor, TablePath}
 import org.apache.fluss.server.testutils.FlussClusterExtension
 
 import org.apache.spark.SparkConf
@@ -61,6 +63,17 @@ class FlussSparkTestBase extends QueryTest with SharedSparkSession {
     super.test(testName, testTags: _*)(testFun)(pos)
   }
 
+  def createTablePath(tableName: String): TablePath = {
+    TablePath.of(DEFAULT_DATABASE, tableName)
+  }
+
+  def createFlussTable(tablePath: TablePath, tableDescriptor: TableDescriptor): Unit = {
+    admin.createTable(tablePath, tableDescriptor, true).get()
+  }
+
+  def loadFlussTable(tablePath: TablePath): Table = {
+    conn.getTable(tablePath)
+  }
 }
 
 @RegisterExtension

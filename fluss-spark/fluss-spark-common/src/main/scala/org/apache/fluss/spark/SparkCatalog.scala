@@ -49,7 +49,8 @@ class SparkCatalog extends TableCatalog with SupportsFlussNamespaces with WithFl
 
   override def loadTable(ident: Identifier): Table = {
     try {
-      SparkTable(admin.getTableInfo(toTablePath(ident)).get())
+      val tablePath = toTablePath(ident)
+      SparkTable(tablePath, admin.getTableInfo(tablePath).get(), flussConfig)
     } catch {
       case e: ExecutionException if e.getCause.isInstanceOf[TableNotExistException] =>
         throw new NoSuchTableException(ident)
