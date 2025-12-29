@@ -174,9 +174,10 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
                                                                     null,
                                                                     0)))))
                     .hasMessageContaining(
-                            String.format(
-                                    "the same name table `%s` is dropped and recreated before the job restarted, which maybe cause inconsistency, please restarted the job without savepoint or checkpoint",
-                                    tablePath));
+                            "Table ID mismatch: expected 0, but split contains 1 for table 'test-flink-db.test-only-snapshot-table'. "
+                                    + "This usually happens when a table with the same name was dropped and recreated between job runs, "
+                                    + "causing metadata inconsistency. To resolve this, please restart the job **without** using "
+                                    + "the previous savepoint or checkpoint.");
         }
     }
 
