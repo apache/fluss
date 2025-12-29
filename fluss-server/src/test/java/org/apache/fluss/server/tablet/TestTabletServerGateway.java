@@ -184,7 +184,9 @@ public class TestTabletServerGateway implements TabletServerGateway {
 
     @Override
     public CompletableFuture<PutKvResponse> putKv(PutKvRequest request) {
-        return null;
+        CompletableFuture<PutKvResponse> response = new CompletableFuture<>();
+        requests.add(Tuple2.of(request, response));
+        return response;
     }
 
     @Override
