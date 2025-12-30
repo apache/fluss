@@ -348,7 +348,7 @@ class IcebergTieringTest {
     }
 
     private GenericRecord toRecord(long offset, GenericRow row, ChangeType changeType) {
-        return new GenericRecord(offset, System.currentTimeMillis(), changeType, row);
+        return new GenericRecord(offset, 1000000000L + offset, changeType, row);
     }
 
     private void createTable(
@@ -549,6 +549,7 @@ class IcebergTieringTest {
     private List<LogRecord> genArrayTypeLogTableRecords(
             @Nullable String partition, int bucket, int numRecords) {
         List<LogRecord> logRecords = new ArrayList<>();
+        long timestamp = 1000000000L;
         for (int i = 0; i < numRecords; i++) {
             GenericRow genericRow = new GenericRow(3);
             genericRow.setField(0, i);
@@ -560,8 +561,7 @@ class IcebergTieringTest {
             }
 
             LogRecord logRecord =
-                    new GenericRecord(
-                            i, System.currentTimeMillis(), ChangeType.APPEND_ONLY, genericRow);
+                    new GenericRecord(i, timestamp + i, ChangeType.APPEND_ONLY, genericRow);
             logRecords.add(logRecord);
         }
         return logRecords;
