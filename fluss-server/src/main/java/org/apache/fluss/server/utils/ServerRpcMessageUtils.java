@@ -21,6 +21,8 @@ import org.apache.fluss.cluster.Endpoint;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.cluster.rebalance.RebalancePlanForBucket;
+import org.apache.fluss.cluster.rebalance.RebalanceProgress;
+import org.apache.fluss.cluster.rebalance.RebalanceResultForBucket;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.cluster.AlterConfigOpType;
 import org.apache.fluss.config.cluster.ColumnPositionType;
@@ -74,6 +76,7 @@ import org.apache.fluss.rpc.messages.ListAclsResponse;
 import org.apache.fluss.rpc.messages.ListOffsetsRequest;
 import org.apache.fluss.rpc.messages.ListOffsetsResponse;
 import org.apache.fluss.rpc.messages.ListPartitionInfosResponse;
+import org.apache.fluss.rpc.messages.ListRebalanceProgressResponse;
 import org.apache.fluss.rpc.messages.LookupRequest;
 import org.apache.fluss.rpc.messages.LookupResponse;
 import org.apache.fluss.rpc.messages.MetadataResponse;
@@ -124,6 +127,7 @@ import org.apache.fluss.rpc.messages.PbPutKvReqForBucket;
 import org.apache.fluss.rpc.messages.PbPutKvRespForBucket;
 import org.apache.fluss.rpc.messages.PbRebalancePlanForBucket;
 import org.apache.fluss.rpc.messages.PbRebalancePlanForTable;
+import org.apache.fluss.rpc.messages.PbRebalanceProgressForBucket;
 import org.apache.fluss.rpc.messages.PbRemoteLogSegment;
 import org.apache.fluss.rpc.messages.PbRemotePathAndLocalFile;
 import org.apache.fluss.rpc.messages.PbRenameColumn;
@@ -1835,6 +1839,37 @@ public class ServerRpcMessageUtils {
 
         planForTables.addAll(tableIdToPbPlanForTable.values());
         response.addAllTablePlans(planForTables);
+        return response;
+    }
+
+    public static ListRebalanceProgressResponse makeListRebalanceProgressResponse(
+            RebalanceProgress rebalanceProgress) {
+        ListRebalanceProgressResponse response =
+                new ListRebalanceProgressResponse()
+                        .setRebalanceStatus(rebalanceProgress.status().getCode());
+
+        Map<Long, List<PbRebalanceProgressForBucket>> tableIdToPbBuckets = new HashMap<>();
+        for (Map.Entry<TableBucket, RebalanceResultForBucket> progressForBucket :
+                rebalanceProgress.progressForBucketMap().entrySet()) {
+            TableBucket tableBucket = progressForBucket.getKey();
+            RebalanceResultForBucket rebalanceResultForBucket = progressForBucket.getValue();
+            long tableId = tableBucket.getTableId();
+            List<PbRebalanceProgressForBucket> pbBuckets =
+                    tableIdToPbBuckets.computeIfAbsent(tableId, k -> new ArrayList<>());
+            pbBuckets.add(
+                    new PbRebalanceProgressForBucket()
+                            .setRebalancePlan(
+                                    toPbRebalancePlanForBucket(rebalanceResultForBucket.plan()))
+                            .setRebalanceStatus(rebalanceResultForBucket.status().getCode()));
+        }
+
+        for (Map.Entry<Long, List<PbRebalanceProgressForBucket>> entry :
+                tableIdToPbBuckets.entrySet()) {
+            response.addTableProgress()
+                    .setTableId(entry.getKey())
+                    .addAllBucketsProgresses(entry.getValue());
+        }
+
         return response;
     }
 

@@ -22,6 +22,7 @@ import org.apache.fluss.cluster.Endpoint;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.cluster.rebalance.RebalancePlanForBucket;
+import org.apache.fluss.cluster.rebalance.RebalanceProgress;
 import org.apache.fluss.cluster.rebalance.RebalanceStatus;
 import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.config.ConfigOptions;
@@ -53,6 +54,7 @@ import org.apache.fluss.rpc.messages.CommitKvSnapshotResponse;
 import org.apache.fluss.rpc.messages.CommitLakeTableSnapshotResponse;
 import org.apache.fluss.rpc.messages.CommitRemoteLogManifestResponse;
 import org.apache.fluss.rpc.messages.ControlledShutdownResponse;
+import org.apache.fluss.rpc.messages.ListRebalanceProgressResponse;
 import org.apache.fluss.rpc.messages.PbCommitLakeTableSnapshotRespForTable;
 import org.apache.fluss.rpc.messages.RebalanceResponse;
 import org.apache.fluss.rpc.messages.RemoveServerTagResponse;
@@ -75,6 +77,7 @@ import org.apache.fluss.server.coordinator.event.DropPartitionEvent;
 import org.apache.fluss.server.coordinator.event.DropTableEvent;
 import org.apache.fluss.server.coordinator.event.EventProcessor;
 import org.apache.fluss.server.coordinator.event.FencedCoordinatorEvent;
+import org.apache.fluss.server.coordinator.event.ListRebalanceProgressEvent;
 import org.apache.fluss.server.coordinator.event.NewTabletServerEvent;
 import org.apache.fluss.server.coordinator.event.NotifyKvSnapshotOffsetEvent;
 import org.apache.fluss.server.coordinator.event.NotifyLakeTableOffsetEvent;
@@ -143,6 +146,7 @@ import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.Onli
 import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.ReplicaDeletionStarted;
 import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.ReplicaDeletionSuccessful;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeAdjustIsrResponse;
+import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeListRebalanceProgressResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeRebalanceRespose;
 import static org.apache.fluss.utils.concurrent.FutureUtils.completeFromCallable;
 
@@ -614,6 +618,12 @@ public class CoordinatorEventProcessor implements EventProcessor {
             CancelRebalanceEvent cancelRebalanceEvent = (CancelRebalanceEvent) event;
             completeFromCallable(
                     cancelRebalanceEvent.getRespCallback(), this::processCancelRebalance);
+        } else if (event instanceof ListRebalanceProgressEvent) {
+            ListRebalanceProgressEvent listRebalanceProgressEvent =
+                    (ListRebalanceProgressEvent) event;
+            completeFromCallable(
+                    listRebalanceProgressEvent.getRespCallback(),
+                    this::processListRebalanceProgress);
         } else if (event instanceof AccessContextEvent) {
             AccessContextEvent<?> accessContextEvent = (AccessContextEvent<?>) event;
             processAccessContext(accessContextEvent);
@@ -1161,6 +1171,11 @@ public class CoordinatorEventProcessor implements EventProcessor {
         CancelRebalanceResponse response = new CancelRebalanceResponse();
         rebalanceManager.cancelRebalance();
         return response;
+    }
+
+    private ListRebalanceProgressResponse processListRebalanceProgress() {
+        RebalanceProgress rebalanceProgress = rebalanceManager.listRebalanceProgress();
+        return makeListRebalanceProgressResponse(rebalanceProgress);
     }
 
     /**

@@ -15,10 +15,8 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.client.admin;
+package org.apache.fluss.cluster.rebalance;
 
-import org.apache.fluss.cluster.rebalance.RebalanceResultForBucket;
-import org.apache.fluss.cluster.rebalance.RebalanceStatus;
 import org.apache.fluss.metadata.TableBucket;
 
 import java.util.Map;
