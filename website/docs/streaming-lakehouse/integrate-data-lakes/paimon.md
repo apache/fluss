@@ -175,6 +175,8 @@ The following table shows the mapping between [Fluss data types](table-design/da
 | TIMESTAMP WITH LOCAL TIMEZONE | TIMESTAMP WITH LOCAL TIMEZONE |
 | BINARY                        | BINARY                        |
 | BYTES                         | BYTES                         |
+| ARRAY                         | ARRAY                         |
+| ROW                           | ROW                           |
 
 ## Snapshot Metadata
 
