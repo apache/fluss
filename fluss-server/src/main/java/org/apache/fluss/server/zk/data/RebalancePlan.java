@@ -82,6 +82,26 @@ public class RebalancePlan {
         return planForBucketsOfPartitionedTable;
     }
 
+    public Map<TableBucket, RebalancePlanForBucket> getExecutePlan() {
+        Map<TableBucket, RebalancePlanForBucket> executePlan = new HashMap<>();
+        planForBuckets.forEach(
+                (tableId, rebalancePlanForBuckets) ->
+                        rebalancePlanForBuckets.forEach(
+                                rebalancePlanForBucket ->
+                                        executePlan.put(
+                                                rebalancePlanForBucket.getTableBucket(),
+                                                rebalancePlanForBucket)));
+
+        planForBucketsOfPartitionedTable.forEach(
+                (tablePartition, rebalancePlanForBuckets) ->
+                        rebalancePlanForBuckets.forEach(
+                                rebalancePlanForBucket ->
+                                        executePlan.put(
+                                                rebalancePlanForBucket.getTableBucket(),
+                                                rebalancePlanForBucket)));
+        return executePlan;
+    }
+
     @Override
     public String toString() {
         return "RebalancePlan{"
