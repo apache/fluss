@@ -67,6 +67,8 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.security.acl.AclBinding;
 import org.apache.fluss.security.acl.AclBindingFilter;
 
+import javax.annotation.Nullable;
+
 import java.util.Collection;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
@@ -577,9 +579,12 @@ public interface Admin extends AutoCloseable {
      *   <li>{@link NoRebalanceInProgressException} If there are no rebalance tasks in progress.
      * </ul>
      *
+     * @param rebalanceId the rebalance id to list progress, if it is null means list the latest
+     *     rebalance task's process. If rebalance id is not exists in server, empty rebalance result
+     *     will be returned.
      * @return the rebalance process.
      */
-    CompletableFuture<RebalanceProgress> listRebalanceProgress();
+    CompletableFuture<RebalanceProgress> listRebalanceProgress(@Nullable String rebalanceId);
 
     /**
      * Cannel the rebalance task.
@@ -589,6 +594,9 @@ public interface Admin extends AutoCloseable {
      *       permissions.
      *   <li>{@link NoRebalanceInProgressException} If there are no rebalance tasks in progress.
      * </ul>
+     *
+     * @param rebalanceId the rebalance id to cancel, if it is null means cancel the latest
+     *     rebalance task. If rebalanceId is not exists in server, nothing will be done.
      */
-    CompletableFuture<Void> cancelRebalance();
+    CompletableFuture<Void> cancelRebalance(@Nullable String rebalanceId);
 }

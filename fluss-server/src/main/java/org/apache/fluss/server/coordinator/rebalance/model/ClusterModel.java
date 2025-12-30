@@ -159,7 +159,13 @@ public class ClusterModel {
         for (Map.Entry<TableBucket, BucketModel> entry : bucketsByTableBucket.entrySet()) {
             TableBucket tableBucket = entry.getKey();
             BucketModel bucket = entry.getValue();
-            leaderDistribution.put(tableBucket, bucket.leader().server().id());
+
+            ReplicaModel replicaModel = bucket.leader();
+            if (replicaModel == null) {
+                continue;
+            }
+
+            leaderDistribution.put(tableBucket, replicaModel.server().id());
         }
         return leaderDistribution;
     }

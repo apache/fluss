@@ -19,6 +19,8 @@ package org.apache.fluss.cluster.rebalance;
 
 import org.apache.fluss.metadata.TableBucket;
 
+import javax.annotation.Nullable;
+
 import java.util.Map;
 
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
@@ -30,6 +32,9 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
  */
 public class RebalanceProgress {
 
+    /** The rebalance id. */
+    private final @Nullable String rebalanceId;
+
     /** The rebalance status for the overall rebalance. */
     private final RebalanceStatus rebalanceStatus;
 
@@ -40,13 +45,19 @@ public class RebalanceProgress {
     private final Map<TableBucket, RebalanceResultForBucket> progressForBucketMap;
 
     public RebalanceProgress(
+            @Nullable String rebalanceId,
             RebalanceStatus rebalanceStatus,
             double progress,
             Map<TableBucket, RebalanceResultForBucket> progressForBucketMap) {
+        this.rebalanceId = rebalanceId;
         // TODO: we may derive the overall progress and status from progressForBucketMap
         this.rebalanceStatus = checkNotNull(rebalanceStatus);
         this.progress = progress;
         this.progressForBucketMap = checkNotNull(progressForBucketMap);
+    }
+
+    public @Nullable String rebalanceId() {
+        return rebalanceId;
     }
 
     public RebalanceStatus status() {

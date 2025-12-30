@@ -1801,7 +1801,8 @@ public class ServerRpcMessageUtils {
     }
 
     public static RebalanceResponse makeRebalanceRespose(RebalancePlan rebalancePlan) {
-        RebalanceResponse response = new RebalanceResponse();
+        RebalanceResponse response =
+                new RebalanceResponse().setRebalanceId(rebalancePlan.getRebalanceId());
         List<PbRebalancePlanForTable> planForTables = new ArrayList<>();
 
         // for none-partitioned tables.
@@ -1847,6 +1848,10 @@ public class ServerRpcMessageUtils {
         ListRebalanceProgressResponse response =
                 new ListRebalanceProgressResponse()
                         .setRebalanceStatus(rebalanceProgress.status().getCode());
+
+        if (rebalanceProgress.rebalanceId() != null) {
+            response.setRebalanceId(rebalanceProgress.rebalanceId());
+        }
 
         Map<Long, List<PbRebalanceProgressForBucket>> tableIdToPbBuckets = new HashMap<>();
         for (Map.Entry<TableBucket, RebalanceResultForBucket> progressForBucket :
