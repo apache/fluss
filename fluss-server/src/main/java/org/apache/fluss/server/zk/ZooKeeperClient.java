@@ -1246,6 +1246,11 @@ public class ZooKeeperClient implements AutoCloseable {
         return getOrEmpty(path).map(RebalanceZNode::decode);
     }
 
+    /** Deletes the rebalance plan from ZooKeeper. Only for testing propose now */
+    public void deleteRebalancePlan() throws Exception {
+        deletePath(RebalanceZNode.path());
+    }
+
     // --------------------------------------------------------------------------------------------
     // Utils
     // --------------------------------------------------------------------------------------------

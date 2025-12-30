@@ -17,38 +17,16 @@
 
 package org.apache.fluss.cluster.rebalance;
 
-import org.apache.fluss.annotation.PublicEvolving;
+import java.util.Arrays;
+import java.util.HashSet;
+import java.util.Set;
 
-/**
- * Rebalance status.
- *
- * @since 0.9
- */
-@PublicEvolving
-public enum RebalanceStatus {
-    NO_TASK(0),
-    NOT_STARTED(1),
-    REBALANCING(2),
-    FAILED(3),
-    COMPLETED(4),
-    CANCELED(5);
+import static org.apache.fluss.cluster.rebalance.RebalanceStatus.CANCELED;
+import static org.apache.fluss.cluster.rebalance.RebalanceStatus.COMPLETED;
+import static org.apache.fluss.cluster.rebalance.RebalanceStatus.FAILED;
 
-    private final int code;
-
-    RebalanceStatus(int code) {
-        this.code = code;
-    }
-
-    public int getCode() {
-        return code;
-    }
-
-    public static RebalanceStatus of(int code) {
-        for (RebalanceStatus status : RebalanceStatus.values()) {
-            if (status.code == code) {
-                return status;
-            }
-        }
-        return null;
-    }
+/** Rebalance utils. */
+public class RebalanceUtils {
+    public static final Set<RebalanceStatus> FINAL_STATUSES =
+            new HashSet<>(Arrays.asList(COMPLETED, CANCELED, FAILED));
 }
