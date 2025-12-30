@@ -178,6 +178,11 @@ public class IcebergLakeCatalog implements LakeCatalog {
         List<Types.NestedField> fields = new ArrayList<>();
         int fieldId = 0;
 
+        int totalTopLevelFields =
+                tableDescriptor.getSchema().getColumns().size() + SYSTEM_COLUMNS.size();
+        FlussDataTypeToIcebergDataType converter =
+                new FlussDataTypeToIcebergDataType(totalTopLevelFields);
+
         // general columns
         for (org.apache.fluss.metadata.Schema.Column column :
                 tableDescriptor.getSchema().getColumns()) {
@@ -192,16 +197,14 @@ public class IcebergLakeCatalog implements LakeCatalog {
                         Types.NestedField.optional(
                                 fieldId++,
                                 colName,
-                                column.getDataType()
-                                        .accept(FlussDataTypeToIcebergDataType.INSTANCE),
+                                column.getDataType().accept(converter),
                                 column.getComment().orElse(null));
             } else {
                 field =
                         Types.NestedField.required(
                                 fieldId++,
                                 colName,
-                                column.getDataType()
-                                        .accept(FlussDataTypeToIcebergDataType.INSTANCE),
+                                column.getDataType().accept(converter),
                                 column.getComment().orElse(null));
             }
             fields.add(field);
