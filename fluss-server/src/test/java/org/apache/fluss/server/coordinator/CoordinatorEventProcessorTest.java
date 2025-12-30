@@ -936,7 +936,9 @@ class CoordinatorEventProcessorTest {
 
         rebalancePlan.put(tb0, planForBucket0);
         // try to execute.
-        eventProcessor.getRebalanceManager().registerRebalance(rebalancePlan);
+        eventProcessor
+                .getRebalanceManager()
+                .registerRebalance("rebalance-task-jdsds1", rebalancePlan);
 
         // Mock to finish rebalance tasks, in production case, this need to be trigged by receiving
         // AdjustIsrRequest.

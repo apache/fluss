@@ -529,6 +529,16 @@ public abstract class FlinkProcedureITCase {
             assertCallResult(listProceduresIterator, new String[] {"+I[success]"});
         }
 
+        // test cancel an un-existed rebalance.
+        try (CloseableIterator<Row> listProceduresIterator =
+                tEnv.executeSql(
+                                String.format(
+                                        "Call %s.sys.cancel_rebalance('not-exist-id')",
+                                        CATALOG_NAME))
+                        .collect()) {
+            assertCallResult(listProceduresIterator, new String[] {"+I[success]"});
+        }
+
         // delete rebalance plan to avoid conflict with other tests.
         FLUSS_CLUSTER_EXTENSION.getZooKeeperClient().deleteRebalancePlan();
     }

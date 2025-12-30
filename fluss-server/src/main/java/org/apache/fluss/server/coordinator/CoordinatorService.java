@@ -897,7 +897,12 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     public CompletableFuture<ListRebalanceProgressResponse> listRebalanceProgress(
             ListRebalanceProgressRequest request) {
         CompletableFuture<ListRebalanceProgressResponse> response = new CompletableFuture<>();
-        eventManagerSupplier.get().put(new ListRebalanceProgressEvent(response));
+        eventManagerSupplier
+                .get()
+                .put(
+                        new ListRebalanceProgressEvent(
+                                request.hasRebalanceId() ? request.getRebalanceId() : null,
+                                response));
         return response;
     }
 
@@ -905,7 +910,12 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     public CompletableFuture<CancelRebalanceResponse> cancelRebalance(
             CancelRebalanceRequest request) {
         CompletableFuture<CancelRebalanceResponse> response = new CompletableFuture<>();
-        eventManagerSupplier.get().put(new CancelRebalanceEvent(response));
+        eventManagerSupplier
+                .get()
+                .put(
+                        new CancelRebalanceEvent(
+                                request.hasRebalanceId() ? request.getRebalanceId() : null,
+                                response));
         return response;
     }
 

@@ -17,15 +17,25 @@
 
 package org.apache.fluss.flink.procedure;
 
+import org.apache.flink.table.annotation.ArgumentHint;
+import org.apache.flink.table.annotation.DataTypeHint;
 import org.apache.flink.table.annotation.ProcedureHint;
 import org.apache.flink.table.procedure.ProcedureContext;
+
+import javax.annotation.Nullable;
 
 /** Procedure to cancel rebalance. */
 public class CancelRebalanceProcedure extends ProcedureBase {
 
-    @ProcedureHint()
-    public String[] call(ProcedureContext context) throws Exception {
-        admin.cancelRebalance().get();
+    @ProcedureHint(
+            argument = {
+                @ArgumentHint(
+                        name = "rebalanceId",
+                        type = @DataTypeHint("STRING"),
+                        isOptional = true)
+            })
+    public String[] call(ProcedureContext context, @Nullable String rebalanceId) throws Exception {
+        admin.cancelRebalance(rebalanceId).get();
         return new String[] {"success"};
     }
 }

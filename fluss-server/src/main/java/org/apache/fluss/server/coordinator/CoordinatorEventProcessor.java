@@ -617,13 +617,14 @@ public class CoordinatorEventProcessor implements EventProcessor {
         } else if (event instanceof CancelRebalanceEvent) {
             CancelRebalanceEvent cancelRebalanceEvent = (CancelRebalanceEvent) event;
             completeFromCallable(
-                    cancelRebalanceEvent.getRespCallback(), this::processCancelRebalance);
+                    cancelRebalanceEvent.getRespCallback(),
+                    () -> processCancelRebalance(cancelRebalanceEvent));
         } else if (event instanceof ListRebalanceProgressEvent) {
             ListRebalanceProgressEvent listRebalanceProgressEvent =
                     (ListRebalanceProgressEvent) event;
             completeFromCallable(
                     listRebalanceProgressEvent.getRespCallback(),
-                    this::processListRebalanceProgress);
+                    () -> processListRebalanceProgress(listRebalanceProgressEvent));
         } else if (event instanceof AccessContextEvent) {
             AccessContextEvent<?> accessContextEvent = (AccessContextEvent<?>) event;
             processAccessContext(accessContextEvent);
@@ -1161,20 +1162,24 @@ public class CoordinatorEventProcessor implements EventProcessor {
             }
 
             // 2. execute rebalance plan.
-            rebalanceManager.registerRebalance(rebalancePlan.getExecutePlan());
+            Map<TableBucket, RebalancePlanForBucket> executePlan = rebalancePlan.getExecutePlan();
+            rebalanceManager.registerRebalance(rebalancePlan.getRebalanceId(), executePlan);
         }
 
         return makeRebalanceRespose(rebalancePlan);
     }
 
-    private CancelRebalanceResponse processCancelRebalance() {
+    private CancelRebalanceResponse processCancelRebalance(
+            CancelRebalanceEvent cancelRebalanceEvent) {
         CancelRebalanceResponse response = new CancelRebalanceResponse();
-        rebalanceManager.cancelRebalance();
+        rebalanceManager.cancelRebalance(cancelRebalanceEvent.getRabalanceId());
         return response;
     }
 
-    private ListRebalanceProgressResponse processListRebalanceProgress() {
-        RebalanceProgress rebalanceProgress = rebalanceManager.listRebalanceProgress();
+    private ListRebalanceProgressResponse processListRebalanceProgress(
+            ListRebalanceProgressEvent event) {
+        RebalanceProgress rebalanceProgress =
+                rebalanceManager.listRebalanceProgress(event.getRabalanceId());
         return makeListRebalanceProgressResponse(rebalanceProgress);
     }
 

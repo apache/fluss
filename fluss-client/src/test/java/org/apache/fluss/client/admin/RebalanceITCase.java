@@ -212,7 +212,7 @@ public class RebalanceITCase {
 
     @Test
     void testListRebalanceProcess() throws Exception {
-        RebalanceProgress rebalanceProgress = admin.listRebalanceProgress().get();
+        RebalanceProgress rebalanceProgress = admin.listRebalanceProgress(null).get();
         assertThat(rebalanceProgress.progress()).isEqualTo(-1d);
         assertThat(rebalanceProgress.status()).isEqualTo(RebalanceStatus.NO_TASK);
         assertThat(rebalanceProgress.progressForBucketMap()).isEmpty();
@@ -249,7 +249,8 @@ public class RebalanceITCase {
         retry(
                 Duration.ofMinutes(2),
                 () -> {
-                    RebalanceProgress progress = admin.listRebalanceProgress().get();
+                    RebalanceProgress progress =
+                            admin.listRebalanceProgress(rebalancePlan.getRebalanceId()).get();
                     assertThat(progress.progress()).isEqualTo(1d);
                     assertThat(progress.status()).isEqualTo(RebalanceStatus.COMPLETED);
                     Map<TableBucket, RebalanceResultForBucket> processForBuckets =
@@ -267,11 +268,20 @@ public class RebalanceITCase {
                 });
 
         // cancel rebalance.
-        admin.cancelRebalance().get();
+        admin.cancelRebalance(rebalancePlan.getRebalanceId()).get();
 
-        RebalanceProgress progress = admin.listRebalanceProgress().get();
+        RebalanceProgress progress =
+                admin.listRebalanceProgress(rebalancePlan.getRebalanceId()).get();
         assertThat(progress.progress()).isEqualTo(1d);
         assertThat(progress.status()).isEqualTo(RebalanceStatus.CANCELED);
+
+        // test list and cancel an un-existed rebalance id.
+        progress = admin.listRebalanceProgress("unexisted-rebalance-id").get();
+        assertThat(progress.progress()).isEqualTo(-1d);
+        assertThat(progress.status()).isEqualTo(RebalanceStatus.NO_TASK);
+        assertThat(progress.progressForBucketMap()).isEmpty();
+
+        admin.cancelRebalance("unexisted-rebalance-id").get();
     }
 
     private static Configuration initConfig() {

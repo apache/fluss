@@ -19,15 +19,25 @@ package org.apache.fluss.server.coordinator.event;
 
 import org.apache.fluss.rpc.messages.ListRebalanceProgressResponse;
 
+import javax.annotation.Nullable;
+
 import java.util.concurrent.CompletableFuture;
 
 /** The event for listing rebalance progress. */
 public class ListRebalanceProgressEvent implements CoordinatorEvent {
+
+    private final @Nullable String rebalanceId;
     private final CompletableFuture<ListRebalanceProgressResponse> respCallback;
 
     public ListRebalanceProgressEvent(
+            @Nullable String rebalanceId,
             CompletableFuture<ListRebalanceProgressResponse> respCallback) {
+        this.rebalanceId = rebalanceId;
         this.respCallback = respCallback;
+    }
+
+    public @Nullable String getRabalanceId() {
+        return rebalanceId;
     }
 
     public CompletableFuture<ListRebalanceProgressResponse> getRespCallback() {
