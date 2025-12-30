@@ -17,7 +17,7 @@
 
 package org.apache.fluss.spark
 
-import org.apache.fluss.metadata.{Schema, TableBucket, TableDescriptor}
+import org.apache.fluss.metadata.{Schema, TableDescriptor}
 import org.apache.fluss.row.{BinaryString, GenericRow, InternalRow}
 import org.apache.fluss.spark.util.TestUtils.FLUSS_ROWTYPE
 import org.apache.fluss.types.DataTypes
@@ -52,12 +52,7 @@ class SparkWriteTest extends FlussSparkTestBase {
                  |""".stripMargin)
 
     val table = loadFlussTable(tablePath)
-    val rows = table.newScan
-      .limit(1)
-      .createBatchScanner(new TableBucket(0, null, 0))
-      .pollBatch(Duration.ofSeconds(1))
-      .asScala
-      .toArray
+    val rows = getRowsWithChangeType(table).map(_._2)
     assertThat(rows.length).isEqualTo(1)
 
     val row = rows.head
@@ -94,14 +89,7 @@ class SparkWriteTest extends FlussSparkTestBase {
            |""".stripMargin)
 
     val table = loadFlussTable(tablePath)
-    val logScanner = table.newScan.createLogScanner
-    (0 until table.getTableInfo.getNumBuckets).foreach(i => logScanner.subscribeFromBeginning(i))
-    val scanRecords = logScanner.poll(Duration.ofSeconds(1))
-    val flussRows = scanRecords
-      .buckets()
-      .asScala
-      .flatMap(tableBucket => scanRecords.records(tableBucket).asScala.map(_.getRow))
-      .toArray
+    val flussRows = getRowsWithChangeType(table).map(_._2)
 
     val expectRows = Array(
       GenericRowBuilder(4)
@@ -153,19 +141,8 @@ class SparkWriteTest extends FlussSparkTestBase {
            |(800L, 23L, 603, "addr3"), (900L, 24L, 604, "addr4"),
            |(1000L, 25L, 605, "addr5")
            |""".stripMargin)
-    val scanRecords1 = logScanner.poll(Duration.ofSeconds(1))
-    val flussRows1 = scanRecords1
-      .buckets()
-      .asScala
-      .flatMap {
-        tableBucket =>
-          scanRecords1
-            .records(tableBucket)
-            .asScala
-            .map(r => (r.getChangeType.shortString, r.getRow))
-      }
-      .toArray
 
+    val flussRows1 = getRowsWithChangeType(table, Some(logScanner))
     val expectRows1 = Array(
       (
         "+I",
@@ -216,19 +193,8 @@ class SparkWriteTest extends FlussSparkTestBase {
            |INSERT INTO $DEFAULT_DATABASE.$pkTableName VALUES
            |(800L, 230L, 603, "addr3"), (900L, 240L, 604, "addr4")
            |""".stripMargin)
-    val scanRecords2 = logScanner.poll(Duration.ofSeconds(1))
-    val flussRows2 = scanRecords2
-      .buckets()
-      .asScala
-      .flatMap {
-        tableBucket =>
-          scanRecords2
-            .records(tableBucket)
-            .asScala
-            .map(r => (r.getChangeType.shortString, r.getRow))
-      }
-      .toArray
 
+    val flussRows2 = getRowsWithChangeType(table, Some(logScanner))
     val expectRows2 = Array(
       (
         "-U",
