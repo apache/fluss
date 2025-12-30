@@ -391,7 +391,7 @@ public class ClientRpcMessageUtils {
                 rebalancePlan.put(planForBucket.getTableBucket(), planForBucket);
             }
         }
-        return new RebalancePlan(rebalancePlan);
+        return new RebalancePlan(response.getRebalanceId(), rebalancePlan);
     }
 
     public static RebalanceProgress toRebalanceProgress(ListRebalanceProgressResponse response) {

@@ -19,15 +19,24 @@ package org.apache.fluss.server.coordinator.event;
 
 import org.apache.fluss.rpc.messages.CancelRebalanceResponse;
 
+import javax.annotation.Nullable;
+
 import java.util.concurrent.CompletableFuture;
 
 /** The event for canceling rebalance. */
 public class CancelRebalanceEvent implements CoordinatorEvent {
 
+    private final @Nullable String rebalanceId;
     private final CompletableFuture<CancelRebalanceResponse> respCallback;
 
-    public CancelRebalanceEvent(CompletableFuture<CancelRebalanceResponse> respCallback) {
+    public CancelRebalanceEvent(
+            @Nullable String rebalanceId, CompletableFuture<CancelRebalanceResponse> respCallback) {
         this.respCallback = respCallback;
+        this.rebalanceId = rebalanceId;
+    }
+
+    public @Nullable String getRabalanceId() {
+        return rebalanceId;
     }
 
     public CompletableFuture<CancelRebalanceResponse> getRespCallback() {

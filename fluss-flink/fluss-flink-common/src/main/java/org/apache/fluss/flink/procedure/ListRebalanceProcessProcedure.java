@@ -22,8 +22,12 @@ import org.apache.fluss.cluster.rebalance.RebalanceResultForBucket;
 import org.apache.fluss.cluster.rebalance.RebalanceStatus;
 import org.apache.fluss.metadata.TableBucket;
 
+import org.apache.flink.table.annotation.ArgumentHint;
+import org.apache.flink.table.annotation.DataTypeHint;
 import org.apache.flink.table.annotation.ProcedureHint;
 import org.apache.flink.table.procedure.ProcedureContext;
+
+import javax.annotation.Nullable;
 
 import java.text.NumberFormat;
 import java.util.Map;
@@ -31,9 +35,15 @@ import java.util.Map;
 /** Procedure to list rebalance process. */
 public class ListRebalanceProcessProcedure extends ProcedureBase {
 
-    @ProcedureHint()
-    public String[] call(ProcedureContext context) throws Exception {
-        RebalanceProgress progress = admin.listRebalanceProgress().get();
+    @ProcedureHint(
+            argument = {
+                @ArgumentHint(
+                        name = "rebalanceId",
+                        type = @DataTypeHint("STRING"),
+                        isOptional = true)
+            })
+    public String[] call(ProcedureContext context, @Nullable String rebalanceId) throws Exception {
+        RebalanceProgress progress = admin.listRebalanceProgress(rebalanceId).get();
         return progressToString(progress);
     }
 

@@ -1761,7 +1761,8 @@ public class ServerRpcMessageUtils {
     }
 
     public static RebalanceResponse makeRebalanceRespose(RebalancePlan rebalancePlan) {
-        RebalanceResponse response = new RebalanceResponse();
+        RebalanceResponse response =
+                new RebalanceResponse().setRebalanceId(rebalancePlan.getRebalanceId());
         List<PbRebalancePlanForTable> planForTables = new ArrayList<>();
 
         // for none-partitioned tables.

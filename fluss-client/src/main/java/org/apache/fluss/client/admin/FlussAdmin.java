@@ -563,15 +563,26 @@ public class FlussAdmin implements Admin {
     }
 
     @Override
-    public CompletableFuture<RebalanceProgress> listRebalanceProgress() {
+    public CompletableFuture<RebalanceProgress> listRebalanceProgress(
+            @Nullable String rebalanceId) {
         ListRebalanceProgressRequest request = new ListRebalanceProgressRequest();
+
+        if (rebalanceId != null) {
+            request.setRebalanceId(rebalanceId);
+        }
+
         return gateway.listRebalanceProgress(request)
                 .thenApply(ClientRpcMessageUtils::toRebalanceProgress);
     }
 
     @Override
-    public CompletableFuture<Void> cancelRebalance() {
+    public CompletableFuture<Void> cancelRebalance(@Nullable String rebalanceId) {
         CancelRebalanceRequest request = new CancelRebalanceRequest();
+
+        if (rebalanceId != null) {
+            request.setRebalanceId(rebalanceId);
+        }
+
         return gateway.cancelRebalance(request).thenApply(r -> null);
     }
 

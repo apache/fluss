@@ -596,10 +596,12 @@ message RebalanceRequest {
 }
 
 message RebalanceResponse {
-  repeated PbRebalancePlanForTable table_plan = 1;
+  required string rebalance_id = 1;
+  repeated PbRebalancePlanForTable table_plan = 2;
 }
 
 message ListRebalanceProgressRequest {
+  optional string rebalance_id = 1;
 }
 
 message ListRebalanceProgressResponse {
@@ -608,6 +610,7 @@ message ListRebalanceProgressResponse {
 }
 
 message CancelRebalanceRequest {
+  optional string rebalance_id = 1;
 }
 
 message CancelRebalanceResponse {
