@@ -20,12 +20,16 @@ package org.apache.fluss.client.admin;
 import org.apache.fluss.client.Connection;
 import org.apache.fluss.client.ConnectionFactory;
 import org.apache.fluss.cluster.rebalance.GoalType;
+import org.apache.fluss.cluster.rebalance.RebalancePlanForBucket;
+import org.apache.fluss.cluster.rebalance.RebalanceProgress;
+import org.apache.fluss.cluster.rebalance.RebalanceResultForBucket;
 import org.apache.fluss.cluster.rebalance.RebalanceStatus;
 import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.PartitionSpec;
+import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.replica.ReplicaManager;
@@ -40,6 +44,7 @@ import org.junit.jupiter.api.extension.RegisterExtension;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.Map;
 import java.util.Optional;
 
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
@@ -66,6 +71,8 @@ public class RebalanceITCase {
 
     @AfterEach
     protected void teardown() throws Exception {
+        FLUSS_CLUSTER_EXTENSION.getZooKeeperClient().deleteRebalancePlan();
+
         if (admin != null) {
             admin.close();
             admin = null;
@@ -201,6 +208,70 @@ public class RebalanceITCase {
                         assertThat(leaderCount).isBetween(10L, 14L);
                     }
                 });
+    }
+
+    @Test
+    void testListRebalanceProcess() throws Exception {
+        RebalanceProgress rebalanceProgress = admin.listRebalanceProgress().get();
+        assertThat(rebalanceProgress.progress()).isEqualTo(-1d);
+        assertThat(rebalanceProgress.status()).isEqualTo(RebalanceStatus.NO_TASK);
+        assertThat(rebalanceProgress.progressForBucketMap()).isEmpty();
+
+        String dbName = "db-rebalance-list";
+        admin.createDatabase(dbName, DatabaseDescriptor.EMPTY, false).get();
+
+        TableDescriptor logDescriptor =
+                TableDescriptor.builder()
+                        .schema(DATA1_SCHEMA)
+                        .distributedBy(3)
+                        .property(
+                                ConfigOptions.TABLE_GENERATE_UNBALANCE_TABLE_ASSIGNMENT.key(),
+                                "true")
+                        .build();
+        // create some none partitioned log table.
+        for (int i = 0; i < 6; i++) {
+            long tableId =
+                    createTable(
+                            new TablePath(dbName, "test-rebalance_table-" + i),
+                            logDescriptor,
+                            false);
+            FLUSS_CLUSTER_EXTENSION.waitUntilTableReady(tableId);
+        }
+
+        // trigger rebalance with goal set[ReplicaDistributionGoal, LeaderReplicaDistributionGoal]
+        org.apache.fluss.client.admin.RebalancePlan rebalancePlan =
+                admin.rebalance(
+                                Arrays.asList(
+                                        GoalType.REPLICA_DISTRIBUTION_GOAL,
+                                        GoalType.LEADER_DISTRIBUTION_GOAL),
+                                false)
+                        .get();
+        retry(
+                Duration.ofMinutes(2),
+                () -> {
+                    RebalanceProgress progress = admin.listRebalanceProgress().get();
+                    assertThat(progress.progress()).isEqualTo(1d);
+                    assertThat(progress.status()).isEqualTo(RebalanceStatus.COMPLETED);
+                    Map<TableBucket, RebalanceResultForBucket> processForBuckets =
+                            progress.progressForBucketMap();
+                    Map<TableBucket, RebalancePlanForBucket> planForBuckets =
+                            rebalancePlan.getPlanForBucketMap();
+                    assertThat(planForBuckets.size()).isEqualTo(processForBuckets.size());
+                    for (TableBucket tableBucket : planForBuckets.keySet()) {
+                        RebalanceResultForBucket processForBucket =
+                                processForBuckets.get(tableBucket);
+                        assertThat(processForBucket.status()).isEqualTo(RebalanceStatus.COMPLETED);
+                        assertThat(processForBucket.plan())
+                                .isEqualTo(planForBuckets.get(tableBucket));
+                    }
+                });
+
+        // cancel rebalance.
+        admin.cancelRebalance().get();
+
+        RebalanceProgress progress = admin.listRebalanceProgress().get();
+        assertThat(progress.progress()).isEqualTo(1d);
+        assertThat(progress.status()).isEqualTo(RebalanceStatus.CANCELED);
     }
 
     private static Configuration initConfig() {

@@ -114,6 +114,7 @@ import org.apache.fluss.server.coordinator.event.CommitLakeTableSnapshotEvent;
 import org.apache.fluss.server.coordinator.event.CommitRemoteLogManifestEvent;
 import org.apache.fluss.server.coordinator.event.ControlledShutdownEvent;
 import org.apache.fluss.server.coordinator.event.EventManager;
+import org.apache.fluss.server.coordinator.event.ListRebalanceProgressEvent;
 import org.apache.fluss.server.coordinator.event.RebalanceEvent;
 import org.apache.fluss.server.coordinator.event.RemoveServerTagEvent;
 import org.apache.fluss.server.coordinator.rebalance.goal.Goal;
@@ -831,7 +832,9 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     @Override
     public CompletableFuture<ListRebalanceProgressResponse> listRebalanceProgress(
             ListRebalanceProgressRequest request) {
-        throw new UnsupportedOperationException("Support soon!");
+        CompletableFuture<ListRebalanceProgressResponse> response = new CompletableFuture<>();
+        eventManagerSupplier.get().put(new ListRebalanceProgressEvent(response));
+        return response;
     }
 
     @Override
@@ -840,9 +843,6 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         CompletableFuture<CancelRebalanceResponse> response = new CompletableFuture<>();
         eventManagerSupplier.get().put(new CancelRebalanceEvent(response));
         return response;
-
-        //        rebalanceManagerSupplier.get().cancelRebalance();
-        //        return CompletableFuture.completedFuture(new CancelRebalanceResponse());
     }
 
     @VisibleForTesting

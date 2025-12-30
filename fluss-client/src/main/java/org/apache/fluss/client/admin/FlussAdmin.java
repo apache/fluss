@@ -25,6 +25,7 @@ import org.apache.fluss.client.utils.ClientRpcMessageUtils;
 import org.apache.fluss.cluster.Cluster;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.rebalance.GoalType;
+import org.apache.fluss.cluster.rebalance.RebalanceProgress;
 import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.config.cluster.AlterConfig;
 import org.apache.fluss.config.cluster.ConfigEntry;
@@ -70,6 +71,7 @@ import org.apache.fluss.rpc.messages.ListDatabasesRequest;
 import org.apache.fluss.rpc.messages.ListDatabasesResponse;
 import org.apache.fluss.rpc.messages.ListOffsetsRequest;
 import org.apache.fluss.rpc.messages.ListPartitionInfosRequest;
+import org.apache.fluss.rpc.messages.ListRebalanceProgressRequest;
 import org.apache.fluss.rpc.messages.ListTablesRequest;
 import org.apache.fluss.rpc.messages.ListTablesResponse;
 import org.apache.fluss.rpc.messages.PbAlterConfig;
@@ -562,7 +564,9 @@ public class FlussAdmin implements Admin {
 
     @Override
     public CompletableFuture<RebalanceProgress> listRebalanceProgress() {
-        throw new UnsupportedOperationException("Support soon");
+        ListRebalanceProgressRequest request = new ListRebalanceProgressRequest();
+        return gateway.listRebalanceProgress(request)
+                .thenApply(ClientRpcMessageUtils::toRebalanceProgress);
     }
 
     @Override

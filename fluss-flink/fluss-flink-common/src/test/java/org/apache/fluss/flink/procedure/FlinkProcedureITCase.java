@@ -55,6 +55,7 @@ import java.util.stream.Collectors;
 import static org.apache.fluss.cluster.rebalance.ServerTag.PERMANENT_OFFLINE;
 import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.assertResultsIgnoreOrder;
 import static org.apache.fluss.server.testutils.FlussClusterExtension.BUILTIN_DATABASE;
+import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -134,7 +135,8 @@ public abstract class FlinkProcedureITCase {
                             "+I[sys.add_server_tag]",
                             "+I[sys.remove_server_tag]",
                             "+I[sys.rebalance]",
-                            "+I[sys.cancel_rebalance]");
+                            "+I[sys.cancel_rebalance]",
+                            "+I[sys.list_rebalance_progress]");
             // make sure no more results is unread.
             assertResultsIgnoreOrder(showProceduresIterator, expectedShowProceduresResult, true);
         }
@@ -526,6 +528,73 @@ public abstract class FlinkProcedureITCase {
                         .collect()) {
             assertCallResult(listProceduresIterator, new String[] {"+I[success]"});
         }
+
+        // delete rebalance plan to avoid conflict with other tests.
+        FLUSS_CLUSTER_EXTENSION.getZooKeeperClient().deleteRebalancePlan();
+    }
+
+    @Test
+    void testListRebalanceProgress() throws Exception {
+        try (CloseableIterator<Row> listProceduresIterator =
+                tEnv.executeSql(
+                                String.format(
+                                        "Call %s.sys.list_rebalance_progress()", CATALOG_NAME))
+                        .collect()) {
+            assertCallResult(
+                    listProceduresIterator,
+                    new String[] {
+                        "+I[Reblance total status: NO_TASK]",
+                        "+I[Rebalance progress: NONE]",
+                        "+I[Rebalance detail progress for bucket:]"
+                    });
+        }
+
+        // first create some unbalance assignment table.
+        for (int i = 0; i < 10; i++) {
+            String tableName = "reblance_test_tab_" + i;
+            tEnv.executeSql(
+                    String.format(
+                            "create table %s (a int, b varchar, c bigint, d int ) "
+                                    + "with ('connector' = 'fluss', 'table.generate-unbalance-table-assignment'='true')",
+                            tableName));
+            long tableId =
+                    admin.getTableInfo(TablePath.of(DEFAULT_DB, tableName)).get().getTableId();
+            FLUSS_CLUSTER_EXTENSION.waitUntilTableReady(tableId);
+        }
+
+        String rebalance =
+                String.format(
+                        "Call %s.sys.rebalance('REPLICA_DISTRIBUTION_GOAL;LEADER_DISTRIBUTION_GOAL', false)",
+                        CATALOG_NAME);
+        List<String> plan;
+        try (CloseableIterator<Row> rows = tEnv.executeSql(rebalance).collect()) {
+            plan =
+                    CollectionUtil.iteratorToList(rows).stream()
+                            .map(Row::toString)
+                            .collect(Collectors.toList());
+            assertThat(plan.size()).isGreaterThan(1);
+        }
+
+        retry(
+                Duration.ofMinutes(2),
+                () -> {
+                    try (CloseableIterator<Row> rows =
+                            tEnv.executeSql(
+                                            String.format(
+                                                    "Call %s.sys.list_rebalance_progress()",
+                                                    CATALOG_NAME))
+                                    .collect()) {
+                        List<String> listProgressResult =
+                                CollectionUtil.iteratorToList(rows).stream()
+                                        .map(Row::toString)
+                                        .collect(Collectors.toList());
+                        assertThat(listProgressResult.size()).isEqualTo(plan.size() + 3);
+                        assertThat(listProgressResult.get(0))
+                                .isEqualTo("+I[Reblance total status: COMPLETED]");
+                        assertThat(listProgressResult.get(1))
+                                .isEqualTo("+I[Rebalance progress: 100%]");
+                    }
+                });
     }
 
     private static Configuration initConfig() {
