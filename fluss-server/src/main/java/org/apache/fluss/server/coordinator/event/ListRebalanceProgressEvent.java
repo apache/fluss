@@ -15,40 +15,22 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.cluster.rebalance;
+package org.apache.fluss.server.coordinator.event;
 
-import org.apache.fluss.annotation.PublicEvolving;
+import org.apache.fluss.rpc.messages.ListRebalanceProgressResponse;
 
-/**
- * Rebalance status.
- *
- * @since 0.9
- */
-@PublicEvolving
-public enum RebalanceStatus {
-    NO_TASK(0),
-    NOT_STARTED(1),
-    REBALANCING(2),
-    FAILED(3),
-    COMPLETED(4),
-    CANCELED(5);
+import java.util.concurrent.CompletableFuture;
 
-    private final int code;
+/** The event for listing rebalance progress. */
+public class ListRebalanceProgressEvent implements CoordinatorEvent {
+    private final CompletableFuture<ListRebalanceProgressResponse> respCallback;
 
-    RebalanceStatus(int code) {
-        this.code = code;
+    public ListRebalanceProgressEvent(
+            CompletableFuture<ListRebalanceProgressResponse> respCallback) {
+        this.respCallback = respCallback;
     }
 
-    public int getCode() {
-        return code;
-    }
-
-    public static RebalanceStatus of(int code) {
-        for (RebalanceStatus status : RebalanceStatus.values()) {
-            if (status.code == code) {
-                return status;
-            }
-        }
-        return null;
+    public CompletableFuture<ListRebalanceProgressResponse> getRespCallback() {
+        return respCallback;
     }
 }
