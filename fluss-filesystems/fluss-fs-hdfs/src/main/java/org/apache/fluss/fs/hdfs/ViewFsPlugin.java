@@ -17,20 +17,14 @@
 
 package org.apache.fluss.fs.hdfs;
 
-/* This file is based on source code of Apache Flink Project (https://flink.apache.org/), licensed by the Apache
- * Software Foundation (ASF) under the Apache License, Version 2.0. See the NOTICE file distributed with this work for
- * additional information regarding copyright ownership. */
-
 /**
  * A file system plugin for ViewFs .
  */
 public class ViewFsPlugin extends HdfsPlugin {
 
-    public static final String SCHEME = "viewfs";
-
     @Override
     public String getScheme() {
-        return SCHEME;
+        return "viewfs";
     }
 
 }
