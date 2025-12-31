@@ -20,6 +20,7 @@ package org.apache.fluss.row.arrow.writers;
 
 import org.apache.fluss.row.DataGetters;
 import org.apache.fluss.row.InternalArray;
+import org.apache.fluss.row.arrow.ArrowWriter;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.FieldVector;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.complex.ListVector;
 
@@ -41,11 +42,12 @@ public class ArrowArrayWriter extends ArrowFieldWriter {
         listVector.startNewValue(rowIndex);
         for (int arrIndex = 0; arrIndex < array.size(); arrIndex++) {
             int fieldIndex = offset + arrIndex;
-            // Always use safe writes for array elements because the element index (offset +
-            // arrIndex) can exceed INITIAL_CAPACITY even when the row count doesn't. The parent's
-            // handleSafe is based on row count, but array element indices grow based on the total
-            // number of elements across all arrays, which can be much larger.
-            elementWriter.write(fieldIndex, array, arrIndex, true);
+            // Use element-based index to determine handleSafe, not parent row count.
+            // This fixes issue #2164: when row count < INITIAL_CAPACITY but total
+            // array elements > INITIAL_CAPACITY, we need to use safe mode for elements
+            // beyond the initial capacity.
+            boolean elementHandleSafe = fieldIndex >= ArrowWriter.INITIAL_CAPACITY;
+            elementWriter.write(fieldIndex, array, arrIndex, elementHandleSafe);
         }
         offset += array.size();
         listVector.endValue(rowIndex, array.size());
