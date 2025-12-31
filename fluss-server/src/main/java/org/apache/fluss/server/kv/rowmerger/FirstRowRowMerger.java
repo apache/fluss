@@ -63,7 +63,7 @@ public class FirstRowRowMerger implements RowMerger {
 
     @Override
     public RowMerger configureTargetColumns(
-            @Nullable int[] targetColumns, short schemaId, Schema schema) {
+            @Nullable int[] targetColumns, short latestShemaId, Schema latestSchema) {
         if (targetColumns == null) {
             return this;
         } else {

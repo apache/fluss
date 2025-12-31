@@ -65,14 +65,14 @@ public class DefaultRowMerger implements RowMerger {
 
     @Override
     public RowMerger configureTargetColumns(
-            @Nullable int[] targetColumns, short schemaId, Schema schema) {
+            @Nullable int[] targetColumns, short latestShemaId, Schema latestSchema) {
         if (targetColumns == null) {
             return this;
         } else {
             // this also sanity checks the validity of the partial update
             PartialUpdater partialUpdater =
                     partialUpdaterCache.getOrCreatePartialUpdater(
-                            kvFormat, schemaId, schema, targetColumns);
+                            kvFormat, latestShemaId, latestSchema, targetColumns);
             return new PartialUpdateRowMerger(partialUpdater, deleteBehavior);
         }
     }

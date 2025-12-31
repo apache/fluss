@@ -23,6 +23,7 @@ import org.apache.fluss.metadata.DeleteBehavior;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.MergeEngineType;
 import org.apache.fluss.metadata.Schema;
+import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.record.BinaryValue;
 
 import javax.annotation.Nullable;
@@ -65,13 +66,22 @@ public interface RowMerger {
      * Dynamically configure the target columns to merge and return the effective merger.
      *
      * @param targetColumns the partial update target column positions, null means full update
-     * @param schemaId the schema id used to generate new rows
-     * @param schema the schema used to generate new rows
+     * @param latestShemaId the schema id used to generate new rows
+     * @param latestSchema the schema used to generate new rows
      */
-    RowMerger configureTargetColumns(@Nullable int[] targetColumns, short schemaId, Schema schema);
+    RowMerger configureTargetColumns(
+            @Nullable int[] targetColumns, short latestShemaId, Schema latestSchema);
 
-    /** Create a row merger based on the given configuration. */
-    static RowMerger create(TableConfig tableConf, KvFormat kvFormat) {
+    /**
+     * Create a row merger based on the given configuration.
+     *
+     * @param tableConf the table configuration
+     * @param kvFormat the kv format
+     * @param schemaGetter the schema getter for retrieving schemas by schema id (required for
+     *     schema evolution support)
+     * @return the created row merger
+     */
+    static RowMerger create(TableConfig tableConf, KvFormat kvFormat, SchemaGetter schemaGetter) {
         Optional<MergeEngineType> mergeEngineType = tableConf.getMergeEngineType();
         @Nullable DeleteBehavior deleteBehavior = tableConf.getDeleteBehavior().orElse(null);
 
@@ -88,6 +98,8 @@ public interface RowMerger {
                                         ConfigOptions.TABLE_MERGE_ENGINE_VERSION_COLUMN.key()));
                     }
                     return new VersionedRowMerger(versionColumn.get(), deleteBehavior);
+                case AGGREGATION:
+                    return new AggregateRowMerger(tableConf, kvFormat, schemaGetter);
                 default:
                     throw new IllegalArgumentException(
                             "Unsupported merge engine type: " + mergeEngineType.get());

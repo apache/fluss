@@ -14,3 +14,4 @@ The following merge engines are supported:
 1. [Default Merge Engine (LastRow)](table-design/table-types/pk-table/merge-engines/default.md)
 2. [FirstRow Merge Engine](table-design/table-types/pk-table/merge-engines/first-row.md)
 3. [Versioned Merge Engine](table-design/table-types/pk-table/merge-engines/versioned.md)
+4. [Aggregation Merge Engine](table-design/table-types/pk-table/merge-engines/aggregation.md)

@@ -52,6 +52,7 @@ import org.apache.fluss.exception.TooManyBucketsException;
 import org.apache.fluss.exception.TooManyPartitionsException;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.fs.FsPathAndFileName;
+import org.apache.fluss.metadata.AggFunctions;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.DatabaseInfo;
 import org.apache.fluss.metadata.DeleteBehavior;
@@ -511,6 +512,47 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         // Get the table and verify delete behavior is changed to IGNORE
         TableInfo tableInfo2 = admin.getTableInfo(tablePath2).join();
         assertThat(tableInfo2.getTableConfig().getDeleteBehavior()).hasValue(DeleteBehavior.IGNORE);
+
+        // Test 2.5: AGGREGATION merge engine - should set delete behavior to IGNORE
+        TablePath tablePathAggregate = TablePath.of("fluss", "test_ignore_delete_for_aggregate");
+        Schema aggregateSchema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("count", DataTypes.BIGINT(), AggFunctions.SUM())
+                        .primaryKey("id")
+                        .build();
+        Map<String, String> propertiesAggregate = new HashMap<>();
+        propertiesAggregate.put(ConfigOptions.TABLE_MERGE_ENGINE.key(), "aggregation");
+        TableDescriptor tableDescriptorAggregate =
+                TableDescriptor.builder()
+                        .schema(aggregateSchema)
+                        .comment("aggregate merge engine table")
+                        .properties(propertiesAggregate)
+                        .build();
+        admin.createTable(tablePathAggregate, tableDescriptorAggregate, false).join();
+        // Get the table and verify delete behavior is changed to IGNORE
+        TableInfo tableInfoAggregate = admin.getTableInfo(tablePathAggregate).join();
+        assertThat(tableInfoAggregate.getTableConfig().getDeleteBehavior())
+                .hasValue(DeleteBehavior.IGNORE);
+
+        // Test 2.6: AGGREGATION merge engine with delete behavior explicitly set to ALLOW - should
+        // be allowed
+        TablePath tablePathAggregateAllow =
+                TablePath.of("fluss", "test_allow_delete_for_aggregate");
+        Map<String, String> propertiesAggregateAllow = new HashMap<>();
+        propertiesAggregateAllow.put(ConfigOptions.TABLE_MERGE_ENGINE.key(), "aggregation");
+        propertiesAggregateAllow.put(ConfigOptions.TABLE_DELETE_BEHAVIOR.key(), "ALLOW");
+        TableDescriptor tableDescriptorAggregateAllow =
+                TableDescriptor.builder()
+                        .schema(aggregateSchema)
+                        .comment("aggregate merge engine table with allow delete")
+                        .properties(propertiesAggregateAllow)
+                        .build();
+        admin.createTable(tablePathAggregateAllow, tableDescriptorAggregateAllow, false).join();
+        // Get the table and verify delete behavior is set to ALLOW
+        TableInfo tableInfoAggregateAllow = admin.getTableInfo(tablePathAggregateAllow).join();
+        assertThat(tableInfoAggregateAllow.getTableConfig().getDeleteBehavior())
+                .hasValue(DeleteBehavior.ALLOW);
 
         // Test 3: FIRST_ROW merge engine with delete behavior explicitly set to ALLOW
         TablePath tablePath3 = TablePath.of("fluss", "test_allow_delete_for_first_row");

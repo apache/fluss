@@ -121,4 +121,158 @@ class TableSchemaTest {
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("Auto increment column can only be used in primary-key table.");
     }
+
+    @Test
+    void testSchemaBuilderColumnWithAggFunction() {
+        Schema schema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("sum_val", DataTypes.BIGINT(), AggFunctions.SUM())
+                        .column("max_val", DataTypes.INT(), AggFunctions.MAX())
+                        .column("min_val", DataTypes.INT(), AggFunctions.MIN())
+                        .column("last_val", DataTypes.STRING(), AggFunctions.LAST_VALUE())
+                        .column(
+                                "last_non_null",
+                                DataTypes.STRING(),
+                                AggFunctions.LAST_VALUE_IGNORE_NULLS())
+                        .column("first_val", DataTypes.STRING(), AggFunctions.FIRST_VALUE())
+                        .column(
+                                "first_non_null",
+                                DataTypes.STRING(),
+                                AggFunctions.FIRST_VALUE_IGNORE_NULLS())
+                        .column("listagg_val", DataTypes.STRING(), AggFunctions.LISTAGG())
+                        .column("string_agg_val", DataTypes.STRING(), AggFunctions.STRING_AGG())
+                        .column("bool_and_val", DataTypes.BOOLEAN(), AggFunctions.BOOL_AND())
+                        .column("bool_or_val", DataTypes.BOOLEAN(), AggFunctions.BOOL_OR())
+                        .primaryKey("id")
+                        .build();
+
+        assertThat(schema.getAggFunction("sum_val").get()).isEqualTo(AggFunctions.SUM());
+        assertThat(schema.getAggFunction("max_val").get()).isEqualTo(AggFunctions.MAX());
+        assertThat(schema.getAggFunction("min_val").get()).isEqualTo(AggFunctions.MIN());
+        assertThat(schema.getAggFunction("last_val").get()).isEqualTo(AggFunctions.LAST_VALUE());
+        assertThat(schema.getAggFunction("last_non_null").get())
+                .isEqualTo(AggFunctions.LAST_VALUE_IGNORE_NULLS());
+        assertThat(schema.getAggFunction("first_val").get()).isEqualTo(AggFunctions.FIRST_VALUE());
+        assertThat(schema.getAggFunction("first_non_null").get())
+                .isEqualTo(AggFunctions.FIRST_VALUE_IGNORE_NULLS());
+        assertThat(schema.getAggFunction("listagg_val").get()).isEqualTo(AggFunctions.LISTAGG());
+        assertThat(schema.getAggFunction("string_agg_val").get())
+                .isEqualTo(AggFunctions.STRING_AGG());
+        assertThat(schema.getAggFunction("bool_and_val").get()).isEqualTo(AggFunctions.BOOL_AND());
+        assertThat(schema.getAggFunction("bool_or_val").get()).isEqualTo(AggFunctions.BOOL_OR());
+    }
+
+    @Test
+    void testSchemaBuilderColumnWithAggFunctionThrowsExceptionForPrimaryKey() {
+        assertThatThrownBy(
+                        () ->
+                                Schema.newBuilder()
+                                        .column("id", DataTypes.INT(), AggFunctions.SUM())
+                                        .column("value", DataTypes.BIGINT())
+                                        .primaryKey("id")
+                                        .build())
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Cannot set aggregation function for primary key column");
+    }
+
+    @Test
+    void testSchemaEqualityWithAggFunction() {
+        Schema schema1 =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("value", DataTypes.BIGINT(), AggFunctions.SUM())
+                        .primaryKey("id")
+                        .build();
+
+        Schema schema2 =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("value", DataTypes.BIGINT(), AggFunctions.SUM())
+                        .primaryKey("id")
+                        .build();
+
+        Schema schema3 =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("value", DataTypes.BIGINT(), AggFunctions.MAX())
+                        .primaryKey("id")
+                        .build();
+
+        assertThat(schema1).isEqualTo(schema2);
+        assertThat(schema1).isNotEqualTo(schema3);
+    }
+
+    @Test
+    void testSchemaFromSchemaPreservesAggFunction() {
+        Schema original =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("value", DataTypes.BIGINT(), AggFunctions.SUM())
+                        .column("max_val", DataTypes.INT(), AggFunctions.MAX())
+                        .primaryKey("id")
+                        .build();
+
+        Schema copied = Schema.newBuilder().fromSchema(original).build();
+
+        assertThat(copied.getAggFunction("value")).isPresent();
+        assertThat(copied.getAggFunction("value").get()).isEqualTo(AggFunctions.SUM());
+        assertThat(copied.getAggFunction("max_val")).isPresent();
+        assertThat(copied.getAggFunction("max_val").get()).isEqualTo(AggFunctions.MAX());
+    }
+
+    @Test
+    void testListaggWithCustomDelimiter() {
+        // Test LISTAGG with default delimiter (comma)
+        Schema schemaDefault =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("tags", DataTypes.STRING(), AggFunctions.LISTAGG())
+                        .primaryKey("id")
+                        .build();
+
+        assertThat(schemaDefault.getAggFunction("tags")).isPresent();
+        assertThat(schemaDefault.getAggFunction("tags").get()).isEqualTo(AggFunctions.LISTAGG());
+        assertThat(schemaDefault.getAggFunction("tags").get().hasParameters()).isFalse();
+
+        // Test LISTAGG with custom delimiter
+        Schema schemaCustom =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("tags", DataTypes.STRING(), AggFunctions.LISTAGG(";"))
+                        .column("values", DataTypes.STRING(), AggFunctions.LISTAGG("|"))
+                        .column("paths", DataTypes.STRING(), AggFunctions.LISTAGG("/"))
+                        .primaryKey("id")
+                        .build();
+
+        assertThat(schemaCustom.getAggFunction("tags")).isPresent();
+        assertThat(schemaCustom.getAggFunction("tags").get()).isEqualTo(AggFunctions.LISTAGG(";"));
+        assertThat(schemaCustom.getAggFunction("tags").get().getParameter("delimiter"))
+                .isEqualTo(";");
+
+        assertThat(schemaCustom.getAggFunction("values")).isPresent();
+        assertThat(schemaCustom.getAggFunction("values").get())
+                .isEqualTo(AggFunctions.LISTAGG("|"));
+        assertThat(schemaCustom.getAggFunction("values").get().getParameter("delimiter"))
+                .isEqualTo("|");
+
+        assertThat(schemaCustom.getAggFunction("paths")).isPresent();
+        assertThat(schemaCustom.getAggFunction("paths").get()).isEqualTo(AggFunctions.LISTAGG("/"));
+        assertThat(schemaCustom.getAggFunction("paths").get().getParameter("delimiter"))
+                .isEqualTo("/");
+
+        // Test STRING_AGG with custom delimiter
+        Schema schemaStringAgg =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("items", DataTypes.STRING(), AggFunctions.STRING_AGG(", "))
+                        .primaryKey("id")
+                        .build();
+
+        assertThat(schemaStringAgg.getAggFunction("items")).isPresent();
+        assertThat(schemaStringAgg.getAggFunction("items").get())
+                .isEqualTo(AggFunctions.STRING_AGG(", "));
+        assertThat(schemaStringAgg.getAggFunction("items").get().getParameter("delimiter"))
+                .isEqualTo(", ");
+    }
 }

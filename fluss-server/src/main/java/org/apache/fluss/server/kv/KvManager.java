@@ -247,7 +247,7 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
                     }
 
                     File tabletDir = getOrCreateTabletDir(tablePath, tableBucket);
-                    RowMerger merger = RowMerger.create(tableConfig, kvFormat);
+                    RowMerger merger = RowMerger.create(tableConfig, kvFormat, schemaGetter);
                     KvTablet tablet =
                             KvTablet.create(
                                     tablePath,
@@ -356,7 +356,8 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
         TableInfo tableInfo = getTableInfo(zkClient, tablePath);
 
         TableConfig tableConfig = tableInfo.getTableConfig();
-        RowMerger rowMerger = RowMerger.create(tableConfig, tableConfig.getKvFormat());
+        RowMerger rowMerger =
+                RowMerger.create(tableConfig, tableConfig.getKvFormat(), schemaGetter);
         KvTablet kvTablet =
                 KvTablet.create(
                         physicalTablePath,

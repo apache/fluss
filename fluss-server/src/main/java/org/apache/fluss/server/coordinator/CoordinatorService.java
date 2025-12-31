@@ -461,12 +461,14 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                             ConfigOptions.TABLE_DATALAKE_ENABLED.key()));
         }
 
-        // For tables with first_row or versioned merge engines, automatically set to IGNORE if
-        // delete behavior is not set
+        // For tables with first_row, versioned or aggregation merge engines, automatically set to
+        // IGNORE if delete behavior is not set
         Configuration tableConf = Configuration.fromMap(tableDescriptor.getProperties());
         MergeEngineType mergeEngine =
                 tableConf.getOptional(ConfigOptions.TABLE_MERGE_ENGINE).orElse(null);
-        if (mergeEngine == MergeEngineType.FIRST_ROW || mergeEngine == MergeEngineType.VERSIONED) {
+        if (mergeEngine == MergeEngineType.FIRST_ROW
+                || mergeEngine == MergeEngineType.VERSIONED
+                || mergeEngine == MergeEngineType.AGGREGATION) {
             if (tableDescriptor.hasPrimaryKey()
                     && !tableConf.getOptional(ConfigOptions.TABLE_DELETE_BEHAVIOR).isPresent()) {
                 Map<String, String> newProperties = new HashMap<>(newDescriptor.getProperties());

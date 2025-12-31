@@ -84,12 +84,12 @@ public class VersionedRowMerger implements RowMerger {
 
     @Override
     public RowMerger configureTargetColumns(
-            @Nullable int[] targetColumns, short schemaId, Schema schema) {
+            @Nullable int[] targetColumns, short latestShemaId, Schema latestSchema) {
         if (targetColumns == null) {
-            if (schemaId != this.schemaId) {
-                this.schemaId = schemaId;
+            if (latestShemaId != this.schemaId) {
+                this.schemaId = latestShemaId;
                 this.versionComparator =
-                        createVersionComparator(schema.getRowType(), versionColumnName);
+                        createVersionComparator(latestSchema.getRowType(), versionColumnName);
             }
             return this;
         } else {

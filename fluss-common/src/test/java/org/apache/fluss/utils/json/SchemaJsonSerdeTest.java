@@ -17,6 +17,7 @@
 
 package org.apache.fluss.utils.json;
 
+import org.apache.fluss.metadata.AggFunctions;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.types.DataTypes;
 
@@ -89,19 +90,42 @@ public class SchemaJsonSerdeTest extends JsonSerdeTestBase<Schema> {
     static final String SCHEMA_JSON_4 =
             "{\"version\":1,\"columns\":[{\"name\":\"a\",\"data_type\":{\"type\":\"INTEGER\",\"nullable\":false},\"comment\":\"a is first column\",\"id\":0},{\"name\":\"b\",\"data_type\":{\"type\":\"INTEGER\",\"nullable\":false},\"comment\":\"b is second column\",\"id\":1},{\"name\":\"c\",\"data_type\":{\"type\":\"CHAR\",\"nullable\":false,\"length\":10},\"comment\":\"c is third column\",\"id\":2}],\"primary_key\":[\"a\",\"c\"],\"auto_increment_column\":[\"b\"],\"highest_field_id\":2}";
 
+    static final Schema SCHEMA_WITH_AGG =
+            Schema.newBuilder()
+                    .column("product_id", DataTypes.BIGINT().copy(false))
+                    .column("total_sales", DataTypes.BIGINT(), AggFunctions.SUM())
+                    .column("max_price", DataTypes.DECIMAL(10, 2), AggFunctions.MAX())
+                    .column(
+                            "last_update_time",
+                            DataTypes.TIMESTAMP(),
+                            AggFunctions.LAST_VALUE_IGNORE_NULLS())
+                    .column("tags", DataTypes.STRING(), AggFunctions.LISTAGG(";"))
+                    .column("categories", DataTypes.STRING(), AggFunctions.STRING_AGG("|"))
+                    .column("labels", DataTypes.STRING(), AggFunctions.LISTAGG())
+                    .primaryKey("product_id")
+                    .build();
+
+    static final String SCHEMA_JSON_WITH_AGG =
+            "{\"version\":1,\"columns\":[{\"name\":\"product_id\",\"data_type\":{\"type\":\"BIGINT\",\"nullable\":false},\"id\":0},{\"name\":\"total_sales\",\"data_type\":{\"type\":\"BIGINT\"},\"agg_function\":{\"type\":\"sum\"},\"id\":1},{\"name\":\"max_price\",\"data_type\":{\"type\":\"DECIMAL\",\"precision\":10,\"scale\":2},\"agg_function\":{\"type\":\"max\"},\"id\":2},{\"name\":\"last_update_time\",\"data_type\":{\"type\":\"TIMESTAMP_WITHOUT_TIME_ZONE\",\"precision\":6},\"agg_function\":{\"type\":\"last_value_ignore_nulls\"},\"id\":3},{\"name\":\"tags\",\"data_type\":{\"type\":\"STRING\"},\"agg_function\":{\"type\":\"listagg\",\"parameters\":{\"delimiter\":\";\"}},\"id\":4},{\"name\":\"categories\",\"data_type\":{\"type\":\"STRING\"},\"agg_function\":{\"type\":\"string_agg\",\"parameters\":{\"delimiter\":\"|\"}},\"id\":5},{\"name\":\"labels\",\"data_type\":{\"type\":\"STRING\"},\"agg_function\":{\"type\":\"listagg\"},\"id\":6}],\"primary_key\":[\"product_id\"],\"highest_field_id\":6}";
+
     SchemaJsonSerdeTest() {
         super(SchemaJsonSerde.INSTANCE);
     }
 
     @Override
     protected Schema[] createObjects() {
-        return new Schema[] {SCHEMA_0, SCHEMA_1, SCHEMA_2, SCHEMA_3, SCHEMA_4};
+        return new Schema[] {SCHEMA_0, SCHEMA_1, SCHEMA_2, SCHEMA_3, SCHEMA_4, SCHEMA_WITH_AGG};
     }
 
     @Override
     protected String[] expectedJsons() {
         return new String[] {
-            SCHEMA_JSON_0, SCHEMA_JSON_1, SCHEMA_JSON_1, SCHEMA_JSON_3, SCHEMA_JSON_4
+            SCHEMA_JSON_0,
+            SCHEMA_JSON_1,
+            SCHEMA_JSON_1,
+            SCHEMA_JSON_3,
+            SCHEMA_JSON_4,
+            SCHEMA_JSON_WITH_AGG
         };
     }
 
