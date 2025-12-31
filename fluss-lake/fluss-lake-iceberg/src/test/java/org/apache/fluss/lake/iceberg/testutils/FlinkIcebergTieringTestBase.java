@@ -28,6 +28,7 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.flink.tiering.LakeTieringJobBuilder;
+import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
@@ -37,6 +38,7 @@ import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.server.replica.Replica;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.server.zk.ZooKeeperClient;
+import org.apache.fluss.server.zk.data.lake.LakeTable;
 
 import org.apache.flink.api.common.RuntimeExecutionMode;
 import org.apache.flink.core.execution.JobClient;
@@ -76,6 +78,7 @@ import java.util.SortedSet;
 import java.util.TreeSet;
 
 import static org.apache.fluss.flink.tiering.source.TieringSourceOptions.POLL_TIERING_TABLE_INTERVAL;
+import static org.apache.fluss.lake.committer.LakeCommitter.FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY;
 import static org.apache.fluss.lake.iceberg.utils.IcebergConversions.toIceberg;
 import static org.apache.fluss.metadata.TableDescriptor.OFFSET_COLUMN_NAME;
 import static org.apache.fluss.testutils.DataTestUtils.row;
@@ -471,11 +474,20 @@ public class FlinkIcebergTieringTestBase {
         return tableScan;
     }
 
-    protected void checkSnapshotPropertyInIceberg(
-            TablePath tablePath, Map<String, String> expectedProperties) {
+    protected void checkFlussOffsetsInSnapshot(
+            TablePath tablePath, Map<TableBucket, Long> expectedOffsets) throws Exception {
         org.apache.iceberg.Table table = icebergCatalog.loadTable(toIceberg(tablePath));
         Snapshot snapshot = table.currentSnapshot();
-        assertThat(snapshot.summary()).containsAllEntriesOf(expectedProperties);
+
+        String offsetFile = snapshot.summary().get(FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY);
+        Map<TableBucket, Long> recordedOffsets =
+                new LakeTable(
+                                new LakeTable.LakeSnapshotMetadata(
+                                        // don't care about snapshot id
+                                        -1, new FsPath(offsetFile), null))
+                        .getOrReadLatestTableSnapshot()
+                        .getBucketLogEndOffset();
+        assertThat(recordedOffsets).isEqualTo(expectedOffsets);
     }
 
     protected Map<String, List<InternalRow>> writeRowsIntoPartitionedTable(

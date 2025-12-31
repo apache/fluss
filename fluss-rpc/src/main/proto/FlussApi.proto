@@ -449,25 +449,27 @@ message NotifyRemoteLogOffsetsRequest {
 message NotifyRemoteLogOffsetsResponse {
 }
 
+message PrepareLakeTableSnapshotRequest {
+  repeated PbTableOffsets bucket_offsets = 1;
+}
+
+message PrepareLakeTableSnapshotResponse {
+  repeated PbPrepareLakeTableRespForTable prepare_lake_table_resp = 1;
+}
+
 message CommitLakeTableSnapshotRequest {
+  // Deprecated: PbLakeTableSnapshotInfo is no longer used for committing lake table snapshots.
+  // Currently, it is only used to allow the coordinator to notify tablet servers about the current
+  // synchronized log end offsets, which are then reported to metrics. In the future, we plan to
+  // have tiering directly report to metrics, and this field will be fully removed.
+  // Still reserve it for protocol compatibility.
   repeated PbLakeTableSnapshotInfo tables_req = 1;
-}
-
-message PbLakeTableSnapshotInfo {
-  optional int64 table_id = 1;
-  required int64 snapshot_id = 2;
-  repeated PbLakeTableOffsetForBucket buckets_req = 3;
-}
-
-message PbLakeTableOffsetForBucket {
-  optional int64 partition_id = 1;
-  required int32 bucket_id = 2;
-  // Deprecated: log_start_offset is no longer used. Field number 3 is reserved for protocol compatibility.
-  // optional int64 log_start_offset = 3;
-  optional int64 log_end_offset = 4;
-  // Deprecated: partition_name is no longer used. Field number 5 is reserved for protocol compatibility.
-  // optional string partition_name = 5;
-  optional int64 max_timestamp = 6;
+  // The metadata for lake table snapshots to be committed. Each entry contains the table ID,
+  // snapshot ID, and the file paths where the snapshot data (containing bucket log end offset
+  // information) is stored. The tiered_snapshot_file_path points to the file storing tiered log
+  // end offsets, while readable_snapshot_file_path (if present) points to the file storing readable
+  // log end offsets.
+  repeated PbLakeTableSnapshotMetadata lake_table_snapshot_metadata = 2;
 }
 
 message CommitLakeTableSnapshotResponse {
@@ -475,9 +477,9 @@ message CommitLakeTableSnapshotResponse {
 }
 
 message PbCommitLakeTableSnapshotRespForTable {
-  required int64 table_id = 1;
-  optional int32 error_code = 2;
-  optional string error_message = 3;
+  optional int32 error_code = 1;
+  optional string error_message = 2;
+  required int64 table_id = 3;
 }
 
 message NotifyLakeTableOffsetRequest {
@@ -1012,4 +1014,49 @@ message PbRebalancePlanForBucket {
   optional int32 new_leader = 4;
   repeated int32 original_replicas = 5 [packed = true];
   repeated int32 new_replicas = 6 [packed = true];
+}
+
+message PbLakeTableSnapshotMetadata {
+  required int64 table_id = 1;
+  required int64 snapshot_id = 2;
+  required string tiered_bucket_offsets_file_path = 3;
+  optional string readable_bucket_offsets_file_path = 4;
+}
+
+message PbLakeTableSnapshotInfo {
+  optional int64 table_id = 1;
+  required int64 snapshot_id = 2;
+  repeated PbLakeTableOffsetForBucket buckets_req = 3;
+  // add table path to reduce get table_path by table id
+  optional PbTablePath table_path = 4;
+}
+
+message PbLakeTableOffsetForBucket {
+  optional int64 partition_id = 1;
+  required int32 bucket_id = 2;
+  // Deprecated: log_start_offset is no longer used. Field number 3 is reserved for protocol compatibility.
+  // optional int64 log_start_offset = 3;
+  optional int64 log_end_offset = 4;
+  // Deprecated: partition_name is no longer used. Field number 5 is reserved for protocol compatibility.
+  // optional string partition_name = 5;
+  optional int64 max_timestamp = 6;
+}
+
+message PbPrepareLakeTableRespForTable {
+  optional int32 error_code = 1;
+  optional string error_message = 2;
+  optional int64 table_id = 3;
+  optional string lake_table_offsets_path = 4;
+}
+
+message PbTableOffsets {
+  required int64 table_id = 1;
+  required PbTablePath table_path = 2;
+  repeated PbBucketOffset bucket_offsets = 3;
+}
+
+message PbBucketOffset {
+  optional int64 partition_id = 1;
+  required int32 bucket_id = 2;
+  optional int64 log_end_offset = 4;
 }

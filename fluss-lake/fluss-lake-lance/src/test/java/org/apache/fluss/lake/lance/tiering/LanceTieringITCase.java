@@ -18,11 +18,13 @@
 package org.apache.fluss.lake.lance.tiering;
 
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.lake.lance.LanceConfig;
 import org.apache.fluss.lake.lance.testutils.FlinkLanceTieringTestBase;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.server.zk.data.lake.LakeTable;
 
 import com.lancedb.lance.Dataset;
 import com.lancedb.lance.ReadOptions;
@@ -39,13 +41,11 @@ import org.junit.jupiter.api.Test;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
-import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 
-import static org.apache.fluss.lake.committer.BucketOffset.FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY;
-import static org.apache.fluss.lake.writer.LakeTieringFactory.FLUSS_LAKE_TIERING_COMMIT_USER;
+import static org.apache.fluss.lake.committer.LakeCommitter.FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY;
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -96,29 +96,28 @@ class LanceTieringITCase extends FlinkLanceTieringTestBase {
 
         // check data in lance
         checkDataInLanceAppendOnlyTable(config, flussRows);
-        // check snapshot property in lance
-        Map<String, String> properties =
-                new HashMap<String, String>() {
-                    {
-                        put(
-                                FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY,
-                                "[{\"bucket\":0,\"offset\":30}]");
-                        put("commit-user", FLUSS_LAKE_TIERING_COMMIT_USER);
-                    }
-                };
-        checkSnapshotPropertyInLance(config, properties);
+        checkSnapshotPropertyInLance(config, Collections.singletonMap(t1Bucket, 30L));
 
         jobClient.cancel().get();
     }
 
     private void checkSnapshotPropertyInLance(
-            LanceConfig config, Map<String, String> expectedProperties) throws Exception {
+            LanceConfig config, Map<TableBucket, Long> expectedOffsets) throws Exception {
         ReadOptions.Builder builder = new ReadOptions.Builder();
         builder.setStorageOptions(LanceConfig.genStorageOptions(config));
         try (Dataset dataset = Dataset.open(allocator, config.getDatasetUri(), builder.build())) {
             Transaction transaction = dataset.readTransaction().orElse(null);
             assertThat(transaction).isNotNull();
-            assertThat(transaction.transactionProperties()).isEqualTo(expectedProperties);
+            String offsetFile =
+                    transaction.transactionProperties().get(FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY);
+            Map<TableBucket, Long> recordedOffsets =
+                    new LakeTable(
+                                    new LakeTable.LakeSnapshotMetadata(
+                                            // don't care about snapshot id
+                                            -1, new FsPath(offsetFile), null))
+                            .getOrReadLatestTableSnapshot()
+                            .getBucketLogEndOffset();
+            assertThat(recordedOffsets).isEqualTo(expectedOffsets);
         }
     }
 

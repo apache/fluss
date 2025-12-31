@@ -19,6 +19,7 @@ package org.apache.fluss.server.entity;
 
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.rpc.messages.CommitLakeTableSnapshotRequest;
+import org.apache.fluss.server.zk.data.lake.LakeTable;
 import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
 
 import java.util.Map;
@@ -27,22 +28,44 @@ import java.util.Objects;
 /** The data for request {@link CommitLakeTableSnapshotRequest}. */
 public class CommitLakeTableSnapshotData {
 
+    /**
+     * Since 0.9, this field is only used to allow the coordinator to send requests to tablet
+     * servers, enabling tablet servers to report metrics about synchronized log end offsets. In the
+     * future, we plan to have the tiering service directly report metrics, and this field will be
+     * removed.
+     */
     private final Map<Long, LakeTableSnapshot> lakeTableSnapshots;
-    private final Map<TableBucket, Long> tableBucketsMaxTieredTimestamp;
+
+    /**
+     * Since 0.9, this field is only used to allow the coordinator to send requests to tablet
+     * servers, enabling tablet servers to report metrics about max tiered timestamps. In the
+     * future, we plan to have the tiering service directly report metrics, and this field will be
+     * removed.
+     */
+    private final Map<Long, Map<TableBucket, Long>> tableMaxTieredTimestamps;
+
+    // the following field only non-empty since 0.9
+    private final Map<Long, LakeTable.LakeSnapshotMetadata> lakeTableSnapshotMetadatas;
 
     public CommitLakeTableSnapshotData(
             Map<Long, LakeTableSnapshot> lakeTableSnapshots,
-            Map<TableBucket, Long> tableBucketsMaxTieredTimestamp) {
+            Map<Long, Map<TableBucket, Long>> tableMaxTieredTimestamps,
+            Map<Long, LakeTable.LakeSnapshotMetadata> lakeTableSnapshotMetadatas) {
         this.lakeTableSnapshots = lakeTableSnapshots;
-        this.tableBucketsMaxTieredTimestamp = tableBucketsMaxTieredTimestamp;
+        this.tableMaxTieredTimestamps = tableMaxTieredTimestamps;
+        this.lakeTableSnapshotMetadatas = lakeTableSnapshotMetadatas;
     }
 
     public Map<Long, LakeTableSnapshot> getLakeTableSnapshot() {
         return lakeTableSnapshots;
     }
 
-    public Map<TableBucket, Long> getTableBucketsMaxTieredTimestamp() {
-        return tableBucketsMaxTieredTimestamp;
+    public Map<Long, Map<TableBucket, Long>> getTableMaxTieredTimestamps() {
+        return tableMaxTieredTimestamps;
+    }
+
+    public Map<Long, LakeTable.LakeSnapshotMetadata> getLakeTableSnapshotMetadatas() {
+        return lakeTableSnapshotMetadatas;
     }
 
     @Override
@@ -55,13 +78,14 @@ public class CommitLakeTableSnapshotData {
         }
         CommitLakeTableSnapshotData that = (CommitLakeTableSnapshotData) o;
         return Objects.equals(lakeTableSnapshots, that.lakeTableSnapshots)
-                && Objects.equals(
-                        tableBucketsMaxTieredTimestamp, that.tableBucketsMaxTieredTimestamp);
+                && Objects.equals(tableMaxTieredTimestamps, that.tableMaxTieredTimestamps)
+                && Objects.equals(lakeTableSnapshotMetadatas, that.lakeTableSnapshotMetadatas);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(lakeTableSnapshots, tableBucketsMaxTieredTimestamp);
+        return Objects.hash(
+                lakeTableSnapshots, tableMaxTieredTimestamps, lakeTableSnapshotMetadatas);
     }
 
     @Override
@@ -69,8 +93,10 @@ public class CommitLakeTableSnapshotData {
         return "CommitLakeTableSnapshotData{"
                 + "lakeTableSnapshots="
                 + lakeTableSnapshots
-                + ", tableBucketsMaxTieredTimestamp="
-                + tableBucketsMaxTieredTimestamp
+                + ", tableMaxTieredTimestamps="
+                + tableMaxTieredTimestamps
+                + ", lakeTableSnapshotMetadatas="
+                + lakeTableSnapshotMetadatas
                 + '}';
     }
 }

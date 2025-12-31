@@ -34,6 +34,7 @@ import org.apache.fluss.exception.SecurityDisabledException;
 import org.apache.fluss.exception.TableAlreadyExistException;
 import org.apache.fluss.exception.TableNotPartitionedException;
 import org.apache.fluss.fs.FileSystem;
+import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.lake.lakestorage.LakeCatalog;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.DatabaseDescriptor;
@@ -88,12 +89,17 @@ import org.apache.fluss.rpc.messages.MetadataResponse;
 import org.apache.fluss.rpc.messages.PbAlterConfig;
 import org.apache.fluss.rpc.messages.PbHeartbeatReqForTable;
 import org.apache.fluss.rpc.messages.PbHeartbeatRespForTable;
+import org.apache.fluss.rpc.messages.PbPrepareLakeTableRespForTable;
+import org.apache.fluss.rpc.messages.PbTableOffsets;
+import org.apache.fluss.rpc.messages.PrepareLakeTableSnapshotRequest;
+import org.apache.fluss.rpc.messages.PrepareLakeTableSnapshotResponse;
 import org.apache.fluss.rpc.messages.RebalanceRequest;
 import org.apache.fluss.rpc.messages.RebalanceResponse;
 import org.apache.fluss.rpc.messages.RemoveServerTagRequest;
 import org.apache.fluss.rpc.messages.RemoveServerTagResponse;
 import org.apache.fluss.rpc.netty.server.Session;
 import org.apache.fluss.rpc.protocol.ApiError;
+import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.security.acl.AclBinding;
 import org.apache.fluss.security.acl.AclBindingFilter;
 import org.apache.fluss.security.acl.FlussPrincipal;
@@ -125,8 +131,11 @@ import org.apache.fluss.server.zk.data.BucketAssignment;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
 import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.server.zk.data.TableRegistration;
+import org.apache.fluss.server.zk.data.lake.LakeTable;
+import org.apache.fluss.server.zk.data.lake.LakeTableHelper;
 import org.apache.fluss.utils.IOUtils;
 import org.apache.fluss.utils.concurrent.FutureUtils;
+import org.apache.fluss.utils.json.TableBucketOffsets;
 
 import javax.annotation.Nullable;
 
@@ -135,6 +144,7 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.function.Supplier;
@@ -152,6 +162,7 @@ import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeCreateAcls
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeDropAclsResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toAlterTableConfigChanges;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toAlterTableSchemaChanges;
+import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toTableBucketOffsets;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toTablePath;
 import static org.apache.fluss.server.utils.TableAssignmentUtils.generateAssignment;
 import static org.apache.fluss.utils.PartitionUtils.validatePartitionSpec;
@@ -170,6 +181,8 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
 
     private final LakeTableTieringManager lakeTableTieringManager;
     private final LakeCatalogDynamicLoader lakeCatalogDynamicLoader;
+    private final ExecutorService ioExecutor;
+    private final LakeTableHelper lakeTableHelper;
 
     public CoordinatorService(
             Configuration conf,
@@ -202,6 +215,9 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         this.lakeTableTieringManager = lakeTableTieringManager;
         this.metadataCache = metadataCache;
         this.lakeCatalogDynamicLoader = lakeCatalogDynamicLoader;
+        this.ioExecutor = ioExecutor;
+        this.lakeTableHelper =
+                new LakeTableHelper(zkClient, conf.getString(ConfigOptions.REMOTE_DATA_DIR));
     }
 
     @Override
@@ -628,6 +644,52 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         List<AclBindingFilter> filters = toAclBindingFilters(request.getAclFiltersList());
         List<AclDeleteResult> aclDeleteResults = authorizer.dropAcls(currentSession(), filters);
         return CompletableFuture.completedFuture(makeDropAclsResponse(aclDeleteResults));
+    }
+
+    @Override
+    public CompletableFuture<PrepareLakeTableSnapshotResponse> prepareLakeTableSnapshot(
+            PrepareLakeTableSnapshotRequest request) {
+        CompletableFuture<PrepareLakeTableSnapshotResponse> future = new CompletableFuture<>();
+        ioExecutor.submit(
+                () -> {
+                    PrepareLakeTableSnapshotResponse response =
+                            new PrepareLakeTableSnapshotResponse();
+                    try {
+                        for (PbTableOffsets bucketOffsets : request.getBucketOffsetsList()) {
+                            PbPrepareLakeTableRespForTable pbPrepareLakeTableRespForTable =
+                                    response.addPrepareLakeTableResp();
+                            try {
+                                long tableId = bucketOffsets.getTableId();
+                                TableBucketOffsets tableBucketOffsets =
+                                        toTableBucketOffsets(bucketOffsets);
+                                // get previous lake tables
+                                Optional<LakeTable> optPreviousLakeTable =
+                                        zkClient.getLakeTable(tableId);
+                                if (optPreviousLakeTable.isPresent()) {
+                                    // need to merge with previous lake table
+                                    tableBucketOffsets =
+                                            lakeTableHelper.mergeTableBucketOffsets(
+                                                    optPreviousLakeTable.get(), tableBucketOffsets);
+                                }
+                                TablePath tablePath = toTablePath(bucketOffsets.getTablePath());
+                                FsPath fsPath =
+                                        lakeTableHelper.storeLakeTableOffsetsFile(
+                                                tablePath, tableBucketOffsets);
+                                pbPrepareLakeTableRespForTable.setTableId(tableId);
+                                pbPrepareLakeTableRespForTable.setLakeTableOffsetsPath(
+                                        fsPath.toString());
+                            } catch (Exception e) {
+                                Errors error = ApiError.fromThrowable(e).error();
+                                pbPrepareLakeTableRespForTable.setError(
+                                        error.code(), error.message());
+                            }
+                        }
+                        future.complete(response);
+                    } catch (Exception e) {
+                        future.completeExceptionally(e);
+                    }
+                });
+        return future;
     }
 
     @Override

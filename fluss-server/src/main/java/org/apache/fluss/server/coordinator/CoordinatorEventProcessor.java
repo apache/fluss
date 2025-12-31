@@ -100,6 +100,7 @@ import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.server.zk.data.TabletServerRegistration;
 import org.apache.fluss.server.zk.data.ZkData.PartitionIdsZNode;
 import org.apache.fluss.server.zk.data.ZkData.TableIdsZNode;
+import org.apache.fluss.server.zk.data.lake.LakeTable;
 import org.apache.fluss.server.zk.data.lake.LakeTableHelper;
 import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
 import org.apache.fluss.utils.types.Tuple2;
@@ -1272,12 +1273,15 @@ public class CoordinatorEventProcessor implements EventProcessor {
 
     private void processNotifyLakeTableOffsetEvent(NotifyLakeTableOffsetEvent event) {
         Map<Long, LakeTableSnapshot> lakeTableSnapshots = event.getLakeTableSnapshots();
-        Map<TableBucket, Long> tableBucketMaxTieredTimestamps =
-                event.getTableBucketMaxTieredTimestamps();
+        Map<Long, Map<TableBucket, Long>> tableMaxTieredTimestamps =
+                event.getTableMaxTieredTimestamps();
         coordinatorRequestBatch.newBatch();
         for (Map.Entry<Long, LakeTableSnapshot> lakeTableSnapshotEntry :
                 lakeTableSnapshots.entrySet()) {
             LakeTableSnapshot lakeTableSnapshot = lakeTableSnapshotEntry.getValue();
+            Map<TableBucket, Long> tableBucketMaxTieredTimestamps =
+                    tableMaxTieredTimestamps.getOrDefault(
+                            lakeTableSnapshotEntry.getKey(), Collections.emptyMap());
             for (TableBucket tb : lakeTableSnapshot.getBucketLogEndOffset().keySet()) {
                 coordinatorContext
                         .getBucketLeaderAndIsr(tb)
@@ -1347,6 +1351,18 @@ public class CoordinatorEventProcessor implements EventProcessor {
     private void tryProcessCommitLakeTableSnapshot(
             CommitLakeTableSnapshotEvent commitLakeTableSnapshotEvent,
             CompletableFuture<CommitLakeTableSnapshotResponse> callback) {
+        CommitLakeTableSnapshotData commitLakeTableSnapshotData =
+                commitLakeTableSnapshotEvent.getCommitLakeTableSnapshotData();
+        if (commitLakeTableSnapshotData.getLakeTableSnapshotMetadatas().isEmpty()) {
+            handleCommitLakeTableSnapshotV1(commitLakeTableSnapshotEvent, callback);
+        } else {
+            handleCommitLakeTableSnapshotV2(commitLakeTableSnapshotEvent, callback);
+        }
+    }
+
+    private void handleCommitLakeTableSnapshotV1(
+            CommitLakeTableSnapshotEvent commitLakeTableSnapshotEvent,
+            CompletableFuture<CommitLakeTableSnapshotResponse> callback) {
         // commit the lake table snapshot asynchronously
         CommitLakeTableSnapshotData commitLakeTableSnapshotData =
                 commitLakeTableSnapshotEvent.getCommitLakeTableSnapshotData();
@@ -1367,6 +1383,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
                     try {
                         CommitLakeTableSnapshotResponse response =
                                 new CommitLakeTableSnapshotResponse();
+                        Set<Long> failedTableIds = new HashSet<>();
                         for (Map.Entry<Long, LakeTableSnapshot> lakeTableSnapshotEntry :
                                 lakeTableSnapshots.entrySet()) {
                             Long tableId = lakeTableSnapshotEntry.getKey();
@@ -1385,20 +1402,72 @@ public class CoordinatorEventProcessor implements EventProcessor {
                                 }
 
                                 // this involves IO operation (ZK), so we do it in ioExecutor
-                                lakeTableHelper.upsertLakeTable(
-                                        tableId, tablePath, lakeTableSnapshotEntry.getValue());
+                                lakeTableHelper.registerLakeTableSnapshotV1(
+                                        tableId, lakeTableSnapshotEntry.getValue());
                             } catch (Exception e) {
+                                failedTableIds.add(tableId);
                                 ApiError error = ApiError.fromThrowable(e);
                                 tableResp.setError(error.error().code(), error.message());
                             }
                         }
 
-                        // send notify lakehouse data request to all replicas via coordinator event
+                        // remove failed tables
+                        Map<Long, LakeTableSnapshot> commitlakeTableSnapshots =
+                                commitLakeTableSnapshotData.getLakeTableSnapshot();
+                        commitlakeTableSnapshots.keySet().removeAll(failedTableIds);
+                        Map<Long, Map<TableBucket, Long>> tableMaxTieredTimestamps =
+                                commitLakeTableSnapshotData.getTableMaxTieredTimestamps();
+                        tableMaxTieredTimestamps.keySet().removeAll(failedTableIds);
+
                         coordinatorEventManager.put(
                                 new NotifyLakeTableOffsetEvent(
-                                        lakeTableSnapshots,
-                                        commitLakeTableSnapshotData
-                                                .getTableBucketsMaxTieredTimestamp()));
+                                        commitlakeTableSnapshots, tableMaxTieredTimestamps));
+                        callback.complete(response);
+                    } catch (Exception e) {
+                        callback.completeExceptionally(e);
+                    }
+                });
+    }
+
+    private void handleCommitLakeTableSnapshotV2(
+            CommitLakeTableSnapshotEvent commitLakeTableSnapshotEvent,
+            CompletableFuture<CommitLakeTableSnapshotResponse> callback) {
+        CommitLakeTableSnapshotData commitLakeTableSnapshotData =
+                commitLakeTableSnapshotEvent.getCommitLakeTableSnapshotData();
+        Map<Long, LakeTable.LakeSnapshotMetadata> lakeSnapshotMetadatas =
+                commitLakeTableSnapshotData.getLakeTableSnapshotMetadatas();
+        ioExecutor.execute(
+                () -> {
+                    try {
+                        CommitLakeTableSnapshotResponse response =
+                                new CommitLakeTableSnapshotResponse();
+                        Set<Long> failedTableIds = new HashSet<>();
+                        for (Map.Entry<Long, LakeTable.LakeSnapshotMetadata>
+                                lakeSnapshotMetadataEntry : lakeSnapshotMetadatas.entrySet()) {
+                            PbCommitLakeTableSnapshotRespForTable tableResp =
+                                    response.addTableResp();
+                            long tableId = lakeSnapshotMetadataEntry.getKey();
+                            tableResp.setTableId(tableId);
+                            try {
+                                lakeTableHelper.registerLakeTableSnapshotV2(
+                                        tableId, lakeSnapshotMetadataEntry.getValue());
+                            } catch (Exception e) {
+                                failedTableIds.add(tableId);
+                                ApiError error = ApiError.fromThrowable(e);
+                                tableResp.setError(error.error().code(), error.message());
+                            }
+                        }
+                        // remove failed tables
+                        Map<Long, LakeTableSnapshot> lakeTableSnapshots =
+                                commitLakeTableSnapshotData.getLakeTableSnapshot();
+                        lakeTableSnapshots.keySet().removeAll(failedTableIds);
+                        Map<Long, Map<TableBucket, Long>> tableMaxTieredTimestamps =
+                                commitLakeTableSnapshotData.getTableMaxTieredTimestamps();
+                        tableMaxTieredTimestamps.keySet().removeAll(failedTableIds);
+
+                        coordinatorEventManager.put(
+                                new NotifyLakeTableOffsetEvent(
+                                        lakeTableSnapshots, tableMaxTieredTimestamps));
                         callback.complete(response);
                     } catch (Exception e) {
                         callback.completeExceptionally(e);

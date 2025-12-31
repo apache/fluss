@@ -37,6 +37,12 @@ import java.util.Map;
 public interface LakeCommitter<WriteResult, CommittableT> extends AutoCloseable {
 
     /**
+     * The property key used to store the file path of lake table bucket offsets in snapshot
+     * properties.
+     */
+    String FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY = "fluss-offsets";
+
+    /**
      * Converts a list of write results to a committable object.
      *
      * @param writeResults the list of write results

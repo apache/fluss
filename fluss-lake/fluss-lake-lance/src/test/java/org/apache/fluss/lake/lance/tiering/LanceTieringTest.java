@@ -64,9 +64,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.stream.Stream;
 
-import static org.apache.fluss.flink.tiering.committer.TieringCommitOperator.fromLogOffsetProperty;
-import static org.apache.fluss.flink.tiering.committer.TieringCommitOperator.toBucketOffsetsProperty;
-import static org.apache.fluss.lake.committer.BucketOffset.FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY;
+import static org.apache.fluss.lake.committer.LakeCommitter.FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** The UT for tiering to Lance via {@link LanceLakeTieringFactory}. */
@@ -133,7 +131,6 @@ class LanceTieringTest {
                             }
                         }
                         : Collections.singletonMap(null, null);
-        Map<TableBucket, Long> tableBucketOffsets = new HashMap<>();
         // first, write data
         for (int bucket = 0; bucket < bucketNum; bucket++) {
             for (Map.Entry<Long, String> entry : partitionIdAndName.entrySet()) {
@@ -146,7 +143,6 @@ class LanceTieringTest {
                     List<LogRecord> writtenRecords = writeAndExpectRecords.f0;
                     List<LogRecord> expectRecords = writeAndExpectRecords.f1;
                     recordsByBucket.put(partitionBucket, expectRecords);
-                    tableBucketOffsets.put(new TableBucket(0, entry.getKey(), bucket), 10L);
                     for (LogRecord logRecord : writtenRecords) {
                         lakeWriter.write(logRecord);
                     }
@@ -169,9 +165,9 @@ class LanceTieringTest {
             lanceCommittable =
                     committableSerializer.deserialize(
                             committableSerializer.getVersion(), serialized);
-            long snapshot =
-                    lakeCommitter.commit(
-                            lanceCommittable, toBucketOffsetsProperty(tableBucketOffsets));
+            Map<String, String> snapshotProperties =
+                    Collections.singletonMap(FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY, "offsets");
+            long snapshot = lakeCommitter.commit(lanceCommittable, snapshotProperties);
             // lance dataset version starts from 1
             assertThat(snapshot).isEqualTo(2);
         }
@@ -203,21 +199,6 @@ class LanceTieringTest {
             // use snapshot id 1 as the known snapshot id
             CommittedLakeSnapshot committedLakeSnapshot = lakeCommitter.getMissingLakeSnapshot(1L);
             assertThat(committedLakeSnapshot).isNotNull();
-            long tableId = tableInfo.getTableId();
-            Map<TableBucket, Long> offsets =
-                    fromLogOffsetProperty(
-                            tableInfo.getTableId(),
-                            committedLakeSnapshot
-                                    .getSnapshotProperties()
-                                    .get(FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY));
-
-            for (int bucket = 0; bucket < 3; bucket++) {
-                for (Long partitionId : partitionIdAndName.keySet()) {
-                    // we only write 10 records, so expected log offset should be 10
-                    assertThat(offsets.get(new TableBucket(tableId, partitionId, bucket)))
-                            .isEqualTo(10);
-                }
-            }
             assertThat(committedLakeSnapshot.getLakeSnapshotId()).isEqualTo(2L);
 
             // use null as the known snapshot id

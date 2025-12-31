@@ -133,21 +133,8 @@ public class PaimonLakeCommitter implements LakeCommitter<PaimonWriteResult, Pai
             throw new IOException("Failed to load committed lake snapshot properties from Paimon.");
         }
 
-        // if resume from an old tiering service v0.7 without paimon supporting snapshot properties,
-        // we can't get the properties. But once come into here, it must be that
-        // tiering service commit snapshot to lake, but fail to commit to fluss, we have to notify
-        // users to run old tiering service again to commit the snapshot to fluss again, and then
-        // it can resume tiering with new tiering service
-        Map<String, String> lakeSnapshotProperties = latestLakeSnapshotOfLake.properties();
-        if (lakeSnapshotProperties == null) {
-            throw new IllegalArgumentException(
-                    "Cannot resume tiering from an old version(v0.7) of tiering service. "
-                            + "The snapshot was committed to the lake storage but failed to commit to Fluss. "
-                            + "To resolve this:\n"
-                            + "1. Run the old tiering service(v0.7) again to complete the Fluss commit\n"
-                            + "2. Then you can resume tiering with the newer version of tiering service");
-        }
-        return new CommittedLakeSnapshot(latestLakeSnapshotOfLake.id(), lakeSnapshotProperties);
+        return new CommittedLakeSnapshot(
+                latestLakeSnapshotOfLake.id(), latestLakeSnapshotOfLake.properties());
     }
 
     @Nullable

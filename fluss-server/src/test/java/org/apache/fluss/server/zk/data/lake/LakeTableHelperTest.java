@@ -30,8 +30,8 @@ import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperExtension;
 import org.apache.fluss.server.zk.ZooKeeperUtils;
 import org.apache.fluss.server.zk.data.TableRegistration;
-import org.apache.fluss.server.zk.data.ZkData;
 import org.apache.fluss.testutils.common.AllCallbackWrapper;
+import org.apache.fluss.utils.json.TableBucketOffsets;
 
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
@@ -76,7 +76,7 @@ class LakeTableHelperTest {
     }
 
     @Test
-    void testUpsertLakeTableCompatible(@TempDir Path tempDir) throws Exception {
+    void testRegisterLakeTableSnapshotCompatibility(@TempDir Path tempDir) throws Exception {
         // Create a ZooKeeperClient with REMOTE_DATA_DIR configuration
         Configuration conf = new Configuration();
         conf.setString(
@@ -110,21 +110,14 @@ class LakeTableHelperTest {
 
             LakeTableSnapshot lakeTableSnapshot =
                     new LakeTableSnapshot(snapshotId, bucketLogEndOffset);
-            // Write version 1 format data directly to ZK (simulating old system behavior)
-            String zkPath = ZkData.LakeTableZNode.path(tableId);
-            byte[] version1Data =
-                    LakeTableSnapshotJsonSerde.toJsonVersion1(lakeTableSnapshot, tableId);
-            zooKeeperClient
-                    .getCuratorClient()
-                    .create()
-                    .creatingParentsIfNeeded()
-                    .forPath(zkPath, version1Data);
+            // Write version 1 format data(simulating old system behavior)
+            lakeTableHelper.registerLakeTableSnapshotV1(tableId, lakeTableSnapshot);
 
             // Verify version 1 data can be read
             Optional<LakeTable> optionalLakeTable = zooKeeperClient.getLakeTable(tableId);
             assertThat(optionalLakeTable).isPresent();
             LakeTable lakeTable = optionalLakeTable.get();
-            assertThat(lakeTable.getLatestTableSnapshot()).isEqualTo(lakeTableSnapshot);
+            assertThat(lakeTable.getOrReadLatestTableSnapshot()).isEqualTo(lakeTableSnapshot);
 
             // Test: Call upsertLakeTableSnapshot with new snapshot data
             // This should read the old version 1 data, merge it, and write as version 2
@@ -133,8 +126,13 @@ class LakeTableHelperTest {
             newBucketLogEndOffset.put(new TableBucket(tableId, 1), 2000L); // new offset
 
             long snapshot2Id = 2L;
-            LakeTableSnapshot snapshot2 = new LakeTableSnapshot(snapshot2Id, newBucketLogEndOffset);
-            lakeTableHelper.upsertLakeTable(tableId, tablePath, snapshot2);
+            FsPath tieredOffsetsPath =
+                    lakeTableHelper.storeLakeTableOffsetsFile(
+                            tablePath, new TableBucketOffsets(tableId, newBucketLogEndOffset));
+            lakeTableHelper.registerLakeTableSnapshotV2(
+                    tableId,
+                    new LakeTable.LakeSnapshotMetadata(
+                            snapshot2Id, tieredOffsetsPath, tieredOffsetsPath));
 
             // Verify: New version 2 data can be read
             Optional<LakeTable> optLakeTableAfter = zooKeeperClient.getLakeTable(tableId);
@@ -163,8 +161,13 @@ class LakeTableHelperTest {
 
             // add a new snapshot 3 again, verify snapshot
             long snapshot3Id = 3L;
-            LakeTableSnapshot snapshot3 = new LakeTableSnapshot(snapshot3Id, newBucketLogEndOffset);
-            lakeTableHelper.upsertLakeTable(tableId, tablePath, snapshot3);
+            tieredOffsetsPath =
+                    lakeTableHelper.storeLakeTableOffsetsFile(
+                            tablePath, new TableBucketOffsets(tableId, newBucketLogEndOffset));
+            lakeTableHelper.registerLakeTableSnapshotV2(
+                    tableId,
+                    new LakeTable.LakeSnapshotMetadata(
+                            snapshot3Id, tieredOffsetsPath, tieredOffsetsPath));
             // verify snapshot 3 is discarded
             assertThat(fileSystem.exists(snapshot2FileHandle)).isFalse();
         }

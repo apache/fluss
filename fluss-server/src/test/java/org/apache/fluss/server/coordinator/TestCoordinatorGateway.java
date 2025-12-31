@@ -90,6 +90,8 @@ import org.apache.fluss.rpc.messages.ListTablesRequest;
 import org.apache.fluss.rpc.messages.ListTablesResponse;
 import org.apache.fluss.rpc.messages.MetadataRequest;
 import org.apache.fluss.rpc.messages.MetadataResponse;
+import org.apache.fluss.rpc.messages.PrepareLakeTableSnapshotRequest;
+import org.apache.fluss.rpc.messages.PrepareLakeTableSnapshotResponse;
 import org.apache.fluss.rpc.messages.RebalanceRequest;
 import org.apache.fluss.rpc.messages.RebalanceResponse;
 import org.apache.fluss.rpc.messages.RemoveServerTagRequest;
@@ -335,6 +337,12 @@ public class TestCoordinatorGateway implements CoordinatorGateway {
         }
 
         return CompletableFuture.completedFuture(response.setCommitSuccess(true));
+    }
+
+    @Override
+    public CompletableFuture<PrepareLakeTableSnapshotResponse> prepareLakeTableSnapshot(
+            PrepareLakeTableSnapshotRequest request) {
+        throw new UnsupportedOperationException();
     }
 
     @Override

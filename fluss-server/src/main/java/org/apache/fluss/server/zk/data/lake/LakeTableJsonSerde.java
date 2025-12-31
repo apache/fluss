@@ -38,8 +38,8 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
  *
  * <ul>
  *   <li>Version 1 (legacy): ZK node contains full {@link LakeTableSnapshot} data. During
- *       deserialization, it uses {@link LakeTableSnapshotJsonSerde} to deserialize and wraps the
- *       result in a {@link LakeTable}.
+ *       deserialization, it uses {@link LakeTableSnapshotLegacyJsonSerde} to deserialize and wraps
+ *       the result in a {@link LakeTable}.
  *   <li>Version 2 (current): ZK node contains only the lake table snapshot file paths. The actual
  *       snapshot data is stored in a remote file pointed by the lake table snapshot file path.
  * </ul>
@@ -61,6 +61,21 @@ public class LakeTableJsonSerde implements JsonSerializer<LakeTable>, JsonDeseri
 
     @Override
     public void serialize(LakeTable lakeTable, JsonGenerator generator) throws IOException {
+        // if lake table snapshot metadata is null, it must be version 1
+        if (lakeTable.getLakeSnapshotMetadatas() == null) {
+            serializeV1(lakeTable, generator);
+        } else {
+            serializeV2(lakeTable, generator);
+        }
+    }
+
+    private void serializeV1(LakeTable lakeTable, JsonGenerator generator) throws IOException {
+        // Version 1: ZK node contains full snapshot data, use LakeTableSnapshotJsonSerde
+        LakeTableSnapshotLegacyJsonSerde.INSTANCE.serialize(
+                lakeTable.getOrReadLatestTableSnapshot(), generator);
+    }
+
+    private void serializeV2(LakeTable lakeTable, JsonGenerator generator) throws IOException {
         generator.writeStartObject();
         generator.writeNumberField(VERSION_KEY, CURRENT_VERSION);
 
@@ -79,7 +94,6 @@ public class LakeTableJsonSerde implements JsonSerializer<LakeTable>, JsonDeseri
             }
             generator.writeEndObject();
         }
-
         generator.writeEndArray();
 
         generator.writeEndObject();
@@ -89,37 +103,42 @@ public class LakeTableJsonSerde implements JsonSerializer<LakeTable>, JsonDeseri
     public LakeTable deserialize(JsonNode node) {
         int version = node.get(VERSION_KEY).asInt();
         if (version == VERSION_1) {
-            // Version 1: ZK node contains full snapshot data, use LakeTableSnapshotJsonSerde
-            LakeTableSnapshot snapshot = LakeTableSnapshotJsonSerde.INSTANCE.deserialize(node);
-            return new LakeTable(snapshot);
+            return deserializeV1(node);
         } else if (version == VERSION_2) {
-            // Version 2: ZK node contains lake snapshot file paths
-            JsonNode lakeSnapshotsNode = node.get(LAKE_SNAPSHOTS);
-            if (lakeSnapshotsNode == null || !lakeSnapshotsNode.isArray()) {
-                throw new IllegalArgumentException(
-                        "Invalid lake_snapshots field in version 2 format");
-            }
-
-            List<LakeTable.LakeSnapshotMetadata> lakeSnapshotMetadatas = new ArrayList<>();
-            Iterator<JsonNode> elements = lakeSnapshotsNode.elements();
-            while (elements.hasNext()) {
-                JsonNode snapshotNode = elements.next();
-                long snapshotId = snapshotNode.get(SNAPSHOT_ID_KEY).asLong();
-                String tieredOffsetsPath = snapshotNode.get(TIERED_OFFSETS_KEY).asText();
-                JsonNode readableOffsetsNode = snapshotNode.get(READABLE_OFFSETS_KEY);
-                FsPath readableOffsetsPath =
-                        readableOffsetsNode != null
-                                ? new FsPath(readableOffsetsNode.asText())
-                                : null;
-
-                LakeTable.LakeSnapshotMetadata metadata =
-                        new LakeTable.LakeSnapshotMetadata(
-                                snapshotId, new FsPath(tieredOffsetsPath), readableOffsetsPath);
-                lakeSnapshotMetadatas.add(metadata);
-            }
-            return new LakeTable(lakeSnapshotMetadatas);
+            return deserializeV2(node);
         } else {
             throw new IllegalArgumentException("Unsupported version: " + version);
         }
+    }
+
+    private LakeTable deserializeV1(JsonNode node) {
+        // Version 1: ZK node contains full snapshot data, use LakeTableSnapshotJsonSerde
+        LakeTableSnapshot snapshot = LakeTableSnapshotLegacyJsonSerde.INSTANCE.deserialize(node);
+        return new LakeTable(snapshot);
+    }
+
+    private LakeTable deserializeV2(JsonNode node) {
+        // Version 2: ZK node contains lake snapshot file paths
+        JsonNode lakeSnapshotsNode = node.get(LAKE_SNAPSHOTS);
+        if (lakeSnapshotsNode == null || !lakeSnapshotsNode.isArray()) {
+            throw new IllegalArgumentException("Invalid lake_snapshots field in version 2 format");
+        }
+
+        List<LakeTable.LakeSnapshotMetadata> lakeSnapshotMetadatas = new ArrayList<>();
+        Iterator<JsonNode> elements = lakeSnapshotsNode.elements();
+        while (elements.hasNext()) {
+            JsonNode snapshotNode = elements.next();
+            long snapshotId = snapshotNode.get(SNAPSHOT_ID_KEY).asLong();
+            String tieredOffsetsPath = snapshotNode.get(TIERED_OFFSETS_KEY).asText();
+            JsonNode readableOffsetsNode = snapshotNode.get(READABLE_OFFSETS_KEY);
+            FsPath readableOffsetsPath =
+                    readableOffsetsNode != null ? new FsPath(readableOffsetsNode.asText()) : null;
+
+            LakeTable.LakeSnapshotMetadata metadata =
+                    new LakeTable.LakeSnapshotMetadata(
+                            snapshotId, new FsPath(tieredOffsetsPath), readableOffsetsPath);
+            lakeSnapshotMetadatas.add(metadata);
+        }
+        return new LakeTable(lakeSnapshotMetadatas);
     }
 }
