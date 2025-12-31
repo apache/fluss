@@ -29,6 +29,8 @@ import org.apache.fluss.types.RowType;
 import javax.annotation.Nullable;
 
 import java.io.Serializable;
+import java.util.HashMap;
+import java.util.Map;
 
 import static org.apache.fluss.row.InternalArray.createDeepElementGetter;
 import static org.apache.fluss.types.DataTypeChecks.getLength;
@@ -272,15 +274,11 @@ public interface InternalRow extends DataGetters {
                 fieldGetter =
                         row -> {
                             InternalMap map = row.getMap(fieldPos);
-                            Object[] keys = new Object[map.size()];
-                            Object[] values = new Object[map.size()];
+                            Map<Object, Object> javaMap = new HashMap<>();
                             for (int i = 0; i < map.size(); i++) {
-                                keys[i] = keyGetter.getElementOrNull(map.keyArray(), i);
-                                values[i] = valueGetter.getElementOrNull(map.valueArray(), i);
-                            }
-                            java.util.Map<Object, Object> javaMap = new java.util.HashMap<>();
-                            for (int i = 0; i < keys.length; i++) {
-                                javaMap.put(keys[i], values[i]);
+                                Object key = keyGetter.getElementOrNull(map.keyArray(), i);
+                                Object value = valueGetter.getElementOrNull(map.valueArray(), i);
+                                javaMap.put(key, value);
                             }
                             return new GenericMap(javaMap);
                         };

@@ -154,74 +154,6 @@ public class ColumnarMapTest {
     }
 
     @Test
-    public void testEquals() {
-        Object[] keys1 = {BinaryString.fromString("k1"), BinaryString.fromString("k2")};
-        Object[] values1 = {1, 2};
-        InternalArray keyArray1 = new GenericArray(keys1);
-        InternalArray valueArray1 = new GenericArray(values1);
-        ColumnarMap map1 = new ColumnarMap(keyArray1, valueArray1);
-
-        Object[] keys2 = {BinaryString.fromString("k1"), BinaryString.fromString("k2")};
-        Object[] values2 = {1, 2};
-        InternalArray keyArray2 = new GenericArray(keys2);
-        InternalArray valueArray2 = new GenericArray(values2);
-        ColumnarMap map2 = new ColumnarMap(keyArray2, valueArray2);
-
-        assertThat(map1.equals(map1)).isTrue();
-        assertThat(map1.equals(map2)).isTrue();
-        assertThat(map2.equals(map1)).isTrue();
-    }
-
-    @Test
-    public void testNotEquals() {
-        Object[] keys1 = {BinaryString.fromString("k1"), BinaryString.fromString("k2")};
-        Object[] values1 = {1, 2};
-        InternalArray keyArray1 = new GenericArray(keys1);
-        InternalArray valueArray1 = new GenericArray(values1);
-        ColumnarMap map1 = new ColumnarMap(keyArray1, valueArray1);
-
-        Object[] keys2 = {BinaryString.fromString("k1"), BinaryString.fromString("k2")};
-        Object[] values2 = {1, 3};
-        InternalArray keyArray2 = new GenericArray(keys2);
-        InternalArray valueArray2 = new GenericArray(values2);
-        ColumnarMap map2 = new ColumnarMap(keyArray2, valueArray2);
-
-        assertThat(map1.equals(map2)).isFalse();
-        assertThat(map1.equals(null)).isFalse();
-        assertThat(map1.equals("string")).isFalse();
-    }
-
-    @Test
-    public void testHashCode() {
-        Object[] keys = {BinaryString.fromString("key1"), BinaryString.fromString("key2")};
-        Object[] values = {100, 200};
-
-        InternalArray keyArray = new GenericArray(keys);
-        InternalArray valueArray = new GenericArray(values);
-
-        ColumnarMap map1 = new ColumnarMap(keyArray, valueArray);
-        ColumnarMap map2 = new ColumnarMap(keyArray, valueArray);
-
-        assertThat(map1.hashCode()).isEqualTo(map2.hashCode());
-    }
-
-    @Test
-    public void testToString() {
-        Object[] keys = {BinaryString.fromString("k1")};
-        Object[] values = {42};
-
-        InternalArray keyArray = new GenericArray(keys);
-        InternalArray valueArray = new GenericArray(values);
-
-        ColumnarMap map = new ColumnarMap(keyArray, valueArray);
-
-        String result = map.toString();
-        assertThat(result).contains("ColumnarMap");
-        assertThat(result).contains("keyArray");
-        assertThat(result).contains("valueArray");
-    }
-
-    @Test
     public void testMapWithNullValues() {
         Object[] keys = {
             BinaryString.fromString("k1"),
@@ -258,13 +190,135 @@ public class ColumnarMapTest {
         assertThat(map.valueArray().getDouble(2)).isEqualTo(3.3);
     }
 
+    @Test
+    public void testEqualsWithSameObject() {
+        Object[] keys = {BinaryString.fromString("key1")};
+        Object[] values = {1};
+
+        InternalArray keyArray = new GenericArray(keys);
+        InternalArray valueArray = new GenericArray(values);
+
+        ColumnarMap map = new ColumnarMap(keyArray, valueArray);
+
+        assertThat(map.equals(map)).isTrue();
+    }
+
+    @Test
+    public void testEqualsWithEqualMap() {
+        Object[] keys = {BinaryString.fromString("key1"), BinaryString.fromString("key2")};
+        Object[] values = {1, 2};
+
+        InternalArray keyArray1 = new GenericArray(keys);
+        InternalArray valueArray1 = new GenericArray(values);
+        ColumnarMap map1 = new ColumnarMap(keyArray1, valueArray1);
+
+        InternalArray keyArray2 = new GenericArray(keys);
+        InternalArray valueArray2 = new GenericArray(values);
+        ColumnarMap map2 = new ColumnarMap(keyArray2, valueArray2);
+
+        assertThat(map1.equals(map2)).isTrue();
+    }
+
+    @Test
+    public void testEqualsWithDifferentKeys() {
+        Object[] keys1 = {BinaryString.fromString("key1")};
+        Object[] keys2 = {BinaryString.fromString("key2")};
+        Object[] values = {1};
+
+        InternalArray keyArray1 = new GenericArray(keys1);
+        InternalArray valueArray1 = new GenericArray(values);
+        ColumnarMap map1 = new ColumnarMap(keyArray1, valueArray1);
+
+        InternalArray keyArray2 = new GenericArray(keys2);
+        InternalArray valueArray2 = new GenericArray(values);
+        ColumnarMap map2 = new ColumnarMap(keyArray2, valueArray2);
+
+        assertThat(map1.equals(map2)).isFalse();
+    }
+
+    @Test
+    public void testEqualsWithDifferentValues() {
+        Object[] keys = {BinaryString.fromString("key1")};
+        Object[] values1 = {1};
+        Object[] values2 = {2};
+
+        InternalArray keyArray1 = new GenericArray(keys);
+        InternalArray valueArray1 = new GenericArray(values1);
+        ColumnarMap map1 = new ColumnarMap(keyArray1, valueArray1);
+
+        InternalArray keyArray2 = new GenericArray(keys);
+        InternalArray valueArray2 = new GenericArray(values2);
+        ColumnarMap map2 = new ColumnarMap(keyArray2, valueArray2);
+
+        assertThat(map1.equals(map2)).isFalse();
+    }
+
+    @Test
+    public void testEqualsWithNonInternalMapObject() {
+        Object[] keys = {BinaryString.fromString("key1")};
+        Object[] values = {1};
+
+        InternalArray keyArray = new GenericArray(keys);
+        InternalArray valueArray = new GenericArray(values);
+        ColumnarMap map = new ColumnarMap(keyArray, valueArray);
+
+        assertThat(map.equals("not a map")).isFalse();
+        assertThat(map.equals(null)).isFalse();
+    }
+
+    @Test
+    public void testHashCodeConsistency() {
+        Object[] keys = {BinaryString.fromString("key1"), BinaryString.fromString("key2")};
+        Object[] values = {1, 2};
+
+        InternalArray keyArray1 = new GenericArray(keys);
+        InternalArray valueArray1 = new GenericArray(values);
+        ColumnarMap map1 = new ColumnarMap(keyArray1, valueArray1);
+
+        InternalArray keyArray2 = new GenericArray(keys);
+        InternalArray valueArray2 = new GenericArray(values);
+        ColumnarMap map2 = new ColumnarMap(keyArray2, valueArray2);
+
+        assertThat(map1.hashCode()).isEqualTo(map2.hashCode());
+    }
+
+    @Test
+    public void testHashCodeWithDifferentMaps() {
+        Object[] keys1 = {BinaryString.fromString("key1")};
+        Object[] keys2 = {BinaryString.fromString("key2")};
+        Object[] values = {1};
+
+        InternalArray keyArray1 = new GenericArray(keys1);
+        InternalArray valueArray1 = new GenericArray(values);
+        ColumnarMap map1 = new ColumnarMap(keyArray1, valueArray1);
+
+        InternalArray keyArray2 = new GenericArray(keys2);
+        InternalArray valueArray2 = new GenericArray(values);
+        ColumnarMap map2 = new ColumnarMap(keyArray2, valueArray2);
+
+        assertThat(map1.hashCode()).isNotEqualTo(map2.hashCode());
+    }
+
+    @Test
+    public void testToString() {
+        Object[] keys = {BinaryString.fromString("k1"), BinaryString.fromString("k2")};
+        Object[] values = {100, 200};
+
+        InternalArray keyArray = new GenericArray(keys);
+        InternalArray valueArray = new GenericArray(values);
+        ColumnarMap map = new ColumnarMap(keyArray, valueArray);
+
+        String result = map.toString();
+        assertThat(result).contains("ColumnarMap");
+        assertThat(result).contains("keyArray");
+        assertThat(result).contains("valueArray");
+    }
+
     private static class TestIntColumnVector implements IntColumnVector {
         private final int[] values;
-        private final boolean[] nulls;
 
         TestIntColumnVector(int[] values) {
             this.values = values;
-            this.nulls = new boolean[values.length];
         }
 
         @Override
@@ -274,17 +328,16 @@ public class ColumnarMapTest {
 
         @Override
         public boolean isNullAt(int i) {
-            return nulls[i];
+            // Primitive int values cannot be null
+            return false;
         }
     }
 
     private static class TestLongColumnVector implements LongColumnVector {
         private final long[] values;
-        private final boolean[] nulls;
 
         TestLongColumnVector(long[] values) {
             this.values = values;
-            this.nulls = new boolean[values.length];
         }
 
         @Override
@@ -294,17 +347,16 @@ public class ColumnarMapTest {
 
         @Override
         public boolean isNullAt(int i) {
-            return nulls[i];
+            // Primitive long values cannot be null
+            return false;
         }
     }
 
     private static class TestDoubleColumnVector implements DoubleColumnVector {
         private final double[] values;
-        private final boolean[] nulls;
 
         TestDoubleColumnVector(double[] values) {
             this.values = values;
-            this.nulls = new boolean[values.length];
         }
 
         @Override
@@ -314,7 +366,8 @@ public class ColumnarMapTest {
 
         @Override
         public boolean isNullAt(int i) {
-            return nulls[i];
+            // Primitive double values cannot be null
+            return false;
         }
     }
 }

@@ -367,10 +367,10 @@ abstract class FlinkComplexTypeITCase extends AbstractTestBase {
 
     @Test
     void testComplexTypesInPrimaryKeyTable() throws Exception {
-        // NOTE: PK tables currently only support array types in non-key columns
         tEnv.executeSql(
                 "create table complex_pk_test ("
                         + "id int, "
+                        + "name string, "
                         + "int_array array<int>, "
                         + "bigint_array array<bigint>, "
                         + "float_array array<float>, "
@@ -379,68 +379,127 @@ abstract class FlinkComplexTypeITCase extends AbstractTestBase {
                         + "boolean_array array<boolean>, "
                         + "nested_int_array array<array<int>>, "
                         + "nested_string_array array<array<string>>, "
+                        + "simple_map map<string, int>, "
+                        + "nested_map map<string, map<int, string>>, "
+                        + "address row<city string, zipcode int>, "
+                        + "nested_row row<x int, y row<z int, w string>>, "
                         + "primary key(id) not enforced"
                         + ") with ('bucket.num' = '3')");
 
         tEnv.executeSql(
                         "INSERT INTO complex_pk_test VALUES "
-                                + "(1, ARRAY[1, 2], ARRAY[100, 300], ARRAY[CAST(1.1 AS FLOAT)], ARRAY[2.2, 3.3], "
+                                + "(1, 'user1', "
+                                + "ARRAY[1, 2], ARRAY[100, 300], ARRAY[CAST(1.1 AS FLOAT)], ARRAY[2.2, 3.3], "
                                 + "ARRAY['a', CAST(NULL AS STRING), 'c'], ARRAY[true, false], "
                                 + "ARRAY[ARRAY[1, 2], CAST(NULL AS ARRAY<INT>), ARRAY[3]], "
-                                + "ARRAY[ARRAY['x'], ARRAY[CAST(NULL AS STRING), 'y']]), "
-                                + "(2, CAST(NULL AS ARRAY<INT>), ARRAY[400, 500], ARRAY[CAST(4.4 AS FLOAT)], ARRAY[5.5], "
-                                + "ARRAY['d', 'e'], ARRAY[true], ARRAY[ARRAY[6, 7, 8]], ARRAY[ARRAY['z']]), "
-                                + "(3, ARRAY[10], ARRAY[600], ARRAY[CAST(7.7 AS FLOAT)], ARRAY[8.8], "
-                                + "ARRAY['f'], ARRAY[false], ARRAY[ARRAY[9]], ARRAY[ARRAY['w']])")
+                                + "ARRAY[ARRAY['x'], ARRAY[CAST(NULL AS STRING), 'y']], "
+                                + "MAP['age', 25, 'score', 90], "
+                                + "MAP['k1', MAP[10, 'v1', 20, 'v2']], "
+                                + "ROW('Beijing', 100000), "
+                                + "ROW(10, ROW(20, 'nested1'))"
+                                + "), "
+                                + "(2, 'user2', "
+                                + "CAST(NULL AS ARRAY<INT>), ARRAY[400, 500], ARRAY[CAST(4.4 AS FLOAT)], ARRAY[5.5], "
+                                + "ARRAY['d', 'e'], ARRAY[true], ARRAY[ARRAY[6, 7, 8]], ARRAY[ARRAY['z']], "
+                                + "MAP['age', 30, 'score', 85], "
+                                + "MAP['k2', MAP[30, 'v3']], "
+                                + "ROW('Shanghai', 200000), "
+                                + "ROW(30, ROW(40, 'nested2'))"
+                                + "), "
+                                + "(3, 'user3', "
+                                + "ARRAY[10], ARRAY[600], ARRAY[CAST(7.7 AS FLOAT)], ARRAY[8.8], "
+                                + "ARRAY['f'], ARRAY[false], ARRAY[ARRAY[9]], ARRAY[ARRAY['w']], "
+                                + "CAST(NULL AS MAP<STRING, INT>), "
+                                + "CAST(NULL AS MAP<STRING, MAP<INT, STRING>>), "
+                                + "CAST(NULL AS ROW<city STRING, zipcode INT>), "
+                                + "CAST(NULL AS ROW<x INT, y ROW<z INT, w STRING>>)"
+                                + ")")
                 .await();
 
         CloseableIterator<Row> rowIter = tEnv.executeSql("select * from complex_pk_test").collect();
         List<String> expectedRows =
                 Arrays.asList(
-                        "+I[1, [1, 2], [100, 300], [1.1], [2.2, 3.3], [a, null, c], [true, false], [[1, 2], null, [3]], [[x], [null, y]]]",
-                        "+I[2, null, [400, 500], [4.4], [5.5], [d, e], [true], [[6, 7, 8]], [[z]]]",
-                        "+I[3, [10], [600], [7.7], [8.8], [f], [false], [[9]], [[w]]]");
+                        "+I[1, user1, [1, 2], [100, 300], [1.1], [2.2, 3.3], [a, null, c], [true, false], [[1, 2], null, [3]], [[x], [null, y]], {score=90, age=25}, {k1={20=v2, 10=v1}}, +I[Beijing, 100000], +I[10, +I[20, nested1]]]",
+                        "+I[2, user2, null, [400, 500], [4.4], [5.5], [d, e], [true], [[6, 7, 8]], [[z]], {score=85, age=30}, {k2={30=v3}}, +I[Shanghai, 200000], +I[30, +I[40, nested2]]]",
+                        "+I[3, user3, [10], [600], [7.7], [8.8], [f], [false], [[9]], [[w]], null, null, null, null]");
         assertResultsIgnoreOrder(rowIter, expectedRows, false);
 
         tEnv.executeSql(
                         "INSERT INTO complex_pk_test VALUES "
-                                + "(1, ARRAY[100, 200], ARRAY[1000], ARRAY[CAST(10.1 AS FLOAT)], ARRAY[11.1], "
-                                + "ARRAY['updated'], ARRAY[false], ARRAY[ARRAY[100]], ARRAY[ARRAY['updated']]), "
-                                + "(4, ARRAY[20, 30], ARRAY[2000, 3000], ARRAY[CAST(20.2 AS FLOAT)], ARRAY[30.3], "
-                                + "ARRAY['new'], ARRAY[true], ARRAY[ARRAY[200], ARRAY[300]], ARRAY[ARRAY['new1'], ARRAY['new2']])")
+                                + "(1, 'user1_updated', "
+                                + "ARRAY[100, 200], ARRAY[1000], ARRAY[CAST(10.1 AS FLOAT)], ARRAY[11.1], "
+                                + "ARRAY['updated'], ARRAY[false], ARRAY[ARRAY[100]], ARRAY[ARRAY['updated']], "
+                                + "MAP['age', 26, 'score', 95], "
+                                + "MAP['k1', MAP[50, 'v5']], "
+                                + "ROW('Shenzhen', 300000), "
+                                + "ROW(50, ROW(60, 'updated_nested'))"
+                                + "), "
+                                + "(4, 'user4', "
+                                + "ARRAY[20, 30], ARRAY[2000, 3000], ARRAY[CAST(20.2 AS FLOAT)], ARRAY[30.3], "
+                                + "ARRAY['new'], ARRAY[true], ARRAY[ARRAY[200], ARRAY[300]], ARRAY[ARRAY['new1'], ARRAY['new2']], "
+                                + "MAP['age', 40], "
+                                + "MAP['k4', MAP[70, 'v7']], "
+                                + "ROW('Hangzhou', 500000), "
+                                + "ROW(70, ROW(80, 'new_nested'))"
+                                + ")")
                 .await();
 
         expectedRows =
                 Arrays.asList(
-                        "-U[1, [1, 2], [100, 300], [1.1], [2.2, 3.3], [a, null, c], [true, false], [[1, 2], null, [3]], [[x], [null, y]]]",
-                        "+U[1, [100, 200], [1000], [10.1], [11.1], [updated], [false], [[100]], [[updated]]]",
-                        "+I[4, [20, 30], [2000, 3000], [20.2], [30.3], [new], [true], [[200], [300]], [[new1], [new2]]]");
+                        "-U[1, user1, [1, 2], [100, 300], [1.1], [2.2, 3.3], [a, null, c], [true, false], [[1, 2], null, [3]], [[x], [null, y]], {score=90, age=25}, {k1={20=v2, 10=v1}}, +I[Beijing, 100000], +I[10, +I[20, nested1]]]",
+                        "+U[1, user1_updated, [100, 200], [1000], [10.1], [11.1], [updated], [false], [[100]], [[updated]], {score=95, age=26}, {k1={50=v5}}, +I[Shenzhen, 300000], +I[50, +I[60, updated_nested]]]",
+                        "+I[4, user4, [20, 30], [2000, 3000], [20.2], [30.3], [new], [true], [[200], [300]], [[new1], [new2]], {age=40}, {k4={70=v7}}, +I[Hangzhou, 500000], +I[70, +I[80, new_nested]]]");
         assertResultsIgnoreOrder(rowIter, expectedRows, false);
 
-        // insert into with partial update test
         tEnv.executeSql(
-                        "INSERT INTO complex_pk_test (id, string_array, bigint_array) VALUES "
-                                + "(2, ARRAY['partially', 'updated'], ARRAY[9999])")
+                        "INSERT INTO complex_pk_test VALUES "
+                                + "(5, 'user5', "
+                                + "ARRAY[50, 60], CAST(NULL AS ARRAY<BIGINT>), CAST(NULL AS ARRAY<FLOAT>), CAST(NULL AS ARRAY<DOUBLE>), "
+                                + "CAST(NULL AS ARRAY<STRING>), CAST(NULL AS ARRAY<BOOLEAN>), "
+                                + "CAST(NULL AS ARRAY<ARRAY<INT>>), CAST(NULL AS ARRAY<ARRAY<STRING>>), "
+                                + "MAP['age', 50], "
+                                + "CAST(NULL AS MAP<STRING, MAP<INT, STRING>>), "
+                                + "CAST(NULL AS ROW<city STRING, zipcode INT>), "
+                                + "CAST(NULL AS ROW<x INT, y ROW<z INT, w STRING>>)"
+                                + "), "
+                                + "(6, 'user6', "
+                                + "CAST(NULL AS ARRAY<INT>), CAST(NULL AS ARRAY<BIGINT>), CAST(NULL AS ARRAY<FLOAT>), CAST(NULL AS ARRAY<DOUBLE>), "
+                                + "ARRAY['g', 'h'], CAST(NULL AS ARRAY<BOOLEAN>), "
+                                + "CAST(NULL AS ARRAY<ARRAY<INT>>), CAST(NULL AS ARRAY<ARRAY<STRING>>), "
+                                + "CAST(NULL AS MAP<STRING, INT>), "
+                                + "CAST(NULL AS MAP<STRING, MAP<INT, STRING>>), "
+                                + "ROW('Guangzhou', 600000), "
+                                + "CAST(NULL AS ROW<x INT, y ROW<z INT, w STRING>>)"
+                                + "), "
+                                + "(7, 'user7', "
+                                + "CAST(NULL AS ARRAY<INT>), CAST(NULL AS ARRAY<BIGINT>), CAST(NULL AS ARRAY<FLOAT>), CAST(NULL AS ARRAY<DOUBLE>), "
+                                + "CAST(NULL AS ARRAY<STRING>), CAST(NULL AS ARRAY<BOOLEAN>), "
+                                + "CAST(NULL AS ARRAY<ARRAY<INT>>), CAST(NULL AS ARRAY<ARRAY<STRING>>), "
+                                + "CAST(NULL AS MAP<STRING, INT>), "
+                                + "CAST(NULL AS MAP<STRING, MAP<INT, STRING>>), "
+                                + "CAST(NULL AS ROW<city STRING, zipcode INT>), "
+                                + "CAST(NULL AS ROW<x INT, y ROW<z INT, w STRING>>)"
+                                + ")")
                 .await();
 
-        expectedRows =
+        List<String> expectedPartialRows =
                 Arrays.asList(
-                        "-U[2, null, [400, 500], [4.4], [5.5], [d, e], [true], [[6, 7, 8]], [[z]]]",
-                        "+U[2, null, [9999], [4.4], [5.5], [partially, updated], [true], [[6, 7, 8]], [[z]]]");
-        assertResultsIgnoreOrder(rowIter, expectedRows, true);
+                        "+I[5, user5, [50, 60], null, null, null, null, null, null, null, {age=50}, null, null, null]",
+                        "+I[6, user6, null, null, null, null, [g, h], null, null, null, null, null, +I[Guangzhou, 600000], null]",
+                        "+I[7, user7, null, null, null, null, null, null, null, null, null, null, null, null]");
+        assertResultsIgnoreOrder(rowIter, expectedPartialRows, true);
 
-        // test lookup join with array type, test partitioned table
         Schema srcSchema =
                 Schema.newBuilder()
                         .column("a", DataTypes.INT())
-                        .column("name", DataTypes.STRING())
+                        .column("query_name", DataTypes.STRING())
                         .column("c", DataTypes.INT())
                         .columnByExpression("proc", "PROCTIME()")
                         .build();
         RowTypeInfo srcTestTypeInfo =
                 new RowTypeInfo(
                         new TypeInformation[] {Types.INT, Types.STRING, Types.INT},
-                        new String[] {"a", "name", "c"});
+                        new String[] {"a", "query_name", "c"});
         List<Row> testData =
                 Arrays.asList(
                         Row.of(1, "name1", 11),
@@ -452,114 +511,17 @@ abstract class FlinkComplexTypeITCase extends AbstractTestBase {
         tEnv.createTemporaryView("src", tEnv.fromDataStream(srcDs, srcSchema));
         CloseableIterator<Row> collected =
                 tEnv.executeSql(
-                                "SELECT a, name, complex_pk_test.* FROM src "
+                                "SELECT a, query_name, complex_pk_test.* FROM src "
                                         + "LEFT JOIN complex_pk_test FOR SYSTEM_TIME AS OF src.proc "
                                         + "ON src.a = complex_pk_test.id")
                         .collect();
         List<String> expected =
                 Arrays.asList(
-                        "+I[1, name1, 1, [100, 200], [1000], [10.1], [11.1], [updated], [false], [[100]], [[updated]]]",
-                        "+I[2, name2, 2, null, [9999], [4.4], [5.5], [partially, updated], [true], [[6, 7, 8]], [[z]]]",
-                        "+I[3, name33, 3, [10], [600], [7.7], [8.8], [f], [false], [[9]], [[w]]]",
-                        "+I[10, name0, null, null, null, null, null, null, null, null, null]");
+                        "+I[1, name1, 1, user1_updated, [100, 200], [1000], [10.1], [11.1], [updated], [false], [[100]], [[updated]], {score=95, age=26}, {k1={50=v5}}, +I[Shenzhen, 300000], +I[50, +I[60, updated_nested]]]",
+                        "+I[2, name2, 2, user2, null, [400, 500], [4.4], [5.5], [d, e], [true], [[6, 7, 8]], [[z]], {score=85, age=30}, {k2={30=v3}}, +I[Shanghai, 200000], +I[30, +I[40, nested2]]]",
+                        "+I[3, name33, 3, user3, [10], [600], [7.7], [8.8], [f], [false], [[9]], [[w]], null, null, null, null]",
+                        "+I[10, name0, null, null, null, null, null, null, null, null, null, null, null, null, null, null]");
         assertResultsIgnoreOrder(collected, expected, true);
-    }
-
-    @Test
-    void testMapTypeInPrimaryKeyTable() throws Exception {
-        tEnv.executeSql(
-                "create table map_pk_test ("
-                        + "id int, "
-                        + "name string, "
-                        + "simple_map map<string, int>, "
-                        + "primary key(id) not enforced"
-                        + ") with ('bucket.num' = '3')");
-
-        tEnv.executeSql(
-                        "INSERT INTO map_pk_test VALUES "
-                                + "(1, 'user1', MAP['age', 25, 'score', 90]), "
-                                + "(2, 'user2', MAP['age', 30, 'score', 85]), "
-                                + "(3, 'user3', CAST(NULL AS MAP<STRING, INT>))")
-                .await();
-
-        CloseableIterator<Row> rowIter = tEnv.executeSql("select * from map_pk_test").collect();
-        List<String> expectedRows =
-                Arrays.asList(
-                        "+I[1, user1, {age=25, score=90}]",
-                        "+I[2, user2, {age=30, score=85}]",
-                        "+I[3, user3, null]");
-        assertResultsIgnoreOrder(rowIter, expectedRows, false);
-
-        // Test update
-        tEnv.executeSql(
-                        "INSERT INTO map_pk_test VALUES "
-                                + "(1, 'user1_updated', MAP['age', 26, 'score', 95])")
-                .await();
-
-        expectedRows =
-                Arrays.asList(
-                        "-U[1, user1, {age=25, score=90}]",
-                        "+U[1, user1_updated, {age=26, score=95}]");
-        assertResultsIgnoreOrder(rowIter, expectedRows, false);
-
-        // Test partial update
-        tEnv.executeSql("INSERT INTO map_pk_test (id, simple_map) VALUES (2, MAP['age', 31])")
-                .await();
-
-        expectedRows =
-                Arrays.asList(
-                        "-U[2, user2, {age=30, score=85}]",
-                        "+U[2, user2, {age=31}]");
-        assertResultsIgnoreOrder(rowIter, expectedRows, true);
-    }
-
-    @Test
-    void testRowTypeInPrimaryKeyTable() throws Exception {
-        tEnv.executeSql(
-                "create table row_pk_test ("
-                        + "id int, "
-                        + "name string, "
-                        + "address row<city string, zipcode int>, "
-                        + "primary key(id) not enforced"
-                        + ") with ('bucket.num' = '3')");
-
-        tEnv.executeSql(
-                        "INSERT INTO row_pk_test VALUES "
-                                + "(1, 'Alice', ROW('Beijing', 100000)), "
-                                + "(2, 'Bob', ROW('Shanghai', 200000)), "
-                                + "(3, 'Charlie', CAST(NULL AS ROW<city STRING, zipcode INT>))")
-                .await();
-
-        CloseableIterator<Row> rowIter = tEnv.executeSql("select * from row_pk_test").collect();
-        List<String> expectedRows =
-                Arrays.asList(
-                        "+I[1, Alice, +I[Beijing, 100000]]",
-                        "+I[2, Bob, +I[Shanghai, 200000]]",
-                        "+I[3, Charlie, null]");
-        assertResultsIgnoreOrder(rowIter, expectedRows, false);
-
-        // Test update
-        tEnv.executeSql(
-                        "INSERT INTO row_pk_test VALUES "
-                                + "(1, 'Alice_updated', ROW('Shenzhen', 300000))")
-                .await();
-
-        expectedRows =
-                Arrays.asList(
-                        "-U[1, Alice, +I[Beijing, 100000]]",
-                        "+U[1, Alice_updated, +I[Shenzhen, 300000]]");
-        assertResultsIgnoreOrder(rowIter, expectedRows, false);
-
-        // Test partial update
-        tEnv.executeSql(
-                        "INSERT INTO row_pk_test (id, address) VALUES (2, ROW('Guangzhou', 400000))")
-                .await();
-
-        expectedRows =
-                Arrays.asList(
-                        "-U[2, Bob, +I[Shanghai, 200000]]",
-                        "+U[2, Bob, +I[Guangzhou, 400000]]");
-        assertResultsIgnoreOrder(rowIter, expectedRows, true);
     }
 
     @Test

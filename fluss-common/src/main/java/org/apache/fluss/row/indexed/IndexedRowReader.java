@@ -28,8 +28,10 @@ import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
 import org.apache.fluss.row.array.IndexedArray;
+import org.apache.fluss.row.map.IndexedMap;
 import org.apache.fluss.types.ArrayType;
 import org.apache.fluss.types.DataType;
+import org.apache.fluss.types.MapType;
 import org.apache.fluss.types.RowType;
 
 import java.io.Serializable;
@@ -215,10 +217,12 @@ public class IndexedRowReader {
         return array;
     }
 
-    public InternalMap readMap() {
+    public InternalMap readMap(DataType keyType, DataType valueType) {
         int length = readVarLengthFromVarLengthList();
         MemorySegment[] segments = new MemorySegment[] {segment};
-        InternalMap map = BinarySegmentUtils.readBinaryMap(segments, position, length);
+        InternalMap map =
+                BinarySegmentUtils.readBinaryMap(
+                        segments, position, length, new IndexedMap(keyType, valueType));
         position += length;
         return map;
     }
@@ -296,7 +300,10 @@ public class IndexedRowReader {
                 fieldReader = (reader, pos) -> reader.readArray(elementType);
                 break;
             case MAP:
-                fieldReader = (reader, pos) -> reader.readMap();
+                MapType mapType = (MapType) fieldType;
+                fieldReader =
+                        (reader, pos) ->
+                                reader.readMap(mapType.getKeyType(), mapType.getValueType());
                 break;
             case ROW:
                 DataType[] nestedFieldTypes =

@@ -144,6 +144,22 @@ public class BinaryWriterTest {
 
         assertThat(array.getMap(0).size()).isEqualTo(2);
         assertThat(array.getMap(1).size()).isEqualTo(2);
+
+        // Assert keys and values for map1
+        InternalArray keys1 = array.getMap(0).keyArray();
+        InternalArray values1 = array.getMap(0).valueArray();
+        assertThat(keys1.getInt(0)).isEqualTo(1);
+        assertThat(keys1.getInt(1)).isEqualTo(2);
+        assertThat(values1.getString(0)).isEqualTo(BinaryString.fromString("one"));
+        assertThat(values1.getString(1)).isEqualTo(BinaryString.fromString("two"));
+
+        // Assert keys and values for map2
+        InternalArray keys2 = array.getMap(1).keyArray();
+        InternalArray values2 = array.getMap(1).valueArray();
+        assertThat(keys2.getInt(0)).isEqualTo(3);
+        assertThat(keys2.getInt(1)).isEqualTo(4);
+        assertThat(values2.getString(0)).isEqualTo(BinaryString.fromString("three"));
+        assertThat(values2.getString(1)).isEqualTo(BinaryString.fromString("four"));
     }
 
     @Test

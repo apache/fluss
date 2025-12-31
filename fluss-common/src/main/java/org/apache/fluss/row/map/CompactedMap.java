@@ -19,10 +19,10 @@
 
 package org.apache.fluss.row.map;
 
+import org.apache.fluss.row.BinaryArray;
 import org.apache.fluss.row.BinaryMap;
 import org.apache.fluss.row.array.CompactedArray;
 import org.apache.fluss.types.DataType;
-import org.apache.fluss.types.MapType;
 
 /**
  * A {@link BinaryMap} that uses {@link org.apache.fluss.row.compacted.CompactedRow} as the binary
@@ -30,18 +30,26 @@ import org.apache.fluss.types.MapType;
  */
 public class CompactedMap extends BinaryMap {
 
+    private final DataType keyType;
+    private final DataType valueType;
+
     public CompactedMap(DataType keyType, DataType valueType) {
-        super(
-                () -> new CompactedArray(keyType),
-                () -> new CompactedArray(valueType),
-                () -> {
-                    if (valueType instanceof MapType) {
-                        MapType mapType = (MapType) valueType;
-                        return new CompactedMap(mapType.getKeyType(), mapType.getValueType());
-                    } else {
-                        throw new IllegalArgumentException(
-                                "Can not get nested map from Map with value type " + valueType);
-                    }
-                });
+        this.keyType = keyType;
+        this.valueType = valueType;
+    }
+
+    @Override
+    protected BinaryArray createKeyArrayInstance() {
+        return new CompactedArray(keyType);
+    }
+
+    @Override
+    protected BinaryArray createValueArrayInstance() {
+        return new CompactedArray(valueType);
+    }
+
+    @Override
+    protected BinaryMap createMapInstance() {
+        return new CompactedMap(keyType, valueType);
     }
 }

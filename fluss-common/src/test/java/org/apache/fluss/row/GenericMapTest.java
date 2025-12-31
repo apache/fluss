@@ -128,121 +128,6 @@ public class GenericMapTest {
     }
 
     @Test
-    public void testEquals() {
-        Map<String, Integer> map1 = new HashMap<>();
-        map1.put("a", 1);
-        map1.put("b", 2);
-
-        Map<String, Integer> map2 = new HashMap<>();
-        map2.put("a", 1);
-        map2.put("b", 2);
-
-        GenericMap genericMap1 = new GenericMap(map1);
-        GenericMap genericMap2 = new GenericMap(map2);
-
-        assertThat(genericMap1.equals(genericMap1)).isTrue();
-        assertThat(genericMap1.equals(genericMap2)).isTrue();
-        assertThat(genericMap2.equals(genericMap1)).isTrue();
-    }
-
-    @Test
-    public void testNotEquals() {
-        Map<String, Integer> map1 = new HashMap<>();
-        map1.put("a", 1);
-
-        Map<String, Integer> map2 = new HashMap<>();
-        map2.put("a", 2);
-
-        GenericMap genericMap1 = new GenericMap(map1);
-        GenericMap genericMap2 = new GenericMap(map2);
-
-        assertThat(genericMap1.equals(genericMap2)).isFalse();
-        assertThat(genericMap1.equals(null)).isFalse();
-        assertThat(genericMap1.equals("string")).isFalse();
-    }
-
-    @Test
-    public void testEqualsWithDifferentSizes() {
-        Map<String, Integer> map1 = new HashMap<>();
-        map1.put("a", 1);
-        map1.put("b", 2);
-
-        Map<String, Integer> map2 = new HashMap<>();
-        map2.put("a", 1);
-
-        GenericMap genericMap1 = new GenericMap(map1);
-        GenericMap genericMap2 = new GenericMap(map2);
-
-        assertThat(genericMap1.equals(genericMap2)).isFalse();
-    }
-
-    @Test
-    public void testEqualsWithNullValues() {
-        Map<String, Integer> map1 = new HashMap<>();
-        map1.put("a", null);
-
-        Map<String, Integer> map2 = new HashMap<>();
-        map2.put("a", null);
-
-        GenericMap genericMap1 = new GenericMap(map1);
-        GenericMap genericMap2 = new GenericMap(map2);
-
-        assertThat(genericMap1.equals(genericMap2)).isTrue();
-    }
-
-    @Test
-    public void testEqualsWithMissingKeys() {
-        Map<String, Integer> map1 = new HashMap<>();
-        map1.put("a", 1);
-
-        Map<String, Integer> map2 = new HashMap<>();
-        map2.put("b", 1);
-
-        GenericMap genericMap1 = new GenericMap(map1);
-        GenericMap genericMap2 = new GenericMap(map2);
-
-        assertThat(genericMap1.equals(genericMap2)).isFalse();
-    }
-
-    @Test
-    public void testEqualsWithArrayValues() {
-        Map<String, Object> map1 = new HashMap<>();
-        map1.put("key", new int[] {1, 2, 3});
-
-        Map<String, Object> map2 = new HashMap<>();
-        map2.put("key", new int[] {1, 2, 3});
-
-        GenericMap genericMap1 = new GenericMap(map1);
-        GenericMap genericMap2 = new GenericMap(map2);
-
-        assertThat(genericMap1.equals(genericMap2)).isTrue();
-    }
-
-    @Test
-    public void testHashCode() {
-        Map<String, Integer> javaMap = new HashMap<>();
-        javaMap.put("key1", 100);
-        javaMap.put("key2", 200);
-
-        GenericMap genericMap = new GenericMap(javaMap);
-
-        int hashCode = genericMap.hashCode();
-        assertThat(hashCode).isNotZero();
-    }
-
-    @Test
-    public void testHashCodeWithNullKey() {
-        Map<String, Integer> javaMap = new HashMap<>();
-        javaMap.put(null, 100);
-        javaMap.put("key", 200);
-
-        GenericMap genericMap = new GenericMap(javaMap);
-
-        int hashCode = genericMap.hashCode();
-        assertThat(hashCode).isGreaterThanOrEqualTo(0);
-    }
-
-    @Test
     public void testOfMethodWithEvenNumberOfArgs() {
         GenericMap genericMap = GenericMap.of("key1", 1, "key2", 2, "key3", 3);
 
@@ -284,18 +169,6 @@ public class GenericMapTest {
 
         InternalArray keyArray = genericMap.keyArray();
         assertThat(keyArray.size()).isEqualTo(4);
-    }
-
-    @Test
-    public void testToString() {
-        Map<String, Integer> javaMap = new HashMap<>();
-        javaMap.put("key", 42);
-
-        GenericMap genericMap = new GenericMap(javaMap);
-
-        String result = genericMap.toString();
-        assertThat(result).contains("GenericMap");
-        assertThat(result).contains("map=");
     }
 
     @Test
@@ -342,16 +215,170 @@ public class GenericMapTest {
     }
 
     @Test
-    public void testEqualsWithClassCastException() {
-        Map<String, Integer> map1 = new HashMap<>();
-        map1.put("key", 1);
+    public void testEqualsSameObject() {
+        Map<String, Integer> javaMap = new HashMap<>();
+        javaMap.put("key1", 1);
+        GenericMap genericMap = new GenericMap(javaMap);
 
-        Map<Integer, String> map2 = new HashMap<>();
-        map2.put(1, "value");
+        assertThat(genericMap.equals(genericMap)).isTrue();
+    }
 
-        GenericMap genericMap1 = new GenericMap(map1);
-        GenericMap genericMap2 = new GenericMap(map2);
+    @Test
+    public void testEqualsWithDifferentType() {
+        Map<String, Integer> javaMap = new HashMap<>();
+        javaMap.put("key1", 1);
+        GenericMap genericMap = new GenericMap(javaMap);
 
-        assertThat(genericMap1.equals(genericMap2)).isFalse();
+        assertThat(genericMap.equals("not a map")).isFalse();
+        assertThat(genericMap.equals(null)).isFalse();
+    }
+
+    @Test
+    public void testEqualsWithEqualMaps() {
+        Map<String, Integer> javaMap1 = new HashMap<>();
+        javaMap1.put("key1", 1);
+        javaMap1.put("key2", 2);
+
+        Map<String, Integer> javaMap2 = new HashMap<>();
+        javaMap2.put("key1", 1);
+        javaMap2.put("key2", 2);
+
+        GenericMap map1 = new GenericMap(javaMap1);
+        GenericMap map2 = new GenericMap(javaMap2);
+
+        assertThat(map1.equals(map2)).isTrue();
+    }
+
+    @Test
+    public void testEqualsWithDifferentSizes() {
+        Map<String, Integer> javaMap1 = new HashMap<>();
+        javaMap1.put("key1", 1);
+
+        Map<String, Integer> javaMap2 = new HashMap<>();
+        javaMap2.put("key1", 1);
+        javaMap2.put("key2", 2);
+
+        GenericMap map1 = new GenericMap(javaMap1);
+        GenericMap map2 = new GenericMap(javaMap2);
+
+        assertThat(map1.equals(map2)).isFalse();
+    }
+
+    @Test
+    public void testEqualsWithNullValue() {
+        Map<String, Integer> javaMap1 = new HashMap<>();
+        javaMap1.put("key1", null);
+
+        Map<String, Integer> javaMap2 = new HashMap<>();
+        javaMap2.put("key1", null);
+
+        GenericMap map1 = new GenericMap(javaMap1);
+        GenericMap map2 = new GenericMap(javaMap2);
+
+        assertThat(map1.equals(map2)).isTrue();
+    }
+
+    @Test
+    public void testEqualsWithDifferentNullValue() {
+        Map<String, Integer> javaMap1 = new HashMap<>();
+        javaMap1.put("key1", null);
+
+        Map<String, Integer> javaMap2 = new HashMap<>();
+        javaMap2.put("key1", 1);
+
+        GenericMap map1 = new GenericMap(javaMap1);
+        GenericMap map2 = new GenericMap(javaMap2);
+
+        assertThat(map1.equals(map2)).isFalse();
+    }
+
+    @Test
+    public void testEqualsWithMissingKey() {
+        Map<String, Integer> javaMap1 = new HashMap<>();
+        javaMap1.put("key1", 1);
+
+        Map<String, Integer> javaMap2 = new HashMap<>();
+        javaMap2.put("key2", 1);
+
+        GenericMap map1 = new GenericMap(javaMap1);
+        GenericMap map2 = new GenericMap(javaMap2);
+
+        assertThat(map1.equals(map2)).isFalse();
+    }
+
+    @Test
+    public void testEqualsWithDifferentValues() {
+        Map<String, Integer> javaMap1 = new HashMap<>();
+        javaMap1.put("key1", 1);
+
+        Map<String, Integer> javaMap2 = new HashMap<>();
+        javaMap2.put("key1", 2);
+
+        GenericMap map1 = new GenericMap(javaMap1);
+        GenericMap map2 = new GenericMap(javaMap2);
+
+        assertThat(map1.equals(map2)).isFalse();
+    }
+
+    @Test
+    public void testEqualsWithArrayValues() {
+        Map<String, int[]> javaMap1 = new HashMap<>();
+        javaMap1.put("key1", new int[] {1, 2, 3});
+
+        Map<String, int[]> javaMap2 = new HashMap<>();
+        javaMap2.put("key1", new int[] {1, 2, 3});
+
+        GenericMap map1 = new GenericMap(javaMap1);
+        GenericMap map2 = new GenericMap(javaMap2);
+
+        assertThat(map1.equals(map2)).isTrue();
+    }
+
+    @Test
+    public void testHashCodeConsistency() {
+        Map<String, Integer> javaMap1 = new HashMap<>();
+        javaMap1.put("key1", 1);
+        javaMap1.put("key2", 2);
+
+        Map<String, Integer> javaMap2 = new HashMap<>();
+        javaMap2.put("key1", 1);
+        javaMap2.put("key2", 2);
+
+        GenericMap map1 = new GenericMap(javaMap1);
+        GenericMap map2 = new GenericMap(javaMap2);
+
+        assertThat(map1.hashCode()).isEqualTo(map2.hashCode());
+    }
+
+    @Test
+    public void testHashCodeWithNullKeys() {
+        Map<String, Integer> javaMap = new HashMap<>();
+        javaMap.put(null, 1);
+        javaMap.put("key2", 2);
+
+        GenericMap genericMap = new GenericMap(javaMap);
+
+        int hashCode = genericMap.hashCode();
+        assertThat(hashCode).isNotZero();
+    }
+
+    @Test
+    public void testHashCodeWithEmptyMap() {
+        Map<String, Integer> javaMap = new HashMap<>();
+        GenericMap genericMap = new GenericMap(javaMap);
+
+        assertThat(genericMap.hashCode()).isEqualTo(0);
+    }
+
+    @Test
+    public void testToString() {
+        Map<String, Integer> javaMap = new HashMap<>();
+        javaMap.put("key1", 1);
+
+        GenericMap genericMap = new GenericMap(javaMap);
+
+        String result = genericMap.toString();
+        assertThat(result).contains("GenericMap");
+        assertThat(result).contains("map=");
     }
 }

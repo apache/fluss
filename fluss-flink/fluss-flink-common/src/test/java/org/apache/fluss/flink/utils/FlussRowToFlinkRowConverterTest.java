@@ -28,6 +28,8 @@ import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.DateTimeUtils;
 
+import org.apache.flink.table.data.ArrayData;
+import org.apache.flink.table.data.MapData;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.types.RowKind;
 import org.junit.jupiter.api.Test;
@@ -126,11 +128,9 @@ class FlussRowToFlinkRowConverterTest {
                     .isEqualTo(new BinaryString[] {fromString("hello"), fromString("world")});
 
             // map
-            assertThat(flinkRow.getMap(22)).isNotNull();
-            assertThat(flinkRow.getMap(22).size()).isEqualTo(3);
-            org.apache.flink.table.data.MapData mapData = flinkRow.getMap(22);
-            org.apache.flink.table.data.ArrayData keyArray = mapData.keyArray();
-            org.apache.flink.table.data.ArrayData valueArray = mapData.valueArray();
+            MapData mapData = flinkRow.getMap(22);
+            ArrayData keyArray = mapData.keyArray();
+            ArrayData valueArray = mapData.valueArray();
             assertThat(keyArray.getInt(0)).isEqualTo(0);
             assertThat(valueArray.isNullAt(0)).isTrue();
             assertThat(keyArray.getInt(1)).isEqualTo(1);

@@ -21,27 +21,27 @@ package org.apache.fluss.row.map;
 
 import org.apache.fluss.row.BinaryArray;
 import org.apache.fluss.row.BinaryMap;
-import org.apache.fluss.row.array.AlignedArray;
+import org.apache.fluss.row.array.PrimitiveBinaryArray;
 
 /**
- * A {@link BinaryMap} that uses {@link org.apache.fluss.row.aligned.AlignedRow} as the binary
- * format for nested row types.
+ * A BinaryMap implementation for primitive types which uses {@link PrimitiveBinaryArray} for both
+ * keys and values.
  */
-public class AlignedMap extends BinaryMap {
+public class PrimitiveBinaryMap extends BinaryMap {
     private static final long serialVersionUID = 1L;
 
     @Override
     protected BinaryArray createKeyArrayInstance() {
-        return new AlignedArray();
+        return new PrimitiveBinaryArray();
     }
 
     @Override
     protected BinaryArray createValueArrayInstance() {
-        return new AlignedArray();
+        return new PrimitiveBinaryArray();
     }
 
     @Override
     protected BinaryMap createMapInstance() {
-        return new AlignedMap();
+        return new PrimitiveBinaryMap();
     }
 }

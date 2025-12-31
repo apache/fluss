@@ -20,10 +20,6 @@ package org.apache.fluss.row;
 
 import org.apache.fluss.annotation.PublicEvolving;
 import org.apache.fluss.memory.MemorySegment;
-import org.apache.fluss.row.array.PrimitiveBinaryArray;
-
-import java.io.Serializable;
-import java.util.function.Supplier;
 
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 
@@ -41,32 +37,12 @@ import static org.apache.fluss.utils.Preconditions.checkArgument;
  * @since 0.9
  */
 @PublicEvolving
-public class BinaryMap extends BinarySection implements InternalMap {
+public abstract class BinaryMap extends BinarySection implements InternalMap {
 
     private static final long serialVersionUID = 1L;
 
     private transient BinaryArray keys;
     private transient BinaryArray values;
-
-    private final transient Supplier<BinaryArray> keyArraySupplier;
-    private final transient Supplier<BinaryArray> valueArraySupplier;
-    private final transient Supplier<BinaryMap> nestedMapSupplier;
-
-    public BinaryMap() {
-        this(
-                (Supplier<BinaryArray> & Serializable) PrimitiveBinaryArray::new,
-                (Supplier<BinaryArray> & Serializable) PrimitiveBinaryArray::new,
-                (Supplier<BinaryMap> & Serializable) BinaryMap::new);
-    }
-
-    public BinaryMap(
-            Supplier<BinaryArray> keyArraySupplier,
-            Supplier<BinaryArray> valueArraySupplier,
-            Supplier<BinaryMap> nestedMapSupplier) {
-        this.keyArraySupplier = keyArraySupplier;
-        this.valueArraySupplier = valueArraySupplier;
-        this.nestedMapSupplier = nestedMapSupplier;
-    }
 
     @Override
     public int size() {
@@ -99,19 +75,13 @@ public class BinaryMap extends BinarySection implements InternalMap {
     }
 
     /** Creates a {@link BinaryArray} instance for keys with the nested data type information. */
-    protected BinaryArray createKeyArrayInstance() {
-        return keyArraySupplier.get();
-    }
+    protected abstract BinaryArray createKeyArrayInstance();
 
     /** Creates a {@link BinaryArray} instance for values with the nested data type information. */
-    protected BinaryArray createValueArrayInstance() {
-        return valueArraySupplier.get();
-    }
+    protected abstract BinaryArray createValueArrayInstance();
 
-    /** Creates a nested {@link BinaryMap} with the nested data type information. */
-    protected BinaryMap createNestedMapInstance() {
-        return nestedMapSupplier.get();
-    }
+    /** Creates a {@link BinaryMap} instance for copy operation. */
+    protected abstract BinaryMap createMapInstance();
 
     @Override
     public BinaryArray keyArray() {
@@ -124,7 +94,7 @@ public class BinaryMap extends BinarySection implements InternalMap {
     }
 
     public BinaryMap copy() {
-        return copy(createNestedMapInstance());
+        return copy(createMapInstance());
     }
 
     public BinaryMap copy(BinaryMap reuse) {

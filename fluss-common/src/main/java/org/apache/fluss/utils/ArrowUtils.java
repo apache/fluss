@@ -346,8 +346,8 @@ public class ArrowUtils {
             MapType mapType = (MapType) dataType;
             MapVector mapVector = (MapVector) vector;
             StructVector structVector = (StructVector) mapVector.getDataVector();
-            FieldVector keyVector = structVector.getChild("key");
-            FieldVector valueVector = structVector.getChild("value");
+            FieldVector keyVector = structVector.getChild(MapVector.KEY_NAME);
+            FieldVector valueVector = structVector.getChild(MapVector.VALUE_NAME);
             return new ArrowMapWriter(
                     vector,
                     ArrowUtils.createArrowFieldWriter(keyVector, mapType.getKeyType()),
@@ -452,20 +452,15 @@ public class ArrowUtils {
             }
         } else if (logicalType instanceof MapType) {
             MapType mapType = (MapType) logicalType;
-            DataType keyType = mapType.getKeyType();
-            if (keyType.isNullable()) {
-                throw new IllegalArgumentException(
-                        String.format(
-                                "Map key type must be non-nullable for Arrow conversion, but got: %s",
-                                keyType.asSummaryString()));
-            }
-            Field keyField = toArrowField("key", keyType);
-            Field valueField = toArrowField("value", mapType.getValueType());
+            // Map keys are always non-nullable (enforced by MapType constructor)
+            Field keyField = toArrowField(MapVector.KEY_NAME, mapType.getKeyType());
+            Field valueField = toArrowField(MapVector.VALUE_NAME, mapType.getValueType());
             FieldType structFieldType = new FieldType(false, ArrowType.Struct.INSTANCE, null);
             List<Field> structChildren = new ArrayList<>();
             structChildren.add(keyField);
             structChildren.add(valueField);
-            Field structField = new Field("entries", structFieldType, structChildren);
+            Field structField =
+                    new Field(MapVector.DATA_VECTOR_NAME, structFieldType, structChildren);
             children = Collections.singletonList(structField);
         }
         return new Field(fieldName, fieldType, children);

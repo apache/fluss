@@ -21,6 +21,8 @@ import org.apache.fluss.annotation.PublicEvolving;
 import org.apache.fluss.types.MapType;
 
 import java.io.Serializable;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.Objects;
 
 /**
@@ -41,11 +43,11 @@ public class GenericMap implements InternalMap, Serializable {
 
     private static final long serialVersionUID = 1L;
 
-    private final java.util.Map<?, ?> map;
+    private final Map<?, ?> map;
     private transient InternalArray keyArray;
     private transient InternalArray valueArray;
 
-    public GenericMap(java.util.Map<?, ?> map) {
+    public GenericMap(Map<?, ?> map) {
         this.map = map;
     }
 
@@ -78,7 +80,7 @@ public class GenericMap implements InternalMap, Serializable {
         Object[] keys = new Object[map.size()];
         Object[] values = new Object[map.size()];
         int i = 0;
-        for (java.util.Map.Entry<?, ?> entry : map.entrySet()) {
+        for (Map.Entry<?, ?> entry : map.entrySet()) {
             keys[i] = entry.getKey();
             values[i] = entry.getValue();
             i++;
@@ -98,12 +100,12 @@ public class GenericMap implements InternalMap, Serializable {
         return deepEquals(map, ((GenericMap) o).map);
     }
 
-    private static <K, V> boolean deepEquals(java.util.Map<K, V> m1, java.util.Map<?, ?> m2) {
+    private static <K, V> boolean deepEquals(Map<K, V> m1, Map<?, ?> m2) {
         if (m1.size() != m2.size()) {
             return false;
         }
         try {
-            for (java.util.Map.Entry<K, V> e : m1.entrySet()) {
+            for (Map.Entry<K, V> e : m1.entrySet()) {
                 K key = e.getKey();
                 V value = e.getValue();
                 if (value == null) {
@@ -137,7 +139,7 @@ public class GenericMap implements InternalMap, Serializable {
                     "Arguments must be in key-value pairs (even number of elements)");
         }
 
-        java.util.Map<Object, Object> javaMap = new java.util.LinkedHashMap<>();
+        Map<Object, Object> javaMap = new LinkedHashMap<>();
         for (int i = 0; i < values.length; i += 2) {
             javaMap.put(values[i], values[i + 1]);
         }

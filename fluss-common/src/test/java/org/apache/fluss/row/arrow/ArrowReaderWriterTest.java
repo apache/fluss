@@ -337,4 +337,77 @@ class ArrowReaderWriterTest {
             }
         }
     }
+
+    /**
+     * Tests that map columns work correctly when the total number of map entries exceeds
+     * INITIAL_CAPACITY (1024) while the row count stays below it. This reproduces a bug where
+     * ArrowMapWriter used the parent's handleSafe flag (based on row count) for entry writes,
+     * causing IndexOutOfBoundsException when entry indices exceeded the vector's initial capacity.
+     */
+    @Test
+    void testMapWriterWithManyEntries() throws IOException {
+        // Schema with map column
+        RowType rowType =
+                DataTypes.ROW(
+                        DataTypes.FIELD("id", DataTypes.INT()),
+                        DataTypes.FIELD(
+                                "map",
+                                DataTypes.MAP(DataTypes.INT().copy(false), DataTypes.STRING())));
+
+        try (BufferAllocator allocator = new RootAllocator(Long.MAX_VALUE);
+                VectorSchemaRoot root =
+                        VectorSchemaRoot.create(ArrowUtils.toArrowSchema(rowType), allocator);
+                ArrowWriterPool provider = new ArrowWriterPool(allocator);
+                ArrowWriter writer =
+                        provider.getOrCreateWriter(
+                                1L, 1, Integer.MAX_VALUE, rowType, NO_COMPRESSION)) {
+
+            // Write 150 rows, each with a 10-entry map.
+            // Total entries = 1500, exceeding INITIAL_CAPACITY (1024).
+            // But row count (150) < 1024, so handleSafe would be false without the fix.
+            int numRows = 150;
+            int mapSize = 10;
+            for (int i = 0; i < numRows; i++) {
+                Object[] mapEntries = new Object[mapSize * 2];
+                for (int j = 0; j < mapSize; j++) {
+                    int key = i * mapSize + j;
+                    mapEntries[j * 2] = key;
+                    mapEntries[j * 2 + 1] = fromString("value_" + key);
+                }
+                GenericMap map = GenericMap.of(mapEntries);
+                writer.writeRow(GenericRow.of(i, map));
+            }
+
+            // Verify serialization works without IndexOutOfBoundsException
+            AbstractPagedOutputView pagedOutputView =
+                    new ManagedPagedOutputView(new TestingMemorySegmentPool(64 * 1024));
+            int size =
+                    writer.serializeToOutputView(
+                            pagedOutputView, arrowChangeTypeOffset(CURRENT_LOG_MAGIC_VALUE));
+            assertThat(size).isGreaterThan(0);
+
+            // Verify the data can be read back correctly
+            int heapMemorySize = Math.max(size, writer.estimatedSizeInBytes());
+            MemorySegment segment = MemorySegment.allocateHeapMemory(heapMemorySize);
+            MemorySegment firstSegment = pagedOutputView.getCurrentSegment();
+            firstSegment.copyTo(arrowChangeTypeOffset(CURRENT_LOG_MAGIC_VALUE), segment, 0, size);
+
+            ArrowReader reader =
+                    ArrowUtils.createArrowReader(segment, 0, size, root, allocator, rowType);
+            assertThat(reader.getRowCount()).isEqualTo(numRows);
+
+            for (int i = 0; i < numRows; i++) {
+                ColumnarRow row = reader.read(i);
+                row.setRowId(i);
+                assertThat(row.getInt(0)).isEqualTo(i);
+                assertThat(row.getMap(1).size()).isEqualTo(mapSize);
+                for (int j = 0; j < mapSize; j++) {
+                    int key = i * mapSize + j;
+                    assertThat(row.getMap(1).keyArray().getInt(j)).isEqualTo(key);
+                    assertThat(row.getMap(1).valueArray().getString(j))
+                            .isEqualTo(fromString("value_" + key));
+                }
+            }
+        }
+    }
 }

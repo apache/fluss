@@ -56,8 +56,9 @@ public class ColumnarMap implements InternalMap {
             ColumnVector valueColumnVector,
             int offset,
             int numElements) {
-        this.keyArray = new ColumnarArray(keyColumnVector, offset, numElements);
-        this.valueArray = new ColumnarArray(valueColumnVector, offset, numElements);
+        this(
+                new ColumnarArray(keyColumnVector, offset, numElements),
+                new ColumnarArray(valueColumnVector, offset, numElements));
     }
 
     @Override

@@ -140,7 +140,7 @@ public class ColumnarRow implements InternalRow {
 
     @Override
     public InternalMap getMap(int pos) {
-        return ((MapColumnVector) vectorizedColumnBatch.getColumn(pos)).getMap(rowId);
+        return vectorizedColumnBatch.getMap(rowId, pos);
     }
 
     @Override

@@ -35,6 +35,7 @@ import org.junit.jupiter.api.Test;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.time.LocalDateTime;
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 import static org.apache.flink.table.data.binary.BinaryStringData.fromString;
@@ -112,7 +113,7 @@ public class FlinkRowToFlussRowConverterTest {
                                     new StringData[] {fromString("hello"), fromString("world")})
                         }));
 
-        Map<Integer, StringData> javaMap = new java.util.LinkedHashMap<>();
+        Map<Integer, StringData> javaMap = new LinkedHashMap<>();
         javaMap.put(0, null);
         javaMap.put(1, fromString("1"));
         javaMap.put(2, fromString("2"));

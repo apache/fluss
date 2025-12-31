@@ -20,10 +20,13 @@
 package org.apache.fluss.row.array;
 
 import org.apache.fluss.row.BinaryArray;
+import org.apache.fluss.row.BinaryMap;
 import org.apache.fluss.row.BinarySegmentUtils;
 import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.row.map.IndexedMap;
 import org.apache.fluss.types.ArrayType;
 import org.apache.fluss.types.DataType;
+import org.apache.fluss.types.MapType;
 import org.apache.fluss.types.RowType;
 
 /**
@@ -64,6 +67,17 @@ public class IndexedArray extends BinaryArray {
         } else {
             throw new IllegalArgumentException(
                     "Can not get nested array from Array of type " + elementType);
+        }
+    }
+
+    @Override
+    protected BinaryMap createNestedMapInstance() {
+        if (elementType instanceof MapType) {
+            MapType mapType = (MapType) elementType;
+            return new IndexedMap(mapType.getKeyType(), mapType.getValueType());
+        } else {
+            throw new IllegalArgumentException(
+                    "Can not get nested map from Array of type " + elementType);
         }
     }
 }

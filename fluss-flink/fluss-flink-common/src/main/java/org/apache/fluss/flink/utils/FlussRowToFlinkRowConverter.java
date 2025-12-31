@@ -40,6 +40,8 @@ import org.apache.flink.table.data.TimestampData;
 import org.apache.flink.types.RowKind;
 
 import java.io.Serializable;
+import java.util.HashMap;
+import java.util.Map;
 
 import static org.apache.fluss.flink.utils.FlinkConversions.toFlinkRowKind;
 
@@ -179,7 +181,7 @@ public class FlussRowToFlinkRowConverter {
                     InternalArray keyArray = flussMap.keyArray();
                     InternalArray valueArray = flussMap.valueArray();
                     int size = flussMap.size();
-                    java.util.Map<Object, Object> javaMap = new java.util.HashMap<>();
+                    Map<Object, Object> javaMap = new HashMap<>();
                     for (int i = 0; i < size; i++) {
                         Object flussKey = keyGetter.getElementOrNull(keyArray, i);
                         Object flussValue = valueGetter.getElementOrNull(valueArray, i);

@@ -1002,30 +1002,16 @@ public final class BinarySegmentUtils {
         return reusedArray;
     }
 
+    /**
+     * Read the map data into the reused {@link BinaryMap} instance from underlying {@link
+     * MemorySegment}.
+     */
     public static BinaryMap readBinaryMap(
-            MemorySegment[] segments, int baseOffset, long offsetAndSize) {
+            MemorySegment[] segments, int baseOffset, long offsetAndSize, BinaryMap reusedMap) {
         final int size = ((int) offsetAndSize);
         int offset = (int) (offsetAndSize >> 32);
-        BinaryMap map = new BinaryMap();
-        map.pointTo(segments, offset + baseOffset, size);
-        return map;
-    }
-
-    /** Read map data from segments. */
-    public static InternalMap readMap(MemorySegment[] segments, int offset, int numBytes) {
-        return readMapData(segments, offset, numBytes);
-    }
-
-    /** Read map data from segments with long offset. */
-    public static InternalMap readMap(MemorySegment[] segments, int offset, long numBytes) {
-        return readMapData(segments, offset, (int) numBytes);
-    }
-
-    /** Read map data from segments. */
-    public static BinaryMap readMapData(MemorySegment[] segments, int offset, int numBytes) {
-        BinaryMap map = new BinaryMap();
-        map.pointTo(segments, offset, numBytes);
-        return map;
+        reusedMap.pointTo(segments, offset + baseOffset, size);
+        return reusedMap;
     }
 
     /** Read aligned row from segments. */

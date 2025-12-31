@@ -32,6 +32,7 @@ import org.apache.fluss.row.NullAwareGetters;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
 import org.apache.fluss.row.array.AlignedArray;
+import org.apache.fluss.row.map.AlignedMap;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DecimalType;
 import org.apache.fluss.types.LocalZonedTimestampType;
@@ -401,7 +402,7 @@ public final class AlignedRow extends BinarySection
         assertIndexIsValid(pos);
         int fieldOffset = getFieldOffset(pos);
         final long offsetAndSize = segments[0].getLong(fieldOffset);
-        return BinarySegmentUtils.readBinaryMap(segments, offset, offsetAndSize);
+        return BinarySegmentUtils.readBinaryMap(segments, offset, offsetAndSize, new AlignedMap());
     }
 
     @Override

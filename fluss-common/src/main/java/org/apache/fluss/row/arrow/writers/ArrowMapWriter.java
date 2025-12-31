@@ -21,6 +21,7 @@ package org.apache.fluss.row.arrow.writers;
 import org.apache.fluss.row.DataGetters;
 import org.apache.fluss.row.InternalArray;
 import org.apache.fluss.row.InternalMap;
+import org.apache.fluss.row.arrow.ArrowWriter;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.FieldVector;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.complex.MapVector;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.complex.StructVector;
@@ -52,10 +53,22 @@ public class ArrowMapWriter extends ArrowFieldWriter {
         for (int i = 0; i < map.size(); i++) {
             int fieldIndex = offset + i;
             structVector.setIndexDefined(fieldIndex);
-            keyWriter.write(fieldIndex, keyArray, i, handleSafe);
-            valueWriter.write(fieldIndex, valueArray, i, handleSafe);
+            // Use element-based index to determine handleSafe, not parent row count.
+            // When row count < INITIAL_CAPACITY but total map entries > INITIAL_CAPACITY,
+            // we need to use safe mode for entries beyond the initial capacity.
+            boolean elementHandleSafe = fieldIndex >= ArrowWriter.INITIAL_CAPACITY;
+            keyWriter.write(fieldIndex, keyArray, i, elementHandleSafe);
+            valueWriter.write(fieldIndex, valueArray, i, elementHandleSafe);
         }
         offset += map.size();
         mapVector.endValue(rowIndex, map.size());
+    }
+
+    @Override
+    public void reset() {
+        super.reset();
+        keyWriter.reset();
+        valueWriter.reset();
+        offset = 0;
     }
 }

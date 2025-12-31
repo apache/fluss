@@ -271,10 +271,14 @@ public abstract class BinaryArray extends BinarySection
     /** Creates a nested {@link BinaryArray} with the nested data type information. */
     protected abstract BinaryArray createNestedArrayInstance();
 
+    /** Creates a nested {@link BinaryMap} with the nested data type information. */
+    protected abstract BinaryMap createNestedMapInstance();
+
     @Override
     public InternalMap getMap(int pos) {
         assertIndexIsValid(pos);
-        return BinarySegmentUtils.readBinaryMap(segments, offset, getLong(pos));
+        return BinarySegmentUtils.readBinaryMap(
+                segments, offset, getLong(pos), createNestedMapInstance());
     }
 
     @Override

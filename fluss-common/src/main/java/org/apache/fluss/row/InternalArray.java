@@ -23,11 +23,14 @@ import org.apache.fluss.row.columnar.ColumnarRow;
 import org.apache.fluss.row.columnar.VectorizedColumnBatch;
 import org.apache.fluss.types.ArrayType;
 import org.apache.fluss.types.DataType;
+import org.apache.fluss.types.MapType;
 import org.apache.fluss.types.RowType;
 
 import javax.annotation.Nullable;
 
 import java.io.Serializable;
+import java.util.HashMap;
+import java.util.Map;
 
 import static org.apache.fluss.types.DataTypeChecks.getLength;
 import static org.apache.fluss.types.DataTypeChecks.getPrecision;
@@ -185,8 +188,8 @@ public interface InternalArray extends DataGetters {
                         };
                 break;
             case MAP:
-                DataType keyType = ((org.apache.fluss.types.MapType) fieldType).getKeyType();
-                DataType valueType = ((org.apache.fluss.types.MapType) fieldType).getValueType();
+                DataType keyType = ((MapType) fieldType).getKeyType();
+                DataType valueType = ((MapType) fieldType).getValueType();
                 ElementGetter keyGetter = createDeepElementGetter(keyType);
                 ElementGetter valueGetter = createDeepElementGetter(valueType);
                 elementGetter =
@@ -194,15 +197,11 @@ public interface InternalArray extends DataGetters {
                             InternalMap inner = array.getMap(pos);
                             InternalArray keys = inner.keyArray();
                             InternalArray values = inner.valueArray();
-                            Object[] keyObjs = new Object[keys.size()];
-                            Object[] valueObjs = new Object[values.size()];
+                            Map<Object, Object> map = new HashMap<>();
                             for (int i = 0; i < keys.size(); i++) {
-                                keyObjs[i] = keyGetter.getElementOrNull(keys, i);
-                                valueObjs[i] = valueGetter.getElementOrNull(values, i);
-                            }
-                            java.util.Map<Object, Object> map = new java.util.HashMap<>();
-                            for (int i = 0; i < keyObjs.length; i++) {
-                                map.put(keyObjs[i], valueObjs[i]);
+                                Object key = keyGetter.getElementOrNull(keys, i);
+                                Object value = valueGetter.getElementOrNull(values, i);
+                                map.put(key, value);
                             }
                             return new GenericMap(map);
                         };

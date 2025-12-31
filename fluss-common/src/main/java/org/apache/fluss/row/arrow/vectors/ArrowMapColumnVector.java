@@ -38,8 +38,8 @@ public class ArrowMapColumnVector implements MapColumnVector {
         this.mapVector = (MapVector) vector;
         FieldVector dataVector = mapVector.getDataVector();
         StructVector structVector = (StructVector) dataVector;
-        FieldVector keyVector = structVector.getChildrenFromFields().get(0);
-        FieldVector valueVector = structVector.getChildrenFromFields().get(1);
+        FieldVector keyVector = structVector.getChild(MapVector.KEY_NAME);
+        FieldVector valueVector = structVector.getChild(MapVector.VALUE_NAME);
         this.keyColumnVector = ArrowUtils.createArrowColumnVector(keyVector, keyType);
         this.valueColumnVector = ArrowUtils.createArrowColumnVector(valueVector, valueType);
     }
@@ -55,9 +55,5 @@ public class ArrowMapColumnVector implements MapColumnVector {
     @Override
     public boolean isNullAt(int i) {
         return mapVector.isNull(i);
-    }
-
-    public ColumnVector[] getChildren() {
-        return new ColumnVector[] {keyColumnVector, valueColumnVector};
     }
 }
