@@ -15,10 +15,20 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.server.coordinator.statemachine;
+package org.apache.fluss.server.coordinator.rebalance;
 
-/** The strategies to elect the replica leader. */
-public enum ReplicaLeaderElectionStrategy {
-    DEFAULT_ELECTION,
-    CONTROLLED_SHUTDOWN_ELECTION
+import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.server.coordinator.rebalance.model.ClusterModel;
+
+import java.util.List;
+
+/** A util class for rebalance test. */
+public class RebalanceTestUtils {
+
+    public static void addBucket(
+            ClusterModel clusterModel, TableBucket tb, List<Integer> replicas) {
+        for (int i = 0; i < replicas.size(); i++) {
+            clusterModel.createReplica(replicas.get(i), tb, i, i == 0);
+        }
+    }
 }

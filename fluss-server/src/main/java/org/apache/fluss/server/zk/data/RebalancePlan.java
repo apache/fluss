@@ -37,6 +37,9 @@ import java.util.Objects;
  */
 public class RebalancePlan {
 
+    /** The rebalance id to trace rebalace task. */
+    private final String rebalanceId;
+
     /** The rebalance status for the overall rebalance. */
     private final RebalanceStatus rebalanceStatus;
 
@@ -48,7 +51,10 @@ public class RebalancePlan {
             planForBucketsOfPartitionedTable;
 
     public RebalancePlan(
-            RebalanceStatus rebalanceStatus, Map<TableBucket, RebalancePlanForBucket> bucketPlan) {
+            String rebalanceId,
+            RebalanceStatus rebalanceStatus,
+            Map<TableBucket, RebalancePlanForBucket> bucketPlan) {
+        this.rebalanceId = rebalanceId;
         this.rebalanceStatus = rebalanceStatus;
         this.planForBuckets = new HashMap<>();
         this.planForBucketsOfPartitionedTable = new HashMap<>();
@@ -70,6 +76,10 @@ public class RebalancePlan {
         }
     }
 
+    public String getRebalanceId() {
+        return rebalanceId;
+    }
+
     public RebalanceStatus getRebalanceStatus() {
         return rebalanceStatus;
     }
@@ -82,12 +92,34 @@ public class RebalancePlan {
         return planForBucketsOfPartitionedTable;
     }
 
+    public Map<TableBucket, RebalancePlanForBucket> getExecutePlan() {
+        Map<TableBucket, RebalancePlanForBucket> executePlan = new HashMap<>();
+        planForBuckets.forEach(
+                (tableId, rebalancePlanForBuckets) ->
+                        rebalancePlanForBuckets.forEach(
+                                rebalancePlanForBucket ->
+                                        executePlan.put(
+                                                rebalancePlanForBucket.getTableBucket(),
+                                                rebalancePlanForBucket)));
+
+        planForBucketsOfPartitionedTable.forEach(
+                (tablePartition, rebalancePlanForBuckets) ->
+                        rebalancePlanForBuckets.forEach(
+                                rebalancePlanForBucket ->
+                                        executePlan.put(
+                                                rebalancePlanForBucket.getTableBucket(),
+                                                rebalancePlanForBucket)));
+        return executePlan;
+    }
+
     @Override
     public String toString() {
         return "RebalancePlan{"
-                + "rebalanceStatus="
+                + "rebalanceId='"
+                + rebalanceId
+                + ", rebalanceStatus="
                 + rebalanceStatus
-                + "planForBuckets="
+                + ", planForBuckets="
                 + planForBuckets
                 + ", planForBucketsOfPartitionedTable="
                 + planForBucketsOfPartitionedTable
@@ -105,6 +137,7 @@ public class RebalancePlan {
 
         RebalancePlan that = (RebalancePlan) o;
         return rebalanceStatus == that.rebalanceStatus
+                && Objects.equals(rebalanceId, that.rebalanceId)
                 && Objects.equals(planForBuckets, that.planForBuckets)
                 && Objects.equals(
                         planForBucketsOfPartitionedTable, that.planForBucketsOfPartitionedTable);
@@ -112,6 +145,7 @@ public class RebalancePlan {
 
     @Override
     public int hashCode() {
-        return Objects.hash(rebalanceStatus, planForBuckets, planForBucketsOfPartitionedTable);
+        return Objects.hash(
+                rebalanceId, rebalanceStatus, planForBuckets, planForBucketsOfPartitionedTable);
     }
 }

@@ -296,7 +296,17 @@ public class ZooKeeperClient implements AutoCloseable {
             throws Exception {
         String path = TableIdZNode.path(tableId);
         zkClient.setData().forPath(path, TableIdZNode.encode(tableAssignment));
-        LOG.info("Updated table assignment {} for table id {}.", tableAssignment, tableId);
+        LOG.debug("Updated table assignment {} for table id {}.", tableAssignment, tableId);
+    }
+
+    public void updatePartitionAssignment(long partitionId, PartitionAssignment partitionAssignment)
+            throws Exception {
+        String path = PartitionIdZNode.path(partitionId);
+        zkClient.setData().forPath(path, PartitionIdZNode.encode(partitionAssignment));
+        LOG.debug(
+                "Updated partition assignment {} for partition id {}.",
+                partitionAssignment,
+                partitionId);
     }
 
     public void deleteTableAssignment(long tableId) throws Exception {
@@ -1234,6 +1244,11 @@ public class ZooKeeperClient implements AutoCloseable {
     public Optional<RebalancePlan> getRebalancePlan() throws Exception {
         String path = RebalanceZNode.path();
         return getOrEmpty(path).map(RebalanceZNode::decode);
+    }
+
+    /** Deletes the rebalance plan from ZooKeeper. Only for testing propose now */
+    public void deleteRebalancePlan() throws Exception {
+        deletePath(RebalanceZNode.path());
     }
 
     // --------------------------------------------------------------------------------------------

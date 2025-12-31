@@ -29,10 +29,17 @@ import java.util.Map;
  */
 public class RebalancePlan {
 
+    private final String rebalanceId;
     private final Map<TableBucket, RebalancePlanForBucket> planForBucketMap;
 
-    public RebalancePlan(Map<TableBucket, RebalancePlanForBucket> planForBucketMap) {
+    public RebalancePlan(
+            String rebalanceId, Map<TableBucket, RebalancePlanForBucket> planForBucketMap) {
+        this.rebalanceId = rebalanceId;
         this.planForBucketMap = planForBucketMap;
+    }
+
+    public String getRebalanceId() {
+        return rebalanceId;
     }
 
     public Map<TableBucket, RebalancePlanForBucket> getPlanForBucketMap() {

@@ -40,6 +40,7 @@ public class RebalancePlanJsonSerde
     public static final RebalancePlanJsonSerde INSTANCE = new RebalancePlanJsonSerde();
 
     private static final String VERSION_KEY = "version";
+    private static final String REBALANCE_ID = "rebalance_id";
     private static final String REBALANCE_STATUS = "rebalance_status";
     private static final String REBALANCE_PLAN = "rebalance_plan";
 
@@ -59,6 +60,7 @@ public class RebalancePlanJsonSerde
     public void serialize(RebalancePlan rebalancePlan, JsonGenerator generator) throws IOException {
         generator.writeStartObject();
         generator.writeNumberField(VERSION_KEY, VERSION);
+        generator.writeStringField(REBALANCE_ID, rebalancePlan.getRebalanceId());
         generator.writeNumberField(REBALANCE_STATUS, rebalancePlan.getRebalanceStatus().getCode());
 
         generator.writeArrayFieldStart(REBALANCE_PLAN);
@@ -98,6 +100,7 @@ public class RebalancePlanJsonSerde
     public RebalancePlan deserialize(JsonNode node) {
         JsonNode rebalancePlanNode = node.get(REBALANCE_PLAN);
 
+        String rebalanceId = node.get(REBALANCE_ID).asText();
         RebalanceStatus rebalanceStatus = RebalanceStatus.of(node.get(REBALANCE_STATUS).asInt());
 
         Map<TableBucket, RebalancePlanForBucket> planForBuckets = new HashMap<>();
@@ -137,7 +140,7 @@ public class RebalancePlanJsonSerde
             }
         }
 
-        return new RebalancePlan(rebalanceStatus, planForBuckets);
+        return new RebalancePlan(rebalanceId, rebalanceStatus, planForBuckets);
     }
 
     private void serializeRebalancePlanForBucket(
