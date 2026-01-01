@@ -40,6 +40,7 @@ import org.apache.fluss.types.TimeType;
 import org.apache.fluss.types.TimestampType;
 import org.apache.fluss.types.TinyIntType;
 import org.apache.fluss.utils.DateTimeUtils;
+
 import org.apache.iceberg.data.Record;
 import org.apache.iceberg.types.Types;
 
