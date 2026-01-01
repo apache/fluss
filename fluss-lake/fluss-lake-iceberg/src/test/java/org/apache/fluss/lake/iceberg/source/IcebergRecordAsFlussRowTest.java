@@ -19,6 +19,7 @@
 package org.apache.fluss.lake.iceberg.source;
 
 import org.apache.fluss.row.InternalRow;
+
 import org.apache.iceberg.Schema;
 import org.apache.iceberg.data.GenericRecord;
 import org.apache.iceberg.data.Record;
