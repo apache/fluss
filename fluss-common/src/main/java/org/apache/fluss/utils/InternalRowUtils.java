@@ -24,12 +24,41 @@ package org.apache.fluss.utils;
 
 import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.Decimal;
+import org.apache.fluss.row.InternalArray;
+import org.apache.fluss.row.InternalMap;
+import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
+import org.apache.fluss.types.ArrayType;
+import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypeRoot;
+import org.apache.fluss.types.MapType;
+import org.apache.fluss.types.RowType;
 
 /** Utility class for {@link org.apache.fluss.row.InternalRow} related operations. */
 public class InternalRowUtils {
+
+    /**
+     * Compares two objects based on their data type.
+     *
+     * @param x the first object
+     * @param y the second object
+     * @param type the data type
+     * @return a negative integer, zero, or a positive integer as x is less than, equal to, or
+     *     greater than y
+     */
+    public static int compare(Object x, Object y, DataType type) {
+        switch (type.getTypeRoot()) {
+            case ARRAY:
+                return compareArray((InternalArray) x, (InternalArray) y, (ArrayType) type);
+            case ROW:
+                return compareRow((InternalRow) x, (InternalRow) y, (RowType) type);
+            case MAP:
+                return compareMap((InternalMap) x, (InternalMap) y, (MapType) type);
+            default:
+                return compare(x, y, type.getTypeRoot());
+        }
+    }
 
     /**
      * Compares two objects based on their data type.
@@ -90,6 +119,64 @@ public class InternalRowUtils {
                 throw new IllegalArgumentException("Incomparable type: " + type);
         }
         return ret;
+    }
+
+    private static int compareArray(InternalArray a1, InternalArray a2, ArrayType type) {
+        int size1 = a1.size();
+        int size2 = a2.size();
+        int size = Math.min(size1, size2);
+        InternalArray.ElementGetter getter =
+                InternalArray.createElementGetter(type.getElementType());
+
+        for (int i = 0; i < size; i++) {
+            Object o1 = getter.getElementOrNull(a1, i);
+            Object o2 = getter.getElementOrNull(a2, i);
+
+            if (o1 == null && o2 == null) {
+                continue;
+            }
+            if (o1 == null) {
+                return -1;
+            }
+            if (o2 == null) {
+                return 1;
+            }
+
+            int cmp = compare(o1, o2, type.getElementType());
+            if (cmp != 0) {
+                return cmp;
+            }
+        }
+        return Integer.compare(size1, size2);
+    }
+
+    private static int compareRow(InternalRow r1, InternalRow r2, RowType type) {
+        int count = type.getFieldCount();
+        for (int i = 0; i < count; i++) {
+            InternalRow.FieldGetter getter = InternalRow.createFieldGetter(type.getTypeAt(i), i);
+            Object o1 = getter.getFieldOrNull(r1);
+            Object o2 = getter.getFieldOrNull(r2);
+
+            if (o1 == null && o2 == null) {
+                continue;
+            }
+            if (o1 == null) {
+                return -1;
+            }
+            if (o2 == null) {
+                return 1;
+            }
+
+            int cmp = compare(o1, o2, type.getTypeAt(i));
+            if (cmp != 0) {
+                return cmp;
+            }
+        }
+        return 0;
+    }
+
+    private static int compareMap(InternalMap m1, InternalMap m2, MapType type) {
+        throw new IllegalArgumentException("Map type is not comparable: " + type);
     }
 
     private static int byteArrayCompare(byte[] array1, byte[] array2) {
