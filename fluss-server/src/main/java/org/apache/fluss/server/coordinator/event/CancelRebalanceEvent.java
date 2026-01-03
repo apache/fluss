@@ -15,10 +15,22 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.server.coordinator.statemachine;
+package org.apache.fluss.server.coordinator.event;
 
-/** The strategies to elect the replica leader. */
-public enum ReplicaLeaderElectionStrategy {
-    DEFAULT_ELECTION,
-    CONTROLLED_SHUTDOWN_ELECTION
+import org.apache.fluss.rpc.messages.CancelRebalanceResponse;
+
+import java.util.concurrent.CompletableFuture;
+
+/** The event for canceling rebalance. */
+public class CancelRebalanceEvent implements CoordinatorEvent {
+
+    private final CompletableFuture<CancelRebalanceResponse> respCallback;
+
+    public CancelRebalanceEvent(CompletableFuture<CancelRebalanceResponse> respCallback) {
+        this.respCallback = respCallback;
+    }
+
+    public CompletableFuture<CancelRebalanceResponse> getRespCallback() {
+        return respCallback;
+    }
 }

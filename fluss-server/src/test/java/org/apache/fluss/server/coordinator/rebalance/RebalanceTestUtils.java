@@ -15,39 +15,20 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.cluster.rebalance;
+package org.apache.fluss.server.coordinator.rebalance;
 
-import org.apache.fluss.annotation.PublicEvolving;
+import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.server.coordinator.rebalance.model.ClusterModel;
 
-/**
- * Rebalance status.
- *
- * @since 0.9
- */
-@PublicEvolving
-public enum RebalanceStatus {
-    NOT_STARTED(1),
-    REBALANCING(2),
-    FAILED(3),
-    COMPLETED(4),
-    CANCELED(5);
+import java.util.List;
 
-    private final int code;
+/** A util class for rebalance test. */
+public class RebalanceTestUtils {
 
-    RebalanceStatus(int code) {
-        this.code = code;
-    }
-
-    public int getCode() {
-        return code;
-    }
-
-    public static RebalanceStatus of(int code) {
-        for (RebalanceStatus status : RebalanceStatus.values()) {
-            if (status.code == code) {
-                return status;
-            }
+    public static void addBucket(
+            ClusterModel clusterModel, TableBucket tb, List<Integer> replicas) {
+        for (int i = 0; i < replicas.size(); i++) {
+            clusterModel.createReplica(replicas.get(i), tb, i, i == 0);
         }
-        return null;
     }
 }
