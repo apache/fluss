@@ -37,7 +37,7 @@ import org.apache.fluss.row.encode.CompactedKeyEncoder;
 import org.apache.fluss.row.encode.KeyEncoder;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.lease.KvSnapshotLease;
-import org.apache.fluss.server.zk.data.lease.KvSnapshotLeaseMetadataHelper;
+import org.apache.fluss.server.zk.data.lease.KvSnapshotLeaseMetadataManager;
 import org.apache.fluss.server.zk.data.lease.KvSnapshotTableLease;
 import org.apache.fluss.types.DataTypes;
 
@@ -205,8 +205,8 @@ class KvSnapshotBatchScannerITCase extends ClientToServerITCaseBase {
 
         ZooKeeperClient zkClient = FLUSS_CLUSTER_EXTENSION.getZooKeeperClient();
         String remoteDataDir = FLUSS_CLUSTER_EXTENSION.getRemoteDataDir();
-        KvSnapshotLeaseMetadataHelper metadataHelper =
-                new KvSnapshotLeaseMetadataHelper(zkClient, remoteDataDir);
+        KvSnapshotLeaseMetadataManager metadataHelper =
+                new KvSnapshotLeaseMetadataManager(zkClient, remoteDataDir);
 
         assertThat(zkClient.getKvSnapshotLeasesList()).isEmpty();
 
@@ -346,7 +346,7 @@ class KvSnapshotBatchScannerITCase extends ClientToServerITCaseBase {
     }
 
     private void checkKvSnapshotLeaseEquals(
-            KvSnapshotLeaseMetadataHelper metadataHelper,
+            KvSnapshotLeaseMetadataManager metadataHelper,
             String leaseId,
             long tableId,
             Long[] expectedBucketIndex)

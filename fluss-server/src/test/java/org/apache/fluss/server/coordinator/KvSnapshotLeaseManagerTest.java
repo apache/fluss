@@ -22,15 +22,13 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.metadata.KvSnapshotLeaseForBucket;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
-import org.apache.fluss.metadata.TableInfo;
-import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.metrics.group.TestingMetricGroups;
 import org.apache.fluss.server.zk.NOPErrorHandler;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperExtension;
 import org.apache.fluss.server.zk.data.BucketSnapshot;
 import org.apache.fluss.server.zk.data.lease.KvSnapshotLease;
-import org.apache.fluss.server.zk.data.lease.KvSnapshotLeaseMetadataHelper;
+import org.apache.fluss.server.zk.data.lease.KvSnapshotLeaseMetadataManager;
 import org.apache.fluss.server.zk.data.lease.KvSnapshotTableLease;
 import org.apache.fluss.testutils.common.AllCallbackWrapper;
 import org.apache.fluss.testutils.common.ManuallyTriggeredScheduledExecutorService;
@@ -52,10 +50,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
-import static org.apache.fluss.record.TestData.DATA1_PARTITIONED_TABLE_DESCRIPTOR;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_ID_PK;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_INFO_PK;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH_PK;
+import static org.apache.fluss.record.TestData.PARTITION_TABLE_ID;
+import static org.apache.fluss.record.TestData.PARTITION_TABLE_INFO;
+import static org.apache.fluss.record.TestData.PARTITION_TABLE_PATH;
 import static org.apache.fluss.server.coordinator.CoordinatorTestUtils.createServers;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -66,17 +66,6 @@ public class KvSnapshotLeaseManagerTest {
     public static final AllCallbackWrapper<ZooKeeperExtension> ZOO_KEEPER_EXTENSION_WRAPPER =
             new AllCallbackWrapper<>(new ZooKeeperExtension());
 
-    private static final TablePath PARTITION_TABLE_PATH =
-            new TablePath("test_db_1", "test_partition_table");
-    private static final long PARTITION_TABLE_ID = 150008L;
-    private static final TableInfo PARTITION_TABLE_INFO =
-            TableInfo.of(
-                    PARTITION_TABLE_PATH,
-                    PARTITION_TABLE_ID,
-                    1,
-                    DATA1_PARTITIONED_TABLE_DESCRIPTOR,
-                    System.currentTimeMillis(),
-                    System.currentTimeMillis());
     private static final long PARTITION_ID_1 = 19001L;
     private static final PhysicalTablePath PARTITION_TABLE_PATH_1 =
             PhysicalTablePath.of(PARTITION_TABLE_PATH, "2024");
@@ -101,7 +90,7 @@ public class KvSnapshotLeaseManagerTest {
     private ManualClock manualClock;
     private ManuallyTriggeredScheduledExecutorService clearLeaseScheduler;
     private KvSnapshotLeaseManager kvSnapshotLeaseManager;
-    private KvSnapshotLeaseMetadataHelper metadataHelper;
+    private KvSnapshotLeaseMetadataManager metadataHelper;
 
     private @TempDir Path tempDir;
 
@@ -121,7 +110,7 @@ public class KvSnapshotLeaseManagerTest {
         conf.set(ConfigOptions.KV_SNAPSHOT_LEASE_EXPIRATION_CHECK_INTERVAL, Duration.ofDays(7));
         manualClock = new ManualClock(System.currentTimeMillis());
         clearLeaseScheduler = new ManuallyTriggeredScheduledExecutorService();
-        metadataHelper = new KvSnapshotLeaseMetadataHelper(zookeeperClient, tempDir.toString());
+        metadataHelper = new KvSnapshotLeaseMetadataManager(zookeeperClient, tempDir.toString());
         kvSnapshotLeaseManager =
                 new KvSnapshotLeaseManager(
                         conf,

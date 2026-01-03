@@ -22,7 +22,7 @@ import org.apache.flink.table.annotation.DataTypeHint;
 import org.apache.flink.table.annotation.ProcedureHint;
 import org.apache.flink.table.procedure.ProcedureContext;
 
-/** Procedure to drop kv snapshot lease. */
+/** Procedure to release kv snapshot lease. */
 public class DropKvSnapshotLeaseProcedure extends ProcedureBase {
 
     @ProcedureHint(

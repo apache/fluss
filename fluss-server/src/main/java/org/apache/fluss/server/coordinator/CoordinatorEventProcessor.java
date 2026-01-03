@@ -111,7 +111,7 @@ import org.apache.fluss.server.zk.data.ZkData.TableIdsZNode;
 import org.apache.fluss.server.zk.data.lake.LakeTable;
 import org.apache.fluss.server.zk.data.lake.LakeTableHelper;
 import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
-import org.apache.fluss.server.zk.data.lease.KvSnapshotLeaseMetadataHelper;
+import org.apache.fluss.server.zk.data.lease.KvSnapshotLeaseMetadataManager;
 import org.apache.fluss.utils.clock.Clock;
 import org.apache.fluss.utils.types.Tuple2;
 
@@ -225,7 +225,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
         this.kvSnapshotLeaseManager =
                 new KvSnapshotLeaseManager(
                         conf,
-                        new KvSnapshotLeaseMetadataHelper(zooKeeperClient, remoteDataDir),
+                        new KvSnapshotLeaseMetadataManager(zooKeeperClient, remoteDataDir),
                         coordinatorContext,
                         clock,
                         coordinatorMetricGroup);

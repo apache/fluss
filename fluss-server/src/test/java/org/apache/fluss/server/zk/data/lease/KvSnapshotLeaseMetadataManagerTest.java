@@ -41,8 +41,8 @@ import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/** Test for {@link KvSnapshotLeaseMetadataHelper}. */
-public class KvSnapshotLeaseMetadataHelperTest {
+/** Test for {@link KvSnapshotLeaseMetadataManager}. */
+public class KvSnapshotLeaseMetadataManagerTest {
 
     @RegisterExtension
     public static final AllCallbackWrapper<ZooKeeperExtension> ZOO_KEEPER_EXTENSION_WRAPPER =
@@ -50,7 +50,7 @@ public class KvSnapshotLeaseMetadataHelperTest {
 
     protected static ZooKeeperClient zookeeperClient;
     private @TempDir Path tempDir;
-    private KvSnapshotLeaseMetadataHelper metadataHelper;
+    private KvSnapshotLeaseMetadataManager metadataHelper;
 
     @BeforeAll
     static void beforeAll() {
@@ -62,7 +62,7 @@ public class KvSnapshotLeaseMetadataHelperTest {
 
     @BeforeEach
     void beforeEach() {
-        metadataHelper = new KvSnapshotLeaseMetadataHelper(zookeeperClient, tempDir.toString());
+        metadataHelper = new KvSnapshotLeaseMetadataManager(zookeeperClient, tempDir.toString());
     }
 
     @AfterEach

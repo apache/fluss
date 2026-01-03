@@ -41,16 +41,16 @@ import java.util.Optional;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /**
- * The helper to handle {@link KvSnapshotLease} to register/update/delete metadata from zk and
+ * The manager to handle {@link KvSnapshotLease} to register/update/delete metadata from zk and
  * remote fs.
  */
-public class KvSnapshotLeaseMetadataHelper {
-    private static final Logger LOG = LoggerFactory.getLogger(KvSnapshotLeaseMetadataHelper.class);
+public class KvSnapshotLeaseMetadataManager {
+    private static final Logger LOG = LoggerFactory.getLogger(KvSnapshotLeaseMetadataManager.class);
 
     private final ZooKeeperClient zkClient;
     private final String remoteDataDir;
 
-    public KvSnapshotLeaseMetadataHelper(ZooKeeperClient zkClient, String remoteDataDir) {
+    public KvSnapshotLeaseMetadataManager(ZooKeeperClient zkClient, String remoteDataDir) {
         this.zkClient = zkClient;
         this.remoteDataDir = remoteDataDir;
     }
