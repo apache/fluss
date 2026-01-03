@@ -43,6 +43,7 @@ import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.InvalidTargetColumnException;
 import org.apache.fluss.exception.InvalidTimestampException;
 import org.apache.fluss.exception.InvalidUpdateVersionException;
+import org.apache.fluss.exception.KvSnapshotLeaseNotExistException;
 import org.apache.fluss.exception.KvSnapshotNotExistException;
 import org.apache.fluss.exception.KvStorageException;
 import org.apache.fluss.exception.LakeStorageNotConfiguredException;
@@ -240,7 +241,9 @@ public enum Errors {
     SEVER_TAG_NOT_EXIST_EXCEPTION(60, "The server tag not exist.", ServerTagNotExistException::new),
     REBALANCE_FAILURE_EXCEPTION(61, "The rebalance task failure.", RebalanceFailureException::new),
     NO_REBALANCE_IN_PROGRESS_EXCEPTION(
-            62, "No rebalance task in progress.", NoRebalanceInProgressException::new);
+            62, "No rebalance task in progress.", NoRebalanceInProgressException::new),
+    KV_SNAPSHOT_LEASE_NOT_EXIST(
+            63, "The kv snapshot lease is not exist.", KvSnapshotLeaseNotExistException::new);
 
     private static final Logger LOG = LoggerFactory.getLogger(Errors.class);
 

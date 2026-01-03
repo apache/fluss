@@ -73,7 +73,8 @@ public class ProcedureManager {
         SET_CLUSTER_CONFIG("sys.set_cluster_config", SetClusterConfigProcedure.class),
         GET_CLUSTER_CONFIG("sys.get_cluster_config", GetClusterConfigProcedure.class),
         ADD_SERVER_TAG("sys.add_server_tag", AddServerTagProcedure.class),
-        REMOVE_SERVER_TAG("sys.remove_server_tag", RemoveServerTagProcedure.class);
+        REMOVE_SERVER_TAG("sys.remove_server_tag", RemoveServerTagProcedure.class),
+        DROP_KV_SNAPSHOT_LEASE("sys.drop_kv_snapshot_lease", DropKvSnapshotLeaseProcedure.class);
 
         private final String path;
         private final Class<? extends ProcedureBase> procedureClass;
