@@ -35,8 +35,8 @@ import java.util.concurrent.atomic.AtomicLong;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-/** Test class for {@link SegmentIncIDGenerator}. */
-class SegmentIncIDGeneratorTest {
+/** Test class for {@link SegmentSequenceGenerator}. */
+class SegmentSequenceGeneratorTest {
 
     private static final TablePath TABLE_PATH = new TablePath("test_db", "test_table");
     private static final int COLUMN_IDX = 0;
@@ -56,8 +56,8 @@ class SegmentIncIDGeneratorTest {
 
     @Test
     void testNextValBasicContinuousId() {
-        SegmentIncIDGenerator generator =
-                new SegmentIncIDGenerator(
+        SegmentSequenceGenerator generator =
+                new SegmentSequenceGenerator(
                         TABLE_PATH,
                         COLUMN_IDX,
                         COLUMN_NAME,
@@ -79,8 +79,8 @@ class SegmentIncIDGeneratorTest {
         for (int i = 0; i < 20; i++) {
             new Thread(
                             () -> {
-                                SegmentIncIDGenerator generator =
-                                        new SegmentIncIDGenerator(
+                                SegmentSequenceGenerator generator =
+                                        new SegmentSequenceGenerator(
                                                 new TablePath("test_db", "table1"),
                                                 COLUMN_IDX,
                                                 COLUMN_NAME + "_table1",
@@ -99,8 +99,8 @@ class SegmentIncIDGeneratorTest {
 
     @Test
     void testFetchFailed() {
-        SegmentIncIDGenerator generator =
-                new SegmentIncIDGenerator(
+        SegmentSequenceGenerator generator =
+                new SegmentSequenceGenerator(
                         new TablePath("test_db", "table1"),
                         COLUMN_IDX,
                         COLUMN_NAME + "_table1",

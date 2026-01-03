@@ -31,8 +31,8 @@ import javax.annotation.concurrent.NotThreadSafe;
 
 /** Segment ID generator, fetch ID with a batch size. */
 @NotThreadSafe
-public class SegmentIncIDGenerator implements IncIDGenerator {
-    private static final Logger LOG = LoggerFactory.getLogger(SegmentIncIDGenerator.class);
+public class SegmentSequenceGenerator implements SequenceGenerator {
+    private static final Logger LOG = LoggerFactory.getLogger(SegmentSequenceGenerator.class);
 
     private final SequenceIDCounter sequenceIDCounter;
     private final TablePath tablePath;
@@ -43,7 +43,7 @@ public class SegmentIncIDGenerator implements IncIDGenerator {
 
     private final long batchSize;
 
-    public SegmentIncIDGenerator(
+    public SegmentSequenceGenerator(
             TablePath tablePath,
             int columnIdx,
             String columnName,

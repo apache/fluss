@@ -19,69 +19,99 @@
 package org.apache.fluss.server.kv.autoinc;
 
 import org.apache.fluss.config.Configuration;
-import org.apache.fluss.config.TableConfig;
+import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.Schema;
-import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.BinaryValue;
+import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.row.encode.RowEncoder;
 import org.apache.fluss.server.zk.ZkSequenceIDCounter;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.ZkData;
+import org.apache.fluss.types.DataType;
 
-/** AutoIncProcessor is used to process auto increment column. */
-public interface AutoIncProcessor {
+import javax.annotation.Nullable;
+import javax.annotation.concurrent.NotThreadSafe;
 
-    /**
-     * Process auto increment column.
-     *
-     * @param originalValue the original value.
-     * @return the processed value.
-     */
-    BinaryValue processAutoInc(BinaryValue originalValue);
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 
-    static AutoIncProcessor create(
+/** A updater to auto increment column . */
+@NotThreadSafe
+public class AutoIncProcessor {
+
+    private final InternalRow.FieldGetter[] flussFieldGetters;
+
+    private final RowEncoder rowEncoder;
+
+    private final DataType[] fieldDataTypes;
+    private final Map<Integer, SequenceGenerator> idGeneratorMap;
+    private final short schemaId;
+
+    public AutoIncProcessor(
             TablePath tablePath,
-            int schemaId,
             Configuration properties,
-            TableConfig tableConf,
-            SchemaGetter schemaGetter,
+            KvFormat kvFormat,
+            short schemaId,
+            Schema schema,
             ZooKeeperClient zkClient) {
-        // TODO: now we only support one auto increment column. we should support add new auto
-        // increment column later.
-        Schema schema = schemaGetter.getSchema(schemaId);
+        this.idGeneratorMap = new HashMap<>();
         int[] autoIncColumnIds = schema.getAutoIncColumnIds();
-        if (autoIncColumnIds.length > 0) {
-            IncIDGenerator[] incIDGenerators = new IncIDGenerator[autoIncColumnIds.length];
-            for (int i = 0; i < autoIncColumnIds.length; i++) {
-                ZkSequenceIDCounter zkSequenceIDCounter =
-                        new ZkSequenceIDCounter(
-                                zkClient.getCuratorClient(),
-                                ZkData.AutoIncrementColumnZNode.path(
-                                        tablePath, autoIncColumnIds[i]));
-                incIDGenerators[i] =
-                        new SegmentIncIDGenerator(
-                                tablePath,
-                                autoIncColumnIds[i],
-                                schema.getColumnName(autoIncColumnIds[i]),
-                                zkSequenceIDCounter,
-                                properties);
-            }
-            return new AutoIncColumnProcessor(
-                    tableConf.getKvFormat(),
-                    (short) schemaId,
-                    schema,
-                    autoIncColumnIds,
-                    incIDGenerators);
-        } else {
-            return new DefaultProcessor();
+        SequenceGenerator[] sequenceGenerators = new SequenceGenerator[autoIncColumnIds.length];
+        for (int i = 0; i < autoIncColumnIds.length; i++) {
+            ZkSequenceIDCounter zkSequenceIDCounter =
+                    new ZkSequenceIDCounter(
+                            zkClient.getCuratorClient(),
+                            ZkData.AutoIncrementColumnZNode.path(tablePath, autoIncColumnIds[i]));
+            sequenceGenerators[i] =
+                    new SegmentSequenceGenerator(
+                            tablePath,
+                            autoIncColumnIds[i],
+                            schema.getColumnName(autoIncColumnIds[i]),
+                            zkSequenceIDCounter,
+                            properties);
         }
+
+        List<Integer> columnIds = schema.getColumnIds();
+        int[] targetColumnIdx = Arrays.stream(autoIncColumnIds).map(columnIds::indexOf).toArray();
+        for (int i = 0; i < autoIncColumnIds.length; i++) {
+            idGeneratorMap.put(targetColumnIdx[i], sequenceGenerators[i]);
+        }
+        this.fieldDataTypes = schema.getRowType().getChildren().toArray(new DataType[0]);
+
+        // getter for the fields in row
+        flussFieldGetters = new InternalRow.FieldGetter[fieldDataTypes.length];
+        for (int i = 0; i < fieldDataTypes.length; i++) {
+            flussFieldGetters[i] = InternalRow.createFieldGetter(fieldDataTypes[i], i);
+        }
+        this.rowEncoder = RowEncoder.create(kvFormat, fieldDataTypes);
+        this.schemaId = schemaId;
     }
 
-    /** Default processor is used when auto increment column is not enabled. */
-    class DefaultProcessor implements AutoIncProcessor {
-        @Override
-        public BinaryValue processAutoInc(BinaryValue originalRow) {
-            return originalRow;
+    @Nullable
+    public BinaryValue processAutoInc(BinaryValue oldValue) {
+        if (idGeneratorMap.isEmpty()) {
+            return oldValue;
+        } else {
+            rowEncoder.startNewRow();
+            for (int i = 0; i < fieldDataTypes.length; i++) {
+                if (idGeneratorMap.containsKey(i)) {
+                    if (oldValue != null && oldValue.row.isNullAt(i)) {
+                        rowEncoder.encodeField(i, idGeneratorMap.get(i).nextVal());
+                    }
+                } else {
+                    // use the old row value
+                    if (oldValue == null) {
+                        rowEncoder.encodeField(i, null);
+                    } else {
+                        rowEncoder.encodeField(
+                                i, flussFieldGetters[i].getFieldOrNull(oldValue.row));
+                    }
+                }
+            }
+            return new BinaryValue(schemaId, rowEncoder.finishRow());
         }
     }
 }

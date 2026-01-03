@@ -18,8 +18,8 @@
 
 package org.apache.fluss.server.kv.autoinc;
 
-/** IncIDGenerator is used to generate auto increment column ID. */
-public interface IncIDGenerator {
+/** SequenceGenerator is used to generate auto increment column ID. */
+public interface SequenceGenerator {
 
     /**
      * Retrieves the next sequential value for the auto-increment column.

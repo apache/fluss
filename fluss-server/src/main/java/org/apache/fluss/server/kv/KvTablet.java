@@ -45,7 +45,7 @@ import org.apache.fluss.row.PaddingRow;
 import org.apache.fluss.row.arrow.ArrowWriterPool;
 import org.apache.fluss.row.arrow.ArrowWriterProvider;
 import org.apache.fluss.row.encode.ValueDecoder;
-import org.apache.fluss.server.kv.autoinc.AutoIncProcessor;
+import org.apache.fluss.server.kv.autoinc.AutoIncProcessorCache;
 import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer;
 import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer.TruncateReason;
 import org.apache.fluss.server.kv.rocksdb.RocksDBKv;
@@ -113,7 +113,7 @@ public final class KvTablet {
     // defines how to merge rows on the same primary key
     private final RowMerger rowMerger;
     private final ArrowCompressionInfo arrowCompressionInfo;
-    private final AutoIncProcessor autoIncProcessor;
+    private final AutoIncProcessorCache autoIncProcessor;
 
     private final SchemaGetter schemaGetter;
 
@@ -145,7 +145,7 @@ public final class KvTablet {
             ArrowCompressionInfo arrowCompressionInfo,
             SchemaGetter schemaGetter,
             ChangelogImage changelogImage,
-            AutoIncProcessor autoIncProcessor) {
+            AutoIncProcessorCache autoIncProcessor) {
         this.physicalPath = physicalPath;
         this.tableBucket = tableBucket;
         this.logTablet = logTablet;
@@ -179,7 +179,7 @@ public final class KvTablet {
             SchemaGetter schemaGetter,
             ChangelogImage changelogImage,
             RateLimiter sharedRateLimiter,
-            AutoIncProcessor autoIncProcessor)
+            AutoIncProcessorCache autoIncProcessor)
             throws IOException {
         RocksDBKv kv = buildRocksDBKv(serverConf, kvTabletDir, sharedRateLimiter);
         return new KvTablet(
@@ -275,6 +275,7 @@ public final class KvTablet {
                     RowMerger currentMerger =
                             rowMerger.configureTargetColumns(
                                     targetColumns, latestSchemaId, latestSchema);
+                    autoIncProcessor.configureSchema(latestSchemaId);
 
                     RowType latestRowType = latestSchema.getRowType();
                     WalBuilder walBuilder = createWalBuilder(latestSchemaId, latestRowType);
