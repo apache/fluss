@@ -30,8 +30,6 @@ import org.apache.fluss.types.DataTypes;
 
 import org.junit.jupiter.api.Test;
 
-import java.util.Map;
-
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test for {@link MapSerializer}. */
@@ -193,90 +191,6 @@ public class MapSerializerTest {
         assertThat(binaryMap.size()).isEqualTo(2);
         assertThat(binaryMap.keyArray().getString(0)).isEqualTo(BinaryString.fromString("key1"));
         assertThat(binaryMap.valueArray().getInt(0)).isEqualTo(1);
-    }
-
-    @Test
-    public void testConvertToJavaMap() {
-        GenericMap genericMap =
-                GenericMap.of(
-                        1, BinaryString.fromString("one"),
-                        2, BinaryString.fromString("two"),
-                        3, BinaryString.fromString("three"));
-
-        Map<Object, Object> javaMap =
-                MapSerializer.convertToJavaMap(genericMap, DataTypes.INT(), DataTypes.STRING());
-
-        assertThat(javaMap).isNotNull();
-        assertThat(javaMap.size()).isEqualTo(3);
-        assertThat(javaMap.get(1)).isEqualTo(BinaryString.fromString("one"));
-        assertThat(javaMap.get(2)).isEqualTo(BinaryString.fromString("two"));
-        assertThat(javaMap.get(3)).isEqualTo(BinaryString.fromString("three"));
-    }
-
-    @Test
-    public void testConvertToJavaMapWithEmptyMap() {
-        GenericMap genericMap = GenericMap.of();
-
-        Map<Object, Object> javaMap =
-                MapSerializer.convertToJavaMap(genericMap, DataTypes.INT(), DataTypes.STRING());
-
-        assertThat(javaMap).isNotNull();
-        assertThat(javaMap.size()).isEqualTo(0);
-    }
-
-    @Test
-    public void testConvertToJavaMapWithNullValues() {
-        GenericMap genericMap =
-                GenericMap.of(
-                        1, BinaryString.fromString("one"),
-                        2, null,
-                        3, BinaryString.fromString("three"));
-
-        Map<Object, Object> javaMap =
-                MapSerializer.convertToJavaMap(genericMap, DataTypes.INT(), DataTypes.STRING());
-
-        assertThat(javaMap.size()).isEqualTo(3);
-        assertThat(javaMap.get(1)).isEqualTo(BinaryString.fromString("one"));
-        assertThat(javaMap.get(2)).isNull();
-        assertThat(javaMap.get(3)).isEqualTo(BinaryString.fromString("three"));
-    }
-
-    @Test
-    public void testConvertToJavaMapWithBinaryMap() {
-        MapSerializer serializer =
-                new MapSerializer(
-                        DataTypes.INT(), DataTypes.STRING(), BinaryRow.BinaryRowFormat.COMPACTED);
-
-        GenericMap genericMap =
-                GenericMap.of(
-                        1, BinaryString.fromString("alpha"),
-                        2, BinaryString.fromString("beta"));
-
-        BinaryMap binaryMap = serializer.toBinaryMap(genericMap);
-
-        Map<Object, Object> javaMap =
-                MapSerializer.convertToJavaMap(binaryMap, DataTypes.INT(), DataTypes.STRING());
-
-        assertThat(javaMap.size()).isEqualTo(2);
-        assertThat(javaMap.get(1)).isEqualTo(BinaryString.fromString("alpha"));
-        assertThat(javaMap.get(2)).isEqualTo(BinaryString.fromString("beta"));
-    }
-
-    @Test
-    public void testConvertToJavaMapWithComplexTypes() {
-        GenericMap genericMap =
-                GenericMap.of(
-                        100L, 3.14,
-                        200L, 6.28,
-                        300L, 9.42);
-
-        Map<Object, Object> javaMap =
-                MapSerializer.convertToJavaMap(genericMap, DataTypes.BIGINT(), DataTypes.DOUBLE());
-
-        assertThat(javaMap.size()).isEqualTo(3);
-        assertThat(javaMap.get(100L)).isEqualTo(3.14);
-        assertThat(javaMap.get(200L)).isEqualTo(6.28);
-        assertThat(javaMap.get(300L)).isEqualTo(9.42);
     }
 
     @Test

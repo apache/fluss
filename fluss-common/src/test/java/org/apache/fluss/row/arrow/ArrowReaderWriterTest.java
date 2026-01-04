@@ -91,7 +91,7 @@ class ArrowReaderWriterTest {
                     DataTypes.ARRAY(DataTypes.INT()),
                     DataTypes.ARRAY(DataTypes.FLOAT().copy(false)), // vector embedding type
                     DataTypes.ARRAY(DataTypes.ARRAY(DataTypes.STRING())), // nested array
-                    DataTypes.MAP(DataTypes.INT().copy(false), DataTypes.STRING()),
+                    DataTypes.MAP(DataTypes.INT(), DataTypes.STRING()),
                     DataTypes.ROW(
                             DataTypes.FIELD("i", DataTypes.INT()),
                             DataTypes.FIELD("r", NESTED_DATA_TYPE),
@@ -350,9 +350,7 @@ class ArrowReaderWriterTest {
         RowType rowType =
                 DataTypes.ROW(
                         DataTypes.FIELD("id", DataTypes.INT()),
-                        DataTypes.FIELD(
-                                "map",
-                                DataTypes.MAP(DataTypes.INT().copy(false), DataTypes.STRING())));
+                        DataTypes.FIELD("map", DataTypes.MAP(DataTypes.INT(), DataTypes.INT())));
 
         try (BufferAllocator allocator = new RootAllocator(Long.MAX_VALUE);
                 VectorSchemaRoot root =
@@ -365,14 +363,14 @@ class ArrowReaderWriterTest {
             // Write 150 rows, each with a 10-entry map.
             // Total entries = 1500, exceeding INITIAL_CAPACITY (1024).
             // But row count (150) < 1024, so handleSafe would be false without the fix.
-            int numRows = 150;
+            int numRows = 200;
             int mapSize = 10;
             for (int i = 0; i < numRows; i++) {
                 Object[] mapEntries = new Object[mapSize * 2];
                 for (int j = 0; j < mapSize; j++) {
                     int key = i * mapSize + j;
                     mapEntries[j * 2] = key;
-                    mapEntries[j * 2 + 1] = fromString("value_" + key);
+                    mapEntries[j * 2 + 1] = key * 2;
                 }
                 GenericMap map = GenericMap.of(mapEntries);
                 writer.writeRow(GenericRow.of(i, map));
@@ -404,8 +402,7 @@ class ArrowReaderWriterTest {
                 for (int j = 0; j < mapSize; j++) {
                     int key = i * mapSize + j;
                     assertThat(row.getMap(1).keyArray().getInt(j)).isEqualTo(key);
-                    assertThat(row.getMap(1).valueArray().getString(j))
-                            .isEqualTo(fromString("value_" + key));
+                    assertThat(row.getMap(1).valueArray().getInt(j)).isEqualTo(key * 2);
                 }
             }
         }

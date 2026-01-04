@@ -129,7 +129,7 @@ public class BinaryWriterTest {
 
         BinaryWriter.ValueWriter setter =
                 BinaryWriter.createValueWriter(
-                        DataTypes.MAP(DataTypes.INT().copy(false), DataTypes.STRING()),
+                        DataTypes.MAP(DataTypes.INT(), DataTypes.STRING()),
                         BinaryRow.BinaryRowFormat.COMPACTED);
 
         GenericMap map1 =

@@ -369,16 +369,4 @@ public class GenericMapTest {
 
         assertThat(genericMap.hashCode()).isEqualTo(0);
     }
-
-    @Test
-    public void testToString() {
-        Map<String, Integer> javaMap = new HashMap<>();
-        javaMap.put("key1", 1);
-
-        GenericMap genericMap = new GenericMap(javaMap);
-
-        String result = genericMap.toString();
-        assertThat(result).contains("GenericMap");
-        assertThat(result).contains("map=");
-    }
 }

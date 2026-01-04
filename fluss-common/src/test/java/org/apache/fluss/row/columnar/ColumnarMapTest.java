@@ -191,19 +191,6 @@ public class ColumnarMapTest {
     }
 
     @Test
-    public void testEqualsWithSameObject() {
-        Object[] keys = {BinaryString.fromString("key1")};
-        Object[] values = {1};
-
-        InternalArray keyArray = new GenericArray(keys);
-        InternalArray valueArray = new GenericArray(values);
-
-        ColumnarMap map = new ColumnarMap(keyArray, valueArray);
-
-        assertThat(map.equals(map)).isTrue();
-    }
-
-    @Test
     public void testEqualsWithEqualMap() {
         Object[] keys = {BinaryString.fromString("key1"), BinaryString.fromString("key2")};
         Object[] values = {1, 2};
@@ -297,21 +284,6 @@ public class ColumnarMapTest {
         ColumnarMap map2 = new ColumnarMap(keyArray2, valueArray2);
 
         assertThat(map1.hashCode()).isNotEqualTo(map2.hashCode());
-    }
-
-    @Test
-    public void testToString() {
-        Object[] keys = {BinaryString.fromString("k1"), BinaryString.fromString("k2")};
-        Object[] values = {100, 200};
-
-        InternalArray keyArray = new GenericArray(keys);
-        InternalArray valueArray = new GenericArray(values);
-        ColumnarMap map = new ColumnarMap(keyArray, valueArray);
-
-        String result = map.toString();
-        assertThat(result).contains("ColumnarMap");
-        assertThat(result).contains("keyArray");
-        assertThat(result).contains("valueArray");
     }
 
     private static class TestIntColumnVector implements IntColumnVector {

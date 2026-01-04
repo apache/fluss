@@ -108,6 +108,7 @@ public abstract class BinaryMap extends BinarySection implements InternalMap {
         if (this == o) {
             return true;
         }
+        // override equals and only checks the other object is instance of BinaryMap
         if (!(o instanceof BinaryMap)) {
             return false;
         }

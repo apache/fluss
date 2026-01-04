@@ -44,10 +44,6 @@ public class VectorizedColumnBatch {
         return columns.length;
     }
 
-    public ColumnVector getColumn(int colId) {
-        return columns[colId];
-    }
-
     public boolean isNullAt(int rowId, int colId) {
         return columns[colId].isNullAt(rowId);
     }

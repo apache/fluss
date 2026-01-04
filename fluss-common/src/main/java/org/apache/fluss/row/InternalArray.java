@@ -150,8 +150,9 @@ public interface InternalArray extends DataGetters {
                                 fieldType.getTypeRoot().toString(), InternalArray.class.getName());
                 throw new IllegalArgumentException(msg);
         }
-        // Always wrap with null check for safety, even for non-nullable types
-        // This is necessary because Arrow format may contain nulls in practice
+        if (!fieldType.isNullable()) {
+            return elementGetter;
+        }
         return (array, pos) -> {
             if (array.isNullAt(pos)) {
                 return null;

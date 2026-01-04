@@ -108,7 +108,7 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
         // will read paimon snapshot, won't merge log since it's empty
         List<String> resultEmptyLog =
                 toSortedRows(batchTEnv.executeSql("select * from " + tableName));
-        String expetedResultFromPaimon = buildExpectedResult(isPartitioned, 0, 1, t1);
+        String expetedResultFromPaimon = buildExpectedResult(isPartitioned, partitions, 0, 1);
         assertThat(resultEmptyLog.toString().replace("+U", "+I"))
                 .isEqualTo(expetedResultFromPaimon);
 
@@ -385,7 +385,7 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
 
         // now, query the result, it must be the union result of lake snapshot and log
         List<String> result = toSortedRows(batchTEnv.executeSql("select * from " + tableName));
-        String expectedResult = buildExpectedResult(isPartitioned, 0, 2, t1);
+        String expectedResult = buildExpectedResult(isPartitioned, partitions, 0, 2);
         assertThat(result.toString().replace("+U", "+I")).isEqualTo(expectedResult);
 
         // query with project push down
@@ -478,9 +478,7 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
         // will read paimon snapshot, should only +I since no change log
         List<Row> expectedRows = new ArrayList<>();
         if (isPartitioned) {
-            List<String> sortedPartitions = new ArrayList<>(waitUntilPartitions(t1).values());
-            sortedPartitions.sort(String::compareTo);
-            for (String partition : sortedPartitions) {
+            for (String partition : waitUntilPartitions(t1).values()) {
                 expectedRows.add(
                         Row.of(
                                 false,
@@ -573,12 +571,9 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
         jobClient.cancel().get();
 
         // write a row again
-        List<String> sortedPartitions = new ArrayList<>();
         if (isPartitioned) {
             Map<Long, String> partitionNameById = waitUntilPartitions(t1);
-            sortedPartitions = new ArrayList<>(partitionNameById.values());
-            sortedPartitions.sort(String::compareTo);
-            for (String partition : sortedPartitions) {
+            for (String partition : partitionNameById.values()) {
                 writeFullTypeRow(t1, partition);
             }
         } else {
@@ -588,7 +583,7 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
         // should generate -U & +U
         List<Row> expectedRows2 = new ArrayList<>();
         if (isPartitioned) {
-            for (String partition : sortedPartitions) {
+            for (String partition : waitUntilPartitions(t1).values()) {
                 expectedRows2.add(
                         Row.ofKind(
                                 RowKind.UPDATE_BEFORE,
@@ -999,7 +994,7 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
     }
 
     private String buildExpectedResult(
-            boolean isPartitioned, int record1, int record2, TablePath tablePath) {
+            boolean isPartitioned, List<String> partitions, int record1, int record2) {
         List<String> records = new ArrayList<>();
         records.add(
                 "+I[false, 1, 2, 3, 4, 5.1, 6.0, string, 0.09, 10, "
@@ -1024,8 +1019,6 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
                         + "[5, 6, 7, 8], [2.1, 2.2, 2.3], +I[300, nested_value_3, 9.99], %s]");
 
         if (isPartitioned) {
-            List<String> partitions = new ArrayList<>(waitUntilPartitions(tablePath).values());
-            partitions.sort(String::compareTo);
             return String.format(
                     "[%s, %s, %s, %s]",
                     String.format(records.get(record1), partitions.get(0)),

@@ -45,9 +45,7 @@ import java.util.List;
 
 import static org.apache.fluss.flink.FlinkConnectorOptions.BOOTSTRAP_SERVERS;
 import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.assertResultsIgnoreOrder;
-import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.collectRowsWithTimeout;
 import static org.apache.fluss.server.testutils.FlussClusterExtension.BUILTIN_DATABASE;
-import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Integration tests for Array type support in Flink connector. */
@@ -214,24 +212,23 @@ abstract class FlinkComplexTypeITCase extends AbstractTestBase {
 
         CloseableIterator<Row> rowIter =
                 tEnv.executeSql("select * from complex_log_test").collect();
-        List<String> actual = collectRowsWithTimeout(rowIter, 4, true);
-
-        assertThat(actual).hasSize(4);
-        assertThat(actual.get(0))
-                .contains("+I[1,", "[1, 2, null]", "{1=one, 2=two}", "+I[10, hello]");
-        assertThat(actual.get(1)).contains("+I[2,", "[400, 500]", "{3=three}", "+I[40, world]");
-
-        String row1 = actual.stream().filter(s -> s.startsWith("+I[1,")).findFirst().orElse("");
-        assertThat(row1).contains("10=v1", "20=v2");
-
-        String row2 = actual.stream().filter(s -> s.startsWith("+I[2,")).findFirst().orElse("");
-        assertThat(row2).contains("40=v4");
-
-        String row3 = actual.stream().filter(s -> s.startsWith("+I[3,")).findFirst().orElse("");
-        assertThat(row3).contains("{1=null}", "{k1={10=null}}", "{arr1=null}");
-
-        String row4 = actual.stream().filter(s -> s.startsWith("+I[4,")).findFirst().orElse("");
-        assertThat(row4).contains("{2=two, 3=null}", "{k2=null}", "{arr2=[1, 2], arr3=null}");
+        List<String> expectedRows =
+                Arrays.asList(
+                        "+I[1, [1, 2, null], [100, null, 300], [1.1, null], [2.2, 3.3, null], [a, null, c], [true, null, false], [[1, 2], null, [3]], [[x], [null, y]], [[[1, 2]], [[3, 4, 5]]], "
+                                + "{1=one, 2=two}, {k1={20=v2, 10=v1}}, {arr1=[1, 2, 3]}, {1=+I[100, row1]}, " // map
+                                + "+I[10, hello], +I[20, +I[30, nested], row1], [+I[1, a], +I[2, b]], " // row
+                                + "null, null, null]", // complex nested types
+                        "+I[2, null, [400, 500], [4.4], [5.5], [d, e], [true], [[6, 7, 8]], [[z]], [[[9]]], "
+                                + "{3=three}, {k3={40=v4}}, {arr3=[6]}, {3=+I[300, row3]}, "
+                                + "+I[40, world], +I[50, +I[60, test], row2], [+I[3, c]], "
+                                + "null, null, null]",
+                        "+I[3, null, null, null, null, null, null, null, null, null, "
+                                + "{1=null}, {k1={10=null}}, {arr1=null}, null, "
+                                + "null, null, null, null, null, null]",
+                        "+I[4, null, null, null, null, null, null, null, null, null, "
+                                + "{2=two, 3=null}, {k2=null}, {arr2=[1, 2], arr3=null}, null, "
+                                + "null, null, null, null, null, null]");
+        assertResultsIgnoreOrder(rowIter, expectedRows, true);
     }
 
     @Test
@@ -339,30 +336,17 @@ abstract class FlinkComplexTypeITCase extends AbstractTestBase {
 
         CloseableIterator<Row> rowIter =
                 tEnv.executeSql("select * from complex_log_test").collect();
-        List<String> actual = collectRowsWithTimeout(rowIter, 4, true);
-        assertThat(actual).hasSize(4);
-
-        assertThat(actual.stream().filter(s -> s.startsWith("+I[1, 2024,")).findFirst().orElse(""))
-                .contains(
-                        "[1, 2, null]",
-                        "1=one",
-                        "10=v1",
-                        "+I[10, hello]",
-                        "+I[20, +I[30, nested",
-                        "null, null, null]");
-        assertThat(actual.stream().filter(s -> s.startsWith("+I[2, 2023,")).findFirst().orElse(""))
-                .contains(
-                        "null, [400, 500]",
-                        "3=three",
-                        "20=v2",
-                        "+I[40, world]",
-                        "+I[50, +I[60, test",
-                        "null, null, null]");
-
-        assertThat(actual.stream().filter(s -> s.startsWith("+I[3, 2024,")).findFirst().orElse(""))
-                .contains("{1=null}", "{k1={10=null}}", "{arr1=null}");
-        assertThat(actual.stream().filter(s -> s.startsWith("+I[4, 2023,")).findFirst().orElse(""))
-                .contains("{2=two, 3=null}", "{k2=null}", "{arr2=[1, 2], arr3=null}");
+        List<String> expectedRows =
+                Arrays.asList(
+                        "+I[1, 2024, [1, 2, null], [100, null, 300], [1.1, null], [2.2, 3.3, null], [a, null, c], [true, null, false], [[1, 2], null, [3]], [[x], [null, y]], [[[1, 2]], [[3, 4, 5]]], "
+                                + "{1=one}, {k1={10=v1}}, {arr1=[1, 2]}, +I[10, hello], +I[20, +I[30, nested]], null, null, null]",
+                        "+I[2, 2023, null, [400, 500], [4.4], [5.5], [d, e], [true], [[6, 7, 8]], [[z]], [[[9]]], "
+                                + "{3=three}, {k2={20=v2}}, {arr2=[3, 4, 5]}, +I[40, world], +I[50, +I[60, test]], null, null, null]",
+                        "+I[3, 2024, null, null, null, null, null, null, null, null, null, "
+                                + "{1=null}, {k1={10=null}}, {arr1=null}, null, null, null, null, null]",
+                        "+I[4, 2023, null, null, null, null, null, null, null, null, null, "
+                                + "{2=two, 3=null}, {k2=null}, {arr2=[1, 2], arr3=null}, null, null, null, null, null]");
+        assertResultsIgnoreOrder(rowIter, expectedRows, true);
     }
 
     @Test
@@ -586,13 +570,14 @@ abstract class FlinkComplexTypeITCase extends AbstractTestBase {
                                         "create table row_partition_test ("
                                                 + "id int, "
                                                 + "data string, "
-                                                + "info row<name string, age int>, "
-                                                + "primary key(id, info) not enforced"
+                                                + "info row<name string, age int>"
                                                 + ") partitioned by (info)"))
                 .hasRootCauseInstanceOf(InvalidTableException.class)
                 .hasRootCauseMessage(
-                        "Primary key column 'info' has unsupported data type ROW<`name` STRING, `age` INT> NOT NULL. "
-                                + "Currently, primary key column does not support types: [ARRAY, MAP, ROW].");
+                        "Currently, partitioned table supported partition key type are [CHAR, STRING, "
+                                + "BOOLEAN, BINARY, BYTES, TINYINT, SMALLINT, INTEGER, DATE, TIME_WITHOUT_TIME_ZONE, "
+                                + "BIGINT, FLOAT, DOUBLE, TIMESTAMP_WITHOUT_TIME_ZONE, TIMESTAMP_WITH_LOCAL_TIME_ZONE], "
+                                + "but got partition key 'info' with data type ROW<`name` STRING, `age` INT>.");
 
         assertThatThrownBy(
                         () ->

@@ -173,12 +173,6 @@ public class BinaryMapTest {
     }
 
     @Test
-    public void testCompactedMapCreation() {
-        CompactedMap map = new CompactedMap(DataTypes.INT(), DataTypes.STRING());
-        assertThat(map).isNotNull();
-    }
-
-    @Test
     public void testCompactedMapKeyValueArrays() {
         CompactedMap map = new CompactedMap(DataTypes.INT(), DataTypes.INT());
 
@@ -205,12 +199,6 @@ public class BinaryMapTest {
         assertThat(copied.size()).isEqualTo(2);
         assertThat(copied.keyArray().getLong(0)).isEqualTo(100L);
         assertThat(copied.valueArray().getDouble(0)).isEqualTo(1.5);
-    }
-
-    @Test
-    public void testIndexedMapCreation() {
-        IndexedMap map = new IndexedMap(DataTypes.INT(), DataTypes.STRING());
-        assertThat(map).isNotNull();
     }
 
     @Test
@@ -290,42 +278,5 @@ public class BinaryMapTest {
         assertThat(binaryMap.valueArray().isNullAt(0)).isFalse();
         assertThat(binaryMap.valueArray().isNullAt(1)).isTrue();
         assertThat(binaryMap.valueArray().isNullAt(2)).isFalse();
-    }
-
-    @Test
-    public void testBinaryMapGetSegments() {
-        AlignedMap map = new AlignedMap();
-
-        BinaryArray keyArray = BinaryArray.fromPrimitiveArray(new int[] {1});
-        BinaryArray valueArray = BinaryArray.fromPrimitiveArray(new int[] {10});
-
-        BinaryMap binaryMap = BinaryMap.valueOf(keyArray, valueArray, map);
-
-        assertThat(binaryMap.getSegments()).isNotNull();
-        assertThat(binaryMap.getSegments().length).isGreaterThan(0);
-    }
-
-    @Test
-    public void testBinaryMapGetOffset() {
-        AlignedMap map = new AlignedMap();
-
-        BinaryArray keyArray = BinaryArray.fromPrimitiveArray(new int[] {1});
-        BinaryArray valueArray = BinaryArray.fromPrimitiveArray(new int[] {10});
-
-        BinaryMap binaryMap = BinaryMap.valueOf(keyArray, valueArray, map);
-
-        assertThat(binaryMap.getOffset()).isGreaterThanOrEqualTo(0);
-    }
-
-    @Test
-    public void testBinaryMapGetSizeInBytes() {
-        AlignedMap map = new AlignedMap();
-
-        BinaryArray keyArray = BinaryArray.fromPrimitiveArray(new int[] {1, 2, 3});
-        BinaryArray valueArray = BinaryArray.fromPrimitiveArray(new int[] {10, 20, 30});
-
-        BinaryMap binaryMap = BinaryMap.valueOf(keyArray, valueArray, map);
-
-        assertThat(binaryMap.getSizeInBytes()).isGreaterThan(0);
     }
 }

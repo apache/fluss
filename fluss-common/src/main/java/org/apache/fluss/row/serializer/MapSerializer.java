@@ -25,11 +25,14 @@ import org.apache.fluss.row.InternalMap;
 import org.apache.fluss.row.map.AlignedMap;
 import org.apache.fluss.row.map.CompactedMap;
 import org.apache.fluss.row.map.IndexedMap;
+import org.apache.fluss.row.map.PrimitiveBinaryMap;
 import org.apache.fluss.types.DataType;
 
 import java.io.Serializable;
-import java.util.HashMap;
-import java.util.Map;
+
+import static org.apache.fluss.row.BinaryRow.BinaryRowFormat.ALIGNED;
+import static org.apache.fluss.row.BinaryRow.BinaryRowFormat.COMPACTED;
+import static org.apache.fluss.row.BinaryRow.BinaryRowFormat.INDEXED;
 
 /** Serializer for {@link InternalMap} to {@link BinaryMap}. */
 public class MapSerializer implements Serializable {
@@ -51,7 +54,13 @@ public class MapSerializer implements Serializable {
 
     public BinaryMap toBinaryMap(InternalMap from) {
         if (from instanceof BinaryMap) {
-            return (BinaryMap) from;
+            if (from instanceof PrimitiveBinaryMap
+                    || rowFormat == INDEXED && from instanceof IndexedMap
+                    || rowFormat == COMPACTED && from instanceof CompactedMap
+                    || rowFormat == ALIGNED && from instanceof AlignedMap) {
+                // directly return the original array iff the array is in the expected format
+                return (BinaryMap) from;
+            }
         }
 
         if (keyArraySerializer == null) {
@@ -84,20 +93,5 @@ public class MapSerializer implements Serializable {
             default:
                 throw new IllegalArgumentException("Unsupported binary row format: " + rowFormat);
         }
-    }
-
-    public static Map<Object, Object> convertToJavaMap(
-            InternalMap map, DataType keyType, DataType valueType) {
-        InternalArray keyArray = map.keyArray();
-        InternalArray valueArray = map.valueArray();
-        Map<Object, Object> javaMap = new HashMap<>();
-        InternalArray.ElementGetter keyGetter = InternalArray.createElementGetter(keyType);
-        InternalArray.ElementGetter valueGetter = InternalArray.createElementGetter(valueType);
-        for (int i = 0; i < map.size(); i++) {
-            Object key = keyGetter.getElementOrNull(keyArray, i);
-            Object value = valueGetter.getElementOrNull(valueArray, i);
-            javaMap.put(key, value);
-        }
-        return javaMap;
     }
 }

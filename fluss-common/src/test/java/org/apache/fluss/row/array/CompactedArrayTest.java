@@ -193,12 +193,4 @@ public class CompactedArrayTest {
         assertThat(compactedArray.getString(0)).isEqualTo(BinaryString.fromString("hello"));
         assertThat(compactedArray.getString(1)).isEqualTo(BinaryString.fromString("world"));
     }
-
-    @Test
-    public void testGetRowCachesNestedFields() {
-        RowType rowType = RowType.of(DataTypes.INT(), DataTypes.STRING());
-
-        CompactedArray compactedArray = new CompactedArray(rowType);
-        assertThat(compactedArray).isNotNull();
-    }
 }

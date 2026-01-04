@@ -32,6 +32,7 @@ import org.assertj.core.api.AbstractAssert;
 
 import java.util.Objects;
 
+import static org.apache.fluss.testutils.InternalMapAssert.assertThatMap;
 import static org.apache.fluss.types.DataTypeChecks.getLength;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -217,7 +218,7 @@ public class InternalArrayAssert extends AbstractAssert<InternalArrayAssert, Int
                     if (expected.isNullAt(i)) {
                         assertThat(actual.isNullAt(i)).isTrue();
                     } else {
-                        InternalMapAssert.assertThatMap(actual.getMap(i))
+                        assertThatMap(actual.getMap(i))
                                 .withMapType((MapType) elementType)
                                 .isEqualTo(expected.getMap(i));
                     }
