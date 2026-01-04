@@ -21,6 +21,7 @@ import org.apache.fluss.lake.iceberg.source.FlussRowAsIcebergRecord;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.types.DataField;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
@@ -38,6 +39,7 @@ import org.apache.iceberg.types.Types;
 
 import javax.annotation.Nullable;
 
+import java.util.ArrayList;
 import java.util.List;
 
 import static org.apache.fluss.metadata.ResolvedPartitionSpec.PARTITION_SPEC_SEPARATOR;
@@ -125,7 +127,16 @@ public class IcebergConversions {
         } else if (icebergType instanceof Types.DecimalType) {
             Types.DecimalType decimalType = (Types.DecimalType) icebergType;
             return DataTypes.DECIMAL(decimalType.precision(), decimalType.scale());
+        } else if (icebergType.isStructType()) {
+            Types.StructType structType = icebergType.asStructType();
+            List<DataField> fields = new ArrayList<>();
+            for (Types.NestedField nestedField : structType.fields()) {
+                DataType fieldType = convertIcebergTypeToFlussType(nestedField.type());
+                fields.add(new DataField(nestedField.name(), fieldType));
+            }
+            return DataTypes.ROW(fields.toArray(new DataField[0]));
         }
+
         throw new UnsupportedOperationException(
                 "Unsupported data type conversion for Iceberg type: "
                         + icebergType.getClass().getName());

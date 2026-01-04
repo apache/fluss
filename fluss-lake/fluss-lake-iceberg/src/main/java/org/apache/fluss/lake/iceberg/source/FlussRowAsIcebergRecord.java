@@ -17,6 +17,7 @@
 
 package org.apache.fluss.lake.iceberg.source;
 
+import org.apache.fluss.lake.iceberg.FlussDataTypeToIcebergDataType;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.types.BigIntType;
 import org.apache.fluss.types.BinaryType;
@@ -169,6 +170,15 @@ public class FlussRowAsIcebergRecord implements Record {
             return row -> DateTimeUtils.toLocalDate(row.getInt(pos));
         } else if (flussType instanceof TimeType) {
             return row -> DateTimeUtils.toLocalTime(row.getInt(pos));
+        } else if (flussType instanceof RowType) {
+            RowType rowType = (RowType) flussType;
+            Types.StructType nestedStructType =
+                    (Types.StructType) rowType.accept(FlussDataTypeToIcebergDataType.INSTANCE);
+
+            return row -> {
+                InternalRow nestedRow = row.getRow(pos, rowType.getFieldCount());
+                return new FlussRowAsIcebergRecord(nestedStructType, rowType, nestedRow);
+            };
         } else {
             throw new UnsupportedOperationException(
                     "Unsupported data type conversion for Fluss type: "
