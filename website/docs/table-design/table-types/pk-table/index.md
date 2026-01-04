@@ -82,10 +82,10 @@ However, users can specify a different merge engine to customize the merging beh
 
 The following merge engines are supported:
 
-1. [Default Merge Engine (LastRow)](merge-engines/default.md)
-2. [FirstRow Merge Engine](merge-engines/first-row.md)
-3. [Versioned Merge Engine](merge-engines/versioned.md)
-4. [Aggregation Merge Engine](merge-engines/aggregation.md)
+1. [Default Merge Engine (LastRow)](../../merge-engines/default.md)
+2. [FirstRow Merge Engine](../../merge-engines/first-row.md)
+3. [Versioned Merge Engine](../../merge-engines/versioned.md)
+4. [Aggregation Merge Engine](../../merge-engines/aggregation.md)
 
 
 ## Changelog Generation

@@ -1,7 +1,7 @@
 ---
 sidebar_label: Overview
 title: Table Overview
-sidebar_position: 2
+sidebar_position: 1
 ---
 
 # Table Overview

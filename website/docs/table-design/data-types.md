@@ -1,6 +1,6 @@
 ---
 title: "Data Types"
-sidebar_position: 10
+sidebar_position: 5
 ---
 
 # Data Types
