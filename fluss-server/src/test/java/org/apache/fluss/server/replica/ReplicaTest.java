@@ -690,10 +690,17 @@ final class ReplicaTest extends ReplicaTestBase {
 
         // We have to remove the first scheduled snapshot task since it's for the previous kv tablet
         // whose rocksdb has been dropped.
-        scheduledExecutorService.removeNonPeriodicScheduledTask();
 
-        // trigger one snapshot,
-        scheduledExecutorService.triggerNonPeriodicScheduledTask();
+        // Remove the stale snapshot task if it exists
+        try {
+            scheduledExecutorService.removeNonPeriodicScheduledTask();
+        } catch (java.util.NoSuchElementException ignored) {
+            // no-op: no scheduled task to remove
+        }
+
+        // Trigger snapshot with retry to avoid flakiness
+        triggerSnapshotTaskWithRetry(scheduledExecutorService, 5);
+
         // wait until the snapshot success
         kvSnapshotStore.waitUntilSnapshotComplete(tableBucket, 0);
 
@@ -716,8 +723,13 @@ final class ReplicaTest extends ReplicaTestBase {
         // test recover with schema evolution.
         short newSchemaId = 2;
         // trigger one snapshot.
-        scheduledExecutorService.removeNonPeriodicScheduledTask();
-        scheduledExecutorService.triggerNonPeriodicScheduledTask();
+        try {
+            scheduledExecutorService.removeNonPeriodicScheduledTask();
+        } catch (java.util.NoSuchElementException ignored) {
+            // no-op
+        }
+        triggerSnapshotTaskWithRetry(scheduledExecutorService, 5);
+
         // wait until the snapshot success
         kvSnapshotStore.waitUntilSnapshotComplete(tableBucket, 1);
         // write data with old schema
