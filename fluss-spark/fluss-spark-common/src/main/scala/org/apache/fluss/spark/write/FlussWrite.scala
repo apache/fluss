@@ -15,32 +15,35 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.spark.catalog
+package org.apache.fluss.spark.write
 
-import org.apache.fluss.config.{Configuration => FlussConfiguration}
-import org.apache.fluss.metadata.{TableInfo, TablePath}
-import org.apache.fluss.spark.SparkConversions
+import org.apache.fluss.config.Configuration
+import org.apache.fluss.metadata.TablePath
 
-import org.apache.spark.sql.connector.catalog.{Table, TableCapability}
+import org.apache.spark.sql.connector.write.{BatchWrite, Write}
 import org.apache.spark.sql.types.StructType
 
-import java.util
+/** An interface that extends from Spark [[Write]]. */
+trait FlussWrite extends Write
 
-import scala.collection.JavaConverters._
+/** Fluss Append Write. */
+case class FlussAppendWrite(
+    tablePath: TablePath,
+    dataSchema: StructType,
+    flussConfig: Configuration)
+  extends FlussWrite {
 
-abstract class AbstractSparkTable(tableInfo: TableInfo) extends Table {
+  override def toBatch: BatchWrite = new FlussAppendBatchWrite(tablePath, dataSchema, flussConfig)
 
-  protected lazy val _schema: StructType =
-    SparkConversions.toSparkDataType(tableInfo.getSchema.getRowType)
+}
 
-  protected lazy val _partitionSchema = new StructType(
-    _schema.fields.filter(tableInfo.getPartitionKeys.contains))
+/** Fluss Upsert Write. */
+case class FlussUpsertWrite(
+    tablePath: TablePath,
+    dataSchema: StructType,
+    flussConfig: Configuration)
+  extends FlussWrite {
 
-  override def name(): String = tableInfo.toString
+  override def toBatch: BatchWrite = FlussUpsertBatchWrite(tablePath, dataSchema, flussConfig)
 
-  override def schema(): StructType = _schema
-
-  override def capabilities(): util.Set[TableCapability] = {
-    Set(TableCapability.BATCH_WRITE).asJava
-  }
 }

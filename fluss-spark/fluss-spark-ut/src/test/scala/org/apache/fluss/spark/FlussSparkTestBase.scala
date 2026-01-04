@@ -19,7 +19,11 @@ package org.apache.fluss.spark
 
 import org.apache.fluss.client.{Connection, ConnectionFactory}
 import org.apache.fluss.client.admin.Admin
+import org.apache.fluss.client.table.Table
+import org.apache.fluss.client.table.scanner.log.LogScanner
 import org.apache.fluss.config.{ConfigOptions, Configuration}
+import org.apache.fluss.metadata.{TableDescriptor, TablePath}
+import org.apache.fluss.row.InternalRow
 import org.apache.fluss.server.testutils.FlussClusterExtension
 
 import org.apache.spark.SparkConf
@@ -30,6 +34,8 @@ import org.scalactic.source.Position
 import org.scalatest.Tag
 
 import java.time.Duration
+
+import scala.collection.JavaConverters._
 
 class FlussSparkTestBase extends QueryTest with SharedSparkSession {
 
@@ -61,6 +67,46 @@ class FlussSparkTestBase extends QueryTest with SharedSparkSession {
     super.test(testName, testTags: _*)(testFun)(pos)
   }
 
+  def createTablePath(tableName: String): TablePath = {
+    TablePath.of(DEFAULT_DATABASE, tableName)
+  }
+
+  def createFlussTable(tablePath: TablePath, tableDescriptor: TableDescriptor): Unit = {
+    admin.createTable(tablePath, tableDescriptor, true).get()
+  }
+
+  def loadFlussTable(tablePath: TablePath): Table = {
+    conn.getTable(tablePath)
+  }
+
+  /**
+   * Get row with change type from table and logScanner if provided.
+   *
+   * @return
+   *   Tuple composed of [[org.apache.fluss.record.ChangeType]] and [[InternalRow]]
+   */
+  def getRowsWithChangeType(
+      table: Table,
+      logScannerOption: Option[LogScanner] = None): Array[(String, InternalRow)] = {
+    val logScanner = logScannerOption match {
+      case Some(ls) => ls
+      case _ =>
+        val ls = table.newScan().createLogScanner()
+        (0 until table.getTableInfo.getNumBuckets).foreach(i => ls.subscribeFromBeginning(i))
+        ls
+    }
+    val scanRecords = logScanner.poll(Duration.ofSeconds(1))
+    scanRecords
+      .buckets()
+      .asScala
+      .flatMap(
+        tableBucket =>
+          scanRecords
+            .records(tableBucket)
+            .asScala
+            .map(r => (r.getChangeType.shortString, r.getRow)))
+      .toArray
+  }
 }
 
 @RegisterExtension

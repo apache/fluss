@@ -33,6 +33,7 @@ trait WithFlussAdmin extends AutoCloseable {
 
   private var _connection: Connection = _
   private var _admin: Admin = _
+  private var _flussConfig: FlussConfiguration = _
 
   // TODO: init lake spark catalog
   protected var lakeCatalog: CatalogPlugin = _
@@ -43,8 +44,14 @@ trait WithFlussAdmin extends AutoCloseable {
       entry: util.Map.Entry[String, String] => flussConfigs.put(entry.getKey, entry.getValue)
     }
 
-    _connection = ConnectionFactory.createConnection(FlussConfiguration.fromMap(flussConfigs))
+    _flussConfig = FlussConfiguration.fromMap(flussConfigs)
+    _connection = ConnectionFactory.createConnection(_flussConfig)
     _admin = _connection.getAdmin
+  }
+
+  protected def flussConfig: FlussConfiguration = {
+    Preconditions.checkNotNull(_flussConfig, "Fluss Configuration is not initialized.")
+    _flussConfig
   }
 
   protected def admin: Admin = {
