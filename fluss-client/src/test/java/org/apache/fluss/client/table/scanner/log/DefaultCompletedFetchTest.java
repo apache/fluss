@@ -32,8 +32,11 @@ import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.record.ProjectionPushdownCache;
 import org.apache.fluss.record.TestingSchemaGetter;
 import org.apache.fluss.row.GenericArray;
+import org.apache.fluss.row.GenericMap;
+import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.rpc.entity.FetchLogResultForBucket;
+import org.apache.fluss.testutils.InternalRowAssert;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.FlussPaths;
@@ -65,6 +68,7 @@ import static org.apache.fluss.record.TestData.DATA2_TABLE_ID;
 import static org.apache.fluss.record.TestData.DATA2_TABLE_INFO;
 import static org.apache.fluss.record.TestData.DATA2_TABLE_PATH;
 import static org.apache.fluss.record.TestData.DEFAULT_SCHEMA_ID;
+import static org.apache.fluss.row.BinaryString.fromString;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toByteBuffer;
 import static org.apache.fluss.testutils.DataTestUtils.createRecordsWithoutBaseLogOffset;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -226,21 +230,54 @@ public class DefaultCompletedFetchTest {
                 Arrays.asList(
                         new Object[] {
                             1,
-                            new String[] {"a", "b"},
-                            new Object[] {new int[] {1, 2}, new int[] {3, 4}},
-                            new Object[] {10, new Object[] {20, "nested"}, "row1"}
+                            new Object[] {fromString("a"), fromString("b")},
+                            new Object[] {
+                                new GenericArray(new int[] {1, 2}),
+                                new GenericArray(new int[] {3, 4})
+                            },
+                            new Object[] {
+                                10, new Object[] {20, fromString("nested")}, fromString("row1")
+                            },
+                            GenericMap.of(1, fromString("one"), 2, fromString("two")),
+                            GenericMap.of(
+                                    fromString("k1"),
+                                    GenericMap.of(10, fromString("v1"), 20, fromString("v2"))),
+                            GenericMap.of(
+                                    fromString("arr1"),
+                                    new GenericArray(new int[] {1, 2}),
+                                    fromString("arr2"),
+                                    new GenericArray(new int[] {3, 4, 5}))
                         },
                         new Object[] {
                             2,
-                            new String[] {"c", null},
-                            new Object[] {null, new int[] {3, 4}},
-                            new Object[] {30, new Object[] {40, "test"}, "row2"}
+                            new Object[] {fromString("c"), null},
+                            new Object[] {null, new GenericArray(new int[] {3, 4})},
+                            new Object[] {
+                                30, new Object[] {40, fromString("test")}, fromString("row2")
+                            },
+                            GenericMap.of(3, null, 4, fromString("four")),
+                            GenericMap.of(fromString("k2"), GenericMap.of(30, fromString("v3"))),
+                            GenericMap.of(fromString("arr3"), new GenericArray(new int[] {6}))
                         },
                         new Object[] {
                             3,
-                            new String[] {"e", "f"},
-                            new Object[] {new int[] {5, 6, 7}, new int[] {8}},
-                            new Object[] {50, new Object[] {60, "value"}, "row3"}
+                            new Object[] {fromString("e"), fromString("f")},
+                            new Object[] {
+                                new GenericArray(new int[] {5, 6, 7}),
+                                new GenericArray(new int[] {8})
+                            },
+                            new Object[] {
+                                50, new Object[] {60, fromString("value")}, fromString("row3")
+                            },
+                            GenericMap.of(5, fromString("five")),
+                            GenericMap.of(
+                                    fromString("k3"),
+                                    GenericMap.of(50, fromString("v5"), 60, fromString("v6"))),
+                            GenericMap.of(
+                                    fromString("arr4"),
+                                    new GenericArray(new int[] {7, 8}),
+                                    fromString("arr5"),
+                                    new GenericArray(new int[] {9}))
                         });
         Schema schema =
                 Schema.newBuilder()
@@ -253,6 +290,18 @@ public class DefaultCompletedFetchTest {
                                         DataTypes.INT(),
                                         DataTypes.ROW(DataTypes.INT(), DataTypes.STRING()),
                                         DataTypes.STRING()))
+                        .column("e", DataTypes.MAP(DataTypes.INT().copy(false), DataTypes.STRING()))
+                        .column(
+                                "f",
+                                DataTypes.MAP(
+                                        DataTypes.STRING().copy(false),
+                                        DataTypes.MAP(
+                                                DataTypes.INT().copy(false), DataTypes.STRING())))
+                        .column(
+                                "g",
+                                DataTypes.MAP(
+                                        DataTypes.STRING().copy(false),
+                                        DataTypes.ARRAY(DataTypes.INT())))
                         .build();
         TableInfo tableInfo =
                 TableInfo.of(
@@ -299,28 +348,30 @@ public class DefaultCompletedFetchTest {
         // this is important to test complex types
         defaultCompletedFetch.readContext.close();
         assertThat(scanRecords.size()).isEqualTo(3);
+
+        List<GenericRow> expectedRows = new ArrayList<>();
+        for (Object[] data : complexData) {
+            Object[] rowData = (Object[]) data[3];
+            Object[] nestedRowData = (Object[]) rowData[1];
+            GenericRow nestedRow = GenericRow.of(nestedRowData[0], nestedRowData[1]);
+            GenericRow row = GenericRow.of(rowData[0], nestedRow, rowData[2]);
+            expectedRows.add(
+                    GenericRow.of(
+                            data[0],
+                            new GenericArray((Object[]) data[1]),
+                            new GenericArray((Object[]) data[2]),
+                            row,
+                            data[4],
+                            data[5],
+                            data[6]));
+        }
+
         for (int i = 0; i < scanRecords.size(); i++) {
             ScanRecord record = scanRecords.get(i);
             assertThat(record.logOffset()).isEqualTo(i);
-            InternalRow row = record.getRow();
-            assertThat(row.getInt(0)).isEqualTo(complexData.get(i)[0]);
-            assertThat(row.getArray(1)).isInstanceOf(GenericArray.class);
-            GenericArray array = (GenericArray) row.getArray(1);
-            assertThat(array.toString())
-                    .isEqualTo(Arrays.deepToString((Object[]) complexData.get(i)[1]));
-            assertThat(row.getArray(2).toString())
-                    .isEqualTo(Arrays.deepToString((Object[]) complexData.get(i)[2]));
-            InternalRow nestedRow = row.getRow(3, 3);
-            assertThat(nestedRow).isNotNull();
-            assertThat(nestedRow.getInt(0)).isEqualTo(((Object[]) complexData.get(i)[3])[0]);
-            InternalRow deeplyNestedRow = nestedRow.getRow(1, 2);
-            assertThat(deeplyNestedRow).isNotNull();
-            assertThat(deeplyNestedRow.getInt(0))
-                    .isEqualTo(((Object[]) ((Object[]) complexData.get(i)[3])[1])[0]);
-            assertThat(deeplyNestedRow.getString(1).toString())
-                    .isEqualTo(((Object[]) ((Object[]) complexData.get(i)[3])[1])[1]);
-            assertThat(nestedRow.getString(2).toString())
-                    .isEqualTo(((Object[]) complexData.get(i)[3])[2]);
+            InternalRowAssert.assertThatRow(record.getRow())
+                    .withSchema(schema.getRowType())
+                    .isEqualTo(expectedRows.get(i));
         }
     }
 

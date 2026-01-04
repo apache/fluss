@@ -21,6 +21,7 @@ import org.apache.fluss.annotation.PublicEvolving;
 import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.Decimal;
 import org.apache.fluss.row.InternalArray;
+import org.apache.fluss.row.InternalMap;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
@@ -137,7 +138,10 @@ public class ColumnarRow implements InternalRow {
         return vectorizedColumnBatch.getArray(rowId, pos);
     }
 
-    // TODO: getMap() will be added in Issue #1973
+    @Override
+    public InternalMap getMap(int pos) {
+        return vectorizedColumnBatch.getMap(rowId, pos);
+    }
 
     @Override
     public InternalRow getRow(int pos, int numFields) {

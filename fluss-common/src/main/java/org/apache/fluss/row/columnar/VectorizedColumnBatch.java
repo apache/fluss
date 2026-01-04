@@ -20,6 +20,7 @@ package org.apache.fluss.row.columnar;
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.row.Decimal;
 import org.apache.fluss.row.InternalArray;
+import org.apache.fluss.row.InternalMap;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
@@ -41,6 +42,10 @@ public class VectorizedColumnBatch {
 
     public int getFieldCount() {
         return columns.length;
+    }
+
+    public ColumnVector getColumn(int colId) {
+        return columns[colId];
     }
 
     public boolean isNullAt(int rowId, int colId) {
@@ -107,6 +112,10 @@ public class VectorizedColumnBatch {
 
     public InternalArray getArray(int rowId, int colId) {
         return ((ArrayColumnVector) columns[colId]).getArray(rowId);
+    }
+
+    public InternalMap getMap(int rowId, int colId) {
+        return ((MapColumnVector) columns[colId]).getMap(rowId);
     }
 
     public InternalRow getRow(int rowId, int colId) {

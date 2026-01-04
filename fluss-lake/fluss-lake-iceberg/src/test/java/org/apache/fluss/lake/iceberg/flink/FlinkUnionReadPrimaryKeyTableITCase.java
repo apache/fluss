@@ -80,7 +80,9 @@ public class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase 
         // will read iceberg snapshot, should only +I since no change log
         List<Row> expectedRows = new ArrayList<>();
         if (isPartitioned) {
-            for (String partition : waitUntilPartitions(t1).values()) {
+            List<String> sortedPartitions = new ArrayList<>(waitUntilPartitions(t1).values());
+            sortedPartitions.sort(String::compareTo);
+            for (String partition : sortedPartitions) {
                 expectedRows.add(
                         Row.of(
                                 false,
@@ -165,9 +167,12 @@ public class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase 
         jobClient.cancel().get();
 
         // write a row again
+        List<String> sortedPartitions = new ArrayList<>();
         if (isPartitioned) {
             Map<Long, String> partitionNameById = waitUntilPartitions(t1);
-            for (String partition : partitionNameById.values()) {
+            sortedPartitions = new ArrayList<>(partitionNameById.values());
+            sortedPartitions.sort(String::compareTo);
+            for (String partition : sortedPartitions) {
                 writeFullTypeRow(t1, partition);
             }
         } else {
@@ -177,7 +182,7 @@ public class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase 
         // should generate -U & +U
         List<Row> expectedRows2 = new ArrayList<>();
         if (isPartitioned) {
-            for (String partition : waitUntilPartitions(t1).values()) {
+            for (String partition : sortedPartitions) {
                 expectedRows2.add(
                         Row.ofKind(
                                 RowKind.UPDATE_BEFORE,

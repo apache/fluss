@@ -20,7 +20,9 @@
 package org.apache.fluss.row.array;
 
 import org.apache.fluss.row.BinaryArray;
+import org.apache.fluss.row.BinaryMap;
 import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.row.map.PrimitiveBinaryMap;
 
 /**
  * A BinaryArray implementation for primitive types (except complex types) which does not support
@@ -39,5 +41,12 @@ public class PrimitiveBinaryArray extends BinaryArray {
         // this should never be called from a primitive array,
         // however, we still return a placeholder
         return new PrimitiveBinaryArray();
+    }
+
+    @Override
+    protected BinaryMap createNestedMapInstance() {
+        // this should never be called from a primitive array,
+        // however, we still return a placeholder
+        return new PrimitiveBinaryMap();
     }
 }

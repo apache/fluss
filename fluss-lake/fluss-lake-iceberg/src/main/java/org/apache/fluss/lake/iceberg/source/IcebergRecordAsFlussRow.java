@@ -21,6 +21,7 @@ package org.apache.fluss.lake.iceberg.source;
 import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.Decimal;
 import org.apache.fluss.row.InternalArray;
+import org.apache.fluss.row.InternalMap;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
@@ -156,7 +157,14 @@ public class IcebergRecordAsFlussRow implements InternalRow {
     }
 
     @Override
+    public InternalMap getMap(int pos) {
+        // TODO: Support Map type conversion from Iceberg to Fluss
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
     public InternalRow getRow(int pos, int numFields) {
+        // TODO: Support Row type conversion from Iceberg to Fluss
         throw new UnsupportedOperationException();
     }
 }

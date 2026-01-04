@@ -26,17 +26,20 @@ import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.BinaryWriter;
 import org.apache.fluss.row.Decimal;
 import org.apache.fluss.row.InternalArray;
+import org.apache.fluss.row.InternalMap;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.NullAwareGetters;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
 import org.apache.fluss.row.array.IndexedArray;
+import org.apache.fluss.row.map.IndexedMap;
 import org.apache.fluss.types.ArrayType;
 import org.apache.fluss.types.BinaryType;
 import org.apache.fluss.types.CharType;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DecimalType;
 import org.apache.fluss.types.IntType;
+import org.apache.fluss.types.MapType;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.types.StringType;
 import org.apache.fluss.utils.MurmurHashUtils;
@@ -397,7 +400,25 @@ public class IndexedRow implements BinaryRow, NullAwareGetters {
         }
     }
 
-    // TODO: getMap() will be added in Issue #1973
+    @Override
+    public InternalMap getMap(int pos) {
+        assertIndexIsValid(pos);
+        int offset = getFieldOffset(pos);
+        int length = columnLengths[pos];
+        long offsetAndLength = ((long) offset << 32) | length;
+        DataType fieldType = fieldTypes[pos];
+        if (fieldType instanceof MapType) {
+            MapType mapType = (MapType) fieldType;
+            return BinarySegmentUtils.readBinaryMap(
+                    segments,
+                    0,
+                    offsetAndLength,
+                    new IndexedMap(mapType.getKeyType(), mapType.getValueType()));
+        } else {
+            throw new IllegalStateException(
+                    "Field type at position " + pos + " is not MapType: " + fieldType);
+        }
+    }
 
     @Override
     public InternalRow getRow(int pos, int numFields) {

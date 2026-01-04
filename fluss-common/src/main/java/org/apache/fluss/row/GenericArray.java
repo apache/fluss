@@ -218,7 +218,10 @@ public final class GenericArray implements InternalArray, Serializable {
         return (InternalArray) getObject(pos);
     }
 
-    // TODO: getMap() will be added in Issue #1973
+    @Override
+    public InternalMap getMap(int pos) {
+        return (InternalMap) getObject(pos);
+    }
 
     @Override
     public InternalRow getRow(int pos, int numFields) {
@@ -334,7 +337,7 @@ public final class GenericArray implements InternalArray, Serializable {
 
     @Override
     public String toString() {
-        return Arrays.toString((Object[]) array);
+        return Arrays.toString(toObjectArray());
     }
 
     // ----------------------------------------------------------------------------------------

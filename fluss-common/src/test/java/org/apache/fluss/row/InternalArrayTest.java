@@ -214,14 +214,6 @@ public class InternalArrayTest {
         assertThat(getter.getElementOrNull(genericArray, 2)).isNull();
     }
 
-    // TODO: Uncomment when Row support is added in Issue #1974
-    // @Test
-    // public void testElementGetterForRow() { ... }
-
-    // TODO: Uncomment when Map support is added in Issue #1973
-    // @Test
-    // public void testElementGetterForMap() { ... }
-
     @Test
     public void testBinaryArrayWithElementGetter() {
         BinaryArray binaryArray = BinaryArray.fromPrimitiveArray(new int[] {10, 20, 30});

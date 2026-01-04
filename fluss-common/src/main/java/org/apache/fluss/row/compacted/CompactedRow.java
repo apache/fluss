@@ -25,6 +25,7 @@ import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.Decimal;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalArray;
+import org.apache.fluss.row.InternalMap;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
@@ -255,7 +256,10 @@ public class CompactedRow implements BinaryRow {
         return decodedRow().getArray(pos);
     }
 
-    // TODO: getMap() will be added in Issue #1973
+    @Override
+    public InternalMap getMap(int pos) {
+        return decodedRow().getMap(pos);
+    }
 
     @Override
     public InternalRow getRow(int pos, int numFields) {

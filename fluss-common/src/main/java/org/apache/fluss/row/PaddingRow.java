@@ -132,6 +132,11 @@ public class PaddingRow implements InternalRow {
     }
 
     @Override
+    public InternalMap getMap(int pos) {
+        return row.getMap(pos);
+    }
+
+    @Override
     public InternalRow getRow(int pos, int numFields) {
         return row.getRow(pos, numFields);
     }

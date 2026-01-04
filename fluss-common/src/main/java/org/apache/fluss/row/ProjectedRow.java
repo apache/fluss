@@ -145,7 +145,10 @@ public class ProjectedRow implements InternalRow {
         return row.getArray(indexMapping[pos]);
     }
 
-    // TODO: getMap() will be added in Issue #1973
+    @Override
+    public InternalMap getMap(int pos) {
+        return row.getMap(indexMapping[pos]);
+    }
 
     @Override
     public InternalRow getRow(int pos, int numFields) {

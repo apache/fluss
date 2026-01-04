@@ -34,8 +34,6 @@ public class CompactedRowDeserializer {
 
     public void deserialize(CompactedRowReader reader, GenericRow output) {
         for (int i = 0; i < readers.length; i++) {
-            // TODO: Row type support will be added in Issue #1974
-            // Currently ROW type is not supported in CompactedRowReader.createFieldReader
             output.setField(i, readers[i].readField(reader, i));
         }
     }

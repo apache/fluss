@@ -271,7 +271,15 @@ public abstract class BinaryArray extends BinarySection
     /** Creates a nested {@link BinaryArray} with the nested data type information. */
     protected abstract BinaryArray createNestedArrayInstance();
 
-    // TODO: getMap() will be added in Issue #1973
+    /** Creates a nested {@link BinaryMap} with the nested data type information. */
+    protected abstract BinaryMap createNestedMapInstance();
+
+    @Override
+    public InternalMap getMap(int pos) {
+        assertIndexIsValid(pos);
+        return BinarySegmentUtils.readBinaryMap(
+                segments, offset, getLong(pos), createNestedMapInstance());
+    }
 
     @Override
     public boolean getBoolean(int pos) {
@@ -602,7 +610,7 @@ public abstract class BinaryArray extends BinarySection
     private static BinaryArray fromPrimitiveArray(
             Object arr, int offset, int length, int elementSize) {
         final long headerInBytes = calculateHeaderInBytes(length);
-        final long valueRegionInBytes = elementSize * length;
+        final long valueRegionInBytes = ((long) elementSize) * length;
 
         // must align by 8 bytes
         long totalSizeInLongs = (headerInBytes + valueRegionInBytes + 7) / 8;
