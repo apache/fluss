@@ -420,7 +420,8 @@ public class ClientRpcMessageUtils {
             progress = (double) finishedTask / totalTask;
         }
 
-        return new RebalanceProgress(totalRebalanceStatus, progress, rebalanceProgress);
+        return new RebalanceProgress(
+                response.getRebalanceId(), totalRebalanceStatus, progress, rebalanceProgress);
     }
 
     private static RebalancePlanForBucket toRebalancePlanForBucket(

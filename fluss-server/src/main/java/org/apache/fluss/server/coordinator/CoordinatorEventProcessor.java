@@ -117,13 +117,11 @@ import org.apache.fluss.server.zk.data.ZkData.TableIdsZNode;
 import org.apache.fluss.server.zk.data.lake.LakeTableHelper;
 import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
 import org.apache.fluss.utils.types.Tuple2;
-
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
 import javax.annotation.concurrent.NotThreadSafe;
-
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
@@ -1161,8 +1159,12 @@ public class CoordinatorEventProcessor implements EventProcessor {
             }
 
             // 2. execute rebalance plan.
-            rebalanceManager.registerRebalance(
-                    rebalancePlan.getRebalanceId(), rebalancePlan.getExecutePlan());
+            Map<TableBucket, RebalancePlanForBucket> executePlan = rebalancePlan.getExecutePlan();
+            if (executePlan.isEmpty()) {
+                LOG.warn("Skipping rebalance task since there is no rebalance task.");
+            } else {
+                rebalanceManager.registerRebalance(rebalancePlan.getRebalanceId(), executePlan);
+            }
         }
 
         return makeRebalanceRespose(rebalancePlan);

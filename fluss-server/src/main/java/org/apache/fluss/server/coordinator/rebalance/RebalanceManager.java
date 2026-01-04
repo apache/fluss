@@ -233,7 +233,8 @@ public class RebalanceManager {
                         LOG.warn(
                                 "Ignore the list rebalance task because it is not the current"
                                         + " rebalance task.");
-                        return new RebalanceProgress(NO_TASK, 0.0, Collections.emptyMap());
+                        return new RebalanceProgress(
+                                currentRebalanceId, NO_TASK, 0.0, Collections.emptyMap());
                     }
 
                     Map<TableBucket, RebalanceResultForBucket> progressForBucketMap =
@@ -241,7 +242,8 @@ public class RebalanceManager {
                     progressForBucketMap.putAll(ongoingRebalanceTasks);
                     progressForBucketMap.putAll(finishedRebalanceTasks);
                     // the progress will be set at client.
-                    return new RebalanceProgress(rebalanceStatus, 0.0, progressForBucketMap);
+                    return new RebalanceProgress(
+                            currentRebalanceId, rebalanceStatus, 0.0, progressForBucketMap);
                 });
     }
 

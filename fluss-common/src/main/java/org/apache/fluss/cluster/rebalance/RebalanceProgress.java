@@ -30,6 +30,9 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
  */
 public class RebalanceProgress {
 
+    /** The rebalance id. */
+    private final String rebalanceId;
+
     /** The rebalance status for the overall rebalance. */
     private final RebalanceStatus rebalanceStatus;
 
@@ -40,13 +43,19 @@ public class RebalanceProgress {
     private final Map<TableBucket, RebalanceResultForBucket> progressForBucketMap;
 
     public RebalanceProgress(
+            String rebalanceId,
             RebalanceStatus rebalanceStatus,
             double progress,
             Map<TableBucket, RebalanceResultForBucket> progressForBucketMap) {
+        this.rebalanceId = checkNotNull(rebalanceId);
         // TODO: we may derive the overall progress and status from progressForBucketMap
         this.rebalanceStatus = checkNotNull(rebalanceStatus);
         this.progress = progress;
         this.progressForBucketMap = checkNotNull(progressForBucketMap);
+    }
+
+    public String rebalanceId() {
+        return rebalanceId;
     }
 
     public RebalanceStatus status() {

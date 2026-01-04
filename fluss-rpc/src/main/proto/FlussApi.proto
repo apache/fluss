@@ -606,7 +606,8 @@ message ListRebalanceProgressRequest {
 
 message ListRebalanceProgressResponse {
   required int32 rebalance_status = 1;
-  repeated PbRebalanceProgressForTable table_progress = 2;
+  required string rebalance_id = 2;
+  repeated PbRebalanceProgressForTable table_progress = 3;
 }
 
 message CancelRebalanceRequest {
