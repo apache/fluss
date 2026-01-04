@@ -39,7 +39,7 @@ public class FieldMaxAgg extends FieldAggregator {
         if (accumulator == null || inputField == null) {
             return accumulator == null ? inputField : accumulator;
         }
-        return InternalRowUtils.compare(accumulator, inputField, typeRoot) < 0
+        return InternalRowUtils.compare(accumulator, inputField, fieldType) < 0
                 ? inputField
                 : accumulator;
     }

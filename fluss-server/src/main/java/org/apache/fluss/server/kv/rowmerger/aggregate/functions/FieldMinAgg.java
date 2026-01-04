@@ -40,7 +40,7 @@ public class FieldMinAgg extends FieldAggregator {
             return accumulator == null ? inputField : accumulator;
         }
 
-        return InternalRowUtils.compare(accumulator, inputField, typeRoot) < 0
+        return InternalRowUtils.compare(accumulator, inputField, fieldType) < 0
                 ? accumulator
                 : inputField;
     }
