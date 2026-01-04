@@ -81,7 +81,7 @@ class BucketingFunctionTest {
     }
 
     @Test
-    public void testLanceBucketing() {
+    void testLanceBucketing() {
         BucketingFunction lanceBucketing = BucketingFunction.of(DataLakeFormat.LANCE);
 
         assertThat(lanceBucketing.bucketing(new byte[] {(byte) 0, (byte) 10}, 7)).isEqualTo(1);
