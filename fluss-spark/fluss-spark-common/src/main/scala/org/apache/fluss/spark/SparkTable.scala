@@ -17,9 +17,24 @@
 
 package org.apache.fluss.spark
 
-import org.apache.fluss.metadata.TableInfo
+import org.apache.fluss.config.{Configuration => FlussConfiguration}
+import org.apache.fluss.metadata.{TableInfo, TablePath}
 import org.apache.fluss.spark.catalog.{AbstractSparkTable, SupportsFlussPartitionManagement}
+import org.apache.fluss.spark.write.{FlussAppendWriteBuilder, FlussUpsertWriteBuilder}
 
-case class SparkTable(table: TableInfo)
-  extends AbstractSparkTable(table)
-  with SupportsFlussPartitionManagement {}
+import org.apache.spark.sql.connector.catalog.SupportsWrite
+import org.apache.spark.sql.connector.write.{LogicalWriteInfo, WriteBuilder}
+
+case class SparkTable(tablePath: TablePath, tableInfo: TableInfo, flussConfig: FlussConfiguration)
+  extends AbstractSparkTable(tableInfo)
+  with SupportsFlussPartitionManagement
+  with SupportsWrite {
+
+  override def newWriteBuilder(logicalWriteInfo: LogicalWriteInfo): WriteBuilder = {
+    if (tableInfo.getPrimaryKeys.isEmpty) {
+      new FlussAppendWriteBuilder(tablePath, logicalWriteInfo.schema(), flussConfig)
+    } else {
+      new FlussUpsertWriteBuilder(tablePath, logicalWriteInfo.schema(), flussConfig)
+    }
+  }
+}

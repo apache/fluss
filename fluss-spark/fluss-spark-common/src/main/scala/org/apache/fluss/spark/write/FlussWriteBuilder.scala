@@ -15,32 +15,37 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.spark.catalog
+package org.apache.fluss.spark.write
 
 import org.apache.fluss.config.{Configuration => FlussConfiguration}
-import org.apache.fluss.metadata.{TableInfo, TablePath}
-import org.apache.fluss.spark.SparkConversions
+import org.apache.fluss.metadata.TablePath
 
-import org.apache.spark.sql.connector.catalog.{Table, TableCapability}
+import org.apache.spark.sql.connector.write.WriteBuilder
 import org.apache.spark.sql.types.StructType
 
-import java.util
+/** An interface that extends from Spark [[WriteBuilder]]. */
+trait FlussWriteBuilder extends WriteBuilder
 
-import scala.collection.JavaConverters._
+/** Fluss Append Write Builder. */
+class FlussAppendWriteBuilder(
+    tablePath: TablePath,
+    dataSchema: StructType,
+    flussConfig: FlussConfiguration)
+  extends FlussWriteBuilder {
 
-abstract class AbstractSparkTable(tableInfo: TableInfo) extends Table {
+  override def build: FlussWrite = {
+    FlussAppendWrite(tablePath, dataSchema, flussConfig)
+  }
+}
 
-  protected lazy val _schema: StructType =
-    SparkConversions.toSparkDataType(tableInfo.getSchema.getRowType)
+/** Fluss Upsert Write Builder. */
+class FlussUpsertWriteBuilder(
+    tablePath: TablePath,
+    dataSchema: StructType,
+    flussConfig: FlussConfiguration)
+  extends FlussWriteBuilder {
 
-  protected lazy val _partitionSchema = new StructType(
-    _schema.fields.filter(tableInfo.getPartitionKeys.contains))
-
-  override def name(): String = tableInfo.toString
-
-  override def schema(): StructType = _schema
-
-  override def capabilities(): util.Set[TableCapability] = {
-    Set(TableCapability.BATCH_WRITE).asJava
+  override def build: FlussWrite = {
+    FlussUpsertWrite(tablePath, dataSchema, flussConfig)
   }
 }
