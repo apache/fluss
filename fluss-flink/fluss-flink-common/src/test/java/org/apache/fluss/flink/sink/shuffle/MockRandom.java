@@ -15,25 +15,28 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.flink.adapter;
+package org.apache.fluss.flink.sink.shuffle;
 
-import org.apache.flink.api.common.functions.RuntimeContext;
-import org.apache.flink.streaming.api.operators.StreamingRuntimeContext;
+import java.util.Random;
 
 /**
- * An adapter for Flink {@link RuntimeContext} class. The {@link RuntimeContext} class added the
- * `getJobInfo` and `getTaskInfo` methods in version 1.19 and deprecated many methods, such as
- * `getAttemptNumber`.
- *
- * <p>TODO: remove this class when no longer support flink 1.18.
+ * A subclass of Random with a fixed seed and generation algorithm. This is useful for generating a
+ * deterministic sequence of pseudorandom numbers.
  */
-public class RuntimeContextAdapter {
+public class MockRandom extends Random {
+    private long state;
 
-    public static int getAttemptNumber(RuntimeContext runtimeContext) {
-        return runtimeContext.getTaskInfo().getAttemptNumber();
+    public MockRandom() {
+        this(17);
     }
 
-    public static int getIndexOfThisSubtask(StreamingRuntimeContext runtimeContext) {
-        return runtimeContext.getTaskInfo().getIndexOfThisSubtask();
+    public MockRandom(long state) {
+        this.state = state;
+    }
+
+    @Override
+    protected int next(int bits) {
+        state = (state * 2862933555777941757L) + 3037000493L;
+        return (int) (state >>> (64 - bits));
     }
 }

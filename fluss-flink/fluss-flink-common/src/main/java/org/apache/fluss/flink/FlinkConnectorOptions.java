@@ -18,6 +18,7 @@
 package org.apache.fluss.flink;
 
 import org.apache.fluss.config.FlussConfigUtils;
+import org.apache.fluss.flink.sink.shuffle.DistributionMode;
 import org.apache.fluss.flink.utils.FlinkConversions;
 
 import org.apache.flink.configuration.ConfigOption;
@@ -124,6 +125,23 @@ public class FlinkConnectorOptions {
                                     + "only take effect when the '"
                                     + BUCKET_KEY.key()
                                     + "' is defined. For Primary Key table, it is enabled by default.");
+
+    public static final ConfigOption<DistributionMode> SINK_DISTRIBUTION_MODE =
+            ConfigOptions.key("sink.distribution-mode")
+                    .enumType(DistributionMode.class)
+                    .defaultValue(DistributionMode.BUCKET_SHUFFLE)
+                    .withDescription(
+                            "Defines the distribution mode for writing data to the sink. Available options are: \n"
+                                    + "- NONE: No specific distribution strategy. Data is forwarded as is.\n"
+                                    + "- BUCKET_SHUFFLE: Shuffle data by bucket ID before writing to sink. "
+                                    + "Shuffling the data with the same bucket ID to be processed by the same task "
+                                    + "can improve the efficiency of client processing and reduce resource consumption. "
+                                    + "For Log Table, bucket shuffle will only take effect when the '"
+                                    + BUCKET_KEY.key()
+                                    + "' is defined. For Primary Key table, it is enabled by default.\n"
+                                    + "- DYNAMIC_SHUFFLE: Dynamically adjust shuffle strategy based on partition key traffic patterns. "
+                                    + "This mode monitors data distribution and adjusts the shuffle behavior to balance the load. "
+                                    + "It is only supported for partitioned tables.");
 
     // --------------------------------------------------------------------------------------------
     // table storage specific options

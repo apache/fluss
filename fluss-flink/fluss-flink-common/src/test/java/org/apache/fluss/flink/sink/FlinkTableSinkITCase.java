@@ -24,6 +24,7 @@ import org.apache.fluss.client.table.scanner.ScanRecord;
 import org.apache.fluss.client.table.scanner.log.LogScanner;
 import org.apache.fluss.client.table.scanner.log.ScanRecords;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.flink.sink.shuffle.DistributionMode;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.InternalRow;
@@ -50,6 +51,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
@@ -100,7 +102,10 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
         // open a catalog so that we can get table from the catalog
         String bootstrapServers = FLUSS_CLUSTER_EXTENSION.getBootstrapServers();
         // create table environment
-        env = StreamExecutionEnvironment.getExecutionEnvironment();
+        org.apache.flink.configuration.Configuration config =
+                new org.apache.flink.configuration.Configuration();
+        config.setString("taskmanager.numberOfTaskSlots", "3");
+        env = StreamExecutionEnvironment.getExecutionEnvironment(config);
         env.setRuntimeMode(RuntimeExecutionMode.STREAMING);
 
         tEnv = StreamTableEnvironment.create(env);
@@ -212,13 +217,13 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
     }
 
     @ParameterizedTest
-    @ValueSource(booleans = {true, false})
-    void testAppendLogWithBucketKey(boolean sinkBucketShuffle) throws Exception {
+    @EnumSource(value = DistributionMode.class)
+    void testAppendLogWithBucketKey(DistributionMode distributionMode) throws Exception {
         tEnv.executeSql(
                 String.format(
                         "create table sink_test (a int not null, b bigint, c string) "
-                                + "with ('bucket.num' = '3', 'bucket.key' = 'c', 'sink.bucket-shuffle'= '%s')",
-                        sinkBucketShuffle));
+                                + "with ('bucket.num' = '3', 'bucket.key' = 'c', 'sink.distribution-mode'= '%s')",
+                        distributionMode));
         String insertSql =
                 "INSERT INTO sink_test(a, b, c) "
                         + "VALUES (1, 3501, 'Tim'), "
@@ -232,9 +237,16 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
                         + "(10, 3510, 'coco'), "
                         + "(11, 3511, 'stave'), "
                         + "(12, 3512, 'Tim')";
+
+        if (distributionMode == DistributionMode.DYNAMIC_SHUFFLE) {
+            assertThatThrownBy(() -> tEnv.executeSql(insertSql))
+                    .hasMessageContaining("DYNAMIC_SHUFFLE is only supported for partition tables");
+            return;
+        }
         String insertPlan = tEnv.explainSql(insertSql, ExplainDetail.JSON_EXECUTION_PLAN);
-        if (sinkBucketShuffle) {
-            assertThat(insertPlan).contains("\"ship_strategy\" : \"BUCKET_SHUFFLE\"");
+        if (distributionMode == DistributionMode.BUCKET_SHUFFLE) {
+            assertThat(insertPlan)
+                    .contains(String.format("\"ship_strategy\" : \"%s\"", distributionMode.name()));
         } else {
             assertThat(insertPlan).contains("\"ship_strategy\" : \"FORWARD\"");
         }
@@ -349,6 +361,59 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
                             "+I[5, 3505, piggy]", "+I[6, 3506, stave]"));
         }
         assertResultsIgnoreOrder(rowIter, expectedRows, true);
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = DistributionMode.class)
+    void testAppendLogPartitionTable(DistributionMode distributionMode) throws Exception {
+        tEnv.executeSql(
+                String.format(
+                        "create table sink_test (a int not null, b bigint, c string) "
+                                + " partitioned by (c) "
+                                + "with ('bucket.num' = '3', 'sink.distribution-mode'= '%s')",
+                        distributionMode));
+        String insertSql =
+                "INSERT INTO sink_test(a, b, c) "
+                        + "VALUES (1, 3501, 'Tim'), "
+                        + "(2, 3502, 'Fabian'), "
+                        + "(3, 3503, 'Tim'), "
+                        + "(4, 3504, 'jerry'), "
+                        + "(5, 3505, 'piggy'), "
+                        + "(7, 3507, 'Fabian'), "
+                        + "(8, 3508, 'stave'), "
+                        + "(9, 3509, 'Tim'), "
+                        + "(10, 3510, 'coco'), "
+                        + "(11, 3511, 'stave'), "
+                        + "(12, 3512, 'Tim')";
+        String insertPlan = tEnv.explainSql(insertSql, ExplainDetail.JSON_EXECUTION_PLAN);
+        if (distributionMode == DistributionMode.DYNAMIC_SHUFFLE) {
+            assertThat(insertPlan)
+                    .contains(String.format("\"ship_strategy\" : \"%s\"", distributionMode.name()));
+        } else {
+            assertThat(insertPlan).contains("\"ship_strategy\" : \"FORWARD\"");
+        }
+        tEnv.executeSql(insertSql).await();
+
+        CloseableIterator<Row> rowIter = tEnv.executeSql("select * from sink_test").collect();
+        //noinspection ArraysAsListWithZeroOrOneArgument
+        List<List<String>> expectedGroups =
+                Arrays.asList(
+                        Arrays.asList(
+                                "+I[1, 3501, Tim]",
+                                "+I[3, 3503, Tim]",
+                                "+I[9, 3509, Tim]",
+                                "+I[12, 3512, Tim]"),
+                        Arrays.asList("+I[2, 3502, Fabian]", "+I[7, 3507, Fabian]"),
+                        Arrays.asList("+I[4, 3504, jerry]"),
+                        Arrays.asList("+I[5, 3505, piggy]"),
+                        Arrays.asList("+I[8, 3508, stave]", "+I[11, 3511, stave]"),
+                        Arrays.asList("+I[10, 3510, coco]"));
+
+        List<String> expectedRows =
+                expectedGroups.stream().flatMap(List::stream).collect(Collectors.toList());
+
+        List<String> actual = collectRowsWithTimeout(rowIter, expectedRows.size());
+        assertThat(actual).containsExactlyInAnyOrderElementsOf(expectedRows);
     }
 
     @ParameterizedTest
