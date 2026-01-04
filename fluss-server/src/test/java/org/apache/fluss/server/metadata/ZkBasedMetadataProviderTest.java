@@ -100,7 +100,7 @@ class ZkBasedMetadataProviderTest {
                         .add(1, BucketAssignment.of(2, 3, 4))
                         .build();
         metadataManager.createDatabase("test_db", DatabaseDescriptor.EMPTY, true);
-        long tableId = metadataManager.createTable(tablePath, desc, tableAssignment, false);
+        long tableId = metadataManager.createTable(tablePath, null, desc, tableAssignment, false);
 
         // Create leader and isr for buckets
         TableBucket tableBucket0 = new TableBucket(tableId, 0);
@@ -161,7 +161,7 @@ class ZkBasedMetadataProviderTest {
                 new PartitionAssignment(tableId, bucketAssignments);
 
         zookeeperClient.registerPartitionAssignmentAndMetadata(
-                partitionId, partitionName, partitionAssignment, tablePath, tableId);
+                partitionId, partitionName, partitionAssignment, null, tablePath, tableId);
 
         // Create leader and isr for partition buckets
         TableBucket partitionBucket0 = new TableBucket(tableId, partitionId, 0);
@@ -233,9 +233,9 @@ class ZkBasedMetadataProviderTest {
                         tableId1, Collections.singletonMap(1, BucketAssignment.of(2, 3)));
 
         zookeeperClient.registerPartitionAssignmentAndMetadata(
-                partitionId1, partitionName1, partitionAssignment1, tablePath1, tableId1);
+                partitionId1, partitionName1, partitionAssignment1, null, tablePath1, tableId1);
         zookeeperClient.registerPartitionAssignmentAndMetadata(
-                partitionId2, partitionName2, partitionAssignment2, tablePath1, tableId1);
+                partitionId2, partitionName2, partitionAssignment2, null, tablePath1, tableId1);
 
         // Create partition for table2
         long partitionId3 = 21L;
@@ -246,7 +246,7 @@ class ZkBasedMetadataProviderTest {
                         tableId2, Collections.singletonMap(0, BucketAssignment.of(1, 3)));
 
         zookeeperClient.registerPartitionAssignmentAndMetadata(
-                partitionId3, partitionName3, partitionAssignment3, tablePath2, tableId2);
+                partitionId3, partitionName3, partitionAssignment3, null, tablePath2, tableId2);
 
         // Create leader and isr for all partition buckets
         TableBucket bucket1 = new TableBucket(tableId1, partitionId1, 0);
@@ -338,6 +338,7 @@ class ZkBasedMetadataProviderTest {
                 new TableDescriptor.TableDistribution(3, Collections.singletonList("a")),
                 options,
                 Collections.emptyMap(),
+                null,
                 currentMillis,
                 currentMillis);
     }

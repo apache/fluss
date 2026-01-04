@@ -23,6 +23,8 @@ import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.server.entity.FetchReqInfo;
 import org.apache.fluss.server.log.FetchParams;
 import org.apache.fluss.server.log.LogTablet;
+import org.apache.fluss.server.zk.data.PartitionAssignment;
+import org.apache.fluss.utils.FlussPaths;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -33,7 +35,9 @@ import java.util.Collections;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 
+import static org.apache.fluss.record.TestData.DATA1_PHYSICAL_TABLE_PATH_PA_2024;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_ID;
+import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test for remote log ttl in {@link RemoteLogManager}. */
@@ -49,6 +53,13 @@ final class RemoteLogTTLTest extends RemoteLogTestBase {
     void testRemoteLogTTL(boolean partitionTable) throws Exception {
         TableBucket tb;
         if (partitionTable) {
+            zkClient.registerPartitionAssignmentAndMetadata(
+                    0L,
+                    DATA1_PHYSICAL_TABLE_PATH_PA_2024.getPartitionName(),
+                    new PartitionAssignment(DATA1_TABLE_ID, Collections.emptyMap()),
+                    FlussPaths.remoteDataDir(conf),
+                    DATA1_TABLE_PATH,
+                    DATA1_TABLE_ID);
             tb = new TableBucket(DATA1_TABLE_ID, 0L, 0);
         } else {
             tb = new TableBucket(DATA1_TABLE_ID, 0);

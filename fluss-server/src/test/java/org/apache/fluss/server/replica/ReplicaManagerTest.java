@@ -942,7 +942,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
     void testListOffsets(boolean isPartitioned) throws Exception {
-        TableBucket tb = new TableBucket(DATA1_TABLE_ID, isPartitioned ? 10L : null, 1);
+        TableBucket tb = makeTableBucket(DATA1_TABLE_ID, isPartitioned ? 10L : null, false);
         makeLogTableAsLeader(tb, isPartitioned);
 
         // produce one batch to this bucket.
@@ -1619,11 +1619,12 @@ class ReplicaManagerTest extends ReplicaTestBase {
         // register table to zk.
         zkClient.registerTable(
                 nonePartitionTablePath,
-                TableRegistration.newTable(nonePartitionTableId, DATA1_TABLE_DESCRIPTOR));
+                TableRegistration.newTable(nonePartitionTableId, null, DATA1_TABLE_DESCRIPTOR));
         zkClient.registerFirstSchema(nonePartitionTablePath, DATA1_TABLE_DESCRIPTOR.getSchema());
         zkClient.registerTable(
                 partitionTablePath,
-                TableRegistration.newTable(partitionTableId, DATA1_PARTITIONED_TABLE_DESCRIPTOR));
+                TableRegistration.newTable(
+                        partitionTableId, null, DATA1_PARTITIONED_TABLE_DESCRIPTOR));
         zkClient.registerFirstSchema(
                 partitionTablePath, DATA1_PARTITIONED_TABLE_DESCRIPTOR.getSchema());
 
