@@ -17,6 +17,7 @@
 
 package org.apache.fluss.spark.util
 
+import org.apache.fluss.row.GenericRow
 import org.apache.fluss.spark.SparkConversions
 import org.apache.fluss.types.RowType
 
@@ -47,4 +48,7 @@ object TestUtils {
 
   val FLUSS_ROWTYPE: RowType = SparkConversions.toFlussDataType(SCHEMA)
 
+  def createGenericRow(values: Any*): GenericRow = {
+    GenericRow.of(values.map(_.asInstanceOf[java.lang.Object]): _*)
+  }
 }

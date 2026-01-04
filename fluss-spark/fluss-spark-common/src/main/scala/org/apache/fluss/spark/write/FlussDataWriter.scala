@@ -19,7 +19,7 @@ package org.apache.fluss.spark.write
 
 import org.apache.fluss.client.{Connection, ConnectionFactory}
 import org.apache.fluss.client.table.Table
-import org.apache.fluss.client.table.writer.{AppendWriter, TableWriter, UpsertWriter}
+import org.apache.fluss.client.table.writer.{AppendResult, AppendWriter, TableWriter, UpsertResult, UpsertWriter}
 import org.apache.fluss.config.Configuration
 import org.apache.fluss.metadata.TablePath
 import org.apache.fluss.spark.row.SparkAsFlussRow
@@ -29,6 +29,9 @@ import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.connector.write.{DataWriter, WriterCommitMessage}
 import org.apache.spark.sql.types.StructType
 
+import java.io.IOException
+import java.util.concurrent.CompletableFuture
+
 /**
  * A fluss implementation of Spark [[WriterCommitMessage]]. Fluss, as a service, accepts data and
  * commit inside of it, so client does nothing.
@@ -36,7 +39,7 @@ import org.apache.spark.sql.types.StructType
 case class FlussWriterCommitMessage() extends WriterCommitMessage
 
 /** An abstract class to Spark [[DataWriter]]. */
-abstract class FlussDataWriter(
+abstract class FlussDataWriter[T](
     tablePath: TablePath,
     dataSchema: StructType,
     flussConfig: Configuration)
@@ -51,8 +54,26 @@ abstract class FlussDataWriter(
 
   protected val flussRow = new SparkAsFlussRow(dataSchema)
 
+  @volatile
+  private var asyncWriterException: Option[Throwable] = _
+
+  def writeRow(record: SparkAsFlussRow): CompletableFuture[T]
+
+  override def write(record: InternalRow): Unit = {
+    checkAsyncException()
+
+    writeRow(flussRow.replace(record)).whenComplete {
+      (_, exception) =>
+        if (exception != null && asyncWriterException.isEmpty) {
+          asyncWriterException = Some(exception)
+        }
+    }
+  }
+
   override def commit(): WriterCommitMessage = {
     writer.flush()
+    checkAsyncException()
+
     FlussWriterCommitMessage()
   }
 
@@ -65,7 +86,27 @@ abstract class FlussDataWriter(
     if (conn != null) {
       conn.close()
     }
+
+    // Rethrow exception for the case in which close is called before write() and commit().
+    checkAsyncException()
+
+    logInfo("Finished closing Fluss data write.")
   }
+
+  @throws[IOException]
+  private def checkAsyncException(): Unit = {
+    val throwable = asyncWriterException
+    throwable match {
+      case Some(exception) =>
+        asyncWriterException = None
+        logError("Exception occurs while write row to fluss.", exception)
+        throw new IOException(
+          "One or more Fluss Writer send requests have encountered exception",
+          exception)
+      case _ =>
+    }
+  }
+
 }
 
 /** Spark-Fluss Append Data Writer. */
@@ -73,20 +114,12 @@ case class FlussAppendDataWriter(
     tablePath: TablePath,
     dataSchema: StructType,
     flussConfig: Configuration)
-  extends FlussDataWriter(tablePath, dataSchema, flussConfig) {
+  extends FlussDataWriter[AppendResult](tablePath, dataSchema, flussConfig) {
 
   override val writer: AppendWriter = table.newAppend().createWriter()
 
-  override def write(record: InternalRow): Unit = {
-    writer.append(flussRow.replace(record)).whenComplete {
-      (_, exception) =>
-        {
-          if (exception != null) {
-//            logError("Exception occurs while append row to fluss.", exception);
-            throw new RuntimeException("Failed to append record", exception)
-          }
-        }
-    }
+  override def writeRow(record: SparkAsFlussRow): CompletableFuture[AppendResult] = {
+    writer.append(record)
   }
 }
 
@@ -95,19 +128,11 @@ case class FlussUpsertDataWriter(
     tablePath: TablePath,
     dataSchema: StructType,
     flussConfig: Configuration)
-  extends FlussDataWriter(tablePath, dataSchema, flussConfig) {
+  extends FlussDataWriter[UpsertResult](tablePath, dataSchema, flussConfig) {
 
   override val writer: UpsertWriter = table.newUpsert().createWriter()
 
-  override def write(record: InternalRow): Unit = {
-    writer.upsert(flussRow.replace(record)).whenComplete {
-      (_, exception) =>
-        {
-          if (exception != null) {
-            logError("Exception occurs while upsert row to fluss.", exception);
-            throw new RuntimeException("Failed to upsert record", exception)
-          }
-        }
-    }
+  override def writeRow(record: SparkAsFlussRow): CompletableFuture[UpsertResult] = {
+    writer.upsert(record)
   }
 }

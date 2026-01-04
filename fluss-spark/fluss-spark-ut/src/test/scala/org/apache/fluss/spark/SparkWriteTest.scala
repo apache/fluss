@@ -19,7 +19,7 @@ package org.apache.fluss.spark
 
 import org.apache.fluss.metadata.{Schema, TableDescriptor}
 import org.apache.fluss.row.{BinaryString, GenericRow, InternalRow}
-import org.apache.fluss.spark.util.TestUtils.FLUSS_ROWTYPE
+import org.apache.fluss.spark.util.TestUtils.{createGenericRow, FLUSS_ROWTYPE}
 import org.apache.fluss.types.DataTypes
 
 import org.assertj.core.api.Assertions.assertThat
@@ -92,36 +92,11 @@ class SparkWriteTest extends FlussSparkTestBase {
     val flussRows = getRowsWithChangeType(table).map(_._2)
 
     val expectRows = Array(
-      GenericRowBuilder(4)
-        .setField(0, 600L)
-        .setField(1, 21L)
-        .setField(2, 601)
-        .setField(3, BinaryString.fromString("addr1"))
-        .builder(),
-      GenericRowBuilder(4)
-        .setField(0, 700L)
-        .setField(1, 22L)
-        .setField(2, 602)
-        .setField(3, BinaryString.fromString("addr2"))
-        .builder(),
-      GenericRowBuilder(4)
-        .setField(0, 800L)
-        .setField(1, 23L)
-        .setField(2, 603)
-        .setField(3, BinaryString.fromString("addr3"))
-        .builder(),
-      GenericRowBuilder(4)
-        .setField(0, 900L)
-        .setField(1, 24L)
-        .setField(2, 604)
-        .setField(3, BinaryString.fromString("addr4"))
-        .builder(),
-      GenericRowBuilder(4)
-        .setField(0, 1000L)
-        .setField(1, 25L)
-        .setField(2, 605)
-        .setField(3, BinaryString.fromString("addr5"))
-        .builder()
+      createGenericRow(600L, 21L, 601, BinaryString.fromString("addr1")),
+      createGenericRow(700L, 22L, 602, BinaryString.fromString("addr2")),
+      createGenericRow(800L, 23L, 603, BinaryString.fromString("addr3")),
+      createGenericRow(900L, 24L, 604, BinaryString.fromString("addr4")),
+      createGenericRow(1000L, 25L, 605, BinaryString.fromString("addr5"))
     )
     assertThat(flussRows.length).isEqualTo(5)
     assertThat(flussRows).containsAll(expectRows.toIterable.asJava)
@@ -144,93 +119,41 @@ class SparkWriteTest extends FlussSparkTestBase {
 
     val flussRows1 = getRowsWithChangeType(table, Some(logScanner))
     val expectRows1 = Array(
-      (
-        "+I",
-        GenericRowBuilder(4)
-          .setField(0, 600L)
-          .setField(1, 21L)
-          .setField(2, 601)
-          .setField(3, BinaryString.fromString("addr1"))
-          .builder()),
-      (
-        "+I",
-        GenericRowBuilder(4)
-          .setField(0, 700L)
-          .setField(1, 22L)
-          .setField(2, 602)
-          .setField(3, BinaryString.fromString("addr2"))
-          .builder()),
-      (
-        "+I",
-        GenericRowBuilder(4)
-          .setField(0, 800L)
-          .setField(1, 23L)
-          .setField(2, 603)
-          .setField(3, BinaryString.fromString("addr3"))
-          .builder()),
-      (
-        "+I",
-        GenericRowBuilder(4)
-          .setField(0, 900L)
-          .setField(1, 24L)
-          .setField(2, 604)
-          .setField(3, BinaryString.fromString("addr4"))
-          .builder()),
-      (
-        "+I",
-        GenericRowBuilder(4)
-          .setField(0, 1000L)
-          .setField(1, 25L)
-          .setField(2, 605)
-          .setField(3, BinaryString.fromString("addr5"))
-          .builder())
+      ("+I", createGenericRow(600L, 21L, 601, BinaryString.fromString("addr1"))),
+      ("+I", createGenericRow(700L, 22L, 602, BinaryString.fromString("addr2"))),
+      ("+I", createGenericRow(800L, 23L, 603, BinaryString.fromString("addr3"))),
+      ("+I", createGenericRow(900L, 24L, 604, BinaryString.fromString("addr4"))),
+      ("+I", createGenericRow(1000L, 25L, 605, BinaryString.fromString("addr5")))
     )
     assertThat(flussRows1.length).isEqualTo(5)
     assertThat(flussRows1).containsAll(expectRows1.toIterable.asJava)
 
     // update data
     sql(s"""
-           |INSERT INTO $DEFAULT_DATABASE.$pkTableName VALUES
-           |(800L, 230L, 603, "addr3"), (900L, 240L, 604, "addr4")
+           |INSERT INTO $DEFAULT_DATABASE.$pkTableName
+           |VALUES (800L, 230L, 603, "addr3")
            |""".stripMargin)
 
     val flussRows2 = getRowsWithChangeType(table, Some(logScanner))
     val expectRows2 = Array(
-      (
-        "-U",
-        GenericRowBuilder(4)
-          .setField(0, 800L)
-          .setField(1, 23L)
-          .setField(2, 603)
-          .setField(3, BinaryString.fromString("addr3"))
-          .builder()),
-      (
-        "-U",
-        GenericRowBuilder(4)
-          .setField(0, 900L)
-          .setField(1, 24L)
-          .setField(2, 604)
-          .setField(3, BinaryString.fromString("addr4"))
-          .builder()),
-      (
-        "+U",
-        GenericRowBuilder(4)
-          .setField(0, 800L)
-          .setField(1, 230L)
-          .setField(2, 603)
-          .setField(3, BinaryString.fromString("addr3"))
-          .builder()),
-      (
-        "+U",
-        GenericRowBuilder(4)
-          .setField(0, 900L)
-          .setField(1, 240L)
-          .setField(2, 604)
-          .setField(3, BinaryString.fromString("addr4"))
-          .builder())
+      ("-U", createGenericRow(800L, 23L, 603, BinaryString.fromString("addr3"))),
+      ("+U", createGenericRow(800L, 230L, 603, BinaryString.fromString("addr3")))
     )
-    assertThat(flussRows2.length).isEqualTo(4)
-    assertThat(flussRows2).containsAll(expectRows2.toIterable.asJava)
+    assertThat(flussRows2.length).isEqualTo(2)
+    assertThat(flussRows2).containsExactlyElementsOf(expectRows2.toIterable.asJava)
+
+    sql(s"""
+           |INSERT INTO $DEFAULT_DATABASE.$pkTableName
+           |VALUES (900L, 240L, 604, "addr4")
+           |""".stripMargin)
+
+    val flussRows3 = getRowsWithChangeType(table, Some(logScanner))
+    val expectRows3 = Array(
+      ("-U", createGenericRow(900L, 24L, 604, BinaryString.fromString("addr4"))),
+      ("+U", createGenericRow(900L, 240L, 604, BinaryString.fromString("addr4")))
+    )
+    assertThat(flussRows3.length).isEqualTo(2)
+    assertThat(flussRows3).containsExactlyElementsOf(expectRows3.toIterable.asJava)
   }
 }
 

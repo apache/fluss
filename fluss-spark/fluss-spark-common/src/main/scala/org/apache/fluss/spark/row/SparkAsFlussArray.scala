@@ -19,12 +19,13 @@ package org.apache.fluss.spark.row
 
 import org.apache.fluss.row.{BinaryString, Decimal, InternalArray => FlussInternalArray, InternalRow => FlussInternalRow, TimestampLtz, TimestampNtz}
 
-import org.apache.spark.sql.catalyst.util.{ArrayData => SparkArrayData, SparkDateTimeUtils}
+import org.apache.spark.sql.catalyst.util.{ArrayData => SparkArrayData}
 import org.apache.spark.sql.types.{ArrayType => SparkArrayType, DataType => SparkDataType, StructType}
 
 /** Wraps a Spark [[SparkArrayData]] as a Fluss [[FlussInternalArray]]. */
 class SparkAsFlussArray(arrayData: SparkArrayData, elementType: SparkDataType)
-  extends FlussInternalArray {
+  extends FlussInternalArray
+  with Serializable {
 
   /** Returns the number of elements in this array. */
   override def size(): Int = arrayData.numElements()
@@ -102,7 +103,7 @@ class SparkAsFlussArray(arrayData: SparkArrayData, elementType: SparkDataType)
    * representation (see [[TimestampNtz]]).
    */
   override def getTimestampNtz(pos: Int, precision: Int): TimestampNtz =
-    TimestampNtz.fromMillis(SparkDateTimeUtils.microsToMillis(arrayData.getLong(pos)))
+    TimestampNtz.fromMicros(arrayData.getLong(pos))
 
   /**
    * Returns the timestamp value at the given position.

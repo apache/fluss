@@ -47,6 +47,12 @@ public class DateTimeUtils {
     /** The julian date of the epoch, 1970-01-01. */
     public static final int EPOCH_JULIAN = 2440588;
 
+    /** The number of microseconds in a millisecond. */
+    public static final long MICROS_PER_MILLIS = 1000L;
+
+    /** The number of nanoseconds in a microsecond. */
+    public static final long NANOS_PER_MICROS = 1000L;
+
     /** The number of milliseconds in a second. */
     private static final long MILLIS_PER_SECOND = 1000L;
 

@@ -23,6 +23,8 @@ import org.apache.fluss.types.LocalZonedTimestampType;
 import java.io.Serializable;
 import java.time.Instant;
 
+import static org.apache.fluss.utils.DateTimeUtils.MICROS_PER_MILLIS;
+import static org.apache.fluss.utils.DateTimeUtils.NANOS_PER_MICROS;
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 
 /**
@@ -38,10 +40,6 @@ import static org.apache.fluss.utils.Preconditions.checkArgument;
 public class TimestampLtz implements Comparable<TimestampLtz>, Serializable {
 
     private static final long serialVersionUID = 1L;
-
-    public static final long MICROS_PER_MILLIS = 1000L;
-
-    public static final long NANOS_PER_MICROS = 1000L;
 
     // this field holds the integral second and the milli-of-second.
     private final long millisecond;

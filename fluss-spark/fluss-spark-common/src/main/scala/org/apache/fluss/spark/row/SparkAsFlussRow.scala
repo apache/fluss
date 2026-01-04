@@ -20,7 +20,6 @@ package org.apache.fluss.spark.row
 import org.apache.fluss.row.{BinaryString, Decimal, InternalRow => FlussInternalRow, TimestampLtz, TimestampNtz}
 
 import org.apache.spark.sql.catalyst.{InternalRow => SparkInternalRow}
-import org.apache.spark.sql.catalyst.util.SparkDateTimeUtils
 import org.apache.spark.sql.types.StructType
 
 /** Wraps a Spark [[SparkInternalRow]] as a Fluss [[FlussInternalRow]]. */
@@ -100,7 +99,7 @@ class SparkAsFlussRow(schema: StructType) extends FlussInternalRow with Serializ
    * representation (see [[TimestampNtz]]).
    */
   override def getTimestampNtz(pos: Int, precision: Int): TimestampNtz =
-    TimestampNtz.fromMillis(SparkDateTimeUtils.microsToMillis(row.getLong(pos)))
+    TimestampNtz.fromMicros(row.getLong(pos))
 
   /**
    * Returns the timestamp value at the given position.
