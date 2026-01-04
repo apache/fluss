@@ -157,24 +157,26 @@ SELECT * FROM paimon_catalog.fluss.enriched_orders$snapshots;
 When integrating with Paimon, Fluss automatically converts between Fluss data types and Paimon data types.  
 The following table shows the mapping between [Fluss data types](table-design/data-types.md) and Paimon data types:
 
-| Fluss Data Type               | Paimon Data Type              |
-|-------------------------------|-------------------------------|
-| BOOLEAN                       | BOOLEAN                       |
-| TINYINT                       | TINYINT                       |
-| SMALLINT                      | SMALLINT                      |
-| INT                           | INT                           |
-| BIGINT                        | BIGINT                        |
-| FLOAT                         | FLOAT                         |
-| DOUBLE                        | DOUBLE                        |
-| DECIMAL                       | DECIMAL                       |
-| STRING                        | STRING                        |
-| CHAR                          | CHAR                          |
-| DATE                          | DATE                          |
-| TIME                          | TIME                          |
-| TIMESTAMP                     | TIMESTAMP                     |
-| TIMESTAMP WITH LOCAL TIMEZONE | TIMESTAMP WITH LOCAL TIMEZONE |
-| BINARY                        | BINARY                        |
-| BYTES                         | BYTES                         |
+| Fluss Data Type                                                 | Paimon Data Type                                                |
+|-----------------------------------------------------------------|-----------------------------------------------------------------|
+| BOOLEAN                                                         | BOOLEAN                                                         |
+| TINYINT                                                         | TINYINT                                                         |
+| SMALLINT                                                        | SMALLINT                                                        |
+| INT                                                             | INT                                                             |
+| BIGINT                                                          | BIGINT                                                          |
+| FLOAT                                                           | FLOAT                                                           |
+| DOUBLE                                                          | DOUBLE                                                          |
+| DECIMAL                                                         | DECIMAL                                                         |
+| STRING                                                          | STRING                                                          |
+| CHAR                                                            | CHAR                                                            |
+| DATE                                                            | DATE                                                            |
+| TIME                                                            | TIME                                                            |
+| TIMESTAMP                                                       | TIMESTAMP                                                       |
+| TIMESTAMP WITH LOCAL TIMEZONE                                   | TIMESTAMP WITH LOCAL TIMEZONE                                   |
+| BINARY                                                          | BINARY                                                          |
+| BYTES                                                           | BYTES                                                           |
+| ARRAY\<t\>                                                      | ARRAY\<t\>                                                      |
+| ROW\<n0 t0, n1 t1, ...\><br/>ROW\<n0 t0 'd0', n1 t1 'd1', ...\> | ROW\<n0 t0, n1 t1, ...\><br/>ROW\<n0 t0 'd0', n1 t1 'd1', ...\> |
 
 ## Snapshot Metadata
 
