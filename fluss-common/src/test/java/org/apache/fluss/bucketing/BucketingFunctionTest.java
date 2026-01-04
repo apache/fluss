@@ -104,7 +104,7 @@ class BucketingFunctionTest {
     }
 
     @Test
-    public void testIcebergBucketing() {
+    void testIcebergBucketing() {
         BucketingFunction icebergBucketing = BucketingFunction.of(DataLakeFormat.ICEBERG);
 
         assertThat(icebergBucketing.bucketing(new byte[] {(byte) 0, (byte) 10}, 7)).isEqualTo(3);
