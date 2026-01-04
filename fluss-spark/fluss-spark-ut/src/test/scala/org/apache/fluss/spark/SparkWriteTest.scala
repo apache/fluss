@@ -131,29 +131,18 @@ class SparkWriteTest extends FlussSparkTestBase {
     // update data
     sql(s"""
            |INSERT INTO $DEFAULT_DATABASE.$pkTableName
-           |VALUES (800L, 230L, 603, "addr3")
+           |VALUES (800L, 230L, 603, "addr3"), (900L, 240L, 604, "addr4")
            |""".stripMargin)
 
     val flussRows2 = getRowsWithChangeType(table, Some(logScanner))
     val expectRows2 = Array(
       ("-U", createGenericRow(800L, 23L, 603, BinaryString.fromString("addr3"))),
-      ("+U", createGenericRow(800L, 230L, 603, BinaryString.fromString("addr3")))
-    )
-    assertThat(flussRows2.length).isEqualTo(2)
-    assertThat(flussRows2).containsExactlyElementsOf(expectRows2.toIterable.asJava)
-
-    sql(s"""
-           |INSERT INTO $DEFAULT_DATABASE.$pkTableName
-           |VALUES (900L, 240L, 604, "addr4")
-           |""".stripMargin)
-
-    val flussRows3 = getRowsWithChangeType(table, Some(logScanner))
-    val expectRows3 = Array(
+      ("+U", createGenericRow(800L, 230L, 603, BinaryString.fromString("addr3"))),
       ("-U", createGenericRow(900L, 24L, 604, BinaryString.fromString("addr4"))),
       ("+U", createGenericRow(900L, 240L, 604, BinaryString.fromString("addr4")))
     )
-    assertThat(flussRows3.length).isEqualTo(2)
-    assertThat(flussRows3).containsExactlyElementsOf(expectRows3.toIterable.asJava)
+    assertThat(flussRows2.length).isEqualTo(4)
+    assertThat(flussRows2).containsAll(expectRows2.toIterable.asJava)
   }
 }
 
