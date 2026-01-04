@@ -67,11 +67,12 @@ public interface RemoteLogStorage extends Closeable {
     }
 
     /**
-     * Returns the remote log directory.
+     * Returns the default remote log directory, configured via {@link
+     * org.apache.fluss.config.ConfigOptions#REMOTE_DATA_DIR}.
      *
      * @return the remote log directory.
      */
-    FsPath getRemoteLogDir();
+    FsPath getDefaultRemoteLogDir();
 
     /**
      * Copies the given {@link LogSegmentFiles} provided for the given {@link RemoteLogSegment}.
@@ -159,6 +160,7 @@ public interface RemoteLogStorage extends Closeable {
      * @throws RemoteStorageException if there are any errors while delete remote log data and
      *     metadata.
      */
-    void deleteTableBucket(PhysicalTablePath physicalTablePath, TableBucket tableBucket)
+    void deleteTableBucket(
+            FsPath remoteLogDir, PhysicalTablePath physicalTablePath, TableBucket tableBucket)
             throws RemoteStorageException;
 }

@@ -30,12 +30,28 @@ import org.junit.jupiter.api.io.TempDir;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Collections;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link ConfigurationParserUtils}. */
 public class ConfigurationParserUtilsTest {
+
+    @Test
+    void test(@TempDir Path tempFolder) throws Exception {
+        Path yamlFile = tempFolder.resolve("server.yaml");
+        Files.write(yamlFile, Collections.singleton("remote.data.dir:path"));
+        String confDir = tempFolder.toAbsolutePath().toString();
+
+        final String[] args = {"--configDir", confDir};
+        Configuration configuration =
+                ConfigurationParserUtils.loadCommonConfiguration(
+                        args, ConfigurationParserUtilsTest.class.getSimpleName());
+
+        List<String> strings = configuration.get(ConfigOptions.REMOTE_DATA_DIRS);
+        System.out.println(strings);
+    }
 
     @Test
     void testLoadCommonConfiguration(@TempDir Path tempFolder) throws Exception {

@@ -20,6 +20,7 @@ package org.apache.fluss.server;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.KvStorageException;
 import org.apache.fluss.exception.LogStorageException;
+import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.exception.SchemaNotExistException;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.SchemaInfo;
@@ -29,6 +30,7 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.kv.KvManager;
 import org.apache.fluss.server.log.LogManager;
 import org.apache.fluss.server.zk.ZooKeeperClient;
+import org.apache.fluss.server.zk.data.PartitionRegistration;
 import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.FlussPaths;
@@ -200,6 +202,26 @@ public abstract class TabletManagerBase {
     // TODO: we should support get table info from local properties file instead of from zk
     public static TableInfo getTableInfo(ZooKeeperClient zkClient, TablePath tablePath)
             throws Exception {
+        SchemaInfo schemaInfo = getSchemaInfo(zkClient, tablePath);
+
+        TableRegistration tableRegistration = getTableRegistration(zkClient, tablePath);
+
+        return tableRegistration.toTableInfo(tablePath, schemaInfo);
+    }
+
+    public static TableRegistration getTableRegistration(
+            ZooKeeperClient zkClient, TablePath tablePath) throws Exception {
+        return zkClient.getTable(tablePath)
+                .orElseThrow(
+                        () ->
+                                new LogStorageException(
+                                        String.format(
+                                                "Failed to load table '%s': table info not found in zookeeper metadata.",
+                                                tablePath)));
+    }
+
+    public static SchemaInfo getSchemaInfo(ZooKeeperClient zkClient, TablePath tablePath)
+            throws Exception {
         int schemaId = zkClient.getCurrentSchemaId(tablePath);
         Optional<SchemaInfo> schemaInfoOpt = zkClient.getSchemaById(tablePath, schemaId);
         SchemaInfo schemaInfo;
@@ -211,17 +233,20 @@ public abstract class TabletManagerBase {
         } else {
             schemaInfo = schemaInfoOpt.get();
         }
+        return schemaInfo;
+    }
 
-        TableRegistration tableRegistration =
-                zkClient.getTable(tablePath)
-                        .orElseThrow(
-                                () ->
-                                        new LogStorageException(
-                                                String.format(
-                                                        "Failed to load table '%s': table info not found in zookeeper metadata.",
-                                                        tablePath)));
-
-        return tableRegistration.toTableInfo(tablePath, schemaInfo);
+    public static PartitionRegistration getPartitionRegistration(
+            ZooKeeperClient zkClient, PhysicalTablePath physicalTablePath) throws Exception {
+        return zkClient.getPartition(
+                        physicalTablePath.getTablePath(), physicalTablePath.getPartitionName())
+                .orElseThrow(
+                        () ->
+                                new PartitionNotExistException(
+                                        String.format(
+                                                "Failed to load partition '%s' for table %s: partition info not found in zookeeper metadata.",
+                                                physicalTablePath.getPartitionName(),
+                                                physicalTablePath.getTablePath())));
     }
 
     /** Create a tablet directory in the given dir. */

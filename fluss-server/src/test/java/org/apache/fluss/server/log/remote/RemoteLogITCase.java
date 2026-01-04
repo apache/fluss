@@ -117,9 +117,7 @@ public class RemoteLogITCase {
         // test create: verify remote log created
         FsPath fsPath =
                 FlussPaths.remoteLogTabletDir(
-                        tabletServer.getReplicaManager().getRemoteLogManager().remoteLogDir(),
-                        PhysicalTablePath.of(DATA1_TABLE_PATH),
-                        tb);
+                        manifest.getRemoteLogDir(), PhysicalTablePath.of(DATA1_TABLE_PATH), tb);
         FileSystem fileSystem = fsPath.getFileSystem();
         assertThat(fileSystem.exists(fsPath)).isTrue();
         assertThat(fileSystem.listStatus(fsPath).length).isGreaterThan(0);
