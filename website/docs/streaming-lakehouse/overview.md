@@ -32,7 +32,7 @@ To build a Streaming Lakehouse, Fluss maintains a tiering service that compacts 
 The data in the Fluss cluster, stored in streaming Arrow format, is optimized for low-latency read and write operations, making it ideal for short-term data storage. In contrast, the compacted data in the Lakehouse, stored in Parquet format with higher compression, is optimized for efficient analytics and long-term storage.
 The data in the Fluss cluster serves as a real-time data layer, retaining days of data with sub-second-level freshness. In contrast, the data in the Lakehouse serves as a historical data layer, retaining months of data with minute-level freshness.
 
-![streamhouse](../assets/streamhouse.png)
+![streamhouse](assets/streamhouse.png)
 
 The core idea of Streaming Lakehouse is shared data and shared metadata between stream and Lakehouse, avoiding data duplication and metadata inconsistency.
 Some powerful features it provides are:
@@ -43,4 +43,4 @@ Some powerful features it provides are:
 - **Analytical Streams**: The union reads help data streams to have the powerful analytics capabilities. This reduces complexity when developing streaming applications, simplifies debugging, and allows for immediate access to live data insights.
 - **Connect to Lakehouse Ecosystem**: Fluss keeps the table metadata in sync with data lake catalogs while compacting data into Lakehouse. As a result, external engines like Spark, StarRocks, Flink, and Trino can read the data directly. They simply connect to the data lake catalog.
 
-Currently, Fluss supports [Paimon](integrate-data-lakes/paimon.md), [Iceberg](integrate-data-lakes/iceberg.md), and [Lance](integrate-data-lakes/lance.md) as Lakehouse Storage, more kinds of data lake formats are on the roadmap.
+Currently, Fluss supports [Paimon](streaming-lakehouse/integrate-data-lakes/paimon.md), [Iceberg](streaming-lakehouse/integrate-data-lakes/iceberg.md), and [Lance](streaming-lakehouse/integrate-data-lakes/lance.md) as Lakehouse Storage, more kinds of data lake formats are on the roadmap.

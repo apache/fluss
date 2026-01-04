@@ -6,7 +6,7 @@ sidebar_position: 1
 # Architecture
 A Fluss cluster consists of two main processes: the **CoordinatorServer** and the **TabletServer**.
 
-![Fluss Architecture](../assets/architecture.png)
+![Fluss Architecture](assets/architecture.png)
 
 ## CoordinatorServer
 The **CoordinatorServer** serves as the central control and management component of the cluster. It is responsible for maintaining metadata, managing tablet allocation, listing nodes, and handling permissions.
