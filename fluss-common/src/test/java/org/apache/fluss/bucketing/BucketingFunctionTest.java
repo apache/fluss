@@ -58,7 +58,7 @@ class BucketingFunctionTest {
     }
 
     @Test
-    public void testPaimonBucketing() {
+    void testPaimonBucketing() {
         BucketingFunction paimonBucketing = BucketingFunction.of(DataLakeFormat.PAIMON);
 
         assertThat(paimonBucketing.bucketing(new byte[] {(byte) 0, (byte) 10}, 7)).isEqualTo(1);
