@@ -26,6 +26,7 @@ import java.time.LocalDateTime;
 import java.time.LocalTime;
 
 import static org.apache.fluss.utils.DateTimeUtils.MICROS_PER_MILLIS;
+import static org.apache.fluss.utils.DateTimeUtils.NANOS_PER_MICROS;
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 
 /**
@@ -80,7 +81,9 @@ public class TimestampNtz implements Comparable<TimestampNtz>, Serializable {
      *     number is the number of microseconds before {@code 1970-01-01 00:00:00}
      */
     public static TimestampNtz fromMicros(long microseconds) {
-        return new TimestampNtz(Math.floorDiv(microseconds, MICROS_PER_MILLIS), 0);
+        long mills = Math.floorDiv(microseconds, MICROS_PER_MILLIS);
+        long nanos = (microseconds - mills * MICROS_PER_MILLIS) * NANOS_PER_MICROS;
+        return TimestampNtz.fromMillis(mills, (int) nanos);
     }
 
     /**
