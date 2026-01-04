@@ -33,7 +33,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
  * consistency
  */
-public class BucketingFunctionTest {
+class BucketingFunctionTest {
     @Test
     public void testDefaultBucketing() {
         BucketingFunction defaultBucketing = BucketingFunction.of(null);
