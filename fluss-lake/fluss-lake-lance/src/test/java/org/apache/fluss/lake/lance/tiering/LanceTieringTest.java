@@ -37,6 +37,7 @@ import org.apache.fluss.record.ChangeType;
 import org.apache.fluss.record.GenericRecord;
 import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.row.BinaryString;
+import org.apache.fluss.row.GenericArray;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.utils.types.Tuple2;
@@ -48,6 +49,7 @@ import org.apache.arrow.vector.VarCharVector;
 import org.apache.arrow.vector.VectorSchemaRoot;
 import org.apache.arrow.vector.ipc.ArrowReader;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
@@ -321,5 +323,403 @@ class LanceTieringTest {
                 config.getDatasetUri(), LanceArrowUtils.toArrowSchema(schema.getRowType()), params);
 
         return schema;
+    }
+
+    @Test
+    void testArrayTypeInt() throws Exception {
+        TablePath tablePath = TablePath.of("lance", "arrayTable");
+        Map<String, String> customProperties = new HashMap<>();
+        customProperties.put("lance.batch_size", "256");
+        LanceConfig config =
+                LanceConfig.from(
+                        configuration.toMap(),
+                        customProperties,
+                        tablePath.getDatabaseName(),
+                        tablePath.getTableName());
+
+        // Create schema with ARRAY<INT> column
+        List<Schema.Column> columns = new ArrayList<>();
+        columns.add(new Schema.Column("id", DataTypes.INT()));
+        columns.add(new Schema.Column("int_array", DataTypes.ARRAY(DataTypes.INT())));
+        Schema schema = Schema.newBuilder().fromColumns(columns).build();
+
+        WriteParams params = LanceConfig.genWriteParamsFromConfig(config);
+        LanceDatasetAdapter.createDataset(
+                config.getDatasetUri(), LanceArrowUtils.toArrowSchema(schema.getRowType()), params);
+
+        TableDescriptor descriptor =
+                TableDescriptor.builder()
+                        .schema(schema)
+                        .distributedBy(1)
+                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
+                        .customProperties(customProperties)
+                        .build();
+        TableInfo tableInfo = TableInfo.of(tablePath, 0, 1, descriptor, 1L, 1L);
+
+        List<LanceWriteResult> lanceWriteResults = new ArrayList<>();
+        Map<TableBucket, Long> tableBucketOffsets = new HashMap<>();
+
+        // Write data with arrays
+        try (LakeWriter<LanceWriteResult> lakeWriter =
+                createLakeWriter(tablePath, 0, null, tableInfo)) {
+            List<LogRecord> logRecords = new ArrayList<>();
+            for (int i = 0; i < 10; i++) {
+                GenericRow row = new GenericRow(2);
+                row.setField(0, i);
+                // Create array with values [i, i+1, i+2]
+                row.setField(1, new GenericArray(new int[] {i, i + 1, i + 2}));
+                logRecords.add(
+                        new GenericRecord(
+                                i, System.currentTimeMillis(), ChangeType.APPEND_ONLY, row));
+            }
+            tableBucketOffsets.put(new TableBucket(0, null, 0), 10L);
+            for (LogRecord logRecord : logRecords) {
+                lakeWriter.write(logRecord);
+            }
+            lanceWriteResults.add(lakeWriter.complete());
+        }
+
+        // Commit data
+        try (LakeCommitter<LanceWriteResult, LanceCommittable> lakeCommitter =
+                createLakeCommitter(tablePath, tableInfo)) {
+            LanceCommittable lanceCommittable = lakeCommitter.toCommittable(lanceWriteResults);
+            long snapshot =
+                    lakeCommitter.commit(
+                            lanceCommittable, toBucketOffsetsProperty(tableBucketOffsets));
+            assertThat(snapshot).isEqualTo(2);
+        }
+
+        // Verify dataset was created successfully
+        try (Dataset dataset =
+                Dataset.open(
+                        new RootAllocator(),
+                        config.getDatasetUri(),
+                        LanceConfig.genReadOptionFromConfig(config))) {
+            assertThat(dataset).isNotNull();
+        }
+    }
+
+    @Test
+    void testArrayTypeString() throws Exception {
+        TablePath tablePath = TablePath.of("lance", "stringArrayTable");
+        Map<String, String> customProperties = new HashMap<>();
+        customProperties.put("lance.batch_size", "256");
+        LanceConfig config =
+                LanceConfig.from(
+                        configuration.toMap(),
+                        customProperties,
+                        tablePath.getDatabaseName(),
+                        tablePath.getTableName());
+
+        // Create schema with ARRAY<STRING> column
+        List<Schema.Column> columns = new ArrayList<>();
+        columns.add(new Schema.Column("id", DataTypes.INT()));
+        columns.add(new Schema.Column("string_array", DataTypes.ARRAY(DataTypes.STRING())));
+        Schema schema = Schema.newBuilder().fromColumns(columns).build();
+
+        WriteParams params = LanceConfig.genWriteParamsFromConfig(config);
+        LanceDatasetAdapter.createDataset(
+                config.getDatasetUri(), LanceArrowUtils.toArrowSchema(schema.getRowType()), params);
+
+        TableDescriptor descriptor =
+                TableDescriptor.builder()
+                        .schema(schema)
+                        .distributedBy(1)
+                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
+                        .customProperties(customProperties)
+                        .build();
+        TableInfo tableInfo = TableInfo.of(tablePath, 0, 1, descriptor, 1L, 1L);
+
+        List<LanceWriteResult> lanceWriteResults = new ArrayList<>();
+        Map<TableBucket, Long> tableBucketOffsets = new HashMap<>();
+
+        // Write data with string arrays
+        try (LakeWriter<LanceWriteResult> lakeWriter =
+                createLakeWriter(tablePath, 0, null, tableInfo)) {
+            List<LogRecord> logRecords = new ArrayList<>();
+            for (int i = 0; i < 10; i++) {
+                GenericRow row = new GenericRow(2);
+                row.setField(0, i);
+                row.setField(
+                        1,
+                        new GenericArray(
+                                new BinaryString[] {
+                                    BinaryString.fromString("str_" + i),
+                                    BinaryString.fromString("str_" + (i + 1))
+                                }));
+                logRecords.add(
+                        new GenericRecord(
+                                i, System.currentTimeMillis(), ChangeType.APPEND_ONLY, row));
+            }
+            tableBucketOffsets.put(new TableBucket(0, null, 0), 10L);
+            for (LogRecord logRecord : logRecords) {
+                lakeWriter.write(logRecord);
+            }
+            lanceWriteResults.add(lakeWriter.complete());
+        }
+
+        // Commit data
+        try (LakeCommitter<LanceWriteResult, LanceCommittable> lakeCommitter =
+                createLakeCommitter(tablePath, tableInfo)) {
+            LanceCommittable lanceCommittable = lakeCommitter.toCommittable(lanceWriteResults);
+            long snapshot =
+                    lakeCommitter.commit(
+                            lanceCommittable, toBucketOffsetsProperty(tableBucketOffsets));
+            assertThat(snapshot).isEqualTo(2);
+        }
+
+        // Verify dataset was created successfully
+        try (Dataset dataset =
+                Dataset.open(
+                        new RootAllocator(),
+                        config.getDatasetUri(),
+                        LanceConfig.genReadOptionFromConfig(config))) {
+            assertThat(dataset).isNotNull();
+        }
+    }
+
+    @Test
+    void testArrayTypeNullable() throws Exception {
+        TablePath tablePath = TablePath.of("lance", "nullableArrayTable");
+        Map<String, String> customProperties = new HashMap<>();
+        customProperties.put("lance.batch_size", "256");
+        LanceConfig config =
+                LanceConfig.from(
+                        configuration.toMap(),
+                        customProperties,
+                        tablePath.getDatabaseName(),
+                        tablePath.getTableName());
+
+        // Create schema with ARRAY<INT> column (elements can be null using Object[] arrays)
+        List<Schema.Column> columns = new ArrayList<>();
+        columns.add(new Schema.Column("id", DataTypes.INT()));
+        columns.add(new Schema.Column("nullable_array", DataTypes.ARRAY(DataTypes.INT())));
+        Schema schema = Schema.newBuilder().fromColumns(columns).build();
+
+        WriteParams params = LanceConfig.genWriteParamsFromConfig(config);
+        LanceDatasetAdapter.createDataset(
+                config.getDatasetUri(), LanceArrowUtils.toArrowSchema(schema.getRowType()), params);
+
+        TableDescriptor descriptor =
+                TableDescriptor.builder()
+                        .schema(schema)
+                        .distributedBy(1)
+                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
+                        .customProperties(customProperties)
+                        .build();
+        TableInfo tableInfo = TableInfo.of(tablePath, 0, 1, descriptor, 1L, 1L);
+
+        List<LanceWriteResult> lanceWriteResults = new ArrayList<>();
+        Map<TableBucket, Long> tableBucketOffsets = new HashMap<>();
+
+        // Write data with null arrays and null elements
+        try (LakeWriter<LanceWriteResult> lakeWriter =
+                createLakeWriter(tablePath, 0, null, tableInfo)) {
+            List<LogRecord> logRecords = new ArrayList<>();
+
+            // Row with null array
+            GenericRow row1 = new GenericRow(2);
+            row1.setField(0, 0);
+            row1.setField(1, null);
+            logRecords.add(
+                    new GenericRecord(0, System.currentTimeMillis(), ChangeType.APPEND_ONLY, row1));
+
+            // Row with empty array
+            GenericRow row2 = new GenericRow(2);
+            row2.setField(0, 1);
+            row2.setField(1, new GenericArray(new Integer[] {}));
+            logRecords.add(
+                    new GenericRecord(1, System.currentTimeMillis(), ChangeType.APPEND_ONLY, row2));
+
+            // Row with array containing null elements
+            GenericRow row3 = new GenericRow(2);
+            row3.setField(0, 2);
+            row3.setField(1, new GenericArray(new Integer[] {1, null, 3}));
+            logRecords.add(
+                    new GenericRecord(2, System.currentTimeMillis(), ChangeType.APPEND_ONLY, row3));
+
+            tableBucketOffsets.put(new TableBucket(0, null, 0), 3L);
+            for (LogRecord logRecord : logRecords) {
+                lakeWriter.write(logRecord);
+            }
+            lanceWriteResults.add(lakeWriter.complete());
+        }
+
+        // Commit data
+        try (LakeCommitter<LanceWriteResult, LanceCommittable> lakeCommitter =
+                createLakeCommitter(tablePath, tableInfo)) {
+            LanceCommittable lanceCommittable = lakeCommitter.toCommittable(lanceWriteResults);
+            long snapshot =
+                    lakeCommitter.commit(
+                            lanceCommittable, toBucketOffsetsProperty(tableBucketOffsets));
+            assertThat(snapshot).isEqualTo(2);
+        }
+
+        // Verify dataset was created successfully
+        try (Dataset dataset =
+                Dataset.open(
+                        new RootAllocator(),
+                        config.getDatasetUri(),
+                        LanceConfig.genReadOptionFromConfig(config))) {
+            assertThat(dataset).isNotNull();
+        }
+    }
+
+    @Test
+    void testNestedArrayType() throws Exception {
+        TablePath tablePath = TablePath.of("lance", "nestedArrayTable");
+        Map<String, String> customProperties = new HashMap<>();
+        customProperties.put("lance.batch_size", "256");
+        LanceConfig config =
+                LanceConfig.from(
+                        configuration.toMap(),
+                        customProperties,
+                        tablePath.getDatabaseName(),
+                        tablePath.getTableName());
+
+        // Create schema with ARRAY<ARRAY<INT>> column
+        List<Schema.Column> columns = new ArrayList<>();
+        columns.add(new Schema.Column("id", DataTypes.INT()));
+        columns.add(
+                new Schema.Column(
+                        "nested_array", DataTypes.ARRAY(DataTypes.ARRAY(DataTypes.INT()))));
+        Schema schema = Schema.newBuilder().fromColumns(columns).build();
+
+        WriteParams params = LanceConfig.genWriteParamsFromConfig(config);
+        LanceDatasetAdapter.createDataset(
+                config.getDatasetUri(), LanceArrowUtils.toArrowSchema(schema.getRowType()), params);
+
+        TableDescriptor descriptor =
+                TableDescriptor.builder()
+                        .schema(schema)
+                        .distributedBy(1)
+                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
+                        .customProperties(customProperties)
+                        .build();
+        TableInfo tableInfo = TableInfo.of(tablePath, 0, 1, descriptor, 1L, 1L);
+
+        List<LanceWriteResult> lanceWriteResults = new ArrayList<>();
+        Map<TableBucket, Long> tableBucketOffsets = new HashMap<>();
+
+        // Write data with nested arrays
+        try (LakeWriter<LanceWriteResult> lakeWriter =
+                createLakeWriter(tablePath, 0, null, tableInfo)) {
+            List<LogRecord> logRecords = new ArrayList<>();
+            GenericRow row = new GenericRow(2);
+            row.setField(0, 0);
+
+            // Create nested array: [[1, 2], [3, 4, 5], [6]]
+            GenericArray inner1 = new GenericArray(new int[] {1, 2});
+            GenericArray inner2 = new GenericArray(new int[] {3, 4, 5});
+            GenericArray inner3 = new GenericArray(new int[] {6});
+            GenericArray outer = new GenericArray(new Object[] {inner1, inner2, inner3});
+            row.setField(1, outer);
+
+            logRecords.add(
+                    new GenericRecord(0, System.currentTimeMillis(), ChangeType.APPEND_ONLY, row));
+
+            tableBucketOffsets.put(new TableBucket(0, null, 0), 1L);
+            for (LogRecord logRecord : logRecords) {
+                lakeWriter.write(logRecord);
+            }
+            lanceWriteResults.add(lakeWriter.complete());
+        }
+
+        // Commit data
+        try (LakeCommitter<LanceWriteResult, LanceCommittable> lakeCommitter =
+                createLakeCommitter(tablePath, tableInfo)) {
+            LanceCommittable lanceCommittable = lakeCommitter.toCommittable(lanceWriteResults);
+            long snapshot =
+                    lakeCommitter.commit(
+                            lanceCommittable, toBucketOffsetsProperty(tableBucketOffsets));
+            assertThat(snapshot).isEqualTo(2);
+        }
+
+        // Verify dataset was created successfully
+        try (Dataset dataset =
+                Dataset.open(
+                        new RootAllocator(),
+                        config.getDatasetUri(),
+                        LanceConfig.genReadOptionFromConfig(config))) {
+            assertThat(dataset).isNotNull();
+        }
+    }
+
+    @Test
+    void testMultiplePrimitiveArrayTypes() throws Exception {
+        TablePath tablePath = TablePath.of("lance", "multiArrayTable");
+        Map<String, String> customProperties = new HashMap<>();
+        customProperties.put("lance.batch_size", "256");
+        LanceConfig config =
+                LanceConfig.from(
+                        configuration.toMap(),
+                        customProperties,
+                        tablePath.getDatabaseName(),
+                        tablePath.getTableName());
+
+        // Create schema with multiple array type columns
+        List<Schema.Column> columns = new ArrayList<>();
+        columns.add(new Schema.Column("int_array", DataTypes.ARRAY(DataTypes.INT())));
+        columns.add(new Schema.Column("bigint_array", DataTypes.ARRAY(DataTypes.BIGINT())));
+        columns.add(new Schema.Column("double_array", DataTypes.ARRAY(DataTypes.DOUBLE())));
+        columns.add(new Schema.Column("boolean_array", DataTypes.ARRAY(DataTypes.BOOLEAN())));
+        columns.add(new Schema.Column("date_array", DataTypes.ARRAY(DataTypes.DATE())));
+        Schema schema = Schema.newBuilder().fromColumns(columns).build();
+
+        WriteParams params = LanceConfig.genWriteParamsFromConfig(config);
+        LanceDatasetAdapter.createDataset(
+                config.getDatasetUri(), LanceArrowUtils.toArrowSchema(schema.getRowType()), params);
+
+        TableDescriptor descriptor =
+                TableDescriptor.builder()
+                        .schema(schema)
+                        .distributedBy(1)
+                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
+                        .customProperties(customProperties)
+                        .build();
+        TableInfo tableInfo = TableInfo.of(tablePath, 0, 1, descriptor, 1L, 1L);
+
+        List<LanceWriteResult> lanceWriteResults = new ArrayList<>();
+        Map<TableBucket, Long> tableBucketOffsets = new HashMap<>();
+
+        // Write data with multiple array types
+        try (LakeWriter<LanceWriteResult> lakeWriter =
+                createLakeWriter(tablePath, 0, null, tableInfo)) {
+            List<LogRecord> logRecords = new ArrayList<>();
+            GenericRow row = new GenericRow(5);
+            row.setField(0, new GenericArray(new int[] {1, 2, 3}));
+            row.setField(1, new GenericArray(new long[] {100L, 200L, 300L}));
+            row.setField(2, new GenericArray(new double[] {1.1, 2.2, 3.3}));
+            row.setField(3, new GenericArray(new boolean[] {true, false, true}));
+            row.setField(4, new GenericArray(new Integer[] {18993, 18994, 18995}));
+
+            logRecords.add(
+                    new GenericRecord(0, System.currentTimeMillis(), ChangeType.APPEND_ONLY, row));
+
+            tableBucketOffsets.put(new TableBucket(0, null, 0), 1L);
+            for (LogRecord logRecord : logRecords) {
+                lakeWriter.write(logRecord);
+            }
+            lanceWriteResults.add(lakeWriter.complete());
+        }
+
+        // Commit data
+        try (LakeCommitter<LanceWriteResult, LanceCommittable> lakeCommitter =
+                createLakeCommitter(tablePath, tableInfo)) {
+            LanceCommittable lanceCommittable = lakeCommitter.toCommittable(lanceWriteResults);
+            long snapshot =
+                    lakeCommitter.commit(
+                            lanceCommittable, toBucketOffsetsProperty(tableBucketOffsets));
+            assertThat(snapshot).isEqualTo(2);
+        }
+
+        // Verify dataset was created successfully
+        try (Dataset dataset =
+                Dataset.open(
+                        new RootAllocator(),
+                        config.getDatasetUri(),
+                        LanceConfig.genReadOptionFromConfig(config))) {
+            assertThat(dataset).isNotNull();
+        }
     }
 }

@@ -26,6 +26,8 @@ import org.apache.fluss.lake.lance.writers.ArrowDoubleWriter;
 import org.apache.fluss.lake.lance.writers.ArrowFieldWriter;
 import org.apache.fluss.lake.lance.writers.ArrowFloatWriter;
 import org.apache.fluss.lake.lance.writers.ArrowIntWriter;
+import org.apache.fluss.lake.lance.writers.ArrowListWriter;
+import org.apache.fluss.lake.lance.writers.ArrowNestedListWriter;
 import org.apache.fluss.lake.lance.writers.ArrowSmallIntWriter;
 import org.apache.fluss.lake.lance.writers.ArrowTimeWriter;
 import org.apache.fluss.lake.lance.writers.ArrowTimestampLtzWriter;
@@ -33,7 +35,24 @@ import org.apache.fluss.lake.lance.writers.ArrowTimestampNtzWriter;
 import org.apache.fluss.lake.lance.writers.ArrowTinyIntWriter;
 import org.apache.fluss.lake.lance.writers.ArrowVarBinaryWriter;
 import org.apache.fluss.lake.lance.writers.ArrowVarCharWriter;
+import org.apache.fluss.lake.lance.writers.array.ArrowArrayBigIntWriter;
+import org.apache.fluss.lake.lance.writers.array.ArrowArrayBinaryWriter;
+import org.apache.fluss.lake.lance.writers.array.ArrowArrayBooleanWriter;
+import org.apache.fluss.lake.lance.writers.array.ArrowArrayDateWriter;
+import org.apache.fluss.lake.lance.writers.array.ArrowArrayDecimalWriter;
+import org.apache.fluss.lake.lance.writers.array.ArrowArrayDoubleWriter;
+import org.apache.fluss.lake.lance.writers.array.ArrowArrayFloatWriter;
+import org.apache.fluss.lake.lance.writers.array.ArrowArrayIntWriter;
+import org.apache.fluss.lake.lance.writers.array.ArrowArraySmallIntWriter;
+import org.apache.fluss.lake.lance.writers.array.ArrowArrayTimeWriter;
+import org.apache.fluss.lake.lance.writers.array.ArrowArrayTimestampLtzWriter;
+import org.apache.fluss.lake.lance.writers.array.ArrowArrayTimestampNtzWriter;
+import org.apache.fluss.lake.lance.writers.array.ArrowArrayTinyIntWriter;
+import org.apache.fluss.lake.lance.writers.array.ArrowArrayVarBinaryWriter;
+import org.apache.fluss.lake.lance.writers.array.ArrowArrayVarCharWriter;
+import org.apache.fluss.row.InternalArray;
 import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.types.ArrayType;
 import org.apache.fluss.types.BigIntType;
 import org.apache.fluss.types.BinaryType;
 import org.apache.fluss.types.BooleanType;
@@ -72,6 +91,7 @@ import org.apache.arrow.vector.TinyIntVector;
 import org.apache.arrow.vector.ValueVector;
 import org.apache.arrow.vector.VarBinaryVector;
 import org.apache.arrow.vector.VarCharVector;
+import org.apache.arrow.vector.complex.ListVector;
 import org.apache.arrow.vector.types.DateUnit;
 import org.apache.arrow.vector.types.FloatingPointPrecision;
 import org.apache.arrow.vector.types.TimeUnit;
@@ -80,6 +100,7 @@ import org.apache.arrow.vector.types.pojo.Field;
 import org.apache.arrow.vector.types.pojo.FieldType;
 import org.apache.arrow.vector.types.pojo.Schema;
 
+import java.util.Collections;
 import java.util.List;
 import java.util.stream.Collectors;
 
@@ -100,7 +121,13 @@ public class LanceArrowUtils {
                         logicalType.isNullable(),
                         logicalType.accept(DataTypeToArrowTypeConverter.INSTANCE),
                         null);
-        return new Field(fieldName, fieldType, null);
+        List<Field> children = null;
+        if (logicalType instanceof ArrayType) {
+            children =
+                    Collections.singletonList(
+                            toArrowField("element", ((ArrayType) logicalType).getElementType()));
+        }
+        return new Field(fieldName, fieldType, children);
     }
 
     private static class DataTypeToArrowTypeConverter extends DataTypeDefaultVisitor<ArrowType> {
@@ -216,6 +243,11 @@ public class LanceArrowUtils {
         }
 
         @Override
+        public ArrowType visit(ArrayType arrayType) {
+            return ArrowType.List.INSTANCE;
+        }
+
+        @Override
         protected ArrowType defaultMethod(DataType dataType) {
             throw new UnsupportedOperationException(
                     String.format(
@@ -270,9 +302,73 @@ public class LanceArrowUtils {
                 precision = ((TimestampType) dataType).getPrecision();
                 return ArrowTimestampNtzWriter.forField(vector, precision);
             }
+        } else if (vector instanceof ListVector) {
+            ArrayType arrayType = (ArrayType) dataType;
+            ListVector listVector = (ListVector) vector;
+            ValueVector elementVector = listVector.getDataVector();
+            ArrowFieldWriter<InternalArray> elementWriter =
+                    createArrayElementWriter(elementVector, arrayType.getElementType());
+            return ArrowListWriter.forField(listVector, elementWriter);
         } else {
             throw new UnsupportedOperationException(
                     String.format("Unsupported type %s.", dataType));
+        }
+    }
+
+    private static ArrowFieldWriter<InternalArray> createArrayElementWriter(
+            ValueVector vector, DataType dataType) {
+        if (vector instanceof TinyIntVector) {
+            return ArrowArrayTinyIntWriter.forField((TinyIntVector) vector);
+        } else if (vector instanceof SmallIntVector) {
+            return ArrowArraySmallIntWriter.forField((SmallIntVector) vector);
+        } else if (vector instanceof IntVector) {
+            return ArrowArrayIntWriter.forField((IntVector) vector);
+        } else if (vector instanceof BigIntVector) {
+            return ArrowArrayBigIntWriter.forField((BigIntVector) vector);
+        } else if (vector instanceof BitVector) {
+            return ArrowArrayBooleanWriter.forField((BitVector) vector);
+        } else if (vector instanceof Float4Vector) {
+            return ArrowArrayFloatWriter.forField((Float4Vector) vector);
+        } else if (vector instanceof Float8Vector) {
+            return ArrowArrayDoubleWriter.forField((Float8Vector) vector);
+        } else if (vector instanceof VarCharVector) {
+            return ArrowArrayVarCharWriter.forField((VarCharVector) vector);
+        } else if (vector instanceof FixedSizeBinaryVector) {
+            return ArrowArrayBinaryWriter.forField((FixedSizeBinaryVector) vector);
+        } else if (vector instanceof VarBinaryVector) {
+            return ArrowArrayVarBinaryWriter.forField((VarBinaryVector) vector);
+        } else if (vector instanceof DecimalVector) {
+            DecimalVector decimalVector = (DecimalVector) vector;
+            return ArrowArrayDecimalWriter.forField(
+                    decimalVector, getPrecision(decimalVector), decimalVector.getScale());
+        } else if (vector instanceof DateDayVector) {
+            return ArrowArrayDateWriter.forField((DateDayVector) vector);
+        } else if (vector instanceof TimeSecVector
+                || vector instanceof TimeMilliVector
+                || vector instanceof TimeMicroVector
+                || vector instanceof TimeNanoVector) {
+            return ArrowArrayTimeWriter.forField(vector);
+        } else if (vector instanceof TimeStampVector
+                && ((ArrowType.Timestamp) vector.getField().getType()).getTimezone() == null) {
+            int precision;
+            if (dataType instanceof LocalZonedTimestampType) {
+                precision = ((LocalZonedTimestampType) dataType).getPrecision();
+                return ArrowArrayTimestampLtzWriter.forField(vector, precision);
+            } else {
+                precision = ((TimestampType) dataType).getPrecision();
+                return ArrowArrayTimestampNtzWriter.forField(vector, precision);
+            }
+        } else if (vector instanceof ListVector) {
+            // Handle nested arrays
+            ArrayType arrayType = (ArrayType) dataType;
+            ListVector listVector = (ListVector) vector;
+            ValueVector elementVector = listVector.getDataVector();
+            ArrowFieldWriter<InternalArray> elementWriter =
+                    createArrayElementWriter(elementVector, arrayType.getElementType());
+            return new ArrowNestedListWriter(listVector, elementWriter);
+        } else {
+            throw new UnsupportedOperationException(
+                    String.format("Unsupported array element type %s.", dataType));
         }
     }
 }
