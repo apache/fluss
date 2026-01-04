@@ -35,7 +35,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 class BucketingFunctionTest {
     @Test
-    public void testDefaultBucketing() {
+    void testDefaultBucketing() {
         BucketingFunction defaultBucketing = BucketingFunction.of(null);
 
         assertThat(defaultBucketing.bucketing(new byte[] {(byte) 0, (byte) 10}, 7)).isEqualTo(1);
