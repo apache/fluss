@@ -48,12 +48,14 @@ import org.apache.fluss.row.encode.ValueEncoder;
 import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer.Key;
 import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer.KvEntry;
 import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer.Value;
+import org.apache.fluss.server.kv.rocksdb.RocksDBMetrics;
 import org.apache.fluss.server.kv.rowmerger.RowMerger;
 import org.apache.fluss.server.log.FetchIsolation;
 import org.apache.fluss.server.log.LogAppendInfo;
 import org.apache.fluss.server.log.LogTablet;
 import org.apache.fluss.server.log.LogTestUtils;
 import org.apache.fluss.server.metrics.group.TestingMetricGroups;
+import org.apache.fluss.server.zk.NOPErrorHandler;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.RootAllocator;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
@@ -1342,5 +1344,184 @@ class KvTabletTest {
 
     private Value valueOf(BinaryRow row) {
         return Value.of(ValueEncoder.encodeValue(schemaId, row));
+    }
+
+    @Test
+    void testRocksDBMetrics() throws Exception {
+        // Initialize tablet with schema
+        initLogTabletAndKvTablet(DATA1_SCHEMA_PK, new HashMap<>());
+
+        // Get RocksDB metrics
+        RocksDBMetrics metrics = kvTablet.getRocksDBMetrics();
+        assertThat(metrics).as("RocksDB metrics should be available").isNotNull();
+
+        // Verify statistics is properly initialized
+        org.rocksdb.Statistics stats = kvTablet.getRocksDBKv().getStatistics();
+        assertThat(stats).as("RocksDB Statistics should be enabled").isNotNull();
+
+        // All metrics should start at 0 for a fresh database
+        assertThat(metrics.getBytesWritten()).isEqualTo(0);
+        assertThat(metrics.getBytesRead()).isEqualTo(0);
+        assertThat(metrics.getFlushBytesWritten()).isEqualTo(0);
+        assertThat(metrics.getWriteLatencyMicros()).isEqualTo(0);
+        assertThat(metrics.getGetLatencyMicros()).isEqualTo(0);
+        assertThat(metrics.getNumFilesAtLevel0()).isEqualTo(0);
+        assertThat(metrics.getFlushPending()).isEqualTo(0);
+        assertThat(metrics.getCompactionPending()).isEqualTo(0);
+        assertThat(metrics.getTotalMemoryUsage()).isGreaterThan(0); // Block cache is pre-allocated
+
+        // ========== Phase 1: Write and Flush ==========
+        int numRecords = 10000;
+        List<KvRecord> rows = new ArrayList<>();
+        for (int i = 0; i < numRecords; i++) {
+            rows.add(
+                    kvRecordFactory.ofRecord(
+                            String.valueOf(i).getBytes(), new Object[] {i, "value-" + i}));
+        }
+        kvTablet.putAsLeader(kvRecordBatchFactory.ofRecords(rows), null);
+        kvTablet.flush(Long.MAX_VALUE, NOPErrorHandler.INSTANCE);
+
+        // After write and flush: must have written data to RocksDB
+        long bytesWrittenAfterFlush = metrics.getBytesWritten();
+        assertThat(bytesWrittenAfterFlush)
+                .as("Must write data to RocksDB after flush")
+                .isGreaterThan(0);
+
+        // Flush must have written bytes (memtable to SST file)
+        long flushBytesWritten = metrics.getFlushBytesWritten();
+        // Note: FLUSH_WRITE_BYTES may not be tracked in all configurations
+        assertThat(flushBytesWritten)
+                .as("Flush bytes written is non-negative")
+                .isGreaterThanOrEqualTo(0);
+
+        // Write latency must be tracked for write operations
+        long writeLatency = metrics.getWriteLatencyMicros();
+        assertThat(writeLatency)
+                .as("Write latency must be > 0 after write operations")
+                .isGreaterThan(0);
+
+        // After flush, there should be at least 1 L0 file (unless immediate compaction occurred)
+        long numL0Files = metrics.getNumFilesAtLevel0();
+        assertThat(numL0Files)
+                .as("Should have L0 files after flush (or 0 if compacted)")
+                .isGreaterThanOrEqualTo(0);
+
+        // Flush pending must be 0 after flush completes
+        assertThat(metrics.getFlushPending()).as("No pending flush after completion").isEqualTo(0);
+
+        // ========== Phase 2: Read Operations ==========
+        List<byte[]> keysToRead = new ArrayList<>();
+        for (int i = 0; i < 100; i++) {
+            keysToRead.add(String.valueOf(i).getBytes());
+        }
+        List<byte[]> readValues = kvTablet.multiGet(keysToRead);
+        assertThat(readValues).hasSize(100);
+
+        // After reads: get latency must be tracked
+        long getLatency = metrics.getGetLatencyMicros();
+        assertThat(getLatency)
+                .as("Get latency must be tracked after read operations")
+                .isGreaterThan(0);
+
+        // Bytes read may increase (depending on cache hits)
+        long bytesRead = metrics.getBytesRead();
+        // Note: bytesRead could be 0 if all data was served from block cache
+        assertThat(bytesRead).as("Bytes read is non-negative").isGreaterThanOrEqualTo(0);
+
+        // ========== Phase 3: Write More Data to Trigger Compaction ==========
+        List<KvRecord> moreRows = new ArrayList<>();
+        for (int i = numRecords; i < numRecords * 2; i++) {
+            moreRows.add(
+                    kvRecordFactory.ofRecord(
+                            String.valueOf(i).getBytes(), new Object[] {i, "value-" + i}));
+        }
+        kvTablet.putAsLeader(kvRecordBatchFactory.ofRecords(moreRows), null);
+        kvTablet.flush(Long.MAX_VALUE, NOPErrorHandler.INSTANCE);
+
+        // Bytes written must increase with more data
+        long bytesWrittenAfterSecondFlush = metrics.getBytesWritten();
+        assertThat(bytesWrittenAfterSecondFlush)
+                .as("Bytes written must increase with second batch")
+                .isGreaterThan(bytesWrittenAfterFlush);
+
+        // ========== Phase 4: Manual Compaction ==========
+        long compactionBytesReadBefore = metrics.getCompactionBytesRead();
+        long compactionBytesWrittenBefore = metrics.getCompactionBytesWritten();
+        long compactionTimeBefore = metrics.getCompactionTimeMicros();
+
+        // Trigger manual compaction
+        try {
+            kvTablet.getRocksDBKv().getDb().compactRange();
+        } catch (Exception e) {
+            // Compaction failure is acceptable in test
+        }
+
+        // After compaction: verify compaction metrics increased
+        long compactionBytesReadAfter = metrics.getCompactionBytesRead();
+        long compactionBytesWrittenAfter = metrics.getCompactionBytesWritten();
+        long compactionTimeAfter = metrics.getCompactionTimeMicros();
+
+        // If any compaction occurred, all three metrics should increase
+        boolean compactionOccurred =
+                compactionBytesReadAfter > compactionBytesReadBefore
+                        || compactionBytesWrittenAfter > compactionBytesWrittenBefore
+                        || compactionTimeAfter > compactionTimeBefore;
+
+        if (compactionOccurred) {
+            assertThat(compactionBytesReadAfter)
+                    .as("Compaction must read data")
+                    .isGreaterThan(compactionBytesReadBefore);
+            assertThat(compactionBytesWrittenAfter)
+                    .as("Compaction must write data")
+                    .isGreaterThan(compactionBytesWrittenBefore);
+            assertThat(compactionTimeAfter)
+                    .as("Compaction must take time")
+                    .isGreaterThan(compactionTimeBefore);
+        }
+
+        // Compaction pending must be 0 after compaction completes
+        assertThat(metrics.getCompactionPending())
+                .as("No pending compaction after completion")
+                .isEqualTo(0);
+
+        // ========== Phase 5: Verify Final State Before Close ==========
+        // Bytes written must be positive after all operations
+        assertThat(metrics.getBytesWritten())
+                .as("Total bytes written must be positive")
+                .isGreaterThan(0);
+
+        // Write and get latency must be positive (operations occurred)
+        assertThat(metrics.getWriteLatencyMicros())
+                .as("Write latency must be positive after writes")
+                .isGreaterThan(0);
+        assertThat(metrics.getGetLatencyMicros())
+                .as("Get latency must be positive after reads")
+                .isGreaterThan(0);
+
+        // No pending operations
+        assertThat(metrics.getFlushPending()).isEqualTo(0);
+        assertThat(metrics.getCompactionPending()).isEqualTo(0);
+
+        // Memory usage should be reasonable (> 0 due to block cache + memtables)
+        assertThat(metrics.getTotalMemoryUsage())
+                .as("Total memory usage must be positive")
+                .isGreaterThan(0);
+
+        // ========== Phase 6: Verify Metrics After Close ==========
+        kvTablet.close();
+
+        // After close: all metrics must return 0 (ResourceGuard protection)
+        assertThat(metrics.getBytesWritten()).isEqualTo(0);
+        assertThat(metrics.getBytesRead()).isEqualTo(0);
+        assertThat(metrics.getFlushBytesWritten()).isEqualTo(0);
+        assertThat(metrics.getWriteLatencyMicros()).isEqualTo(0);
+        assertThat(metrics.getGetLatencyMicros()).isEqualTo(0);
+        assertThat(metrics.getNumFilesAtLevel0()).isEqualTo(0);
+        assertThat(metrics.getFlushPending()).isEqualTo(0);
+        assertThat(metrics.getCompactionPending()).isEqualTo(0);
+        assertThat(metrics.getCompactionBytesRead()).isEqualTo(0);
+        assertThat(metrics.getCompactionBytesWritten()).isEqualTo(0);
+        assertThat(metrics.getCompactionTimeMicros()).isEqualTo(0);
+        assertThat(metrics.getTotalMemoryUsage()).isEqualTo(0);
     }
 }

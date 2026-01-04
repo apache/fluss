@@ -23,12 +23,14 @@ import org.apache.fluss.server.utils.ResourceGuard;
 import org.apache.fluss.utils.BytesUtils;
 import org.apache.fluss.utils.IOUtils;
 
+import org.rocksdb.Cache;
 import org.rocksdb.ColumnFamilyHandle;
 import org.rocksdb.ColumnFamilyOptions;
 import org.rocksdb.ReadOptions;
 import org.rocksdb.RocksDB;
 import org.rocksdb.RocksDBException;
 import org.rocksdb.RocksIterator;
+import org.rocksdb.Statistics;
 import org.rocksdb.WriteOptions;
 
 import javax.annotation.Nullable;
@@ -63,6 +65,9 @@ public class RocksDBKv implements AutoCloseable {
     /** Our RocksDB database. Currently, one kv tablet, one RocksDB instance. */
     protected final RocksDB db;
 
+    /** RocksDB Statistics for metrics collection. */
+    private final @Nullable Statistics statistics;
+
     // mark whether this kv is already closed and prevent duplicate closing
     private volatile boolean closed = false;
 
@@ -70,12 +75,14 @@ public class RocksDBKv implements AutoCloseable {
             RocksDBResourceContainer optionsContainer,
             RocksDB db,
             ResourceGuard rocksDBResourceGuard,
-            ColumnFamilyHandle defaultColumnFamilyHandle) {
+            ColumnFamilyHandle defaultColumnFamilyHandle,
+            @Nullable Statistics statistics) {
         this.optionsContainer = optionsContainer;
         this.db = db;
         this.rocksDBResourceGuard = rocksDBResourceGuard;
         this.writeOptions = optionsContainer.getWriteOptions();
         this.defaultColumnFamilyHandle = defaultColumnFamilyHandle;
+        this.statistics = statistics;
     }
 
     public ResourceGuard getResourceGuard() {
@@ -205,5 +212,19 @@ public class RocksDBKv implements AutoCloseable {
 
     public RocksDB getDb() {
         return db;
+    }
+
+    @Nullable
+    public Statistics getStatistics() {
+        return optionsContainer.getStatistics();
+    }
+
+    @Nullable
+    public Cache getBlockCache() {
+        return optionsContainer.getBlockCache();
+    }
+
+    public ColumnFamilyHandle getDefaultColumnFamilyHandle() {
+        return defaultColumnFamilyHandle;
     }
 }

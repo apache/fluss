@@ -266,6 +266,14 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
                                     sharedRocksDBRateLimiter);
                     currentKvs.put(tableBucket, tablet);
 
+                    // Register RocksDB metrics to TableMetricGroup for aggregation
+                    // Note: BucketMetricGroup is already created by Replica when LogTablet is
+                    // created
+                    if (tablet.getRocksDBMetrics() != null) {
+                        serverMetricGroup.registerRocksDBMetrics(
+                                tablePath.getTablePath(), tableBucket, tablet.getRocksDBMetrics());
+                    }
+
                     LOG.info(
                             "Created kv tablet for bucket {} in dir {}.",
                             tableBucket,
@@ -304,6 +312,9 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
         if (dropKvTablet != null) {
             TablePath tablePath = dropKvTablet.getTablePath();
             try {
+                // Unregister RocksDB metrics from TableMetricGroup
+                serverMetricGroup.unregisterRocksDBMetrics(tablePath, tableBucket);
+
                 dropKvTablet.drop();
                 if (dropKvTablet.getPartitionName() == null) {
                     LOG.info(
@@ -387,6 +398,14 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
                             currentKvs.get(tableBucket).getKvTabletDir().getAbsolutePath()));
         }
         this.currentKvs.put(tableBucket, kvTablet);
+
+        // Register RocksDB metrics to TableMetricGroup for aggregation
+        // Note: BucketMetricGroup is already created by Replica when LogTablet is created
+        if (kvTablet.getRocksDBMetrics() != null) {
+            serverMetricGroup.registerRocksDBMetrics(
+                    physicalTablePath.getTablePath(), tableBucket, kvTablet.getRocksDBMetrics());
+        }
+
         return kvTablet;
     }
 

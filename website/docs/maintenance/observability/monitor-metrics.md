@@ -825,6 +825,134 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
   </tbody>
 </table>
 
+### RocksDB
+
+RocksDB metrics provide insights into the performance and health of the underlying RocksDB storage engine used by Fluss. These metrics are categorized into table-level metrics (aggregated from all buckets of a table) and server-level metrics (aggregated from all tables in a server).
+
+#### Table-level RocksDB Metrics (Max Aggregation)
+
+These metrics use Max aggregation to show the maximum value across all buckets of a table, which helps identify the worst-performing bucket.
+
+<table class="table table-bordered">
+  <thead>
+    <tr>
+      <th class="text-left" style={{width: '30pt'}}>Scope</th>
+      <th class="text-left" style={{width: '150pt'}}>Infix</th>
+      <th class="text-left" style={{width: '80pt'}}>Metrics</th>
+      <th class="text-left" style={{width: '300pt'}}>Description</th>
+      <th class="text-left" style={{width: '40pt'}}>Type</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th rowspan="7"><strong>tabletserver</strong></th>
+      <td rowspan="7">table</td>
+      <td>rocksdbWriteStallMicrosMax</td>
+      <td>Maximum write stall duration across all buckets of this table (in microseconds). Write stalls occur when RocksDB needs to slow down writes due to compaction pressure or memory limits.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>rocksdbGetLatencyMicrosMax</td>
+      <td>Maximum get operation latency across all buckets of this table (in microseconds). This represents the slowest read operation among all buckets.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>rocksdbWriteLatencyMicrosMax</td>
+      <td>Maximum write operation latency across all buckets of this table (in microseconds). This represents the slowest write operation among all buckets.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>rocksdbNumFilesAtLevel0Max</td>
+      <td>Maximum number of L0 files across all buckets of this table. A high number of L0 files indicates compaction pressure and may impact read performance.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>rocksdbFlushPendingMax</td>
+      <td>Maximum flush pending indicator across all buckets of this table. A value greater than 0 indicates that some buckets have pending flush operations.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>rocksdbCompactionPendingMax</td>
+      <td>Maximum compaction pending indicator across all buckets of this table. A value greater than 0 indicates that some buckets have pending compaction operations.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>rocksdbCompactionTimeMicrosMax</td>
+      <td>Maximum compaction time across all buckets of this table (in microseconds). This represents the longest compaction operation among all buckets.</td>
+      <td>Gauge</td>
+    </tr>
+  </tbody>
+</table>
+
+#### Table-level RocksDB Metrics (Sum Aggregation)
+
+These metrics use Sum aggregation to show the total value across all buckets of a table, providing an overall view of table-level I/O and storage operations.
+
+<table class="table table-bordered">
+  <thead>
+    <tr>
+      <th class="text-left" style={{width: '30pt'}}>Scope</th>
+      <th class="text-left" style={{width: '150pt'}}>Infix</th>
+      <th class="text-left" style={{width: '80pt'}}>Metrics</th>
+      <th class="text-left" style={{width: '300pt'}}>Description</th>
+      <th class="text-left" style={{width: '40pt'}}>Type</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th rowspan="5"><strong>tabletserver</strong></th>
+      <td rowspan="5">table</td>
+      <td>rocksdbBytesReadTotal</td>
+      <td>Total bytes read across all buckets of this table. This includes both user reads and internal reads (e.g., compaction reads).</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>rocksdbBytesWrittenTotal</td>
+      <td>Total bytes written across all buckets of this table. This includes both user writes and internal writes (e.g., compaction writes).</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>rocksdbFlushBytesWrittenTotal</td>
+      <td>Total flush bytes written across all buckets of this table. This represents the amount of data flushed from memtable to persistent storage.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>rocksdbCompactionBytesReadTotal</td>
+      <td>Total compaction bytes read across all buckets of this table. This represents the amount of data read during compaction operations.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>rocksdbCompactionBytesWrittenTotal</td>
+      <td>Total compaction bytes written across all buckets of this table. This represents the amount of data written during compaction operations.</td>
+      <td>Gauge</td>
+    </tr>
+  </tbody>
+</table>
+
+#### Server-level RocksDB Metrics (Sum Aggregation)
+
+These metrics use Sum aggregation to show the total value across all tables in a server, providing a server-wide view of RocksDB resource usage.
+
+<table class="table table-bordered">
+  <thead>
+    <tr>
+      <th class="text-left" style={{width: '30pt'}}>Scope</th>
+      <th class="text-left" style={{width: '150pt'}}>Infix</th>
+      <th class="text-left" style={{width: '80pt'}}>Metrics</th>
+      <th class="text-left" style={{width: '300pt'}}>Description</th>
+      <th class="text-left" style={{width: '40pt'}}>Type</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th rowspan="1"><strong>tabletserver</strong></th>
+      <td style={{textAlign: 'center', verticalAlign: 'middle' }} rowspan="1">-</td>
+      <td>rocksdbMemoryUsageTotal</td>
+      <td>Total memory usage across all RocksDB instances in this server (in bytes). This includes memory used by memtables, block cache, and other RocksDB internal structures.</td>
+      <td>Gauge</td>
+    </tr>
+  </tbody>
+</table>
 
 ### Flink connector standard metrics
 

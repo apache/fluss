@@ -30,12 +30,18 @@ import org.apache.fluss.metrics.SimpleCounter;
 import org.apache.fluss.metrics.ThreadSafeSimpleCounter;
 import org.apache.fluss.metrics.groups.AbstractMetricGroup;
 import org.apache.fluss.metrics.registry.MetricRegistry;
+import org.apache.fluss.server.kv.rocksdb.RocksDBMetrics;
 import org.apache.fluss.utils.MapUtils;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.Map;
 
 /** The metric group for tablet server. */
 public class TabletServerMetricGroup extends AbstractMetricGroup {
+
+    private static final Logger LOG = LoggerFactory.getLogger(TabletServerMetricGroup.class);
 
     private static final String NAME = "tabletserver";
     private static final int WINDOW_SIZE = 1024;
@@ -133,6 +139,24 @@ public class TabletServerMetricGroup extends AbstractMetricGroup {
         meter(MetricNames.ISR_SHRINKS_RATE, new MeterView(isrShrinks));
         failedIsrUpdates = new SimpleCounter();
         meter(MetricNames.FAILED_ISR_UPDATES_RATE, new MeterView(failedIsrUpdates));
+
+        // Register server-level RocksDB aggregated metrics
+        registerServerRocksDBMetrics();
+    }
+
+    /**
+     * Register server-level RocksDB aggregated metrics. These metrics aggregate memory usage from
+     * all tables.
+     */
+    private void registerServerRocksDBMetrics() {
+        // Total memory usage across all RocksDB instances in this server
+        gauge(
+                MetricNames.ROCKSDB_MEMORY_USAGE_TOTAL,
+                () ->
+                        metricGroupByTable.values().stream()
+                                .flatMap(table -> table.getRocksDBMetricsMap().values().stream())
+                                .mapToLong(RocksDBMetrics::getTotalMemoryUsage)
+                                .sum());
     }
 
     @Override
@@ -232,6 +256,39 @@ public class TabletServerMetricGroup extends AbstractMetricGroup {
                         tablePath,
                         table -> new TableMetricGroup(registry, tablePath, isKvTable, this));
         return tableMetricGroup.addBucketMetricGroup(physicalTablePath.getPartitionName(), bucket);
+    }
+
+    /**
+     * Register RocksDB metrics for a specific table bucket. This method ensures the
+     * TableMetricGroup exists (creates it if necessary) before registering the RocksDB metrics.
+     *
+     * <p>This is an idempotent operation - calling it multiple times with the same parameters is
+     * safe.
+     *
+     * @param tablePath the table path
+     * @param tableBucket the table bucket
+     * @param rocksDBMetrics the RocksDB metrics to register
+     */
+    public void registerRocksDBMetrics(
+            TablePath tablePath, TableBucket tableBucket, RocksDBMetrics rocksDBMetrics) {
+        // Ensure TableMetricGroup exists (idempotent creation)
+        TableMetricGroup tableMetricGroup =
+                metricGroupByTable.computeIfAbsent(
+                        tablePath, table -> new TableMetricGroup(registry, tablePath, true, this));
+        tableMetricGroup.registerRocksDBMetrics(tableBucket, rocksDBMetrics);
+    }
+
+    /**
+     * Unregister RocksDB metrics for a specific table bucket.
+     *
+     * @param tablePath the table path
+     * @param tableBucket the table bucket
+     */
+    public void unregisterRocksDBMetrics(TablePath tablePath, TableBucket tableBucket) {
+        TableMetricGroup tableMetricGroup = metricGroupByTable.get(tablePath);
+        if (tableMetricGroup != null) {
+            tableMetricGroup.unregisterRocksDBMetrics(tableBucket);
+        }
     }
 
     public void removeTableBucketMetricGroup(TablePath tablePath, TableBucket bucket) {
