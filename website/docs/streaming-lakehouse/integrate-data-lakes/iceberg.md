@@ -500,6 +500,7 @@ When integrating with Iceberg, Fluss automatically converts between Fluss data t
 | TIMESTAMP WITH LOCAL TIMEZONE | TIMESTAMP (with timezone)     |                     |
 | BINARY                        | BINARY                        |                     |
 | BYTES                         | BINARY                        | Converted to BINARY |
+| ARRAY                         | LIST                          |                     |
 
 
 ## Maintenance and Optimization
