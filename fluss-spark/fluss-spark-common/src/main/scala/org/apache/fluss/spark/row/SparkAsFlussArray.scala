@@ -79,7 +79,7 @@ class SparkAsFlussArray(arrayData: SparkArrayData, elementType: SparkDataType)
    * Returns the decimal value at the given position.
    *
    * <p>The precision and scale are required to determine whether the decimal value was stored in a
-   * compact representation (see {@link Decimal}).
+   * compact representation (see [[Decimal]]).
    */
   override def getDecimal(pos: Int, precision: Int, scale: Int): Decimal = {
     val sparkDecimal = arrayData.getDecimal(pos, precision, scale)
@@ -99,7 +99,7 @@ class SparkAsFlussArray(arrayData: SparkArrayData, elementType: SparkDataType)
    * Returns the timestamp value at the given position.
    *
    * <p>The precision is required to determine whether the timestamp value was stored in a compact
-   * representation (see {@link TimestampNtz}).
+   * representation (see [[TimestampNtz]]).
    */
   override def getTimestampNtz(pos: Int, precision: Int): TimestampNtz =
     TimestampNtz.fromMillis(SparkDateTimeUtils.microsToMillis(arrayData.getLong(pos)))
@@ -108,7 +108,7 @@ class SparkAsFlussArray(arrayData: SparkArrayData, elementType: SparkDataType)
    * Returns the timestamp value at the given position.
    *
    * <p>The precision is required to determine whether the timestamp value was stored in a compact
-   * representation (see {@link TimestampLtz}).
+   * representation (see [[TimestampLtz]]).
    */
   override def getTimestampLtz(pos: Int, precision: Int): TimestampLtz =
     TimestampLtz.fromEpochMicros(arrayData.getLong(pos))

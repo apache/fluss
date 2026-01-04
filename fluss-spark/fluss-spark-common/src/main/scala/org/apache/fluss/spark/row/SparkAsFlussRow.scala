@@ -38,7 +38,7 @@ class SparkAsFlussRow(schema: StructType) extends FlussInternalRow with Serializ
   /**
    * Returns the number of fields in this row.
    *
-   * <p>The number does not include {@link ChangeType}. It is kept separately.
+   * <p>The number does not include [[org.apache.fluss.record.ChangeType]]. It is kept separately.
    */
   override def getFieldCount: Int = fieldCount
 
@@ -77,7 +77,7 @@ class SparkAsFlussRow(schema: StructType) extends FlussInternalRow with Serializ
    * Returns the decimal value at the given position.
    *
    * <p>The precision and scale are required to determine whether the decimal value was stored in a
-   * compact representation (see {@link Decimal}).
+   * compact representation (see [[Decimal]]).
    */
   override def getDecimal(pos: Int, precision: Int, scale: Int): Decimal = {
     val sparkDecimal = row.getDecimal(pos, precision, scale)
@@ -97,7 +97,7 @@ class SparkAsFlussRow(schema: StructType) extends FlussInternalRow with Serializ
    * Returns the timestamp value at the given position.
    *
    * <p>The precision is required to determine whether the timestamp value was stored in a compact
-   * representation (see {@link TimestampNtz}).
+   * representation (see [[TimestampNtz]]).
    */
   override def getTimestampNtz(pos: Int, precision: Int): TimestampNtz =
     TimestampNtz.fromMillis(SparkDateTimeUtils.microsToMillis(row.getLong(pos)))
@@ -106,7 +106,7 @@ class SparkAsFlussRow(schema: StructType) extends FlussInternalRow with Serializ
    * Returns the timestamp value at the given position.
    *
    * <p>The precision is required to determine whether the timestamp value was stored in a compact
-   * representation (see {@link TimestampLtz}).
+   * representation (see [[TimestampLtz]]).
    */
   override def getTimestampLtz(pos: Int, precision: Int): TimestampLtz =
     TimestampLtz.fromEpochMicros(row.getLong(pos))

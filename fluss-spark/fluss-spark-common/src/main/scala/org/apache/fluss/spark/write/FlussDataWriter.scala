@@ -30,7 +30,7 @@ import org.apache.spark.sql.connector.write.{DataWriter, WriterCommitMessage}
 import org.apache.spark.sql.types.StructType
 
 /**
- * A fluss implementation of Spark [[WriterCommitMessage]]. Fluss, As a service, accepts data and
+ * A fluss implementation of Spark [[WriterCommitMessage]]. Fluss, as a service, accepts data and
  * commit inside of it, so client does nothing.
  */
 case class FlussWriterCommitMessage() extends WriterCommitMessage
