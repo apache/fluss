@@ -36,12 +36,16 @@ import org.apache.flink.api.connector.source.SourceReader;
 import org.apache.flink.api.connector.source.SourceReaderContext;
 import org.apache.flink.api.connector.source.SplitEnumerator;
 import org.apache.flink.api.connector.source.SplitEnumeratorContext;
+import org.apache.flink.connector.base.source.reader.RecordsWithSplitIds;
+import org.apache.flink.connector.base.source.reader.synchronization.FutureCompletingBlockingQueue;
 import org.apache.flink.core.io.SimpleVersionedSerializer;
 import org.apache.flink.runtime.jobgraph.OperatorID;
 import org.apache.flink.streaming.api.graph.StreamGraphHasherV2;
 
 import java.nio.charset.StandardCharsets;
 
+import static org.apache.fluss.config.ConfigOptions.LAKE_TIERING_TABLE_DURATION_DETECT_INTERVAL;
+import static org.apache.fluss.config.ConfigOptions.LAKE_TIERING_TABLE_DURATION_MAX;
 import static org.apache.fluss.flink.tiering.source.TieringSourceOptions.POLL_TIERING_TABLE_INTERVAL;
 
 /**
@@ -61,14 +65,20 @@ public class TieringSource<WriteResult>
     private final Configuration flussConf;
     private final LakeTieringFactory<WriteResult, ?> lakeTieringFactory;
     private final long pollTieringTableIntervalMs;
+    private final long tieringTableDurationMaxMs;
+    private final long tieringTableDurationDetectIntervalMs;
 
     public TieringSource(
             Configuration flussConf,
             LakeTieringFactory<WriteResult, ?> lakeTieringFactory,
-            long pollTieringTableIntervalMs) {
+            long pollTieringTableIntervalMs,
+            long tieringTableDurationMaxMs,
+            long tieringTableDurationDetectIntervalMs) {
         this.flussConf = flussConf;
         this.lakeTieringFactory = lakeTieringFactory;
         this.pollTieringTableIntervalMs = pollTieringTableIntervalMs;
+        this.tieringTableDurationMaxMs = tieringTableDurationMaxMs;
+        this.tieringTableDurationDetectIntervalMs = tieringTableDurationDetectIntervalMs;
     }
 
     @Override
@@ -78,19 +88,26 @@ public class TieringSource<WriteResult>
 
     @Override
     public SplitEnumerator<TieringSplit, TieringSourceEnumeratorState> createEnumerator(
-            SplitEnumeratorContext<TieringSplit> splitEnumeratorContext) throws Exception {
+            SplitEnumeratorContext<TieringSplit> splitEnumeratorContext) {
         return new TieringSourceEnumerator(
-                flussConf, splitEnumeratorContext, pollTieringTableIntervalMs);
+                flussConf,
+                splitEnumeratorContext,
+                pollTieringTableIntervalMs,
+                tieringTableDurationMaxMs,
+                tieringTableDurationDetectIntervalMs);
     }
 
     @Override
     public SplitEnumerator<TieringSplit, TieringSourceEnumeratorState> restoreEnumerator(
             SplitEnumeratorContext<TieringSplit> splitEnumeratorContext,
-            TieringSourceEnumeratorState tieringSourceEnumeratorState)
-            throws Exception {
+            TieringSourceEnumeratorState tieringSourceEnumeratorState) {
         // stateless operator
         return new TieringSourceEnumerator(
-                flussConf, splitEnumeratorContext, pollTieringTableIntervalMs);
+                flussConf,
+                splitEnumeratorContext,
+                pollTieringTableIntervalMs,
+                tieringTableDurationMaxMs,
+                tieringTableDurationDetectIntervalMs);
     }
 
     @Override
@@ -107,8 +124,11 @@ public class TieringSource<WriteResult>
     @Override
     public SourceReader<TableBucketWriteResult<WriteResult>, TieringSplit> createReader(
             SourceReaderContext sourceReaderContext) {
+        FutureCompletingBlockingQueue<RecordsWithSplitIds<TableBucketWriteResult<WriteResult>>>
+                elementsQueue = new FutureCompletingBlockingQueue<>();
         Connection connection = ConnectionFactory.createConnection(flussConf);
-        return new TieringSourceReader<>(sourceReaderContext, connection, lakeTieringFactory);
+        return new TieringSourceReader<>(
+                elementsQueue, sourceReaderContext, connection, lakeTieringFactory);
     }
 
     /** This follows the operator uid hash generation logic of flink {@link StreamGraphHasherV2}. */
@@ -126,6 +146,10 @@ public class TieringSource<WriteResult>
         private final LakeTieringFactory<WriteResult, ?> lakeTieringFactory;
         private long pollTieringTableIntervalMs =
                 POLL_TIERING_TABLE_INTERVAL.defaultValue().toMillis();
+        private long tieringTableDurationMaxMs =
+                LAKE_TIERING_TABLE_DURATION_MAX.defaultValue().toMillis();
+        private long tieringTableDurationDetectIntervalMs =
+                LAKE_TIERING_TABLE_DURATION_DETECT_INTERVAL.defaultValue().toMillis();
 
         public Builder(
                 Configuration flussConf, LakeTieringFactory<WriteResult, ?> lakeTieringFactory) {
@@ -138,8 +162,24 @@ public class TieringSource<WriteResult>
             return this;
         }
 
+        public Builder<WriteResult> withTieringTableDurationMax(long tieringTableDurationMaxMs) {
+            this.tieringTableDurationMaxMs = tieringTableDurationMaxMs;
+            return this;
+        }
+
+        public Builder<WriteResult> withTieringTableDurationDetectInterval(
+                long tieringTableDurationDetectIntervalMs) {
+            this.tieringTableDurationDetectIntervalMs = tieringTableDurationDetectIntervalMs;
+            return this;
+        }
+
         public TieringSource<WriteResult> build() {
-            return new TieringSource<>(flussConf, lakeTieringFactory, pollTieringTableIntervalMs);
+            return new TieringSource<>(
+                    flussConf,
+                    lakeTieringFactory,
+                    pollTieringTableIntervalMs,
+                    tieringTableDurationMaxMs,
+                    tieringTableDurationDetectIntervalMs);
         }
     }
 }

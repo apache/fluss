@@ -43,10 +43,16 @@ public class TieringSnapshotSplit extends TieringSplit {
             TableBucket tableBucket,
             @Nullable String partitionName,
             long snapshotId,
-            long logOffsetOfSnapshot) {
-        super(tablePath, tableBucket, partitionName, UNKNOWN_NUMBER_OF_SPLITS);
-        this.snapshotId = snapshotId;
-        this.logOffsetOfSnapshot = logOffsetOfSnapshot;
+            long logOffsetOfSnapshot,
+            int numberOfSplits) {
+        this(
+                tablePath,
+                tableBucket,
+                partitionName,
+                snapshotId,
+                logOffsetOfSnapshot,
+                numberOfSplits,
+                false);
     }
 
     public TieringSnapshotSplit(
@@ -55,8 +61,9 @@ public class TieringSnapshotSplit extends TieringSplit {
             @Nullable String partitionName,
             long snapshotId,
             long logOffsetOfSnapshot,
-            int numberOfSplits) {
-        super(tablePath, tableBucket, partitionName, numberOfSplits);
+            int numberOfSplits,
+            boolean forceIgnore) {
+        super(tablePath, tableBucket, partitionName, forceIgnore, numberOfSplits);
         this.snapshotId = snapshotId;
         this.logOffsetOfSnapshot = logOffsetOfSnapshot;
     }
@@ -84,12 +91,14 @@ public class TieringSnapshotSplit extends TieringSplit {
                 + ", partitionName='"
                 + partitionName
                 + '\''
+                + ", numberOfSplits="
+                + numberOfSplits
+                + ", forceIgnore="
+                + forceIgnore
                 + ", snapshotId="
                 + snapshotId
                 + ", logOffsetOfSnapshot="
                 + logOffsetOfSnapshot
-                + ", numberOfSplits="
-                + numberOfSplits
                 + '}';
     }
 
@@ -101,7 +110,8 @@ public class TieringSnapshotSplit extends TieringSplit {
                 partitionName,
                 snapshotId,
                 logOffsetOfSnapshot,
-                numberOfSplits);
+                numberOfSplits,
+                forceIgnore);
     }
 
     @Override

@@ -74,6 +74,9 @@ public class TieringSplitSerializer implements SimpleVersionedSerializer<Tiering
             out.writeBoolean(false);
         }
 
+        // write force ignore
+        out.writeBoolean(split.isForceIgnore());
+
         // write number of splits
         out.writeInt(split.getNumberOfSplits());
         if (split.isTieringSnapshotSplit()) {
@@ -126,6 +129,8 @@ public class TieringSplitSerializer implements SimpleVersionedSerializer<Tiering
         }
         TableBucket tableBucket = new TableBucket(tableId, partitionId, bucketId);
 
+        boolean forceIgnore = in.readBoolean();
+
         // deserialize number of splits
         int numberOfSplits = in.readInt();
 
@@ -140,7 +145,8 @@ public class TieringSplitSerializer implements SimpleVersionedSerializer<Tiering
                     partitionName,
                     snapshotId,
                     logOffsetOfSnapshot,
-                    numberOfSplits);
+                    numberOfSplits,
+                    forceIgnore);
         } else {
             // deserialize starting offset
             long startingOffset = in.readLong();
@@ -152,6 +158,7 @@ public class TieringSplitSerializer implements SimpleVersionedSerializer<Tiering
                     partitionName,
                     startingOffset,
                     stoppingOffset,
+                    forceIgnore,
                     numberOfSplits);
         }
     }

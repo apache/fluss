@@ -54,7 +54,25 @@ public class TieringLogSplit extends TieringSplit {
             long startingOffset,
             long stoppingOffset,
             int numberOfSplits) {
-        super(tablePath, tableBucket, partitionName, numberOfSplits);
+        this(
+                tablePath,
+                tableBucket,
+                partitionName,
+                startingOffset,
+                stoppingOffset,
+                false,
+                numberOfSplits);
+    }
+
+    public TieringLogSplit(
+            TablePath tablePath,
+            TableBucket tableBucket,
+            @Nullable String partitionName,
+            long startingOffset,
+            long stoppingOffset,
+            boolean forceIgnore,
+            int numberOfSplits) {
+        super(tablePath, tableBucket, partitionName, forceIgnore, numberOfSplits);
         this.startingOffset = startingOffset;
         this.stoppingOffset = stoppingOffset;
     }
@@ -82,12 +100,14 @@ public class TieringLogSplit extends TieringSplit {
                 + ", partitionName='"
                 + partitionName
                 + '\''
+                + ", numberOfSplits="
+                + numberOfSplits
+                + ", forceIgnore="
+                + forceIgnore
                 + ", startingOffset="
                 + startingOffset
                 + ", stoppingOffset="
                 + stoppingOffset
-                + ", numberOfSplits="
-                + numberOfSplits
                 + '}';
     }
 
@@ -99,6 +119,7 @@ public class TieringLogSplit extends TieringSplit {
                 partitionName,
                 startingOffset,
                 stoppingOffset,
+                forceIgnore,
                 numberOfSplits);
     }
 

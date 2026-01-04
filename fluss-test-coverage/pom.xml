@@ -448,6 +448,7 @@
                                         <exclude>org.apache.fluss.flink.tiering.source.TieringWriterInitContext
                                         </exclude>
                                         <exclude>org.apache.fluss.flink.tiering.source.TieringSourceReader</exclude>
+                                        <exclude>org.apache.fluss.flink.tiering.source.TieringSourceFetcherManager</exclude>
                                         <exclude>org.apache.fluss.flink.tiering.source.TableBucketWriteResultEmitter
                                         </exclude>
                                         <exclude>
