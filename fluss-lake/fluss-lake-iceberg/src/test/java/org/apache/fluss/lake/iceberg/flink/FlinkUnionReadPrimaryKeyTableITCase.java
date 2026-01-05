@@ -25,6 +25,7 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.Decimal;
+import org.apache.fluss.row.GenericArray;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
@@ -98,6 +99,7 @@ public class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase 
                                 TimestampNtz.fromMillis(1698235273183L),
                                 TimestampNtz.fromMillis(1698235273183L, 6000),
                                 new byte[] {1, 2, 3, 4},
+                                new float[] {1.1f, 1.2f, 1.3f},
                                 partition));
                 expectedRows.add(
                         Row.of(
@@ -116,6 +118,7 @@ public class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase 
                                 TimestampNtz.fromMillis(1698235273201L),
                                 TimestampNtz.fromMillis(1698235273201L, 6000),
                                 new byte[] {1, 2, 3, 4},
+                                new float[] {1.1f, 1.2f, 1.3f},
                                 partition));
             }
         } else {
@@ -137,6 +140,7 @@ public class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase 
                                     TimestampNtz.fromMillis(1698235273183L),
                                     TimestampNtz.fromMillis(1698235273183L, 6000),
                                     new byte[] {1, 2, 3, 4},
+                                    new float[] {1.1f, 1.2f, 1.3f},
                                     null),
                             Row.of(
                                     true,
@@ -154,6 +158,7 @@ public class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase 
                                     TimestampNtz.fromMillis(1698235273201L),
                                     TimestampNtz.fromMillis(1698235273201L, 6000),
                                     new byte[] {1, 2, 3, 4},
+                                    new float[] {1.1f, 1.2f, 1.3f},
                                     null));
         }
 
@@ -196,6 +201,7 @@ public class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase 
                                 TimestampNtz.fromMillis(1698235273201L),
                                 TimestampNtz.fromMillis(1698235273201L, 6000),
                                 new byte[] {1, 2, 3, 4},
+                                new float[] {1.1f, 1.2f, 1.3f},
                                 partition));
                 expectedRows2.add(
                         Row.ofKind(
@@ -215,6 +221,7 @@ public class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase 
                                 TimestampNtz.fromMillis(1698235273501L),
                                 TimestampNtz.fromMillis(1698235273501L, 8000),
                                 new byte[] {5, 6, 7, 8},
+                                new float[] {2.1f, 2.2f, 2.3f},
                                 partition));
             }
         } else {
@@ -236,6 +243,7 @@ public class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase 
                             TimestampNtz.fromMillis(1698235273201L),
                             TimestampNtz.fromMillis(1698235273201L, 6000),
                             new byte[] {1, 2, 3, 4},
+                            new float[] {1.1f, 1.2f, 1.3f},
                             null));
             expectedRows2.add(
                     Row.ofKind(
@@ -255,6 +263,7 @@ public class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase 
                             TimestampNtz.fromMillis(1698235273501L),
                             TimestampNtz.fromMillis(1698235273501L, 8000),
                             new byte[] {5, 6, 7, 8},
+                            new float[] {2.1f, 2.2f, 2.3f},
                             null));
         }
 
@@ -358,6 +367,7 @@ public class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase 
                                 TimestampNtz.fromMillis(1698235273501L),
                                 TimestampNtz.fromMillis(1698235273501L, 8000),
                                 new byte[] {5, 6, 7, 8},
+                                new GenericArray(new float[] {2.1f, 2.2f, 2.3f}),
                                 partition));
         writeRows(tablePath, rows, false);
     }
@@ -411,7 +421,8 @@ public class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase 
                         .column("c13", DataTypes.TIMESTAMP(3))
                         .column("c14", DataTypes.TIMESTAMP(6))
                         .column("c15", DataTypes.BINARY(4))
-                        .column("c16", DataTypes.STRING());
+                        .column("c16", DataTypes.ARRAY(DataTypes.FLOAT()))
+                        .column("c17", DataTypes.STRING());
 
         TableDescriptor.Builder tableBuilder =
                 TableDescriptor.builder()
@@ -421,8 +432,8 @@ public class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase 
 
         if (isPartitioned) {
             tableBuilder.property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, true);
-            tableBuilder.partitionedBy("c16");
-            schemaBuilder.primaryKey("c4", "c16");
+            tableBuilder.partitionedBy("c17");
+            schemaBuilder.primaryKey("c4", "c17");
             tableBuilder.property(
                     ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT, AutoPartitionTimeUnit.YEAR);
         } else {
@@ -450,6 +461,7 @@ public class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase 
                         TimestampNtz.fromMillis(1698235273183L),
                         TimestampNtz.fromMillis(1698235273183L, 6000),
                         new byte[] {1, 2, 3, 4},
+                        new GenericArray(new float[] {1.1f, 1.2f, 1.3f}),
                         partition),
                 row(
                         true,
@@ -467,6 +479,7 @@ public class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase 
                         TimestampNtz.fromMillis(1698235273201L),
                         TimestampNtz.fromMillis(1698235273201L, 6000),
                         new byte[] {1, 2, 3, 4},
+                        new GenericArray(new float[] {1.1f, 1.2f, 1.3f}),
                         partition));
     }
 

@@ -33,6 +33,7 @@ import java.math.BigDecimal;
 import java.nio.ByteBuffer;
 import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
+import java.util.List;
 
 import static org.apache.fluss.lake.iceberg.IcebergLakeCatalog.SYSTEM_COLUMNS;
 
@@ -152,8 +153,12 @@ public class IcebergRecordAsFlussRow implements InternalRow {
 
     @Override
     public InternalArray getArray(int pos) {
-        // TODO: Support Array type conversion from Iceberg to Fluss
-        throw new UnsupportedOperationException();
+        Object value = icebergRecord.get(pos);
+        if (value == null) {
+            return null;
+        }
+        List<?> icebergList = (List<?>) value;
+        return new IcebergArrayAsFlussArray(icebergList);
     }
 
     @Override

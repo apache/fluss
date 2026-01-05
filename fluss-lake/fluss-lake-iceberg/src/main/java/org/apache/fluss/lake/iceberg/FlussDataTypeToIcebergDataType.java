@@ -47,6 +47,30 @@ public class FlussDataTypeToIcebergDataType implements DataTypeVisitor<Type> {
     public static final FlussDataTypeToIcebergDataType INSTANCE =
             new FlussDataTypeToIcebergDataType();
 
+    private final RowType root;
+    private int nextId;
+
+    FlussDataTypeToIcebergDataType() {
+        this.root = null;
+        this.nextId = 0;
+    }
+
+    FlussDataTypeToIcebergDataType(int startId) {
+        this.root = null;
+        this.nextId = startId;
+    }
+
+    FlussDataTypeToIcebergDataType(RowType root) {
+        this.root = root;
+        this.nextId = root.getFieldCount();
+    }
+
+    private int getNextId() {
+        int next = nextId;
+        nextId += 1;
+        return next;
+    }
+
     @Override
     public Type visit(CharType charType) {
         return Types.StringType.get();
@@ -129,7 +153,12 @@ public class FlussDataTypeToIcebergDataType implements DataTypeVisitor<Type> {
 
     @Override
     public Type visit(ArrayType arrayType) {
-        throw new UnsupportedOperationException("Unsupported array type");
+        Type elementType = arrayType.getElementType().accept(this);
+        if (arrayType.getElementType().isNullable()) {
+            return Types.ListType.ofOptional(getNextId(), elementType);
+        } else {
+            return Types.ListType.ofRequired(getNextId(), elementType);
+        }
     }
 
     @Override

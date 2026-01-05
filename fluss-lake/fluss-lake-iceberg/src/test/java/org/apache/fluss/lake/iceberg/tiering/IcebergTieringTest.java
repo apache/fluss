@@ -347,7 +347,7 @@ class IcebergTieringTest {
     }
 
     private GenericRecord toRecord(long offset, GenericRow row, ChangeType changeType) {
-        return new GenericRecord(offset, System.currentTimeMillis(), changeType, row);
+        return new GenericRecord(offset, 1000000000L + offset, changeType, row);
     }
 
     private void createTable(
