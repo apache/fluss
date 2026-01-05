@@ -26,14 +26,18 @@ import org.apache.fluss.row.compacted.CompactedRowReader;
 import org.apache.fluss.row.indexed.IndexedRow;
 import org.apache.fluss.row.indexed.IndexedRowTest;
 import org.apache.fluss.row.indexed.IndexedRowWriter;
+import org.apache.fluss.shaded.guava32.com.google.common.io.BaseEncoding;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
 
 import org.junit.jupiter.api.Test;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.Collections;
 import java.util.List;
+import java.util.regex.Pattern;
 import java.util.stream.IntStream;
 
 import static org.apache.fluss.row.TestInternalRowGenerator.createAllRowType;
@@ -43,6 +47,10 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link CompactedKeyEncoder}. */
 class CompactedKeyEncoderTest {
+
+    private static final Pattern COMMENT_PATTERN = Pattern.compile("(#.*$)", Pattern.MULTILINE);
+    private static final Pattern NON_HEX_PATTERN = Pattern.compile("[^0-9A-Fa-f]+", Pattern.MULTILINE);
+    private static final String ENCODED_KEY_HEX_FILE_PATH = "encoding/encoded_key.hex";
 
     @Test
     void testEncodeKey() {
@@ -71,6 +79,9 @@ class CompactedKeyEncoderTest {
 
         CompactedKeyEncoder keyEncoder = CompactedKeyEncoder.createKeyEncoder(rowType, pk);
         byte[] encodedBytes = keyEncoder.encodeKey(row);
+
+        //  2 (start of text), 97 (the letter a), 50 (the number 2)
+        assertThat(encodedBytes).isEqualTo(new byte[] {2, 97, 50});
 
         // decode it, should only get "a2"
         InternalRow encodedKey =
@@ -124,6 +135,9 @@ class CompactedKeyEncoderTest {
                         BinaryString.fromString("a3"));
         keyBytes = keyEncoder1.encodeKey(row);
 
+        // 1, 2 (start of text), 97 (the letter a), 50 (the number 2)
+        assertThat(keyBytes).isEqualTo(new byte[] {1, 2, 97, 50});
+
         InternalRow keyRow =
                 decodeRow(
                         new DataType[] {
@@ -153,6 +167,14 @@ class CompactedKeyEncoderTest {
             byte[] keyBytes = keyEncoder.encodeKey(row);
 
             InternalRow keyRow = decodeRow(keyDataTypes, keyBytes);
+
+            Path encodedKeyFilePath = Path.of(getClass().getClassLoader().getResource(ENCODED_KEY_HEX_FILE_PATH).getPath());
+            String encodedKeyString = Files.readString(encodedKeyFilePath);
+            encodedKeyString = COMMENT_PATTERN.matcher(encodedKeyString).replaceAll("");
+            encodedKeyString = NON_HEX_PATTERN.matcher(encodedKeyString).replaceAll("");
+            byte[] expected = BaseEncoding.base16().decode(encodedKeyString);
+
+            assertThat(keyBytes).isEqualTo(expected);
 
             // get the field getter for the key field
             InternalRow.FieldGetter[] fieldGetters =
