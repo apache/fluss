@@ -18,7 +18,7 @@ SHOW PROCEDURES;
 
 ## Access Control Procedures
 
-Fluss provides procedures to manage Access Control Lists (ACLs) for security and authorization. See the [Security](../security/overview.md) documentation for more details.
+Fluss provides procedures to manage Access Control Lists (ACLs) for security and authorization. See the [Security](/security/overview.md) documentation for more details.
 
 ### add_acl
 

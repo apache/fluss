@@ -9,7 +9,7 @@ sidebar_position: 2
 ## Overview
 
 The **Default Merge Engine** behaves as a LastRow merge engine that retains the latest record for a given primary key. It supports all the operations: `INSERT`, `UPDATE`, `DELETE`.
-Additionally, the default merge engine supports [Partial Update](table-design/table-types/pk-table/index.md#partial-update), which preserves the latest values for the specified update columns.
+Additionally, the default merge engine supports [Partial Update](table-design/table-types/pk-table.md#partial-update), which preserves the latest values for the specified update columns.
 If the `'table.merge-engine'` property is not explicitly defined in the table properties when creating a Primary Key Table, the default merge engine will be applied automatically.
 
 

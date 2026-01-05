@@ -130,7 +130,7 @@ For example:
 - Full primary key: `(city_id, order_id)`
 - Bucket key: `city_id`
 
-This yields an **index** on the prefix key `city_id`, so that you can perform [Prefix Key Lookup](/docs/engine-flink/lookups/#prefix-lookup) by the `city_id`.
+This yields an **index** on the prefix key `city_id`, so that you can perform [Prefix Key Lookup](/engine-flink/lookups.md#prefix-lookup) by the `city_id`.
 
 In this setup:
 * The delta join operator uses the prefix key (`city_id`) to retrieve only relevant right-side records matching each left-side event. 

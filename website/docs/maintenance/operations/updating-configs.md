@@ -18,7 +18,7 @@ Currently, the supported dynamically updatable server configurations include:
 - `kv.rocksdb.shared-rate-limiter.bytes-per-sec`: Control RocksDB flush and compaction write rate shared across all RocksDB instances on the TabletServer. The rate limiter is always enabled. Set to a lower value (e.g., 100MB) to limit the rate, or a very high value to effectively disable rate limiting.
 
 
-You can update the configuration of a cluster with [Java client](#using-java-client) or [Flink Procedures](../../engine-flink/procedures.md#cluster-configuration-procedures).
+You can update the configuration of a cluster with [Java client](#using-java-client) or [Flink Procedures](engine-flink/procedures.md#cluster-configuration-procedures).
 
 ### Using Java Client
 

@@ -31,7 +31,7 @@ In Fluss primary key table, each row of data has a unique primary key.
 If multiple entries with the same primary key are written to the Fluss primary key table, only the last entry will be
 retained.
 
-For [Partitioned Primary Key Table](table-design/data-distribution/partitioning.md), the primary key must contain the
+For [Partitioned Primary Key Table](/table-design/data-distribution/partitioning.md), the primary key must contain the
 partition key.
 
 ## Bucket Assigning
@@ -82,10 +82,10 @@ However, users can specify a different merge engine to customize the merging beh
 
 The following merge engines are supported:
 
-1. [Default Merge Engine (LastRow)](merge-engines/default.md)
-2. [FirstRow Merge Engine](merge-engines/first-row.md)
-3. [Versioned Merge Engine](merge-engines/versioned.md)
-4. [Aggregation Merge Engine](merge-engines/aggregation.md)
+1. [Default Merge Engine (LastRow)](/table-design/merge-engines/default.md)
+2. [FirstRow Merge Engine](/table-design/merge-engines/first-row.md)
+3. [Versioned Merge Engine](/table-design/merge-engines/versioned.md)
+4. [Aggregation Merge Engine](/table-design/merge-engines/aggregation.md)
 
 
 ## Changelog Generation
@@ -147,13 +147,13 @@ For primary key tables, Fluss supports various kinds of querying abilities.
 For a primary key table, the default read method is a full snapshot followed by incremental data. First, the
 snapshot data of the table is consumed, followed by the changelog data of the table.
 
-It is also possible to only consume the changelog data of the table. For more details, please refer to the [Flink Reads](../../../engine-flink/reads.md)
+It is also possible to only consume the changelog data of the table. For more details, please refer to the [Flink Reads](/engine-flink/reads.md)
 
 ### Lookup
 
-Fluss primary key table can lookup data by the primary keys. If the key exists in Fluss, lookup will return a unique row. It is always used in [Flink Lookup Join](../../../engine-flink/lookups.md#lookup).
+Fluss primary key table can lookup data by the primary keys. If the key exists in Fluss, lookup will return a unique row. It is always used in [Flink Lookup Join](/engine-flink/lookups.md#lookup).
 
 ### Prefix Lookup
 
 Fluss primary key table can also do prefix lookup by the prefix subset primary keys. Unlike lookup, prefix lookup
-will scan data based on the prefix of primary keys and may return multiple rows. It is always used in [Flink Prefix Lookup Join](../../../engine-flink/lookups.md#prefix-lookup).
+will scan data based on the prefix of primary keys and may return multiple rows. It is always used in [Flink Prefix Lookup Join](/engine-flink/lookups.md#prefix-lookup).
