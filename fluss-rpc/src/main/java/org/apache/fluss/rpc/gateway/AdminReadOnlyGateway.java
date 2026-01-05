@@ -28,10 +28,10 @@ import org.apache.fluss.rpc.messages.GetFileSystemSecurityTokenRequest;
 import org.apache.fluss.rpc.messages.GetFileSystemSecurityTokenResponse;
 import org.apache.fluss.rpc.messages.GetKvSnapshotMetadataRequest;
 import org.apache.fluss.rpc.messages.GetKvSnapshotMetadataResponse;
+import org.apache.fluss.rpc.messages.GetLakeSnapshotRequest;
+import org.apache.fluss.rpc.messages.GetLakeSnapshotResponse;
 import org.apache.fluss.rpc.messages.GetLatestKvSnapshotsRequest;
 import org.apache.fluss.rpc.messages.GetLatestKvSnapshotsResponse;
-import org.apache.fluss.rpc.messages.GetLatestLakeSnapshotRequest;
-import org.apache.fluss.rpc.messages.GetLatestLakeSnapshotResponse;
 import org.apache.fluss.rpc.messages.GetTableInfoRequest;
 import org.apache.fluss.rpc.messages.GetTableInfoResponse;
 import org.apache.fluss.rpc.messages.GetTableSchemaRequest;
@@ -177,9 +177,8 @@ public interface AdminReadOnlyGateway extends RpcGateway {
      * @param request request that specifies that table path.
      * @return a future returns the lake snapshot of the table.
      */
-    @RPC(api = ApiKeys.GET_LATEST_LAKE_SNAPSHOT)
-    CompletableFuture<GetLatestLakeSnapshotResponse> getLatestLakeSnapshot(
-            GetLatestLakeSnapshotRequest request);
+    @RPC(api = ApiKeys.GET_LAKE_SNAPSHOT)
+    CompletableFuture<GetLakeSnapshotResponse> getLakeSnapshot(GetLakeSnapshotRequest request);
 
     /**
      * List acls for a table.

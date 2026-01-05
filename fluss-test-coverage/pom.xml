@@ -464,6 +464,7 @@
                                         <exclude>
                                             org.apache.fluss.flink.tiering.LakeTieringJobBuilder
                                         </exclude>
+                                        <exclude>org.apache.fluss.lake.committer.LakeCommitResult*</exclude>
                                         <exclude>org.apache.fluss.flink.tiering.FlussLakeTieringEntrypoint</exclude>
                                         <!-- end exclude for flink tiering service -->
                                         <!-- exclude flink compatibility class for catalogs -->
