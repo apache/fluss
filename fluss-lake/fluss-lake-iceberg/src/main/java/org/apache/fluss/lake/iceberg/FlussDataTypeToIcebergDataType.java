@@ -173,7 +173,6 @@ public class FlussDataTypeToIcebergDataType implements DataTypeVisitor<Type> {
     @Override
     public Type visit(RowType rowType) {
         List<Types.NestedField> fields = new ArrayList<>();
-        int fieldId = 0;
 
         for (DataField field : rowType.getFields()) {
             Type fieldType = field.getType().accept(this);
@@ -181,14 +180,14 @@ public class FlussDataTypeToIcebergDataType implements DataTypeVisitor<Type> {
             if (field.getType().isNullable()) {
                 fields.add(
                         Types.NestedField.optional(
-                                fieldId++,
+                                getNextId(),
                                 field.getName(),
                                 fieldType,
                                 field.getDescription().orElse(null)));
             } else {
                 fields.add(
                         Types.NestedField.required(
-                                fieldId++,
+                                getNextId(),
                                 field.getName(),
                                 fieldType,
                                 field.getDescription().orElse(null)));
