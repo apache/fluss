@@ -21,6 +21,7 @@ package org.apache.fluss.lake.iceberg.source;
 import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.Decimal;
 import org.apache.fluss.row.InternalArray;
+import org.apache.fluss.row.InternalMap;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
@@ -134,6 +135,11 @@ public class IcebergArrayAsFlussArray implements InternalArray {
     public InternalArray getArray(int pos) {
         List<?> nestedList = (List<?>) icebergList.get(pos);
         return nestedList == null ? null : new IcebergArrayAsFlussArray(nestedList);
+    }
+
+    @Override
+    public InternalMap getMap(int pos) {
+        throw new UnsupportedOperationException();
     }
 
     @Override
