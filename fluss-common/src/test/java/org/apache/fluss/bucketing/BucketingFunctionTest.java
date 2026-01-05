@@ -25,14 +25,7 @@ import java.nio.charset.StandardCharsets;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/**
- /**
- * Unit tests for {@link BucketingFunction}.
- * * <p>Maintains parity with Rust client tests to guarantee cross-client 
- * hashing consistency.
- */
- * consistency
- */
+/** Maintains parity with Rust client tests to guarantee cross-client hashing consistency. */
 class BucketingFunctionTest {
     @Test
     void testDefaultBucketing() {
