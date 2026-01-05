@@ -170,8 +170,13 @@ public class FlussRowAsPaimonRow implements InternalRow {
 
     @Override
     public InternalMap getMap(int pos) {
-        throw new UnsupportedOperationException(
-                "getMap is not support for Fluss record currently.");
+        org.apache.fluss.row.InternalMap flussMap = internalRow.getMap(pos);
+        if (flussMap == null) {
+            return null;
+        }
+        org.apache.paimon.types.MapType mapType =
+                (org.apache.paimon.types.MapType) tableRowType.getField(pos).type();
+        return new FlussMapAsPaimonMap(flussMap, mapType.getKeyType(), mapType.getValueType());
     }
 
     @Override
