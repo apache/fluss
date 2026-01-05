@@ -20,7 +20,7 @@ package org.apache.fluss.spark
 import org.apache.fluss.metadata.{DatabaseDescriptor, Schema, TableDescriptor, TablePath}
 import org.apache.fluss.types.{DataTypes, RowType}
 
-import org.apache.spark.sql.Row
+import org.apache.spark.sql.{AnalysisException, Row}
 import org.assertj.core.api.Assertions.{assertThat, assertThatList}
 
 import scala.collection.JavaConverters._
@@ -138,5 +138,21 @@ class FlussCatalogTest extends FlussSparkTestBase {
 
     admin.dropDatabase("db_by_admin", true, true).get()
     checkAnswer(sql("SHOW DATABASES"), Row(DEFAULT_DATABASE) :: Nil)
+  }
+
+  test("Catalog: show columns should throw") {
+    val tableName = "test_tbl"
+    withTable(tableName) {
+      sql(
+        s"CREATE TABLE $DEFAULT_DATABASE.$tableName (id int, name string) COMMENT 'my test table'")
+
+      checkError(
+        exception = intercept[AnalysisException] {
+          sql(s"SHOW COLUMNS in $tableName")
+        },
+        errorClass = "NOT_SUPPORTED_COMMAND_FOR_V2_TABLE",
+        parameters = Map("cmd" -> "SHOW COLUMNS")
+      )
+    }
   }
 }
