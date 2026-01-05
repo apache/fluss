@@ -49,7 +49,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class CompactedKeyEncoderTest {
 
     private static final Pattern COMMENT_PATTERN = Pattern.compile("(#.*$)", Pattern.MULTILINE);
-    private static final Pattern NON_HEX_PATTERN = Pattern.compile("[^0-9A-Fa-f]+", Pattern.MULTILINE);
+    private static final Pattern NON_HEX_PATTERN =
+            Pattern.compile("[^0-9A-Fa-f]+", Pattern.MULTILINE);
     private static final String ENCODED_KEY_HEX_FILE_PATH = "encoding/encoded_key.hex";
 
     @Test
@@ -168,7 +169,12 @@ class CompactedKeyEncoderTest {
 
             InternalRow keyRow = decodeRow(keyDataTypes, keyBytes);
 
-            Path encodedKeyFilePath = Path.of(getClass().getClassLoader().getResource(ENCODED_KEY_HEX_FILE_PATH).getPath());
+            Path encodedKeyFilePath =
+                    Path.of(
+                            getClass()
+                                    .getClassLoader()
+                                    .getResource(ENCODED_KEY_HEX_FILE_PATH)
+                                    .getPath());
             String encodedKeyString = Files.readString(encodedKeyFilePath);
             encodedKeyString = COMMENT_PATTERN.matcher(encodedKeyString).replaceAll("");
             encodedKeyString = NON_HEX_PATTERN.matcher(encodedKeyString).replaceAll("");
