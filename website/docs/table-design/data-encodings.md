@@ -2,10 +2,22 @@
 title: Data Encodings
 ---
 
-## Overview
+### How to Think About Encodings in Fluss
 
-Fluss supports multiple **data encodings** to optimize how data is stored and read for different workloads. Each encoding is designed to
-balance storage efficiency, read performance, and query capabilities.
+In Fluss, a data encoding primarily determines:
+
+- How data is laid out on disk (columnar vs row-oriented)
+- How efficiently data can be scanned, filtered, or projected
+- Whether the workload is optimized for streaming scans or key-based access
+
+Encodings in Fluss determine:
+
+- **CPU vs IO trade-offs**
+- **Scan-heavy vs lookup-heavy workloads**
+- **Analytical vs operational access patterns**
+
+
+In Fluss, a data encoding primarily defines **how data is stored and accessed**. Each encoding is designed to balance storage efficiency, read performance, and query capabilities.
 
 This page describes the available encodings in Fluss and provides guidance on selecting the appropriate encoding based on workload characteristics.
 
@@ -21,7 +33,7 @@ In Fluss, data encodings can be used in two different ways, depending on how the
 - **KV encoding** is designed for accessing data by key.
   It is used for workloads where queries look up or update values using a key and only the most recent value for each key is needed.
 
-ARROW can be used as log encoding, while COMPACTED supports both.
+ARROW can be used as log encoding, while COMPACTED supports both log and KV encodings.
 
 ## ARROW Encoding (Default)
 
@@ -47,7 +59,7 @@ ARROW is recommended for:
 
 ARROW is less efficient for workloads that:
 - Always read all columns
-- Workloads that mostly access individual rows by key
+- Mostly access individual rows by key
 
 ---
 
@@ -110,3 +122,17 @@ COMPACTED is not recommended when:
 - Filters are applied to reduce the amount of data read
 - Analytical workloads require flexible access to individual columns
 - Historical changes or full changelog data must be preserved
+
+## ARROW vs COMPACTED
+
+| Feature                | ARROW                               | COMPACTED                          |
+|------------------------|-------------------------------------|------------------------------------|
+| Physical layout        | Columnar                            | Row-oriented                       |
+| Typical access pattern | Scans with projection & filters     | Full-row reads or key lookups      |
+| Column pruning         | ✅ Yes                             | ❌ No                              |
+| Predicate pushdown     | ✅ Yes                              | ❌ No                             |
+| Storage efficiency     | Good                                | Excellent                          |
+| CPU efficiency         | Better for selective reads          | Better for full-row reads          |
+| Log encoding           | ✅ Yes                              | ✅ Yes                            |
+| KV encoding            | ❌ No                               | ✅ Yes                            |
+| Best suited for        | Analytics workloads                 | State tables / materialized data   |
