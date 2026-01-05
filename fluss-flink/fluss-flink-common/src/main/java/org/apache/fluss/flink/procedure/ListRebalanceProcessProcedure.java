@@ -30,6 +30,8 @@ import org.apache.flink.table.procedure.ProcedureContext;
 import javax.annotation.Nullable;
 
 import java.text.NumberFormat;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 
 /** Procedure to list rebalance process. */
@@ -52,15 +54,17 @@ public class ListRebalanceProcessProcedure extends ProcedureBase {
         double rebalanceProgress = progress.progress();
         Map<TableBucket, RebalanceResultForBucket> bucketMap = progress.progressForBucketMap();
 
-        String[] result = new String[bucketMap.size() + 3];
-        result[0] = "Reblance total status: " + status;
-        result[1] = "Rebalance progress: " + formatAsPercentage(rebalanceProgress);
-        result[2] = "Rebalance detail progress for bucket:";
-        int i = 3;
-        for (RebalanceResultForBucket resultForBucket : bucketMap.values()) {
-            result[i++] = resultForBucket.toString();
+        List<String> result = new ArrayList<>();
+        if (progress.rebalanceId() != null) {
+            result.add("Rebalance id: " + progress.rebalanceId());
         }
-        return result;
+        result.add("Reblance total status: " + status);
+        result.add("Rebalance progress: " + formatAsPercentage(rebalanceProgress));
+        result.add("Rebalance detail progress for bucket:");
+        for (RebalanceResultForBucket resultForBucket : bucketMap.values()) {
+            result.add(resultForBucket.toString());
+        }
+        return result.toArray(new String[0]);
     }
 
     public static String formatAsPercentage(double value) {

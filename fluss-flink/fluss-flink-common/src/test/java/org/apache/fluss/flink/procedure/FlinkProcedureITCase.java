@@ -598,11 +598,14 @@ public abstract class FlinkProcedureITCase {
                                 CollectionUtil.iteratorToList(rows).stream()
                                         .map(Row::toString)
                                         .collect(Collectors.toList());
-                        assertThat(listProgressResult.size()).isEqualTo(plan.size() + 3);
-                        assertThat(listProgressResult.get(0))
-                                .isEqualTo("+I[Reblance total status: COMPLETED]");
+                        assertThat(listProgressResult.size()).isEqualTo(plan.size() + 2);
+                        assertThat(listProgressResult.get(0)).startsWith("+I[Rebalance id:");
                         assertThat(listProgressResult.get(1))
+                                .isEqualTo("+I[Reblance total status: COMPLETED]");
+                        assertThat(listProgressResult.get(2))
                                 .isEqualTo("+I[Rebalance progress: 100%]");
+                        assertThat(listProgressResult.get(3))
+                                .isEqualTo("+I[Rebalance detail progress for bucket:]");
                     }
                 });
     }

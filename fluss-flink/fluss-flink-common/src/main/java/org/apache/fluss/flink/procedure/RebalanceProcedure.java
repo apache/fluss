@@ -20,7 +20,6 @@ package org.apache.fluss.flink.procedure;
 import org.apache.fluss.client.admin.RebalancePlan;
 import org.apache.fluss.cluster.rebalance.GoalType;
 import org.apache.fluss.cluster.rebalance.RebalancePlanForBucket;
-import org.apache.fluss.metadata.TableBucket;
 
 import org.apache.flink.table.annotation.ArgumentHint;
 import org.apache.flink.table.annotation.DataTypeHint;
@@ -31,7 +30,6 @@ import javax.annotation.Nullable;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 
 /** Procedure to rebalance. */
 public class RebalanceProcedure extends ProcedureBase {
@@ -48,19 +46,18 @@ public class RebalanceProcedure extends ProcedureBase {
     public String[] call(ProcedureContext context, String priorityGoals, @Nullable Boolean dryRun)
             throws Exception {
         List<GoalType> goalTypes = validateAndGetPriorityGoals(priorityGoals);
-        RebalancePlan planForBucketMap = admin.rebalance(goalTypes, dryRun != null && dryRun).get();
-        return planForBucketMapToString(planForBucketMap.getPlanForBucketMap());
+        RebalancePlan rebalancePlan = admin.rebalance(goalTypes, dryRun != null && dryRun).get();
+        return planToString(rebalancePlan);
     }
 
-    private static String[] planForBucketMapToString(
-            Map<TableBucket, RebalancePlanForBucket> planForBucketMap) {
-        if (planForBucketMap == null || planForBucketMap.isEmpty()) {
-            return new String[] {};
-        }
-
-        return planForBucketMap.values().stream()
+    private static String[] planToString(RebalancePlan plan) {
+        List<String> result = new ArrayList<>();
+        result.add("Rebalance id: " + plan.getRebalanceId());
+        result.add("Detail rebalance plan:");
+        plan.getPlanForBucketMap().values().stream()
                 .map(RebalancePlanForBucket::toString)
-                .toArray(String[]::new);
+                .forEach(result::add);
+        return result.toArray(new String[0]);
     }
 
     private static List<GoalType> validateAndGetPriorityGoals(String priorityGoals) {
