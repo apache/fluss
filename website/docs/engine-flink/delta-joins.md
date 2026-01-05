@@ -19,7 +19,7 @@ Starting with **Apache Fluss 0.8**, streaming join jobs running on **Flink 2.1 o
 
 Traditional streaming joins in Flink require maintaining both input sides entirely in state to match records across streams. Delta join, by contrast, uses a **index-key lookup mechanism** to transform the behavior of querying data from the state into querying data from the Fluss source table, thereby avoiding redundant storage of the same data in both the Fluss source table and the state. This drastically reduces state size and improves performance for many streaming analytics and enrichment workloads.
 
-![](assets/delta_join.jpg)
+![](../assets/delta_join.jpg)
 
 ## Example: Delta Join in Flink 2.1
 
@@ -130,7 +130,7 @@ For example:
 - Full primary key: `(city_id, order_id)`
 - Bucket key: `city_id`
 
-This yields an **index** on the prefix key `city_id`, so that you can perform [Prefix Key Lookup](engine-flink/lookups.md#prefix-lookup) by the `city_id`.
+This yields an **index** on the prefix key `city_id`, so that you can perform [Prefix Key Lookup](/engine-flink/lookups.md#prefix-lookup) by the `city_id`.
 
 In this setup:
 * The delta join operator uses the prefix key (`city_id`) to retrieve only relevant right-side records matching each left-side event. 
