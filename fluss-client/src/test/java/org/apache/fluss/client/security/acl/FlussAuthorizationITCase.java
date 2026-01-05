@@ -458,7 +458,7 @@ public class FlussAuthorizationITCase {
         assertThatThrownBy(() -> guestAdmin.getLatestLakeSnapshot(DATA1_TABLE_PATH_PK).get())
                 .rootCause()
                 .isInstanceOf(LakeTableSnapshotNotExistException.class)
-                .hasMessageContaining("Lake table snapshot not exist for table");
+                .hasMessageContaining("Lake table snapshot doesn't exist for table");
     }
 
     @ParameterizedTest

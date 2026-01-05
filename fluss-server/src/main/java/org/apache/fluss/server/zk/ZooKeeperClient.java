@@ -1138,14 +1138,42 @@ public class ZooKeeperClient implements AutoCloseable {
      * Gets the {@link LakeTableSnapshot} for the given table ID.
      *
      * @param tableId the table ID
+     * @param snapshotId the snapshot id for the snapshot to get, null means to get latest snapshot
+     *     id
      * @return an Optional containing the LakeTableSnapshot if the table exists, empty otherwise
      * @throws Exception if the operation fails
      */
-    public Optional<LakeTableSnapshot> getLakeTableSnapshot(long tableId) throws Exception {
+    public Optional<LakeTableSnapshot> getLakeTableSnapshot(long tableId, @Nullable Long snapshotId)
+            throws Exception {
         Optional<LakeTable> optLakeTable = getLakeTable(tableId);
         if (optLakeTable.isPresent()) {
             // always get the latest snapshot
-            return Optional.of(optLakeTable.get().getOrReadLatestTableSnapshot());
+            if (snapshotId == null) {
+                return Optional.ofNullable(optLakeTable.get().getOrReadLatestTableSnapshot());
+            } else {
+                return Optional.ofNullable(optLakeTable.get().getOrReadTableSnapshot(snapshotId));
+            }
+
+        } else {
+            return Optional.empty();
+        }
+    }
+
+    /**
+     * Gets the latest readable {@link LakeTableSnapshot} for the given table ID.
+     *
+     * @param tableId the table ID
+     * @return an Optional containing the latest readable LakeTableSnapshot if found, empty
+     *     otherwise
+     * @throws Exception if the operation fails
+     */
+    public Optional<LakeTableSnapshot> getLatestReadableLakeTableSnapshot(long tableId)
+            throws Exception {
+        Optional<LakeTable> optLakeTable = getLakeTable(tableId);
+        if (optLakeTable.isPresent()) {
+            LakeTableSnapshot readableSnapshot =
+                    optLakeTable.get().getOrReadLatestReadableTableSnapshot();
+            return Optional.ofNullable(readableSnapshot);
         } else {
             return Optional.empty();
         }

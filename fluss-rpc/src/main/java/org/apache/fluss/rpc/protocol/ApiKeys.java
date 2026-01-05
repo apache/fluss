@@ -69,7 +69,7 @@ public enum ApiKeys {
     NOTIFY_KV_SNAPSHOT_OFFSET(1029, 0, 0, PRIVATE),
     COMMIT_LAKE_TABLE_SNAPSHOT(1030, 0, 0, PRIVATE),
     NOTIFY_LAKE_TABLE_OFFSET(1031, 0, 0, PRIVATE),
-    GET_LATEST_LAKE_SNAPSHOT(1032, 0, 0, PUBLIC),
+    GET_LAKE_SNAPSHOT(1032, 0, 0, PUBLIC),
     LIMIT_SCAN(1033, 0, 0, PUBLIC),
 
     // Version 0: Uses lake's encoder for prefix key encoding (legacy behavior).

@@ -97,7 +97,19 @@ public class LakeTable {
     @Nullable
     public LakeSnapshotMetadata getLatestLakeSnapshotMetadata() {
         if (lakeSnapshotMetadatas != null && !lakeSnapshotMetadatas.isEmpty()) {
-            return lakeSnapshotMetadatas.get(0);
+            return lakeSnapshotMetadatas.get(lakeSnapshotMetadatas.size() - 1);
+        }
+        return null;
+    }
+
+    @Nullable
+    private LakeSnapshotMetadata getLakeSnapshotMetadata(long snapshotId) {
+        if (lakeSnapshotMetadatas != null) {
+            for (LakeSnapshotMetadata lakeSnapshotMetadata : lakeSnapshotMetadatas) {
+                if (lakeSnapshotMetadata.snapshotId == snapshotId) {
+                    return lakeSnapshotMetadata;
+                }
+            }
         }
         return null;
     }
@@ -124,15 +136,73 @@ public class LakeTable {
         if (lakeTableSnapshot != null) {
             return lakeTableSnapshot;
         }
-        LakeSnapshotMetadata lakeSnapshotMetadata = getLatestLakeSnapshotMetadata();
+        return toLakeTableSnapshot(getLatestLakeSnapshotMetadata());
+    }
+
+    /**
+     * Gets the table snapshot for the given ID.
+     *
+     * <p>Returns the cached snapshot if the ID matches; otherwise, reads and reconstructs it from
+     * lake metadata.
+     *
+     * @return the {@link LakeTableSnapshot}, or null if not found.
+     */
+    @Nullable
+    public LakeTableSnapshot getOrReadTableSnapshot(long snapshotId) throws IOException {
+        // only happen in v1
+        if (lakeTableSnapshot != null && lakeTableSnapshot.getSnapshotId() == snapshotId) {
+            return lakeTableSnapshot;
+        }
+        LakeSnapshotMetadata lakeSnapshotMetadata = getLakeSnapshotMetadata(snapshotId);
+        if (lakeSnapshotMetadata == null) {
+            return null;
+        }
+        return toLakeTableSnapshot(lakeSnapshotMetadata);
+    }
+
+    /**
+     * Gets the latest readable table snapshot. *
+     *
+     * <p>Searches metadata in reverse order to find the newest snapshot with valid readable
+     * offsets.
+     *
+     * @return the latest readable {@link LakeTableSnapshot}, or null if none exist.
+     */
+    @Nullable
+    public LakeTableSnapshot getOrReadLatestReadableTableSnapshot() throws IOException {
+        // only happen in v1
+        if (lakeTableSnapshot != null) {
+            return lakeTableSnapshot;
+        }
+
+        // when fluss cluster upgrade, tiering service not upgrade,
+        // flink connector upgrade, and call getOrReadLatestReadableTableSnapshot
+        // will always get null.
+        // todo: do we need to consider such case?
+        for (int i = checkNotNull(lakeSnapshotMetadatas).size() - 1; i >= 0; i--) {
+            LakeSnapshotMetadata snapshotMetadata = lakeSnapshotMetadatas.get(i);
+            if (snapshotMetadata.readableOffsetsFilePath != null) {
+                return toLakeTableSnapshot(
+                        snapshotMetadata.snapshotId, snapshotMetadata.readableOffsetsFilePath);
+            }
+        }
+        return null;
+    }
+
+    private LakeTableSnapshot toLakeTableSnapshot(LakeSnapshotMetadata lakeSnapshotMetadata)
+            throws IOException {
         FsPath tieredOffsetsFilePath = checkNotNull(lakeSnapshotMetadata).tieredOffsetsFilePath;
-        FSDataInputStream inputStream =
-                tieredOffsetsFilePath.getFileSystem().open(tieredOffsetsFilePath);
+        return toLakeTableSnapshot(lakeSnapshotMetadata.snapshotId, tieredOffsetsFilePath);
+    }
+
+    private LakeTableSnapshot toLakeTableSnapshot(long snapshotId, FsPath offsetFilePath)
+            throws IOException {
+        FSDataInputStream inputStream = offsetFilePath.getFileSystem().open(offsetFilePath);
         try (ByteArrayOutputStream outputStream = new ByteArrayOutputStream()) {
             IOUtils.copyBytes(inputStream, outputStream, true);
             Map<TableBucket, Long> logOffsets =
                     TableBucketOffsets.fromJsonBytes(outputStream.toByteArray()).getOffsets();
-            return new LakeTableSnapshot(lakeSnapshotMetadata.snapshotId, logOffsets);
+            return new LakeTableSnapshot(snapshotId, logOffsets);
         }
     }
 

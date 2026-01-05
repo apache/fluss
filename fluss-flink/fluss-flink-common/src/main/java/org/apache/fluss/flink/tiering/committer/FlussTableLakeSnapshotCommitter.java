@@ -21,6 +21,7 @@ import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.lake.committer.LakeCommitResult;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.metrics.registry.MetricRegistry;
@@ -41,7 +42,10 @@ import org.apache.fluss.rpc.metrics.ClientMetricGroup;
 import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.utils.ExceptionUtils;
 
+import javax.annotation.Nullable;
+
 import java.io.IOException;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 
@@ -87,7 +91,8 @@ public class FlussTableLakeSnapshotCommitter implements AutoCloseable {
                         metadataUpdater::getCoordinatorServer, rpcClient, CoordinatorGateway.class);
     }
 
-    String prepareLakeSnapshot(
+    @VisibleForTesting
+    public String prepareLakeSnapshot(
             long tableId, TablePath tablePath, Map<TableBucket, Long> logEndOffsets)
             throws IOException {
         PbPrepareLakeTableRespForTable prepareResp;
@@ -121,21 +126,92 @@ public class FlussTableLakeSnapshotCommitter implements AutoCloseable {
         }
     }
 
-    void commit(
+    public void commit(
             long tableId,
-            long lakeSnapshotId,
-            String lakeBucketOffsetsPath,
+            TablePath tablePath,
+            LakeCommitResult lakeCommitResult,
+            String lakeBucketTieredOffsetsPath,
             Map<TableBucket, Long> logEndOffsets,
             Map<TableBucket, Long> logMaxTieredTimestamps)
+            throws IOException {
+        Long earliestSnapshotIDToKeep = lakeCommitResult.getEarliestSnapshotIDToKeep();
+        if (lakeCommitResult.committedIsReadable()) {
+            commit(
+                    tableId,
+                    lakeCommitResult.getCommittedSnapshotId(),
+                    lakeBucketTieredOffsetsPath,
+                    lakeBucketTieredOffsetsPath,
+                    logEndOffsets,
+                    logMaxTieredTimestamps,
+                    earliestSnapshotIDToKeep);
+        } else {
+            LakeCommitResult.ReadableSnapshot readableSnapshot =
+                    lakeCommitResult.getReadableSnapshot();
+            if (readableSnapshot == null) {
+                // readable snapshot is unknown
+                commit(
+                        tableId,
+                        lakeCommitResult.getCommittedSnapshotId(),
+                        lakeBucketTieredOffsetsPath,
+                        null,
+                        logEndOffsets,
+                        logMaxTieredTimestamps,
+                        earliestSnapshotIDToKeep);
+            } else {
+                // readable snapshot is known, we will first commit a snapshot with readable bucket
+                // offset
+                // prepare a readable bucket offset file for the readable snapshot
+                String readableSnapshotReadableOffsetsPath =
+                        prepareLakeSnapshot(
+                                tableId, tablePath, readableSnapshot.getReadableLogEndOffsets());
+
+                // prepare a tiered bucket offset file for the readable snapshot
+                String readableSnapshotTieredOffsetsPath =
+                        prepareLakeSnapshot(
+                                tableId, tablePath, readableSnapshot.getTieredLogEndOffsets());
+                // commit the readable snapshot
+                commit(
+                        tableId,
+                        readableSnapshot.getReadableSnapshotId(),
+                        readableSnapshotTieredOffsetsPath,
+                        readableSnapshotReadableOffsetsPath,
+                        Collections.emptyMap(),
+                        Collections.emptyMap(),
+                        earliestSnapshotIDToKeep);
+
+                // commit the tiered snapshot
+                commit(
+                        tableId,
+                        lakeCommitResult.getCommittedSnapshotId(),
+                        lakeBucketTieredOffsetsPath,
+                        // no readable snapshot offset path
+                        null,
+                        logEndOffsets,
+                        logMaxTieredTimestamps,
+                        earliestSnapshotIDToKeep);
+            }
+        }
+    }
+
+    void commit(
+            long tableId,
+            long snapshotId,
+            String lakeBucketTieredOffsetsPath,
+            @Nullable String readableLakeBucketTieredOffsetsPath,
+            Map<TableBucket, Long> logEndOffsets,
+            Map<TableBucket, Long> logMaxTieredTimestamps,
+            @Nullable Long earliestSnapshotIDToKeep)
             throws IOException {
         try {
             CommitLakeTableSnapshotRequest request =
                     toCommitLakeTableSnapshotRequest(
                             tableId,
-                            lakeSnapshotId,
-                            lakeBucketOffsetsPath,
+                            snapshotId,
+                            lakeBucketTieredOffsetsPath,
+                            readableLakeBucketTieredOffsetsPath,
                             logEndOffsets,
-                            logMaxTieredTimestamps);
+                            logMaxTieredTimestamps,
+                            earliestSnapshotIDToKeep);
             List<PbCommitLakeTableSnapshotRespForTable> commitLakeTableSnapshotRespForTables =
                     coordinatorGateway.commitLakeTableSnapshot(request).get().getTableRespsList();
             checkState(commitLakeTableSnapshotRespForTables.size() == 1);
@@ -148,7 +224,7 @@ public class FlussTableLakeSnapshotCommitter implements AutoCloseable {
             throw new IOException(
                     String.format(
                             "Fail to commit table lake snapshot id %d of table %d to Fluss.",
-                            lakeSnapshotId, tableId),
+                            snapshotId, tableId),
                     ExceptionUtils.stripExecutionException(exception));
         }
     }
@@ -197,17 +273,22 @@ public class FlussTableLakeSnapshotCommitter implements AutoCloseable {
      *
      * @param tableId the table ID
      * @param snapshotId the lake snapshot ID
-     * @param bucketOffsetsPath the file path where the bucket offsets is stored
+     * @param tieredBucketOffsetsPath the file path where the tiered bucket offsets is stored
+     * @param readableBucketTieredOffsetsPath the file path where the readable bucket offsets is
+     *     stored
      * @param logEndOffsets the log end offsets for each bucket
      * @param logMaxTieredTimestamps the max tiered timestamps for each bucket
+     * @param earliestSnapshotIDToKeep the earliest snapshot id to keep
      * @return the commit request
      */
     private CommitLakeTableSnapshotRequest toCommitLakeTableSnapshotRequest(
             long tableId,
             long snapshotId,
-            String bucketOffsetsPath,
+            String tieredBucketOffsetsPath,
+            @Nullable String readableBucketTieredOffsetsPath,
             Map<TableBucket, Long> logEndOffsets,
-            Map<TableBucket, Long> logMaxTieredTimestamps) {
+            Map<TableBucket, Long> logMaxTieredTimestamps,
+            @Nullable Long earliestSnapshotIDToKeep) {
         CommitLakeTableSnapshotRequest commitLakeTableSnapshotRequest =
                 new CommitLakeTableSnapshotRequest();
 
@@ -217,8 +298,14 @@ public class FlussTableLakeSnapshotCommitter implements AutoCloseable {
         pbLakeTableSnapshotMetadata.setSnapshotId(snapshotId);
         pbLakeTableSnapshotMetadata.setTableId(tableId);
         // tiered snapshot file path is equal to readable snapshot currently
-        pbLakeTableSnapshotMetadata.setTieredBucketOffsetsFilePath(bucketOffsetsPath);
-        pbLakeTableSnapshotMetadata.setReadableBucketOffsetsFilePath(bucketOffsetsPath);
+        pbLakeTableSnapshotMetadata.setTieredBucketOffsetsFilePath(tieredBucketOffsetsPath);
+        if (readableBucketTieredOffsetsPath != null) {
+            pbLakeTableSnapshotMetadata.setReadableBucketOffsetsFilePath(
+                    readableBucketTieredOffsetsPath);
+        }
+        if (earliestSnapshotIDToKeep != null) {
+            pbLakeTableSnapshotMetadata.setEarliestSnapshotIdToKeep(earliestSnapshotIDToKeep);
+        }
 
         // Add PbLakeTableSnapshotInfo for metrics reporting (to notify tablet servers about
         // synchronized log end offsets and max timestamps)

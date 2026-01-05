@@ -258,7 +258,10 @@ class PaimonTieringTest {
         try (LakeCommitter<PaimonWriteResult, PaimonCommittable> lakeCommitter =
                 createLakeCommitter(tablePath, tableInfo, new Configuration())) {
             PaimonCommittable committable = lakeCommitter.toCommittable(paimonWriteResults);
-            long snapshot = lakeCommitter.commit(committable, Collections.emptyMap());
+            long snapshot =
+                    lakeCommitter
+                            .commit(committable, Collections.emptyMap())
+                            .getCommittedSnapshotId();
             assertThat(snapshot).isEqualTo(1);
         }
 
@@ -330,7 +333,8 @@ class PaimonTieringTest {
         try (LakeCommitter<PaimonWriteResult, PaimonCommittable> lakeCommitter =
                 createLakeCommitter(tablePath, tableInfo, new Configuration())) {
             PaimonCommittable committable = lakeCommitter.toCommittable(paimonWriteResults);
-            snapshot = lakeCommitter.commit(committable, snapshotProperties);
+            snapshot =
+                    lakeCommitter.commit(committable, snapshotProperties).getCommittedSnapshotId();
             assertThat(snapshot).isEqualTo(1);
         }
 
@@ -751,6 +755,12 @@ class PaimonTieringTest {
                     @Override
                     public Configuration lakeTieringConfig() {
                         return lakeTieringConfig;
+                    }
+
+                    @Override
+                    public Configuration flussConfig() {
+                        // don't care about fluss config
+                        return new Configuration();
                     }
                 });
     }

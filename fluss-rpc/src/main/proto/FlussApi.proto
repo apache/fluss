@@ -401,11 +401,13 @@ message DropKvSnapshotLeaseRequest {
 
 message DropKvSnapshotLeaseResponse {}
 
-message GetLatestLakeSnapshotRequest {
+message GetLakeSnapshotRequest {
   required PbTablePath table_path = 1;
+  optional int64 snapshot_id = 2; // If not set, returns the latest snapshot
+  optional bool readable = 3; // If true, returns the latest readable snapshot
 }
 
-message GetLatestLakeSnapshotResponse {
+message GetLakeSnapshotResponse {
   required int64 table_id = 1;
   required int64 snapshotId = 2;
   repeated PbLakeSnapshotForBucket bucket_snapshots = 3;
@@ -488,6 +490,11 @@ message NotifyRemoteLogOffsetsResponse {
 
 message PrepareLakeTableSnapshotRequest {
   repeated PbTableOffsets bucket_offsets = 1;
+  // If true, ignore previous table offsets and do not merge with existing lake table offsets.
+  // If false (default), the system will merge the provided bucket offsets with the previous
+  // lake table offsets to ensure continuity. This is useful when you want to replace all offsets
+  // instead of merging with existing ones.
+  optional bool ignore_previous_table_offsets = 2;
 }
 
 message PrepareLakeTableSnapshotResponse {
@@ -1111,6 +1118,10 @@ message PbLakeTableSnapshotMetadata {
   required int64 snapshot_id = 2;
   required string tiered_bucket_offsets_file_path = 3;
   optional string readable_bucket_offsets_file_path = 4;
+  // Snapshot retention policy: The earliest snapshot ID to retain.
+  // 1. If set, the system will keep all snapshots in the range [earliest_snapshot_id_to_keep, current_snapshot_id].
+  // 2. If not set, the system defaults to a "Single Snapshot Retention" policy, keeping only the snapshot specified in this request.
+  optional int64 earliest_snapshot_id_to_keep = 5;
 }
 
 message PbLakeTableSnapshotInfo {

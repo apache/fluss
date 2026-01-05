@@ -26,7 +26,12 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.json.TableBucketOffsets;
+import org.apache.fluss.utils.types.Tuple2;
 
+import javax.annotation.Nullable;
+
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -71,26 +76,92 @@ public class LakeTableHelper {
 
     public void registerLakeTableSnapshotV2(
             long tableId, LakeTable.LakeSnapshotMetadata lakeSnapshotMetadata) throws Exception {
-        Optional<LakeTable> optPreviousLakeTable = zkClient.getLakeTable(tableId);
-        List<LakeTable.LakeSnapshotMetadata> previousLakeSnapshotMetadatas = null;
-        if (optPreviousLakeTable.isPresent()) {
-            previousLakeSnapshotMetadatas = optPreviousLakeTable.get().getLakeSnapshotMetadatas();
-        }
-        LakeTable lakeTable = new LakeTable(lakeSnapshotMetadata);
+        registerLakeTableSnapshotV2(tableId, lakeSnapshotMetadata, null);
+    }
+
+    /**
+     * Register a lake table snapshot and clean up old snapshots based on the table type.
+     *
+     * @param tableId the table ID
+     * @param lakeSnapshotMetadata the new snapshot metadata to register
+     * @param earliestSnapshotIDToKeep the earliest snapshot ID to keep. If null, only the latest
+     *     snapshot will be kept.
+     * @throws Exception if the operation fails
+     */
+    public void registerLakeTableSnapshotV2(
+            long tableId,
+            LakeTable.LakeSnapshotMetadata lakeSnapshotMetadata,
+            @Nullable Long earliestSnapshotIDToKeep)
+            throws Exception {
+        Optional<LakeTable> optPreviousTable = zkClient.getLakeTable(tableId);
+        List<LakeTable.LakeSnapshotMetadata> previousMetadatas =
+                optPreviousTable
+                        .map(LakeTable::getLakeSnapshotMetadatas)
+                        .orElse(Collections.emptyList());
+
+        // Determine which snapshots to keep and which to discard (but don't discard yet)
+
+        Tuple2<List<LakeTable.LakeSnapshotMetadata>, List<LakeTable.LakeSnapshotMetadata>> result =
+                determineSnapshotsToKeepAndDiscard(
+                        previousMetadatas, lakeSnapshotMetadata, earliestSnapshotIDToKeep);
+
+        List<LakeTable.LakeSnapshotMetadata> keptSnapshots = result.f0;
+        List<LakeTable.LakeSnapshotMetadata> snapshotsToDiscard = result.f1;
+
+        LakeTable lakeTable = new LakeTable(keptSnapshots);
         try {
-            zkClient.upsertLakeTable(tableId, lakeTable, optPreviousLakeTable.isPresent());
+            // First, upsert to ZK. Only after success, we discard old snapshots.
+            zkClient.upsertLakeTable(tableId, lakeTable, optPreviousTable.isPresent());
         } catch (Exception e) {
             LOG.warn("Failed to upsert lake table snapshot to zk.", e);
             throw e;
         }
 
-        // currently, we keep only one lake snapshot metadata in zk,
-        // todo: in solve paimon dv union read issue #2121, we'll keep multiple lake snapshot
-        // metadata
-        // discard previous lake snapshot metadata
-        if (previousLakeSnapshotMetadatas != null) {
-            previousLakeSnapshotMetadatas.forEach(LakeTable.LakeSnapshotMetadata::discard);
+        // After successful upsert, discard snapshots
+        for (LakeTable.LakeSnapshotMetadata metadata : snapshotsToDiscard) {
+            metadata.discard();
         }
+    }
+
+    /**
+     * Determines which snapshots should be retained or discarded based on the timeline according to
+     * {@code earliestSnapshotIDToKeep}.
+     */
+    private Tuple2<List<LakeTable.LakeSnapshotMetadata>, List<LakeTable.LakeSnapshotMetadata>>
+            determineSnapshotsToKeepAndDiscard(
+                    List<LakeTable.LakeSnapshotMetadata> previousMetadatas,
+                    LakeTable.LakeSnapshotMetadata newSnapshotMetadata,
+                    @Nullable Long earliestSnapshotIDToKeep) {
+        // Scenario 1: No retention boundary or no history -> Keep only latest
+        if (earliestSnapshotIDToKeep == null || previousMetadatas.isEmpty()) {
+            return new Tuple2<>(
+                    Collections.singletonList(newSnapshotMetadata),
+                    new ArrayList<>(previousMetadatas));
+        }
+
+        // Scenario 2: Find the split point based on position (
+        // not compare snapshot id directly for non-monotonic IDs, like iceberg)
+        int splitIndex = -1;
+        for (int i = 0; i < previousMetadatas.size(); i++) {
+            if (previousMetadatas.get(i).getSnapshotId() == earliestSnapshotIDToKeep) {
+                splitIndex = i;
+                break;
+            }
+        }
+
+        // If ID not found, play safe: keep everything
+        if (splitIndex == -1) {
+            List<LakeTable.LakeSnapshotMetadata> kept = new ArrayList<>(previousMetadatas);
+            kept.add(newSnapshotMetadata);
+            return new Tuple2<>(kept, Collections.emptyList());
+        }
+
+        List<LakeTable.LakeSnapshotMetadata> toDiscard =
+                new ArrayList<>(previousMetadatas.subList(0, splitIndex));
+        List<LakeTable.LakeSnapshotMetadata> toKeep =
+                new ArrayList<>(previousMetadatas.subList(splitIndex, previousMetadatas.size()));
+        toKeep.add(newSnapshotMetadata);
+        return new Tuple2<>(toKeep, toDiscard);
     }
 
     public TableBucketOffsets mergeTableBucketOffsets(

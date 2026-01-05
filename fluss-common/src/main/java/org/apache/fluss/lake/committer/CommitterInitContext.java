@@ -51,4 +51,11 @@ public interface CommitterInitContext {
      * @return the lake tiering config
      */
     Configuration lakeTieringConfig();
+
+    /**
+     * Returns the fluss config.
+     *
+     * @return the fluss config
+     */
+    Configuration flussConfig();
 }

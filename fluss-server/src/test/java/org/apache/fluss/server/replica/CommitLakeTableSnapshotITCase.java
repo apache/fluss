@@ -132,7 +132,7 @@ class CommitLakeTableSnapshotITCase {
     }
 
     private void checkLakeTableDataInZk(long tableId, LakeTableSnapshot expected) throws Exception {
-        LakeTableSnapshot lakeTableSnapshot = zkClient.getLakeTableSnapshot(tableId).get();
+        LakeTableSnapshot lakeTableSnapshot = zkClient.getLakeTableSnapshot(tableId, null).get();
         assertThat(lakeTableSnapshot).isEqualTo(expected);
     }
 
