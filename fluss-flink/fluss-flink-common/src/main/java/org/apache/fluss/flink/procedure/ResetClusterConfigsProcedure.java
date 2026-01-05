@@ -29,9 +29,9 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Procedure to reset cluster configuration dynamically.
+ * Procedure to reset cluster configurations to their default values.
  *
- * <p>This procedure allows modifying dynamic cluster configurations. The changes are:
+ * <p>This procedure reverts the configurations to their initial system defaults. The changes are:
  *
  * <ul>
  *   <li>Validated by the CoordinatorServer before persistence
@@ -47,12 +47,12 @@ import java.util.List;
  * CALL sys.reset_cluster_configs('kv.rocksdb.shared-rate-limiter.bytes-per-sec');
  *
  * -- reset multiple configurations at one time
- * CALL sys.reset_cluster_configs('kv.rocksdb.shared-rate-limiter.bytes-per-sec','datalake.format');
+ * CALL sys.reset_cluster_configs('kv.rocksdb.shared-rate-limiter.bytes-per-sec', 'datalake.format');
  *
  * </pre>
  *
- * <p><b>Note:</b> Not all configurations support dynamic changes. The server will validate the
- * change and reject it if the configuration cannot be reset dynamically.
+ * <p><b>Note:</b> In theory, an operation like <b>Reset to default value</b> should always succeed,
+ * as the default value should be a valid one
  */
 public class ResetClusterConfigsProcedure extends ProcedureBase {
 
@@ -64,19 +64,19 @@ public class ResetClusterConfigsProcedure extends ProcedureBase {
             // Validate config key
             if (configKeys.length == 0) {
                 throw new IllegalArgumentException(
-                        "config_pairs cannot be null or empty. "
+                        "config_keys cannot be null or empty. "
                                 + "Please specify valid configuration keys.");
             }
 
             List<AlterConfig> configList = new ArrayList<>();
-            StringBuilder resultMessage = new StringBuilder();
+            List<String> resultMessage = new ArrayList();
 
             for (String key : configKeys) {
                 String configKey = key.trim();
                 if (configKey.isEmpty()) {
                     throw new IllegalArgumentException(
                             "Config key cannot be null or empty. "
-                                    + "Please specify valid configuration key.");
+                                    + "Please specify a valid configuration key.");
                 }
 
                 String operationDesc = "deleted (reset to default)";
@@ -84,7 +84,7 @@ public class ResetClusterConfigsProcedure extends ProcedureBase {
                 AlterConfig alterConfig =
                         new AlterConfig(configKey, null, AlterConfigOpType.DELETE);
                 configList.add(alterConfig);
-                resultMessage.append(
+                resultMessage.add(
                         String.format(
                                 "Successfully %s configuration '%s'. ", operationDesc, configKey));
             }
@@ -93,9 +93,7 @@ public class ResetClusterConfigsProcedure extends ProcedureBase {
             // This will trigger validation on CoordinatorServer before persistence
             admin.alterClusterConfigs(configList).get();
 
-            return new String[] {
-                resultMessage + "The change is persisted in ZooKeeper and applied to all servers."
-            };
+            return resultMessage.toArray(new String[0]);
         } catch (IllegalArgumentException e) {
             // Re-throw validation errors with original message
             throw e;

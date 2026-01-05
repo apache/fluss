@@ -68,13 +68,13 @@ public class GetClusterConfigsProcedure extends ProcedureBase {
     }
 
     @ProcedureHint(
-            argument = {@ArgumentHint(name = "config_key", type = @DataTypeHint("STRING"))},
+            argument = {@ArgumentHint(name = "config_keys", type = @DataTypeHint("STRING"))},
             isVarArgs = true,
             output =
                     @DataTypeHint(
                             "ROW<config_key STRING, config_value STRING, config_source STRING>"))
-    public Row[] call(ProcedureContext context, String... configKey) throws Exception {
-        return getConfigs(configKey);
+    public Row[] call(ProcedureContext context, String... configKeys) throws Exception {
+        return getConfigs(configKeys);
     }
 
     private Row[] getConfigs(@Nullable String... configKeys) throws Exception {
@@ -109,8 +109,6 @@ public class GetClusterConfigsProcedure extends ProcedureBase {
                                         entry.source() != null
                                                 ? entry.source().name()
                                                 : "UNKNOWN"));
-                    } else {
-                        results.add(Row.of());
                     }
                 }
             }

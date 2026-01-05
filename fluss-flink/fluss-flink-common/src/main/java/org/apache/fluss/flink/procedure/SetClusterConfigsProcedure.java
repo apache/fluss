@@ -49,9 +49,6 @@ import java.util.List;
  *
  * -- Set multiple configurations at one time
  * CALL sys.set_cluster_configs('kv.rocksdb.shared-rate-limiter.bytes-per-sec', '200MB','datalake.format', 'paimon');
- *
- * -- Delete a configuration (reset to default)
- * CALL sys.set_cluster_configs('kv.rocksdb.shared-rate-limiter.bytes-per-sec', '');
  * </pre>
  *
  * <p><b>Note:</b> Not all configurations support dynamic changes. The server will validate the
@@ -78,7 +75,7 @@ public class SetClusterConfigsProcedure extends ProcedureBase {
                                 + "Please specify a valid configuration pairs.");
             }
             List<AlterConfig> configList = new ArrayList<>();
-            StringBuilder resultMessage = new StringBuilder();
+            List<String> resultMessage = new ArrayList<>();
 
             for (int i = 0; i < configPairs.length; i += 2) {
                 String configKey = configPairs[i].trim();
@@ -95,7 +92,7 @@ public class SetClusterConfigsProcedure extends ProcedureBase {
                 AlterConfig alterConfig =
                         new AlterConfig(configKey, configValue, AlterConfigOpType.SET);
                 configList.add(alterConfig);
-                resultMessage.append(
+                resultMessage.add(
                         String.format(
                                 "Successfully %s configuration '%s'. ", operationDesc, configKey));
             }
@@ -104,9 +101,7 @@ public class SetClusterConfigsProcedure extends ProcedureBase {
             // This will trigger validation on CoordinatorServer before persistence
             admin.alterClusterConfigs(configList).get();
 
-            return new String[] {
-                resultMessage + "The change is persisted in ZooKeeper and applied to all servers."
-            };
+            return resultMessage.toArray(new String[0]);
         } catch (IllegalArgumentException e) {
             // Re-throw validation errors with original message
             throw e;

@@ -284,6 +284,31 @@ public abstract class FlinkProcedureITCase {
             assertThat(row.getField(2)).isNotNull(); // config_source
         }
 
+        // Get multiple config
+        try (CloseableIterator<Row> resultIterator =
+                tEnv.executeSql(
+                                String.format(
+                                        "Call %s.sys.get_cluster_configs('%s', '%s')",
+                                        CATALOG_NAME,
+                                        ConfigOptions.KV_SHARED_RATE_LIMITER_BYTES_PER_SEC.key(),
+                                        ConfigOptions.DATALAKE_FORMAT.key()))
+                        .collect()) {
+            List<Row> results = CollectionUtil.iteratorToList(resultIterator);
+            assertThat(results).hasSize(2);
+            // the first row
+            Row row0 = results.get(0);
+            assertThat(row0.getField(0))
+                    .isEqualTo(ConfigOptions.KV_SHARED_RATE_LIMITER_BYTES_PER_SEC.key());
+            assertThat(row0.getField(1)).isEqualTo("100 mb");
+            assertThat(row0.getField(2)).isNotNull(); // config_source
+
+            // the second row
+            Row row1 = results.get(1);
+            assertThat(row1.getField(0)).isEqualTo(ConfigOptions.DATALAKE_FORMAT.key());
+            assertThat(row1.getField(1)).isEqualTo("paimon");
+            assertThat(row1.getField(2)).isNotNull(); // config_source
+        }
+
         // Get all configs
         try (CloseableIterator<Row> resultIterator =
                 tEnv.executeSql(String.format("Call %s.sys.get_cluster_configs()", CATALOG_NAME))
@@ -340,11 +365,14 @@ public abstract class FlinkProcedureITCase {
                                         ConfigOptions.DATALAKE_FORMAT.key()))
                         .collect()) {
             List<Row> results = CollectionUtil.iteratorToList(resultIterator);
-            assertThat(results).hasSize(1);
+            assertThat(results).hasSize(2);
             assertThat(results.get(0).getField(0))
                     .asString()
                     .contains("Successfully set to '300MB'")
-                    .contains(ConfigOptions.KV_SHARED_RATE_LIMITER_BYTES_PER_SEC.key())
+                    .contains(ConfigOptions.KV_SHARED_RATE_LIMITER_BYTES_PER_SEC.key());
+
+            assertThat(results.get(1).getField(0))
+                    .asString()
                     .contains("Successfully set to 'paimon'")
                     .contains(ConfigOptions.DATALAKE_FORMAT.key());
         }
@@ -365,9 +393,10 @@ public abstract class FlinkProcedureITCase {
         // reset cluster configs.
         tEnv.executeSql(
                         String.format(
-                                "Call %s.sys.reset_cluster_configs('%s')",
+                                "Call %s.sys.reset_cluster_configs('%s', '%s')",
                                 CATALOG_NAME,
-                                ConfigOptions.KV_SHARED_RATE_LIMITER_BYTES_PER_SEC.key()))
+                                ConfigOptions.KV_SHARED_RATE_LIMITER_BYTES_PER_SEC.key(),
+                                ConfigOptions.DATALAKE_FORMAT.key()))
                 .await();
     }
 
@@ -392,11 +421,15 @@ public abstract class FlinkProcedureITCase {
                                         ConfigOptions.KV_SHARED_RATE_LIMITER_BYTES_PER_SEC.key()))
                         .collect()) {
             List<Row> results = CollectionUtil.iteratorToList(resultIterator);
-            assertThat(results).hasSize(1);
+            assertThat(results).hasSize(2);
             assertThat(results.get(0).getField(0))
                     .asString()
                     .contains("Successfully deleted")
-                    .contains(ConfigOptions.DATALAKE_FORMAT.key())
+                    .contains(ConfigOptions.DATALAKE_FORMAT.key());
+
+            assertThat(results.get(1).getField(0))
+                    .asString()
+                    .contains("Successfully deleted")
                     .contains(ConfigOptions.KV_SHARED_RATE_LIMITER_BYTES_PER_SEC.key());
         }
     }
@@ -428,7 +461,61 @@ public abstract class FlinkProcedureITCase {
                                         .await())
                 .rootCause()
                 .hasMessageContaining(
-                        "config_pairs must be set in pairs. Please specify a valid configuration pairs.");
+                        "config_pairs must be set in pairs. Please specify a valid configuration pairs");
+
+        // Try to no parameters passed
+        assertThatThrownBy(
+                        () ->
+                                tEnv.executeSql(
+                                                String.format(
+                                                        "Call %s.sys.set_cluster_configs()",
+                                                        CATALOG_NAME))
+                                        .await())
+                .rootCause()
+                .hasMessageContaining(
+                        "config_pairs cannot be null or empty. Please specify a valid configuration pairs");
+
+        // Try to mismatched key-value pairs in the input parameters.
+        assertThatThrownBy(
+                        () ->
+                                tEnv.executeSql(
+                                                String.format(
+                                                        "Call %s.sys.set_cluster_configs('%s', 'paimon')",
+                                                        CATALOG_NAME,
+                                                        ConfigOptions
+                                                                .KV_SHARED_RATE_LIMITER_BYTES_PER_SEC
+                                                                .key()))
+                                        .await())
+                .rootCause()
+                .hasMessageContaining(
+                        "Could not parse value 'paimon' for key 'kv.rocksdb.shared-rate-limiter.bytes-per-sec'");
+    }
+
+    @Test
+    void testResetClusterConfigValidation() throws Exception {
+        // Try to reset an invalid config
+        assertThatThrownBy(
+                        () ->
+                                tEnv.executeSql(
+                                                String.format(
+                                                        "Call %s.sys.reset_cluster_configs('invalid.config.key')",
+                                                        CATALOG_NAME))
+                                        .await())
+                .rootCause()
+                .hasMessageContaining(
+                        "The config key invalid.config.key is not allowed to be changed dynamically");
+
+        // Try to no parameters passed
+        assertThatThrownBy(
+                        () ->
+                                tEnv.executeSql(
+                                                String.format(
+                                                        "Call %s.sys.reset_cluster_configs()",
+                                                        CATALOG_NAME))
+                                        .await())
+                .rootCause()
+                .hasMessageContaining(
+                        "config_keys cannot be null or empty. Please specify valid configuration keys");
     }
 
     @ParameterizedTest
