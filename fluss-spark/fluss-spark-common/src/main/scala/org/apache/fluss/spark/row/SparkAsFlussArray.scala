@@ -17,9 +17,10 @@
 
 package org.apache.fluss.spark.row
 
-import org.apache.fluss.row.{BinaryString, Decimal, InternalMap, TimestampLtz, TimestampNtz, InternalArray => FlussInternalArray, InternalRow => FlussInternalRow}
+import org.apache.fluss.row.{BinaryString, Decimal, InternalArray => FlussInternalArray, InternalMap, InternalRow => FlussInternalRow, TimestampLtz, TimestampNtz}
+
 import org.apache.spark.sql.catalyst.util.{ArrayData => SparkArrayData}
-import org.apache.spark.sql.types.{StructType, ArrayType => SparkArrayType, DataType => SparkDataType}
+import org.apache.spark.sql.types.{ArrayType => SparkArrayType, DataType => SparkDataType, StructType}
 
 /** Wraps a Spark [[SparkArrayData]] as a Fluss [[FlussInternalArray]]. */
 class SparkAsFlussArray(arrayData: SparkArrayData, elementType: SparkDataType)
