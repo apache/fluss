@@ -61,12 +61,6 @@ class FlussSparkTestBase extends QueryTest with SharedSparkSession {
     sql(s"USE $DEFAULT_DATABASE")
   }
 
-  override def test(testName: String, testTags: Tag*)(testFun: => Any)(implicit
-      pos: Position): Unit = {
-    println(testName)
-    super.test(testName, testTags: _*)(testFun)(pos)
-  }
-
   def createTablePath(tableName: String): TablePath = {
     TablePath.of(DEFAULT_DATABASE, tableName)
   }

@@ -82,6 +82,40 @@ class FlussCatalogTest extends FlussSparkTestBase {
     checkAnswer(sql("SHOW TABLES"), Nil)
   }
 
+  test("Catalog: show tables") {
+    withTable("test_tbl", "test_tbl1", "tbl_a") {
+      sql(s"CREATE TABLE $DEFAULT_DATABASE.test_tbl (id int, name string) COMMENT 'my test table'")
+      sql(
+        s"CREATE TABLE $DEFAULT_DATABASE.test_tbl1 (id int, name string) COMMENT 'my test table1'")
+      sql(s"CREATE TABLE $DEFAULT_DATABASE.tbl_a (id int, name string) COMMENT 'my table a'")
+
+      checkAnswer(
+        sql("SHOW TABLES"),
+        Row("fluss", "test_tbl", false) :: Row("fluss", "test_tbl1", false) :: Row(
+          "fluss",
+          "tbl_a",
+          false) :: Nil)
+
+      checkAnswer(
+        sql(s"SHOW TABLES in $DEFAULT_DATABASE"),
+        Row("fluss", "test_tbl", false) :: Row("fluss", "test_tbl1", false) :: Row(
+          "fluss",
+          "tbl_a",
+          false) :: Nil)
+
+      checkAnswer(
+        sql(s"SHOW TABLES from $DEFAULT_DATABASE"),
+        Row("fluss", "test_tbl", false) :: Row("fluss", "test_tbl1", false) :: Row(
+          "fluss",
+          "tbl_a",
+          false) :: Nil)
+
+      checkAnswer(
+        sql(s"SHOW TABLES from $DEFAULT_DATABASE like 'test_*'"),
+        Row("fluss", "test_tbl", false) :: Row("fluss", "test_tbl1", false) :: Nil)
+    }
+  }
+
   test("Catalog: primary-key table") {
     sql(s"""
            |CREATE TABLE $DEFAULT_DATABASE.test_tbl (id int, name string, pt string)
