@@ -42,8 +42,8 @@ import org.apache.fluss.rpc.messages.CreatePartitionRequest;
 import org.apache.fluss.rpc.messages.DropPartitionRequest;
 import org.apache.fluss.rpc.messages.GetFileSystemSecurityTokenResponse;
 import org.apache.fluss.rpc.messages.GetKvSnapshotMetadataResponse;
+import org.apache.fluss.rpc.messages.GetLakeSnapshotResponse;
 import org.apache.fluss.rpc.messages.GetLatestKvSnapshotsResponse;
-import org.apache.fluss.rpc.messages.GetLatestLakeSnapshotResponse;
 import org.apache.fluss.rpc.messages.ListOffsetsRequest;
 import org.apache.fluss.rpc.messages.ListPartitionInfosResponse;
 import org.apache.fluss.rpc.messages.LookupRequest;
@@ -210,7 +210,7 @@ public class ClientRpcMessageUtils {
                 toFsPathAndFileName(response.getSnapshotFilesList()), response.getLogOffset());
     }
 
-    public static LakeSnapshot toLakeTableSnapshotInfo(GetLatestLakeSnapshotResponse response) {
+    public static LakeSnapshot toLakeTableSnapshotInfo(GetLakeSnapshotResponse response) {
         long tableId = response.getTableId();
         long snapshotId = response.getSnapshotId();
         Map<TableBucket, Long> tableBucketsOffset =

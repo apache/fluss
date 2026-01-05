@@ -21,6 +21,7 @@ import org.apache.fluss.flink.tiering.committer.TestingCommittable;
 import org.apache.fluss.flink.tiering.source.TestingWriteResultSerializer;
 import org.apache.fluss.lake.committer.CommittedLakeSnapshot;
 import org.apache.fluss.lake.committer.CommitterInitContext;
+import org.apache.fluss.lake.committer.LakeCommitResult;
 import org.apache.fluss.lake.committer.LakeCommitter;
 import org.apache.fluss.lake.serializer.SimpleVersionedSerializer;
 import org.apache.fluss.lake.writer.LakeTieringFactory;
@@ -120,9 +121,10 @@ public class TestingLakeTieringFactory
         }
 
         @Override
-        public long commit(TestingCommittable committable, Map<String, String> snapshotProperties)
+        public LakeCommitResult commit(
+                TestingCommittable committable, Map<String, String> snapshotProperties)
                 throws IOException {
-            return ++currentSnapshot;
+            return LakeCommitResult.committedIsReadable(++currentSnapshot);
         }
 
         @Override
