@@ -23,6 +23,7 @@ import org.apache.fluss.row.GenericArray;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
+
 import org.apache.iceberg.data.Record;
 import org.apache.iceberg.types.Types;
 import org.junit.jupiter.api.Test;
