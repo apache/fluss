@@ -1320,18 +1320,18 @@ public class CoordinatorEventProcessor implements EventProcessor {
      *
      * <ul>
      *   <li>B1. Move all replicas in AR to OnlineReplica state.
-     *   <li>B2. Send a LeaderAndIsr request with RS = TRS. This will prevent the leader from adding
+     *   <li>B2. Set RS = TRS, AR = [], RR = [] in memory.
+     *   <li>B3. Send a LeaderAndIsr request with RS = TRS. This will prevent the leader from adding
      *       any replica in TRS - ORS back in the isr. If the current leader is not in TRS or isn't
      *       alive, we move the leader to a new replica in TRS. We may send the LeaderAndIsr to more
      *       than the TRS replicas due to the way the partition state machine works (it reads
      *       replicas from ZK)
-     *   <li>B3. Move all replicas in RR to OfflineReplica state. As part of OfflineReplica state
+     *   <li>B4. Move all replicas in RR to OfflineReplica state. As part of OfflineReplica state
      *       change, we shrink the isr to remove RR in ZooKeeper and send a LeaderAndIsr ONLY to the
      *       Leader to notify it of the shrunk isr. After that, we send a StopReplica (delete =
      *       false) to the replicas in RR.
-     *   <li>B4. Move all replicas in RR to NonExistentReplica state. This will send a StopReplica
+     *   <li>B5. Move all replicas in RR to NonExistentReplica state. This will send a StopReplica
      *       (delete = true) to he replicas in RR to physically delete the replicas on disk.
-     *   <li>B5. Set RS = TRS, AR = [], RR = [] in memory.
      *   <li>B6. Update ZK with RS=TRS, AR=[], RR=[].
      *   <li>B7. After electing leader, the replicas and isr information changes. So resend the
      *       update metadata request to every tabletServer.
@@ -1395,15 +1395,15 @@ public class CoordinatorEventProcessor implements EventProcessor {
                                             new TableBucketReplica(tableBucket, replica)),
                                     OnlineReplica));
             List<Integer> targetReplicas = reassignment.getTargetReplicas();
-            // B2. Send LeaderAndIsr request with a potential new leader (if current leader not in
-            // TRS) and a new RS (using TRS) and same isr to every tabletServer in ORS + TRS or TRS
-            maybeReassignedBucketLeaderIfRequired(tableBucket, targetReplicas);
-            // B3. replicas in RR -> Offline (force those replicas out of isr)
-            // B4. replicas in RR -> NonExistentReplica (force those replicas to be deleted)
-            stopRemovedReplicasOfReassignedBucket(tableBucket, removingReplicas);
-            // B5. Set RS = TRS, AR = [], RR = [] in memory.
+            // B2. Set RS = TRS, AR = [], RR = [] in memory.
             coordinatorContext.updateBucketReplicaAssignment(
                     tableBucket, reassignment.getTargetReplicas());
+            // B3. Send LeaderAndIsr request with a potential new leader (if current leader not in
+            // TRS) and a new RS (using TRS) and same isr to every tabletServer in ORS + TRS or TRS
+            maybeReassignedBucketLeaderIfRequired(tableBucket, targetReplicas);
+            // B4. replicas in RR -> Offline (force those replicas out of isr)
+            // B5. replicas in RR -> NonExistentReplica (force those replicas to be deleted)
+            stopRemovedReplicasOfReassignedBucket(tableBucket, removingReplicas);
             // B6. Update ZK with RS = TRS, AR = [], RR = [].
             updateReplicaAssignmentForBucket(tableBucket, targetReplicas);
             // B7. After electing a leader in B3, the replicas and isr information changes, so
