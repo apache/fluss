@@ -45,6 +45,7 @@ import org.apache.fluss.record.MemoryLogRecordsIndexedBuilder;
 import org.apache.fluss.remote.RemoteLogSegment;
 import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.GenericArray;
+import org.apache.fluss.row.GenericMap;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.arrow.ArrowWriter;
@@ -139,6 +140,14 @@ public class DataTestUtils {
             return null;
         }
 
+        // If already an internal type, return as-is
+        if (obj instanceof InternalRow
+                || obj instanceof GenericArray
+                || obj instanceof GenericMap
+                || obj instanceof BinaryString) {
+            return obj;
+        }
+
         DataTypeRoot typeRoot = dataType.getTypeRoot();
 
         if (typeRoot == DataTypeRoot.ROW) {
@@ -164,6 +173,26 @@ public class DataTestUtils {
             }
             throw new IllegalArgumentException(
                     "Expected array for ARRAY type, but got: " + obj.getClass().getSimpleName());
+        }
+
+        if (typeRoot == DataTypeRoot.MAP) {
+            if (obj instanceof Object[]) {
+                Object[] mapData = (Object[]) obj;
+                if (mapData.length % 2 != 0) {
+                    throw new IllegalArgumentException(
+                            "MAP data must have even number of elements (key-value pairs)");
+                }
+                DataType keyType = dataType.getChildren().get(0);
+                DataType valueType = dataType.getChildren().get(1);
+                Object[] convertedData = new Object[mapData.length];
+                for (int j = 0; j < mapData.length; j += 2) {
+                    convertedData[j] = toInternalObject(mapData[j], keyType);
+                    convertedData[j + 1] = toInternalObject(mapData[j + 1], valueType);
+                }
+                return GenericMap.of(convertedData);
+            }
+            throw new IllegalArgumentException(
+                    "Expected Object[] for MAP type, but got: " + obj.getClass().getSimpleName());
         }
 
         if (obj instanceof String) {

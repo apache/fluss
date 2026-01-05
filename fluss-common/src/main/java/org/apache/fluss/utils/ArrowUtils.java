@@ -31,6 +31,7 @@ import org.apache.fluss.row.arrow.vectors.ArrowDecimalColumnVector;
 import org.apache.fluss.row.arrow.vectors.ArrowDoubleColumnVector;
 import org.apache.fluss.row.arrow.vectors.ArrowFloatColumnVector;
 import org.apache.fluss.row.arrow.vectors.ArrowIntColumnVector;
+import org.apache.fluss.row.arrow.vectors.ArrowMapColumnVector;
 import org.apache.fluss.row.arrow.vectors.ArrowRowColumnVector;
 import org.apache.fluss.row.arrow.vectors.ArrowSmallIntColumnVector;
 import org.apache.fluss.row.arrow.vectors.ArrowTimeColumnVector;
@@ -49,6 +50,7 @@ import org.apache.fluss.row.arrow.writers.ArrowDoubleWriter;
 import org.apache.fluss.row.arrow.writers.ArrowFieldWriter;
 import org.apache.fluss.row.arrow.writers.ArrowFloatWriter;
 import org.apache.fluss.row.arrow.writers.ArrowIntWriter;
+import org.apache.fluss.row.arrow.writers.ArrowMapWriter;
 import org.apache.fluss.row.arrow.writers.ArrowRowWriter;
 import org.apache.fluss.row.arrow.writers.ArrowSmallIntWriter;
 import org.apache.fluss.row.arrow.writers.ArrowTimeWriter;
@@ -87,6 +89,7 @@ import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.VarCharVector;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.VectorLoader;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.VectorSchemaRoot;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.complex.ListVector;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.complex.MapVector;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.complex.StructVector;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.compression.NoCompressionCodec;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.ipc.ReadChannel;
@@ -339,6 +342,16 @@ public class ArrowUtils {
             FieldVector elementFieldVector = ((ListVector) vector).getDataVector();
             return new ArrowArrayWriter(
                     vector, ArrowUtils.createArrowFieldWriter(elementFieldVector, elementType));
+        } else if (vector instanceof MapVector && dataType instanceof MapType) {
+            MapType mapType = (MapType) dataType;
+            MapVector mapVector = (MapVector) vector;
+            StructVector structVector = (StructVector) mapVector.getDataVector();
+            FieldVector keyVector = structVector.getChild(MapVector.KEY_NAME);
+            FieldVector valueVector = structVector.getChild(MapVector.VALUE_NAME);
+            return new ArrowMapWriter(
+                    vector,
+                    ArrowUtils.createArrowFieldWriter(keyVector, mapType.getKeyType()),
+                    ArrowUtils.createArrowFieldWriter(valueVector, mapType.getValueType()));
         } else if (vector instanceof StructVector && dataType instanceof RowType) {
             RowType rowType = (RowType) dataType;
             StructVector structVector = (StructVector) vector;
@@ -356,7 +369,7 @@ public class ArrowUtils {
         }
     }
 
-    private static ColumnVector createArrowColumnVector(ValueVector vector, DataType dataType) {
+    public static ColumnVector createArrowColumnVector(ValueVector vector, DataType dataType) {
         if (vector instanceof TinyIntVector) {
             return new ArrowTinyIntColumnVector((TinyIntVector) vector);
         } else if (vector instanceof SmallIntVector) {
@@ -399,7 +412,10 @@ public class ArrowUtils {
             return new ArrowArrayColumnVector(
                     listVector,
                     ArrowUtils.createArrowColumnVector(listVector.getDataVector(), elementType));
-
+        } else if (vector instanceof MapVector && dataType instanceof MapType) {
+            MapType mapType = (MapType) dataType;
+            return new ArrowMapColumnVector(
+                    (FieldVector) vector, mapType.getKeyType(), mapType.getValueType());
         } else if (vector instanceof StructVector && dataType instanceof RowType) {
             RowType rowType = (RowType) dataType;
             StructVector structVector = (StructVector) vector;
@@ -434,9 +450,19 @@ public class ArrowUtils {
             for (DataField field : rowType.getFields()) {
                 children.add(toArrowField(field.getName(), field.getType()));
             }
+        } else if (logicalType instanceof MapType) {
+            MapType mapType = (MapType) logicalType;
+            // Map keys are always non-nullable (enforced by MapType constructor)
+            Field keyField = toArrowField(MapVector.KEY_NAME, mapType.getKeyType());
+            Field valueField = toArrowField(MapVector.VALUE_NAME, mapType.getValueType());
+            FieldType structFieldType = new FieldType(false, ArrowType.Struct.INSTANCE, null);
+            List<Field> structChildren = new ArrayList<>();
+            structChildren.add(keyField);
+            structChildren.add(valueField);
+            Field structField =
+                    new Field(MapVector.DATA_VECTOR_NAME, structFieldType, structChildren);
+            children = Collections.singletonList(structField);
         }
-        // TODO: Add Map type support in future
-        // else if (logicalType instanceof MapType) { ... }
         return new Field(fieldName, fieldType, children);
     }
 

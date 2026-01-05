@@ -21,6 +21,7 @@ package org.apache.fluss.row;
 import org.apache.fluss.annotation.PublicEvolving;
 import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.row.serializer.ArraySerializer;
+import org.apache.fluss.row.serializer.MapSerializer;
 import org.apache.fluss.row.serializer.RowSerializer;
 
 /**
@@ -68,8 +69,7 @@ public interface SequentialBinaryWriter extends BinaryWriter {
 
     void writeArray(InternalArray value, ArraySerializer serializer);
 
-    // TODO: Map and Row write methods will be added in Issue #1973 and #1974
-    // void writeMap(InternalMap value, InternalMapSerializer serializer);
+    void writeMap(InternalMap value, MapSerializer serializer);
 
     void writeRow(InternalRow value, RowSerializer serializer);
 
@@ -157,6 +157,11 @@ public interface SequentialBinaryWriter extends BinaryWriter {
     @Override
     default void writeArray(int pos, InternalArray value, ArraySerializer serializer) {
         writeArray(value, serializer);
+    }
+
+    @Override
+    default void writeMap(int pos, InternalMap value, MapSerializer serializer) {
+        writeMap(value, serializer);
     }
 
     @Override

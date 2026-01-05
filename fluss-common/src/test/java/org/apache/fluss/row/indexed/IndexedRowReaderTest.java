@@ -22,9 +22,12 @@ import org.apache.fluss.row.BinaryWriter;
 import org.apache.fluss.row.Decimal;
 import org.apache.fluss.row.GenericArray;
 import org.apache.fluss.row.GenericRow;
+import org.apache.fluss.row.InternalArray;
+import org.apache.fluss.row.InternalMap;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypes;
+import org.apache.fluss.types.MapType;
 import org.apache.fluss.utils.DateTimeUtils;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -120,8 +123,21 @@ public class IndexedRowReaderTest {
                                 GenericArray.of(fromString("a"), null, fromString("c")),
                                 null,
                                 GenericArray.of(fromString("hello"), fromString("world"))));
+        MapType mapType = (MapType) dataTypes[22];
+        InternalMap map = reader.readMap(mapType.getKeyType(), mapType.getValueType());
+        assertThat(map.size()).isEqualTo(3);
+
+        // Assert map keys and values
+        InternalArray keys = map.keyArray();
+        InternalArray values = map.valueArray();
+        assertThat(keys.getInt(0)).isEqualTo(0);
+        assertThat(keys.getInt(1)).isEqualTo(1);
+        assertThat(keys.getInt(2)).isEqualTo(2);
+        assertThat(values.isNullAt(0)).isTrue();
+        assertThat(values.getString(1)).isEqualTo(fromString("1"));
+        assertThat(values.getString(2)).isEqualTo(fromString("2"));
         InternalRow nestedRow =
-                reader.readRow(dataTypes[22].getChildren().toArray(new DataType[0]));
+                reader.readRow(dataTypes[23].getChildren().toArray(new DataType[0]));
         GenericRow expectedInnerRow = GenericRow.of(22);
         GenericRow expectedNestedRow = GenericRow.of(123, expectedInnerRow, fromString("Test"));
         assertThatRow(nestedRow)

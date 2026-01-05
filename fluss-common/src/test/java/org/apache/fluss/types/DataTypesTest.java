@@ -549,14 +549,21 @@ public class DataTypesTest {
     @Test
     void testMapType() {
         MapType mapType = new MapType(new IntType(), new CharType(5));
-        dataTypeBaseAssert(mapType.getKeyType(), true, "INT", new IntType(false));
+        // Map keys are automatically converted to non-nullable
+        dataTypeBaseAssert(mapType.getKeyType(), false, "INT NOT NULL", new IntType(true));
         dataTypeBaseAssert(mapType.getValueType(), true, "CHAR(5)", new CharType(1));
         dataTypeBaseAssert(
-                mapType, true, "MAP<INT, CHAR(5)>", new MapType(new IntType(), new CharType(1)));
+                mapType,
+                true,
+                "MAP<INT NOT NULL, CHAR(5)>",
+                new MapType(new IntType(), new CharType(1)));
 
         mapType = DataTypes.MAP(new IntType(), new CharType(5));
         dataTypeBaseAssert(
-                mapType, true, "MAP<INT, CHAR(5)>", new MapType(new IntType(), new CharType(1)));
+                mapType,
+                true,
+                "MAP<INT NOT NULL, CHAR(5)>",
+                new MapType(new IntType(), new CharType(1)));
 
         assertThatThrownBy(() -> new MapType(null, new CharType(5)))
                 .isInstanceOf(NullPointerException.class)
@@ -568,7 +575,8 @@ public class DataTypesTest {
 
         // test get children.
         assertThat(mapType.getChildren().size()).isEqualTo(2);
-        assertThat(mapType.getChildren()).containsExactly(new IntType(), new CharType(5));
+        // Key type is automatically converted to non-nullable
+        assertThat(mapType.getChildren()).containsExactly(new IntType(false), new CharType(5));
         // test getTypeRoot.
         assertThat(mapType.getTypeRoot().getFamilies())
                 .containsExactlyInAnyOrder(DataTypeFamily.CONSTRUCTED, DataTypeFamily.EXTENSION);

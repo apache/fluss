@@ -21,15 +21,18 @@ import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.Decimal;
 import org.apache.fluss.row.InternalArray;
+import org.apache.fluss.row.InternalMap;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
 import org.apache.fluss.types.ArrayType;
 import org.apache.fluss.types.DataType;
+import org.apache.fluss.types.MapType;
 import org.apache.fluss.types.RowType;
 
 import org.apache.flink.table.data.DecimalData;
 import org.apache.flink.table.data.GenericArrayData;
+import org.apache.flink.table.data.GenericMapData;
 import org.apache.flink.table.data.GenericRowData;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.data.StringData;
@@ -37,6 +40,8 @@ import org.apache.flink.table.data.TimestampData;
 import org.apache.flink.types.RowKind;
 
 import java.io.Serializable;
+import java.util.HashMap;
+import java.util.Map;
 
 import static org.apache.fluss.flink.utils.FlinkConversions.toFlinkRowKind;
 
@@ -162,8 +167,30 @@ public class FlussRowToFlinkRowConverter {
                     return new GenericArrayData(flinkArray);
                 };
             case MAP:
-                // TODO: Add Map type support in future
-                throw new UnsupportedOperationException("Map type not supported yet");
+                MapType mapType = (MapType) flussDataType;
+                InternalArray.ElementGetter keyGetter =
+                        InternalArray.createElementGetter(mapType.getKeyType());
+                InternalArray.ElementGetter valueGetter =
+                        InternalArray.createElementGetter(mapType.getValueType());
+                FlussDeserializationConverter keyConverter =
+                        createNullableInternalConverter(mapType.getKeyType());
+                FlussDeserializationConverter valueConverter =
+                        createNullableInternalConverter(mapType.getValueType());
+                return (flussField) -> {
+                    InternalMap flussMap = (InternalMap) flussField;
+                    InternalArray keyArray = flussMap.keyArray();
+                    InternalArray valueArray = flussMap.valueArray();
+                    int size = flussMap.size();
+                    Map<Object, Object> javaMap = new HashMap<>();
+                    for (int i = 0; i < size; i++) {
+                        Object flussKey = keyGetter.getElementOrNull(keyArray, i);
+                        Object flussValue = valueGetter.getElementOrNull(valueArray, i);
+                        Object flinkKey = keyConverter.deserialize(flussKey);
+                        Object flinkValue = valueConverter.deserialize(flussValue);
+                        javaMap.put(flinkKey, flinkValue);
+                    }
+                    return new GenericMapData(javaMap);
+                };
             case ROW:
                 RowType rowType = (RowType) flussDataType;
                 int fieldCount = rowType.getFieldCount();

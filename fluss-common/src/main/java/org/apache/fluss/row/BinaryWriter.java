@@ -20,9 +20,11 @@ package org.apache.fluss.row;
 import org.apache.fluss.annotation.PublicEvolving;
 import org.apache.fluss.row.BinaryRow.BinaryRowFormat;
 import org.apache.fluss.row.serializer.ArraySerializer;
+import org.apache.fluss.row.serializer.MapSerializer;
 import org.apache.fluss.row.serializer.RowSerializer;
 import org.apache.fluss.types.ArrayType;
 import org.apache.fluss.types.DataType;
+import org.apache.fluss.types.MapType;
 import org.apache.fluss.types.RowType;
 
 import javax.annotation.Nullable;
@@ -77,6 +79,8 @@ public interface BinaryWriter {
     void writeTimestampLtz(int pos, TimestampLtz value, int precision);
 
     void writeArray(int pos, InternalArray value, ArraySerializer serializer);
+
+    void writeMap(int pos, InternalMap value, MapSerializer serializer);
 
     void writeRow(int pos, InternalRow value, RowSerializer serializer);
 
@@ -164,9 +168,11 @@ public interface BinaryWriter {
                         writer.writeArray(pos, (InternalArray) value, arraySerializer);
 
             case MAP:
-                // TODO: Map type support will be added in Issue #1973
-                throw new UnsupportedOperationException(
-                        "Map type is not supported yet. Will be added in Issue #1973.");
+                MapType mapType = (MapType) elementType;
+                final MapSerializer mapSerializer =
+                        new MapSerializer(mapType.getKeyType(), mapType.getValueType(), rowFormat);
+                return (writer, pos, value) ->
+                        writer.writeMap(pos, (InternalMap) value, mapSerializer);
             case ROW:
                 if (rowFormat == null) {
                     throw new IllegalArgumentException(

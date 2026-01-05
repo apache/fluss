@@ -28,6 +28,8 @@ import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.DateTimeUtils;
 
+import org.apache.flink.table.data.ArrayData;
+import org.apache.flink.table.data.MapData;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.types.RowKind;
 import org.junit.jupiter.api.Test;
@@ -125,12 +127,23 @@ class FlussRowToFlinkRowConverterTest {
             assertThat(stringArray2)
                     .isEqualTo(new BinaryString[] {fromString("hello"), fromString("world")});
 
+            // map
+            MapData mapData = flinkRow.getMap(22);
+            ArrayData keyArray = mapData.keyArray();
+            ArrayData valueArray = mapData.valueArray();
+            assertThat(keyArray.getInt(0)).isEqualTo(0);
+            assertThat(valueArray.isNullAt(0)).isTrue();
+            assertThat(keyArray.getInt(1)).isEqualTo(1);
+            assertThat(valueArray.getString(1).toString()).isEqualTo("1");
+            assertThat(keyArray.getInt(2)).isEqualTo(2);
+            assertThat(valueArray.getString(2).toString()).isEqualTo("2");
+
             // nested row: ROW<u1: INT, u2: ROW<v1: INT>, u3: STRING>
-            assertThat(flinkRow.getRow(22, 3)).isNotNull();
-            assertThat(flinkRow.getRow(22, 3).getInt(0)).isEqualTo(123);
-            assertThat(flinkRow.getRow(22, 3).getRow(1, 1)).isNotNull();
-            assertThat(flinkRow.getRow(22, 3).getRow(1, 1).getInt(0)).isEqualTo(22);
-            assertThat(flinkRow.getRow(22, 3).getString(2).toString()).isEqualTo("Test");
+            assertThat(flinkRow.getRow(23, 3)).isNotNull();
+            assertThat(flinkRow.getRow(23, 3).getInt(0)).isEqualTo(123);
+            assertThat(flinkRow.getRow(23, 3).getRow(1, 1)).isNotNull();
+            assertThat(flinkRow.getRow(23, 3).getRow(1, 1).getInt(0)).isEqualTo(22);
+            assertThat(flinkRow.getRow(23, 3).getString(2).toString()).isEqualTo("Test");
         }
     }
 }

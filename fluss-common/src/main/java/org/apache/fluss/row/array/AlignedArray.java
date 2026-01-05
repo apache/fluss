@@ -20,8 +20,10 @@
 package org.apache.fluss.row.array;
 
 import org.apache.fluss.row.BinaryArray;
+import org.apache.fluss.row.BinaryMap;
 import org.apache.fluss.row.BinarySegmentUtils;
 import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.row.map.AlignedMap;
 
 /**
  * A {@link BinaryArray} that uses {@link org.apache.fluss.row.aligned.AlignedRow} as the binary
@@ -38,5 +40,10 @@ public class AlignedArray extends BinaryArray {
     @Override
     protected BinaryArray createNestedArrayInstance() {
         return new AlignedArray();
+    }
+
+    @Override
+    protected BinaryMap createNestedMapInstance() {
+        return new AlignedMap();
     }
 }

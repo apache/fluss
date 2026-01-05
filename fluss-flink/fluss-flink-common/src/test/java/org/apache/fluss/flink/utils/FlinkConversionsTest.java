@@ -110,7 +110,7 @@ public class FlinkConversionsTest {
                         org.apache.flink.table.api.DataTypes.ARRAY(
                                 org.apache.flink.table.api.DataTypes.STRING()),
                         org.apache.flink.table.api.DataTypes.MAP(
-                                org.apache.flink.table.api.DataTypes.INT(),
+                                org.apache.flink.table.api.DataTypes.INT().notNull(),
                                 org.apache.flink.table.api.DataTypes.STRING()),
                         org.apache.flink.table.api.DataTypes.ROW(
                                 org.apache.flink.table.api.DataTypes.FIELD(

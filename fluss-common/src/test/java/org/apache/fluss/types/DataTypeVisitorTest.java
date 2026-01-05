@@ -67,7 +67,7 @@ public class DataTypeVisitorTest {
             "STRING",
             "BYTES",
             "ARRAY<INT>",
-            "MAP<INT, INT>",
+            "MAP<INT NOT NULL, INT>",
             "ROW<`a` INT>"
         };
 

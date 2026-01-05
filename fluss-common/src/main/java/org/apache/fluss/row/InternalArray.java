@@ -23,11 +23,14 @@ import org.apache.fluss.row.columnar.ColumnarRow;
 import org.apache.fluss.row.columnar.VectorizedColumnBatch;
 import org.apache.fluss.types.ArrayType;
 import org.apache.fluss.types.DataType;
+import org.apache.fluss.types.MapType;
 import org.apache.fluss.types.RowType;
 
 import javax.annotation.Nullable;
 
 import java.io.Serializable;
+import java.util.HashMap;
+import java.util.Map;
 
 import static org.apache.fluss.types.DataTypeChecks.getLength;
 import static org.apache.fluss.types.DataTypeChecks.getPrecision;
@@ -133,12 +136,13 @@ public interface InternalArray extends DataGetters {
             case ARRAY:
                 elementGetter = InternalArray::getArray;
                 break;
+            case MAP:
+                elementGetter = InternalArray::getMap;
+                break;
             case ROW:
                 final int rowFieldCount = ((RowType) fieldType).getFieldCount();
                 elementGetter = (array, pos) -> array.getRow(pos, rowFieldCount);
                 break;
-                // TODO: MAP support will be added in Issue #1973
-            case MAP:
             default:
                 String msg =
                         String.format(
@@ -184,6 +188,25 @@ public interface InternalArray extends DataGetters {
                             return new GenericArray(objs);
                         };
                 break;
+            case MAP:
+                DataType keyType = ((MapType) fieldType).getKeyType();
+                DataType valueType = ((MapType) fieldType).getValueType();
+                ElementGetter keyGetter = createDeepElementGetter(keyType);
+                ElementGetter valueGetter = createDeepElementGetter(valueType);
+                elementGetter =
+                        (array, pos) -> {
+                            InternalMap inner = array.getMap(pos);
+                            InternalArray keys = inner.keyArray();
+                            InternalArray values = inner.valueArray();
+                            Map<Object, Object> map = new HashMap<>();
+                            for (int i = 0; i < keys.size(); i++) {
+                                Object key = keyGetter.getElementOrNull(keys, i);
+                                Object value = valueGetter.getElementOrNull(values, i);
+                                map.put(key, value);
+                            }
+                            return new GenericMap(map);
+                        };
+                break;
             case ROW:
                 RowType rowType = (RowType) fieldType;
                 int numFields = rowType.getFieldCount();
@@ -201,12 +224,6 @@ public interface InternalArray extends DataGetters {
                             return genericRow;
                         };
                 break;
-            case MAP:
-                String msg =
-                        String.format(
-                                "type %s not support in %s",
-                                fieldType.getTypeRoot().toString(), InternalArray.class.getName());
-                throw new IllegalArgumentException(msg);
             default:
                 // for primitive types, we can directly return the element getter
                 elementGetter = createElementGetter(fieldType);

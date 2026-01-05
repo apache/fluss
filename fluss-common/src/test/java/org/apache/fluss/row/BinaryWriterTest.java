@@ -24,7 +24,6 @@ import org.apache.fluss.types.DataTypes;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link BinaryWriter}. */
 public class BinaryWriterTest {
@@ -124,13 +123,43 @@ public class BinaryWriterTest {
     }
 
     @Test
-    public void testCreateValueSetterForMapThrowsException() {
-        assertThatThrownBy(
-                        () ->
-                                createPrimitiveValueWriter(
-                                        DataTypes.MAP(DataTypes.INT(), DataTypes.STRING())))
-                .isInstanceOf(UnsupportedOperationException.class)
-                .hasMessageContaining("Map type is not supported yet");
+    public void testValueSetterWithMapType() {
+        BinaryArray array = new org.apache.fluss.row.array.PrimitiveBinaryArray();
+        BinaryArrayWriter writer = new BinaryArrayWriter(array, 2, 8);
+
+        BinaryWriter.ValueWriter setter =
+                BinaryWriter.createValueWriter(
+                        DataTypes.MAP(DataTypes.INT(), DataTypes.STRING()),
+                        BinaryRow.BinaryRowFormat.COMPACTED);
+
+        GenericMap map1 =
+                GenericMap.of(1, BinaryString.fromString("one"), 2, BinaryString.fromString("two"));
+        GenericMap map2 =
+                GenericMap.of(
+                        3, BinaryString.fromString("three"), 4, BinaryString.fromString("four"));
+
+        setter.writeValue(writer, 0, map1);
+        setter.writeValue(writer, 1, map2);
+        writer.complete();
+
+        assertThat(array.getMap(0).size()).isEqualTo(2);
+        assertThat(array.getMap(1).size()).isEqualTo(2);
+
+        // Assert keys and values for map1
+        InternalArray keys1 = array.getMap(0).keyArray();
+        InternalArray values1 = array.getMap(0).valueArray();
+        assertThat(keys1.getInt(0)).isEqualTo(1);
+        assertThat(keys1.getInt(1)).isEqualTo(2);
+        assertThat(values1.getString(0)).isEqualTo(BinaryString.fromString("one"));
+        assertThat(values1.getString(1)).isEqualTo(BinaryString.fromString("two"));
+
+        // Assert keys and values for map2
+        InternalArray keys2 = array.getMap(1).keyArray();
+        InternalArray values2 = array.getMap(1).valueArray();
+        assertThat(keys2.getInt(0)).isEqualTo(3);
+        assertThat(keys2.getInt(1)).isEqualTo(4);
+        assertThat(values2.getString(0)).isEqualTo(BinaryString.fromString("three"));
+        assertThat(values2.getString(1)).isEqualTo(BinaryString.fromString("four"));
     }
 
     @Test

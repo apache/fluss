@@ -19,6 +19,7 @@ package org.apache.fluss.row;
 
 import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.row.serializer.ArraySerializer;
+import org.apache.fluss.row.serializer.MapSerializer;
 import org.apache.fluss.row.serializer.RowSerializer;
 
 import java.nio.charset.StandardCharsets;
@@ -89,13 +90,12 @@ public abstract class AbstractBinaryWriter implements BinaryWriter {
                 pos, binary.getSegments(), binary.getOffset(), binary.getSizeInBytes());
     }
 
-    // TODO: Map and Row write methods will be added in Issue #1973
-    // @Override
-    // public void writeMap(int pos, InternalMap input, InternalMapSerializer serializer) {
-    //     BinaryMap binary = serializer.toBinaryMap(input);
-    //     writeSegmentsToVarLenPart(
-    //             pos, binary.getSegments(), binary.getOffset(), binary.getSizeInBytes());
-    // }
+    @Override
+    public void writeMap(int pos, InternalMap input, MapSerializer serializer) {
+        BinaryMap binary = serializer.toBinaryMap(input);
+        writeSegmentsToVarLenPart(
+                pos, binary.getSegments(), binary.getOffset(), binary.getSizeInBytes());
+    }
 
     @Override
     public void writeRow(int pos, InternalRow value, RowSerializer serializer) {

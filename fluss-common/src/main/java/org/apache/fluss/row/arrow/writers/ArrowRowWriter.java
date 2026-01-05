@@ -43,4 +43,12 @@ public class ArrowRowWriter extends ArrowFieldWriter {
             fieldWriters[i].write(rowIndex, nestedRow, i, handleSafe);
         }
     }
+
+    @Override
+    public void reset() {
+        super.reset();
+        for (ArrowFieldWriter fieldWriter : fieldWriters) {
+            fieldWriter.reset();
+        }
+    }
 }

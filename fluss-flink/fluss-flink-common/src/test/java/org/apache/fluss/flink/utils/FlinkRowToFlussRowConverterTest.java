@@ -25,6 +25,7 @@ import org.apache.fluss.utils.TypeUtils;
 
 import org.apache.flink.table.data.DecimalData;
 import org.apache.flink.table.data.GenericArrayData;
+import org.apache.flink.table.data.GenericMapData;
 import org.apache.flink.table.data.GenericRowData;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.data.StringData;
@@ -34,6 +35,8 @@ import org.junit.jupiter.api.Test;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.time.LocalDateTime;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 import static org.apache.flink.table.data.binary.BinaryStringData.fromString;
 import static org.apache.fluss.flink.utils.FlinkConversions.toFlinkRowType;
@@ -52,7 +55,7 @@ public class FlinkRowToFlussRowConverterTest {
         try (FlinkRowToFlussRowConverter converter =
                 FlinkRowToFlussRowConverter.create(toFlinkRowType(flussRowType))) {
             InternalRow internalRow = converter.toInternalRow(genRowDataForAllType());
-            assertThat(internalRow.getFieldCount()).isEqualTo(23);
+            assertThat(internalRow.getFieldCount()).isEqualTo(24);
             assertAllTypeEquals(internalRow);
         }
 
@@ -61,13 +64,13 @@ public class FlinkRowToFlussRowConverterTest {
                 FlinkRowToFlussRowConverter.create(
                         toFlinkRowType(flussRowType), KvFormat.COMPACTED)) {
             InternalRow internalRow = converter.toInternalRow(genRowDataForAllType());
-            assertThat(internalRow.getFieldCount()).isEqualTo(23);
+            assertThat(internalRow.getFieldCount()).isEqualTo(24);
             assertAllTypeEquals(internalRow);
         }
     }
 
     private static RowData genRowDataForAllType() {
-        GenericRowData genericRowData = new GenericRowData(23);
+        GenericRowData genericRowData = new GenericRowData(24);
         genericRowData.setField(0, true);
         genericRowData.setField(1, (byte) 2);
         genericRowData.setField(2, Short.parseShort("10"));
@@ -110,9 +113,15 @@ public class FlinkRowToFlussRowConverterTest {
                                     new StringData[] {fromString("hello"), fromString("world")})
                         }));
 
-        // 22: row (nested row with fields: u1: INT, u2: ROW(v1: INT), u3: STRING)
+        Map<Integer, StringData> javaMap = new LinkedHashMap<>();
+        javaMap.put(0, null);
+        javaMap.put(1, fromString("1"));
+        javaMap.put(2, fromString("2"));
+        genericRowData.setField(22, new GenericMapData(javaMap));
+
+        // 23: row (nested row with fields: u1: INT, u2: ROW(v1: INT), u3: STRING)
         genericRowData.setField(
-                22, GenericRowData.of(123, GenericRowData.of(22), StringData.fromString("Test")));
+                23, GenericRowData.of(123, GenericRowData.of(22), StringData.fromString("Test")));
 
         return genericRowData;
     }

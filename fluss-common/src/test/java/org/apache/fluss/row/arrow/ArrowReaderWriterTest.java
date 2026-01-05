@@ -23,6 +23,7 @@ import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.memory.TestingMemorySegmentPool;
 import org.apache.fluss.row.Decimal;
 import org.apache.fluss.row.GenericArray;
+import org.apache.fluss.row.GenericMap;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.TimestampLtz;
@@ -90,7 +91,7 @@ class ArrowReaderWriterTest {
                     DataTypes.ARRAY(DataTypes.INT()),
                     DataTypes.ARRAY(DataTypes.FLOAT().copy(false)), // vector embedding type
                     DataTypes.ARRAY(DataTypes.ARRAY(DataTypes.STRING())), // nested array
-                    // TODO: Add Map and Row types in Issue #1973
+                    DataTypes.MAP(DataTypes.INT(), DataTypes.STRING()),
                     DataTypes.ROW(
                             DataTypes.FIELD("i", DataTypes.INT()),
                             DataTypes.FIELD("r", NESTED_DATA_TYPE),
@@ -126,6 +127,13 @@ class ArrowReaderWriterTest {
                             GenericArray.of(
                                     GenericArray.of(fromString("a"), fromString("b")),
                                     GenericArray.of(fromString("c"), fromString("d"))),
+                            GenericMap.of(
+                                    1,
+                                    fromString("one"),
+                                    2,
+                                    fromString("two"),
+                                    3,
+                                    fromString("three")),
                             GenericRow.of(
                                     12,
                                     GenericRow.of(34, fromString("56"), 78L),
@@ -166,6 +174,7 @@ class ArrowReaderWriterTest {
                                     GenericArray.of(fromString("a"), null, fromString("c")),
                                     null,
                                     GenericArray.of(fromString("hello"), fromString("world"))),
+                            GenericMap.of(10, fromString("ten"), 20, fromString("twenty")),
                             GenericRow.of(
                                     12,
                                     GenericRow.of(34, fromString("56"), 78L),
@@ -324,6 +333,76 @@ class ArrowReaderWriterTest {
                 assertThat(row.getArray(1).size()).isEqualTo(arraySize);
                 for (int j = 0; j < arraySize; j++) {
                     assertThat(row.getArray(1).getInt(j)).isEqualTo(i * arraySize + j);
+                }
+            }
+        }
+    }
+
+    /**
+     * Tests that map columns work correctly when the total number of map entries exceeds
+     * INITIAL_CAPACITY (1024) while the row count stays below it. This reproduces a bug where
+     * ArrowMapWriter used the parent's handleSafe flag (based on row count) for entry writes,
+     * causing IndexOutOfBoundsException when entry indices exceeded the vector's initial capacity.
+     */
+    @Test
+    void testMapWriterWithManyEntries() throws IOException {
+        // Schema with map column
+        RowType rowType =
+                DataTypes.ROW(
+                        DataTypes.FIELD("id", DataTypes.INT()),
+                        DataTypes.FIELD("map", DataTypes.MAP(DataTypes.INT(), DataTypes.INT())));
+
+        try (BufferAllocator allocator = new RootAllocator(Long.MAX_VALUE);
+                VectorSchemaRoot root =
+                        VectorSchemaRoot.create(ArrowUtils.toArrowSchema(rowType), allocator);
+                ArrowWriterPool provider = new ArrowWriterPool(allocator);
+                ArrowWriter writer =
+                        provider.getOrCreateWriter(
+                                1L, 1, Integer.MAX_VALUE, rowType, NO_COMPRESSION)) {
+
+            // Write 150 rows, each with a 10-entry map.
+            // Total entries = 1500, exceeding INITIAL_CAPACITY (1024).
+            // But row count (150) < 1024, so handleSafe would be false without the fix.
+            int numRows = 200;
+            int mapSize = 10;
+            for (int i = 0; i < numRows; i++) {
+                Object[] mapEntries = new Object[mapSize * 2];
+                for (int j = 0; j < mapSize; j++) {
+                    int key = i * mapSize + j;
+                    mapEntries[j * 2] = key;
+                    mapEntries[j * 2 + 1] = key * 2;
+                }
+                GenericMap map = GenericMap.of(mapEntries);
+                writer.writeRow(GenericRow.of(i, map));
+            }
+
+            // Verify serialization works without IndexOutOfBoundsException
+            AbstractPagedOutputView pagedOutputView =
+                    new ManagedPagedOutputView(new TestingMemorySegmentPool(64 * 1024));
+            int size =
+                    writer.serializeToOutputView(
+                            pagedOutputView, arrowChangeTypeOffset(CURRENT_LOG_MAGIC_VALUE));
+            assertThat(size).isGreaterThan(0);
+
+            // Verify the data can be read back correctly
+            int heapMemorySize = Math.max(size, writer.estimatedSizeInBytes());
+            MemorySegment segment = MemorySegment.allocateHeapMemory(heapMemorySize);
+            MemorySegment firstSegment = pagedOutputView.getCurrentSegment();
+            firstSegment.copyTo(arrowChangeTypeOffset(CURRENT_LOG_MAGIC_VALUE), segment, 0, size);
+
+            ArrowReader reader =
+                    ArrowUtils.createArrowReader(segment, 0, size, root, allocator, rowType);
+            assertThat(reader.getRowCount()).isEqualTo(numRows);
+
+            for (int i = 0; i < numRows; i++) {
+                ColumnarRow row = reader.read(i);
+                row.setRowId(i);
+                assertThat(row.getInt(0)).isEqualTo(i);
+                assertThat(row.getMap(1).size()).isEqualTo(mapSize);
+                for (int j = 0; j < mapSize; j++) {
+                    int key = i * mapSize + j;
+                    assertThat(row.getMap(1).keyArray().getInt(j)).isEqualTo(key);
+                    assertThat(row.getMap(1).valueArray().getInt(j)).isEqualTo(key * 2);
                 }
             }
         }

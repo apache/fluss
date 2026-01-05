@@ -152,10 +152,9 @@ class FlinkTypeToFlussType extends LogicalTypeDefaultVisitor<DataType> {
 
     @Override
     public DataType visit(MapType mapType) {
-        return new org.apache.fluss.types.MapType(
-                mapType.isNullable(),
-                mapType.getKeyType().accept(this),
-                mapType.getValueType().accept(this));
+        DataType keyType = mapType.getKeyType().accept(this);
+        DataType valueType = mapType.getValueType().accept(this);
+        return new org.apache.fluss.types.MapType(mapType.isNullable(), keyType, valueType);
     }
 
     @Override

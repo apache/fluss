@@ -20,6 +20,7 @@ package org.apache.fluss.flink.row;
 import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.Decimal;
 import org.apache.fluss.row.InternalArray;
+import org.apache.fluss.row.InternalMap;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
@@ -141,6 +142,11 @@ public class FlinkAsFlussRow implements InternalRow {
     @Override
     public InternalArray getArray(int pos) {
         return new FlinkAsFlussArray(flinkRow.getArray(pos));
+    }
+
+    @Override
+    public InternalMap getMap(int pos) {
+        return new FlinkAsFlussMap(flinkRow.getMap(pos));
     }
 
     @Override
