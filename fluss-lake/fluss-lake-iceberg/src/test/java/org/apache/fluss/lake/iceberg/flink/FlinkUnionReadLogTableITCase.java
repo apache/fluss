@@ -126,12 +126,12 @@ public class FlinkUnionReadLogTableITCase extends FlinkUnionReadTestBase {
             // check filter push down
             assertThat(plan)
                     .contains("TableSourceScan(")
-                    .contains("LogicalFilter(condition=[=($15, _UTF-16LE'" + partition + "'")
+                    .contains("LogicalFilter(condition=[=($16, _UTF-16LE'" + partition + "'")
                     .contains("filter=[=(p, _UTF-16LE'" + partition + "'");
 
             List<Row> expectedFiltered =
                     writtenRows.stream()
-                            .filter(r -> partition.equals(r.getField(15)))
+                            .filter(r -> partition.equals(r.getField(16)))
                             .collect(Collectors.toList());
 
             List<Row> actualFiltered =
@@ -295,7 +295,12 @@ public class FlinkUnionReadLogTableITCase extends FlinkUnionReadTestBase {
                         .column("f_timestamp_ltz2", DataTypes.TIMESTAMP_LTZ(6))
                         .column("f_timestamp_ntz1", DataTypes.TIMESTAMP(3))
                         .column("f_timestamp_ntz2", DataTypes.TIMESTAMP(6))
-                        .column("f_binary", DataTypes.BINARY(4));
+                        .column("f_binary", DataTypes.BINARY(4))
+                        .column(
+                                "f_row",
+                                DataTypes.ROW(
+                                        DataTypes.FIELD("f_nested_int", DataTypes.INT()),
+                                        DataTypes.FIELD("f_nested_string", DataTypes.STRING())));
 
         TableDescriptor.Builder tableBuilder =
                 TableDescriptor.builder()
@@ -342,7 +347,8 @@ public class FlinkUnionReadLogTableITCase extends FlinkUnionReadTestBase {
                                 TimestampLtz.fromEpochMillis(1698235273400L, 7000),
                                 TimestampNtz.fromMillis(1698235273501L),
                                 TimestampNtz.fromMillis(1698235273501L, 8000),
-                                new byte[] {5, 6, 7, 8}));
+                                new byte[] {5, 6, 7, 8},
+                                row(10, "nested_string")));
 
                 flinkRows.add(
                         Row.of(
@@ -364,7 +370,8 @@ public class FlinkUnionReadLogTableITCase extends FlinkUnionReadTestBase {
                                                 Instant.ofEpochMilli(1698235273501L),
                                                 ZoneId.of("UTC"))
                                         .plusNanos(8000),
-                                new byte[] {5, 6, 7, 8}));
+                                new byte[] {5, 6, 7, 8},
+                                Row.of(10, "nested_string")));
             } else {
                 rows.add(
                         row(
@@ -383,6 +390,7 @@ public class FlinkUnionReadLogTableITCase extends FlinkUnionReadTestBase {
                                 TimestampNtz.fromMillis(1698235273501L),
                                 TimestampNtz.fromMillis(1698235273501L, 8000),
                                 new byte[] {5, 6, 7, 8},
+                                row(10, "nested_string"),
                                 partition));
 
                 flinkRows.add(
@@ -406,6 +414,7 @@ public class FlinkUnionReadLogTableITCase extends FlinkUnionReadTestBase {
                                                 ZoneId.of("UTC"))
                                         .plusNanos(8000),
                                 new byte[] {5, 6, 7, 8},
+                                Row.of(10, "nested_string"),
                                 partition));
             }
         }
