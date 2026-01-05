@@ -297,19 +297,30 @@ public class RebalanceManager {
     public RebalancePlan generateRebalancePlan(List<Goal> goalsByPriority) {
         checkNotClosed();
         List<RebalancePlanForBucket> rebalancePlanForBuckets;
+        String rebalanceId = UUID.randomUUID().toString();
         try {
             // Generate the latest cluster model.
+            long startTime = System.currentTimeMillis();
             ClusterModel clusterModel = buildClusterModel(eventProcessor.getCoordinatorContext());
+            LOG.info(
+                    "Build cluster model for rebalance id {} with {} ms.",
+                    rebalanceId,
+                    System.currentTimeMillis() - startTime);
 
             // do optimize.
+            startTime = System.currentTimeMillis();
             rebalancePlanForBuckets = goalOptimizer.doOptimizeOnce(clusterModel, goalsByPriority);
+            LOG.info(
+                    "Do optimize for rebalance id {} with {} ms.",
+                    rebalanceId,
+                    System.currentTimeMillis() - startTime);
         } catch (Exception e) {
             LOG.error("Failed to generate rebalance plan.", e);
             throw e;
         }
 
         // group by tableId and partitionId to generate rebalance plan.
-        return buildRebalancePlan(rebalancePlanForBuckets);
+        return buildRebalancePlan(rebalanceId, rebalancePlanForBuckets);
     }
 
     public @Nullable RebalancePlanForBucket getRebalancePlanForBucket(TableBucket tableBucket) {
@@ -402,12 +413,13 @@ public class RebalanceManager {
         return clusterModel;
     }
 
-    private RebalancePlan buildRebalancePlan(List<RebalancePlanForBucket> rebalancePlanForBuckets) {
+    private RebalancePlan buildRebalancePlan(
+            String rebalanceId, List<RebalancePlanForBucket> rebalancePlanForBuckets) {
         Map<TableBucket, RebalancePlanForBucket> bucketPlan = new HashMap<>();
         for (RebalancePlanForBucket rebalancePlanForBucket : rebalancePlanForBuckets) {
             bucketPlan.put(rebalancePlanForBucket.getTableBucket(), rebalancePlanForBucket);
         }
-        return new RebalancePlan(UUID.randomUUID().toString(), NOT_STARTED, bucketPlan);
+        return new RebalancePlan(rebalanceId, NOT_STARTED, bucketPlan);
     }
 
     private boolean isServerOffline(ServerTag serverTag) {
