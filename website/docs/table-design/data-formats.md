@@ -1,45 +1,43 @@
 ---
-title: Data Encodings
+title: Storage Formats
 ---
 
-### How to Think About Encodings in Fluss
+In Fluss, a storage format primarily defines **how data is stored and accessed**. Each format is designed to balance storage efficiency, read performance, and query capabilities.
 
-In Fluss, a data encoding primarily determines:
+This page describes the available formats in Fluss and provides guidance on selecting the appropriate format based on workload characteristics.
 
+### How to Think About Formats in Fluss
+
+At a high level, a format determines:
 - How data is laid out on disk (columnar vs row-oriented)
 - How efficiently data can be scanned, filtered, or projected
 - Whether the workload is optimized for streaming scans or key-based access
 
-Encodings in Fluss determine:
+Formats in Fluss determine:
 
-- **CPU vs IO trade-offs**
-- **Scan-heavy vs lookup-heavy workloads**
-- **Analytical vs operational access patterns**
-
-
-In Fluss, a data encoding primarily defines **how data is stored and accessed**. Each encoding is designed to balance storage efficiency, read performance, and query capabilities.
-
-This page describes the available encodings in Fluss and provides guidance on selecting the appropriate encoding based on workload characteristics.
+- CPU vs IO trade-offs
+- Scan-heavy vs lookup-heavy workloads
+- Analytical vs operational access patterns
 
 ---
 
-## Log Encoding and KV Encoding
+## Log Format and KV Format
 
-In Fluss, data encodings can be used in two different ways, depending on how the data is accessed.
+In Fluss, storage formats can be used in two different ways, depending on how the data is accessed.
 
-- **Log encoding** is designed for reading data in order, as it is written.
+- **Log format** is designed for reading data in order, as it is written.
   It is commonly used for streaming workloads, append-only tables, and changelog-style data.
 
-- **KV encoding** is designed for accessing data by key.
+- **KV format** is designed for accessing data by key.
   It is used for workloads where queries look up or update values using a key and only the most recent value for each key is needed.
 
-ARROW can be used as log encoding, while COMPACTED supports both log and KV encodings.
+ARROW can be used as log format, while COMPACTED supports both log and KV formats.
 
-## ARROW Encoding (Default)
+## ARROW Format (Default)
 
 ### Overview
 
-ARROW is the **default encoding** in Fluss. It stores data in a columnar layout, organizing information by columns rather than rows. This layout is well suited for analytical and streaming workloads.
+ARROW is the **default log format** in Fluss. It stores data in a columnar layout, organizing information by columns rather than rows. This layout is well suited for analytical and streaming workloads.
 
 ### Key Features
 
@@ -63,11 +61,11 @@ ARROW is less efficient for workloads that:
 
 ---
 
-## COMPACTED Encoding
+## COMPACTED Format
 
 ### Overview
 
-COMPACTED uses a **row-oriented encoding** that focuses on reducing storage size and CPU usage. It is optimized for workloads where queries typically access entire rows rather than individual columns.
+COMPACTED uses a **row-oriented format** that focuses on reducing storage size and CPU usage. It is optimized for workloads where queries typically access entire rows rather than individual columns.
 
 ### Key Features
 
@@ -89,7 +87,7 @@ COMPACTED is recommended for:
 
 ## Configuration
 
-To enable the COMPACTED encoding, set the `table.format` option:
+To enable the COMPACTED format for log data, set the `table.log.format` option:
 
 ```sql
 CREATE TABLE my_table (
@@ -97,13 +95,13 @@ CREATE TABLE my_table (
   data STRING,
   PRIMARY KEY (id) NOT ENFORCED
 ) WITH (
-  'table.format' = 'COMPACTED'
+  'table.log.format' = 'COMPACTED'
 );
 ```
 
 ### COMPACTED with WAL Changelog Image
 
-For key-based workloads that only require the **latest value per key**, the COMPACTED encoding can be combined with the WAL changelog image mode.
+For key-based workloads that only require the **latest value per key**, the COMPACTED format can be used for both log and kv data, combined with the WAL changelog image mode.
 
 ```sql
 CREATE TABLE kv_table (
@@ -111,7 +109,8 @@ CREATE TABLE kv_table (
   value STRING,
   PRIMARY KEY (key) NOT ENFORCED
 ) WITH (
-  'table.format' = 'COMPACTED',
+  'table.log.format' = 'COMPACTED',
+  'table.kv.format' = 'COMPACTED',
   'table.changelog.image' = 'WAL'
 );
 ```
@@ -133,6 +132,6 @@ COMPACTED is not recommended when:
 | Predicate pushdown     | ✅ Yes                              | ❌ No                             |
 | Storage efficiency     | Good                                | Excellent                          |
 | CPU efficiency         | Better for selective reads          | Better for full-row reads          |
-| Log encoding           | ✅ Yes                              | ✅ Yes                            |
-| KV encoding            | ❌ No                               | ✅ Yes                            |
+| Log format             | ✅ Yes                              | ✅ Yes                            |
+| KV format              | ❌ No                               | ✅ Yes                            |
 | Best suited for        | Analytics workloads                 | State tables / materialized data   |
