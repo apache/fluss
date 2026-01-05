@@ -189,7 +189,8 @@ class RocksDBResourceContainerTest {
                     (BlockBasedTableConfig) columnOptions.tableFormatConfig();
             assertThat(tableConfig.blockSize()).isEqualTo(4 * SizeUnit.KB);
             assertThat(tableConfig.metadataBlockSize()).isEqualTo(8 * SizeUnit.KB);
-            assertThat(tableConfig.blockCacheSize()).isEqualTo(512 * SizeUnit.MB);
+            // Verify block cache was created with explicit LRUCache for memory tracking
+            assertThat(optionsContainer.getBlockCache()).isNotNull();
             assertThat(tableConfig.filterPolicy() instanceof BloomFilter).isTrue();
         }
     }

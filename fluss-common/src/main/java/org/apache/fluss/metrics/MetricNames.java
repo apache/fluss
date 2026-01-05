@@ -132,6 +132,54 @@ public class MetricNames {
             "preWriteBufferTruncateAsErrorPerSecond";
 
     // --------------------------------------------------------------------------------------------
+    // RocksDB metrics
+    // --------------------------------------------------------------------------------------------
+    // Table-level RocksDB metrics (aggregated from all buckets of a table, Max aggregation)
+    /** Maximum write stall duration across all buckets of this table (Max aggregation). */
+    public static final String ROCKSDB_WRITE_STALL_MICROS_MAX = "rocksdbWriteStallMicrosMax";
+
+    /** Maximum get latency across all buckets of this table (Max aggregation). */
+    public static final String ROCKSDB_GET_LATENCY_MICROS_MAX = "rocksdbGetLatencyMicrosMax";
+
+    /** Maximum write latency across all buckets of this table (Max aggregation). */
+    public static final String ROCKSDB_WRITE_LATENCY_MICROS_MAX = "rocksdbWriteLatencyMicrosMax";
+
+    /** Maximum number of L0 files across all buckets of this table (Max aggregation). */
+    public static final String ROCKSDB_NUM_FILES_AT_LEVEL0_MAX = "rocksdbNumFilesAtLevel0Max";
+
+    /** Maximum flush pending indicator across all buckets of this table (Max aggregation). */
+    public static final String ROCKSDB_FLUSH_PENDING_MAX = "rocksdbFlushPendingMax";
+
+    /** Maximum compaction pending indicator across all buckets of this table (Max aggregation). */
+    public static final String ROCKSDB_COMPACTION_PENDING_MAX = "rocksdbCompactionPendingMax";
+
+    /** Maximum compaction time across all buckets of this table (Max aggregation). */
+    public static final String ROCKSDB_COMPACTION_TIME_MICROS_MAX =
+            "rocksdbCompactionTimeMicrosMax";
+
+    // Table-level RocksDB metrics (aggregated from all buckets of a table, Sum aggregation)
+    /** Total bytes read across all buckets of this table (Sum aggregation). */
+    public static final String ROCKSDB_BYTES_READ_TOTAL = "rocksdbBytesReadTotal";
+
+    /** Total bytes written across all buckets of this table (Sum aggregation). */
+    public static final String ROCKSDB_BYTES_WRITTEN_TOTAL = "rocksdbBytesWrittenTotal";
+
+    /** Total flush bytes written across all buckets of this table (Sum aggregation). */
+    public static final String ROCKSDB_FLUSH_BYTES_WRITTEN_TOTAL = "rocksdbFlushBytesWrittenTotal";
+
+    /** Total compaction bytes read across all buckets of this table (Sum aggregation). */
+    public static final String ROCKSDB_COMPACTION_BYTES_READ_TOTAL =
+            "rocksdbCompactionBytesReadTotal";
+
+    /** Total compaction bytes written across all buckets of this table (Sum aggregation). */
+    public static final String ROCKSDB_COMPACTION_BYTES_WRITTEN_TOTAL =
+            "rocksdbCompactionBytesWrittenTotal";
+
+    // Server-level RocksDB metrics (aggregated from all tables, Sum aggregation)
+    /** Total memory usage across all RocksDB instances in this server (Sum aggregation). */
+    public static final String ROCKSDB_MEMORY_USAGE_TOTAL = "rocksdbMemoryUsageTotal";
+
+    // --------------------------------------------------------------------------------------------
     // metrics for table bucket
     // --------------------------------------------------------------------------------------------
 

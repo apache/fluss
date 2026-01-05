@@ -107,7 +107,12 @@ public class RocksDBKvBuilder {
             throw new KvBuildingException(errMsg, t);
         }
         LOG.info("Finished building RocksDB kv at {}.", instanceBasePath);
-        return new RocksDBKv(optionsContainer, db, rocksDBResourceGuard, defaultColumnFamilyHandle);
+        return new RocksDBKv(
+                optionsContainer,
+                db,
+                rocksDBResourceGuard,
+                defaultColumnFamilyHandle,
+                optionsContainer.getStatistics());
     }
 
     void prepareDirectories() throws IOException {
