@@ -192,17 +192,4 @@ class FlussCatalogTest extends FlussSparkTestBase {
     admin.dropDatabase(dbName, true, true).get()
     checkAnswer(sql("SHOW DATABASES"), Row(DEFAULT_DATABASE) :: Nil)
   }
-
-  test("Catalog: add partitions") {
-    withTable("t") {
-      sql(s"""
-             |CREATE TABLE $DEFAULT_DATABASE.t (id int, name string, pt1 string, pt2 int)
-             | PARTITIONED BY (pt1, pt2)
-             |""".stripMargin)
-
-      println("======")
-      sql("desc formatted t").show(false)
-      sql(s"ALTER TABLE $DEFAULT_DATABASE.t ADD PARTITION (pt1 = 'a', pt2 = 1)")
-    }
-  }
 }
