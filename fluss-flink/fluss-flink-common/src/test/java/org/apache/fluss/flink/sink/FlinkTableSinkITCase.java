@@ -1453,4 +1453,62 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
         // Collect results with timeout
         assertQueryResultExactOrder(tEnv, aggQuery, expectedAggResults);
     }
+
+    @Test
+    void testWalModeWithAutoIncrement() throws Exception {
+        // use single parallelism to make result ordering stable
+        tEnv.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 1);
+
+        String tableName = "wal_mode_pk_table";
+        // Create a table with WAL mode and auto increment column
+        tEnv.executeSql(
+                String.format(
+                        "create table %s ("
+                                + " id int not null,"
+                                + " auto_increment_id bigint,"
+                                + " amount bigint,"
+                                + " primary key (id) not enforced"
+                                + ") with ('table.changelog.image' = 'wal', 'auto-increment.fields'='auto_increment_id')",
+                        tableName));
+
+        // Insert initial data
+        tEnv.executeSql(
+                        String.format(
+                                "INSERT INTO %s (id, amount) VALUES "
+                                        + "(1, 100), "
+                                        + "(2, 200), "
+                                        + "(3, 150), "
+                                        + "(4, 250)",
+                                tableName))
+                .await();
+
+        // Use batch mode to update and delete records
+
+        // Upsert data, not support update/delete rows in table with auto-inc column for now.
+        // TODO: Support Batch Update
+        tEnv.executeSql(
+                        String.format(
+                                "INSERT INTO %s (id, amount) VALUES " + "(1, 120), " + "(3, 180)",
+                                tableName))
+                .await();
+
+        List<String> expectedResults =
+                Arrays.asList(
+                        "+I[1, 1, 100]",
+                        "+I[2, 2, 200]",
+                        "+I[3, 3, 150]",
+                        "+I[4, 4, 250]",
+                        "-U[1, 1, 100]",
+                        "+U[1, 1, 120]",
+                        "-U[3, 3, 150]",
+                        "+U[3, 3, 180]");
+
+        // Collect results with timeout
+        assertQueryResultExactOrder(
+                tEnv,
+                String.format(
+                        "SELECT id, auto_increment_id, amount FROM %s /*+ OPTIONS('scan.startup.mode' = 'earliest') */",
+                        tableName),
+                expectedResults);
+    }
 }

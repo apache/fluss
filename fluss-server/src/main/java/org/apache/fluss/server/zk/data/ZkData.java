@@ -253,6 +253,28 @@ public final class ZkData {
     }
 
     /**
+     * The znode for auto increment columns of a table. The znode path is:
+     *
+     * <p>/metadata/databases/[databaseName]/tables/[tableName]/auto_inc
+     */
+    public static final class AutoIncrementColumnsZNode {
+        public static String path(TablePath tablePath) {
+            return TableZNode.path(tablePath) + "/auto_inc";
+        }
+    }
+
+    /**
+     * The znode for auto increment column. The znode path is:
+     *
+     * <p>/metadata/databases/[databaseName]/tables/[tableName]/auto_inc/col_[columnId]
+     */
+    public static final class AutoIncrementColumnZNode {
+        public static String path(TablePath tablePath, int columnId) {
+            return AutoIncrementColumnsZNode.path(tablePath) + String.format("/col_%d", columnId);
+        }
+    }
+
+    /**
      * The znode used to generate a sequence unique id for a partition. The znode path is:
      *
      * <p>/metadata/partition_seqid

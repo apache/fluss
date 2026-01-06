@@ -1447,16 +1447,15 @@ public class ConfigOptions {
                                     + "For tables with FIRST_ROW, VERSIONED, or AGGREGATION merge engines, this option defaults to `ignore`. "
                                     + "Note: For AGGREGATION merge engine, when set to `allow`, delete operations will remove the entire record.");
 
-    public static final ConfigOption<String> TABLE_AUTO_INCREMENT_FIELDS =
-            key("table.auto-increment.fields")
-                    .stringType()
-                    .noDefaultValue()
+    public static final ConfigOption<Long> TABLE_AUTO_INCREMENT_CACHE_SIZE =
+            key("table.auto-increment.cache-size")
+                    .longType()
+                    .defaultValue(100000L)
                     .withDescription(
-                            "Defines the auto increment columns. "
-                                    + "The auto increment column can only be used in primary-key table."
-                                    + "With an auto increment column in the table, whenever a new row is inserted into the table, the new row will be assigned with the next available value from the auto-increment sequence."
-                                    + "The auto increment column can only be used in primary-key table. The data type of the auto increment column must be INT or BIGINT."
-                                    + "Currently a table can have only one auto-increment column.");
+                            "The cache size of auto-increment IDs fetched from the distributed counter each time. "
+                                    + "This value determines the length of the locally cached ID segment. Default: 100000. "
+                                    + "A larger cache size may cause significant auto-increment ID gaps, especially when unused cached ID segments are discarded due to TabletServer restarts or abnormal terminations. "
+                                    + "Conversely, a smaller cache size increases the frequency of ID fetch requests to the distributed counter, introducing extra network overhead and reducing write throughput and performance.");
 
     public static final ConfigOption<ChangelogImage> TABLE_CHANGELOG_IMAGE =
             key("table.changelog.image")
@@ -1468,7 +1467,7 @@ public class ConfigOptions {
                                     + "The supported modes are `FULL` (default) and `WAL`. "
                                     + "The `FULL` mode produces both UPDATE_BEFORE and UPDATE_AFTER records for update operations, capturing complete information about updates and allowing tracking of previous values. "
                                     + "The `WAL` mode does not produce UPDATE_BEFORE records. Only INSERT, UPDATE_AFTER (and DELETE if allowed) records are emitted. "
-                                    + "When WAL mode is enabled with default merge engine (no merge engine configured) and full row updates (not partial update), an optimization is applied to skip looking up old values, "
+                                    + "When WAL mode is enabled, the default merge engine is used (no merge engine configured), updates are full row updates (not partial update), and there is no auto-increment column, an optimization is applied to skip looking up old values, "
                                     + "and in this case INSERT operations are converted to UPDATE_AFTER events. "
                                     + "This mode reduces storage and transmission costs but loses the ability to track previous values. "
                                     + "This option only affects primary key tables.");

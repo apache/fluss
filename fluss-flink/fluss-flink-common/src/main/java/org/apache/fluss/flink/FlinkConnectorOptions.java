@@ -36,6 +36,18 @@ import static org.apache.flink.configuration.description.TextElement.text;
 /** Options for flink connector. */
 public class FlinkConnectorOptions {
 
+    public static final ConfigOption<String> AUTO_INCREMENT_FIELDS =
+            ConfigOptions.key("auto-increment.fields")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "Defines the auto increment columns. "
+                                    + "The auto increment column can only be used in primary-key table."
+                                    + "With an auto increment column in the table, whenever a new row is inserted into the table, the new row will be assigned with the next available value from the auto-increment sequence."
+                                    + "The auto increment column can only be used in primary-key table. The data type of the auto increment column must be INT or BIGINT."
+                                    + "Currently a table can have only one auto-increment column."
+                                    + "Adding an auto increment column to an existing table is not supported.");
+
     public static final ConfigOption<Integer> BUCKET_NUMBER =
             ConfigOptions.key("bucket.num")
                     .intType()
@@ -144,7 +156,11 @@ public class FlinkConnectorOptions {
     // --------------------------------------------------------------------------------------------
 
     public static final List<String> ALTER_DISALLOW_OPTIONS =
-            Arrays.asList(BUCKET_NUMBER.key(), BUCKET_KEY.key(), BOOTSTRAP_SERVERS.key());
+            Arrays.asList(
+                    AUTO_INCREMENT_FIELDS.key(),
+                    BUCKET_NUMBER.key(),
+                    BUCKET_KEY.key(),
+                    BOOTSTRAP_SERVERS.key());
 
     // -------------------------------------------------------------------------------------------
     // Only used internally to support materialized table

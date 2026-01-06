@@ -67,8 +67,8 @@ import static org.apache.flink.table.utils.EncodingUtils.decodeBase64ToBytes;
 import static org.apache.flink.table.utils.EncodingUtils.encodeBytesToBase64;
 import static org.apache.flink.util.Preconditions.checkNotNull;
 import static org.apache.flink.util.Preconditions.checkState;
-import static org.apache.fluss.config.ConfigOptions.TABLE_AUTO_INCREMENT_FIELDS;
 import static org.apache.fluss.config.FlussConfigUtils.isTableStorageConfig;
+import static org.apache.fluss.flink.FlinkConnectorOptions.AUTO_INCREMENT_FIELDS;
 import static org.apache.fluss.flink.FlinkConnectorOptions.BUCKET_KEY;
 import static org.apache.fluss.flink.FlinkConnectorOptions.BUCKET_NUMBER;
 import static org.apache.fluss.flink.FlinkConnectorOptions.MATERIALIZED_TABLE_DEFINITION_QUERY;
@@ -209,16 +209,17 @@ public class FlinkConversions {
                                     .withComment(column.getComment().orElse(null));
                         });
 
+        // Configure auto-increment columns based on the 'auto-increment.fields' option.
+        if (flinkTableConf.containsKey(AUTO_INCREMENT_FIELDS.key())) {
+            for (String autoIncrementColumn :
+                    flinkTableConf.get(AUTO_INCREMENT_FIELDS).split(",")) {
+                schemBuilder.enableAutoIncrement(autoIncrementColumn.trim());
+            }
+        }
+
         // convert some flink options to fluss table configs.
         Map<String, String> storageProperties =
                 convertFlinkOptionsToFlussTableProperties(flinkTableConf);
-
-        if (storageProperties.containsKey(TABLE_AUTO_INCREMENT_FIELDS.key())) {
-            for (String autoIncrementColumn :
-                    storageProperties.get(TABLE_AUTO_INCREMENT_FIELDS.key()).split(",")) {
-                schemBuilder.enableAutoIncrement(autoIncrementColumn);
-            }
-        }
 
         // serialize computed column and watermark spec to custom properties
         Map<String, String> customProperties =

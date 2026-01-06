@@ -359,6 +359,20 @@ class TableSchemaTest {
     }
 
     @Test
+    void testSchemaFromSchemaPreservesAutoIncrement() {
+        Schema original =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("value", DataTypes.BIGINT())
+                        .primaryKey("id")
+                        .enableAutoIncrement("value")
+                        .build();
+
+        Schema copied = Schema.newBuilder().fromSchema(original).build();
+        assertThat(copied.getAutoIncrementColumnNames()).isEqualTo(Arrays.asList("value"));
+    }
+
+    @Test
     void testListaggWithCustomDelimiter() {
         // Test LISTAGG with default delimiter (comma)
         Schema schemaDefault =
