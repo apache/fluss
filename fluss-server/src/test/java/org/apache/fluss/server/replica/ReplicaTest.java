@@ -692,12 +692,7 @@ final class ReplicaTest extends ReplicaTestBase {
         // whose rocksdb has been dropped.
 
         // Remove the stale snapshot task if it exists
-        try {
-            scheduledExecutorService.removeNonPeriodicScheduledTask();
-        } catch (java.util.NoSuchElementException ignored) {
-            // no-op: no scheduled task to remove
-        }
-
+        scheduledExecutorService.removeNonPeriodicScheduledTask();
         // Trigger snapshot with retry to avoid flakiness
         triggerSnapshotTaskWithRetry(scheduledExecutorService, 5);
 
@@ -723,11 +718,8 @@ final class ReplicaTest extends ReplicaTestBase {
         // test recover with schema evolution.
         short newSchemaId = 2;
         // trigger one snapshot.
-        try {
-            scheduledExecutorService.removeNonPeriodicScheduledTask();
-        } catch (java.util.NoSuchElementException ignored) {
-            // no-op
-        }
+        scheduledExecutorService.removeNonPeriodicScheduledTask();
+
         triggerSnapshotTaskWithRetry(scheduledExecutorService, 5);
 
         // wait until the snapshot success
