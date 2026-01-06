@@ -17,25 +17,18 @@
 
 package org.apache.fluss.metrics.prometheus;
 
-import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.metrics.reporter.MetricReporter;
 import org.apache.fluss.metrics.reporter.MetricReporterPlugin;
-import org.apache.fluss.utils.NetUtils;
 
-import java.util.Iterator;
+/** {@link MetricReporterPlugin} for {@link PrometheusPushGatewayReporter}. */
+public class PrometheusPushGatewayReporterPlugin implements MetricReporterPlugin {
 
-/** {@link MetricReporterPlugin} for {@link PrometheusReporter}. */
-public class PrometheusReporterPlugin implements MetricReporterPlugin {
-
-    private static final String PLUGIN_NAME = "prometheus";
+    private static final String PLUGIN_NAME = "prometheus-push";
 
     @Override
     public MetricReporter createMetricReporter(Configuration configuration) {
-        String portsConfig =
-                configuration.getString(ConfigOptions.METRICS_REPORTER_PROMETHEUS_PORT);
-        Iterator<Integer> ports = NetUtils.getPortRangeFromString(portsConfig);
-        return new PrometheusReporter(ports);
+        return new PrometheusPushGatewayReporter();
     }
 
     @Override

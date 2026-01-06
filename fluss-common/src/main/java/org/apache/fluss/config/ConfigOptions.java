@@ -1774,6 +1774,57 @@ public class ConfigOptions {
                                     + "like 9250-9260.");
 
     // ------------------------------------------------------------------------
+    //  ConfigOptions for prometheus push gateway reporter
+    // ------------------------------------------------------------------------
+    public static final ConfigOption<String> METRICS_REPORTER_PROMETHEUS_PUSHGATEWAY_HOST_URL =
+            key("metrics.reporter.prometheus-pushgateway.hostUrl")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription("The URL of the Prometheus PushGateway to push metrics to.");
+
+    public static final ConfigOption<String> METRICS_REPORTER_PROMETHEUS_PUSHGATEWAY_JOB_NAME =
+            key("metrics.reporter.prometheus-pushgateway.jobName")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The job name under which to push metrics to Prometheus PushGateway.");
+
+    public static final ConfigOption<Boolean>
+            METRICS_REPORTER_PROMETHEUS_PUSHGATEWAY_RANDOM_JOB_NAME_SUFFIX =
+                    key("metrics.reporter.prometheus-pushgateway.randomJobNameSuffix")
+                            .booleanType()
+                            .defaultValue(true)
+                            .withDescription(
+                                    "Whether to append a random suffix to the job name. "
+                                            + "This is useful when multiple instances of the reporter "
+                                            + "are running on the same host.");
+
+    public static final ConfigOption<Boolean>
+            METRICS_REPORTER_PROMETHEUS_PUSHGATEWAY_DELETE_ON_SHUTDOWN =
+                    key("metrics.reporter.prometheus-pushgateway.deleteOnShutdown")
+                            .booleanType()
+                            .defaultValue(true)
+                            .withDescription(
+                                    "Whether to delete metrics from PushGateway on shutdown.");
+
+    public static final ConfigOption<Boolean>
+            METRICS_REPORTER_PROMETHEUS_PUSHGATEWAY_FILTER_LABEL_VALUE_CHARACTERS =
+                    key("metrics.reporter.prometheus-pushgateway.filterLabelValueCharacters")
+                            .booleanType()
+                            .defaultValue(true)
+                            .withDescription(
+                                    "Whether to filter characters in label values to conform to the "
+                                            + "Prometheus character set ([a-zA-Z0-9:_]).");
+
+    public static final ConfigOption<String> METRICS_REPORTER_PROMETHEUS_PUSHGATEWAY_GROUPING_KEY =
+            key("metrics.reporter.prometheus-pushgateway.groupingKey")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The grouping key to use when pushing metrics to Prometheus PushGateway. "
+                                    + "The format should be k1=v1;k2=v2.");
+
+    // ------------------------------------------------------------------------
     //  ConfigOptions for jmx reporter
     // ------------------------------------------------------------------------
     public static final ConfigOption<String> METRICS_REPORTER_JMX_HOST =
