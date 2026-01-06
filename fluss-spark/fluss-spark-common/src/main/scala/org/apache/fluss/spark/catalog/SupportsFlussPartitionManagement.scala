@@ -41,7 +41,9 @@ trait SupportsFlussPartitionManagement extends AbstractSparkTable with SupportsP
   }
 
   override def dropPartition(ident: InternalRow): Boolean = {
-    throw new UnsupportedOperationException("Dropping partition is not supported")
+    val partitionSpec = toPartitionSpec(ident, partitionSchema())
+    admin.dropPartition(tableInfo.getTablePath, partitionSpec, false).get()
+    true
   }
 
   override def replacePartitionMetadata(
