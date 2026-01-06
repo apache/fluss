@@ -21,8 +21,10 @@ import org.apache.fluss.metadata.{DatabaseDescriptor, Schema, TableDescriptor, T
 import org.apache.fluss.types.{DataTypes, RowType}
 
 import org.apache.spark.sql.Row
-import org.apache.spark.sql.connector.catalog.Identifier
+import org.apache.spark.sql.connector.catalog.{Identifier, TableCatalog}
 import org.assertj.core.api.Assertions.{assertThat, assertThatList}
+
+import java.util
 
 import scala.collection.JavaConverters._
 
@@ -189,5 +191,18 @@ class FlussCatalogTest extends FlussSparkTestBase {
 
     admin.dropDatabase(dbName, true, true).get()
     checkAnswer(sql("SHOW DATABASES"), Row(DEFAULT_DATABASE) :: Nil)
+  }
+
+  test("Catalog: add partitions") {
+    withTable("t") {
+      sql(s"""
+             |CREATE TABLE $DEFAULT_DATABASE.t (id int, name string, pt1 string, pt2 int)
+             | PARTITIONED BY (pt1, pt2)
+             |""".stripMargin)
+
+      println("======")
+      sql("desc formatted t").show(false)
+      sql(s"ALTER TABLE $DEFAULT_DATABASE.t ADD PARTITION (pt1 = 'a', pt2 = 1)")
+    }
   }
 }
