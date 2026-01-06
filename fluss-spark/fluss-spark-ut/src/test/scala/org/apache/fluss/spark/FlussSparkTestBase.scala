@@ -30,8 +30,6 @@ import org.apache.spark.SparkConf
 import org.apache.spark.sql.QueryTest
 import org.apache.spark.sql.test.SharedSparkSession
 import org.junit.jupiter.api.extension.RegisterExtension
-import org.scalactic.source.Position
-import org.scalatest.Tag
 
 import java.time.Duration
 
@@ -41,16 +39,17 @@ class FlussSparkTestBase extends QueryTest with SharedSparkSession {
 
   import FlussSparkTestBase._
 
-  protected val DEFAULT_DATABASE = "fluss";
+  protected val DEFAULT_CATALOG = "fluss_catalog"
+  protected val DEFAULT_DATABASE = "fluss"
 
   protected var conn: Connection = _
   protected var admin: Admin = _
 
   override protected def sparkConf: SparkConf = {
     super.sparkConf
-      .set("spark.sql.catalog.fluss_catalog", classOf[SparkCatalog].getName)
-      .set("spark.sql.catalog.fluss_catalog.bootstrap.servers", bootstrapServers)
-      .set("spark.sql.defaultCatalog", "fluss_catalog")
+      .set(s"spark.sql.catalog.$DEFAULT_CATALOG", classOf[SparkCatalog].getName)
+      .set(s"spark.sql.catalog.$DEFAULT_CATALOG.bootstrap.servers", bootstrapServers)
+      .set("spark.sql.defaultCatalog", DEFAULT_CATALOG)
   }
 
   override protected def beforeAll(): Unit = {

@@ -17,15 +17,14 @@
 
 package org.apache.fluss.spark.catalog
 
-import org.apache.fluss.config.{Configuration => FlussConfiguration}
-import org.apache.fluss.metadata.{TableInfo, TablePath}
+import org.apache.fluss.metadata.TableInfo
 import org.apache.fluss.spark.SparkConversions
-
+import org.apache.spark.sql.CatalogV2UtilShim
 import org.apache.spark.sql.connector.catalog.{Table, TableCapability}
+import org.apache.spark.sql.connector.expressions.Transform
 import org.apache.spark.sql.types.StructType
 
 import java.util
-
 import scala.collection.JavaConverters._
 
 abstract class AbstractSparkTable(tableInfo: TableInfo) extends Table {
@@ -34,7 +33,7 @@ abstract class AbstractSparkTable(tableInfo: TableInfo) extends Table {
     SparkConversions.toSparkDataType(tableInfo.getSchema.getRowType)
 
   protected lazy val _partitionSchema = new StructType(
-    _schema.fields.filter(tableInfo.getPartitionKeys.contains))
+    _schema.fields.filter(e => tableInfo.getPartitionKeys.contains(e.name)))
 
   override def name(): String = tableInfo.toString
 
@@ -42,5 +41,9 @@ abstract class AbstractSparkTable(tableInfo: TableInfo) extends Table {
 
   override def capabilities(): util.Set[TableCapability] = {
     Set(TableCapability.BATCH_WRITE).asJava
+  }
+
+  override def partitioning(): Array[Transform] = {
+    CatalogV2UtilShim.toSparkTransforms(_partitionSchema.fields.map(_.name))
   }
 }

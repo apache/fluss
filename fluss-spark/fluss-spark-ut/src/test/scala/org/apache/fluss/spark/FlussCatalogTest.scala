@@ -21,6 +21,7 @@ import org.apache.fluss.metadata.{DatabaseDescriptor, Schema, TableDescriptor, T
 import org.apache.fluss.types.{DataTypes, RowType}
 
 import org.apache.spark.sql.Row
+import org.apache.spark.sql.connector.catalog.Identifier
 import org.assertj.core.api.Assertions.{assertThat, assertThatList}
 
 import scala.collection.JavaConverters._
@@ -144,12 +145,18 @@ class FlussCatalogTest extends FlussSparkTestBase {
   }
 
   test("Catalog: check namespace and table created by admin") {
-    val dbDesc = DatabaseDescriptor.builder().comment("created by admin").build()
-    admin.createDatabase("db_by_admin", dbDesc, true).get()
-    checkAnswer(sql("SHOW DATABASES"), Row(DEFAULT_DATABASE) :: Row("db_by_admin") :: Nil)
+    val dbName = "db_by_fluss_admin"
+    val tblName = "tbl_by_fluss_admin"
+    val catalog = spark.sessionState.catalogManager.currentCatalog.asInstanceOf[SparkCatalog]
 
-    sql("USE db_by_admin")
-    val tablePath = TablePath.of("db_by_admin", "tbl_by_admin")
+    // check namespace
+    val dbDesc = DatabaseDescriptor.builder().comment("created by admin").build()
+    admin.createDatabase(dbName, dbDesc, true).get()
+    assert(catalog.namespaceExists(Array(dbName)))
+    checkAnswer(sql("SHOW DATABASES"), Row(DEFAULT_DATABASE) :: Row(dbName) :: Nil)
+
+    // check table
+    val tablePath = TablePath.of(dbName, tblName)
     val rt = RowType
       .builder()
       .field("id", DataTypes.INT())
@@ -162,15 +169,25 @@ class FlussCatalogTest extends FlussSparkTestBase {
       .partitionedBy("pt")
       .build()
     admin.createTable(tablePath, tableDesc, false).get()
-    checkAnswer(sql("SHOW TABLES"), Row("db_by_admin", "tbl_by_admin", false) :: Nil)
+    assert(
+      catalog.tableExists(Identifier.of(Array(tablePath.getDatabaseName), tablePath.getTableName)))
+    val expectDescTable = Seq(
+      Row("id", "int", null),
+      Row("name", "string", null),
+      Row("pt", "string", null),
+      Row("# Partition Information", "", ""),
+      Row("# col_name", "data_type", "comment"),
+      Row("pt", "string", null)
+    )
     checkAnswer(
-      sql("DESC tbl_by_admin"),
-      Row("id", "int", null) :: Row("name", "string", null) :: Row("pt", "string", null) :: Nil)
+      sql(s"DESC $dbName.$tblName"),
+      expectDescTable
+    )
 
     admin.dropTable(tablePath, true).get()
-    checkAnswer(sql("SHOW TABLES"), Nil)
+    checkAnswer(sql(s"SHOW TABLES IN $dbName"), Nil)
 
-    admin.dropDatabase("db_by_admin", true, true).get()
+    admin.dropDatabase(dbName, true, true).get()
     checkAnswer(sql("SHOW DATABASES"), Row(DEFAULT_DATABASE) :: Nil)
   }
 }
