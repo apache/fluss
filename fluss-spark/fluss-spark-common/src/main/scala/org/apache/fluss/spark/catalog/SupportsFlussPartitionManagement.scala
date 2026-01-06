@@ -18,10 +18,13 @@
 package org.apache.fluss.spark.catalog
 
 import org.apache.spark.sql.catalyst.InternalRow
+import org.apache.spark.sql.catalyst.expressions.GenericInternalRow
 import org.apache.spark.sql.connector.catalog.SupportsPartitionManagement
 import org.apache.spark.sql.types.StructType
 
 import java.util
+
+import scala.collection.JavaConverters._
 
 trait SupportsFlussPartitionManagement extends AbstractSparkTable with SupportsPartitionManagement {
 
@@ -48,6 +51,34 @@ trait SupportsFlussPartitionManagement extends AbstractSparkTable with SupportsP
   override def listPartitionIdentifiers(
       names: Array[String],
       ident: InternalRow): Array[InternalRow] = {
-    throw new UnsupportedOperationException("Listing partition is not supported")
+    assert(
+      names.length == ident.numFields,
+      s"Number of partition names (${names.length}) must be equal to " +
+        s"the number of partition values (${ident.numFields})."
+    )
+    val schema = partitionSchema
+    assert(
+      names.forall(fieldName => schema.fieldNames.contains(fieldName)),
+      s"Some partition names ${names.mkString("[", ", ", "]")} don't belong to " +
+        s"the partition schema '${schema.sql}'."
+    )
+
+    val res = admin
+      .listPartitionInfos(tableInfo.getTablePath)
+      .get()
+      .asScala
+      .map(_.getPartitionSpec)
+      .map {
+        partSpec =>
+          val currentRow = new GenericInternalRow(new Array[Any](names.length))
+          for ((name, i) <- names.zipWithIndex) {
+            currentRow.update(i, partSpec.getSpecMap.get(name))
+          }
+          currentRow
+      }
+      .filter(_ == ident)
+      .map(_.asInstanceOf[InternalRow])
+      .toArray
+    res
   }
 }

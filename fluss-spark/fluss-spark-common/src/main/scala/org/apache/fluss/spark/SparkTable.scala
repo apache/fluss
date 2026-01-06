@@ -17,16 +17,16 @@
 
 package org.apache.fluss.spark
 
+import org.apache.fluss.client.admin.Admin
 import org.apache.fluss.config.{Configuration => FlussConfiguration}
 import org.apache.fluss.metadata.{TableInfo, TablePath}
 import org.apache.fluss.spark.catalog.{AbstractSparkTable, SupportsFlussPartitionManagement}
 import org.apache.fluss.spark.write.{FlussAppendWriteBuilder, FlussUpsertWriteBuilder}
-
 import org.apache.spark.sql.connector.catalog.SupportsWrite
 import org.apache.spark.sql.connector.write.{LogicalWriteInfo, WriteBuilder}
 
-case class SparkTable(tablePath: TablePath, tableInfo: TableInfo, flussConfig: FlussConfiguration)
-  extends AbstractSparkTable(tableInfo)
+class SparkTable(tablePath: TablePath, tableInfo: TableInfo, flussConfig: FlussConfiguration, admin: Admin)
+  extends AbstractSparkTable(admin, tableInfo)
   with SupportsFlussPartitionManagement
   with SupportsWrite {
 
