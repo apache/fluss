@@ -69,7 +69,7 @@ public class ResetClusterConfigsProcedure extends ProcedureBase {
             }
 
             List<AlterConfig> configList = new ArrayList<>();
-            List<String> resultMessage = new ArrayList();
+            List<String> resultMessage = new ArrayList<>();
 
             for (String key : configKeys) {
                 String configKey = key.trim();

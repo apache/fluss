@@ -261,12 +261,6 @@ CALL [catalog_name.]sys.reset_cluster_configs(config_keys => 'key1' [, 'key2', .
 
 - `config_keys`(required): The configuration keys to reset.
 
-**Important Notes:**
-
-- Changes are validated before being applied and persisted in ZooKeeper
-- Changes are automatically applied to all servers (Coordinator and TabletServers)
-- Changes survive server restarts
-- Not all configurations support dynamic changes. The server will reject invalid modifications
 
 **Example:**
 
