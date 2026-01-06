@@ -26,6 +26,8 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
+import static org.apache.fluss.utils.Preconditions.checkArgument;
+
 /** A class that holds the information of the {@link TableBucket} for rebalance. */
 public class BucketModel {
     private final TableBucket tableBucket;
@@ -76,40 +78,36 @@ public class BucketModel {
     }
 
     public void addLeader(ReplicaModel leader, int index) {
-        if (this.leader != null) {
-            throw new IllegalArgumentException(
-                    String.format(
-                            "Bucket %s already has a leader replica %s. Cannot add a new leader replica %s.",
-                            tableBucket, this.leader, leader));
-        }
+        checkArgument(
+                this.leader == null,
+                String.format(
+                        "Bucket %s already has a leader replica %s. Cannot add a new leader replica %s.",
+                        tableBucket, this.leader, leader));
 
-        if (!leader.isLeader()) {
-            throw new IllegalArgumentException(
-                    String.format(
-                            "Inconsistent leadership information. Trying to set %s as the leader for bucket %s while "
-                                    + "the replica is not marked as a leader",
-                            leader, tableBucket));
-        }
+        checkArgument(
+                leader.isLeader(),
+                String.format(
+                        "Inconsistent leadership information. Trying to set %s as the leader for bucket %s while "
+                                + "the replica is not marked as a leader",
+                        leader, tableBucket));
 
         this.leader = leader;
         replicas.add(index, leader);
     }
 
     public void addFollower(ReplicaModel follower, int index) {
-        if (follower.isLeader()) {
-            throw new IllegalArgumentException(
-                    String.format(
-                            "Inconsistent leadership information. Trying to set %s as the follower for bucket %s while "
-                                    + "the replica is marked as a leader",
-                            follower, tableBucket));
-        }
+        checkArgument(
+                !follower.isLeader(),
+                String.format(
+                        "Inconsistent leadership information. Trying to set %s as the follower for bucket %s while "
+                                + "the replica is marked as a leader",
+                        follower, tableBucket));
 
-        if (!follower.tableBucket().equals(this.tableBucket)) {
-            throw new IllegalArgumentException(
-                    String.format(
-                            "Inconsistent table bucket. Trying to add follower replica %s to tableBucket %s",
-                            follower, tableBucket));
-        }
+        checkArgument(
+                follower.tableBucket().equals(this.tableBucket),
+                String.format(
+                        "Inconsistent table bucket. Trying to add follower replica %s to tableBucket %s",
+                        follower, tableBucket));
 
         // Add follower to list of followers
         replicas.add(index, follower);

@@ -17,8 +17,9 @@
 
 package org.apache.fluss.flink.procedure;
 
-import org.apache.fluss.client.admin.RebalancePlan;
+import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.cluster.rebalance.GoalType;
+import org.apache.fluss.cluster.rebalance.RebalancePlan;
 import org.apache.fluss.cluster.rebalance.RebalancePlanForBucket;
 
 import org.apache.flink.table.annotation.ArgumentHint;
@@ -31,7 +32,27 @@ import javax.annotation.Nullable;
 import java.util.ArrayList;
 import java.util.List;
 
-/** Procedure to rebalance. */
+/**
+ * Procedure to trigger rebalance.
+ *
+ * <p>This procedure allows triggering rebalance with different goals. See {@link
+ * Admin#rebalance(List, boolean)} for more details.
+ *
+ * <p>Usage examples:
+ *
+ * <pre>
+ * -- Trigger rebalance with REPLICA_DISTRIBUTION goal
+ * CALL sys.rebalance('REPLICA_DISTRIBUTION');
+ * -- Trigger rebalance with REPLICA_DISTRIBUTION and LEADER_DISTRIBUTION goals
+ * CALL sys.rebalance('REPLICA_DISTRIBUTION;LEADER_DISTRIBUTION');
+ *
+ * -- Trigger rebalance without dry run
+ * CALL sys.rebalance('REPLICA_DISTRIBUTION', false);
+ *
+ * -- Trigger rebalance with dry run
+ * CALL sys.rebalance('REPLICA_DISTRIBUTION', true);
+ * </pre>
+ */
 public class RebalanceProcedure extends ProcedureBase {
 
     /**
@@ -63,16 +84,16 @@ public class RebalanceProcedure extends ProcedureBase {
     private static List<GoalType> validateAndGetPriorityGoals(String priorityGoals) {
         if (priorityGoals == null || priorityGoals.trim().isEmpty()) {
             throw new IllegalArgumentException(
-                    "priority goals cannot be null or empty. You can specify one goal as 'REPLICA_DISTRIBUTION_GOAL' or "
-                            + "specify multi goals as 'REPLICA_DISTRIBUTION_GOAL;LEADER_DISTRIBUTION_GOAL' (split by ';')");
+                    "priority goals cannot be null or empty. You can specify one goal as 'REPLICA_DISTRIBUTION' or "
+                            + "specify multi goals as 'REPLICA_DISTRIBUTION;LEADER_DISTRIBUTION' (split by ';')");
         }
 
         priorityGoals = priorityGoals.trim();
         String[] splitGoals = priorityGoals.split(";");
         if (splitGoals.length == 0) {
             throw new IllegalArgumentException(
-                    "priority goals cannot be empty. You can specify one goal as 'REPLICA_DISTRIBUTION_GOAL' "
-                            + "or specify multi goals as 'REPLICA_DISTRIBUTION_GOAL;LEADER_DISTRIBUTION_GOAL' (split by ';')");
+                    "priority goals cannot be empty. You can specify one goal as 'REPLICA_DISTRIBUTION' "
+                            + "or specify multi goals as 'REPLICA_DISTRIBUTION;LEADER_DISTRIBUTION' (split by ';')");
         }
         List<GoalType> goalTypes = new ArrayList<>();
         for (String goal : splitGoals) {

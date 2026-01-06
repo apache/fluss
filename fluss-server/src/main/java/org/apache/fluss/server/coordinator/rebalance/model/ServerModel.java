@@ -26,6 +26,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 /** A class that holds the information of the tabletServer for rebalance. */
 public class ServerModel implements Comparable<ServerModel> {
@@ -34,7 +35,6 @@ public class ServerModel implements Comparable<ServerModel> {
     private final boolean isAlive;
     private final String rack;
     private final Set<ReplicaModel> replicas;
-    private final Set<ReplicaModel> leaderReplicas;
     /** A map for tracking (tableId) -> (BucketId -> replica) for none-partitioned table. */
     private final Map<Long, Map<Integer, ReplicaModel>> tableReplicas;
 
@@ -46,7 +46,6 @@ public class ServerModel implements Comparable<ServerModel> {
         this.rack = rack;
         this.isAlive = isAlive;
         this.replicas = new HashSet<>();
-        this.leaderReplicas = new HashSet<>();
         this.tableReplicas = new HashMap<>();
         this.tablePartitionReplicas = new HashMap<>();
     }
@@ -68,7 +67,7 @@ public class ServerModel implements Comparable<ServerModel> {
     }
 
     public Set<ReplicaModel> leaderReplicas() {
-        return new HashSet<>(leaderReplicas);
+        return replicas.stream().filter(ReplicaModel::isLeader).collect(Collectors.toSet());
     }
 
     public Set<Long> tables() {
@@ -81,7 +80,6 @@ public class ServerModel implements Comparable<ServerModel> {
         ReplicaModel replica = replica(tableBucket);
         if (replica != null) {
             replica.makeFollower();
-            leaderReplicas.remove(replica);
         }
     }
 
@@ -89,7 +87,6 @@ public class ServerModel implements Comparable<ServerModel> {
         ReplicaModel replica = replica(tableBucket);
         if (replica != null) {
             replica.makeLeader();
-            leaderReplicas.add(replica);
         }
     }
 
@@ -106,10 +103,6 @@ public class ServerModel implements Comparable<ServerModel> {
             tableReplicas
                     .computeIfAbsent(tableBucket.getTableId(), k -> new HashMap<>())
                     .put(tableBucket.getBucket(), replica);
-        }
-
-        if (replica.isLeader()) {
-            leaderReplicas.add(replica);
         }
     }
 
@@ -159,10 +152,6 @@ public class ServerModel implements Comparable<ServerModel> {
                         this.tableReplicas.remove(tableBucket.getTableId());
                     }
                 }
-            }
-
-            if (removedReplica.isLeader()) {
-                leaderReplicas.remove(removedReplica);
             }
         }
 

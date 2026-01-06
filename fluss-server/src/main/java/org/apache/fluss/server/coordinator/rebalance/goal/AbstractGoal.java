@@ -115,10 +115,7 @@ public abstract class AbstractGoal implements Goal {
         return clusterModel.servers();
     }
 
-    /**
-     * Initialize states that this goal requires. E.g. run sanity checks regarding hard goals
-     * requirements.
-     */
+    /** Initialize states that this goal requires. */
     protected abstract void initGoalState(ClusterModel clusterModel)
             throws RebalanceFailureException;
 

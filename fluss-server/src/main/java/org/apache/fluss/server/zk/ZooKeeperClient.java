@@ -18,6 +18,7 @@
 package org.apache.fluss.server.zk;
 
 import org.apache.fluss.annotation.Internal;
+import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.metadata.PhysicalTablePath;
@@ -1247,6 +1248,7 @@ public class ZooKeeperClient implements AutoCloseable {
     }
 
     /** Deletes the rebalance plan from ZooKeeper. Only for testing propose now */
+    @VisibleForTesting
     public void deleteRebalancePlan() throws Exception {
         deletePath(RebalanceZNode.path());
     }

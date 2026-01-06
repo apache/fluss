@@ -111,7 +111,11 @@ public class ClusterModel {
     }
 
     public int numLeaderReplicas() {
-        return bucketsByTableBucket.size();
+        int numLeaderReplicas = 0;
+        for (BucketModel bucket : bucketsByTableBucket.values()) {
+            numLeaderReplicas += bucket.leader() != null ? 1 : 0;
+        }
+        return numLeaderReplicas;
     }
 
     public SortedMap<Long, List<BucketModel>> getBucketsByTable() {

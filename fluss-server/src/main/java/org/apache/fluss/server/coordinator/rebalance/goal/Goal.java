@@ -17,7 +17,6 @@
 
 package org.apache.fluss.server.coordinator.rebalance.goal;
 
-import org.apache.fluss.exception.RebalanceFailureException;
 import org.apache.fluss.server.coordinator.rebalance.ActionAcceptance;
 import org.apache.fluss.server.coordinator.rebalance.ReBalancingAction;
 import org.apache.fluss.server.coordinator.rebalance.model.ClusterModel;
@@ -47,9 +46,6 @@ public interface Goal {
      *
      * <p>The implementation of a soft goal should return a boolean indicating whether the goal has
      * been met after the optimization or not.
-     *
-     * <p>The implementation of a hard goal should throw an {@link RebalanceFailureException} when
-     * the goal cannot be met. This will then fail the entire optimization attempt.
      */
     void optimize(ClusterModel clusterModel, Set<Goal> optimizedGoals);
 
@@ -78,11 +74,6 @@ public interface Goal {
      * as finished and perform the memory clean up after the goal optimization.
      */
     void finish();
-
-    /**
-     * @return {@code true} if this is a hard goal, {@code false} otherwise.
-     */
-    boolean isHardGoal();
 
     /**
      * @return The name of this goal. Name of a goal provides an identification for the goal in

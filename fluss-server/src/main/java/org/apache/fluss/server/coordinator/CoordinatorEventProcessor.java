@@ -1172,7 +1172,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
         }
 
         if (!isDryRun) {
-            if (rebalanceManager.hasOngoingRebalance()) {
+            if (rebalanceManager.hasInProgressRebalance()) {
                 throw new RebalanceFailureException(
                         "Rebalance task already exists. Please wait for it to finish or cancel it first.");
             }
@@ -1237,7 +1237,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
                 ReplicaReassignment.build(
                         coordinatorContext.getAssignment(tableBucket), newReplicas);
 
-        if (planForBucket.isLeaderAction() && !reassignment.isBeingReassigned()) {
+        if (planForBucket.isLeaderChanged() && !reassignment.isBeingReassigned()) {
             // buckets only need to change leader like leader replica rebalance.
             LOG.info("trigger leader election for tableBucket {}.", tableBucket);
             tableBucketStateMachine.handleStateChange(
@@ -1269,7 +1269,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
                             coordinatorContext.getAssignment(tableBucket),
                             planForBucket.getNewReplicas());
             try {
-                if (planForBucket.isLeaderAction() && !reassignment.isBeingReassigned()) {
+                if (planForBucket.isLeaderChanged() && !reassignment.isBeingReassigned()) {
                     LeaderAndIsr leaderAndIsr = zooKeeperClient.getLeaderAndIsr(tableBucket).get();
                     int currentLeader = leaderAndIsr.leader();
                     if (currentLeader == planForBucket.getNewLeader()) {

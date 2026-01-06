@@ -1473,14 +1473,6 @@ public class ConfigOptions {
                                     + "This mode reduces storage and transmission costs but loses the ability to track previous values. "
                                     + "This option only affects primary key tables.");
 
-    public static final ConfigOption<Boolean> TABLE_GENERATE_UNBALANCE_TABLE_ASSIGNMENT =
-            key("table.generate-unbalance-table-assignment")
-                    .booleanType()
-                    .defaultValue(false)
-                    .withDescription(
-                            "This parameter is only used for test. If set to true, the assignment will always be [0,1,2] "
-                                    + "as replica factor set as 3 even if there are tabletServers more than 3.");
-
     // ------------------------------------------------------------------------
     //  ConfigOptions for Kv
     // ------------------------------------------------------------------------

@@ -147,7 +147,6 @@ import javax.annotation.Nullable;
 import java.io.UncheckedIOException;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -316,29 +315,12 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
 
         // first, generate the assignment
         TableAssignment tableAssignment = null;
-        Map<String, String> properties = tableDescriptor.getProperties();
-        boolean generateUnbalanceAssignment;
-        if (properties.containsKey(ConfigOptions.TABLE_GENERATE_UNBALANCE_TABLE_ASSIGNMENT.key())) {
-            generateUnbalanceAssignment =
-                    Boolean.parseBoolean(
-                            properties.get(
-                                    ConfigOptions.TABLE_GENERATE_UNBALANCE_TABLE_ASSIGNMENT.key()));
-        } else {
-            generateUnbalanceAssignment = false;
-        }
         // only when it's no partitioned table do we generate the assignment for it
         if (!tableDescriptor.isPartitioned()) {
             // the replication factor must be set now
             int replicaFactor = tableDescriptor.getReplicationFactor();
             TabletServerInfo[] servers = metadataCache.getLiveServers();
-            if (generateUnbalanceAssignment) {
-                // this branch is only used for testing.
-                tableAssignment =
-                        new TableAssignment(
-                                generateUnBalanceAssignment(bucketCount, replicaFactor));
-            } else {
-                tableAssignment = generateAssignment(bucketCount, replicaFactor, servers);
-            }
+            tableAssignment = generateAssignment(bucketCount, replicaFactor, servers);
         }
 
         // before create table in fluss, we may create in lake
@@ -552,18 +534,9 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         // second, generate the PartitionAssignment.
         int replicaFactor = table.getTableConfig().getReplicationFactor();
         TabletServerInfo[] servers = metadataCache.getLiveServers();
-        Map<Integer, BucketAssignment> bucketAssignments;
-
-        boolean generateUnbalanceAssignment = table.getTableConfig().generateUnbalanceAssignment();
-        if (generateUnbalanceAssignment) {
-            // This branch is only used for testing.
-            bucketAssignments = generateUnBalanceAssignment(table.bucketCount, replicaFactor);
-        } else {
-            bucketAssignments =
-                    generateAssignment(table.bucketCount, replicaFactor, servers)
-                            .getBucketAssignments();
-        }
-
+        Map<Integer, BucketAssignment> bucketAssignments =
+                generateAssignment(table.bucketCount, replicaFactor, servers)
+                        .getBucketAssignments();
         PartitionAssignment partitionAssignment =
                 new PartitionAssignment(table.tableId, bucketAssignments);
 
@@ -960,24 +933,6 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                         "Creation of Log Tables is disallowed in the cluster.");
             }
         }
-    }
-
-    private Map<Integer, BucketAssignment> generateUnBalanceAssignment(
-            int nBuckets, int replicationFactor) {
-        Map<Integer, BucketAssignment> assignments = new HashMap<>();
-        for (int i = 0; i < nBuckets; i++) {
-            if (replicationFactor == 1) {
-                assignments.put(i, new BucketAssignment(Collections.singletonList(0)));
-            } else if (replicationFactor == 2) {
-                assignments.put(i, new BucketAssignment(Arrays.asList(0, 1)));
-            } else if (replicationFactor == 3) {
-                assignments.put(i, new BucketAssignment(Arrays.asList(0, 1, 2)));
-            } else {
-                throw new IllegalArgumentException(
-                        "replicationFactor must be 1, 2 or 3 for unbalance assignment.");
-            }
-        }
-        return assignments;
     }
 
     static class DefaultLakeCatalogContext implements LakeCatalog.Context {

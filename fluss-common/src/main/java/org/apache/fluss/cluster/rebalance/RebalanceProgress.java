@@ -38,7 +38,10 @@ public class RebalanceProgress {
     /** The rebalance status for the overall rebalance. */
     private final RebalanceStatus rebalanceStatus;
 
-    /** The rebalance progress for the overall rebalance. Between 0.0d to 1.0d */
+    /**
+     * The rebalance progress for the overall rebalance. Between 0.0d to 1.0d or a negative value.
+     * If this value lower than 0.0d, it means there are no bucket level rebalance tasks.
+     */
     private final double progress;
 
     /** The rebalance progress for each tabletBucket. */

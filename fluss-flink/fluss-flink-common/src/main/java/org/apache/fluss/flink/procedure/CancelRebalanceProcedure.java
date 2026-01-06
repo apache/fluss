@@ -17,6 +17,8 @@
 
 package org.apache.fluss.flink.procedure;
 
+import org.apache.fluss.client.admin.Admin;
+
 import org.apache.flink.table.annotation.ArgumentHint;
 import org.apache.flink.table.annotation.DataTypeHint;
 import org.apache.flink.table.annotation.ProcedureHint;
@@ -24,7 +26,20 @@ import org.apache.flink.table.procedure.ProcedureContext;
 
 import javax.annotation.Nullable;
 
-/** Procedure to cancel rebalance. */
+/**
+ * Procedure to cancel rebalance.
+ *
+ * <p>This procedure allows canceling rebalance. See {@link Admin#cancelRebalance(String)} for more
+ * details.
+ *
+ * <pre>
+ * -- Cancel the rebalance without rebalance id
+ * CALL sys.cancel_rebalance();
+ *
+ * -- Cancel the rebalance with rebalance id
+ * CALL sys.cancel_rebalance('xxx_xxx_xxx');
+ * </pre>
+ */
 public class CancelRebalanceProcedure extends ProcedureBase {
 
     @ProcedureHint(

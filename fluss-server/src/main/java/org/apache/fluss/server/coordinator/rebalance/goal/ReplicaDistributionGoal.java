@@ -25,7 +25,8 @@ import org.apache.fluss.server.coordinator.rebalance.model.ClusterModel;
 import org.apache.fluss.server.coordinator.rebalance.model.ClusterModelStats;
 import org.apache.fluss.server.coordinator.rebalance.model.ReplicaModel;
 import org.apache.fluss.server.coordinator.rebalance.model.ServerModel;
-import org.apache.fluss.server.coordinator.rebalance.model.Statistic;
+import org.apache.fluss.server.coordinator.rebalance.model.StatisticType;
+import org.apache.fluss.utils.MathUtils;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -271,9 +272,9 @@ public class ReplicaDistributionGoal extends ReplicaDistributionAbstractGoal {
             // Standard deviation of number of replicas over servers not excluded for replica moves
             // must be less than the
             // pre-optimized stats.
-            double stDev1 = stats1.replicaStats().get(Statistic.ST_DEV).doubleValue();
-            double stDev2 = stats2.replicaStats().get(Statistic.ST_DEV).doubleValue();
-            int result = GoalOptimizerUtils.compare(stDev2, stDev1, EPSILON);
+            double stDev1 = stats1.replicaStats().get(StatisticType.ST_DEV).doubleValue();
+            double stDev2 = stats2.replicaStats().get(StatisticType.ST_DEV).doubleValue();
+            int result = MathUtils.compare(stDev2, stDev1, EPSILON);
             if (result < 0) {
                 reasonForLastNegativeResult =
                         String.format(

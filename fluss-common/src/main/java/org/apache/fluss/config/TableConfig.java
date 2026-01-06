@@ -140,9 +140,4 @@ public class TableConfig {
     public AutoPartitionStrategy getAutoPartitionStrategy() {
         return AutoPartitionStrategy.from(config);
     }
-
-    /** Whether to generate unbalance assignment fot this table. */
-    public boolean generateUnbalanceAssignment() {
-        return config.get(ConfigOptions.TABLE_GENERATE_UNBALANCE_TABLE_ASSIGNMENT);
-    }
 }

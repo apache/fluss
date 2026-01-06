@@ -15,34 +15,29 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.client.admin;
+package org.apache.fluss.server.coordinator.rebalance.model;
 
-import org.apache.fluss.cluster.rebalance.RebalancePlanForBucket;
-import org.apache.fluss.metadata.TableBucket;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 
-import java.util.Map;
+import java.util.SortedSet;
+import java.util.TreeSet;
 
-/**
- * The rebalance plan.
- *
- * @since 0.9
- */
-public class RebalancePlan {
+/** Tests for the {@link ClusterModelStats}. */
+public class ClusterModelStatsTest {
+    private SortedSet<ServerModel> servers;
 
-    private final String rebalanceId;
-    private final Map<TableBucket, RebalancePlanForBucket> planForBucketMap;
-
-    public RebalancePlan(
-            String rebalanceId, Map<TableBucket, RebalancePlanForBucket> planForBucketMap) {
-        this.rebalanceId = rebalanceId;
-        this.planForBucketMap = planForBucketMap;
+    @BeforeEach
+    public void setup() {
+        servers = new TreeSet<>();
+        ServerModel server0 = new ServerModel(0, "rack0", true);
+        ServerModel server1 = new ServerModel(1, "rack1", true);
+        servers.add(server0);
+        servers.add(server1);
     }
 
-    public String getRebalanceId() {
-        return rebalanceId;
-    }
-
-    public Map<TableBucket, RebalancePlanForBucket> getPlanForBucketMap() {
-        return planForBucketMap;
+    @Test
+    void testPopulate() throws Exception {
+        // TODO add test for this method, trace by https://github.com/apache/fluss/issues/2315
     }
 }

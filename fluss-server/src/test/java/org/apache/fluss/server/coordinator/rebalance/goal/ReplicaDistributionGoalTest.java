@@ -21,7 +21,7 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.server.coordinator.rebalance.model.ClusterModel;
 import org.apache.fluss.server.coordinator.rebalance.model.ClusterModelStats;
 import org.apache.fluss.server.coordinator.rebalance.model.ServerModel;
-import org.apache.fluss.server.coordinator.rebalance.model.Statistic;
+import org.apache.fluss.server.coordinator.rebalance.model.StatisticType;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -72,10 +72,10 @@ public class ReplicaDistributionGoalTest {
         }
 
         ClusterModelStats clusterStats = clusterModel.getClusterStats();
-        Map<Statistic, Number> replicaStats = clusterStats.replicaStats();
-        assertThat(replicaStats.get(Statistic.AVG)).isEqualTo(7.0);
-        assertThat(replicaStats.get(Statistic.MIN)).isEqualTo(1);
-        assertThat(replicaStats.get(Statistic.MAX)).isEqualTo(13);
+        Map<StatisticType, Number> replicaStats = clusterStats.replicaStats();
+        assertThat(replicaStats.get(StatisticType.AVG)).isEqualTo(7.0);
+        assertThat(replicaStats.get(StatisticType.MIN)).isEqualTo(1);
+        assertThat(replicaStats.get(StatisticType.MAX)).isEqualTo(13);
 
         Map<Integer, Integer> serverIdToReplicaNumber = getServerIdToReplicaNumber(clusterModel);
         assertThat(serverIdToReplicaNumber.get(0)).isEqualTo(13);

@@ -87,11 +87,6 @@ public abstract class ReplicaDistributionAbstractGoal extends AbstractGoal {
     }
 
     @Override
-    public boolean isHardGoal() {
-        return false;
-    }
-
-    @Override
     protected void initGoalState(ClusterModel clusterModel) throws RebalanceFailureException {
         serversAllowedReplicaRemove = aliveServersNotExcludeForReplicaMove(clusterModel);
         if (serversAllowedReplicaRemove.isEmpty()) {

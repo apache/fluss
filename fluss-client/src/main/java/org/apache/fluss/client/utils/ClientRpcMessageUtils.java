@@ -18,7 +18,6 @@
 package org.apache.fluss.client.utils;
 
 import org.apache.fluss.client.admin.OffsetSpec;
-import org.apache.fluss.client.admin.RebalancePlan;
 import org.apache.fluss.client.lookup.LookupBatch;
 import org.apache.fluss.client.lookup.PrefixLookupBatch;
 import org.apache.fluss.client.metadata.KvSnapshotMetadata;
@@ -26,6 +25,7 @@ import org.apache.fluss.client.metadata.KvSnapshots;
 import org.apache.fluss.client.metadata.LakeSnapshot;
 import org.apache.fluss.client.write.KvWriteBatch;
 import org.apache.fluss.client.write.ReadyWriteBatch;
+import org.apache.fluss.cluster.rebalance.RebalancePlan;
 import org.apache.fluss.cluster.rebalance.RebalancePlanForBucket;
 import org.apache.fluss.cluster.rebalance.RebalanceProgress;
 import org.apache.fluss.cluster.rebalance.RebalanceResultForBucket;
@@ -91,7 +91,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
-import static org.apache.fluss.cluster.rebalance.RebalanceUtils.FINAL_STATUSES;
+import static org.apache.fluss.cluster.rebalance.RebalanceStatus.FINAL_STATUSES;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toResolvedPartitionSpec;
 import static org.apache.fluss.utils.Preconditions.checkState;
 
@@ -415,6 +415,8 @@ public class ClientRpcMessageUtils {
             }
         }
 
+        // For these rebalance task without only bucket level rebalance tasks, we return -1 as
+        // progress.
         double progress = -1d;
         if (totalTask != 0) {
             progress = (double) finishedTask / totalTask;

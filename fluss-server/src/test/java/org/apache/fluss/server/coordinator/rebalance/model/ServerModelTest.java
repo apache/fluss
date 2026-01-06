@@ -92,6 +92,7 @@ public class ServerModelTest {
 
     @Test
     void testEquals() {
+        // TODO add more test for this method. trace by https://github.com/apache/fluss/issues/2315
         // equals by server Id.
         ServerModel serverModel1 = new ServerModel(0, "rack0", true);
         ServerModel serverModel2 = new ServerModel(0, "rack0", true);

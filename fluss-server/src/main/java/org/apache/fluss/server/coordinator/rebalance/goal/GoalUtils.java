@@ -32,9 +32,9 @@ public class GoalUtils {
 
     public static Goal getGoalByType(GoalType goalType) {
         switch (goalType) {
-            case REPLICA_DISTRIBUTION_GOAL:
+            case REPLICA_DISTRIBUTION:
                 return new ReplicaDistributionGoal();
-            case LEADER_DISTRIBUTION_GOAL:
+            case LEADER_DISTRIBUTION:
                 return new LeaderReplicaDistributionGoal();
             default:
                 throw new IllegalArgumentException("Unsupported goal type " + goalType);

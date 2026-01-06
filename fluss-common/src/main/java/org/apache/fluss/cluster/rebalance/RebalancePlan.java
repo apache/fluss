@@ -15,12 +15,33 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.server.coordinator.rebalance.model;
+package org.apache.fluss.cluster.rebalance;
 
-/** An enum for the statistic. */
-public enum Statistic {
-    AVG,
-    MAX,
-    MIN,
-    ST_DEV
+import org.apache.fluss.metadata.TableBucket;
+
+import java.util.Map;
+
+/**
+ * The rebalance plan.
+ *
+ * @since 0.9
+ */
+public class RebalancePlan {
+
+    private final String rebalanceId;
+    private final Map<TableBucket, RebalancePlanForBucket> planForBucketMap;
+
+    public RebalancePlan(
+            String rebalanceId, Map<TableBucket, RebalancePlanForBucket> planForBucketMap) {
+        this.rebalanceId = rebalanceId;
+        this.planForBucketMap = planForBucketMap;
+    }
+
+    public String getRebalanceId() {
+        return rebalanceId;
+    }
+
+    public Map<TableBucket, RebalancePlanForBucket> getPlanForBucketMap() {
+        return planForBucketMap;
+    }
 }

@@ -15,18 +15,12 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.cluster.rebalance;
+package org.apache.fluss.server.coordinator.rebalance.model;
 
-import java.util.Arrays;
-import java.util.HashSet;
-import java.util.Set;
-
-import static org.apache.fluss.cluster.rebalance.RebalanceStatus.CANCELED;
-import static org.apache.fluss.cluster.rebalance.RebalanceStatus.COMPLETED;
-import static org.apache.fluss.cluster.rebalance.RebalanceStatus.FAILED;
-
-/** Rebalance utils. */
-public class RebalanceUtils {
-    public static final Set<RebalanceStatus> FINAL_STATUSES =
-            new HashSet<>(Arrays.asList(COMPLETED, CANCELED, FAILED));
+/** An enum for the statistic type. */
+public enum StatisticType {
+    AVG,
+    MAX,
+    MIN,
+    ST_DEV
 }

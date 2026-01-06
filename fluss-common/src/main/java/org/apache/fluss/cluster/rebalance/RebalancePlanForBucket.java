@@ -73,7 +73,7 @@ public class RebalancePlanForBucket {
         return newReplicas;
     }
 
-    public boolean isLeaderAction() {
+    public boolean isLeaderChanged() {
         return originalLeader != newLeader;
     }
 

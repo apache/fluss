@@ -17,6 +17,7 @@
 
 package org.apache.fluss.flink.procedure;
 
+import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.cluster.rebalance.RebalanceProgress;
 import org.apache.fluss.cluster.rebalance.RebalanceResultForBucket;
 import org.apache.fluss.cluster.rebalance.RebalanceStatus;
@@ -34,7 +35,22 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
-/** Procedure to list rebalance process. */
+/**
+ * Procedure to list rebalance progress.
+ *
+ * <p>This procedure allows querying rebalance progress. See {@link
+ * Admin#listRebalanceProgress(String)} for more details.
+ *
+ * <p>Usage examples:
+ *
+ * <pre>
+ * -- List the rebalance progress without rebalance id
+ * CALL sys.list_rebalance_process();
+ *
+ * -- List the rebalance progress with rebalance id
+ * CALL sys.list_rebalance_process('xxx_xxx_xxx');
+ * </pre>
+ */
 public class ListRebalanceProcessProcedure extends ProcedureBase {
 
     @ProcedureHint(

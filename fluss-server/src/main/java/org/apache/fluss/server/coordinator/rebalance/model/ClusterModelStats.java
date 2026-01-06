@@ -17,6 +17,8 @@
 
 package org.apache.fluss.server.coordinator.rebalance.model;
 
+import org.apache.fluss.annotation.VisibleForTesting;
+
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
@@ -26,8 +28,8 @@ import java.util.function.Function;
 
 /** A class that holds the statistics of the cluster for rebalance. */
 public class ClusterModelStats {
-    private final Map<Statistic, Number> replicaStats;
-    private final Map<Statistic, Number> leaderReplicaStats;
+    private final Map<StatisticType, Number> replicaStats;
+    private final Map<StatisticType, Number> leaderReplicaStats;
     private int numServers;
     private int numReplicasInCluster;
 
@@ -70,7 +72,7 @@ public class ClusterModelStats {
 
     private void populateReplicaStats(
             Function<ServerModel, Integer> numInterestedReplicasFunc,
-            Map<Statistic, Number> interestedReplicaStats,
+            Map<StatisticType, Number> interestedReplicaStats,
             SortedSet<ServerModel> servers,
             Set<ServerModel> aliveServers) {
         // Average, minimum, and maximum number of replicas of interest in servers.
@@ -99,17 +101,27 @@ public class ClusterModelStats {
                             / aliveServers.size());
         }
 
-        interestedReplicaStats.put(Statistic.AVG, avgInterestedReplicas);
-        interestedReplicaStats.put(Statistic.MAX, maxInterestedReplicasInServer);
-        interestedReplicaStats.put(Statistic.MIN, minInterestedReplicasInServer);
-        interestedReplicaStats.put(Statistic.ST_DEV, Math.sqrt(variance));
+        interestedReplicaStats.put(StatisticType.AVG, avgInterestedReplicas);
+        interestedReplicaStats.put(StatisticType.MAX, maxInterestedReplicasInServer);
+        interestedReplicaStats.put(StatisticType.MIN, minInterestedReplicasInServer);
+        interestedReplicaStats.put(StatisticType.ST_DEV, Math.sqrt(variance));
     }
 
-    public Map<Statistic, Number> replicaStats() {
+    public Map<StatisticType, Number> replicaStats() {
         return Collections.unmodifiableMap(replicaStats);
     }
 
-    public Map<Statistic, Number> leaderReplicaStats() {
+    public Map<StatisticType, Number> leaderReplicaStats() {
         return Collections.unmodifiableMap(leaderReplicaStats);
+    }
+
+    @VisibleForTesting
+    public int numServers() {
+        return numServers;
+    }
+
+    @VisibleForTesting
+    public int numReplicasInCluster() {
+        return numReplicasInCluster;
     }
 }

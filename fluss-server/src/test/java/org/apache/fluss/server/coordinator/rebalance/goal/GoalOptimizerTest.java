@@ -44,5 +44,7 @@ public class GoalOptimizerTest {
     }
 
     @Test
-    void testOptimize() {}
+    void testOptimize() {
+        // TODO add test for this method, trace by https://github.com/apache/fluss/issues/2315
+    }
 }

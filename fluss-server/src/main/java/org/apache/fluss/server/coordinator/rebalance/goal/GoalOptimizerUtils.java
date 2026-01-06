@@ -51,28 +51,6 @@ public class GoalOptimizerUtils {
     }
 
     /**
-     * Compare the given values.
-     *
-     * <pre>
-     *     1. Return 1 if first
-     *     2. -1 if first
-     *     3. 0 otherwise.
-     * </pre>
-     */
-    public static int compare(double d1, double d2, double epsilon) {
-        if (d2 - d1 > epsilon) {
-            // Second value is larger than the first value.
-            return -1;
-        }
-        if (d1 - d2 > epsilon) {
-            // First value is larger than the second value.
-            return 1;
-        }
-        // Given values are approximately equal.
-        return 0;
-    }
-
-    /**
      * Get whether there is any diff represented by a set of rebalance plan to move from the initial
      * to final distribution.
      */
