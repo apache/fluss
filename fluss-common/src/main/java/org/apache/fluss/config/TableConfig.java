@@ -140,4 +140,9 @@ public class TableConfig {
     public AutoPartitionStrategy getAutoPartitionStrategy() {
         return AutoPartitionStrategy.from(config);
     }
+
+    /** Gets the number of auto-increment IDs cached per segment. */
+    public Long getAutoIncrementCacheSize() {
+        return config.get(ConfigOptions.TABLE_AUTO_INCREMENT_CACHE_SIZE);
+    }
 }

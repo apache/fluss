@@ -48,6 +48,7 @@ import org.apache.fluss.record.ChangeType;
 import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.row.ProjectedRow;
 import org.apache.fluss.row.indexed.IndexedRow;
 import org.apache.fluss.types.BigIntType;
 import org.apache.fluss.types.DataTypes;
@@ -452,6 +453,181 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                 .hasMessageContaining(
                         "Can not perform prefix lookup on table 'test_db_1.test_invalid_prefix_lookup_2', "
                                 + "because the lookup columns [b, a] must contain all bucket keys [a, b] in order.");
+    }
+
+    @Test
+    void testSingleBucketPutAutoIncrementColumnAndLookup() throws Exception {
+        Schema schema =
+                Schema.newBuilder()
+                        .column("col1", DataTypes.STRING())
+                        .withComment("col1 is first column")
+                        .column("col2", DataTypes.BIGINT())
+                        .withComment("col2 is second column, auto increment column")
+                        .column("col3", DataTypes.STRING())
+                        .withComment("col3 is third column")
+                        .enableAutoIncrement("col2")
+                        .primaryKey("col1")
+                        .build();
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder().schema(schema).distributedBy(1, "col1").build();
+        // create the table
+        TablePath tablePath =
+                TablePath.of(DATA1_TABLE_PATH_PK.getDatabaseName(), "test_pk_table_auto_inc");
+        createTable(tablePath, tableDescriptor, true);
+        Table autoIncTable = conn.getTable(tablePath);
+        Object[][] records = {
+            {"a", null, "batch1"},
+            {"b", null, "batch1"},
+            {"c", null, "batch1"},
+            {"d", null, "batch1"},
+            {"e", null, "batch1"},
+            {"d", null, "batch2"},
+            {"e", null, "batch2"}
+        };
+        partialUpdateRecords(new String[] {"col1", "col3"}, records, autoIncTable);
+
+        Object[][] expectedRecords = {
+            {"a", 1L, "batch1"},
+            {"b", 2L, "batch1"},
+            {"c", 3L, "batch1"},
+            {"d", 4L, "batch2"},
+            {"e", 5L, "batch2"}
+        };
+        verifyRecords(expectedRecords, autoIncTable, schema);
+
+        admin.alterTable(
+                        tablePath,
+                        Collections.singletonList(
+                                TableChange.addColumn(
+                                        "col4",
+                                        DataTypes.INT(),
+                                        null,
+                                        TableChange.ColumnPosition.last())),
+                        false)
+                .get();
+        Table newSchemaTable = conn.getTable(tablePath);
+        Schema newSchema = newSchemaTable.getTableInfo().getSchema();
+
+        // schema change case1: read new data with new schema.
+        Object[][] expectedRecordsWithOldSchema = {
+            {"a", 1L, "batch1"},
+            {"b", 2L, "batch1"},
+            {"c", 3L, "batch1"},
+            {"d", 4L, "batch2"},
+            {"e", 5L, "batch2"}
+        };
+        verifyRecords(expectedRecordsWithOldSchema, autoIncTable, schema);
+
+        // schema change case2: update new data with new schema.
+
+        Object[][] recordsWithNewSchema = {
+            {"a", null, "batch3", 10},
+            {"b", null, "batch3", 11}
+        };
+        partialUpdateRecords(
+                new String[] {"col1", "col3", "col4"}, recordsWithNewSchema, newSchemaTable);
+
+        // schema change case3: read data with old schema.
+        expectedRecordsWithOldSchema[0][2] = "batch3";
+        expectedRecordsWithOldSchema[1][2] = "batch3";
+        verifyRecords(expectedRecordsWithOldSchema, autoIncTable, schema);
+
+        // schema change case4: read data with new schema.
+        Object[][] expectedRecordsWithNewSchema = {
+            {"a", 1L, "batch3", 10},
+            {"b", 2L, "batch3", 11},
+            {"c", 3L, "batch1", null},
+            {"d", 4L, "batch2", null},
+            {"e", 5L, "batch2", null}
+        };
+        verifyRecords(expectedRecordsWithNewSchema, newSchemaTable, newSchema);
+
+        // kill and restart all tablet server
+        for (int i = 0; i < 3; i++) {
+            FLUSS_CLUSTER_EXTENSION.stopTabletServer(i);
+            FLUSS_CLUSTER_EXTENSION.startTabletServer(i);
+        }
+
+        // reconnect fluss server
+        conn = ConnectionFactory.createConnection(clientConf);
+        newSchemaTable = conn.getTable(tablePath);
+        verifyRecords(expectedRecordsWithNewSchema, newSchemaTable, newSchema);
+
+        Object[][] restartWriteRecords = {{"f", null, "batch4", 12}};
+        partialUpdateRecords(
+                new String[] {"col1", "col3", "col4"}, restartWriteRecords, newSchemaTable);
+
+        // The auto-increment column should start from a new segment for now, and local cached
+        // IDs have been discarded.
+        Object[][] expectedRestartWriteRecords = {{"f", 100001L, "batch4", 12}};
+        verifyRecords(expectedRestartWriteRecords, newSchemaTable, newSchema);
+    }
+
+    @Test
+    void testPutAutoIncrementColumnAndLookup() throws Exception {
+        Schema schema =
+                Schema.newBuilder()
+                        .column("dt", DataTypes.STRING())
+                        .column("col1", DataTypes.STRING())
+                        .withComment("col1 is first column")
+                        .column("col2", DataTypes.BIGINT())
+                        .withComment("col2 is second column, auto increment column")
+                        .column("col3", DataTypes.STRING())
+                        .withComment("col3 is third column")
+                        .enableAutoIncrement("col2")
+                        .primaryKey("dt", "col1")
+                        .build();
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(schema)
+                        .partitionedBy("dt")
+                        .distributedBy(2, "col1")
+                        .build();
+        // create the table
+        TablePath tablePath =
+                TablePath.of(DATA1_TABLE_PATH_PK.getDatabaseName(), "test_pk_table_auto_inc");
+        createTable(tablePath, tableDescriptor, true);
+        Table autoIncTable = conn.getTable(tablePath);
+        Object[][] records = {
+            {"2026-01-06", "a", null, "batch1"},
+            {"2026-01-06", "b", null, "batch1"},
+            {"2026-01-06", "c", null, "batch1"},
+            {"2026-01-06", "d", null, "batch1"},
+            {"2026-01-07", "e", null, "batch1"},
+            {"2026-01-06", "a", null, "batch2"},
+            {"2026-01-06", "b", null, "batch2"},
+        };
+
+        // upsert records with auto inc column col1 null value
+        partialUpdateRecords(new String[] {"dt", "col1", "col3"}, records, autoIncTable);
+        Object[][] expectedRecords = {
+            {"2026-01-06", "a", 1L, "batch2"},
+            {"2026-01-06", "b", 100001L, "batch2"},
+            {"2026-01-06", "c", 2L, "batch1"},
+            {"2026-01-06", "d", 100002L, "batch1"},
+            {"2026-01-07", "e", 200001L, "batch1"}
+        };
+        verifyRecords(expectedRecords, autoIncTable, schema);
+    }
+
+    private void partialUpdateRecords(String[] targetColumns, Object[][] records, Table table) {
+        UpsertWriter upsertWriter = table.newUpsert().partialUpdate(targetColumns).createWriter();
+        for (Object[] record : records) {
+            upsertWriter.upsert(row(record));
+            // flush immediately to ensure auto-increment values are assigned sequentially across
+            // multiple buckets.
+            upsertWriter.flush();
+        }
+    }
+
+    private void verifyRecords(Object[][] records, Table table, Schema schema) throws Exception {
+        Lookuper lookuper = table.newLookup().createLookuper();
+        ProjectedRow keyRow = ProjectedRow.from(schema.getPrimaryKeyIndexes());
+        for (Object[] record : records) {
+            assertThatRow(lookupRow(lookuper, keyRow.replaceRow(row(record))))
+                    .withSchema(schema.getRowType())
+                    .isEqualTo(row(record));
+        }
     }
 
     @Test

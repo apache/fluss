@@ -206,6 +206,7 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
         HashSet<ConfigOption<?>> options =
                 new HashSet<>(
                         Arrays.asList(
+                                FlinkConnectorOptions.AUTO_INCREMENT_FIELDS,
                                 FlinkConnectorOptions.BUCKET_KEY,
                                 FlinkConnectorOptions.BUCKET_NUMBER,
                                 FlinkConnectorOptions.SCAN_STARTUP_MODE,

@@ -134,6 +134,18 @@ public final class Schema implements Serializable {
                 .orElseGet(() -> new int[0]);
     }
 
+    /** Returns the auto-increment columnIds, if any, otherwise returns an empty array. */
+    public int[] getAutoIncrementColumnIds() {
+        if (autoIncrementColumnNames.isEmpty()) {
+            return new int[0];
+        } else {
+            return getColumns().stream()
+                    .filter(column -> autoIncrementColumnNames.contains(column.getName()))
+                    .mapToInt(Column::getColumnId)
+                    .toArray();
+        }
+    }
+
     /** Returns the primary key column names, if any, otherwise returns an empty array. */
     public List<String> getPrimaryKeyColumnNames() {
         return getPrimaryKey().map(PrimaryKey::getColumnNames).orElse(Collections.emptyList());
@@ -174,6 +186,11 @@ public final class Schema implements Serializable {
             columnNames.add(columns.get(columnIndex).columnName);
         }
         return columnNames;
+    }
+
+    /** Returns the column name in given column index. */
+    public String getColumnName(int columnIndex) {
+        return columns.get(columnIndex).columnName;
     }
 
     /** Returns the indexes of the fields in the schema. */
@@ -249,6 +266,13 @@ public final class Schema implements Serializable {
             columns.addAll(schema.columns);
             if (schema.primaryKey != null) {
                 primaryKeyNamed(schema.primaryKey.constraintName, schema.primaryKey.columnNames);
+            }
+            if (schema.autoIncrementColumnNames != null
+                    && !schema.autoIncrementColumnNames.isEmpty()) {
+                checkState(
+                        schema.autoIncrementColumnNames.size() == 1,
+                        "Multiple auto increment columns are not supported yet.");
+                enableAutoIncrement(schema.autoIncrementColumnNames.get(0));
             }
             this.highestFieldId = new AtomicInteger(schema.highestFieldId);
             return this;
@@ -748,9 +772,7 @@ public final class Schema implements Serializable {
             }
 
             // primary key and auto increment column should not nullable
-            if ((pkSet.contains(column.getName())
-                            || autoIncrementColumnNames.contains(column.getName()))
-                    && column.getDataType().isNullable()) {
+            if (pkSet.contains(column.getName()) && column.getDataType().isNullable()) {
                 newColumns.add(
                         new Column(
                                 column.getName(),

@@ -47,12 +47,14 @@ public class SchemaUpdate {
     private final AtomicInteger highestFieldId;
     private final List<String> primaryKeys;
     private final Map<String, Schema.Column> existedColumns;
+    private final List<String> autoIncrementColumns;
 
     public SchemaUpdate(TableInfo tableInfo) {
         this.columns = new ArrayList<>();
         this.existedColumns = new HashMap<>();
         this.highestFieldId = new AtomicInteger(tableInfo.getSchema().getHighestFieldId());
         this.primaryKeys = tableInfo.getPrimaryKeys();
+        this.autoIncrementColumns = tableInfo.getSchema().getAutoIncrementColumnNames();
         this.columns.addAll(tableInfo.getSchema().getColumns());
         for (Schema.Column column : columns) {
             existedColumns.put(column.getName(), column);
@@ -66,6 +68,9 @@ public class SchemaUpdate {
                         .highestFieldId((short) highestFieldId.get());
         if (!primaryKeys.isEmpty()) {
             builder.primaryKey(primaryKeys);
+        }
+        for (String autoIncrementColumn : autoIncrementColumns) {
+            builder.enableAutoIncrement(autoIncrementColumn);
         }
 
         return builder.build();

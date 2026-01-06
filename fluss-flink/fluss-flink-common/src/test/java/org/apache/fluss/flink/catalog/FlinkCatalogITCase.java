@@ -290,6 +290,13 @@ abstract class FlinkCatalogITCase {
                 .isInstanceOf(InvalidConfigException.class)
                 .hasMessage(
                         "Property 'paimon.file.format' is not supported to alter which is for datalake table.");
+
+        String unSupportedDml7 =
+                "alter table test_alter_table_append_only set ('auto-increment.fields' = 'b')";
+        assertThatThrownBy(() -> tEnv.executeSql(unSupportedDml7))
+                .rootCause()
+                .isInstanceOf(CatalogException.class)
+                .hasMessage("The option 'auto-increment.fields' is not supported to alter yet.");
     }
 
     @Test
