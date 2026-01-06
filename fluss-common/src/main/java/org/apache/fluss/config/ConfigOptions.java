@@ -1793,7 +1793,7 @@ public class ConfigOptions {
             METRICS_REPORTER_PROMETHEUS_PUSHGATEWAY_RANDOM_JOB_NAME_SUFFIX =
                     key("metrics.reporter.prometheus-pushgateway.randomJobNameSuffix")
                             .booleanType()
-                            .defaultValue(true)
+                            .defaultValue(false)
                             .withDescription(
                                     "Whether to append a random suffix to the job name. "
                                             + "This is useful when multiple instances of the reporter "
@@ -1803,7 +1803,7 @@ public class ConfigOptions {
             METRICS_REPORTER_PROMETHEUS_PUSHGATEWAY_DELETE_ON_SHUTDOWN =
                     key("metrics.reporter.prometheus-pushgateway.deleteOnShutdown")
                             .booleanType()
-                            .defaultValue(true)
+                            .defaultValue(false)
                             .withDescription(
                                     "Whether to delete metrics from PushGateway on shutdown.");
 
