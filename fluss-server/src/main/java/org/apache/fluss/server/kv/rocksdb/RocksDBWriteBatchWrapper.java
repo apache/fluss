@@ -17,6 +17,8 @@
 
 package org.apache.fluss.server.kv.rocksdb;
 
+import org.apache.fluss.metrics.Counter;
+import org.apache.fluss.metrics.Histogram;
 import org.apache.fluss.server.kv.KvBatchWriter;
 import org.apache.fluss.utils.IOUtils;
 
@@ -65,10 +67,21 @@ public class RocksDBWriteBatchWrapper implements KvBatchWriter {
     /** List of all objects that we need to close in close(). */
     private final List<AutoCloseable> toClose;
 
-    public RocksDBWriteBatchWrapper(@Nonnull RocksDB rocksDB, long batchSize) {
+    /** Metrics for flush operations. */
+    private final Counter flushCount;
+
+    private final Histogram flushLatencyHistogram;
+
+    public RocksDBWriteBatchWrapper(
+            @Nonnull RocksDB rocksDB,
+            long batchSize,
+            Counter flushCount,
+            Histogram flushLatencyHistogram) {
         checkArgument(batchSize >= 0, "Max batch size have to be no negative.");
         this.db = rocksDB;
         this.batchSize = batchSize;
+        this.flushCount = flushCount;
+        this.flushLatencyHistogram = flushLatencyHistogram;
         this.toClose = new ArrayList<>(2);
         if (this.batchSize > 0) {
             this.batch =
@@ -103,11 +116,14 @@ public class RocksDBWriteBatchWrapper implements KvBatchWriter {
     }
 
     public void flush() throws IOException {
+        long start = System.nanoTime();
         Exception lastException = null;
         for (int tryTime = 0; tryTime < MAX_TRY_TIMES; tryTime++) {
             try {
                 db.write(options, batch);
                 batch.clear();
+                flushCount.inc();
+                flushLatencyHistogram.update((System.nanoTime() - start) / 1_000_000);
                 return;
             } catch (RocksDBException e) {
                 lastException = e;

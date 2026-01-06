@@ -105,6 +105,7 @@ public final class KvTablet {
     private final long writeBatchSize;
     private final RocksDBKv rocksDBKv;
     private final KvPreWriteBuffer kvPreWriteBuffer;
+    private final TabletServerMetricGroup serverMetricGroup;
 
     // A lock that guards all modifications to the kv.
     private final ReadWriteLock kvLock = new ReentrantReadWriteLock();
@@ -154,6 +155,7 @@ public final class KvTablet {
         this.kvTabletDir = kvTabletDir;
         this.rocksDBKv = rocksDBKv;
         this.writeBatchSize = writeBatchSize;
+        this.serverMetricGroup = serverMetricGroup;
         this.kvPreWriteBuffer = new KvPreWriteBuffer(createKvBatchWriter(), serverMetricGroup);
         this.logFormat = logFormat;
         this.arrowWriterProvider = new ArrowWriterPool(arrowBufferAllocator);
@@ -641,7 +643,10 @@ public final class KvTablet {
     }
 
     public KvBatchWriter createKvBatchWriter() {
-        return rocksDBKv.newWriteBatch(writeBatchSize);
+        return rocksDBKv.newWriteBatch(
+                writeBatchSize,
+                serverMetricGroup.kvFlushCount(),
+                serverMetricGroup.kvFlushLatencyHistogram());
     }
 
     public void close() throws Exception {
