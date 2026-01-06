@@ -34,6 +34,7 @@ import org.apache.fluss.lake.committer.LakeCommitter;
 import org.apache.fluss.lake.writer.LakeTieringFactory;
 import org.apache.fluss.lake.writer.LakeWriter;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.utils.ExceptionUtils;
 
@@ -199,12 +200,24 @@ public class TieringCommitOperator<WriteResult, Committable>
         if (committableWriteResults.isEmpty()) {
             return null;
         }
+
+        // Check if the table was dropped and recreated during tiering.
+        // If the current table id differs from the committable's table id, fail this commit
+        // to avoid dirty commit to a newly created table.
+        TableInfo currentTableInfo = admin.getTableInfo(tablePath).get();
+        if (currentTableInfo.getTableId() != tableId) {
+            throw new IllegalStateException(
+                    String.format(
+                            "The current table id %s for table path %s is different from the table id %s in the committable. "
+                                    + "This usually happens when a table was dropped and recreated during tiering. "
+                                    + "Aborting commit to prevent dirty commit.",
+                            currentTableInfo.getTableId(), tablePath, tableId));
+        }
+
         try (LakeCommitter<WriteResult, Committable> lakeCommitter =
                 lakeTieringFactory.createLakeCommitter(
                         new TieringCommitterInitContext(
-                                tablePath,
-                                admin.getTableInfo(tablePath).get(),
-                                lakeTieringConfig))) {
+                                tablePath, currentTableInfo, lakeTieringConfig))) {
             List<WriteResult> writeResults =
                     committableWriteResults.stream()
                             .map(TableBucketWriteResult::writeResult)
