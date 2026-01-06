@@ -20,9 +20,7 @@ package org.apache.spark.sql
 import org.apache.spark.sql.connector.catalog.CatalogV2Implicits._
 import org.apache.spark.sql.connector.expressions.Transform
 
-/**
- * Shim of org.apache.spark.sql.connector.catalog.CatalogV2Util.
- */
+/** Shim of org.apache.spark.sql.connector.catalog.CatalogV2Util. */
 object CatalogV2UtilShim {
   def toSparkTransforms(colNames: Seq[String]): Array[Transform] = {
     colNames.asTransforms

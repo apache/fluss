@@ -19,12 +19,14 @@ package org.apache.fluss.spark.catalog
 
 import org.apache.fluss.metadata.TableInfo
 import org.apache.fluss.spark.SparkConversions
+
 import org.apache.spark.sql.CatalogV2UtilShim
 import org.apache.spark.sql.connector.catalog.{Table, TableCapability}
 import org.apache.spark.sql.connector.expressions.Transform
 import org.apache.spark.sql.types.StructType
 
 import java.util
+
 import scala.collection.JavaConverters._
 
 abstract class AbstractSparkTable(tableInfo: TableInfo) extends Table {
