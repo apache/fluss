@@ -84,9 +84,8 @@ public class AutoIncProcessor {
                         sequenceGeneratorMap.get(autoIncColumnIds[0]));
     }
 
-    // Support: 1. Remove auto increment column for a table.
-    // 2. Reorder columns of a table.
-    // Not support Add auto increment column for a table.
+    // Supports removing or reordering columns; does NOT support adding an auto-increment column to
+    // an existing table.
     public void configureSchema(int latestSchemaId) {
         if (latestSchemaId != this.schemaId) {
             Schema schema = schemaGetter.getSchema(latestSchemaId);
