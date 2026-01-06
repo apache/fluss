@@ -48,6 +48,7 @@ import org.apache.fluss.record.ChangeType;
 import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.row.ProjectedRow;
 import org.apache.fluss.row.indexed.IndexedRow;
 import org.apache.fluss.types.BigIntType;
 import org.apache.fluss.types.DataTypes;
@@ -452,6 +453,159 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                 .hasMessageContaining(
                         "Can not perform prefix lookup on table 'test_db_1.test_invalid_prefix_lookup_2', "
                                 + "because the lookup columns [b, a] must contain all bucket keys [a, b] in order.");
+    }
+
+    @Test
+    void testSingleBucketPutAutoIncColumnAndLookup() throws Exception {
+        Schema schema =
+                Schema.newBuilder()
+                        .column("col1", DataTypes.STRING())
+                        .withComment("col1 is first column")
+                        .column("col2", DataTypes.BIGINT())
+                        .withComment("col2 is second column, auto increment column")
+                        .column("col3", DataTypes.STRING())
+                        .withComment("col3 is third column")
+                        .enableAutoIncrement("col2")
+                        .primaryKey("col1")
+                        .build();
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder().schema(schema).distributedBy(1, "col1").build();
+        // create the table
+        TablePath data1PkTablePath =
+                TablePath.of(DATA1_TABLE_PATH_PK.getDatabaseName(), "test_pk_table_auto_inc");
+        createTable(data1PkTablePath, tableDescriptor, true);
+        Table autoIncTable = conn.getTable(data1PkTablePath);
+        UpsertWriter upsertWriter =
+                autoIncTable.newUpsert().partialUpdate("col1", "col3").createWriter();
+        String[] keys = new String[] {"a", "b", "c"};
+        for (String key : keys) {
+            upsertWriter.upsert(row(key, null, "batch1"));
+        }
+        upsertWriter.flush();
+
+        Lookuper lookuper = autoIncTable.newLookup().createLookuper();
+        ProjectedRow keyRow = ProjectedRow.from(schema.getPrimaryKeyIndexes());
+        for (int i = 0; i < keys.length; i++) {
+            assertThatRow(lookupRow(lookuper, keyRow.replaceRow(row(keys[i], null, null))))
+                    .withSchema(schema.getRowType())
+                    .isEqualTo(row(keys[i], (long) i, "batch1"));
+        }
+
+        for (String key : keys) {
+            upsertWriter.upsert(row(key, null, "batch2"));
+        }
+        upsertWriter.flush();
+
+        for (int i = 0; i < 3; i++) {
+            assertThatRow(lookupRow(lookuper, keyRow.replaceRow(row(keys[i], null, null))))
+                    .withSchema(schema.getRowType())
+                    .isEqualTo(row(keys[i], (long) i, "batch2"));
+        }
+
+        admin.alterTable(
+                        data1PkTablePath,
+                        Collections.singletonList(
+                                TableChange.addColumn(
+                                        "col4",
+                                        DataTypes.BIGINT(),
+                                        null,
+                                        TableChange.ColumnPosition.last())),
+                        false)
+                .get();
+        Table newSchemaTable = conn.getTable(data1PkTablePath);
+        Schema newSchema = newSchemaTable.getTableInfo().getSchema();
+        Lookuper newLookuper = newSchemaTable.newLookup().createLookuper();
+
+        // schema change case1: read new data with new schema.
+        for (int i = 0; i < keys.length; i++) {
+            assertThatRow(lookupRow(newLookuper, keyRow.replaceRow(row(keys[i], null, null))))
+                    .withSchema(newSchema.getRowType())
+                    .isEqualTo(row(keys[i], (long) i, "batch2", null));
+        }
+
+        // schema change case2: update new data with old schema.
+        keys = new String[] {"a", "b", "c", "d"};
+        UpsertWriter newUpsertWriter =
+                newSchemaTable.newUpsert().partialUpdate("col1", "col3", "col4").createWriter();
+        for (int i = 0; i < keys.length; i++) {
+            newUpsertWriter.upsert(row(keys[i], null, "batch3", (long) i));
+        }
+        newUpsertWriter.flush();
+
+        // schema change case3: read data with old schema.
+        for (int i = 0; i < keys.length; i++) {
+            assertThatRow(lookupRow(lookuper, keyRow.replaceRow(row(keys[i], null, null))))
+                    .withSchema(schema.getRowType())
+                    .isEqualTo(row(keys[i], (long) i, "batch3"));
+        }
+
+        // schema change case4: read data with new schema.
+        for (int i = 0; i < keys.length; i++) {
+            assertThatRow(lookupRow(newLookuper, keyRow.replaceRow(row(keys[i], null, null))))
+                    .withSchema(newSchema.getRowType())
+                    .isEqualTo(row(keys[i], (long) i, "batch3", (long) i));
+        }
+    }
+
+    @Test
+    void testPutAutoIncColumnAndLookup() throws Exception {
+        Schema schema =
+                Schema.newBuilder()
+                        .column("col1", DataTypes.STRING())
+                        .withComment("col1 is first column")
+                        .column("col2", DataTypes.BIGINT())
+                        .withComment("col2 is second column, auto increment column")
+                        .column("col3", DataTypes.STRING())
+                        .withComment("col3 is third column")
+                        .enableAutoIncrement("col2")
+                        .primaryKey("col1")
+                        .build();
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder().schema(schema).distributedBy(2, "col1").build();
+        // create the table
+        TablePath data1PkTablePath =
+                TablePath.of(DATA1_TABLE_PATH_PK.getDatabaseName(), "test_pk_table_auto_inc");
+        createTable(data1PkTablePath, tableDescriptor, true);
+        Table autoIncTable = conn.getTable(data1PkTablePath);
+        UpsertWriter upsertWriter =
+                autoIncTable.newUpsert().partialUpdate("col1", "col3").createWriter();
+        String[] keys = new String[] {"a", "b", "c", "d"};
+        for (String key : keys) {
+            upsertWriter.upsert(row(key, null, "batch1"));
+            upsertWriter.flush();
+        }
+
+        Lookuper lookuper = autoIncTable.newLookup().createLookuper();
+        ProjectedRow keyRow = ProjectedRow.from(schema.getPrimaryKeyIndexes());
+        assertThatRow(lookupRow(lookuper, keyRow.replaceRow(row("a", null, "batch1"))))
+                .withSchema(schema.getRowType())
+                .isEqualTo(row("a", 0L, "batch1"));
+        assertThatRow(lookupRow(lookuper, keyRow.replaceRow(row("b", null, "batch1"))))
+                .withSchema(schema.getRowType())
+                .isEqualTo(row("b", 100000L, "batch1"));
+        assertThatRow(lookupRow(lookuper, keyRow.replaceRow(row("c", null, "batch1"))))
+                .withSchema(schema.getRowType())
+                .isEqualTo(row("c", 1L, "batch1"));
+        assertThatRow(lookupRow(lookuper, keyRow.replaceRow(row("d", null, "batch1"))))
+                .withSchema(schema.getRowType())
+                .isEqualTo(row("d", 100001L, "batch1"));
+
+        for (String key : keys) {
+            upsertWriter.upsert(row(key, null, "batch2"));
+            upsertWriter.flush();
+        }
+        assertThatRow(lookupRow(lookuper, keyRow.replaceRow(row("a", null, "batch2"))))
+                .withSchema(schema.getRowType())
+                .isEqualTo(row("a", 0L, "batch2"));
+        assertThatRow(lookupRow(lookuper, keyRow.replaceRow(row("b", null, "batch2"))))
+                .withSchema(schema.getRowType())
+                .isEqualTo(row("b", 100000L, "batch2"));
+        assertThatRow(lookupRow(lookuper, keyRow.replaceRow(row("c", null, "batch2"))))
+                .withSchema(schema.getRowType())
+                .isEqualTo(row("c", 1L, "batch2"));
+        assertThatRow(lookupRow(lookuper, keyRow.replaceRow(row("d", null, "batch2"))))
+                .withSchema(schema.getRowType())
+                .isEqualTo(row("d", 100001L, "batch2"));
     }
 
     @Test

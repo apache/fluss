@@ -45,6 +45,7 @@ import org.apache.fluss.row.PaddingRow;
 import org.apache.fluss.row.arrow.ArrowWriterPool;
 import org.apache.fluss.row.arrow.ArrowWriterProvider;
 import org.apache.fluss.row.encode.ValueDecoder;
+import org.apache.fluss.server.kv.autoinc.AutoIncProcessor;
 import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer;
 import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer.TruncateReason;
 import org.apache.fluss.server.kv.rocksdb.RocksDBKv;
@@ -113,6 +114,7 @@ public final class KvTablet {
     // defines how to merge rows on the same primary key
     private final RowMerger rowMerger;
     private final ArrowCompressionInfo arrowCompressionInfo;
+    private final AutoIncProcessor autoIncProcessor;
 
     private final SchemaGetter schemaGetter;
 
@@ -147,7 +149,8 @@ public final class KvTablet {
             ArrowCompressionInfo arrowCompressionInfo,
             SchemaGetter schemaGetter,
             ChangelogImage changelogImage,
-            @Nullable RocksDBStatistics rocksDBStatistics) {
+            @Nullable RocksDBStatistics rocksDBStatistics,
+            AutoIncProcessor autoIncProcessor) {
         this.physicalPath = physicalPath;
         this.tableBucket = tableBucket;
         this.logTablet = logTablet;
@@ -164,6 +167,7 @@ public final class KvTablet {
         this.schemaGetter = schemaGetter;
         this.changelogImage = changelogImage;
         this.rocksDBStatistics = rocksDBStatistics;
+        this.autoIncProcessor = autoIncProcessor;
     }
 
     public static KvTablet create(
@@ -180,7 +184,8 @@ public final class KvTablet {
             ArrowCompressionInfo arrowCompressionInfo,
             SchemaGetter schemaGetter,
             ChangelogImage changelogImage,
-            RateLimiter sharedRateLimiter)
+            RateLimiter sharedRateLimiter,
+            AutoIncProcessor autoIncProcessor)
             throws IOException {
         RocksDBKv kv = buildRocksDBKv(serverConf, kvTabletDir, sharedRateLimiter);
 
@@ -212,7 +217,8 @@ public final class KvTablet {
                 arrowCompressionInfo,
                 schemaGetter,
                 changelogImage,
-                rocksDBStatistics);
+                rocksDBStatistics,
+                autoIncProcessor);
     }
 
     private static RocksDBKv buildRocksDBKv(
@@ -300,6 +306,7 @@ public final class KvTablet {
                     RowMerger currentMerger =
                             rowMerger.configureTargetColumns(
                                     targetColumns, latestSchemaId, latestSchema);
+                    autoIncProcessor.configureSchema(latestSchemaId);
 
                     RowType latestRowType = latestSchema.getRowType();
                     WalBuilder walBuilder = createWalBuilder(latestSchemaId, latestRowType);
@@ -498,8 +505,9 @@ public final class KvTablet {
             PaddingRow latestSchemaRow,
             long logOffset)
             throws Exception {
-        walBuilder.append(ChangeType.INSERT, latestSchemaRow.replaceRow(currentValue.row));
-        kvPreWriteBuffer.put(key, currentValue.encodeValue(), logOffset);
+        BinaryValue newValue = autoIncProcessor.processAutoInc(currentValue);
+        walBuilder.append(ChangeType.INSERT, latestSchemaRow.replaceRow(newValue.row));
+        kvPreWriteBuffer.put(key, newValue.encodeValue(), logOffset);
         return logOffset + 1;
     }
 
