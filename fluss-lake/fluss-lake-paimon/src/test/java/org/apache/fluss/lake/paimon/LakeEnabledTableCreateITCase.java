@@ -927,6 +927,50 @@ class LakeEnabledTableCreateITCase {
         assertThat(alteredRowType.getField("c3").description()).isEqualTo("c3 comment");
     }
 
+    @Test
+    void testEnableLakeTableWithLegacySystemTimestampColumn() throws Exception {
+        TablePath tablePath = TablePath.of(DATABASE, "timestamp_precision_compat");
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(Schema.newBuilder().column("c1", DataTypes.INT()).build())
+                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
+                        .build();
+
+        admin.createTable(tablePath, tableDescriptor, false).get();
+
+        Identifier paimonIdentifier = Identifier.create(DATABASE, tablePath.getTableName());
+
+        // alter to TIMESTAMP_WITH_LOCAL_TIME_ZONE to mock the legacy behavior
+        paimonCatalog.alterTable(
+                paimonIdentifier,
+                SchemaChange.updateColumnType(
+                        TIMESTAMP_COLUMN_NAME,
+                        org.apache.paimon.types.DataTypes.TIMESTAMP_WITH_LOCAL_TIME_ZONE()),
+                false);
+
+        // disable data lake
+        admin.alterTable(
+                        tablePath,
+                        Collections.singletonList(
+                                TableChange.set(
+                                        ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "false")),
+                        false)
+                .get();
+        assertThat(admin.getTableInfo(tablePath).get().getTableConfig().isDataLakeEnabled())
+                .isFalse();
+
+        // enable data lake again, should still enable it
+        admin.alterTable(
+                        tablePath,
+                        Collections.singletonList(
+                                TableChange.set(
+                                        ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "true")),
+                        false)
+                .get();
+        assertThat(admin.getTableInfo(tablePath).get().getTableConfig().isDataLakeEnabled())
+                .isTrue();
+    }
+
     private void verifyPaimonTable(
             Table paimonTable,
             TableDescriptor flussTable,
