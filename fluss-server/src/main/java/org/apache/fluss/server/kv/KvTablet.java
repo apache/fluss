@@ -462,10 +462,10 @@ public final class KvTablet {
             PaddingRow latestSchemaRow,
             long logOffset)
             throws Exception {
-        // Optimization: when using WAL mode and merger is DefaultRowMerger (full update, not
-        // partial update), we can skip fetching old value for better performance since it
-        // always returns new value. In this case, both INSERT and UPDATE will produce
-        // UPDATE_AFTER.
+        // Optimization: IN WAL mode，when using DefaultRowMerger (full update, not partial update)
+        // and there is no auto-increment column, we can skip fetching old value for better
+        // performance since the result always reflects the new value. In this case, both INSERT and
+        // UPDATE will produce UPDATE_AFTER.
         if (changelogImage == ChangelogImage.WAL
                 && autoIncProcessor.isNoOpUpdate()
                 && currentMerger instanceof DefaultRowMerger) {

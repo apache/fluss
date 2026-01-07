@@ -18,18 +18,13 @@
 package org.apache.fluss.client.table;
 
 import org.apache.fluss.client.admin.ClientToServerITCaseBase;
-import org.apache.fluss.client.lookup.Lookuper;
 import org.apache.fluss.client.table.scanner.ScanRecord;
 import org.apache.fluss.client.table.scanner.log.LogScanner;
 import org.apache.fluss.client.table.scanner.log.ScanRecords;
 import org.apache.fluss.client.table.writer.AppendWriter;
 import org.apache.fluss.client.table.writer.UpsertWriter;
-import org.apache.fluss.metadata.Schema;
-import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
-import org.apache.fluss.row.ProjectedRow;
-import org.apache.fluss.types.DataTypes;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -44,7 +39,6 @@ import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR_PK;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH_PK;
 import static org.apache.fluss.testutils.DataTestUtils.row;
-import static org.apache.fluss.testutils.InternalRowAssert.assertThatRow;
 import static org.apache.fluss.testutils.InternalRowListAssert.assertThatRows;
 
 /** IT case for {@link FlussTable} in the case of one tablet server fails. */
@@ -150,64 +144,6 @@ class FlussFailServerTableITCase extends ClientToServerITCaseBase {
             } finally {
                 FLUSS_CLUSTER_EXTENSION.startTabletServer(SERVER);
             }
-        }
-    }
-
-    @Test
-    void testPutAutoIncColumnAndLookup() throws Exception {
-        Schema schema =
-                Schema.newBuilder()
-                        .column("col1", DataTypes.STRING())
-                        .withComment("col1 is first column")
-                        .column("col2", DataTypes.BIGINT())
-                        .withComment("col2 is second column, auto increment column")
-                        .column("col3", DataTypes.STRING())
-                        .withComment("col3 is third column")
-                        .enableAutoIncrement("col2")
-                        .primaryKey("col1")
-                        .build();
-        TableDescriptor tableDescriptor =
-                TableDescriptor.builder().schema(schema).distributedBy(2, "col1").build();
-        createTable(DATA1_TABLE_PATH_PK, tableDescriptor, false);
-        Object[][] records = {
-            {"a", 0L, "batch1"},
-            {"b", 100000L, "batch1"},
-            {"c", 1L, "batch1"},
-            {"d", 100001L, "batch1"}
-        };
-
-        try (Table table = conn.getTable(DATA1_TABLE_PATH_PK)) {
-            UpsertWriter upsertWriter =
-                    table.newUpsert().partialUpdate("col1", "col3").createWriter();
-            for (Object[] record : records) {
-                upsertWriter.upsert(row(record[0], null, record[2])).get();
-            }
-
-            Lookuper lookuper = table.newLookup().createLookuper();
-            ProjectedRow keyRow = ProjectedRow.from(schema.getPrimaryKeyIndexes());
-            for (Object[] record : records) {
-                assertThatRow(lookupRow(lookuper, keyRow.replaceRow(row(record))))
-                        .withSchema(schema.getRowType())
-                        .isEqualTo(row(record));
-            }
-
-            // kill and restart all tablet server
-            for (int i = 0; i < 3; i++) {
-                FLUSS_CLUSTER_EXTENSION.stopTabletServer(i);
-                FLUSS_CLUSTER_EXTENSION.startTabletServer(i);
-            }
-
-            for (Object[] record : records) {
-                assertThatRow(lookupRow(lookuper, keyRow.replaceRow(row(record))))
-                        .withSchema(schema.getRowType())
-                        .isEqualTo(row(record));
-            }
-            upsertWriter.upsert(row("e", null, "batch2")).get();
-            // The auto-increment column should start from a new segment for now, and local cached
-            // IDs have been discarded.
-            assertThatRow(lookupRow(lookuper, keyRow.replaceRow(row("e", null, null))))
-                    .withSchema(schema.getRowType())
-                    .isEqualTo(row("e", 200000L, "batch2"));
         }
     }
 

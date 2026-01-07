@@ -455,6 +455,24 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                                 + "because the lookup columns [b, a] must contain all bucket keys [a, b] in order.");
     }
 
+    private void partialUpdateRecords(String[] targetColumns, Object[][] records, Table table) {
+        UpsertWriter upsertWriter = table.newUpsert().partialUpdate(targetColumns).createWriter();
+        for (Object[] record : records) {
+            upsertWriter.upsert(row(record));
+        }
+        upsertWriter.flush();
+    }
+
+    private void verifyRecords(Object[][] records, Table table, Schema schema) throws Exception {
+        Lookuper lookuper = table.newLookup().createLookuper();
+        ProjectedRow keyRow = ProjectedRow.from(schema.getPrimaryKeyIndexes());
+        for (Object[] record : records) {
+            assertThatRow(lookupRow(lookuper, keyRow.replaceRow(row(record))))
+                    .withSchema(schema.getRowType())
+                    .isEqualTo(row(record));
+        }
+    }
+
     @Test
     void testSingleBucketPutAutoIncColumnAndLookup() throws Exception {
         Schema schema =
@@ -475,40 +493,25 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                 TablePath.of(DATA1_TABLE_PATH_PK.getDatabaseName(), "test_pk_table_auto_inc");
         createTable(tablePath, tableDescriptor, true);
         Table autoIncTable = conn.getTable(tablePath);
-        UpsertWriter upsertWriter =
-                autoIncTable.newUpsert().partialUpdate("col1", "col3").createWriter();
         Object[][] records = {
+            {"a", null, "batch1"},
+            {"b", null, "batch1"},
+            {"c", null, "batch1"},
+            {"d", null, "batch1"},
+            {"e", null, "batch1"},
+            {"d", null, "batch2"},
+            {"e", null, "batch2"}
+        };
+        partialUpdateRecords(new String[] {"col1", "col3"}, records, autoIncTable);
+
+        Object[][] expectedRecords = {
             {"a", 0L, "batch1"},
             {"b", 1L, "batch1"},
             {"c", 2L, "batch1"},
-            {"d", 3L, "batch1"},
-            {"e", 4L, "batch1"}
+            {"d", 3L, "batch2"},
+            {"e", 4L, "batch2"}
         };
-        for (Object[] record : records) {
-            upsertWriter.upsert(row(record[0], null, record[2]));
-        }
-        upsertWriter.flush();
-
-        Lookuper lookuper = autoIncTable.newLookup().createLookuper();
-        ProjectedRow keyRow = ProjectedRow.from(schema.getPrimaryKeyIndexes());
-
-        for (Object[] record : records) {
-            assertThatRow(lookupRow(lookuper, keyRow.replaceRow(row(record))))
-                    .withSchema(schema.getRowType())
-                    .isEqualTo(row(record));
-        }
-
-        for (Object[] record : records) {
-            record[2] = "batch2";
-            upsertWriter.upsert(row(record[0], null, record[2]));
-        }
-        upsertWriter.flush();
-
-        for (Object[] record : records) {
-            assertThatRow(lookupRow(lookuper, keyRow.replaceRow(row(record))))
-                    .withSchema(schema.getRowType())
-                    .isEqualTo(row(record));
-        }
+        verifyRecords(expectedRecords, autoIncTable, schema);
 
         admin.alterTable(
                         tablePath,
@@ -522,45 +525,60 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                 .get();
         Table newSchemaTable = conn.getTable(tablePath);
         Schema newSchema = newSchemaTable.getTableInfo().getSchema();
-        Lookuper newLookuper = newSchemaTable.newLookup().createLookuper();
 
-        Object[][] recordsWithNewSchema = {
-            {"a", 0L, "batch2", 10},
-            {"b", 1L, "batch2", 11},
-            {"c", 2L, "batch2", 12},
-            {"d", 3L, "batch2", 13},
-            {"e", 4L, "batch2", 14}
-        };
         // schema change case1: read new data with new schema.
-        for (Object[] record : recordsWithNewSchema) {
-            assertThatRow(lookupRow(newLookuper, keyRow.replaceRow(row(record))))
-                    .withSchema(newSchema.getRowType())
-                    .isEqualTo(row(record[0], record[1], record[2], null));
-        }
+        Object[][] expectedRecordsWithOldSchema = {
+            {"a", 0L, "batch1"},
+            {"b", 1L, "batch1"},
+            {"c", 2L, "batch1"},
+            {"d", 3L, "batch2"},
+            {"e", 4L, "batch2"}
+        };
+        verifyRecords(expectedRecordsWithOldSchema, autoIncTable, schema);
 
         // schema change case2: update new data with new schema.
-        UpsertWriter newUpsertWriter =
-                newSchemaTable.newUpsert().partialUpdate("col1", "col3", "col4").createWriter();
-        for (Object[] record : recordsWithNewSchema) {
-            record[2] = "batch3";
-            newUpsertWriter.upsert(row(record));
-        }
-        newUpsertWriter.flush();
+
+        Object[][] recordsWithNewSchema = {
+            {"a", null, "batch3", 10},
+            {"b", null, "batch3", 11}
+        };
+        partialUpdateRecords(
+                new String[] {"col1", "col3", "col4"}, recordsWithNewSchema, newSchemaTable);
 
         // schema change case3: read data with old schema.
-        for (Object[] record : records) {
-            record[2] = "batch3";
-            assertThatRow(lookupRow(lookuper, keyRow.replaceRow(row(record))))
-                    .withSchema(schema.getRowType())
-                    .isEqualTo(row(record));
-        }
+        expectedRecordsWithOldSchema[0][2] = "batch3";
+        expectedRecordsWithOldSchema[1][2] = "batch3";
+        verifyRecords(expectedRecordsWithOldSchema, autoIncTable, schema);
 
         // schema change case4: read data with new schema.
-        for (Object[] record : recordsWithNewSchema) {
-            assertThatRow(lookupRow(newLookuper, keyRow.replaceRow(row(record))))
-                    .withSchema(newSchema.getRowType())
-                    .isEqualTo(row(record));
+        Object[][] expectedRecordsWithNewSchema = {
+            {"a", 0L, "batch3", 10},
+            {"b", 1L, "batch3", 11},
+            {"c", 2L, "batch1", null},
+            {"d", 3L, "batch2", null},
+            {"e", 4L, "batch2", null}
+        };
+        verifyRecords(expectedRecordsWithNewSchema, newSchemaTable, newSchema);
+
+        // kill and restart all tablet server
+        for (int i = 0; i < 3; i++) {
+            FLUSS_CLUSTER_EXTENSION.stopTabletServer(i);
+            FLUSS_CLUSTER_EXTENSION.startTabletServer(i);
         }
+
+        // reconnect fluss server
+        conn = ConnectionFactory.createConnection(clientConf);
+        newSchemaTable = conn.getTable(tablePath);
+        verifyRecords(expectedRecordsWithNewSchema, newSchemaTable, newSchema);
+
+        Object[][] restartWriteRecords = {{"f", null, "batch4", 12}};
+        partialUpdateRecords(
+                new String[] {"col1", "col3", "col4"}, restartWriteRecords, newSchemaTable);
+
+        // The auto-increment column should start from a new segment for now, and local cached
+        // IDs have been discarded.
+        Object[][] expectedRestartWriteRecords = {{"f", 100000L, "batch4", 12}};
+        verifyRecords(expectedRestartWriteRecords, newSchemaTable, newSchema);
     }
 
     @Test
