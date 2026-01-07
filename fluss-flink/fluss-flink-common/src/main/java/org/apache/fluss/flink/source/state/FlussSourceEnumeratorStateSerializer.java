@@ -17,6 +17,7 @@
 
 package org.apache.fluss.flink.source.state;
 
+import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.flink.source.split.SourceSplitBase;
 import org.apache.fluss.flink.source.split.SourceSplitSerializer;
 import org.apache.fluss.lake.source.LakeSource;
@@ -37,6 +38,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import static org.apache.fluss.utils.Preconditions.checkNotNull;
+
 /** A serializer for {@link SourceEnumeratorState}. */
 public class FlussSourceEnumeratorStateSerializer
         implements SimpleVersionedSerializer<SourceEnumeratorState> {
@@ -44,10 +47,12 @@ public class FlussSourceEnumeratorStateSerializer
     @Nullable private final LakeSource<LakeSplit> lakeSource;
 
     private static final int VERSION_0 = 0;
+    private static final int VERSION_1 = 1;
+
     private static final ThreadLocal<DataOutputSerializer> SERIALIZER_CACHE =
             ThreadLocal.withInitial(() -> new DataOutputSerializer(64));
 
-    private static final int CURRENT_VERSION = VERSION_0;
+    private static final int CURRENT_VERSION = VERSION_1;
 
     public FlussSourceEnumeratorStateSerializer(LakeSource<LakeSplit> lakeSource) {
         this.lakeSource = lakeSource;
@@ -61,11 +66,28 @@ public class FlussSourceEnumeratorStateSerializer
     @Override
     public byte[] serialize(SourceEnumeratorState state) throws IOException {
         final DataOutputSerializer out = SERIALIZER_CACHE.get();
-        // write assigned buckets
-        out.writeInt(state.getAssignedBuckets().size());
-        for (TableBucket tableBucket : state.getAssignedBuckets()) {
-            out.writeLong(tableBucket.getTableId());
 
+        // serialize assign bucket and partitions
+        serializeAssignBucketAndPartitions(
+                out, state.getAssignedBuckets(), state.getAssignedPartitions());
+
+        // serialize remain hybrid lake splits
+        serializeRemainingHybridLakeFlussSplits(out, state);
+
+        final byte[] result = out.getCopyOfBuffer();
+        out.clear();
+        return result;
+    }
+
+    private void serializeAssignBucketAndPartitions(
+            DataOutputSerializer out,
+            Set<TableBucket> assignedBuckets,
+            Map<Long, String> assignedPartitions)
+            throws IOException {
+        // write assigned buckets
+        out.writeInt(assignedBuckets.size());
+        for (TableBucket tableBucket : assignedBuckets) {
+            out.writeLong(tableBucket.getTableId());
             // write partition
             // if partition is not null
             if (tableBucket.getPartitionId() != null) {
@@ -78,16 +100,21 @@ public class FlussSourceEnumeratorStateSerializer
             out.writeInt(tableBucket.getBucket());
         }
         // write assigned partitions
-        out.writeInt(state.getAssignedPartitions().size());
-        for (Map.Entry<Long, String> entry : state.getAssignedPartitions().entrySet()) {
+        out.writeInt(assignedPartitions.size());
+        for (Map.Entry<Long, String> entry : assignedPartitions.entrySet()) {
             out.writeLong(entry.getKey());
             out.writeUTF(entry.getValue());
         }
+    }
 
+    @VisibleForTesting
+    protected byte[] serializeV0(SourceEnumeratorState state) throws IOException {
+        final DataOutputSerializer out = SERIALIZER_CACHE.get();
+        serializeAssignBucketAndPartitions(
+                out, state.getAssignedBuckets(), state.getAssignedPartitions());
         if (lakeSource != null) {
             serializeRemainingHybridLakeFlussSplits(out, state);
         }
-
         final byte[] result = out.getCopyOfBuffer();
         out.clear();
         return result;
@@ -95,7 +122,7 @@ public class FlussSourceEnumeratorStateSerializer
 
     @Override
     public SourceEnumeratorState deserialize(int version, byte[] serialized) throws IOException {
-        if (version != VERSION_0) {
+        if (version != VERSION_0 && version != CURRENT_VERSION) {
             throw new IOException("Unknown version or corrupt state: " + version);
         }
         final DataInputDeserializer in = new DataInputDeserializer(serialized);
@@ -124,8 +151,18 @@ public class FlussSourceEnumeratorStateSerializer
         }
 
         List<SourceSplitBase> remainingHybridLakeFlussSplits = null;
-        if (lakeSource != null) {
-            // todo: add a ut for serialize remaining hybrid lake fluss splits
+
+        if (version == VERSION_0) {
+            // For VERSION_0, deserialize remaining hybrid lake Fluss splits only when lakeSource is
+            // not null.
+            if (lakeSource != null) {
+                remainingHybridLakeFlussSplits = deserializeRemainingHybridLakeFlussSplits(in);
+            }
+        } else {
+            // For VERSION_1 and later, always attempt to deserialize remaining hybrid lake/Fluss
+            // splits. The serialized state encodes their presence via a boolean flag, so this
+            // logic no longer depends on the lakeSource flag. This unconditional deserialization
+            // is the intended behavior change compared to VERSION_0.
             remainingHybridLakeFlussSplits = deserializeRemainingHybridLakeFlussSplits(in);
         }
 
@@ -160,7 +197,11 @@ public class FlussSourceEnumeratorStateSerializer
         if (in.readBoolean()) {
             int numSplits = in.readInt();
             List<SourceSplitBase> splits = new ArrayList<>(numSplits);
-            SourceSplitSerializer sourceSplitSerializer = new SourceSplitSerializer(lakeSource);
+            SourceSplitSerializer sourceSplitSerializer =
+                    new SourceSplitSerializer(
+                            checkNotNull(
+                                    lakeSource,
+                                    "lake source must not be null when there are hybrid lake splits."));
             int version = in.readInt();
             for (int i = 0; i < numSplits; i++) {
                 int splitSizeInBytes = in.readInt();

@@ -92,4 +92,66 @@ class SourceEnumeratorStateSerializerTest {
         /* check deserialized is equal to the original */
         assertThat(deserializedSourceEnumeratorState).isEqualTo(sourceEnumeratorState);
     }
+
+    @Test
+    void testV0Compatibility() throws Exception {
+        // serialize with v0,
+        int version = 0;
+        // test with lake source = null
+        FlussSourceEnumeratorStateSerializer serializer =
+                new FlussSourceEnumeratorStateSerializer(null);
+
+        Set<TableBucket> assignedBuckets =
+                new HashSet<>(Arrays.asList(new TableBucket(1, 0), new TableBucket(1, 4L, 1)));
+        Map<Long, String> assignedPartitions = new HashMap<>();
+        assignedPartitions.put(1L, "partition1");
+        assignedPartitions.put(2L, "partition2");
+        SourceEnumeratorState sourceEnumeratorState =
+                new SourceEnumeratorState(assignedBuckets, assignedPartitions, null);
+        byte[] serialized = serializer.serializeV0(sourceEnumeratorState);
+
+        // then deserialize
+        SourceEnumeratorState deserializedSourceEnumeratorState =
+                serializer.deserialize(version, serialized);
+        assertThat(deserializedSourceEnumeratorState).isEqualTo(sourceEnumeratorState);
+
+        // test with lake source is not null
+        serializer = new FlussSourceEnumeratorStateSerializer(new TestingLakeSource());
+        List<SourceSplitBase> remainingHybridLakeFlussSplits = new ArrayList<>();
+        // Add a LogSplit
+        TableBucket logSplitBucket = new TableBucket(1, 0);
+        LogSplit logSplit = new LogSplit(logSplitBucket, null, 100L);
+        remainingHybridLakeFlussSplits.add(logSplit);
+        sourceEnumeratorState =
+                new SourceEnumeratorState(
+                        assignedBuckets, assignedPartitions, remainingHybridLakeFlussSplits);
+
+        serialized = serializer.serializeV0(sourceEnumeratorState);
+
+        // then deserialize
+        deserializedSourceEnumeratorState = serializer.deserialize(version, serialized);
+        assertThat(deserializedSourceEnumeratorState).isEqualTo(sourceEnumeratorState);
+    }
+
+    @Test
+    void testInconsistentLakeSourceSerde() throws Exception {
+        // test serialize with null lake source
+        FlussSourceEnumeratorStateSerializer serializer =
+                new FlussSourceEnumeratorStateSerializer(null);
+
+        Set<TableBucket> assignedBuckets =
+                new HashSet<>(Arrays.asList(new TableBucket(1, 0), new TableBucket(1, 4L, 1)));
+        Map<Long, String> assignedPartitions = new HashMap<>();
+        assignedPartitions.put(1L, "partition1");
+        assignedPartitions.put(2L, "partition2");
+        SourceEnumeratorState sourceEnumeratorState =
+                new SourceEnumeratorState(assignedBuckets, assignedPartitions, null);
+        byte[] serialized = serializer.serialize(sourceEnumeratorState);
+
+        // test deserialize with nonnull lake source
+        serializer = new FlussSourceEnumeratorStateSerializer(new TestingLakeSource());
+        SourceEnumeratorState deserializedSourceEnumeratorState =
+                serializer.deserialize(serializer.getVersion(), serialized);
+        assertThat(deserializedSourceEnumeratorState).isEqualTo(sourceEnumeratorState);
+    }
 }
