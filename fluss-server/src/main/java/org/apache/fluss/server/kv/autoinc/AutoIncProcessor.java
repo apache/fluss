@@ -135,6 +135,10 @@ public class AutoIncProcessor {
         return autoIncUpdater.updateAutoInc(oldValue);
     }
 
+    public boolean isNoOpUpdate() {
+        return autoIncUpdater.equals(NO_OP_UPDATER);
+    }
+
     private interface AutoIncUpdater {
         BinaryValue updateAutoInc(BinaryValue oldValue);
     }

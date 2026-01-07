@@ -466,7 +466,9 @@ public final class KvTablet {
         // partial update), we can skip fetching old value for better performance since it
         // always returns new value. In this case, both INSERT and UPDATE will produce
         // UPDATE_AFTER.
-        if (changelogImage == ChangelogImage.WAL && currentMerger instanceof DefaultRowMerger) {
+        if (changelogImage == ChangelogImage.WAL
+                && autoIncProcessor.isNoOpUpdate()
+                && currentMerger instanceof DefaultRowMerger) {
             return applyUpdate(key, null, currentValue, walBuilder, latestSchemaRow, logOffset);
         }
 
