@@ -135,7 +135,7 @@ class LakeEnableTableITCase extends ClientToServerITCaseBase {
                                 .getDataLakeFormat())
                 .isEqualTo(null);
 
-        // Create table with explicit datalake format set (even though cluster has it)
+        // Create table with explicit datalake format set (even though cluster doesn't set it)
         TableDescriptor tableDescriptor =
                 TableDescriptor.builder()
                         .schema(
