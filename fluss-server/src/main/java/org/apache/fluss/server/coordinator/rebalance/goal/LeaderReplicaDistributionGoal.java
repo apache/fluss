@@ -45,9 +45,7 @@ import java.util.stream.Collectors;
 
 import static org.apache.fluss.server.coordinator.rebalance.ActionAcceptance.ACCEPT;
 import static org.apache.fluss.server.coordinator.rebalance.ActionAcceptance.REPLICA_REJECT;
-import static org.apache.fluss.server.coordinator.rebalance.goal.GoalOptimizerUtils.EPSILON;
-import static org.apache.fluss.server.coordinator.rebalance.goal.ReplicaDistributionAbstractGoal.ChangeType.ADD;
-import static org.apache.fluss.server.coordinator.rebalance.goal.ReplicaDistributionAbstractGoal.ChangeType.REMOVE;
+import static org.apache.fluss.utils.MathUtils.EPSILON;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /**
@@ -150,12 +148,10 @@ public class LeaderReplicaDistributionGoal extends ReplicaDistributionAbstractGo
     private ActionAcceptance isLeaderMovementSatisfiable(
             ServerModel sourceServer, ServerModel destServer) {
         return (isReplicaCountUnderBalanceUpperLimitAfterChange(
-                                destServer, destServer.leaderReplicas().size(), ADD)
+                                destServer, destServer.leaderReplicas().size())
                         && (isExcludedForReplicaMove(sourceServer)
                                 || isReplicaCountAboveBalanceLowerLimitAfterChange(
-                                        sourceServer,
-                                        sourceServer.leaderReplicas().size(),
-                                        REMOVE)))
+                                        sourceServer, sourceServer.leaderReplicas().size())))
                 ? ACCEPT
                 : REPLICA_REJECT;
     }

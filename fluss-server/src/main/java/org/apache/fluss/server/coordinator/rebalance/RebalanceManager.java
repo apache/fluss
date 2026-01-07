@@ -56,9 +56,7 @@ import java.util.Set;
 import java.util.SortedSet;
 import java.util.TreeSet;
 import java.util.UUID;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.locks.Lock;
-import java.util.concurrent.locks.ReentrantLock;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 import static org.apache.fluss.cluster.rebalance.RebalanceStatus.CANCELED;
 import static org.apache.fluss.cluster.rebalance.RebalanceStatus.COMPLETED;
@@ -67,7 +65,8 @@ import static org.apache.fluss.cluster.rebalance.RebalanceStatus.NO_TASK;
 import static org.apache.fluss.cluster.rebalance.RebalanceStatus.REBALANCING;
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
-import static org.apache.fluss.utils.concurrent.LockUtils.inLock;
+import static org.apache.fluss.utils.concurrent.LockUtils.inReadLock;
+import static org.apache.fluss.utils.concurrent.LockUtils.inWriteLock;
 
 /**
  * A rebalance manager to generate rebalance plan, and execution rebalance plan.
@@ -79,8 +78,7 @@ public class RebalanceManager {
 
     private static final Logger LOG = LoggerFactory.getLogger(RebalanceManager.class);
 
-    private final AtomicBoolean isClosed = new AtomicBoolean(false);
-    private final Lock lock = new ReentrantLock();
+    private final ReentrantReadWriteLock lock = new ReentrantReadWriteLock();
     private final ZooKeeperClient zkClient;
     private final CoordinatorEventProcessor eventProcessor;
 
@@ -102,6 +100,7 @@ public class RebalanceManager {
     private volatile long registerTime;
     private volatile RebalanceStatus rebalanceStatus = NO_TASK;
     private volatile @Nullable String currentRebalanceId;
+    private volatile boolean isClosed = false;
 
     public RebalanceManager(CoordinatorEventProcessor eventProcessor, ZooKeeperClient zkClient) {
         this.eventProcessor = eventProcessor;
@@ -175,7 +174,7 @@ public class RebalanceManager {
                     "Error when register rebalance plan to zookeeper.", e);
         }
 
-        inLock(
+        inWriteLock(
                 lock,
                 () -> {
                     // Then, register to ongoingRebalanceTasks.
@@ -196,7 +195,7 @@ public class RebalanceManager {
 
     public void finishRebalanceTask(TableBucket tableBucket, RebalanceStatus statusForBucket) {
         checkNotClosed();
-        inLock(
+        inWriteLock(
                 lock,
                 () -> {
                     if (inProgressRebalanceTasksQueue.contains(tableBucket)) {
@@ -228,7 +227,7 @@ public class RebalanceManager {
 
     public RebalanceProgress listRebalanceProgress(@Nullable String rebalanceId) {
         checkNotClosed();
-        return inLock(
+        return inReadLock(
                 lock,
                 () -> {
                     if (rebalanceId != null
@@ -269,7 +268,7 @@ public class RebalanceManager {
                             rebalanceId, currentRebalanceId));
         }
 
-        inLock(
+        inWriteLock(
                 lock,
                 () -> {
                     try {
@@ -299,7 +298,7 @@ public class RebalanceManager {
 
     public boolean hasInProgressRebalance() {
         checkNotClosed();
-        return inLock(
+        return inReadLock(
                 lock,
                 () ->
                         !inProgressRebalanceTasks.isEmpty()
@@ -337,7 +336,7 @@ public class RebalanceManager {
 
     public @Nullable RebalancePlanForBucket getRebalancePlanForBucket(TableBucket tableBucket) {
         checkNotClosed();
-        return inLock(
+        return inReadLock(
                 lock,
                 () -> {
                     RebalanceResultForBucket resultForBucket =
@@ -361,7 +360,7 @@ public class RebalanceManager {
 
     private void completeRebalance() {
         checkNotClosed();
-        inLock(
+        inWriteLock(
                 lock,
                 () -> {
                     try {
@@ -444,11 +443,11 @@ public class RebalanceManager {
     }
 
     private void checkNotClosed() {
-        checkArgument(!isClosed.get(), "RebalanceManager is already closed.");
+        checkArgument(!isClosed, "RebalanceManager is already closed.");
     }
 
     public void close() {
-        isClosed.compareAndSet(false, true);
+        isClosed = true;
     }
 
     @VisibleForTesting

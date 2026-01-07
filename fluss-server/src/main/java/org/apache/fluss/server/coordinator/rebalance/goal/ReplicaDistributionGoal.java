@@ -42,9 +42,7 @@ import java.util.stream.Collectors;
 
 import static org.apache.fluss.server.coordinator.rebalance.ActionAcceptance.ACCEPT;
 import static org.apache.fluss.server.coordinator.rebalance.ActionAcceptance.REPLICA_REJECT;
-import static org.apache.fluss.server.coordinator.rebalance.goal.GoalOptimizerUtils.EPSILON;
-import static org.apache.fluss.server.coordinator.rebalance.goal.ReplicaDistributionAbstractGoal.ChangeType.ADD;
-import static org.apache.fluss.server.coordinator.rebalance.goal.ReplicaDistributionAbstractGoal.ChangeType.REMOVE;
+import static org.apache.fluss.utils.MathUtils.EPSILON;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /**
@@ -87,12 +85,10 @@ public class ReplicaDistributionGoal extends ReplicaDistributionAbstractGoal {
 
                 // Check that destination and source would not become unbalanced.
                 return (isReplicaCountUnderBalanceUpperLimitAfterChange(
-                                        destServer, destServer.replicas().size(), ADD))
+                                        destServer, destServer.replicas().size()))
                                 && (isExcludedForReplicaMove(sourceServer)
                                         || isReplicaCountAboveBalanceLowerLimitAfterChange(
-                                                sourceServer,
-                                                sourceServer.replicas().size(),
-                                                REMOVE))
+                                                sourceServer, sourceServer.replicas().size()))
                         ? ACCEPT
                         : REPLICA_REJECT;
             default:

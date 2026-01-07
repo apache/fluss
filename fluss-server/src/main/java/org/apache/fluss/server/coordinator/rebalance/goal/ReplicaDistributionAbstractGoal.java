@@ -69,21 +69,15 @@ public abstract class ReplicaDistributionAbstractGoal extends AbstractGoal {
     }
 
     boolean isReplicaCountUnderBalanceUpperLimitAfterChange(
-            ServerModel server, int currentReplicaCount, ChangeType changeType) {
+            ServerModel server, int currentReplicaCount) {
         int serverBalanceUpperLimit = server.isAlive() ? rebalanceUpperLimit : 0;
-
-        return changeType == ChangeType.ADD
-                ? currentReplicaCount + 1 <= serverBalanceUpperLimit
-                : currentReplicaCount - 1 <= serverBalanceUpperLimit;
+        return currentReplicaCount + 1 <= serverBalanceUpperLimit;
     }
 
     boolean isReplicaCountAboveBalanceLowerLimitAfterChange(
-            ServerModel server, int currentReplicaCount, ChangeType changeType) {
+            ServerModel server, int currentReplicaCount) {
         int serverBalanceLowerLimit = server.isAlive() ? rebalanceLowerLimit : 0;
-
-        return changeType == ChangeType.ADD
-                ? currentReplicaCount + 1 >= serverBalanceLowerLimit
-                : currentReplicaCount - 1 >= serverBalanceLowerLimit;
+        return currentReplicaCount - 1 >= serverBalanceLowerLimit;
     }
 
     @Override

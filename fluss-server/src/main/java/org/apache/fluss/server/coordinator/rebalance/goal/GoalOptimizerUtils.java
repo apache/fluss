@@ -36,8 +36,6 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
 /** An util class for {@link GoalOptimizer}. */
 public class GoalOptimizerUtils {
 
-    public static final double EPSILON = 1E-5;
-
     /** Check whether the given proposal is acceptable for all the given optimized goals. */
     public static ActionAcceptance isProposalAcceptableForOptimizedGoals(
             Set<Goal> optimizedGoals, ReBalancingAction action, ClusterModel cluster) {

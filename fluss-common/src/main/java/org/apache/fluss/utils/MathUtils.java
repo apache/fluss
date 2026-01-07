@@ -20,6 +20,8 @@ package org.apache.fluss.utils;
 /** Collection of simple mathematical routines. */
 public class MathUtils {
 
+    public static final double EPSILON = 1E-5;
+
     /**
      * Computes the logarithm of the given value to the base of 2. This method throws an error, if
      * the given argument is not a power of 2.
