@@ -93,8 +93,7 @@ public class CoordinatorMetadataCacheTest {
                         new TabletServerInfo(0, "rack0"),
                         new TabletServerInfo(1, "rack1"),
                         new TabletServerInfo(2, "rack2"));
-        // server 0 with PERMANENT_OFFLINE tag and server 1 with TEMPORARY_OFFLINE will no longer
-        // consider alive
+        // server 0 with PERMANENT_OFFLINE tag will no longer consider alive
         assertThat(serverMetadataCache.getLiveServers())
                 .containsExactlyInAnyOrder(
                         new TabletServerInfo(1, "rack1"), new TabletServerInfo(2, "rack2"));
