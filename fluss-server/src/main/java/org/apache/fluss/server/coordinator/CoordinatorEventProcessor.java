@@ -141,6 +141,7 @@ import java.util.stream.Collectors;
 import static org.apache.fluss.server.coordinator.statemachine.BucketState.OfflineBucket;
 import static org.apache.fluss.server.coordinator.statemachine.BucketState.OnlineBucket;
 import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.NewReplica;
+import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.NonExistentReplica;
 import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.OfflineReplica;
 import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.OnlineReplica;
 import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.ReplicaDeletionStarted;
@@ -1379,7 +1380,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
         if (!isReassignmentComplete) {
             // A1. Send LeaderAndIsr request to every replica in ORS + TRS (with the new RS, AR and
             // RR).
-            updateBucketEpochAndSendRequest(tableBucket, reassignment);
+            updateBucketEpochAndSendRequest(tableBucket, reassignment.replicas);
 
             // A2. Set RS = TRS, AR = [], RR = [] in memory.
             coordinatorContext.updateBucketReplicaAssignment(tableBucket, reassignment.replicas);
@@ -1434,15 +1435,32 @@ public class CoordinatorEventProcessor implements EventProcessor {
     }
 
     private void maybeReassignedBucketLeaderIfRequired(
-            TableBucket tableBucket, List<Integer> targetReplicas) {
+            TableBucket tableBucket, List<Integer> targetReplicas) throws Exception {
         LeaderAndIsr leaderAndIsr = coordinatorContext.getBucketLeaderAndIsr(tableBucket).get();
         int currentLeader = leaderAndIsr.leader();
-        if (currentLeader != targetReplicas.get(0)) {
+        if (!targetReplicas.contains(currentLeader)) {
             LOG.info(
                     "Leader {} for tableBucket {} being reassigned. Re-electing leader to {}",
                     currentLeader,
                     tableBucket,
                     targetReplicas.get(0));
+            tableBucketStateMachine.handleStateChange(
+                    Collections.singleton(tableBucket),
+                    OnlineBucket,
+                    new ReassignmentLeaderElection(targetReplicas));
+        } else if (coordinatorContext.isReplicaOnline(currentLeader, tableBucket)) {
+            LOG.info(
+                    "Leader {} for tableBucket {} being reassigned. is already in the new list of replicas {} and is alive",
+                    currentLeader,
+                    tableBucket,
+                    targetReplicas);
+            updateBucketEpochAndSendRequest(tableBucket, targetReplicas);
+        } else {
+            LOG.info(
+                    "Leader {} for tableBucket {} being reassigned. is already in the new list of replicas {} but is dead",
+                    currentLeader,
+                    tableBucket,
+                    targetReplicas);
             tableBucketStateMachine.handleStateChange(
                     Collections.singleton(tableBucket),
                     OnlineBucket,
@@ -1458,6 +1476,10 @@ public class CoordinatorEventProcessor implements EventProcessor {
         replicaStateMachine.handleStateChanges(replicasToBeDeleted, OfflineReplica);
         // send stop replica command to the old replicas.
         replicaStateMachine.handleStateChanges(replicasToBeDeleted, ReplicaDeletionStarted);
+        // TODO: Eventually bucket reassignment could use a callback that does retries if deletion
+        // failed
+        replicaStateMachine.handleStateChanges(replicasToBeDeleted, ReplicaDeletionSuccessful);
+        replicaStateMachine.handleStateChanges(replicasToBeDeleted, NonExistentReplica);
     }
 
     private void updateReplicaAssignmentForBucket(
@@ -2037,8 +2059,8 @@ public class CoordinatorEventProcessor implements EventProcessor {
         coordinatorRequestBatch.sendUpdateMetadataRequest();
     }
 
-    private void updateBucketEpochAndSendRequest(
-            TableBucket tableBucket, ReplicaReassignment reassignment) throws Exception {
+    private void updateBucketEpochAndSendRequest(TableBucket tableBucket, List<Integer> newReplicas)
+            throws Exception {
         Optional<LeaderAndIsr> leaderAndIsrOpt = zooKeeperClient.getLeaderAndIsr(tableBucket);
         if (!leaderAndIsrOpt.isPresent()) {
             return;
@@ -2054,7 +2076,6 @@ public class CoordinatorEventProcessor implements EventProcessor {
             }
         }
 
-        List<Integer> newReplicas = reassignment.replicas;
         // pass the original isr not include the new replicas.
         LeaderAndIsr newLeaderAndIsr = leaderAndIsr.newLeaderAndIsr(leaderAndIsr.isr());
 
