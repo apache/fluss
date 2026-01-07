@@ -19,6 +19,7 @@ package org.apache.fluss.server.metadata;
 
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.TabletServerInfo;
+import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.server.coordinator.CoordinatorServer;
 
 import javax.annotation.Nullable;
@@ -27,11 +28,13 @@ import javax.annotation.concurrent.GuardedBy;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.stream.Collectors;
 
 import static org.apache.fluss.utils.concurrent.LockUtils.inLock;
 
@@ -42,7 +45,7 @@ public class CoordinatorMetadataCache implements ServerMetadataCache {
 
     @GuardedBy("metadataLock")
     private volatile NodeMetadataSnapshot metadataSnapshot =
-            new NodeMetadataSnapshot(null, Collections.emptyMap());
+            new NodeMetadataSnapshot(null, Collections.emptyMap(), Collections.emptyMap());
 
     public CoordinatorMetadataCache() {}
 
@@ -91,7 +94,34 @@ public class CoordinatorMetadataCache implements ServerMetadataCache {
         return Collections.unmodifiableSet(tabletServerInfos);
     }
 
-    public void updateMetadata(ServerInfo coordinatorServer, Set<ServerInfo> serverInfoSet) {
+    /**
+     * Servers with {@code PERMANENT_OFFLINE} tags are no longer returned here. So that no new
+     * replicas will be assigned to these servers.
+     */
+    @Override
+    public TabletServerInfo[] getLiveServers() {
+        Set<TabletServerInfo> aliveTabletServerInfosWithoutOfflineServerTag =
+                getAliveTabletServerInfos().stream()
+                        .filter(
+                                info -> {
+                                    ServerTag tag = metadataSnapshot.serverTags.get(info.getId());
+                                    return tag != ServerTag.PERMANENT_OFFLINE;
+                                })
+                        .collect(Collectors.toSet());
+        TabletServerInfo[] server =
+                new TabletServerInfo[aliveTabletServerInfosWithoutOfflineServerTag.size()];
+        Iterator<TabletServerInfo> iterator =
+                aliveTabletServerInfosWithoutOfflineServerTag.iterator();
+        for (int i = 0; i < aliveTabletServerInfosWithoutOfflineServerTag.size(); i++) {
+            server[i] = iterator.next();
+        }
+        return server;
+    }
+
+    public void updateMetadata(
+            ServerInfo coordinatorServer,
+            Set<ServerInfo> serverInfoSet,
+            Map<Integer, ServerTag> serverTagMap) {
         inLock(
                 metadataLock,
                 () -> {
@@ -101,19 +131,23 @@ public class CoordinatorMetadataCache implements ServerMetadataCache {
                     }
 
                     this.metadataSnapshot =
-                            new NodeMetadataSnapshot(coordinatorServer, newAliveTableServers);
+                            new NodeMetadataSnapshot(
+                                    coordinatorServer, newAliveTableServers, serverTagMap);
                 });
     }
 
     private static class NodeMetadataSnapshot {
         final @Nullable ServerInfo coordinatorServer;
         final Map<Integer, ServerInfo> aliveTabletServers;
+        final Map<Integer, ServerTag> serverTags;
 
         private NodeMetadataSnapshot(
                 @Nullable ServerInfo coordinatorServer,
-                Map<Integer, ServerInfo> aliveTabletServers) {
+                Map<Integer, ServerInfo> aliveTabletServers,
+                Map<Integer, ServerTag> serverTags) {
             this.coordinatorServer = coordinatorServer;
             this.aliveTabletServers = aliveTabletServers;
+            this.serverTags = serverTags;
         }
     }
 }

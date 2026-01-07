@@ -20,12 +20,15 @@ package org.apache.fluss.server.metadata;
 import org.apache.fluss.cluster.Endpoint;
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.cluster.TabletServerInfo;
+import org.apache.fluss.cluster.rebalance.ServerTag;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Map;
 import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -36,6 +39,7 @@ public class CoordinatorMetadataCacheTest {
 
     private ServerInfo coordinatorServer;
     private Set<ServerInfo> aliveTableServers;
+    private Map<Integer, ServerTag> serverTagMap;
 
     @BeforeEach
     public void setup() {
@@ -68,11 +72,15 @@ public class CoordinatorMetadataCacheTest {
                                         "rack2",
                                         Endpoint.fromListenersString("INTERNAL://localhost:104"),
                                         ServerType.TABLET_SERVER)));
+
+        serverTagMap = new HashMap<>();
+        serverTagMap.put(0, ServerTag.PERMANENT_OFFLINE);
+        serverTagMap.put(1, ServerTag.TEMPORARY_OFFLINE);
     }
 
     @Test
     void testCoordinatorServerMetadataCache() {
-        serverMetadataCache.updateMetadata(coordinatorServer, aliveTableServers);
+        serverMetadataCache.updateMetadata(coordinatorServer, aliveTableServers, serverTagMap);
         assertThat(serverMetadataCache.getCoordinatorServer("CLIENT"))
                 .isEqualTo(coordinatorServer.node("CLIENT"));
         assertThat(serverMetadataCache.getCoordinatorServer("INTERNAL"))
@@ -85,5 +93,9 @@ public class CoordinatorMetadataCacheTest {
                         new TabletServerInfo(0, "rack0"),
                         new TabletServerInfo(1, "rack1"),
                         new TabletServerInfo(2, "rack2"));
+        // server 0 with PERMANENT_OFFLINE tag will no longer consider alive
+        assertThat(serverMetadataCache.getLiveServers())
+                .containsExactlyInAnyOrder(
+                        new TabletServerInfo(1, "rack1"), new TabletServerInfo(2, "rack2"));
     }
 }
