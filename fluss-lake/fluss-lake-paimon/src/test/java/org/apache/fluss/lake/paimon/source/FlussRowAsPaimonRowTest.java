@@ -25,16 +25,20 @@ import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.Decimal;
 import org.apache.fluss.row.GenericArray;
+import org.apache.fluss.row.GenericMap;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
 
 import org.apache.paimon.data.InternalArray;
+import org.apache.paimon.data.InternalMap;
 import org.apache.paimon.types.RowKind;
 import org.apache.paimon.types.RowType;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
+import java.util.HashMap;
+import java.util.Map;
 
 import static org.apache.fluss.record.ChangeType.APPEND_ONLY;
 import static org.apache.fluss.record.ChangeType.DELETE;
@@ -332,5 +336,157 @@ class FlussRowAsPaimonRowTest {
 
         InternalArray innerArray2 = outerArray.getArray(1);
         assertThat(innerArray2.toIntArray()).isEqualTo(new int[] {3, 4, 5});
+    }
+
+    @Test
+    void testMapWithAllTypes() {
+        long logOffset = 0;
+        long timeStamp = System.currentTimeMillis();
+
+        // Test map with integer key and integer value
+        RowType intMapRowType =
+                RowType.of(
+                        new org.apache.paimon.types.MapType(
+                                new org.apache.paimon.types.IntType(),
+                                new org.apache.paimon.types.IntType()));
+        GenericRow intMapRow = new GenericRow(1);
+        Map<Object, Object> intMapData = new HashMap<>();
+        intMapData.put(1, 100);
+        intMapData.put(2, 200);
+        intMapData.put(3, 300);
+        intMapRow.setField(0, new GenericMap(intMapData));
+        LogRecord intMapRecord = new GenericRecord(logOffset, timeStamp, APPEND_ONLY, intMapRow);
+        FlussRowAsPaimonRow intMapFlussRow =
+                new FlussRowAsPaimonRow(intMapRecord.getRow(), intMapRowType);
+
+        InternalMap intMap = intMapFlussRow.getMap(0);
+        assertThat(intMap).isNotNull();
+        assertThat(intMap.size()).isEqualTo(3);
+        InternalArray intKeys = intMap.keyArray();
+        InternalArray intValues = intMap.valueArray();
+        assertThat(intKeys.size()).isEqualTo(3);
+        assertThat(intValues.size()).isEqualTo(3);
+        assertThat(intKeys.toIntArray()).containsExactlyInAnyOrder(1, 2, 3);
+        assertThat(intValues.toIntArray()).containsExactlyInAnyOrder(100, 200, 300);
+
+        // Test map with string key and integer value
+        RowType stringMapRowType =
+                RowType.of(
+                        new org.apache.paimon.types.MapType(
+                                new org.apache.paimon.types.VarCharType(),
+                                new org.apache.paimon.types.IntType()));
+        GenericRow stringMapRow = new GenericRow(1);
+        Map<Object, Object> stringMapData = new HashMap<>();
+        stringMapData.put(BinaryString.fromString("key1"), 100);
+        stringMapData.put(BinaryString.fromString("key2"), 200);
+        stringMapRow.setField(0, new GenericMap(stringMapData));
+        LogRecord stringMapRecord =
+                new GenericRecord(logOffset, timeStamp, APPEND_ONLY, stringMapRow);
+        FlussRowAsPaimonRow stringMapFlussRow =
+                new FlussRowAsPaimonRow(stringMapRecord.getRow(), stringMapRowType);
+
+        InternalMap stringMap = stringMapFlussRow.getMap(0);
+        assertThat(stringMap).isNotNull();
+        assertThat(stringMap.size()).isEqualTo(2);
+        InternalArray stringKeys = stringMap.keyArray();
+        InternalArray stringValues = stringMap.valueArray();
+        assertThat(stringKeys.size()).isEqualTo(2);
+        assertThat(stringValues.size()).isEqualTo(2);
+        assertThat(stringKeys.getString(0).toString()).isIn("key1", "key2");
+        assertThat(stringKeys.getString(1).toString()).isIn("key1", "key2");
+        assertThat(stringValues.toIntArray()).containsExactlyInAnyOrder(100, 200);
+
+        // Test map with long key and double value
+        RowType longDoubleMapRowType =
+                RowType.of(
+                        new org.apache.paimon.types.MapType(
+                                new org.apache.paimon.types.BigIntType(),
+                                new org.apache.paimon.types.DoubleType()));
+        GenericRow longDoubleMapRow = new GenericRow(1);
+        Map<Object, Object> longDoubleMapData = new HashMap<>();
+        longDoubleMapData.put(1L, 1.1);
+        longDoubleMapData.put(2L, 2.2);
+        longDoubleMapRow.setField(0, new GenericMap(longDoubleMapData));
+        LogRecord longDoubleMapRecord =
+                new GenericRecord(logOffset, timeStamp, APPEND_ONLY, longDoubleMapRow);
+        FlussRowAsPaimonRow longDoubleMapFlussRow =
+                new FlussRowAsPaimonRow(longDoubleMapRecord.getRow(), longDoubleMapRowType);
+
+        InternalMap longDoubleMap = longDoubleMapFlussRow.getMap(0);
+        assertThat(longDoubleMap).isNotNull();
+        assertThat(longDoubleMap.size()).isEqualTo(2);
+        InternalArray longKeys = longDoubleMap.keyArray();
+        InternalArray doubleValues = longDoubleMap.valueArray();
+        assertThat(longKeys.toLongArray()).containsExactlyInAnyOrder(1L, 2L);
+        assertThat(doubleValues.toDoubleArray()).containsExactlyInAnyOrder(1.1, 2.2);
+
+        // Test map with decimal values
+        RowType decimalMapRowType =
+                RowType.of(
+                        new org.apache.paimon.types.MapType(
+                                new org.apache.paimon.types.IntType(),
+                                new org.apache.paimon.types.DecimalType(10, 2)));
+        GenericRow decimalMapRow = new GenericRow(1);
+        Map<Object, Object> decimalMapData = new HashMap<>();
+        decimalMapData.put(1, Decimal.fromBigDecimal(new BigDecimal("123.45"), 10, 2));
+        decimalMapData.put(2, Decimal.fromBigDecimal(new BigDecimal("678.90"), 10, 2));
+        decimalMapRow.setField(0, new GenericMap(decimalMapData));
+        LogRecord decimalMapRecord =
+                new GenericRecord(logOffset, timeStamp, APPEND_ONLY, decimalMapRow);
+        FlussRowAsPaimonRow decimalMapFlussRow =
+                new FlussRowAsPaimonRow(decimalMapRecord.getRow(), decimalMapRowType);
+
+        InternalMap decimalMap = decimalMapFlussRow.getMap(0);
+        assertThat(decimalMap).isNotNull();
+        assertThat(decimalMap.size()).isEqualTo(2);
+        InternalArray decimalKeys = decimalMap.keyArray();
+        InternalArray decimalValues = decimalMap.valueArray();
+        assertThat(decimalKeys.toIntArray()).containsExactlyInAnyOrder(1, 2);
+        assertThat(decimalValues.getDecimal(0, 10, 2).toBigDecimal())
+                .isIn(new BigDecimal("123.45"), new BigDecimal("678.90"));
+        assertThat(decimalValues.getDecimal(1, 10, 2).toBigDecimal())
+                .isIn(new BigDecimal("123.45"), new BigDecimal("678.90"));
+
+        // Test nested map type
+        RowType nestedMapRowType =
+                RowType.of(
+                        new org.apache.paimon.types.MapType(
+                                new org.apache.paimon.types.IntType(),
+                                new org.apache.paimon.types.MapType(
+                                        new org.apache.paimon.types.VarCharType(),
+                                        new org.apache.paimon.types.IntType())));
+        GenericRow nestedMapRow = new GenericRow(1);
+
+        Map<Object, Object> innerMap1 = new HashMap<>();
+        innerMap1.put(BinaryString.fromString("a"), 1);
+        innerMap1.put(BinaryString.fromString("b"), 2);
+
+        Map<Object, Object> innerMap2 = new HashMap<>();
+        innerMap2.put(BinaryString.fromString("c"), 3);
+        innerMap2.put(BinaryString.fromString("d"), 4);
+
+        Map<Object, Object> outerMap = new HashMap<>();
+        outerMap.put(1, new GenericMap(innerMap1));
+        outerMap.put(2, new GenericMap(innerMap2));
+
+        nestedMapRow.setField(0, new GenericMap(outerMap));
+
+        LogRecord nestedMapRecord =
+                new GenericRecord(logOffset, timeStamp, APPEND_ONLY, nestedMapRow);
+        FlussRowAsPaimonRow nestedMapFlussRow =
+                new FlussRowAsPaimonRow(nestedMapRecord.getRow(), nestedMapRowType);
+
+        InternalMap outerMapResult = nestedMapFlussRow.getMap(0);
+        assertThat(outerMapResult).isNotNull();
+        assertThat(outerMapResult.size()).isEqualTo(2);
+
+        InternalArray values = outerMapResult.valueArray();
+        InternalMap innerMap1Result = values.getMap(0);
+        assertThat(innerMap1Result).isNotNull();
+        assertThat(innerMap1Result.size()).isEqualTo(2);
+
+        InternalMap innerMap2Result = values.getMap(1);
+        assertThat(innerMap2Result).isNotNull();
+        assertThat(innerMap2Result.size()).isEqualTo(2);
     }
 }
