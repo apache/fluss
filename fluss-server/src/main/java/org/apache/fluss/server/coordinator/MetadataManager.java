@@ -606,8 +606,12 @@ public class MetadataManager {
         }
         TableRegistration tableReg = optionalTable.get();
         SchemaInfo schemaInfo = getLatestSchema(tablePath);
-        Map<String, String> tableLakeOptions =
+        Map<String, String> defaultTableLakeOptions =
                 lakeCatalogDynamicLoader.getLakeCatalogContainer().getDefaultTableLakeOptions();
+        // Create a copy to avoid ConcurrentModificationException when multiple threads
+        // call getTable() concurrently, as defaultTableLakeOptions is a shared instance
+        Map<String, String> tableLakeOptions =
+                defaultTableLakeOptions != null ? new HashMap<>(defaultTableLakeOptions) : null;
         removeSensitiveTableOptions(tableLakeOptions);
         return tableReg.toTableInfo(tablePath, schemaInfo, tableLakeOptions);
     }
