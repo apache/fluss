@@ -17,6 +17,7 @@
 
 package org.apache.fluss.flink.source.state;
 
+import org.apache.fluss.flink.source.reader.LeaseContext;
 import org.apache.fluss.flink.source.split.SourceSplitBase;
 import org.apache.fluss.flink.source.split.SourceSplitSerializer;
 import org.apache.fluss.lake.source.LakeSource;
@@ -88,6 +89,9 @@ public class FlussSourceEnumeratorStateSerializer
             serializeRemainingHybridLakeFlussSplits(out, state);
         }
 
+        // write lease context
+        serializeLeaseContext(out, state);
+
         final byte[] result = out.getCopyOfBuffer();
         out.clear();
         return result;
@@ -129,8 +133,11 @@ public class FlussSourceEnumeratorStateSerializer
             remainingHybridLakeFlussSplits = deserializeRemainingHybridLakeFlussSplits(in);
         }
 
+        // deserialize lease context
+        LeaseContext leaseContext = deserializeLeaseContext(in);
+
         return new SourceEnumeratorState(
-                assignedBuckets, assignedPartitions, remainingHybridLakeFlussSplits);
+                assignedBuckets, assignedPartitions, remainingHybridLakeFlussSplits, leaseContext);
     }
 
     private void serializeRemainingHybridLakeFlussSplits(
@@ -171,6 +178,41 @@ public class FlussSourceEnumeratorStateSerializer
             return splits;
         } else {
             return null;
+        }
+    }
+
+    private void serializeLeaseContext(final DataOutputSerializer out, SourceEnumeratorState state)
+            throws IOException {
+        LeaseContext leaseContext = state.getLeaseContext();
+        String kvSnapshotLeaseId = leaseContext.getKvSnapshotLeaseId();
+        if (kvSnapshotLeaseId != null) {
+            out.writeBoolean(true);
+            out.writeUTF(kvSnapshotLeaseId);
+        } else {
+            out.writeBoolean(false);
+        }
+
+        Long kvSnapshotLeaseDurationMs = leaseContext.getKvSnapshotLeaseDurationMs();
+        if (kvSnapshotLeaseDurationMs != null) {
+            out.writeBoolean(true);
+            out.writeLong(kvSnapshotLeaseDurationMs);
+        } else {
+            out.writeBoolean(false);
+        }
+    }
+
+    private LeaseContext deserializeLeaseContext(final DataInputDeserializer in)
+            throws IOException {
+        if (in.readBoolean()) {
+            String kvSnapshotLeaseId = in.readUTF();
+            if (in.readBoolean()) {
+                Long kvSnapshotLeaseDurationMs = in.readLong();
+                return new LeaseContext(kvSnapshotLeaseId, kvSnapshotLeaseDurationMs);
+            } else {
+                return new LeaseContext(kvSnapshotLeaseId, null);
+            }
+        } else {
+            return new LeaseContext(null, null);
         }
     }
 }

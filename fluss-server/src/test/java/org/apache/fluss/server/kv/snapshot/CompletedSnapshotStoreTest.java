@@ -557,7 +557,8 @@ class CompletedSnapshotStoreTest {
                 sharedKvFileRegistry,
                 completedSnapshots,
                 snapshotHandleStore,
-                executorService);
+                executorService,
+                bucket -> true);
     }
 
     private List<Tuple2<CompletedSnapshotHandle, String>> createSnapshotHandles(int num) {

@@ -29,6 +29,7 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
+import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.utils.clock.ManualClock;
 
 import org.apache.commons.lang3.RandomUtils;
@@ -78,6 +79,7 @@ import static org.apache.fluss.flink.utils.FlinkTestBase.writeRows;
 import static org.apache.fluss.flink.utils.FlinkTestBase.writeRowsToPartition;
 import static org.apache.fluss.server.testutils.FlussClusterExtension.BUILTIN_DATABASE;
 import static org.apache.fluss.testutils.DataTestUtils.row;
+import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.apache.fluss.testutils.common.CommonTestUtils.waitUntil;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -357,6 +359,51 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
         assertResultsIgnoreOrder(rowIter, expectedRows, true);
     }
 
+    @Test
+    void testPkTableReadWithKvSnapshotLease() throws Exception {
+        tEnv.executeSql(
+                "create table pk_table_with_kv_snapshot_lease (a int not null primary key not enforced, b varchar)");
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "pk_table_with_kv_snapshot_lease");
+
+        List<InternalRow> rows = Arrays.asList(row(1, "v1"), row(2, "v2"), row(3, "v3"));
+
+        // write records
+        writeRows(conn, tablePath, rows, false);
+
+        waitUntilAllBucketFinishSnapshot(admin, tablePath);
+
+        // enable checkpoint to make sure the kv snapshot lease will be cleared.
+        execEnv.enableCheckpointing(100);
+
+        List<String> expectedRows = Arrays.asList("+I[1, v1]", "+I[2, v2]", "+I[3, v3]");
+        org.apache.flink.util.CloseableIterator<Row> rowIter =
+                tEnv.executeSql(
+                                "select * from pk_table_with_kv_snapshot_lease "
+                                        + "/*+ OPTIONS('scan.kv.snapshot.lease.id' = 'test-lease-10001') */")
+                        .collect();
+        assertResultsIgnoreOrder(rowIter, expectedRows, false);
+
+        // now, we put rows to the table again, should read the log
+        expectedRows =
+                Arrays.asList(
+                        "-U[1, v1]",
+                        "+U[1, v1]",
+                        "-U[2, v2]",
+                        "+U[2, v2]",
+                        "-U[3, v3]",
+                        "+U[3, v3]");
+        writeRows(conn, tablePath, rows, false);
+        assertResultsIgnoreOrder(rowIter, expectedRows, true);
+
+        // check lease will be dropped after job finished.
+        ZooKeeperClient zkClient = FLUSS_CLUSTER_EXTENSION.getZooKeeperClient();
+        retry(
+                Duration.ofMinutes(1),
+                () ->
+                        assertThat(zkClient.getKvSnapshotLeaseMetadata("test-lease-10001"))
+                                .isNotPresent());
+    }
+
     // -------------------------------------------------------------------------------------
     // Fluss scan start mode tests
     // -------------------------------------------------------------------------------------
@@ -607,15 +654,8 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
                 writeRowsToPartition(conn, tablePath, partitionNameById.values());
         waitUntilAllBucketFinishSnapshot(admin, tablePath, partitionNameById.values());
 
-        // This test requires dynamically discovering newly created partitions, so
-        // 'scan.partition.discovery.interval' needs to be set to 2s (default is 1 minute),
-        // otherwise the test may hang for 1 minute.
         org.apache.flink.util.CloseableIterator<Row> rowIter =
-                tEnv.executeSql(
-                                String.format(
-                                        "select * from %s /*+ OPTIONS('scan.partition.discovery.interval' = '2s') */",
-                                        tableName))
-                        .collect();
+                tEnv.executeSql(String.format("select * from %s", tableName)).collect();
         assertResultsIgnoreOrder(rowIter, expectedRowValues, false);
 
         // then create some new partitions, and write rows to the new partitions

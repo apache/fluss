@@ -211,7 +211,8 @@ class CompletedSnapshotStoreManagerTest {
                         ioExecutor,
                         zookeeperClient,
                         zooKeeperClient -> completedSnapshotHandleStore,
-                        TestingMetricGroups.COORDINATOR_METRICS);
+                        TestingMetricGroups.COORDINATOR_METRICS,
+                        bucket -> true);
 
         // Verify that only the valid snapshot remains
         CompletedSnapshotStore completedSnapshotStore =
@@ -227,7 +228,8 @@ class CompletedSnapshotStoreManagerTest {
                 maxNumberOfSnapshotsToRetain,
                 ioExecutor,
                 zookeeperClient,
-                TestingMetricGroups.COORDINATOR_METRICS);
+                TestingMetricGroups.COORDINATOR_METRICS,
+                bucket -> true);
     }
 
     private CompletedSnapshot getLatestCompletedSnapshot(

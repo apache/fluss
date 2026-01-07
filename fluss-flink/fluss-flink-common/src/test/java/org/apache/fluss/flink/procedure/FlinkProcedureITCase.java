@@ -17,12 +17,18 @@
 
 package org.apache.fluss.flink.procedure;
 
+import org.apache.fluss.client.Connection;
+import org.apache.fluss.client.ConnectionFactory;
+import org.apache.fluss.client.admin.Admin;
+import org.apache.fluss.client.metadata.KvSnapshots;
 import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.MemorySize;
 import org.apache.fluss.exception.SecurityDisabledException;
 import org.apache.fluss.metadata.DataLakeFormat;
+import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.ServerTags;
@@ -32,6 +38,7 @@ import org.apache.flink.table.api.TableEnvironment;
 import org.apache.flink.types.Row;
 import org.apache.flink.util.CloseableIterator;
 import org.apache.flink.util.CollectionUtil;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
@@ -48,6 +55,9 @@ import java.util.stream.Collectors;
 
 import static org.apache.fluss.cluster.rebalance.ServerTag.PERMANENT_OFFLINE;
 import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.assertResultsIgnoreOrder;
+import static org.apache.fluss.flink.utils.FlinkTestBase.writeRows;
+import static org.apache.fluss.testutils.DataTestUtils.row;
+import static org.apache.fluss.testutils.common.CommonTestUtils.waitUntil;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -64,8 +74,18 @@ public abstract class FlinkProcedureITCase {
                     .build();
 
     static final String CATALOG_NAME = "testcatalog";
+    static Configuration clientConf;
+    static Connection conn;
+    static Admin admin;
 
     TableEnvironment tEnv;
+
+    @BeforeAll
+    protected static void beforeAll() {
+        clientConf = FLUSS_CLUSTER_EXTENSION.getClientConfig();
+        conn = ConnectionFactory.createConnection(clientConf);
+        admin = conn.getAdmin();
+    }
 
     @BeforeEach
     void before() throws ExecutionException, InterruptedException {
@@ -104,7 +124,8 @@ public abstract class FlinkProcedureITCase {
                             "+I[sys.list_acl]",
                             "+I[sys.set_cluster_config]",
                             "+I[sys.add_server_tag]",
-                            "+I[sys.remove_server_tag]");
+                            "+I[sys.remove_server_tag]",
+                            "+I[sys.drop_kv_snapshot_lease]");
             // make sure no more results is unread.
             assertResultsIgnoreOrder(showProceduresIterator, expectedShowProceduresResult, true);
         }
@@ -460,6 +481,43 @@ public abstract class FlinkProcedureITCase {
         }
     }
 
+    @Test
+    void testDropKvSnapshotLeaseProcedure() throws Exception {
+        tEnv.executeSql(
+                "create table testcatalog.fluss.pk_table_test_kv_snapshot_lease ("
+                        + "a int not null primary key not enforced, b varchar)");
+        TablePath tablePath = TablePath.of("fluss", "pk_table_test_kv_snapshot_lease");
+
+        List<InternalRow> rows = Arrays.asList(row(1, "v1"), row(2, "v2"), row(3, "v3"));
+
+        // write records
+        writeRows(conn, tablePath, rows, false);
+
+        waitUntilAllBucketFinishSnapshot(admin, tablePath);
+
+        List<String> expectedRows = Arrays.asList("+I[1, v1]", "+I[2, v2]", "+I[3, v3]");
+
+        String leaseId = "test-lease-kjhdds23";
+        org.apache.flink.util.CloseableIterator<Row> rowIter =
+                tEnv.executeSql(
+                                "select * from testcatalog.fluss.pk_table_test_kv_snapshot_lease "
+                                        + "/*+ OPTIONS('scan.kv.snapshot.lease.id' = '"
+                                        + leaseId
+                                        + "') */")
+                        .collect();
+        assertResultsIgnoreOrder(rowIter, expectedRows, false);
+
+        // Lease will not be dropped automatically as the checkpoint not trigger.
+        ZooKeeperClient zkClient = FLUSS_CLUSTER_EXTENSION.getZooKeeperClient();
+        assertThat(zkClient.getKvSnapshotLeaseMetadata(leaseId)).isPresent();
+        tEnv.executeSql(
+                        String.format(
+                                "Call %s.sys.drop_kv_snapshot_lease('" + leaseId + "' )",
+                                CATALOG_NAME))
+                .await();
+        assertThat(zkClient.getKvSnapshotLeaseMetadata(leaseId)).isNotPresent();
+    }
+
     private static Configuration initConfig() {
         Configuration conf = new Configuration();
         conf.setInt(ConfigOptions.DEFAULT_REPLICATION_FACTOR, 3);
@@ -499,5 +557,20 @@ public abstract class FlinkProcedureITCase {
         } else {
             assertThat(actual).containsExactlyInAnyOrder(expected);
         }
+    }
+
+    private void waitUntilAllBucketFinishSnapshot(Admin admin, TablePath tablePath) {
+        waitUntil(
+                () -> {
+                    KvSnapshots snapshots = admin.getLatestKvSnapshots(tablePath).get();
+                    for (int bucketId : snapshots.getBucketIds()) {
+                        if (!snapshots.getSnapshotId(bucketId).isPresent()) {
+                            return false;
+                        }
+                    }
+                    return true;
+                },
+                Duration.ofMinutes(1),
+                "Fail to wait until all bucket finish snapshot");
     }
 }

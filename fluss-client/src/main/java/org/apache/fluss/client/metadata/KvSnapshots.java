@@ -18,12 +18,14 @@
 package org.apache.fluss.client.metadata;
 
 import org.apache.fluss.annotation.PublicEvolving;
+import org.apache.fluss.metadata.TableBucket;
 
 import javax.annotation.Nullable;
 
 import java.util.Map;
 import java.util.OptionalLong;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * A class representing the kv snapshots of a table or a partition. It contains multiple snapshots
@@ -69,6 +71,12 @@ public class KvSnapshots {
 
     public Set<Integer> getBucketIds() {
         return snapshotIds.keySet();
+    }
+
+    public Set<TableBucket> getTableBuckets() {
+        return snapshotIds.keySet().stream()
+                .map(bucketId -> new TableBucket(tableId, partitionId, bucketId))
+                .collect(Collectors.toSet());
     }
 
     /**
