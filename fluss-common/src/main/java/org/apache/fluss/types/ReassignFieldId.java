@@ -21,7 +21,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 
-/** Reassign field id by given field id. */
+/** Visitor that recursively reassigns field IDs in nested data types using a provided counter. */
 public class ReassignFieldId extends DataTypeDefaultVisitor<DataType> {
 
     private final AtomicInteger highestFieldId;

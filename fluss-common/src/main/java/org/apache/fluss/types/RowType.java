@@ -250,10 +250,6 @@ public final class RowType extends DataType {
                     "Field IDs must be either all -1 or all non-negative. "
                             + "Mixed field IDs are not allowed.");
         } else {
-            // All fields have non-negative IDs
-            if (fieldIds.stream().anyMatch(id -> id < 0)) {
-                throw new IllegalArgumentException("Field ID must not be negative.");
-            }
             final Set<Integer> duplicateIds =
                     fieldIds.stream()
                             .filter(id -> Collections.frequency(fieldIds, id) > 1)

@@ -344,8 +344,6 @@ public final class Schema implements Serializable {
          * Adopts the given field names and field data types as physical columns of the schema.
          *
          * <p>This method internally calls {@link #column(String, DataType)} for each field, which
-         *
-         * <p>This method internally calls {@link #column(String, DataType)} for each field, which
          * means: The original field IDs in the RowType will be ignored and replaced with new ones.
          * If you need to preserve existing field IDs, use {@link #fromColumns(List)} or {@link
          * #fromSchema(Schema)} instead.

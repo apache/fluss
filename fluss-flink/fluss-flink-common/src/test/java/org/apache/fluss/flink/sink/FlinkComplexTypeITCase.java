@@ -625,8 +625,8 @@ abstract class FlinkComplexTypeITCase extends AbstractTestBase {
 
         // Currently, flink not supported push down nested row projection because
         // FlinkTableSource.supportsNestedProjection returns false.
-        // Todo: supported nested row projection down in https://github.com/apache/fluss/issues/2311
-        // later.
+        // Todo: support nested row projection pushdown in
+        // https://github.com/apache/fluss/issues/2311 later.
         String s = tEnv.explainSql("select id, simple_row.a, nested_row.y.z from row_log_test");
         assertThat(s)
                 .contains(
