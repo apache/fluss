@@ -435,7 +435,7 @@ public abstract class FlinkProcedureITCase {
     }
 
     @Test
-    void testSetClusterConfigValidation() throws Exception {
+    void testSetClusterConfigsValidation() throws Exception {
         // Try to set an invalid config (not allowed for dynamic change)
         assertThatThrownBy(
                         () ->
@@ -445,6 +445,7 @@ public abstract class FlinkProcedureITCase {
                                                         CATALOG_NAME))
                                         .await())
                 .rootCause()
+                // TODO: Fix misleading error: non-existent key reported as not allowed.
                 .hasMessageContaining(
                         "The config key invalid.config.key is not allowed to be changed dynamically");
 
@@ -492,7 +493,7 @@ public abstract class FlinkProcedureITCase {
     }
 
     @Test
-    void testResetClusterConfigValidation() throws Exception {
+    void testResetClusterConfigsValidation() throws Exception {
         // Try to reset an invalid config
         assertThatThrownBy(
                         () ->
@@ -502,6 +503,7 @@ public abstract class FlinkProcedureITCase {
                                                         CATALOG_NAME))
                                         .await())
                 .rootCause()
+                // TODO: Fix misleading error: non-existent key reported as not allowed.
                 .hasMessageContaining(
                         "The config key invalid.config.key is not allowed to be changed dynamically");
 
