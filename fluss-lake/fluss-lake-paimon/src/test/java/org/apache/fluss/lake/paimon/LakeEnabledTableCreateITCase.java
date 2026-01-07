@@ -168,7 +168,7 @@ class LakeEnabledTableCreateITCase {
                             // for __bucket, __offset, __timestamp
                             org.apache.paimon.types.DataTypes.INT(),
                             org.apache.paimon.types.DataTypes.BIGINT(),
-                            org.apache.paimon.types.DataTypes.TIMESTAMP_WITH_LOCAL_TIME_ZONE()
+                            org.apache.paimon.types.DataTypes.TIMESTAMP_LTZ_MILLIS()
                         },
                         new String[] {
                             "log_c1",
@@ -206,7 +206,7 @@ class LakeEnabledTableCreateITCase {
                             // for __bucket, __offset, __timestamp
                             org.apache.paimon.types.DataTypes.INT(),
                             org.apache.paimon.types.DataTypes.BIGINT(),
-                            org.apache.paimon.types.DataTypes.TIMESTAMP_WITH_LOCAL_TIME_ZONE()
+                            org.apache.paimon.types.DataTypes.TIMESTAMP_LTZ_MILLIS()
                         },
                         new String[] {
                             "log_c1",
@@ -245,7 +245,7 @@ class LakeEnabledTableCreateITCase {
                             // for __bucket, __offset, __timestamp
                             org.apache.paimon.types.DataTypes.INT(),
                             org.apache.paimon.types.DataTypes.BIGINT(),
-                            org.apache.paimon.types.DataTypes.TIMESTAMP_WITH_LOCAL_TIME_ZONE()
+                            org.apache.paimon.types.DataTypes.TIMESTAMP_LTZ_MILLIS()
                         },
                         new String[] {
                             "pk_c1",
@@ -288,7 +288,7 @@ class LakeEnabledTableCreateITCase {
                             // for __bucket, __offset, __timestamp
                             org.apache.paimon.types.DataTypes.INT(),
                             org.apache.paimon.types.DataTypes.BIGINT(),
-                            org.apache.paimon.types.DataTypes.TIMESTAMP_WITH_LOCAL_TIME_ZONE()
+                            org.apache.paimon.types.DataTypes.TIMESTAMP_LTZ_MILLIS()
                         },
                         new String[] {
                             "c1",
@@ -355,7 +355,7 @@ class LakeEnabledTableCreateITCase {
                             // for __bucket, __offset, __timestamp
                             org.apache.paimon.types.DataTypes.INT(),
                             org.apache.paimon.types.DataTypes.BIGINT(),
-                            org.apache.paimon.types.DataTypes.TIMESTAMP_WITH_LOCAL_TIME_ZONE()
+                            org.apache.paimon.types.DataTypes.TIMESTAMP_LTZ_MILLIS()
                         },
                         new String[] {
                             "log_c1",
@@ -456,8 +456,8 @@ class LakeEnabledTableCreateITCase {
                 .isInstanceOf(LakeTableAlreadyExistException.class)
                 .hasMessage(
                         "The table `fluss`.`log_table_with_exist_lake_table` already exists in Paimon catalog, but the table schema is not compatible. "
-                                + "Existing schema: UpdateSchema{fields=[`c1` STRING, `c2` INT, `__bucket` INT, `__offset` BIGINT, `__timestamp` TIMESTAMP(6) WITH LOCAL TIME ZONE], partitionKeys=[], primaryKeys=[], options={bucket=-1, fluss.table.replication.factor=1, fluss.table.datalake.enabled=true, fluss.table.datalake.format=paimon, partition.legacy-name=false, file.format=parquet, fluss.k1=v1}, comment=null}, "
-                                + "new schema: UpdateSchema{fields=[`c1` STRING, `c2` INT, `__bucket` INT, `__offset` BIGINT, `__timestamp` TIMESTAMP(6) WITH LOCAL TIME ZONE], partitionKeys=[], primaryKeys=[], options={bucket=3, fluss.table.replication.factor=1, fluss.table.datalake.enabled=true, fluss.table.datalake.format=paimon, partition.legacy-name=false, bucket-key=c1,c2, file.format=parquet, fluss.k1=v1}, comment=null}. "
+                                + "Existing schema: UpdateSchema{fields=[`c1` STRING, `c2` INT, `__bucket` INT, `__offset` BIGINT, `__timestamp` TIMESTAMP(3) WITH LOCAL TIME ZONE], partitionKeys=[], primaryKeys=[], options={bucket=-1, fluss.table.replication.factor=1, fluss.table.datalake.enabled=true, fluss.table.datalake.format=paimon, partition.legacy-name=false, file.format=parquet, fluss.k1=v1}, comment=null}, "
+                                + "new schema: UpdateSchema{fields=[`c1` STRING, `c2` INT, `__bucket` INT, `__offset` BIGINT, `__timestamp` TIMESTAMP(3) WITH LOCAL TIME ZONE], partitionKeys=[], primaryKeys=[], options={bucket=3, fluss.table.replication.factor=1, fluss.table.datalake.enabled=true, fluss.table.datalake.format=paimon, partition.legacy-name=false, bucket-key=c1,c2, file.format=parquet, fluss.k1=v1}, comment=null}. "
                                 + "Please first drop the table in Paimon catalog or use a new table name.");
 
         // create log table with different fields will throw exception
@@ -475,8 +475,8 @@ class LakeEnabledTableCreateITCase {
                 .isInstanceOf(LakeTableAlreadyExistException.class)
                 .hasMessage(
                         "The table `fluss`.`log_table_with_exist_lake_table` already exists in Paimon catalog, but the table schema is not compatible. "
-                                + "Existing schema: UpdateSchema{fields=[`c1` STRING, `c2` INT, `__bucket` INT, `__offset` BIGINT, `__timestamp` TIMESTAMP(6) WITH LOCAL TIME ZONE], partitionKeys=[], primaryKeys=[], options={bucket=-1, fluss.table.replication.factor=1, fluss.table.datalake.enabled=true, fluss.table.datalake.format=paimon, partition.legacy-name=false, file.format=parquet, fluss.k1=v1}, comment=null}, "
-                                + "new schema: UpdateSchema{fields=[`c1` STRING, `c2` INT, `c3` STRING, `__bucket` INT, `__offset` BIGINT, `__timestamp` TIMESTAMP(6) WITH LOCAL TIME ZONE], partitionKeys=[], primaryKeys=[], options={bucket=-1, fluss.table.replication.factor=1, fluss.table.datalake.enabled=true, fluss.table.datalake.format=paimon, partition.legacy-name=false, file.format=parquet, fluss.k1=v1}, comment=null}. "
+                                + "Existing schema: UpdateSchema{fields=[`c1` STRING, `c2` INT, `__bucket` INT, `__offset` BIGINT, `__timestamp` TIMESTAMP(3) WITH LOCAL TIME ZONE], partitionKeys=[], primaryKeys=[], options={bucket=-1, fluss.table.replication.factor=1, fluss.table.datalake.enabled=true, fluss.table.datalake.format=paimon, partition.legacy-name=false, file.format=parquet, fluss.k1=v1}, comment=null}, "
+                                + "new schema: UpdateSchema{fields=[`c1` STRING, `c2` INT, `c3` STRING, `__bucket` INT, `__offset` BIGINT, `__timestamp` TIMESTAMP(3) WITH LOCAL TIME ZONE], partitionKeys=[], primaryKeys=[], options={bucket=-1, fluss.table.replication.factor=1, fluss.table.datalake.enabled=true, fluss.table.datalake.format=paimon, partition.legacy-name=false, file.format=parquet, fluss.k1=v1}, comment=null}. "
                                 + "Please first drop the table in Paimon catalog or use a new table name.");
 
         // add an insignificant option to Paimon table will be ok
@@ -615,7 +615,7 @@ class LakeEnabledTableCreateITCase {
                             // for __bucket, __offset, __timestamp
                             org.apache.paimon.types.DataTypes.INT(),
                             org.apache.paimon.types.DataTypes.BIGINT(),
-                            org.apache.paimon.types.DataTypes.TIMESTAMP_WITH_LOCAL_TIME_ZONE()
+                            org.apache.paimon.types.DataTypes.TIMESTAMP_LTZ_MILLIS()
                         },
                         new String[] {
                             "log_c1",
@@ -711,7 +711,7 @@ class LakeEnabledTableCreateITCase {
                             // for __bucket, __offset, __timestamp
                             org.apache.paimon.types.DataTypes.INT(),
                             org.apache.paimon.types.DataTypes.BIGINT(),
-                            org.apache.paimon.types.DataTypes.TIMESTAMP_WITH_LOCAL_TIME_ZONE()
+                            org.apache.paimon.types.DataTypes.TIMESTAMP_LTZ_MILLIS()
                         },
                         new String[] {
                             "c1",
@@ -742,7 +742,7 @@ class LakeEnabledTableCreateITCase {
                             // for __bucket, __offset, __timestamp
                             org.apache.paimon.types.DataTypes.INT(),
                             org.apache.paimon.types.DataTypes.BIGINT(),
-                            org.apache.paimon.types.DataTypes.TIMESTAMP_WITH_LOCAL_TIME_ZONE()
+                            org.apache.paimon.types.DataTypes.TIMESTAMP_LTZ_MILLIS()
                         },
                         new String[] {
                             "c1",
@@ -832,7 +832,7 @@ class LakeEnabledTableCreateITCase {
                             // for __bucket, __offset, __timestamp
                             org.apache.paimon.types.DataTypes.INT(),
                             org.apache.paimon.types.DataTypes.BIGINT(),
-                            org.apache.paimon.types.DataTypes.TIMESTAMP_WITH_LOCAL_TIME_ZONE()
+                            org.apache.paimon.types.DataTypes.TIMESTAMP_LTZ_MILLIS()
                         },
                         new String[] {
                             "c1",
@@ -885,7 +885,7 @@ class LakeEnabledTableCreateITCase {
                             // for __bucket, __offset, __timestamp
                             org.apache.paimon.types.DataTypes.INT(),
                             org.apache.paimon.types.DataTypes.BIGINT(),
-                            org.apache.paimon.types.DataTypes.TIMESTAMP_WITH_LOCAL_TIME_ZONE()
+                            org.apache.paimon.types.DataTypes.TIMESTAMP_LTZ_MILLIS()
                         },
                         new String[] {
                             "c1",
