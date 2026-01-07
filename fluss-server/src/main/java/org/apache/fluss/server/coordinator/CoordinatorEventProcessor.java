@@ -848,13 +848,31 @@ public class CoordinatorEventProcessor implements EventProcessor {
                         coordinatorContext.retryDeleteAndSuccessDeleteReplicas(failDeletedReplicas);
 
         // transmit to deletion started for retry delete replicas
-        replicaStateMachine.handleStateChanges(
-                retryDeleteAndSuccessDeleteReplicas.f0, ReplicaDeletionStarted);
+        Set<TableBucketReplica> needRetryDeleteReplicas = new HashSet<>();
+        retryDeleteAndSuccessDeleteReplicas.f0.forEach(
+                (replica) -> {
+                    // For rebalance case. the replica state already set to null in method
+                    // stopRemovedReplicasOfReassignedBucket. so we need not reset it again.
+                    if (coordinatorContext.getReplicaState(replica) != null) {
+                        needRetryDeleteReplicas.add(replica);
+                    }
+                });
+        replicaStateMachine.handleStateChanges(needRetryDeleteReplicas, ReplicaDeletionStarted);
 
         // add all the replicas that considered as success delete to success deleted replicas
         successDeletedReplicas.addAll(retryDeleteAndSuccessDeleteReplicas.f1);
+
+        Set<TableBucketReplica> newSuccessDeleteReplicas = new HashSet<>();
+        successDeletedReplicas.forEach(
+                (replica) -> {
+                    // For rebalance case. the replica state already set to null in method
+                    // stopRemovedReplicasOfReassignedBucket. so we need not reset it again.
+                    if (coordinatorContext.getReplicaState(replica) != null) {
+                        newSuccessDeleteReplicas.add(replica);
+                    }
+                });
         // transmit to deletion successful for success deleted replicas
-        replicaStateMachine.handleStateChanges(successDeletedReplicas, ReplicaDeletionSuccessful);
+        replicaStateMachine.handleStateChanges(newSuccessDeleteReplicas, ReplicaDeletionSuccessful);
         // if any success deletion, we can resume
         if (!successDeletedReplicas.isEmpty()) {
             tableManager.resumeDeletions();
