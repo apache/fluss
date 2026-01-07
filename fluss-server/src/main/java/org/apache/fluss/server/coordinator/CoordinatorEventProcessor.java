@@ -1175,7 +1175,10 @@ public class CoordinatorEventProcessor implements EventProcessor {
         if (!isDryRun) {
             if (rebalanceManager.hasInProgressRebalance()) {
                 throw new RebalanceFailureException(
-                        "Rebalance task already exists. Please wait for it to finish or cancel it first.");
+                        String.format(
+                                "Rebalance task already exists, current rebalance id is '%s'. Please wait for "
+                                        + "it to finish or cancel it first.",
+                                rebalanceManager.getRebalanceId()));
             }
 
             // 2. execute rebalance plan.

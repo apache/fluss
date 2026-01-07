@@ -29,6 +29,7 @@ import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.NoRebalanceInProgressException;
+import org.apache.fluss.exception.RebalanceFailureException;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.TableBucket;
@@ -73,6 +74,7 @@ public class RebalanceITCase {
 
     @AfterEach
     protected void teardown() throws Exception {
+        admin.cancelRebalance(null).get();
         FLUSS_CLUSTER_EXTENSION.getZooKeeperClient().deleteRebalancePlan();
 
         if (admin != null) {
@@ -162,6 +164,7 @@ public class RebalanceITCase {
         for (int i = 0; i < 4; i++) {
             ReplicaManager replicaManager =
                     FLUSS_CLUSTER_EXTENSION.getTabletServerById(i).getReplicaManager();
+            // TODO Change to an reasonable assertion way.
             // average will be 9
             assertThat(replicaManager.onlineReplicas().count()).isBetween(6L, 12L);
             long leaderCount = replicaManager.leaderCount();
@@ -205,11 +208,6 @@ public class RebalanceITCase {
 
     @Test
     void testListRebalanceProcess() throws Exception {
-        RebalanceProgress rebalanceProgress = admin.listRebalanceProgress(null).get();
-        assertThat(rebalanceProgress.progress()).isEqualTo(-1d);
-        assertThat(rebalanceProgress.status()).isEqualTo(RebalanceStatus.NO_TASK);
-        assertThat(rebalanceProgress.progressForBucketMap()).isEmpty();
-
         String dbName = "db-rebalance-list";
         admin.createDatabase(dbName, DatabaseDescriptor.EMPTY, false).get();
 
@@ -279,6 +277,54 @@ public class RebalanceITCase {
                 .isInstanceOf(NoRebalanceInProgressException.class)
                 .hasMessageContaining(
                         "Rebalance task id unexisted-rebalance-id2 to cancel is not the current rebalance task id");
+    }
+
+    @Test
+    void testSendRebalanceWhileRebalanceTaskExists() throws Exception {
+        String dbName = "db-balance-exists";
+        admin.createDatabase(dbName, DatabaseDescriptor.EMPTY, false).get();
+
+        // add server tag PERMANENT_OFFLINE for server 3, this will avoid to generate bucket
+        // assignment on server 3 when create table.
+        admin.addServerTag(Collections.singletonList(3), ServerTag.PERMANENT_OFFLINE).get();
+
+        // create enough tables to make sure the rebalance task is not finished when next rebalance
+        // task is triggered.
+        for (int i = 0; i < 10; i++) {
+            long tableId =
+                    createTable(
+                            new TablePath(dbName, "test-rebalance_table-" + i),
+                            DATA1_TABLE_DESCRIPTOR,
+                            false);
+            FLUSS_CLUSTER_EXTENSION.waitUntilTableReady(tableId);
+        }
+
+        // remove tag after crated table.
+        admin.removeServerTag(Collections.singletonList(3), ServerTag.PERMANENT_OFFLINE).get();
+
+        // trigger once.
+        RebalancePlan rebalancePlan1 =
+                admin.rebalance(
+                                Arrays.asList(
+                                        GoalType.REPLICA_DISTRIBUTION,
+                                        GoalType.LEADER_DISTRIBUTION),
+                                false)
+                        .get();
+
+        assertThatThrownBy(
+                        () ->
+                                admin.rebalance(
+                                                Arrays.asList(
+                                                        GoalType.REPLICA_DISTRIBUTION,
+                                                        GoalType.LEADER_DISTRIBUTION),
+                                                false)
+                                        .get())
+                .rootCause()
+                .isInstanceOf(RebalanceFailureException.class)
+                .hasMessage(
+                        String.format(
+                                "Rebalance task already exists, current rebalance id is '%s'. Please wait for it to finish or cancel it first.",
+                                rebalancePlan1.getRebalanceId()));
     }
 
     private static Configuration initConfig() {

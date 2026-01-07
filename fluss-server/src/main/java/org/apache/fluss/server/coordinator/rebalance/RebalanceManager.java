@@ -113,6 +113,10 @@ public class RebalanceManager {
         initialize();
     }
 
+    public @Nullable String getRebalanceId() {
+        return currentRebalanceId;
+    }
+
     private void initialize() {
         try {
             zkClient.getRebalancePlan()
