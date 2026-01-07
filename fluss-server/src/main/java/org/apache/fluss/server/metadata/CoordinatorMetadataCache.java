@@ -103,10 +103,10 @@ public class CoordinatorMetadataCache implements ServerMetadataCache {
         Set<TabletServerInfo> aliveTabletServerInfosWithoutOfflineServerTag =
                 getAliveTabletServerInfos().stream()
                         .filter(
-                                info ->
-                                        !metadataSnapshot.serverTags.containsKey(info.getId())
-                                                || metadataSnapshot.serverTags.get(info.getId())
-                                                        != ServerTag.PERMANENT_OFFLINE)
+                                info -> {
+                                    ServerTag tag = metadataSnapshot.serverTags.get(info.getId());
+                                    return tag != ServerTag.PERMANENT_OFFLINE;
+                                })
                         .collect(Collectors.toSet());
         TabletServerInfo[] server =
                 new TabletServerInfo[aliveTabletServerInfosWithoutOfflineServerTag.size()];
