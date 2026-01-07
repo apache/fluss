@@ -461,6 +461,50 @@ class TieringCommitOperatorTest extends FlinkTestBase {
         assertThat(failedTieringEvent.failReason()).contains(failedReason);
     }
 
+    @Test
+    void testCommitFailsWhenTableRecreated() throws Exception {
+        TablePath tablePath = TablePath.of("fluss", "test_commit_fails_when_table_recreated");
+        long originalTableId = createTable(tablePath, DEFAULT_PK_TABLE_DESCRIPTOR);
+        int numberOfWriteResults = 3;
+
+        // Send write results for the first bucket
+        TableBucket tableBucket = new TableBucket(originalTableId, 0);
+        committerOperator.processElement(
+                createTableBucketWriteResultStreamRecord(
+                        tablePath, tableBucket, 1, 1, 1L, numberOfWriteResults));
+
+        // Drop and recreate the table with the same path
+        admin.dropTable(tablePath, true).get();
+        long newTableId = createTable(tablePath, DEFAULT_PK_TABLE_DESCRIPTOR);
+
+        // Verify that the table id has changed
+        assertThat(newTableId).isNotEqualTo(originalTableId);
+
+        // Try to commit the remaining write results - should fail because table was recreated
+        for (int bucket = 1; bucket < numberOfWriteResults; bucket++) {
+            tableBucket = new TableBucket(originalTableId, bucket);
+            committerOperator.processElement(
+                    createTableBucketWriteResultStreamRecord(
+                            tablePath,
+                            tableBucket,
+                            bucket,
+                            bucket,
+                            (long) bucket,
+                            numberOfWriteResults));
+        }
+
+        // Verify that a FailedTieringEvent was sent with the expected error message
+        List<OperatorEvent> operatorEvents = mockOperatorEventGateway.getEventsSent();
+        SourceEventWrapper sourceEventWrapper =
+                (SourceEventWrapper) operatorEvents.get(operatorEvents.size() - 1);
+        FailedTieringEvent failedTieringEvent =
+                (FailedTieringEvent) sourceEventWrapper.getSourceEvent();
+        assertThat(failedTieringEvent.getTableId()).isEqualTo(originalTableId);
+        assertThat(failedTieringEvent.failReason())
+                .contains("different from the table id")
+                .contains("dropped and recreated during tiering");
+    }
+
     private CommittedLakeSnapshot mockCommittedLakeSnapshot(
             long tableId, TablePath tablePath, int snapshotId, Map<TableBucket, Long> logEndOffsets)
             throws Exception {
