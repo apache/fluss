@@ -118,10 +118,26 @@ public class RebalanceManager {
         try {
             zkClient.getRebalancePlan()
                     .ifPresent(
-                            rebalancePlan ->
+                            rebalancePlan -> {
+                                if (rebalancePlan.getRebalanceStatus() == REBALANCING) {
                                     registerRebalance(
                                             rebalancePlan.getRebalanceId(),
-                                            rebalancePlan.getExecutePlan()));
+                                            rebalancePlan.getExecutePlan());
+                                } else {
+                                    rebalanceStatus = rebalancePlan.getRebalanceStatus();
+                                    currentRebalanceId = rebalancePlan.getRebalanceId();
+                                    rebalancePlan
+                                            .getExecutePlan()
+                                            .forEach(
+                                                    (tableBucket, rebalancePlanForBucket) ->
+                                                            finishedRebalanceTasks.put(
+                                                                    tableBucket,
+                                                                    RebalanceResultForBucket.of(
+                                                                            rebalancePlanForBucket,
+                                                                            rebalancePlan
+                                                                                    .getRebalanceStatus())));
+                                }
+                            });
         } catch (Exception e) {
             LOG.error(
                     "Failed to get rebalance plan from zookeeper, it will be treated as no"

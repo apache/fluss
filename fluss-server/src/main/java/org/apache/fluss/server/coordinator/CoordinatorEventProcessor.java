@@ -1251,7 +1251,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
                         "Try to processing bucket reassignment for tableBucket {} with assignment: {}.",
                         tableBucket,
                         reassignment);
-                onBucketReassignment(tableBucket, reassignment);
+                onBucketReassignment(tableBucket, reassignment, false);
             } catch (Exception e) {
                 LOG.error("Error when processing bucket reassignment.", e);
                 rebalanceManager.finishRebalanceTask(tableBucket, RebalanceStatus.FAILED);
@@ -1285,7 +1285,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
                                 "Target replicas {} have all caught up with the leader for reassigning bucket {}",
                                 reassignment.getTargetReplicas(),
                                 tableBucket);
-                        onBucketReassignment(tableBucket, reassignment);
+                        onBucketReassignment(tableBucket, reassignment, true);
                     }
                 }
             } catch (Exception e) {
@@ -1368,12 +1368,15 @@ public class CoordinatorEventProcessor implements EventProcessor {
      * store ORS persistently. This way, if the coordinatorServer crashes before that step, we can
      * still recover.
      */
-    private void onBucketReassignment(TableBucket tableBucket, ReplicaReassignment reassignment)
+    private void onBucketReassignment(
+            TableBucket tableBucket,
+            ReplicaReassignment reassignment,
+            boolean isReassignmentComplete)
             throws Exception {
         List<Integer> addingReplicas = reassignment.addingReplicas;
         List<Integer> removingReplicas = reassignment.removingReplicas;
 
-        if (!isReassignmentComplete(tableBucket, reassignment)) {
+        if (!isReassignmentComplete) {
             // A1. Send LeaderAndIsr request to every replica in ORS + TRS (with the new RS, AR and
             // RR).
             updateBucketEpochAndSendRequest(tableBucket, reassignment);
@@ -1401,8 +1404,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
                                     OnlineReplica));
             List<Integer> targetReplicas = reassignment.getTargetReplicas();
             // B2. Set RS = TRS, AR = [], RR = [] in memory.
-            coordinatorContext.updateBucketReplicaAssignment(
-                    tableBucket, reassignment.getTargetReplicas());
+            coordinatorContext.updateBucketReplicaAssignment(tableBucket, targetReplicas);
             // B3. Send LeaderAndIsr request with a potential new leader (if current leader not in
             // TRS) and a new RS (using TRS) and same isr to every tabletServer in ORS + TRS or TRS
             maybeReassignedBucketLeaderIfRequired(tableBucket, targetReplicas);

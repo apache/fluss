@@ -20,6 +20,7 @@ package org.apache.fluss.flink.procedure;
 import org.apache.fluss.client.Connection;
 import org.apache.fluss.client.ConnectionFactory;
 import org.apache.fluss.client.admin.Admin;
+import org.apache.fluss.cluster.rebalance.RebalanceProgress;
 import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
@@ -496,7 +497,6 @@ public abstract class FlinkProcedureITCase {
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
     void testRebalance(boolean upperCase) throws Exception {
-
         // add server tag PERMANENT_OFFLINE for server 3, this will avoid to generate bucket
         // assignment on server 3 when create table.
         try (CloseableIterator<Row> listProceduresIterator =
@@ -563,9 +563,14 @@ public abstract class FlinkProcedureITCase {
                 .hasMessageContaining(
                         "Rebalance task id not-exist-id to cancel is not the current rebalance task id");
 
+        // To compatibility with old version, that the call procedure input cannot be null.
+        RebalanceProgress progress = admin.listRebalanceProgress(null).get();
         // test cancel rebalance.
         try (CloseableIterator<Row> listProceduresIterator =
-                tEnv.executeSql(String.format("Call %s.sys.cancel_rebalance()", CATALOG_NAME))
+                tEnv.executeSql(
+                                String.format(
+                                        "Call %s.sys.cancel_rebalance('%s')",
+                                        CATALOG_NAME, progress.rebalanceId()))
                         .collect()) {
             assertCallResult(listProceduresIterator, new String[] {"+I[success]"});
         }
@@ -576,20 +581,6 @@ public abstract class FlinkProcedureITCase {
 
     @Test
     void testListRebalanceProgress() throws Exception {
-        try (CloseableIterator<Row> listProceduresIterator =
-                tEnv.executeSql(
-                                String.format(
-                                        "Call %s.sys.list_rebalance_progress()", CATALOG_NAME))
-                        .collect()) {
-            assertCallResult(
-                    listProceduresIterator,
-                    new String[] {
-                        "+I[Reblance total status: NO_TASK]",
-                        "+I[Rebalance progress: NONE]",
-                        "+I[Rebalance detail progress for bucket:]"
-                    });
-        }
-
         // add server tag PERMANENT_OFFLINE for server 3, this will avoid to generate bucket
         // assignment on server 3 when create table.
         try (CloseableIterator<Row> listProceduresIterator =
@@ -637,14 +628,16 @@ public abstract class FlinkProcedureITCase {
             assertThat(plan.size()).isGreaterThan(1);
         }
 
+        // To compatibility with old version, that the call procedure input cannot be null.
+        RebalanceProgress progress = admin.listRebalanceProgress(null).get();
         retry(
                 Duration.ofMinutes(2),
                 () -> {
                     try (CloseableIterator<Row> rows =
                             tEnv.executeSql(
                                             String.format(
-                                                    "Call %s.sys.list_rebalance_progress()",
-                                                    CATALOG_NAME))
+                                                    "Call %s.sys.list_rebalance_progress('%s')",
+                                                    CATALOG_NAME, progress.rebalanceId()))
                                     .collect()) {
                         List<String> listProgressResult =
                                 CollectionUtil.iteratorToList(rows).stream()
