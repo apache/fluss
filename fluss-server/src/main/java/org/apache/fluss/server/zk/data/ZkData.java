@@ -270,9 +270,7 @@ public final class ZkData {
      */
     public static final class AutoIncrementColumnZNode {
         public static String path(TablePath tablePath, int columnId) {
-            return AutoIncrementColumnsZNode.path(tablePath)
-                    + "/"
-                    + String.format("col_%d", columnId);
+            return AutoIncrementColumnsZNode.path(tablePath) + String.format("/col_%d", columnId);
         }
     }
 

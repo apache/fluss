@@ -33,7 +33,7 @@ import javax.annotation.concurrent.NotThreadSafe;
 import java.util.HashMap;
 import java.util.Map;
 
-/** AutoIncProcessor is used to process auto increment column for each schema ID. */
+/** AutoIncProcessor is used to process auto increment column. */
 @NotThreadSafe
 public class AutoIncProcessor {
     private final SchemaGetter schemaGetter;
@@ -50,7 +50,7 @@ public class AutoIncProcessor {
             ZooKeeperClient zkClient) {
         this.schemaGetter = schemaGetter;
         this.kvFormat = kvFormat;
-        schemaId = schemaGetter.getLatestSchemaInfo().getSchemaId();
+        this.schemaId = schemaGetter.getLatestSchemaInfo().getSchemaId();
         Schema schema = schemaGetter.getSchema(schemaId);
         int[] autoIncColumnIds = schema.getAutoIncColumnIds();
 
@@ -64,24 +64,26 @@ public class AutoIncProcessor {
             ZkSequenceIDCounter zkSequenceIDCounter =
                     new ZkSequenceIDCounter(
                             zkClient.getCuratorClient(),
-                            ZkData.AutoIncrementColumnZNode.path(tablePath, autoIncColumnIds[0]));
+                            ZkData.AutoIncrementColumnZNode.path(tablePath, autoIncColumnId));
             SequenceGenerator sequenceGenerator =
                     new SegmentSequenceGenerator(
                             tablePath,
-                            autoIncColumnIds[0],
-                            schema.getColumnName(autoIncColumnIds[0]),
+                            autoIncColumnId,
+                            schema.getColumnName(autoIncColumnId),
                             zkSequenceIDCounter,
                             properties);
             sequenceGeneratorMap.put(autoIncColumnId, sequenceGenerator);
         }
 
-        autoIncUpdater =
-                new AutoIncUpdater(
-                        kvFormat,
-                        (short) schemaId,
-                        schema,
-                        autoIncColumnIds[0],
-                        sequenceGeneratorMap.get(autoIncColumnIds[0]));
+        if (autoIncColumnIds.length > 0) {
+            autoIncUpdater =
+                    new AutoIncUpdater(
+                            kvFormat,
+                            (short) schemaId,
+                            schema,
+                            autoIncColumnIds[0],
+                            sequenceGeneratorMap.get(autoIncColumnIds[0]));
+        }
     }
 
     // Supports removing or reordering columns; does NOT support adding an auto-increment column to

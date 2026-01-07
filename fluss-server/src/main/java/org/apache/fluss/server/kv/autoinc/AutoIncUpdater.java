@@ -63,9 +63,7 @@ public class AutoIncUpdater {
         rowEncoder.startNewRow();
         for (int i = 0; i < fieldDataTypes.length; i++) {
             if (targetColumnIdx == i) {
-                if (oldValue != null && oldValue.row.isNullAt(i)) {
-                    rowEncoder.encodeField(i, idGenerator.nextVal());
-                }
+                rowEncoder.encodeField(i, idGenerator.nextVal());
             } else {
                 // use the old row value
                 if (oldValue == null) {

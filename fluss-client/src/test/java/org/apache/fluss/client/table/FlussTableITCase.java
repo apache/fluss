@@ -598,7 +598,7 @@ class FlussTableITCase extends ClientToServerITCaseBase {
             {"2026-01-07", "e", 200000L, "batch1"}
         };
 
-        // upsert record with auto inc column col1 null value
+        // upsert records with auto inc column col1 null value
         for (Object[] record : records) {
             upsertWriter.upsert(row(record[0], record[1], null, record[3]));
             upsertWriter.flush();
