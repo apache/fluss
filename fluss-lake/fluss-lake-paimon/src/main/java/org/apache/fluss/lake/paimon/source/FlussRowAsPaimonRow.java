@@ -164,8 +164,7 @@ public class FlussRowAsPaimonRow implements InternalRow {
         return flussArray == null
                 ? null
                 : new FlussArrayAsPaimonArray(
-                        flussArray,
-                        ((ArrayType) tableRowType.getField(pos).type()).getElementType());
+                        flussArray, ((ArrayType) tableRowType.getTypeAt(pos)).getElementType());
     }
 
     @Override
@@ -175,7 +174,7 @@ public class FlussRowAsPaimonRow implements InternalRow {
             return null;
         }
         org.apache.paimon.types.MapType mapType =
-                (org.apache.paimon.types.MapType) tableRowType.getField(pos).type();
+                (org.apache.paimon.types.MapType) tableRowType.getTypeAt(pos);
         return new FlussMapAsPaimonMap(flussMap, mapType.getKeyType(), mapType.getValueType());
     }
 
@@ -186,6 +185,6 @@ public class FlussRowAsPaimonRow implements InternalRow {
                 ? null
                 : new FlussRowAsPaimonRow(
                         nestedFlussRow,
-                        (org.apache.paimon.types.RowType) tableRowType.getField(pos).type());
+                        (org.apache.paimon.types.RowType) tableRowType.getTypeAt(pos));
     }
 }
