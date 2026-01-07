@@ -174,7 +174,7 @@ public class DefaultCompletedFetchTest {
         long fetchOffset = 0L;
         int bucketId = 0; // records for 0-10.
         TableBucket tb = new TableBucket(DATA2_TABLE_ID, bucketId);
-        Projection projection = Projection.of(new int[] {0, 2}, schema);
+        Projection projection = Projection.of(new int[] {0, 2});
         MemoryLogRecords memoryLogRecords;
         if (logFormat == LogFormat.ARROW) {
             memoryLogRecords = genRecordsWithProjection(DATA2, projection, magic);
@@ -210,7 +210,7 @@ public class DefaultCompletedFetchTest {
         // test projection reorder.
         defaultCompletedFetch =
                 makeCompletedFetch(
-                        tb, resultForBucket0, fetchOffset, Projection.of(new int[] {2, 0}, schema));
+                        tb, resultForBucket0, fetchOffset, Projection.of(new int[] {2, 0}));
         scanRecords = defaultCompletedFetch.fetchRecords(8);
         assertThat(scanRecords.size()).isEqualTo(8);
         for (int i = 0; i < scanRecords.size(); i++) {
@@ -427,7 +427,7 @@ public class DefaultCompletedFetchTest {
                 DATA2_TABLE_ID,
                 testingSchemaGetter,
                 DEFAULT_COMPRESSION,
-                projection.getProjectionIdInOrder());
+                projection.getProjectionInOrder());
         ByteBuffer buffer =
                 toByteBuffer(
                         fileLogProjection

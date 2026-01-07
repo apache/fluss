@@ -584,6 +584,23 @@ public class DataTypesTest {
 
     @Test
     void testRowType() {
+        assertThatThrownBy(
+                        () ->
+                                new RowType(
+                                        Arrays.asList(
+                                                new DataField("a", new IntType(), "column a", 0),
+                                                new DataField(
+                                                        "b", new CharType(5), "column b", 0))))
+                .hasMessageContaining("Field IDs must be unique. Found duplicates: [0]");
+        assertThatThrownBy(
+                        () ->
+                                new RowType(
+                                        Arrays.asList(
+                                                new DataField("a", new IntType(), "column a", 0),
+                                                new DataField("b", new CharType(5), "column b"))))
+                .hasMessageContaining(
+                        "Field IDs must be either all -1 or all non-negative. Mixed field IDs are not allowed");
+
         RowType rowType =
                 new RowType(
                         Arrays.asList(
@@ -593,8 +610,8 @@ public class DataTypesTest {
         assertThat(rowType.getFields().size()).isEqualTo(2);
         assertThat(rowType.getFields())
                 .containsExactlyInAnyOrder(
-                        new DataField("a", new IntType(), "column a"),
-                        new DataField("b", new CharType(5), "column b"));
+                        new DataField("a", new IntType(), "column a", 0),
+                        new DataField("b", new CharType(5), "column b", 1));
         assertThat(rowType.getFieldNames()).containsExactlyInAnyOrder("a", "b");
         assertThat(rowType.getTypeAt(0)).isInstanceOf(IntType.class);
         assertThat(rowType.getTypeAt(1)).isInstanceOf(CharType.class);
@@ -605,36 +622,36 @@ public class DataTypesTest {
                 "ROW<`a` INT 'column a', `b` CHAR(5) 'column b'>",
                 new RowType(
                         Arrays.asList(
-                                new DataField("a1", new IntType(), "column a1"),
-                                new DataField("b", new CharType(5), "column b"))));
+                                new DataField("a1", new IntType(), "column a1", 0),
+                                new DataField("b", new CharType(5), "column b", 2))));
 
         rowType =
                 new RowType(
                         false,
                         Arrays.asList(
-                                new DataField("a", new IntType(), "column a"),
-                                new DataField("b", new CharType(5), "column b")));
+                                new DataField("a", new IntType(), "column a", 0),
+                                new DataField("b", new CharType(5), "column b", 1)));
         dataTypeBaseAssert(
                 rowType,
                 false,
                 "ROW<`a` INT 'column a', `b` CHAR(5) 'column b'> NOT NULL",
                 new RowType(
                         Arrays.asList(
-                                new DataField("a", new IntType(), "column a"),
-                                new DataField("b", new CharType(5), "column b"))));
+                                new DataField("a", new IntType(), "column a", 0),
+                                new DataField("b", new CharType(5), "column b", 1))));
 
         rowType =
                 DataTypes.ROW(
-                        new DataField("a", new IntType(), "column a"),
-                        new DataField("b", new CharType(5), "column b"));
+                        new DataField("a", new IntType(), "column a", 0),
+                        new DataField("b", new CharType(5), "column b", 1));
         dataTypeBaseAssert(
                 rowType,
                 true,
                 "ROW<`a` INT 'column a', `b` CHAR(5) 'column b'>",
                 new RowType(
                         Arrays.asList(
-                                new DataField("a1", new IntType(), "column a1"),
-                                new DataField("b", new CharType(5), "column b"))));
+                                new DataField("a1", new IntType(), "column a1", 0),
+                                new DataField("b", new CharType(5), "column b", 1))));
 
         rowType = DataTypes.ROW(new IntType(), new CharType(5));
         dataTypeBaseAssert(
@@ -645,16 +662,16 @@ public class DataTypesTest {
 
         rowType =
                 DataTypes.ROW(
-                        DataTypes.FIELD("a", new IntType(), "column a"),
-                        DataTypes.FIELD("b", new CharType(5)));
+                        DataTypes.FIELD("a", new IntType(), "column a", 0),
+                        DataTypes.FIELD("b", new CharType(5), 1));
         dataTypeBaseAssert(
                 rowType,
                 true,
                 "ROW<`a` INT 'column a', `b` CHAR(5)>",
                 new RowType(
                         Arrays.asList(
-                                new DataField("a1", new IntType(), "column a1"),
-                                new DataField("b", new CharType(5)))));
+                                new DataField("a1", new IntType(), "column a1", 0),
+                                new DataField("b", new CharType(5), 1))));
 
         rowType = RowType.of(DataTypes.CHAR(1), DataTypes.CHAR(2));
         dataTypeBaseAssert(

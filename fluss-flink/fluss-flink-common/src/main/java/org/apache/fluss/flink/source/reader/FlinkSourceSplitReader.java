@@ -39,6 +39,9 @@ import org.apache.fluss.lake.source.LakeSource;
 import org.apache.fluss.lake.source.LakeSplit;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.types.ArrayType;
+import org.apache.fluss.types.DataField;
+import org.apache.fluss.types.MapType;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.CloseableIterator;
 import org.apache.fluss.utils.ExceptionUtils;
@@ -575,10 +578,7 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
                         ? flussTableRowType.project(projectedFields)
                         // only read the output fields from source
                         : flussTableRowType.project(sourceOutputType.getFieldNames());
-        if (!sourceOutputType.copy(false).equals(tableRowType.copy(false))) {
-            // The default nullability of Flink row type and Fluss row type might be not the same,
-            // thus we need to compare the row type without nullability here.
-
+        if (!compareRowTypesIgnoreFieldId(tableRowType, sourceOutputType)) {
             final String flussSchemaMsg;
             if (projectedFields == null) {
                 flussSchemaMsg = "\nFluss table schema: " + tableRowType;
@@ -605,5 +605,69 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
     @VisibleForTesting
     int[] getProjectedFields() {
         return projectedFields;
+    }
+
+    /** Compares two RowType recursively, ignoring field IDs and nullable. */
+    private boolean compareRowTypesIgnoreFieldId(
+            RowType flussTableRowType, RowType sourceOutputType) {
+        List<DataField> flussFields = flussTableRowType.getFields();
+        List<DataField> sourceFields = sourceOutputType.getFields();
+
+        // Check if field counts match
+        if (flussFields.size() != sourceFields.size()) {
+            return false;
+        }
+
+        // Compare each field
+        for (int i = 0; i < flussFields.size(); i++) {
+            DataField flussField = flussFields.get(i);
+            DataField sourceField = sourceFields.get(i);
+
+            // Check field name
+            if (!flussField.getName().equals(sourceField.getName())) {
+                return false;
+            }
+
+            // The default nullability and field_id of Flink row type and Fluss row type might be
+            // not the same,
+            // thus we need to compare the row type without nullability here.
+            if (!compareDataTypesIgnoreFieldId(
+                    flussField.getType().copy(false), sourceField.getType().copy(false))) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /** Compares two DataType recursively, ignoring field IDs and nullable. */
+    private boolean compareDataTypesIgnoreFieldId(
+            org.apache.fluss.types.DataType flussType, org.apache.fluss.types.DataType sourceType) {
+        // Check type roots
+        if (flussType.getTypeRoot() != sourceType.getTypeRoot()) {
+            return false;
+        }
+
+        if (flussType instanceof RowType && sourceType instanceof RowType) {
+            return compareRowTypesIgnoreFieldId((RowType) flussType, (RowType) sourceType);
+        }
+
+        if (flussType instanceof ArrayType && sourceType instanceof ArrayType) {
+            return compareDataTypesIgnoreFieldId(
+                    ((ArrayType) flussType).getElementType(),
+                    ((ArrayType) sourceType).getElementType());
+        }
+
+        if (flussType instanceof MapType && sourceType instanceof MapType) {
+            MapType flussMapType = (MapType) flussType;
+            MapType sourceMapType = (MapType) sourceType;
+            return compareDataTypesIgnoreFieldId(
+                            flussMapType.getKeyType(), sourceMapType.getKeyType())
+                    && compareDataTypesIgnoreFieldId(
+                            flussMapType.getValueType(), sourceMapType.getValueType());
+        }
+
+        // For primitive types and other types, use standard equals
+        return flussType.equals(sourceType);
     }
 }

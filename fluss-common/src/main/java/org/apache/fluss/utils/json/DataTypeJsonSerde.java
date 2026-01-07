@@ -70,6 +70,7 @@ public class DataTypeJsonSerde implements JsonSerializer<DataType>, JsonDeserial
     static final String FIELD_NAME_FIELDS = "fields";
     static final String FIELD_NAME_FIELD_NAME = "name";
     static final String FIELD_NAME_FIELD_TYPE = "field_type";
+    static final String FIELD_NAME_FIELD_ID = "field_id";
     static final String FIELD_NAME_FIELD_DESCRIPTION = "description";
 
     @Override
@@ -190,6 +191,8 @@ public class DataTypeJsonSerde implements JsonSerializer<DataType>, JsonDeserial
                 jsonGenerator.writeStringField(
                         FIELD_NAME_FIELD_DESCRIPTION, dataField.getDescription().get());
             }
+
+            jsonGenerator.writeNumberField(FIELD_NAME_FIELD_ID, dataField.getFieldId());
             jsonGenerator.writeEndObject();
         }
         jsonGenerator.writeEndArray();
@@ -291,18 +294,38 @@ public class DataTypeJsonSerde implements JsonSerializer<DataType>, JsonDeserial
     private static DataType deserializeRow(JsonNode dataTypeNode) {
         final ArrayNode fieldNodes = (ArrayNode) dataTypeNode.get(FIELD_NAME_FIELDS);
         final List<DataField> fields = new ArrayList<>();
+
+        boolean hasFieldWithId = false;
+        boolean hasFieldWithoutId = false;
+        int autoFieldId = 0;
+
         for (JsonNode fieldNode : fieldNodes) {
             final String fieldName = fieldNode.get(FIELD_NAME_FIELD_NAME).asText();
             final DataType fieldType =
                     DataTypeJsonSerde.INSTANCE.deserialize(fieldNode.get(FIELD_NAME_FIELD_TYPE));
-            final String fieldDescription;
-            if (fieldNode.has(FIELD_NAME_FIELD_DESCRIPTION)) {
-                fieldDescription = fieldNode.get(FIELD_NAME_FIELD_DESCRIPTION).asText();
+            final String fieldDescription =
+                    fieldNode.has(FIELD_NAME_FIELD_DESCRIPTION)
+                            ? fieldNode.get(FIELD_NAME_FIELD_DESCRIPTION).asText()
+                            : null;
+
+            final int fieldId;
+            if (fieldNode.has(FIELD_NAME_FIELD_ID)) {
+                hasFieldWithId = true;
+                fieldId = fieldNode.get(FIELD_NAME_FIELD_ID).asInt();
             } else {
-                fieldDescription = null;
+                hasFieldWithoutId = true;
+                fieldId = autoFieldId++;
             }
-            fields.add(new DataField(fieldName, fieldType, fieldDescription));
+
+            fields.add(new DataField(fieldName, fieldType, fieldDescription, fieldId));
         }
+
+        if (hasFieldWithId && hasFieldWithoutId) {
+            throw new TableException(
+                    "Field ID inconsistency detected in row type: "
+                            + "all fields must either have field IDs or none should have field IDs.");
+        }
+
         return new RowType(fields);
     }
 }

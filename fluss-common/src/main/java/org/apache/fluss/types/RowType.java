@@ -25,6 +25,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
@@ -50,9 +51,7 @@ public final class RowType extends DataType {
         super(isNullable, DataTypeRoot.ROW);
         this.fields =
                 Collections.unmodifiableList(
-                        new ArrayList<>(checkNotNull(fields, "Fields must not be null.")));
-
-        validateFields(fields);
+                        validateFields(checkNotNull(fields, "Fields must not be null.")));
     }
 
     public RowType(List<DataField> fields) {
@@ -172,23 +171,102 @@ public final class RowType extends DataType {
         return Objects.hash(super.hashCode(), fields);
     }
 
+    /**
+     * Compares this RowType with another RowType, ignoring field IDs.
+     *
+     * @param other the other RowType to compare with
+     * @return true if the RowTypes are equal ignoring field IDs, false otherwise
+     */
+    public boolean equalsIgnoreFieldId(RowType other) {
+        if (this == other) {
+            return true;
+        }
+        if (other == null) {
+            return false;
+        }
+        if (this.isNullable() != other.isNullable()) {
+            return false;
+        }
+        if (this.fields.size() != other.fields.size()) {
+            return false;
+        }
+        for (int i = 0; i < fields.size(); i++) {
+            DataField thisField = fields.get(i);
+            DataField otherField = other.fields.get(i);
+            if (!thisField.getName().equals(otherField.getName())) {
+                return false;
+            }
+            if (!thisField.getType().equals(otherField.getType())) {
+                return false;
+            }
+            if (!Objects.equals(thisField.getDescription(), otherField.getDescription())) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     // --------------------------------------------------------------------------------------------
 
-    private static void validateFields(List<DataField> fields) {
+    private static List<DataField> validateFields(List<DataField> fields) {
+        // Validate field names
         final List<String> fieldNames =
                 fields.stream().map(DataField::getName).collect(Collectors.toList());
         if (fieldNames.stream().anyMatch(StringUtils::isNullOrWhitespaceOnly)) {
             throw new IllegalArgumentException(
                     "Field names must contain at least one non-whitespace character.");
         }
-        final Set<String> duplicates =
+        final Set<String> duplicateNames =
                 fieldNames.stream()
                         .filter(n -> Collections.frequency(fieldNames, n) > 1)
                         .collect(Collectors.toSet());
-        if (!duplicates.isEmpty()) {
+        if (!duplicateNames.isEmpty()) {
             throw new IllegalArgumentException(
-                    String.format("Field names must be unique. Found duplicates: %s", duplicates));
+                    String.format(
+                            "Field names must be unique. Found duplicates: %s", duplicateNames));
         }
+
+        // Validate and process field IDs
+        final List<Integer> fieldIds =
+                fields.stream().map(DataField::getFieldId).collect(Collectors.toList());
+        long negativeIdCount = fieldIds.stream().filter(id -> id == -1).count();
+
+        List<DataField> processedFields;
+        if (negativeIdCount == fields.size()) {
+            // All fields have ID -1, assign IDs in order
+            processedFields = new ArrayList<>();
+            for (int i = 0; i < fields.size(); i++) {
+                DataField field = fields.get(i);
+                processedFields.add(
+                        new DataField(
+                                field.getName(),
+                                field.getType(),
+                                field.getDescription().orElse(null),
+                                i));
+            }
+        } else if (negativeIdCount > 0) {
+            // Some fields have ID -1 and some don't, throw error
+            throw new IllegalArgumentException(
+                    "Field IDs must be either all -1 or all non-negative. "
+                            + "Mixed field IDs are not allowed.");
+        } else {
+            // All fields have non-negative IDs
+            if (fieldIds.stream().anyMatch(id -> id < 0)) {
+                throw new IllegalArgumentException("Field ID must not be negative.");
+            }
+            final Set<Integer> duplicateIds =
+                    fieldIds.stream()
+                            .filter(id -> Collections.frequency(fieldIds, id) > 1)
+                            .collect(Collectors.toSet());
+            if (!duplicateIds.isEmpty()) {
+                throw new IllegalArgumentException(
+                        String.format(
+                                "Field IDs must be unique. Found duplicates: %s", duplicateIds));
+            }
+            processedFields = fields;
+        }
+
+        return processedFields;
     }
 
     public static RowType of(DataType... types) {
@@ -198,7 +276,7 @@ public final class RowType extends DataType {
     public static RowType of(boolean isNullable, DataType... types) {
         final List<DataField> fields = new ArrayList<>();
         for (int i = 0; i < types.length; i++) {
-            fields.add(new DataField("f" + i, types[i]));
+            fields.add(new DataField("f" + i, types[i], i));
         }
         return new RowType(isNullable, fields);
     }
@@ -220,7 +298,11 @@ public final class RowType extends DataType {
     }
 
     public static Builder builder(boolean isNullable) {
-        return new Builder(isNullable);
+        return new Builder(isNullable, new AtomicInteger(-1));
+    }
+
+    public static Builder builder(boolean isNullable, AtomicInteger fieldId) {
+        return new Builder(isNullable, fieldId);
     }
 
     /** Builder of {@link RowType}. */
@@ -229,18 +311,20 @@ public final class RowType extends DataType {
         private final List<DataField> fields = new ArrayList<>();
 
         private final boolean isNullable;
+        private final AtomicInteger fieldId;
 
-        private Builder(boolean isNullable) {
+        private Builder(boolean isNullable, AtomicInteger fieldId) {
             this.isNullable = isNullable;
+            this.fieldId = fieldId;
         }
 
         public Builder field(String name, DataType type) {
-            fields.add(new DataField(name, type));
+            fields.add(new DataField(name, type, fieldId.incrementAndGet()));
             return this;
         }
 
         public Builder field(String name, DataType type, String description) {
-            fields.add(new DataField(name, type, description));
+            fields.add(new DataField(name, type, description, fieldId.incrementAndGet()));
             return this;
         }
 

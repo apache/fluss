@@ -47,14 +47,25 @@ public class DataField implements Serializable {
 
     private final @Nullable String description;
 
-    public DataField(String name, DataType type, @Nullable String description) {
+    private final int fieldId;
+
+    public DataField(String name, DataType type, @Nullable String description, int fieldId) {
         this.name = checkNotNull(name, "Field name must not be null.");
         this.type = checkNotNull(type, "Field type must not be null.");
         this.description = description;
+        this.fieldId = fieldId;
+    }
+
+    public DataField(String name, DataType type, Integer fieldId) {
+        this(name, type, null, fieldId);
     }
 
     public DataField(String name, DataType type) {
-        this(name, type, null);
+        this(name, type, -1);
+    }
+
+    public DataField(String name, DataType type, @Nullable String description) {
+        this(name, type, description, -1);
     }
 
     public String getName() {
@@ -65,12 +76,16 @@ public class DataField implements Serializable {
         return type;
     }
 
+    public int getFieldId() {
+        return fieldId;
+    }
+
     public Optional<String> getDescription() {
         return Optional.ofNullable(description);
     }
 
     public DataField copy() {
-        return new DataField(name, type.copy(), description);
+        return new DataField(name, type.copy(), description, fieldId);
     }
 
     public String asSummaryString() {
@@ -92,12 +107,13 @@ public class DataField implements Serializable {
         DataField rowField = (DataField) o;
         return name.equals(rowField.name)
                 && type.equals(rowField.type)
+                && fieldId == rowField.fieldId
                 && Objects.equals(description, rowField.description);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(name, type, description);
+        return Objects.hash(name, type, fieldId, description);
     }
 
     private String formatString(String typeString, boolean excludeDescription) {

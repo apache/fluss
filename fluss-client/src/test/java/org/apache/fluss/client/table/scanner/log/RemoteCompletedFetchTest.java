@@ -226,10 +226,7 @@ class RemoteCompletedFetchTest {
                 createFileLogRecords(tableBucket, DATA2_PHYSICAL_TABLE_PATH, DATA2, logFormat);
         RemoteCompletedFetch completedFetch =
                 makeCompletedFetch(
-                        tableBucket,
-                        fileLogRecords,
-                        fetchOffset,
-                        Projection.of(new int[] {0, 2}, schema));
+                        tableBucket, fileLogRecords, fetchOffset, Projection.of(new int[] {0, 2}));
 
         List<ScanRecord> scanRecords = completedFetch.fetchRecords(8);
         List<Object[]> expectedObjects =
@@ -255,10 +252,7 @@ class RemoteCompletedFetchTest {
 
         completedFetch =
                 makeCompletedFetch(
-                        tableBucket,
-                        fileLogRecords,
-                        fetchOffset,
-                        Projection.of(new int[] {2, 0}, schema));
+                        tableBucket, fileLogRecords, fetchOffset, Projection.of(new int[] {2, 0}));
         scanRecords = completedFetch.fetchRecords(8);
         assertThat(scanRecords.size()).isEqualTo(8);
         for (int i = 0; i < scanRecords.size(); i++) {

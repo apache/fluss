@@ -301,14 +301,48 @@ public class DataTypes {
         return new MapType(keyType, valueType);
     }
 
-    /** Field definition with field name and data type. */
     public static DataField FIELD(String name, DataType type) {
         return new DataField(name, type);
     }
 
-    /** Field definition with field name, data type, and a description. */
+    /**
+     * Creates a field definition with field name, data type, and field ID.
+     *
+     * @param name the field name
+     * @param type the field data type
+     * @param fieldId the field ID for schema evolution
+     * @return a new data field without description
+     */
+    public static DataField FIELD(String name, DataType type, int fieldId) {
+        return new DataField(name, type, fieldId);
+    }
+
+    /**
+     * Creates a field definition with field name, data type, and a description.
+     *
+     * @param name the field name
+     * @param type the field data type
+     * @param description the field description
+     * @return a new data field with description but with default field ID (0)
+     * @deprecated Use {@link #FIELD(String, DataType, String, int)} instead to explicitly specify
+     *     field ID. Field ID is required for schema evolution support.
+     */
+    @Deprecated
     public static DataField FIELD(String name, DataType type, String description) {
         return new DataField(name, type, description);
+    }
+
+    /**
+     * Creates a field definition with field name, data type, description, and field ID.
+     *
+     * @param name the field name
+     * @param type the field data type
+     * @param description the field description
+     * @param fieldId the field ID for schema evolution
+     * @return a new data field with all properties
+     */
+    public static DataField FIELD(String name, DataType type, String description, int fieldId) {
+        return new DataField(name, type, description, fieldId);
     }
 
     /**

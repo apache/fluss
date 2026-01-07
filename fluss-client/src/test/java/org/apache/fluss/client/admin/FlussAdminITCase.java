@@ -394,7 +394,12 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
 
         admin.alterTable(
                         tablePath,
-                        Collections.singletonList(
+                        Arrays.asList(
+                                TableChange.addColumn(
+                                        "nested_row",
+                                        DataTypes.ROW(DataTypes.STRING(), DataTypes.INT()),
+                                        "new nested column",
+                                        TableChange.ColumnPosition.last()),
                                 TableChange.addColumn(
                                         "c1",
                                         DataTypes.STRING(),
@@ -408,20 +413,20 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                         .primaryKey("id")
                         .fromColumns(
                                 Arrays.asList(
+                                        new Schema.Column("id", DataTypes.INT(), "person id", 0),
                                         new Schema.Column(
-                                                "id", DataTypes.INT(), "person id", (short) 0),
+                                                "name", DataTypes.STRING(), "person name", 1),
+                                        new Schema.Column("age", DataTypes.INT(), "person age", 2),
                                         new Schema.Column(
-                                                "name",
-                                                DataTypes.STRING(),
-                                                "person name",
-                                                (short) 1),
+                                                "nested_row",
+                                                DataTypes.ROW(
+                                                        DataTypes.FIELD(
+                                                                "f0", DataTypes.STRING(), 4),
+                                                        DataTypes.FIELD("f1", DataTypes.INT(), 5)),
+                                                "new nested column",
+                                                3),
                                         new Schema.Column(
-                                                "age", DataTypes.INT(), "person age", (short) 2),
-                                        new Schema.Column(
-                                                "c1",
-                                                DataTypes.STRING(),
-                                                "new column c1",
-                                                (short) 3)))
+                                                "c1", DataTypes.STRING(), "new column c1", 6)))
                         .build();
         SchemaInfo schemaInfo = admin.getTableSchema(tablePath).get();
         assertThat(schemaInfo).isEqualTo(new SchemaInfo(expectedSchema, 2));

@@ -21,6 +21,8 @@ import org.apache.fluss.exception.SchemaChangeException;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.types.DataType;
+import org.apache.fluss.types.ReassignFieldId;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -106,12 +108,11 @@ public class SchemaUpdate {
                     "Column " + addColumn.getName() + " must be nullable.");
         }
 
+        int columnId = highestFieldId.incrementAndGet();
+        DataType dataType = ReassignFieldId.reassign(addColumn.getDataType(), highestFieldId);
+
         Schema.Column newColumn =
-                new Schema.Column(
-                        addColumn.getName(),
-                        addColumn.getDataType(),
-                        addColumn.getComment(),
-                        (byte) highestFieldId.incrementAndGet());
+                new Schema.Column(addColumn.getName(), dataType, addColumn.getComment(), columnId);
         columns.add(newColumn);
         existedColumns.put(newColumn.getName(), newColumn);
         return this;

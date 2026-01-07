@@ -134,7 +134,7 @@ class FileLogProjectionTest {
                                         new int[] {3},
                                         recordsOfData2RowType.sizeInBytes()))
                 .isInstanceOf(InvalidColumnProjectionException.class)
-                .hasMessage("Projected field id 3 is not contained in [0, 1, 2]");
+                .hasMessage("Projected fields [3] is out of bound for schema with 3 fields.");
 
         assertThatThrownBy(
                         () ->
@@ -160,6 +160,51 @@ class FileLogProjectionTest {
                 .isInstanceOf(InvalidColumnProjectionException.class)
                 .hasMessage(
                         "The projection indexes should not contain duplicated fields, but is [0, 0, 0]");
+    }
+
+    @Test
+    void testProjectionOldDataWithNewSchema() throws Exception {
+        // Currently, we only support add column at last.
+        short schemaId = 1;
+        try (FileLogRecords records =
+                createFileLogRecords(
+                        schemaId, LOG_MAGIC_VALUE_V1, TestData.DATA1_ROW_TYPE, TestData.DATA1)) {
+
+            ProjectionPushdownCache cache = new ProjectionPushdownCache();
+            FileLogProjection projection = new FileLogProjection(cache);
+            assertThat(
+                            doProjection(
+                                    2L,
+                                    2,
+                                    projection,
+                                    records,
+                                    new int[] {1},
+                                    records.sizeInBytes()))
+                    .containsExactly(
+                            new Object[] {"a"},
+                            new Object[] {"b"},
+                            new Object[] {"c"},
+                            new Object[] {"d"},
+                            new Object[] {"e"},
+                            new Object[] {"f"},
+                            new Object[] {"g"},
+                            new Object[] {"h"},
+                            new Object[] {"i"},
+                            new Object[] {"j"});
+
+            assertThatThrownBy(
+                            () ->
+                                    doProjection(
+                                            1L,
+                                            2,
+                                            projection,
+                                            records,
+                                            new int[] {0, 2},
+                                            records.sizeInBytes()))
+                    .isInstanceOf(InvalidColumnProjectionException.class)
+                    .hasMessage(
+                            "Projected fields [0, 2] is out of bound for schema with 2 fields.");
+        }
     }
 
     static Stream<Arguments> projectedFieldsArgs() {
@@ -420,7 +465,7 @@ class FileLogProjectionTest {
 
     private List<Object[]> doProjection(
             long tableId,
-            short schemaId,
+            int schemaId,
             FileLogProjection projection,
             FileLogRecords fileLogRecords,
             int[] projectedFields,
@@ -437,7 +482,7 @@ class FileLogProjectionTest {
         List<Object[]> results = new ArrayList<>();
         long expectedOffset = 0L;
         try (LogRecordReadContext context =
-                createArrowReadContext(projectedType, schemaId, testingSchemaGetter)) {
+                createArrowReadContext(projectedType, schemaId, testingSchemaGetter, true)) {
             for (LogRecordBatch batch : project.batches()) {
                 try (CloseableIterator<LogRecord> records = batch.records(context)) {
                     while (records.hasNext()) {
