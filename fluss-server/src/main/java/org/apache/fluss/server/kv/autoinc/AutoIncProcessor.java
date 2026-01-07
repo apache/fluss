@@ -24,9 +24,12 @@ import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.BinaryValue;
+import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.row.encode.RowEncoder;
 import org.apache.fluss.server.zk.ZkSequenceIDCounter;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.ZkData;
+import org.apache.fluss.types.DataType;
 
 import javax.annotation.concurrent.NotThreadSafe;
 
@@ -36,6 +39,8 @@ import java.util.Map;
 /** AutoIncProcessor is used to process auto increment column. */
 @NotThreadSafe
 public class AutoIncProcessor {
+    private static final AutoIncUpdater NO_OP_UPDATER = oldValue -> oldValue;
+
     private final SchemaGetter schemaGetter;
     private final KvFormat kvFormat;
     private AutoIncUpdater autoIncUpdater;
@@ -77,12 +82,14 @@ public class AutoIncProcessor {
 
         if (autoIncColumnIds.length > 0) {
             autoIncUpdater =
-                    new AutoIncUpdater(
+                    new DefaultAutoIncUpdater(
                             kvFormat,
                             (short) schemaId,
                             schema,
                             autoIncColumnIds[0],
                             sequenceGeneratorMap.get(autoIncColumnIds[0]));
+        } else {
+            autoIncUpdater = NO_OP_UPDATER;
         }
     }
 
@@ -97,20 +104,21 @@ public class AutoIncProcessor {
                         "Only support one auto increment column for a table, but got "
                                 + autoIncColumnIds.length);
             } else if (autoIncColumnIds.length == 1) {
-                if (sequenceGeneratorMap.containsKey(autoIncColumnIds[0])) {
+                int autoIncColumnId = autoIncColumnIds[0];
+                if (sequenceGeneratorMap.containsKey(autoIncColumnId)) {
                     this.autoIncUpdater =
-                            new AutoIncUpdater(
+                            new DefaultAutoIncUpdater(
                                     kvFormat,
                                     (short) latestSchemaId,
                                     schemaGetter.getSchema(latestSchemaId),
-                                    autoIncColumnIds[0],
-                                    sequenceGeneratorMap.get(autoIncColumnIds[0]));
+                                    autoIncColumnId,
+                                    sequenceGeneratorMap.get(autoIncColumnId));
                 } else {
                     throw new IllegalStateException(
                             "Not supported add auto increment column for a table.");
                 }
             } else {
-                this.autoIncUpdater = null;
+                this.autoIncUpdater = NO_OP_UPDATER;
                 this.sequenceGeneratorMap.clear();
             }
             this.schemaId = latestSchemaId;
@@ -124,10 +132,67 @@ public class AutoIncProcessor {
      * @return the new value with auto incremented column value
      */
     public BinaryValue processAutoInc(BinaryValue oldValue) {
-        if (autoIncUpdater != null) {
-            return autoIncUpdater.updateAutoInc(oldValue);
-        } else {
-            return oldValue;
+        return autoIncUpdater.updateAutoInc(oldValue);
+    }
+
+    private interface AutoIncUpdater {
+        BinaryValue updateAutoInc(BinaryValue oldValue);
+    }
+
+    /** Default auto increment column updater. */
+    @NotThreadSafe
+    private static class DefaultAutoIncUpdater implements AutoIncProcessor.AutoIncUpdater {
+        private final InternalRow.FieldGetter[] flussFieldGetters;
+        private final RowEncoder rowEncoder;
+        private final DataType[] fieldDataTypes;
+        private final int targetColumnIdx;
+        private final SequenceGenerator idGenerator;
+        private final short schemaId;
+
+        public DefaultAutoIncUpdater(
+                KvFormat kvFormat,
+                short schemaId,
+                Schema schema,
+                int autoIncColumnId,
+                SequenceGenerator sequenceGenerator) {
+            DataType[] fieldDataTypes = schema.getRowType().getChildren().toArray(new DataType[0]);
+
+            // getter for the fields in row
+            InternalRow.FieldGetter[] flussFieldGetters =
+                    new InternalRow.FieldGetter[fieldDataTypes.length];
+            for (int i = 0; i < fieldDataTypes.length; i++) {
+                flussFieldGetters[i] = InternalRow.createFieldGetter(fieldDataTypes[i], i);
+            }
+            this.idGenerator = sequenceGenerator;
+            this.schemaId = schemaId;
+            this.targetColumnIdx = schema.getColumnIds().indexOf(autoIncColumnId);
+            if (targetColumnIdx == -1) {
+                throw new IllegalStateException(
+                        String.format(
+                                "Auto-increment column ID %d not found in schema columns: %s",
+                                autoIncColumnId, schema.getColumnIds()));
+            }
+            this.rowEncoder = RowEncoder.create(kvFormat, fieldDataTypes);
+            this.fieldDataTypes = fieldDataTypes;
+            this.flussFieldGetters = flussFieldGetters;
+        }
+
+        public BinaryValue updateAutoInc(BinaryValue oldValue) {
+            rowEncoder.startNewRow();
+            for (int i = 0; i < fieldDataTypes.length; i++) {
+                if (targetColumnIdx == i) {
+                    rowEncoder.encodeField(i, idGenerator.nextVal());
+                } else {
+                    // use the old row value
+                    if (oldValue == null) {
+                        rowEncoder.encodeField(i, null);
+                    } else {
+                        rowEncoder.encodeField(
+                                i, flussFieldGetters[i].getFieldOrNull(oldValue.row));
+                    }
+                }
+            }
+            return new BinaryValue(schemaId, rowEncoder.finishRow());
         }
     }
 }
