@@ -40,7 +40,26 @@ import java.util.Set;
 
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
-/** A serializer for {@link SourceEnumeratorState}. */
+/**
+ * Serializer for {@link SourceEnumeratorState}.
+ *
+ * <p>This serializer manages the versioned persistence of the enumerator's state, including
+ * assigned buckets, partitions, and remaining hybrid lake/Fluss splits.
+ *
+ * <h3>Version Evolution:</h3>
+ *
+ * <ul>
+ *   <li><b>Version 0:</b> Initial version. Remaining hybrid lake splits are only (de)serialized if
+ *       the {@code lakeSource} is non-null.
+ *   <li><b>Version 1 (Current):</b> Decouples split serialization from the {@code lakeSource}
+ *       presence. It always attempts to (de)serialize the splits, using an internal boolean flag to
+ *       indicate presence. This ensures state consistency regardless of the current runtime
+ *       configuration.
+ * </ul>
+ *
+ * <p><b>Compatibility Note:</b> This serializer is designed for backward compatibility. It can
+ * deserialize states from Version 0, but always produces Version 1 during serialization.
+ */
 public class FlussSourceEnumeratorStateSerializer
         implements SimpleVersionedSerializer<SourceEnumeratorState> {
 
@@ -122,8 +141,15 @@ public class FlussSourceEnumeratorStateSerializer
 
     @Override
     public SourceEnumeratorState deserialize(int version, byte[] serialized) throws IOException {
-        if (version != VERSION_0 && version != CURRENT_VERSION) {
-            throw new IOException("Unknown version or corrupt state: " + version);
+        if (version < VERSION_0 || version > CURRENT_VERSION) {
+            throw new IOException(
+                    "Unsupported state version: "
+                            + version
+                            + ". Supported range: ["
+                            + VERSION_0
+                            + ", "
+                            + CURRENT_VERSION
+                            + "]");
         }
         final DataInputDeserializer in = new DataInputDeserializer(serialized);
         // deserialize assigned buckets
