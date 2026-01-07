@@ -91,11 +91,18 @@ class TableChangeWatcherTest {
                         zookeeperClient,
                         new Configuration(),
                         new LakeCatalogDynamicLoader(new Configuration(), null, true));
-        metadataManager.createDatabase(DEFAULT_DB, DatabaseDescriptor.builder().build(), false);
     }
 
     @BeforeEach
     void before() {
+        // Clean up ZK state from previous tests to prevent CuratorCache initial sync
+        // from picking up leftover data
+        try {
+            metadataManager.dropDatabase(DEFAULT_DB, true, true);
+        } catch (Exception ignored) {
+        }
+        metadataManager.createDatabase(DEFAULT_DB, DatabaseDescriptor.builder().build(), false);
+
         eventManager = new TestingEventManager();
         tableChangeWatcher = new TableChangeWatcher(zookeeperClient, eventManager);
         tableChangeWatcher.start();
