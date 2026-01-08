@@ -24,6 +24,8 @@ import org.apache.fluss.types.BooleanType;
 import org.apache.fluss.types.BytesType;
 import org.apache.fluss.types.CharType;
 import org.apache.fluss.types.DataType;
+import org.apache.fluss.types.DataTypeEqualsWithFieldId;
+import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.DateType;
 import org.apache.fluss.types.DecimalType;
 import org.apache.fluss.types.DoubleType;
@@ -46,13 +48,18 @@ import java.util.Arrays;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link DataTypeJsonSerde}. */
 public class DataTypeJsonSerdeTest extends JsonSerdeTestBase<DataType> {
 
     DataTypeJsonSerdeTest() {
         super(DataTypeJsonSerde.INSTANCE);
+    }
+
+    @Override
+    protected void assertEquals(DataType actual, DataType expected) {
+        // compare with field_id.
+        assertThat(DataTypeEqualsWithFieldId.equals(actual, expected)).isTrue();
     }
 
     @Override
@@ -151,82 +158,21 @@ public class DataTypeJsonSerdeTest extends JsonSerdeTestBase<DataType> {
     }
 
     @Test
-    void testCompatibilityFromJsonLackOfFieldId() {
-        String[] jsonLackOfFieldId =
-                new String[] {
-                    "{\"type\":\"BOOLEAN\"}",
-                    "{\"type\":\"BOOLEAN\",\"nullable\":false}",
-                    "{\"type\":\"TINYINT\"}",
-                    "{\"type\":\"TINYINT\",\"nullable\":false}",
-                    "{\"type\":\"SMALLINT\"}",
-                    "{\"type\":\"SMALLINT\",\"nullable\":false}",
-                    "{\"type\":\"INTEGER\"}",
-                    "{\"type\":\"INTEGER\",\"nullable\":false}",
-                    "{\"type\":\"BIGINT\"}",
-                    "{\"type\":\"BIGINT\",\"nullable\":false}",
-                    "{\"type\":\"FLOAT\"}",
-                    "{\"type\":\"FLOAT\",\"nullable\":false}",
-                    "{\"type\":\"DOUBLE\"}",
-                    "{\"type\":\"DOUBLE\",\"nullable\":false}",
-                    "{\"type\":\"DECIMAL\",\"precision\":10,\"scale\":0}",
-                    "{\"type\":\"DECIMAL\",\"nullable\":false,\"precision\":10,\"scale\":0}",
-                    "{\"type\":\"DECIMAL\",\"precision\":15,\"scale\":5}",
-                    "{\"type\":\"DECIMAL\",\"nullable\":false,\"precision\":15,\"scale\":5}",
-                    "{\"type\":\"CHAR\",\"length\":1}",
-                    "{\"type\":\"CHAR\",\"nullable\":false,\"length\":1}",
-                    "{\"type\":\"CHAR\",\"length\":5}",
-                    "{\"type\":\"CHAR\",\"nullable\":false,\"length\":5}",
-                    "{\"type\":\"STRING\"}",
-                    "{\"type\":\"STRING\",\"nullable\":false}",
-                    "{\"type\":\"BINARY\",\"length\":1}",
-                    "{\"type\":\"BINARY\",\"nullable\":false,\"length\":1}",
-                    "{\"type\":\"BINARY\",\"length\":100}",
-                    "{\"type\":\"BINARY\",\"nullable\":false,\"length\":100}",
-                    "{\"type\":\"BYTES\"}",
-                    "{\"type\":\"BYTES\",\"nullable\":false}",
-                    "{\"type\":\"DATE\"}",
-                    "{\"type\":\"DATE\",\"nullable\":false}",
-                    "{\"type\":\"TIME_WITHOUT_TIME_ZONE\",\"precision\":0}",
-                    "{\"type\":\"TIME_WITHOUT_TIME_ZONE\",\"nullable\":false,\"precision\":0}",
-                    "{\"type\":\"TIME_WITHOUT_TIME_ZONE\",\"precision\":3}",
-                    "{\"type\":\"TIME_WITHOUT_TIME_ZONE\",\"nullable\":false,\"precision\":3}",
-                    "{\"type\":\"TIMESTAMP_WITHOUT_TIME_ZONE\",\"precision\":6}",
-                    "{\"type\":\"TIMESTAMP_WITHOUT_TIME_ZONE\",\"nullable\":false,\"precision\":6}",
-                    "{\"type\":\"TIMESTAMP_WITHOUT_TIME_ZONE\",\"precision\":3}",
-                    "{\"type\":\"TIMESTAMP_WITHOUT_TIME_ZONE\",\"nullable\":false,\"precision\":3}",
-                    "{\"type\":\"TIMESTAMP_WITH_LOCAL_TIME_ZONE\",\"precision\":6}",
-                    "{\"type\":\"TIMESTAMP_WITH_LOCAL_TIME_ZONE\",\"nullable\":false,\"precision\":6}",
-                    "{\"type\":\"TIMESTAMP_WITH_LOCAL_TIME_ZONE\",\"precision\":3}",
-                    "{\"type\":\"TIMESTAMP_WITH_LOCAL_TIME_ZONE\",\"nullable\":false,\"precision\":3}",
-                    "{\"type\":\"ARRAY\",\"element_type\":{\"type\":\"INTEGER\",\"nullable\":false}}",
-                    "{\"type\":\"ARRAY\",\"nullable\":false,\"element_type\":{\"type\":\"INTEGER\",\"nullable\":false}}",
-                    "{\"type\":\"MAP\",\"key_type\":{\"type\":\"BIGINT\",\"nullable\":false},\"value_type\":{\"type\":\"INTEGER\",\"nullable\":false}}",
-                    "{\"type\":\"MAP\",\"nullable\":false,\"key_type\":{\"type\":\"BIGINT\",\"nullable\":false},\"value_type\":{\"type\":\"INTEGER\",\"nullable\":false}}",
-                    "{\"type\":\"ROW\",\"fields\":[{\"name\":\"f0\",\"field_type\":{\"type\":\"BIGINT\"}},{\"name\":\"f1\",\"field_type\":{\"type\":\"INTEGER\",\"nullable\":false}},{\"name\":\"f2\",\"field_type\":{\"type\":\"STRING\"}}]}",
-                    "{\"type\":\"ROW\",\"nullable\":false,\"fields\":[{\"name\":\"f0\",\"field_type\":{\"type\":\"BIGINT\"}},{\"name\":\"f1\",\"field_type\":{\"type\":\"INTEGER\",\"nullable\":false}},{\"name\":\"f2\",\"field_type\":{\"type\":\"STRING\"}}]}",
-                };
-        DataType[] expectedObject = createObjects();
-        for (int i = 0; i < jsonLackOfFieldId.length; i++) {
-            assertThat(
-                            JsonSerdeUtils.readValue(
-                                    jsonLackOfFieldId[i].getBytes(StandardCharsets.UTF_8),
-                                    DataTypeJsonSerde.INSTANCE))
-                    .isEqualTo(expectedObject[i]);
-        }
-    }
-
-    @Test
-    void testJsonWithInconsistencyFieldId() {
+    void testJsonLackOfFieldId() {
+        // some fields with field_id while others without field_id.
         String testJsonWithInconsistencyFieldId =
                 "{\"type\":\"ROW\",\"nullable\":false,\"fields\":[{\"name\":\"f0\",\"field_type\":{\"type\":\"BIGINT\"}},{\"name\":\"f1\",\"field_type\":{\"type\":\"INTEGER\",\"nullable\":false},\"field_id\":1},{\"name\":\"f2\",\"field_type\":{\"type\":\"STRING\"},\"field_id\":2}]}";
-
-        assertThatThrownBy(
-                        () ->
-                                JsonSerdeUtils.readValue(
-                                        testJsonWithInconsistencyFieldId.getBytes(
-                                                StandardCharsets.UTF_8),
-                                        DataTypeJsonSerde.INSTANCE))
-                .hasMessageContaining(
-                        "Field ID inconsistency detected in row type: all fields must either have field IDs or none should have field IDs.");
+        DataType dataType =
+                JsonSerdeUtils.readValue(
+                        testJsonWithInconsistencyFieldId.getBytes(StandardCharsets.UTF_8),
+                        DataTypeJsonSerde.INSTANCE);
+        assertThat(dataType).isInstanceOf(RowType.class);
+        assertEquals(
+                dataType,
+                DataTypes.ROW(
+                                DataTypes.FIELD("f0", DataTypes.BIGINT()),
+                                DataTypes.FIELD("f1", DataTypes.INT().copy(false), 1),
+                                DataTypes.FIELD("f2", DataTypes.STRING(), 2))
+                        .copy(false));
     }
 }

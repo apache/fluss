@@ -815,9 +815,10 @@ public final class Schema implements Serializable {
         Integer maximumFieldId = allFieldIds.stream().max(Integer::compareTo).orElse(-1);
         checkState(
                 columns.isEmpty() || highestFieldId >= maximumFieldId,
-                "Highest field ID (%s) must be greater than or equal to the maximum field ID (%s) including nested fields.",
+                "Highest field ID (%s) must be greater than or equal to the maximum field ID (%s) including nested fields. Current columns is %s",
                 highestFieldId,
-                maximumFieldId);
+                maximumFieldId,
+                columns);
     }
 
     /**

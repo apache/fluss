@@ -26,6 +26,7 @@ import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -45,10 +46,11 @@ public class ColumnJsonSerdeTest extends JsonSerdeTestBase<Schema.Column> {
         columns[4] =
                 new Schema.Column(
                         "e",
-                        RowType.builder()
-                                .field("f", DataTypes.STRING())
-                                .field("g", DataTypes.STRING())
-                                .build(),
+                        new RowType(
+                                true,
+                                Arrays.asList(
+                                        DataTypes.FIELD("f", DataTypes.STRING()),
+                                        DataTypes.FIELD("g", DataTypes.STRING(), 1))),
                         "hello c",
                         (short) 2);
         return columns;
@@ -61,7 +63,7 @@ public class ColumnJsonSerdeTest extends JsonSerdeTestBase<Schema.Column> {
             "{\"name\":\"b\",\"data_type\":{\"type\":\"INTEGER\"},\"comment\":\"hello b\",\"id\":-1}",
             "{\"name\":\"c\",\"data_type\":{\"type\":\"INTEGER\",\"nullable\":false},\"comment\":\"hello c\",\"id\":-1}",
             "{\"name\":\"d\",\"data_type\":{\"type\":\"INTEGER\",\"nullable\":false},\"comment\":\"hello c\",\"id\":2}",
-            "{\"name\":\"e\",\"data_type\":{\"type\":\"ROW\",\"fields\":[{\"name\":\"f\",\"field_type\":{\"type\":\"STRING\"},\"field_id\":0},{\"name\":\"g\",\"field_type\":{\"type\":\"STRING\"},\"field_id\":1}]},\"comment\":\"hello c\",\"id\":2}"
+            "{\"name\":\"e\",\"data_type\":{\"type\":\"ROW\",\"fields\":[{\"name\":\"f\",\"field_type\":{\"type\":\"STRING\"},\"field_id\":-1},{\"name\":\"g\",\"field_type\":{\"type\":\"STRING\"},\"field_id\":1}]},\"comment\":\"hello c\",\"id\":2}"
         };
     }
 

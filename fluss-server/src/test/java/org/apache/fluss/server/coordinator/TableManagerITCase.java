@@ -63,6 +63,7 @@ import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.BucketAssignment;
 import org.apache.fluss.server.zk.data.TableAssignment;
+import org.apache.fluss.types.DataTypeEqualsWithFieldId;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.json.DataTypeJsonSerde;
@@ -704,13 +705,15 @@ class TableManagerITCase {
         assertThat(tableInfo.getSchema().getColumnIds()).containsExactly(0, 1, 2, 5);
         // check nested row's field_id.
         assertThat(columns.get(2).getName()).isEqualTo("new_nested_column");
-        assertThat(columns.get(2).getDataType())
-                .isEqualTo(
-                        new RowType(
-                                true,
-                                Arrays.asList(
-                                        DataTypes.FIELD("f0", DataTypes.STRING(), 3),
-                                        DataTypes.FIELD("f1", DataTypes.INT(), 4))));
+        assertThat(
+                        DataTypeEqualsWithFieldId.equals(
+                                columns.get(2).getDataType(),
+                                new RowType(
+                                        true,
+                                        Arrays.asList(
+                                                DataTypes.FIELD("f0", DataTypes.STRING(), 3),
+                                                DataTypes.FIELD("f1", DataTypes.INT(), 4)))))
+                .isTrue();
     }
 
     private void checkBucketMetadata(int expectBucketCount, List<PbBucketMetadata> bucketMetadata) {

@@ -17,6 +17,7 @@
 
 package org.apache.fluss.metadata;
 
+import org.apache.fluss.types.DataTypeEqualsWithFieldId;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
 
@@ -140,7 +141,7 @@ class TableSchemaTest {
                                                 "n2",
                                                 DataTypes.ROW(
                                                         DataTypes.FIELD(
-                                                                "m1", DataTypes.TINYINT(), 1)),
+                                                                "m1", DataTypes.TINYINT(), 0)),
                                                 2)))
                         .column(
                                 "f2",
@@ -151,37 +152,49 @@ class TableSchemaTest {
                         .primaryKey("f0")
                         .build();
         assertThat(schema.getColumnIds()).containsExactly(0, 1, 6, 9);
-        assertThat(schema.getRowType())
-                .isEqualTo(
-                        new RowType(
-                                true,
-                                Arrays.asList(
-                                        DataTypes.FIELD("f0", DataTypes.STRING().copy(false), 0),
-                                        DataTypes.FIELD(
-                                                "f1",
-                                                DataTypes.ROW(
-                                                        DataTypes.FIELD(
-                                                                "n0", DataTypes.TINYINT(), 2),
-                                                        DataTypes.FIELD(
-                                                                "n1", DataTypes.STRING(), 3),
-                                                        DataTypes.FIELD(
-                                                                "n2",
-                                                                DataTypes.ROW(
-                                                                        DataTypes.FIELD(
-                                                                                "m1",
-                                                                                DataTypes.TINYINT(),
-                                                                                5)),
-                                                                4)),
-                                                1),
-                                        DataTypes.FIELD(
-                                                "f2",
-                                                DataTypes.ROW(
-                                                        DataTypes.FIELD(
-                                                                "n0", DataTypes.TINYINT(), 7),
-                                                        DataTypes.FIELD(
-                                                                "n1", DataTypes.STRING(), 8)),
-                                                6),
-                                        DataTypes.FIELD("f3", DataTypes.STRING(), 9))));
+        assertThat(
+                        DataTypeEqualsWithFieldId.equals(
+                                schema.getRowType(),
+                                new RowType(
+                                        true,
+                                        Arrays.asList(
+                                                DataTypes.FIELD(
+                                                        "f0", DataTypes.STRING().copy(false), 0),
+                                                DataTypes.FIELD(
+                                                        "f1",
+                                                        DataTypes.ROW(
+                                                                DataTypes.FIELD(
+                                                                        "n0",
+                                                                        DataTypes.TINYINT(),
+                                                                        2),
+                                                                DataTypes.FIELD(
+                                                                        "n1",
+                                                                        DataTypes.STRING(),
+                                                                        3),
+                                                                DataTypes.FIELD(
+                                                                        "n2",
+                                                                        DataTypes.ROW(
+                                                                                DataTypes.FIELD(
+                                                                                        "m1",
+                                                                                        DataTypes
+                                                                                                .TINYINT(),
+                                                                                        5)),
+                                                                        4)),
+                                                        1),
+                                                DataTypes.FIELD(
+                                                        "f2",
+                                                        DataTypes.ROW(
+                                                                DataTypes.FIELD(
+                                                                        "n0",
+                                                                        DataTypes.TINYINT(),
+                                                                        7),
+                                                                DataTypes.FIELD(
+                                                                        "n1",
+                                                                        DataTypes.STRING(),
+                                                                        8)),
+                                                        6),
+                                                DataTypes.FIELD("f3", DataTypes.STRING(), 9)))))
+                .isTrue();
 
         // Schema.Builder.fromColumns won't reassign field id.
         List<Schema.Column> columns =
@@ -235,36 +248,48 @@ class TableSchemaTest {
                                 2));
         schema = Schema.newBuilder().fromColumns(columns2).build();
         assertThat(schema.getColumnIds()).containsExactly(0, 1, 2);
-        assertThat(schema.getRowType())
-                .isEqualTo(
-                        new RowType(
-                                true,
-                                Arrays.asList(
-                                        DataTypes.FIELD("f0", DataTypes.STRING().copy(false), 0),
-                                        DataTypes.FIELD(
-                                                "f1",
-                                                DataTypes.ROW(
-                                                        DataTypes.FIELD(
-                                                                "n0", DataTypes.TINYINT(), 6),
-                                                        DataTypes.FIELD(
-                                                                "n1", DataTypes.STRING(), 7),
-                                                        DataTypes.FIELD(
-                                                                "n2",
-                                                                DataTypes.ROW(
-                                                                        DataTypes.FIELD(
-                                                                                "m1",
-                                                                                DataTypes.TINYINT(),
-                                                                                11)),
-                                                                8)),
-                                                1),
-                                        DataTypes.FIELD(
-                                                "f2",
-                                                DataTypes.ROW(
-                                                        DataTypes.FIELD(
-                                                                "n0", DataTypes.TINYINT(), 9),
-                                                        DataTypes.FIELD(
-                                                                "n1", DataTypes.STRING(), 10)),
-                                                2))));
+        assertThat(
+                        DataTypeEqualsWithFieldId.equals(
+                                schema.getRowType(),
+                                new RowType(
+                                        true,
+                                        Arrays.asList(
+                                                DataTypes.FIELD(
+                                                        "f0", DataTypes.STRING().copy(false), 0),
+                                                DataTypes.FIELD(
+                                                        "f1",
+                                                        DataTypes.ROW(
+                                                                DataTypes.FIELD(
+                                                                        "n0",
+                                                                        DataTypes.TINYINT(),
+                                                                        6),
+                                                                DataTypes.FIELD(
+                                                                        "n1",
+                                                                        DataTypes.STRING(),
+                                                                        7),
+                                                                DataTypes.FIELD(
+                                                                        "n2",
+                                                                        DataTypes.ROW(
+                                                                                DataTypes.FIELD(
+                                                                                        "m1",
+                                                                                        DataTypes
+                                                                                                .TINYINT(),
+                                                                                        11)),
+                                                                        8)),
+                                                        1),
+                                                DataTypes.FIELD(
+                                                        "f2",
+                                                        DataTypes.ROW(
+                                                                DataTypes.FIELD(
+                                                                        "n0",
+                                                                        DataTypes.TINYINT(),
+                                                                        9),
+                                                                DataTypes.FIELD(
+                                                                        "n1",
+                                                                        DataTypes.STRING(),
+                                                                        10)),
+                                                        2)))))
+                .isTrue();
     }
 
     @Test

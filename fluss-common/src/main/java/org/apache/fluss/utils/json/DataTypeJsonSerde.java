@@ -295,10 +295,6 @@ public class DataTypeJsonSerde implements JsonSerializer<DataType>, JsonDeserial
         final ArrayNode fieldNodes = (ArrayNode) dataTypeNode.get(FIELD_NAME_FIELDS);
         final List<DataField> fields = new ArrayList<>();
 
-        boolean hasFieldWithId = false;
-        boolean hasFieldWithoutId = false;
-        int autoFieldId = 0;
-
         for (JsonNode fieldNode : fieldNodes) {
             final String fieldName = fieldNode.get(FIELD_NAME_FIELD_NAME).asText();
             final DataType fieldType =
@@ -308,22 +304,11 @@ public class DataTypeJsonSerde implements JsonSerializer<DataType>, JsonDeserial
                             ? fieldNode.get(FIELD_NAME_FIELD_DESCRIPTION).asText()
                             : null;
 
-            final int fieldId;
-            if (fieldNode.has(FIELD_NAME_FIELD_ID)) {
-                hasFieldWithId = true;
-                fieldId = fieldNode.get(FIELD_NAME_FIELD_ID).asInt();
-            } else {
-                hasFieldWithoutId = true;
-                fieldId = autoFieldId++;
-            }
-
+            final int fieldId =
+                    fieldNode.has(FIELD_NAME_FIELD_ID)
+                            ? fieldNode.get(FIELD_NAME_FIELD_ID).asInt()
+                            : -1;
             fields.add(new DataField(fieldName, fieldType, fieldDescription, fieldId));
-        }
-
-        if (hasFieldWithId && hasFieldWithoutId) {
-            throw new TableException(
-                    "Field ID inconsistency detected in row type: "
-                            + "all fields must either have field IDs or none should have field IDs.");
         }
 
         return new RowType(fields);

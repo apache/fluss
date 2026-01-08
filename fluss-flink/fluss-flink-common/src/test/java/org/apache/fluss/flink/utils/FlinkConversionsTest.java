@@ -24,6 +24,7 @@ import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.types.DataType;
+import org.apache.fluss.types.DataTypeEqualsWithFieldId;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
 
@@ -134,6 +135,12 @@ public class FlinkConversionsTest {
             actualFlussTypes.add(FlinkConversions.toFlussType(flinkDataType));
         }
         assertThat(actualFlussTypes).isEqualTo(flussTypes);
+
+        // check the field id of rowType.
+        assertThat(
+                DataTypeEqualsWithFieldId.equals(
+                        actualFlussTypes.get(actualFlussTypes.size() - 1),
+                        flussTypes.get(flinkTypes.size() - 1)));
 
         // test conversion for data types not supported in Fluss
         assertThatThrownBy(() -> FlinkConversions.toFlussType(VARCHAR(10)))

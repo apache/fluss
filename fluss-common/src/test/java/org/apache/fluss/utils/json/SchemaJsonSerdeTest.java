@@ -19,6 +19,7 @@ package org.apache.fluss.utils.json;
 
 import org.apache.fluss.metadata.AggFunctions;
 import org.apache.fluss.metadata.Schema;
+import org.apache.fluss.types.DataTypeEqualsWithFieldId;
 import org.apache.fluss.types.DataTypes;
 
 import org.junit.jupiter.api.Test;
@@ -128,6 +129,14 @@ public class SchemaJsonSerdeTest extends JsonSerdeTestBase<Schema> {
     }
 
     @Override
+    protected void assertEquals(Schema actual, Schema expected) {
+        assertThat(actual).isEqualTo(expected);
+        // compare field ids.
+        assertThat(DataTypeEqualsWithFieldId.equals(actual.getRowType(), expected.getRowType()))
+                .isTrue();
+    }
+
+    @Override
     protected Schema[] createObjects() {
         return new Schema[] {
             SCHEMA_0, SCHEMA_1, SCHEMA_2, SCHEMA_3, SCHEMA_4, SCHEMA_5, SCHEMA_WITH_AGG
@@ -150,13 +159,12 @@ public class SchemaJsonSerdeTest extends JsonSerdeTestBase<Schema> {
     @Test
     void testCompatibilityFromJsonLackOfColumnId() {
         String[] jsons = jsonLackOfColumnId();
-        Schema[] expectedSchema = new Schema[] {SCHEMA_0, SCHEMA_1, SCHEMA_2, SCHEMA_3};
+        Schema[] expectedSchema = new Schema[] {SCHEMA_0, SCHEMA_1, SCHEMA_2, SCHEMA_3, SCHEMA_5};
         for (int i = 0; i < jsons.length; i++) {
-            assertThat(
-                            JsonSerdeUtils.readValue(
-                                    jsons[i].getBytes(StandardCharsets.UTF_8),
-                                    SchemaJsonSerde.INSTANCE))
-                    .isEqualTo(expectedSchema[i]);
+            assertEquals(
+                    JsonSerdeUtils.readValue(
+                            jsons[i].getBytes(StandardCharsets.UTF_8), SchemaJsonSerde.INSTANCE),
+                    expectedSchema[i]);
         }
     }
 
