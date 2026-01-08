@@ -30,6 +30,9 @@ import javax.annotation.Nullable;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
+import java.util.Map;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 /**
  * Procedure to get cluster configuration(s).
@@ -37,7 +40,7 @@ import java.util.List;
  * <p>This procedure allows querying dynamic cluster configurations. It can retrieve:
  *
  * <ul>
- *   <li>A specific configuration key
+ *   <li>multiple configurations
  *   <li>All configurations (when key parameter is null or empty)
  * </ul>
  *
@@ -45,39 +48,43 @@ import java.util.List;
  *
  * <pre>
  * -- Get a specific configuration
- * CALL sys.get_cluster_config('kv.rocksdb.shared-rate-limiter.bytes-per-sec');
+ * CALL sys.get_cluster_configs('kv.rocksdb.shared-rate-limiter.bytes-per-sec');
+ *
+ * -- Get multiple configurations
+ * CALL sys.get_cluster_configs('kv.rocksdb.shared-rate-limiter.bytes-per-sec', 'datalake.format');
  *
  * -- Get all cluster configurations
- * CALL sys.get_cluster_config();
+ * CALL sys.get_cluster_configs();
  * </pre>
  */
-public class GetClusterConfigProcedure extends ProcedureBase {
+public class GetClusterConfigsProcedure extends ProcedureBase {
 
     @ProcedureHint(
             output =
                     @DataTypeHint(
                             "ROW<config_key STRING, config_value STRING, config_source STRING>"))
     public Row[] call(ProcedureContext context) throws Exception {
-        return getConfigs(null);
+        return getConfigs();
     }
 
     @ProcedureHint(
-            argument = {@ArgumentHint(name = "config_key", type = @DataTypeHint("STRING"))},
+            argument = {@ArgumentHint(name = "config_keys", type = @DataTypeHint("STRING"))},
+            isVarArgs = true,
             output =
                     @DataTypeHint(
                             "ROW<config_key STRING, config_value STRING, config_source STRING>"))
-    public Row[] call(ProcedureContext context, String configKey) throws Exception {
-        return getConfigs(configKey);
+    public Row[] call(ProcedureContext context, String... configKeys) throws Exception {
+        return getConfigs(configKeys);
     }
 
-    private Row[] getConfigs(@Nullable String configKey) throws Exception {
+    private Row[] getConfigs(@Nullable String... configKeys) throws Exception {
         try {
             // Get all cluster configurations
             Collection<ConfigEntry> configs = admin.describeClusterConfigs().get();
 
             List<Row> results = new ArrayList<>();
 
-            if (configKey == null || configKey.isEmpty()) {
+            if (configKeys == null || configKeys.length == 0) {
                 // Return all configurations
                 for (ConfigEntry entry : configs) {
                     results.add(
@@ -87,9 +94,14 @@ public class GetClusterConfigProcedure extends ProcedureBase {
                                     entry.source() != null ? entry.source().name() : "UNKNOWN"));
                 }
             } else {
-                // Find specific configuration
-                for (ConfigEntry entry : configs) {
-                    if (entry.key().equals(configKey)) {
+                // Find configurations
+                // The order of the results is the same as that of the key.
+                Map<String, ConfigEntry> configEntryMap =
+                        configs.stream()
+                                .collect(Collectors.toMap(ConfigEntry::key, Function.identity()));
+                for (String key : configKeys) {
+                    ConfigEntry entry = configEntryMap.get(key);
+                    if (null != entry) {
                         results.add(
                                 Row.of(
                                         entry.key(),
@@ -97,7 +109,6 @@ public class GetClusterConfigProcedure extends ProcedureBase {
                                         entry.source() != null
                                                 ? entry.source().name()
                                                 : "UNKNOWN"));
-                        break;
                     }
                 }
             }

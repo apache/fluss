@@ -162,23 +162,23 @@ CALL sys.list_acl(
 
 Fluss provides procedures to dynamically manage cluster configurations without requiring a server restart.
 
-### get_cluster_config
+### get_cluster_configs
 
 Retrieve cluster configuration values.
 
 **Syntax:**
 
 ```sql
--- Get a specific configuration
-CALL [catalog_name.]sys.get_cluster_config(config_key => 'STRING')
+-- Get multiple configurations
+CALL [catalog_name.]sys.get_cluster_configs(config_keys => 'key1' [, 'key2', ...])
 
 -- Get all cluster configurations
-CALL [catalog_name.]sys.get_cluster_config()
+CALL [catalog_name.]sys.get_cluster_configs()
 ```
 
 **Parameters:**
 
-- `config_key` (optional): The configuration key to retrieve. If omitted, returns all cluster configurations.
+- `config_keys` (optional): The configuration keys to retrieve. If omitted, returns all cluster configurations.
 
 **Returns:** A table with columns:
 - `config_key`: The configuration key name
@@ -192,35 +192,35 @@ CALL [catalog_name.]sys.get_cluster_config()
 USE fluss_catalog;
 
 -- Get a specific configuration
-CALL sys.get_cluster_config(
-  config_key => 'kv.rocksdb.shared-rate-limiter.bytes-per-sec'
+CALL sys.get_cluster_configs(
+  config_keys => 'kv.rocksdb.shared-rate-limiter.bytes-per-sec'
+);
+
+-- Get multiple configuration
+CALL sys.get_cluster_configs(
+  config_keys => 'kv.rocksdb.shared-rate-limiter.bytes-per-sec', 'datalake.format'
 );
 
 -- Get all cluster configurations
-CALL sys.get_cluster_config();
+CALL sys.get_cluster_configs();
 ```
 
-### set_cluster_config
+### set_cluster_configs
 
-Set or delete a cluster configuration dynamically.
+Set cluster configurations dynamically.
 
 **Syntax:**
 
 ```sql
--- Set a configuration value
-CALL [catalog_name.]sys.set_cluster_config(
-  config_key => 'STRING',
-  config_value => 'STRING'
+-- Set configuration values
+CALL [catalog_name.]sys.set_cluster_configs(
+  config_pairs => 'key1', 'value1' [, 'key2', 'value2' ...]
 )
-
--- Delete a configuration (reset to default)
-CALL [catalog_name.]sys.set_cluster_config(config_key => 'STRING')
 ```
 
 **Parameters:**
 
-- `config_key` (required): The configuration key to modify.
-- `config_value` (optional): The new value to set. If omitted or empty, the configuration is deleted (reset to default).
+- `config_pairs`(required): For key-value pairs in configuration items, the number of parameters must be even.
 
 **Important Notes:**
 
@@ -236,20 +236,45 @@ CALL [catalog_name.]sys.set_cluster_config(config_key => 'STRING')
 USE fluss_catalog;
 
 -- Set RocksDB rate limiter
-CALL sys.set_cluster_config(
-  config_key => 'kv.rocksdb.shared-rate-limiter.bytes-per-sec',
-  config_value => '200MB'
+CALL sys.set_cluster_configs(
+  config_pairs => 'kv.rocksdb.shared-rate-limiter.bytes-per-sec', '200MB'
 );
 
--- Set datalake format
-CALL sys.set_cluster_config(
-  config_key => 'datalake.format',
-  config_value => 'paimon'
-);
-
--- Delete a configuration (reset to default)
-CALL sys.set_cluster_config(
-  config_key => 'kv.rocksdb.shared-rate-limiter.bytes-per-sec'
+-- Set RocksDB rate limiter and datalake format
+CALL sys.set_cluster_configs(
+  config_pairs => 'kv.rocksdb.shared-rate-limiter.bytes-per-sec', '200MB', 'datalake.format','paimon'
 );
 ```
 
+### reset_cluster_configs
+
+reset cluster configurations dynamically.
+
+**Syntax:**
+
+```sql
+-- reset configuration values
+CALL [catalog_name.]sys.reset_cluster_configs(config_keys => 'key1' [, 'key2', ...])
+```
+
+**Parameters:**
+
+- `config_keys`(required): The configuration keys to reset.
+
+
+**Example:**
+
+```sql title="Flink SQL"
+-- Use the Fluss catalog (replace 'fluss_catalog' with your catalog name if different)
+USE fluss_catalog;
+
+-- Reset a specific configuration
+CALL sys.reset_cluster_configs(
+  config_keys => 'kv.rocksdb.shared-rate-limiter.bytes-per-sec'
+);
+
+-- Reset RocksDB rate limiter and datalake format
+CALL sys.reset_cluster_configs(
+  config_keys => 'kv.rocksdb.shared-rate-limiter.bytes-per-sec', 'datalake.format'
+);
+```
