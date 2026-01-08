@@ -73,12 +73,14 @@ public class SourceEnumeratorState {
         }
         SourceEnumeratorState that = (SourceEnumeratorState) o;
         return Objects.equals(assignedBuckets, that.assignedBuckets)
-                && Objects.equals(assignedPartitions, that.assignedPartitions);
+                && Objects.equals(assignedPartitions, that.assignedPartitions)
+                && Objects.equals(
+                        remainingHybridLakeFlussSplits, that.remainingHybridLakeFlussSplits);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(assignedBuckets, assignedPartitions);
+        return Objects.hash(assignedBuckets, assignedPartitions, remainingHybridLakeFlussSplits);
     }
 
     @Override
