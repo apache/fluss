@@ -615,15 +615,15 @@ public class DataTypesTest {
                 "ROW<`a` INT 'column a', `b` CHAR(5) 'column b'>",
                 new RowType(
                         Arrays.asList(
-                                new DataField("a1", new IntType(), "column a1", 2),
-                                new DataField("b", new CharType(5), "column b", 3))));
+                                new DataField("a1", new IntType(), "column a1"),
+                                new DataField("b", new CharType(5), "column b"))));
 
         rowType =
                 new RowType(
                         false,
                         Arrays.asList(
-                                new DataField("a", new IntType(), "column a", 0),
-                                new DataField("b", new CharType(5), "column b", 1)));
+                                new DataField("a", new IntType(), "column a"),
+                                new DataField("b", new CharType(5), "column b")));
         dataTypeBaseAssert(
                 rowType,
                 false,

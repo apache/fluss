@@ -24,7 +24,7 @@ import org.apache.fluss.types.BooleanType;
 import org.apache.fluss.types.BytesType;
 import org.apache.fluss.types.CharType;
 import org.apache.fluss.types.DataType;
-import org.apache.fluss.types.DataTypeEqualsWithFieldId;
+import org.apache.fluss.types.DataTypeChecks;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.DateType;
 import org.apache.fluss.types.DecimalType;
@@ -59,7 +59,7 @@ public class DataTypeJsonSerdeTest extends JsonSerdeTestBase<DataType> {
     @Override
     protected void assertEquals(DataType actual, DataType expected) {
         // compare with field_id.
-        assertThat(DataTypeEqualsWithFieldId.equals(actual, expected)).isTrue();
+        assertThat(DataTypeChecks.equalsWithFieldId(actual, expected)).isTrue();
     }
 
     @Override

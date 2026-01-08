@@ -63,7 +63,7 @@ import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.BucketAssignment;
 import org.apache.fluss.server.zk.data.TableAssignment;
-import org.apache.fluss.types.DataTypeEqualsWithFieldId;
+import org.apache.fluss.types.DataTypeChecks;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.json.DataTypeJsonSerde;
@@ -706,7 +706,7 @@ class TableManagerITCase {
         // check nested row's field_id.
         assertThat(columns.get(2).getName()).isEqualTo("new_nested_column");
         assertThat(
-                        DataTypeEqualsWithFieldId.equals(
+                        DataTypeChecks.equalsWithFieldId(
                                 columns.get(2).getDataType(),
                                 new RowType(
                                         true,

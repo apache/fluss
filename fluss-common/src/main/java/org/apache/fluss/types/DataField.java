@@ -105,15 +105,17 @@ public class DataField implements Serializable {
             return false;
         }
         DataField rowField = (DataField) o;
+        // ignore field id in equality check, because field id is not part of type definition,
+        // use RowType#
+        // we may ignore description too in the future.
         return name.equals(rowField.name)
                 && type.equals(rowField.type)
-                && fieldId == rowField.fieldId
                 && Objects.equals(description, rowField.description);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(name, type, fieldId, description);
+        return Objects.hash(name, type, description);
     }
 
     private String formatString(String typeString, boolean excludeDescription) {

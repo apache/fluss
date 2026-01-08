@@ -19,7 +19,6 @@ package org.apache.fluss.utils.json;
 
 import org.apache.fluss.metadata.AggFunctions;
 import org.apache.fluss.metadata.Schema;
-import org.apache.fluss.types.DataTypeEqualsWithFieldId;
 import org.apache.fluss.types.DataTypes;
 
 import org.junit.jupiter.api.Test;
@@ -132,8 +131,7 @@ public class SchemaJsonSerdeTest extends JsonSerdeTestBase<Schema> {
     protected void assertEquals(Schema actual, Schema expected) {
         assertThat(actual).isEqualTo(expected);
         // compare field ids.
-        assertThat(DataTypeEqualsWithFieldId.equals(actual.getRowType(), expected.getRowType()))
-                .isTrue();
+        assertThat(actual.getRowType().equalsWithFieldId(expected.getRowType())).isTrue();
     }
 
     @Override

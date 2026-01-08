@@ -71,7 +71,7 @@ import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
 import org.apache.fluss.server.kv.snapshot.KvSnapshotHandle;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.ServerTags;
-import org.apache.fluss.types.DataTypeEqualsWithFieldId;
+import org.apache.fluss.types.DataTypeChecks;
 import org.apache.fluss.types.DataTypes;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -433,7 +433,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         assertThat(schemaInfo).isEqualTo(new SchemaInfo(expectedSchema, 2));
         // test field_id of rowType
         assertThat(
-                        DataTypeEqualsWithFieldId.equals(
+                        DataTypeChecks.equalsWithFieldId(
                                 schemaInfo.getSchema().getRowType(), expectedSchema.getRowType()))
                 .isTrue();
     }

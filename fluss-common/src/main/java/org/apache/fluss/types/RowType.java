@@ -164,17 +164,12 @@ public final class RowType extends DataType {
             return false;
         }
         RowType rowType = (RowType) o;
-        //  Compares this RowType with another RowType, ignoring field IDs.
-        for (int i = 0; i < fields.size(); i++) {
-            DataField thisField = fields.get(i);
-            DataField otherField = rowType.fields.get(i);
-            if (!thisField.getName().equals(otherField.getName())
-                    || !thisField.getType().equals(otherField.getType())
-                    || !Objects.equals(thisField.getDescription(), otherField.getDescription())) {
-                return false;
-            }
-        }
-        return true;
+        return fields.equals(rowType.fields);
+    }
+
+    /** Checks whether two data types are equal including field ids for row types. */
+    public boolean equalsWithFieldId(DataType other) {
+        return DataTypeChecks.equalsWithFieldId(this, other);
     }
 
     @Override
@@ -208,7 +203,7 @@ public final class RowType extends DataType {
     public static RowType of(boolean isNullable, DataType... types) {
         final List<DataField> fields = new ArrayList<>();
         for (int i = 0; i < types.length; i++) {
-            fields.add(new DataField("f" + i, types[i], i));
+            fields.add(new DataField("f" + i, types[i]));
         }
         return new RowType(isNullable, fields);
     }
