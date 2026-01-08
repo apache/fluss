@@ -604,7 +604,4 @@ public interface Admin extends AutoCloseable {
      *     NoRebalanceInProgressException} will be thrown.
      */
     CompletableFuture<Void> cancelRebalance(@Nullable String rebalanceId);
-
-    // TODO support CompletableFuture<Optional<RebalanceProgress>> listRebalanceProgress(@Nullable
-    // String rebalanceId);
 }

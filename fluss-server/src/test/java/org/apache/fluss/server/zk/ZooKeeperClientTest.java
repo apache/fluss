@@ -613,9 +613,9 @@ class ZooKeeperClientTest {
                         1,
                         Arrays.asList(0, 1, 2),
                         Arrays.asList(1, 2, 3)));
-        zookeeperClient.registerRebalancePlan(
+        zookeeperClient.registerRebalanceTask(
                 new RebalanceTask("rebalance-task-1", NOT_STARTED, bucketPlan));
-        assertThat(zookeeperClient.getRebalancePlan())
+        assertThat(zookeeperClient.getRebalanceTask())
                 .hasValue(new RebalanceTask("rebalance-task-1", NOT_STARTED, bucketPlan));
 
         bucketPlan = new HashMap<>();
@@ -627,14 +627,14 @@ class ZooKeeperClientTest {
                         3,
                         Arrays.asList(0, 1, 2),
                         Arrays.asList(3, 4, 5)));
-        zookeeperClient.registerRebalancePlan(
+        zookeeperClient.registerRebalanceTask(
                 new RebalanceTask("rebalance-task-2", NOT_STARTED, bucketPlan));
-        assertThat(zookeeperClient.getRebalancePlan())
+        assertThat(zookeeperClient.getRebalanceTask())
                 .hasValue(new RebalanceTask("rebalance-task-2", NOT_STARTED, bucketPlan));
 
-        zookeeperClient.registerRebalancePlan(
+        zookeeperClient.registerRebalanceTask(
                 new RebalanceTask("rebalance-task-2", COMPLETED, bucketPlan));
-        assertThat(zookeeperClient.getRebalancePlan())
+        assertThat(zookeeperClient.getRebalanceTask())
                 .hasValue(new RebalanceTask("rebalance-task-2", COMPLETED, bucketPlan));
     }
 

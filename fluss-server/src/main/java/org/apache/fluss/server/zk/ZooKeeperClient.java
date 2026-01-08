@@ -1229,7 +1229,7 @@ public class ZooKeeperClient implements AutoCloseable {
         deletePath(ServerTagsZNode.path());
     }
 
-    public void registerRebalancePlan(RebalanceTask rebalanceTask) throws Exception {
+    public void registerRebalanceTask(RebalanceTask rebalanceTask) throws Exception {
         String path = RebalanceZNode.path();
         Stat stat = zkClient.checkExists().forPath(path);
         if (stat == null) {
@@ -1242,14 +1242,14 @@ public class ZooKeeperClient implements AutoCloseable {
         }
     }
 
-    public Optional<RebalanceTask> getRebalancePlan() throws Exception {
+    public Optional<RebalanceTask> getRebalanceTask() throws Exception {
         String path = RebalanceZNode.path();
         return getOrEmpty(path).map(RebalanceZNode::decode);
     }
 
-    /** Deletes the rebalance plan from ZooKeeper. Only for testing propose now */
+    /** Deletes the rebalance task from ZooKeeper. Only for testing propose now */
     @VisibleForTesting
-    public void deleteRebalancePlan() throws Exception {
+    public void deleteRebalanceTask() throws Exception {
         deletePath(RebalanceZNode.path());
     }
 

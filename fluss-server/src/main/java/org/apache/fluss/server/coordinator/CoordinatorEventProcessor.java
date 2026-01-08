@@ -1193,11 +1193,11 @@ public class CoordinatorEventProcessor implements EventProcessor {
         try {
             // 1. generate rebalance plan.
             rebalanceTask =
-                    rebalanceManager.generateRebalancePlan(rebalanceEvent.getGoalsByPriority());
+                    rebalanceManager.generateRebalanceTask(rebalanceEvent.getGoalsByPriority());
 
             // 2. execute rebalance plan.
             Map<TableBucket, RebalancePlanForBucket> executePlan = rebalanceTask.getExecutePlan();
-            zooKeeperClient.registerRebalancePlan(rebalanceTask);
+            zooKeeperClient.registerRebalanceTask(rebalanceTask);
             rebalanceManager.registerRebalance(
                     rebalanceTask.getRebalanceId(), executePlan, RebalanceStatus.NOT_STARTED);
         } catch (Exception e) {

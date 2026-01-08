@@ -87,7 +87,7 @@ public class RebalanceTaskJsonSerdeTest extends JsonSerdeTestBase<RebalanceTask>
     @Override
     protected String[] expectedJsons() {
         return new String[] {
-            "{\"version\":1,\"rebalance_id\":\"rebalance-task-21jd\",\"rebalance_status\":1,\"rebalance_plan\":"
+            "{\"version\":1,\"rebalance_id\":\"rebalance-task-21jd\",\"rebalance_status\":0,\"rebalance_plan\":"
                     + "[{\"table_id\":0,\"buckets\":"
                     + "[{\"bucket_id\":1,\"original_leader\":1,\"new_leader\":1,\"origin_replicas\":[0,1,2],\"new_replicas\":[1,2,3]},"
                     + "{\"bucket_id\":0,\"original_leader\":0,\"new_leader\":3,\"origin_replicas\":[0,1,2],\"new_replicas\":[3,4,5]}]},"

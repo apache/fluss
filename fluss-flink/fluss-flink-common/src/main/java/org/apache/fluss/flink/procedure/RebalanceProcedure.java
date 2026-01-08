@@ -40,14 +40,14 @@ import java.util.List;
  * -- Trigger rebalance with REPLICA_DISTRIBUTION goal
  * CALL sys.rebalance('REPLICA_DISTRIBUTION');
  * -- Trigger rebalance with REPLICA_DISTRIBUTION and LEADER_DISTRIBUTION goals
- * CALL sys.rebalance('REPLICA_DISTRIBUTION;LEADER_DISTRIBUTION');
+ * CALL sys.rebalance('REPLICA_DISTRIBUTION,LEADER_DISTRIBUTION');
  * </pre>
  */
 public class RebalanceProcedure extends ProcedureBase {
 
     /**
      * As flink call don't support input a nested type like 'ARRAY'. So priorityGoals is defined as
-     * a String type, and different goals are split by ';'.
+     * a String type, and different goals are split by ','.
      */
     @ProcedureHint(
             argument = {@ArgumentHint(name = "priorityGoals", type = @DataTypeHint("STRING"))})

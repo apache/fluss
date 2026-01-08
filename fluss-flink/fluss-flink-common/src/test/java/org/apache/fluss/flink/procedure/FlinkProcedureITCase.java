@@ -573,7 +573,7 @@ public abstract class FlinkProcedureITCase {
         }
 
         // delete rebalance plan to avoid conflict with other tests.
-        FLUSS_CLUSTER_EXTENSION.getZooKeeperClient().deleteRebalancePlan();
+        FLUSS_CLUSTER_EXTENSION.getZooKeeperClient().deleteRebalanceTask();
     }
 
     @Test

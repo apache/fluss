@@ -107,7 +107,7 @@ public class RebalanceManager {
 
     private void initialize() {
         try {
-            zkClient.getRebalancePlan()
+            zkClient.getRebalanceTask()
                     .ifPresent(
                             rebalancePlan ->
                                     registerRebalance(
@@ -230,10 +230,10 @@ public class RebalanceManager {
         }
 
         try {
-            Optional<RebalanceTask> rebalancePlanOpt = zkClient.getRebalancePlan();
-            if (rebalancePlanOpt.isPresent()) {
-                RebalanceTask rebalanceTask = rebalancePlanOpt.get();
-                zkClient.registerRebalancePlan(
+            Optional<RebalanceTask> rebalanceTaskOpt = zkClient.getRebalanceTask();
+            if (rebalanceTaskOpt.isPresent()) {
+                RebalanceTask rebalanceTask = rebalanceTaskOpt.get();
+                zkClient.registerRebalanceTask(
                         new RebalanceTask(
                                 rebalanceTask.getRebalanceId(),
                                 CANCELED,
@@ -257,7 +257,7 @@ public class RebalanceManager {
         return !inProgressRebalanceTasks.isEmpty() || !inProgressRebalanceTasksQueue.isEmpty();
     }
 
-    public RebalanceTask generateRebalancePlan(List<Goal> goalsByPriority) {
+    public RebalanceTask generateRebalanceTask(List<Goal> goalsByPriority) {
         checkNotClosed();
         List<RebalancePlanForBucket> rebalancePlanForBuckets;
         String rebalanceId = UUID.randomUUID().toString();
@@ -283,7 +283,7 @@ public class RebalanceManager {
         }
 
         // group by tableId and partitionId to generate rebalance plan.
-        return buildRebalancePlan(rebalanceId, rebalancePlanForBuckets);
+        return buildRebalanceTask(rebalanceId, rebalancePlanForBuckets);
     }
 
     public @Nullable RebalancePlanForBucket getRebalancePlanForBucket(TableBucket tableBucket) {
@@ -308,10 +308,10 @@ public class RebalanceManager {
     private void completeRebalance() {
         checkNotClosed();
         try {
-            Optional<RebalanceTask> rebalancePlanOpt = zkClient.getRebalancePlan();
-            if (rebalancePlanOpt.isPresent()) {
-                RebalanceTask rebalanceTask = rebalancePlanOpt.get();
-                zkClient.registerRebalancePlan(
+            Optional<RebalanceTask> rebalanceTaskOpt = zkClient.getRebalanceTask();
+            if (rebalanceTaskOpt.isPresent()) {
+                RebalanceTask rebalanceTask = rebalanceTaskOpt.get();
+                zkClient.registerRebalanceTask(
                         new RebalanceTask(
                                 rebalanceTask.getRebalanceId(),
                                 COMPLETED,
@@ -365,7 +365,7 @@ public class RebalanceManager {
         return clusterModel;
     }
 
-    private RebalanceTask buildRebalancePlan(
+    private RebalanceTask buildRebalanceTask(
             String rebalanceId, List<RebalancePlanForBucket> rebalancePlanForBuckets) {
         Map<TableBucket, RebalancePlanForBucket> bucketPlan = new HashMap<>();
         for (RebalancePlanForBucket rebalancePlanForBucket : rebalancePlanForBuckets) {

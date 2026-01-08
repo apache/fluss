@@ -71,7 +71,7 @@ public class RebalanceITCase {
     @AfterEach
     protected void teardown() throws Exception {
         admin.cancelRebalance(null).get();
-        FLUSS_CLUSTER_EXTENSION.getZooKeeperClient().deleteRebalancePlan();
+        FLUSS_CLUSTER_EXTENSION.getZooKeeperClient().deleteRebalanceTask();
 
         if (admin != null) {
             admin.close();
