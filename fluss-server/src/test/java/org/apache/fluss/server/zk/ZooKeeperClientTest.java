@@ -35,7 +35,7 @@ import org.apache.fluss.server.zk.data.BucketSnapshot;
 import org.apache.fluss.server.zk.data.CoordinatorAddress;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
-import org.apache.fluss.server.zk.data.RebalancePlan;
+import org.apache.fluss.server.zk.data.RebalanceTask;
 import org.apache.fluss.server.zk.data.ServerTags;
 import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.server.zk.data.TableRegistration;
@@ -614,9 +614,9 @@ class ZooKeeperClientTest {
                         Arrays.asList(0, 1, 2),
                         Arrays.asList(1, 2, 3)));
         zookeeperClient.registerRebalancePlan(
-                new RebalancePlan("rebalance-task-1", NOT_STARTED, bucketPlan));
+                new RebalanceTask("rebalance-task-1", NOT_STARTED, bucketPlan));
         assertThat(zookeeperClient.getRebalancePlan())
-                .hasValue(new RebalancePlan("rebalance-task-1", NOT_STARTED, bucketPlan));
+                .hasValue(new RebalanceTask("rebalance-task-1", NOT_STARTED, bucketPlan));
 
         bucketPlan = new HashMap<>();
         bucketPlan.put(
@@ -627,15 +627,15 @@ class ZooKeeperClientTest {
                         3,
                         Arrays.asList(0, 1, 2),
                         Arrays.asList(3, 4, 5)));
-        zookeeperClient.updateRebalancePlan(
-                new RebalancePlan("rebalance-task-2", NOT_STARTED, bucketPlan));
+        zookeeperClient.registerRebalancePlan(
+                new RebalanceTask("rebalance-task-2", NOT_STARTED, bucketPlan));
         assertThat(zookeeperClient.getRebalancePlan())
-                .hasValue(new RebalancePlan("rebalance-task-2", NOT_STARTED, bucketPlan));
+                .hasValue(new RebalanceTask("rebalance-task-2", NOT_STARTED, bucketPlan));
 
-        zookeeperClient.updateRebalancePlan(
-                new RebalancePlan("rebalance-task-2", COMPLETED, bucketPlan));
+        zookeeperClient.registerRebalancePlan(
+                new RebalanceTask("rebalance-task-2", COMPLETED, bucketPlan));
         assertThat(zookeeperClient.getRebalancePlan())
-                .hasValue(new RebalancePlan("rebalance-task-2", COMPLETED, bucketPlan));
+                .hasValue(new RebalanceTask("rebalance-task-2", COMPLETED, bucketPlan));
     }
 
     @Test

@@ -20,13 +20,13 @@ package org.apache.fluss.server.coordinator.rebalance;
 import org.apache.fluss.metadata.TableBucket;
 
 /** Represents the load rebalancing operation over a replica for Fluss Load GoalOptimizer. */
-public class ReBalancingAction {
+public class RebalancingAction {
     private final TableBucket tableBucket;
     private final Integer sourceServerId;
     private final Integer destinationServerId;
     private final ActionType actionType;
 
-    public ReBalancingAction(
+    public RebalancingAction(
             TableBucket tableBucket,
             Integer sourceServerId,
             Integer destinationServerId,
@@ -62,7 +62,7 @@ public class ReBalancingAction {
             return false;
         }
 
-        ReBalancingAction that = (ReBalancingAction) o;
+        RebalancingAction that = (RebalancingAction) o;
 
         if (!tableBucket.equals(that.tableBucket)) {
             return false;

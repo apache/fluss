@@ -859,10 +859,9 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         List<Goal> goalsByPriority = new ArrayList<>();
         Arrays.stream(request.getGoals())
                 .forEach(goal -> goalsByPriority.add(getGoalByType(GoalType.valueOf(goal))));
-        boolean isDryRun = request.isDryRun();
 
         CompletableFuture<RebalanceResponse> response = new CompletableFuture<>();
-        eventManagerSupplier.get().put(new RebalanceEvent(goalsByPriority, isDryRun, response));
+        eventManagerSupplier.get().put(new RebalanceEvent(goalsByPriority, response));
         return response;
     }
 

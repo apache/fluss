@@ -30,6 +30,9 @@ import java.util.stream.Collectors;
 /** The strategies to elect the replica leader. */
 public abstract class ReplicaLeaderElection {
 
+    // TODO refactor ReplicaLeaderElection into interface with method leaderElection, tace
+    // by:https://github.com/apache/fluss/issues/2324
+
     /** The default replica leader election. */
     public static class DefaultLeaderElection extends ReplicaLeaderElection {
         /**

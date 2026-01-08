@@ -32,7 +32,7 @@ import java.util.stream.Collectors;
 public class ServerModel implements Comparable<ServerModel> {
 
     private final int serverId;
-    private final boolean isAlive;
+    private final boolean isOfflineTagged;
     private final String rack;
     private final Set<ReplicaModel> replicas;
     /** A map for tracking (tableId) -> (BucketId -> replica) for none-partitioned table. */
@@ -41,10 +41,12 @@ public class ServerModel implements Comparable<ServerModel> {
     /** A map for tracking (tableId, partitionId) -> (BucketId -> replica) for partitioned table. */
     private final Map<TablePartition, Map<Integer, ReplicaModel>> tablePartitionReplicas;
 
-    public ServerModel(int serverId, String rack, boolean isAlive) {
+    private int numLeaderReplicas = 0;
+
+    public ServerModel(int serverId, String rack, boolean isOfflineTagged) {
         this.serverId = serverId;
         this.rack = rack;
-        this.isAlive = isAlive;
+        this.isOfflineTagged = isOfflineTagged;
         this.replicas = new HashSet<>();
         this.tableReplicas = new HashMap<>();
         this.tablePartitionReplicas = new HashMap<>();
@@ -58,16 +60,24 @@ public class ServerModel implements Comparable<ServerModel> {
         return rack;
     }
 
-    public boolean isAlive() {
-        return isAlive;
+    public boolean isOfflineTagged() {
+        return isOfflineTagged;
     }
 
     public Set<ReplicaModel> replicas() {
         return new HashSet<>(replicas);
     }
 
+    public int numReplicas() {
+        return replicas.size();
+    }
+
     public Set<ReplicaModel> leaderReplicas() {
         return replicas.stream().filter(ReplicaModel::isLeader).collect(Collectors.toSet());
+    }
+
+    public int numLeaderReplicas() {
+        return numLeaderReplicas;
     }
 
     public Set<Long> tables() {
@@ -79,6 +89,9 @@ public class ServerModel implements Comparable<ServerModel> {
     public void makeFollower(TableBucket tableBucket) {
         ReplicaModel replica = replica(tableBucket);
         if (replica != null) {
+            if (replica.isLeader()) {
+                numLeaderReplicas--;
+            }
             replica.makeFollower();
         }
     }
@@ -86,12 +99,19 @@ public class ServerModel implements Comparable<ServerModel> {
     public void makeLeader(TableBucket tableBucket) {
         ReplicaModel replica = replica(tableBucket);
         if (replica != null) {
+            if (!replica.isLeader()) {
+                numLeaderReplicas++;
+            }
             replica.makeLeader();
         }
     }
 
     public void putReplica(TableBucket tableBucket, ReplicaModel replica) {
         replicas.add(replica);
+        if (replica.isLeader()) {
+            numLeaderReplicas++;
+        }
+
         replica.setServer(this);
         if (tableBucket.getPartitionId() != null) {
             TablePartition tablePartition =
@@ -128,6 +148,10 @@ public class ServerModel implements Comparable<ServerModel> {
     public @Nullable ReplicaModel removeReplica(TableBucket tableBucket) {
         ReplicaModel removedReplica = replica(tableBucket);
         if (removedReplica != null) {
+            if (removedReplica.isLeader()) {
+                numLeaderReplicas--;
+            }
+
             replicas.remove(removedReplica);
 
             if (tableBucket.getPartitionId() != null) {
@@ -167,7 +191,7 @@ public class ServerModel implements Comparable<ServerModel> {
     public String toString() {
         return String.format(
                 "ServerModel[id=%s,rack=%s,isAlive=%s,replicaCount=%s]",
-                serverId, rack, isAlive, replicas.size());
+                serverId, rack, isOfflineTagged, replicas.size());
     }
 
     @Override

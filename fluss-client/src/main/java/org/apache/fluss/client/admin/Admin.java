@@ -23,7 +23,6 @@ import org.apache.fluss.client.metadata.KvSnapshots;
 import org.apache.fluss.client.metadata.LakeSnapshot;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.rebalance.GoalType;
-import org.apache.fluss.cluster.rebalance.RebalancePlan;
 import org.apache.fluss.cluster.rebalance.RebalanceProgress;
 import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.config.ConfigOptions;
@@ -72,6 +71,7 @@ import javax.annotation.Nullable;
 
 import java.util.Collection;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 
 /**
@@ -555,21 +555,22 @@ public interface Admin extends AutoCloseable {
      * balancing according to the user-defined {@code priorityGoals}.
      *
      * <p>Currently, Fluss only supports one active rebalance task in the cluster. If an uncompleted
-     * rebalance task exists, an {@link RebalanceFailureException} will be thrown.
+     * rebalance task exists, Fluss will return the uncompleted rebalance task's progress.
+     *
+     * <p>If you want to cancel the rebalance task, you can use {@link #cancelRebalance(String)}
      *
      * <ul>
      *   <li>{@link AuthorizationException} If the authenticated user doesn't have cluster
      *       permissions.
-     *   <li>{@link RebalanceFailureException} If the rebalance failed. Such as there is an ongoing
-     *       execution.
+     *   <li>{@link RebalanceFailureException} If the rebalance failed. Such as there is an
+     *       inProgress execution.
      * </ul>
      *
      * @param priorityGoals the goals to be optimized.
-     * @param dryRun Calculate and return the rebalance optimization proposal, but do not execute
-     *     it.
-     * @return the generated rebalance plan for all the tableBuckets which need to do rebalance.
+     * @return the rebalance id. If there is no rebalance task in progress, it will trigger a new
+     *     rebalance task and return the rebalance id.
      */
-    CompletableFuture<RebalancePlan> rebalance(List<GoalType> priorityGoals, boolean dryRun);
+    CompletableFuture<String> rebalance(List<GoalType> priorityGoals);
 
     /**
      * List the rebalance progress.
@@ -577,15 +578,16 @@ public interface Admin extends AutoCloseable {
      * <ul>
      *   <li>{@link AuthorizationException} If the authenticated user doesn't have cluster
      *       permissions.
-     *   <li>{@link NoRebalanceInProgressException} If there are no rebalance tasks in progress.
+     *   <li>{@link NoRebalanceInProgressException} If there are no rebalance tasks in progress for
+     *       the input rebalanceId.
      * </ul>
      *
-     * @param rebalanceId the rebalance id to list progress, if it is null means list the latest
-     *     rebalance task's process. If rebalance id is not exists in server, empty rebalance result
-     *     will be returned.
+     * @param rebalanceId the rebalance id to list progress, if it is null means list the in
+     *     progress rebalance task's.
      * @return the rebalance process.
      */
-    CompletableFuture<RebalanceProgress> listRebalanceProgress(@Nullable String rebalanceId);
+    CompletableFuture<Optional<RebalanceProgress>> listRebalanceProgress(
+            @Nullable String rebalanceId);
 
     /**
      * Cannel the rebalance task.
@@ -602,4 +604,7 @@ public interface Admin extends AutoCloseable {
      *     NoRebalanceInProgressException} will be thrown.
      */
     CompletableFuture<Void> cancelRebalance(@Nullable String rebalanceId);
+
+    // TODO support CompletableFuture<Optional<RebalanceProgress>> listRebalanceProgress(@Nullable
+    // String rebalanceId);
 }

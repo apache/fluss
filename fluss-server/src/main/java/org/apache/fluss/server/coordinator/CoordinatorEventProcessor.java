@@ -107,7 +107,7 @@ import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.BucketAssignment;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
-import org.apache.fluss.server.zk.data.RebalancePlan;
+import org.apache.fluss.server.zk.data.RebalanceTask;
 import org.apache.fluss.server.zk.data.RemoteLogManifestHandle;
 import org.apache.fluss.server.zk.data.ServerTags;
 import org.apache.fluss.server.zk.data.TableAssignment;
@@ -148,7 +148,7 @@ import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.Repl
 import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.ReplicaDeletionSuccessful;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeAdjustIsrResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeListRebalanceProgressResponse;
-import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeRebalanceRespose;
+import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeRebalanceResponse;
 import static org.apache.fluss.utils.concurrent.FutureUtils.completeFromCallable;
 
 /** An implementation for {@link EventProcessor}. */
@@ -1180,35 +1180,39 @@ public class CoordinatorEventProcessor implements EventProcessor {
     }
 
     private RebalanceResponse processRebalance(RebalanceEvent rebalanceEvent) {
-        boolean isDryRun = rebalanceEvent.isDryRun();
-        RebalancePlan rebalancePlan;
-        long startTime = System.currentTimeMillis();
-        try {
-            rebalancePlan =
-                    rebalanceManager.generateRebalancePlan(rebalanceEvent.getGoalsByPriority());
-        } catch (Exception e) {
-            throw new RebalanceFailureException("Failed to generate rebalance plan.", e);
+        if (rebalanceManager.hasInProgressRebalance()) {
+            throw new RebalanceFailureException(
+                    String.format(
+                            "Rebalance task already exists, current rebalance id is '%s'. Please wait for "
+                                    + "it to finish or cancel it first.",
+                            rebalanceManager.getRebalanceId()));
         }
 
-        if (!isDryRun) {
-            if (rebalanceManager.hasInProgressRebalance()) {
-                throw new RebalanceFailureException(
-                        String.format(
-                                "Rebalance task already exists, current rebalance id is '%s'. Please wait for "
-                                        + "it to finish or cancel it first.",
-                                rebalanceManager.getRebalanceId()));
-            }
+        RebalanceTask rebalanceTask;
+        long startTime = System.currentTimeMillis();
+        try {
+            // 1. generate rebalance plan.
+            rebalanceTask =
+                    rebalanceManager.generateRebalancePlan(rebalanceEvent.getGoalsByPriority());
 
             // 2. execute rebalance plan.
-            Map<TableBucket, RebalancePlanForBucket> executePlan = rebalancePlan.getExecutePlan();
-            rebalanceManager.registerRebalance(rebalancePlan.getRebalanceId(), executePlan);
+            Map<TableBucket, RebalancePlanForBucket> executePlan = rebalanceTask.getExecutePlan();
+            zooKeeperClient.registerRebalancePlan(rebalanceTask);
+            rebalanceManager.registerRebalance(
+                    rebalanceTask.getRebalanceId(), executePlan, RebalanceStatus.NOT_STARTED);
+        } catch (Exception e) {
+            throw new RebalanceFailureException(
+                    String.format(
+                            "Failed to generate plan and execute rebalance. The root cause: %s",
+                            e.getMessage()),
+                    e);
         }
 
         LOG.info(
-                "Generate Rebalance plan rebalanace id {} with {} ms.",
-                rebalancePlan.getRebalanceId(),
+                "Generate Rebalance plan rebalance id {} with {} ms.",
+                rebalanceTask.getRebalanceId(),
                 System.currentTimeMillis() - startTime);
-        return makeRebalanceRespose(rebalancePlan);
+        return makeRebalanceResponse(rebalanceTask.getRebalanceId());
     }
 
     private CancelRebalanceResponse processCancelRebalance(

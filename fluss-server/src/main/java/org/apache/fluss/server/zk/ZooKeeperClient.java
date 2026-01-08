@@ -43,7 +43,7 @@ import org.apache.fluss.server.zk.data.CoordinatorAddress;
 import org.apache.fluss.server.zk.data.DatabaseRegistration;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
-import org.apache.fluss.server.zk.data.RebalancePlan;
+import org.apache.fluss.server.zk.data.RebalanceTask;
 import org.apache.fluss.server.zk.data.RemoteLogManifestHandle;
 import org.apache.fluss.server.zk.data.ResourceAcl;
 import org.apache.fluss.server.zk.data.ServerTags;
@@ -1229,20 +1229,20 @@ public class ZooKeeperClient implements AutoCloseable {
         deletePath(ServerTagsZNode.path());
     }
 
-    public void registerRebalancePlan(RebalancePlan rebalancePlan) throws Exception {
+    public void registerRebalancePlan(RebalanceTask rebalanceTask) throws Exception {
         String path = RebalanceZNode.path();
-        zkClient.create()
-                .creatingParentsIfNeeded()
-                .withMode(CreateMode.PERSISTENT)
-                .forPath(path, RebalanceZNode.encode(rebalancePlan));
+        Stat stat = zkClient.checkExists().forPath(path);
+        if (stat == null) {
+            zkClient.create()
+                    .creatingParentsIfNeeded()
+                    .withMode(CreateMode.PERSISTENT)
+                    .forPath(path, RebalanceZNode.encode(rebalanceTask));
+        } else {
+            zkClient.setData().forPath(path, RebalanceZNode.encode(rebalanceTask));
+        }
     }
 
-    public void updateRebalancePlan(RebalancePlan rebalancePlan) throws Exception {
-        String path = RebalanceZNode.path();
-        zkClient.setData().forPath(path, RebalanceZNode.encode(rebalancePlan));
-    }
-
-    public Optional<RebalancePlan> getRebalancePlan() throws Exception {
+    public Optional<RebalanceTask> getRebalancePlan() throws Exception {
         String path = RebalanceZNode.path();
         return getOrEmpty(path).map(RebalanceZNode::decode);
     }

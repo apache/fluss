@@ -24,7 +24,6 @@ import org.apache.fluss.cluster.rebalance.RebalanceResultForBucket;
 import org.apache.fluss.cluster.rebalance.RebalanceStatus;
 import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.exception.NoRebalanceInProgressException;
-import org.apache.fluss.exception.RebalanceFailureException;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.server.coordinator.CoordinatorContext;
 import org.apache.fluss.server.coordinator.CoordinatorEventProcessor;
@@ -36,15 +35,13 @@ import org.apache.fluss.server.coordinator.rebalance.model.ServerModel;
 import org.apache.fluss.server.metadata.ServerInfo;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
-import org.apache.fluss.server.zk.data.RebalancePlan;
+import org.apache.fluss.server.zk.data.RebalanceTask;
 import org.apache.fluss.utils.MapUtils;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
-import javax.annotation.concurrent.GuardedBy;
-import javax.annotation.concurrent.ThreadSafe;
 
 import java.util.ArrayDeque;
 import java.util.HashMap;
@@ -56,49 +53,40 @@ import java.util.Set;
 import java.util.SortedSet;
 import java.util.TreeSet;
 import java.util.UUID;
-import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 import static org.apache.fluss.cluster.rebalance.RebalanceStatus.CANCELED;
 import static org.apache.fluss.cluster.rebalance.RebalanceStatus.COMPLETED;
+import static org.apache.fluss.cluster.rebalance.RebalanceStatus.FINAL_STATUSES;
 import static org.apache.fluss.cluster.rebalance.RebalanceStatus.NOT_STARTED;
-import static org.apache.fluss.cluster.rebalance.RebalanceStatus.NO_TASK;
 import static org.apache.fluss.cluster.rebalance.RebalanceStatus.REBALANCING;
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
-import static org.apache.fluss.utils.concurrent.LockUtils.inReadLock;
-import static org.apache.fluss.utils.concurrent.LockUtils.inWriteLock;
 
 /**
  * A rebalance manager to generate rebalance plan, and execution rebalance plan.
  *
  * <p>This manager can only be used in {@link CoordinatorEventProcessor} as a single threaded model.
  */
-@ThreadSafe
 public class RebalanceManager {
-
     private static final Logger LOG = LoggerFactory.getLogger(RebalanceManager.class);
 
-    private final ReentrantReadWriteLock lock = new ReentrantReadWriteLock();
     private final ZooKeeperClient zkClient;
     private final CoordinatorEventProcessor eventProcessor;
 
     /** A queue of in progress table bucket to rebalance. */
-    @GuardedBy("lock")
     private final Queue<TableBucket> inProgressRebalanceTasksQueue = new ArrayDeque<>();
 
     /** A mapping from table bucket to rebalance status of pending and running tasks. */
-    @GuardedBy("lock")
     private final Map<TableBucket, RebalanceResultForBucket> inProgressRebalanceTasks =
             MapUtils.newConcurrentHashMap();
 
     /** A mapping from table bucket to rebalance status of failed or completed tasks. */
-    @GuardedBy("lock")
     private final Map<TableBucket, RebalanceResultForBucket> finishedRebalanceTasks =
             MapUtils.newConcurrentHashMap();
 
     private final GoalOptimizer goalOptimizer;
     private volatile long registerTime;
-    private volatile RebalanceStatus rebalanceStatus = NO_TASK;
+    private volatile @Nullable RebalanceStatus rebalanceStatus;
     private volatile @Nullable String currentRebalanceId;
     private volatile boolean isClosed = false;
 
@@ -121,26 +109,11 @@ public class RebalanceManager {
         try {
             zkClient.getRebalancePlan()
                     .ifPresent(
-                            rebalancePlan -> {
-                                if (rebalancePlan.getRebalanceStatus() == REBALANCING) {
+                            rebalancePlan ->
                                     registerRebalance(
                                             rebalancePlan.getRebalanceId(),
-                                            rebalancePlan.getExecutePlan());
-                                } else {
-                                    rebalanceStatus = rebalancePlan.getRebalanceStatus();
-                                    currentRebalanceId = rebalancePlan.getRebalanceId();
-                                    rebalancePlan
-                                            .getExecutePlan()
-                                            .forEach(
-                                                    (tableBucket, rebalancePlanForBucket) ->
-                                                            finishedRebalanceTasks.put(
-                                                                    tableBucket,
-                                                                    RebalanceResultForBucket.of(
-                                                                            rebalancePlanForBucket,
-                                                                            rebalancePlan
-                                                                                    .getRebalanceStatus())));
-                                }
-                            });
+                                            rebalancePlan.getExecutePlan(),
+                                            rebalancePlan.getRebalanceStatus()));
         } catch (Exception e) {
             LOG.error(
                     "Failed to get rebalance plan from zookeeper, it will be treated as no"
@@ -150,110 +123,89 @@ public class RebalanceManager {
     }
 
     public void registerRebalance(
-            String rebalanceId, Map<TableBucket, RebalancePlanForBucket> rebalancePlan) {
+            String rebalanceId,
+            Map<TableBucket, RebalancePlanForBucket> rebalancePlan,
+            RebalanceStatus newStatus) {
         checkNotClosed();
         registerTime = System.currentTimeMillis();
-        // Register to zookeeper first.
-        try {
-            // first clear all exists tasks.
-            inProgressRebalanceTasks.clear();
-            inProgressRebalanceTasksQueue.clear();
-            finishedRebalanceTasks.clear();
+        // first clear all exists tasks.
+        inProgressRebalanceTasks.clear();
+        inProgressRebalanceTasksQueue.clear();
+        finishedRebalanceTasks.clear();
 
-            Optional<RebalancePlan> existPlanOpt = zkClient.getRebalancePlan();
-            RebalanceStatus newStatus = rebalancePlan.isEmpty() ? COMPLETED : NOT_STARTED;
-            if (!existPlanOpt.isPresent()) {
-                zkClient.registerRebalancePlan(
-                        new RebalancePlan(rebalanceId, newStatus, rebalancePlan));
-            } else {
-                zkClient.updateRebalancePlan(
-                        new RebalancePlan(rebalanceId, newStatus, rebalancePlan));
-            }
+        currentRebalanceId = rebalanceId;
+        rebalancePlan.forEach(
+                ((tableBucket, planForBucket) -> {
+                    if (FINAL_STATUSES.contains(newStatus)) {
+                        finishedRebalanceTasks.put(
+                                tableBucket, RebalanceResultForBucket.of(planForBucket, newStatus));
+                    } else {
+                        inProgressRebalanceTasksQueue.add(tableBucket);
+                        inProgressRebalanceTasks.put(
+                                tableBucket,
+                                RebalanceResultForBucket.of(planForBucket, NOT_STARTED));
+                    }
+                }));
 
-            currentRebalanceId = rebalanceId;
+        if (!inProgressRebalanceTasksQueue.isEmpty()) {
+            // Trigger one rebalance task to execute.
+            rebalanceStatus = REBALANCING;
+            processNewRebalanceTask();
+        } else {
             rebalanceStatus = newStatus;
-        } catch (Exception e) {
-            LOG.error("Error when register rebalance plan to zookeeper.", e);
-            throw new RebalanceFailureException(
-                    "Error when register rebalance plan to zookeeper.", e);
         }
-
-        inWriteLock(
-                lock,
-                () -> {
-                    // Then, register to ongoingRebalanceTasks.
-                    rebalancePlan.forEach(
-                            ((tableBucket, rebalancePlanForBucket) -> {
-                                inProgressRebalanceTasksQueue.add(tableBucket);
-                                inProgressRebalanceTasks.put(
-                                        tableBucket,
-                                        RebalanceResultForBucket.of(
-                                                rebalancePlanForBucket, NOT_STARTED));
-                            }));
-
-                    // Trigger one rebalance task to execute.
-                    rebalanceStatus = rebalancePlan.isEmpty() ? COMPLETED : REBALANCING;
-                    processNewRebalanceTask();
-                });
     }
 
     public void finishRebalanceTask(TableBucket tableBucket, RebalanceStatus statusForBucket) {
         checkNotClosed();
-        inWriteLock(
-                lock,
-                () -> {
-                    if (inProgressRebalanceTasksQueue.contains(tableBucket)) {
-                        inProgressRebalanceTasksQueue.remove(tableBucket);
-                        RebalanceResultForBucket resultForBucket =
-                                inProgressRebalanceTasks.remove(tableBucket);
-                        checkNotNull(resultForBucket, "RebalanceResultForBucket is null.");
-                        finishedRebalanceTasks.put(
-                                tableBucket,
-                                RebalanceResultForBucket.of(
-                                        resultForBucket.plan(), statusForBucket));
-                        LOG.info(
-                                "Rebalance task {} in progress: {} tasks pending, {} completed.",
-                                currentRebalanceId,
-                                inProgressRebalanceTasksQueue.size(),
-                                finishedRebalanceTasks.size());
+        if (inProgressRebalanceTasksQueue.contains(tableBucket)) {
+            inProgressRebalanceTasksQueue.remove(tableBucket);
+            RebalanceResultForBucket resultForBucket = inProgressRebalanceTasks.remove(tableBucket);
+            checkNotNull(resultForBucket, "RebalanceResultForBucket is null.");
+            finishedRebalanceTasks.put(
+                    tableBucket,
+                    RebalanceResultForBucket.of(resultForBucket.plan(), statusForBucket));
+            LOG.info(
+                    "Rebalance task {} in progress: {} tasks pending, {} completed.",
+                    currentRebalanceId,
+                    inProgressRebalanceTasksQueue.size(),
+                    finishedRebalanceTasks.size());
 
-                        if (inProgressRebalanceTasksQueue.isEmpty()) {
-                            // All rebalance tasks are completed.
-                            rebalanceStatus = COMPLETED;
-                            completeRebalance();
-                        } else {
-                            // Trigger one rebalance task to execute.
-                            processNewRebalanceTask();
-                        }
-                    }
-                });
+            if (inProgressRebalanceTasksQueue.isEmpty()) {
+                // All rebalance tasks are completed.
+                rebalanceStatus = COMPLETED;
+                completeRebalance();
+            } else {
+                // Trigger one rebalance task to execute.
+                processNewRebalanceTask();
+            }
+        }
     }
 
-    public RebalanceProgress listRebalanceProgress(@Nullable String rebalanceId) {
+    public @Nullable RebalanceProgress listRebalanceProgress(@Nullable String rebalanceId) {
         checkNotClosed();
-        return inReadLock(
-                lock,
-                () -> {
-                    if (rebalanceId != null
-                            && currentRebalanceId != null
-                            && !rebalanceId.equals(currentRebalanceId)) {
-                        LOG.warn(
-                                "Ignore the list rebalance task because it is not the current"
-                                        + " rebalance task.");
-                        throw new NoRebalanceInProgressException(
-                                String.format(
-                                        "Rebalance task id %s to list is not the current rebalance task id %s.",
-                                        rebalanceId, currentRebalanceId));
-                    }
+        if (rebalanceId != null
+                && currentRebalanceId != null
+                && !rebalanceId.equals(currentRebalanceId)) {
+            LOG.warn(
+                    "Ignore the list rebalance task because it is not the current"
+                            + " rebalance task.");
+            throw new NoRebalanceInProgressException(
+                    String.format(
+                            "Rebalance task id %s to list is not the current rebalance task id %s.",
+                            rebalanceId, currentRebalanceId));
+        }
 
-                    Map<TableBucket, RebalanceResultForBucket> progressForBucketMap =
-                            new HashMap<>();
-                    progressForBucketMap.putAll(inProgressRebalanceTasks);
-                    progressForBucketMap.putAll(finishedRebalanceTasks);
-                    // the progress will be set at client.
-                    return new RebalanceProgress(
-                            currentRebalanceId, rebalanceStatus, 0.0, progressForBucketMap);
-                });
+        if (currentRebalanceId == null) {
+            return null;
+        }
+
+        Map<TableBucket, RebalanceResultForBucket> progressForBucketMap = new HashMap<>();
+        progressForBucketMap.putAll(inProgressRebalanceTasks);
+        progressForBucketMap.putAll(finishedRebalanceTasks);
+        // the progress will be set at client.
+        return new RebalanceProgress(
+                currentRebalanceId, rebalanceStatus, 0.0, progressForBucketMap);
     }
 
     public void cancelRebalance(@Nullable String rebalanceId) {
@@ -272,44 +224,40 @@ public class RebalanceManager {
                             rebalanceId, currentRebalanceId));
         }
 
-        inWriteLock(
-                lock,
-                () -> {
-                    try {
-                        Optional<RebalancePlan> rebalancePlanOpt = zkClient.getRebalancePlan();
-                        if (rebalancePlanOpt.isPresent()) {
-                            RebalancePlan rebalancePlan = rebalancePlanOpt.get();
-                            zkClient.updateRebalancePlan(
-                                    new RebalancePlan(
-                                            rebalancePlan.getRebalanceId(),
-                                            CANCELED,
-                                            rebalancePlan.getExecutePlan()));
-                        }
-                    } catch (Exception e) {
-                        LOG.error("Error when delete rebalance plan from zookeeper.", e);
-                    }
+        if (rebalanceStatus != null && FINAL_STATUSES.contains(rebalanceStatus)) {
+            // do nothing for the final state rebalance task.
+            return;
+        }
 
-                    rebalanceStatus = CANCELED;
-                    inProgressRebalanceTasksQueue.clear();
-                    inProgressRebalanceTasks.clear();
+        try {
+            Optional<RebalanceTask> rebalancePlanOpt = zkClient.getRebalancePlan();
+            if (rebalancePlanOpt.isPresent()) {
+                RebalanceTask rebalanceTask = rebalancePlanOpt.get();
+                zkClient.registerRebalancePlan(
+                        new RebalanceTask(
+                                rebalanceTask.getRebalanceId(),
+                                CANCELED,
+                                rebalanceTask.getExecutePlan()));
+            }
+        } catch (Exception e) {
+            LOG.error("Error when delete rebalance plan from zookeeper.", e);
+        }
 
-                    // Here, it will not clear finishedRebalanceTasks, because it will be used by
-                    // listRebalanceProgress. It will be cleared when next register.
+        rebalanceStatus = CANCELED;
+        inProgressRebalanceTasksQueue.clear();
+        inProgressRebalanceTasks.clear();
+        // Here, it will not clear finishedRebalanceTasks, because it will be used by
+        // listRebalanceProgress. It will be cleared when next register.
 
-                    LOG.info("Cancel rebalance task success.");
-                });
+        LOG.info("Cancel rebalance task success.");
     }
 
     public boolean hasInProgressRebalance() {
         checkNotClosed();
-        return inReadLock(
-                lock,
-                () ->
-                        !inProgressRebalanceTasks.isEmpty()
-                                || !inProgressRebalanceTasksQueue.isEmpty());
+        return !inProgressRebalanceTasks.isEmpty() || !inProgressRebalanceTasksQueue.isEmpty();
     }
 
-    public RebalancePlan generateRebalancePlan(List<Goal> goalsByPriority) {
+    public RebalanceTask generateRebalancePlan(List<Goal> goalsByPriority) {
         checkNotClosed();
         List<RebalancePlanForBucket> rebalancePlanForBuckets;
         String rebalanceId = UUID.randomUUID().toString();
@@ -340,16 +288,11 @@ public class RebalanceManager {
 
     public @Nullable RebalancePlanForBucket getRebalancePlanForBucket(TableBucket tableBucket) {
         checkNotClosed();
-        return inReadLock(
-                lock,
-                () -> {
-                    RebalanceResultForBucket resultForBucket =
-                            inProgressRebalanceTasks.get(tableBucket);
-                    if (resultForBucket != null) {
-                        return resultForBucket.plan();
-                    }
-                    return null;
-                });
+        RebalanceResultForBucket resultForBucket = inProgressRebalanceTasks.get(tableBucket);
+        if (resultForBucket != null) {
+            return resultForBucket.plan();
+        }
+        return null;
     }
 
     private void processNewRebalanceTask() {
@@ -364,33 +307,27 @@ public class RebalanceManager {
 
     private void completeRebalance() {
         checkNotClosed();
-        inWriteLock(
-                lock,
-                () -> {
-                    try {
-                        Optional<RebalancePlan> rebalancePlanOpt = zkClient.getRebalancePlan();
-                        if (rebalancePlanOpt.isPresent()) {
-                            RebalancePlan rebalancePlan = rebalancePlanOpt.get();
-                            zkClient.updateRebalancePlan(
-                                    new RebalancePlan(
-                                            rebalancePlan.getRebalanceId(),
-                                            COMPLETED,
-                                            rebalancePlan.getExecutePlan()));
-                        }
-                    } catch (Exception e) {
-                        LOG.error("Error when update rebalance plan from zookeeper.", e);
-                    }
+        try {
+            Optional<RebalanceTask> rebalancePlanOpt = zkClient.getRebalancePlan();
+            if (rebalancePlanOpt.isPresent()) {
+                RebalanceTask rebalanceTask = rebalancePlanOpt.get();
+                zkClient.registerRebalancePlan(
+                        new RebalanceTask(
+                                rebalanceTask.getRebalanceId(),
+                                COMPLETED,
+                                rebalanceTask.getExecutePlan()));
+            }
+        } catch (Exception e) {
+            LOG.error("Error when update rebalance plan from zookeeper.", e);
+        }
 
-                    inProgressRebalanceTasks.clear();
-                    inProgressRebalanceTasksQueue.clear();
+        inProgressRebalanceTasks.clear();
+        inProgressRebalanceTasksQueue.clear();
 
-                    // Here, it will not clear finishedRebalanceTasks, because it will be used by
-                    // listRebalanceProgress. It will be cleared when next register.
+        // Here, it will not clear finishedRebalanceTasks, because it will be used by
+        // listRebalanceProgress. It will be cleared when next register.
 
-                    LOG.info(
-                            "Rebalance complete with {} ms.",
-                            System.currentTimeMillis() - registerTime);
-                });
+        LOG.info("Rebalance complete with {} ms.", System.currentTimeMillis() - registerTime);
     }
 
     private ClusterModel buildClusterModel(CoordinatorContext coordinatorContext) {
@@ -403,9 +340,9 @@ public class RebalanceManager {
             String rack = serverInfo.rack() == null ? RackModel.DEFAULT_RACK : serverInfo.rack();
             if (serverTags.containsKey(id)) {
                 serverModelMap.put(
-                        id, new ServerModel(id, rack, !isServerOffline(serverTags.get(id))));
+                        id, new ServerModel(id, rack, isOfflineTagged(serverTags.get(id))));
             } else {
-                serverModelMap.put(id, new ServerModel(id, rack, true));
+                serverModelMap.put(id, new ServerModel(id, rack, false));
             }
         }
 
@@ -428,16 +365,16 @@ public class RebalanceManager {
         return clusterModel;
     }
 
-    private RebalancePlan buildRebalancePlan(
+    private RebalanceTask buildRebalancePlan(
             String rebalanceId, List<RebalancePlanForBucket> rebalancePlanForBuckets) {
         Map<TableBucket, RebalancePlanForBucket> bucketPlan = new HashMap<>();
         for (RebalancePlanForBucket rebalancePlanForBucket : rebalancePlanForBuckets) {
             bucketPlan.put(rebalancePlanForBucket.getTableBucket(), rebalancePlanForBucket);
         }
-        return new RebalancePlan(rebalanceId, NOT_STARTED, bucketPlan);
+        return new RebalanceTask(rebalanceId, NOT_STARTED, bucketPlan);
     }
 
-    private boolean isServerOffline(ServerTag serverTag) {
+    private boolean isOfflineTagged(ServerTag serverTag) {
         return serverTag == ServerTag.PERMANENT_OFFLINE || serverTag == ServerTag.TEMPORARY_OFFLINE;
     }
 

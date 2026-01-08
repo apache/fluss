@@ -52,11 +52,11 @@ public class RemoveServerTagProcedure extends ProcedureBase {
         }
 
         tabletServers = tabletServers.trim();
-        String[] splitServers = tabletServers.split(";");
+        String[] splitServers = tabletServers.split(",");
         if (splitServers.length == 0) {
             throw new IllegalArgumentException(
                     "tabletServers cannot be empty. You can specify one tabletServer as 1 or "
-                            + "specify multi tabletServers as 1;2 (split by ';')");
+                            + "specify multi tabletServers as 1,2 (split by ',')");
         }
         List<Integer> servers = new ArrayList<>();
         for (String server : splitServers) {

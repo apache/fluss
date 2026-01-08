@@ -55,8 +55,7 @@ public class ClusterModelStats {
             ClusterModel clusterModel,
             SortedSet<ServerModel> servers,
             Set<ServerModel> aliveServers) {
-        populateReplicaStats(
-                serverModel -> serverModel.replicas().size(), replicaStats, servers, aliveServers);
+        populateReplicaStats(ServerModel::numReplicas, replicaStats, servers, aliveServers);
         numReplicasInCluster = clusterModel.numReplicas();
     }
 
@@ -64,10 +63,7 @@ public class ClusterModelStats {
     private void numForLeaderReplicas(
             SortedSet<ServerModel> servers, Set<ServerModel> aliveServers) {
         populateReplicaStats(
-                serverModel -> serverModel.leaderReplicas().size(),
-                leaderReplicaStats,
-                servers,
-                aliveServers);
+                ServerModel::numLeaderReplicas, leaderReplicaStats, servers, aliveServers);
     }
 
     private void populateReplicaStats(

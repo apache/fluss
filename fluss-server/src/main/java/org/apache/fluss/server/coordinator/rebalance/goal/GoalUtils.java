@@ -71,7 +71,7 @@ public class GoalUtils {
      * Retrieve alive servers ids that are not excluded for replica moves. Returns a set to provide
      * constant time lookup guaranteed by a HashSet.
      */
-    public static Set<Integer> aliveServersNotExcludeForReplicaMove(ClusterModel cluster) {
+    public static Set<Integer> aliveServers(ClusterModel cluster) {
         return cluster.aliveServers().stream()
                 .map(ServerModel::id)
                 .collect(Collectors.toCollection(HashSet::new));

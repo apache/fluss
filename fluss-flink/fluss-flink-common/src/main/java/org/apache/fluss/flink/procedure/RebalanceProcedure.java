@@ -19,15 +19,11 @@ package org.apache.fluss.flink.procedure;
 
 import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.cluster.rebalance.GoalType;
-import org.apache.fluss.cluster.rebalance.RebalancePlan;
-import org.apache.fluss.cluster.rebalance.RebalancePlanForBucket;
 
 import org.apache.flink.table.annotation.ArgumentHint;
 import org.apache.flink.table.annotation.DataTypeHint;
 import org.apache.flink.table.annotation.ProcedureHint;
 import org.apache.flink.table.procedure.ProcedureContext;
-
-import javax.annotation.Nullable;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -36,7 +32,7 @@ import java.util.List;
  * Procedure to trigger rebalance.
  *
  * <p>This procedure allows triggering rebalance with different goals. See {@link
- * Admin#rebalance(List, boolean)} for more details.
+ * Admin#rebalance(List)} for more details.
  *
  * <p>Usage examples:
  *
@@ -45,12 +41,6 @@ import java.util.List;
  * CALL sys.rebalance('REPLICA_DISTRIBUTION');
  * -- Trigger rebalance with REPLICA_DISTRIBUTION and LEADER_DISTRIBUTION goals
  * CALL sys.rebalance('REPLICA_DISTRIBUTION;LEADER_DISTRIBUTION');
- *
- * -- Trigger rebalance without dry run
- * CALL sys.rebalance('REPLICA_DISTRIBUTION', false);
- *
- * -- Trigger rebalance with dry run
- * CALL sys.rebalance('REPLICA_DISTRIBUTION', true);
  * </pre>
  */
 public class RebalanceProcedure extends ProcedureBase {
@@ -60,40 +50,26 @@ public class RebalanceProcedure extends ProcedureBase {
      * a String type, and different goals are split by ';'.
      */
     @ProcedureHint(
-            argument = {
-                @ArgumentHint(name = "priorityGoals", type = @DataTypeHint("STRING")),
-                @ArgumentHint(name = "dryRun", type = @DataTypeHint("BOOLEAN"), isOptional = true)
-            })
-    public String[] call(ProcedureContext context, String priorityGoals, @Nullable Boolean dryRun)
-            throws Exception {
+            argument = {@ArgumentHint(name = "priorityGoals", type = @DataTypeHint("STRING"))})
+    public String[] call(ProcedureContext context, String priorityGoals) throws Exception {
         List<GoalType> goalTypes = validateAndGetPriorityGoals(priorityGoals);
-        RebalancePlan rebalancePlan = admin.rebalance(goalTypes, dryRun != null && dryRun).get();
-        return planToString(rebalancePlan);
-    }
-
-    private static String[] planToString(RebalancePlan plan) {
-        List<String> result = new ArrayList<>();
-        result.add("Rebalance id: " + plan.getRebalanceId());
-        result.add("Detail rebalance plan:");
-        plan.getPlanForBucketMap().values().stream()
-                .map(RebalancePlanForBucket::toString)
-                .forEach(result::add);
-        return result.toArray(new String[0]);
+        String rebalanceId = admin.rebalance(goalTypes).get();
+        return new String[] {rebalanceId};
     }
 
     private static List<GoalType> validateAndGetPriorityGoals(String priorityGoals) {
         if (priorityGoals == null || priorityGoals.trim().isEmpty()) {
             throw new IllegalArgumentException(
                     "priority goals cannot be null or empty. You can specify one goal as 'REPLICA_DISTRIBUTION' or "
-                            + "specify multi goals as 'REPLICA_DISTRIBUTION;LEADER_DISTRIBUTION' (split by ';')");
+                            + "specify multi goals as 'REPLICA_DISTRIBUTION,LEADER_DISTRIBUTION' (split by ',')");
         }
 
         priorityGoals = priorityGoals.trim();
-        String[] splitGoals = priorityGoals.split(";");
+        String[] splitGoals = priorityGoals.split(",");
         if (splitGoals.length == 0) {
             throw new IllegalArgumentException(
                     "priority goals cannot be empty. You can specify one goal as 'REPLICA_DISTRIBUTION' "
-                            + "or specify multi goals as 'REPLICA_DISTRIBUTION;LEADER_DISTRIBUTION' (split by ';')");
+                            + "or specify multi goals as 'REPLICA_DISTRIBUTION,LEADER_DISTRIBUTION' (split by ',')");
         }
         List<GoalType> goalTypes = new ArrayList<>();
         for (String goal : splitGoals) {

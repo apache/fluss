@@ -20,10 +20,7 @@ package org.apache.fluss.client.admin;
 import org.apache.fluss.client.Connection;
 import org.apache.fluss.client.ConnectionFactory;
 import org.apache.fluss.cluster.rebalance.GoalType;
-import org.apache.fluss.cluster.rebalance.RebalancePlan;
-import org.apache.fluss.cluster.rebalance.RebalancePlanForBucket;
 import org.apache.fluss.cluster.rebalance.RebalanceProgress;
-import org.apache.fluss.cluster.rebalance.RebalanceResultForBucket;
 import org.apache.fluss.cluster.rebalance.RebalanceStatus;
 import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.config.ConfigOptions;
@@ -32,7 +29,6 @@ import org.apache.fluss.exception.NoRebalanceInProgressException;
 import org.apache.fluss.exception.RebalanceFailureException;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.PartitionSpec;
-import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.replica.ReplicaManager;
@@ -46,7 +42,7 @@ import org.junit.jupiter.api.extension.RegisterExtension;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.Collections;
-import java.util.Map;
+import java.util.Optional;
 
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
@@ -104,8 +100,7 @@ public class RebalanceITCase {
             long tableId =
                     createTable(
                             new TablePath(dbName, "test-rebalance_table-" + i),
-                            DATA1_TABLE_DESCRIPTOR,
-                            false);
+                            DATA1_TABLE_DESCRIPTOR);
             FLUSS_CLUSTER_EXTENSION.waitUntilTableReady(tableId);
         }
 
@@ -117,7 +112,7 @@ public class RebalanceITCase {
                         .partitionedBy("b")
                         .build();
         TablePath tablePath = new TablePath(dbName, "test-rebalance_partitioned_table1");
-        long tableId = createTable(tablePath, partitionedDescriptor, false);
+        long tableId = createTable(tablePath, partitionedDescriptor);
         for (int j = 0; j < 2; j++) {
             PartitionSpec partitionSpec =
                     new PartitionSpec(Collections.singletonMap("b", String.valueOf(j)));
@@ -147,19 +142,21 @@ public class RebalanceITCase {
         admin.removeServerTag(Collections.singletonList(3), ServerTag.PERMANENT_OFFLINE).get();
 
         // trigger rebalance with goal set[ReplicaDistributionGoal, LeaderReplicaDistributionGoal]
-        RebalancePlan rebalancePlan =
+        String rebalanceId =
                 admin.rebalance(
                                 Arrays.asList(
                                         GoalType.REPLICA_DISTRIBUTION,
-                                        GoalType.LEADER_DISTRIBUTION),
-                                false)
+                                        GoalType.LEADER_DISTRIBUTION))
                         .get();
 
         retry(
                 Duration.ofMinutes(2),
                 () -> {
-                    RebalanceProgress progress = admin.listRebalanceProgress(null).get();
-                    assertPlan(rebalancePlan, progress);
+                    Optional<RebalanceProgress> progressOpt =
+                            admin.listRebalanceProgress(null).get();
+                    assertThat(progressOpt).isPresent();
+                    assertThat(rebalanceId).isEqualTo(progressOpt.get().rebalanceId());
+                    assertThat(progressOpt.get().status()).isEqualTo(RebalanceStatus.COMPLETED);
                 });
         for (int i = 0; i < 4; i++) {
             ReplicaManager replicaManager =
@@ -175,18 +172,20 @@ public class RebalanceITCase {
         // add server tag PERMANENT_OFFLINE for server 0, trigger all leader and replica removed
         // from server 3.
         admin.addServerTag(Collections.singletonList(0), ServerTag.PERMANENT_OFFLINE).get();
-        RebalancePlan rebalancePlan2 =
+        String rebalanceId2 =
                 admin.rebalance(
                                 Arrays.asList(
                                         GoalType.REPLICA_DISTRIBUTION,
-                                        GoalType.LEADER_DISTRIBUTION),
-                                false)
+                                        GoalType.LEADER_DISTRIBUTION))
                         .get();
         retry(
                 Duration.ofMinutes(2),
                 () -> {
-                    RebalanceProgress progress = admin.listRebalanceProgress(null).get();
-                    assertPlan(rebalancePlan2, progress);
+                    Optional<RebalanceProgress> progressOpt =
+                            admin.listRebalanceProgress(null).get();
+                    assertThat(progressOpt).isPresent();
+                    assertThat(rebalanceId2).isEqualTo(progressOpt.get().rebalanceId());
+                    assertThat(progressOpt.get().status()).isEqualTo(RebalanceStatus.COMPLETED);
                 });
         ReplicaManager replicaManager0 =
                 FLUSS_CLUSTER_EXTENSION.getTabletServerById(0).getReplicaManager();
@@ -207,7 +206,7 @@ public class RebalanceITCase {
     }
 
     @Test
-    void testListRebalanceProcess() throws Exception {
+    void testListRebalanceProgress() throws Exception {
         String dbName = "db-rebalance-list";
         admin.createDatabase(dbName, DatabaseDescriptor.EMPTY, false).get();
 
@@ -220,8 +219,7 @@ public class RebalanceITCase {
             long tableId =
                     createTable(
                             new TablePath(dbName, "test-rebalance_table-" + i),
-                            DATA1_TABLE_DESCRIPTOR,
-                            false);
+                            DATA1_TABLE_DESCRIPTOR);
             FLUSS_CLUSTER_EXTENSION.waitUntilTableReady(tableId);
         }
 
@@ -229,41 +227,30 @@ public class RebalanceITCase {
         admin.removeServerTag(Collections.singletonList(3), ServerTag.PERMANENT_OFFLINE).get();
 
         // trigger rebalance with goal set[ReplicaDistributionGoal, LeaderReplicaDistributionGoal]
-        RebalancePlan rebalancePlan =
+        String rebalanceId =
                 admin.rebalance(
                                 Arrays.asList(
                                         GoalType.REPLICA_DISTRIBUTION,
-                                        GoalType.LEADER_DISTRIBUTION),
-                                false)
+                                        GoalType.LEADER_DISTRIBUTION))
                         .get();
         retry(
                 Duration.ofMinutes(2),
                 () -> {
-                    RebalanceProgress progress =
-                            admin.listRebalanceProgress(rebalancePlan.getRebalanceId()).get();
+                    Optional<RebalanceProgress> progressOpt =
+                            admin.listRebalanceProgress(rebalanceId).get();
+                    assertThat(progressOpt).isPresent();
+                    RebalanceProgress progress = progressOpt.get();
                     assertThat(progress.progress()).isEqualTo(1d);
                     assertThat(progress.status()).isEqualTo(RebalanceStatus.COMPLETED);
-                    Map<TableBucket, RebalanceResultForBucket> processForBuckets =
-                            progress.progressForBucketMap();
-                    Map<TableBucket, RebalancePlanForBucket> planForBuckets =
-                            rebalancePlan.getPlanForBucketMap();
-                    assertThat(planForBuckets.size()).isEqualTo(processForBuckets.size());
-                    for (TableBucket tableBucket : planForBuckets.keySet()) {
-                        RebalanceResultForBucket processForBucket =
-                                processForBuckets.get(tableBucket);
-                        assertThat(processForBucket.status()).isEqualTo(RebalanceStatus.COMPLETED);
-                        assertThat(processForBucket.plan())
-                                .isEqualTo(planForBuckets.get(tableBucket));
-                    }
                 });
 
-        // cancel rebalance.
-        admin.cancelRebalance(rebalancePlan.getRebalanceId()).get();
-
-        RebalanceProgress progress =
-                admin.listRebalanceProgress(rebalancePlan.getRebalanceId()).get();
+        // cancel rebalance can not change the final status.
+        admin.cancelRebalance(rebalanceId).get();
+        Optional<RebalanceProgress> progressOpt = admin.listRebalanceProgress(rebalanceId).get();
+        assertThat(progressOpt).isPresent();
+        RebalanceProgress progress = progressOpt.get();
         assertThat(progress.progress()).isEqualTo(1d);
-        assertThat(progress.status()).isEqualTo(RebalanceStatus.CANCELED);
+        assertThat(progress.status()).isEqualTo(RebalanceStatus.COMPLETED);
 
         // test list and cancel an un-existed rebalance id.
         assertThatThrownBy(() -> admin.listRebalanceProgress("unexisted-rebalance-id").get())
@@ -294,8 +281,7 @@ public class RebalanceITCase {
             long tableId =
                     createTable(
                             new TablePath(dbName, "test-rebalance_table-" + i),
-                            DATA1_TABLE_DESCRIPTOR,
-                            false);
+                            DATA1_TABLE_DESCRIPTOR);
             FLUSS_CLUSTER_EXTENSION.waitUntilTableReady(tableId);
         }
 
@@ -303,28 +289,26 @@ public class RebalanceITCase {
         admin.removeServerTag(Collections.singletonList(3), ServerTag.PERMANENT_OFFLINE).get();
 
         // trigger once.
-        RebalancePlan rebalancePlan1 =
+        String rebalanceId1 =
                 admin.rebalance(
                                 Arrays.asList(
                                         GoalType.REPLICA_DISTRIBUTION,
-                                        GoalType.LEADER_DISTRIBUTION),
-                                false)
+                                        GoalType.LEADER_DISTRIBUTION))
                         .get();
-
         assertThatThrownBy(
                         () ->
                                 admin.rebalance(
                                                 Arrays.asList(
                                                         GoalType.REPLICA_DISTRIBUTION,
-                                                        GoalType.LEADER_DISTRIBUTION),
-                                                false)
+                                                        GoalType.LEADER_DISTRIBUTION))
                                         .get())
                 .rootCause()
                 .isInstanceOf(RebalanceFailureException.class)
                 .hasMessage(
                         String.format(
-                                "Rebalance task already exists, current rebalance id is '%s'. Please wait for it to finish or cancel it first.",
-                                rebalancePlan1.getRebalanceId()));
+                                "Rebalance task already exists, current rebalance id is '%s'. "
+                                        + "Please wait for it to finish or cancel it first.",
+                                rebalanceId1));
     }
 
     private static Configuration initConfig() {
@@ -334,25 +318,9 @@ public class RebalanceITCase {
         return configuration;
     }
 
-    private long createTable(
-            TablePath tablePath, TableDescriptor tableDescriptor, boolean ignoreIfExists)
+    private long createTable(TablePath tablePath, TableDescriptor tableDescriptor)
             throws Exception {
-        admin.createTable(tablePath, tableDescriptor, ignoreIfExists).get();
+        admin.createTable(tablePath, tableDescriptor, false).get();
         return admin.getTableInfo(tablePath).get().getTableId();
-    }
-
-    private void assertPlan(RebalancePlan rebalancePlan, RebalanceProgress progress) {
-        assertThat(progress.progress()).isEqualTo(1d);
-        assertThat(progress.status()).isEqualTo(RebalanceStatus.COMPLETED);
-        Map<TableBucket, RebalanceResultForBucket> processForBuckets =
-                progress.progressForBucketMap();
-        Map<TableBucket, RebalancePlanForBucket> planForBuckets =
-                rebalancePlan.getPlanForBucketMap();
-        assertThat(planForBuckets.size()).isEqualTo(processForBuckets.size());
-        for (TableBucket tableBucket : planForBuckets.keySet()) {
-            RebalanceResultForBucket processForBucket = processForBuckets.get(tableBucket);
-            assertThat(processForBucket.status()).isEqualTo(RebalanceStatus.COMPLETED);
-            assertThat(processForBucket.plan()).isEqualTo(planForBuckets.get(tableBucket));
-        }
     }
 }

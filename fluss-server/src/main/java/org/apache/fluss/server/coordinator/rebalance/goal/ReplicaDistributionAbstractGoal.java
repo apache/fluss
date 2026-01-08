@@ -18,7 +18,7 @@
 package org.apache.fluss.server.coordinator.rebalance.goal;
 
 import org.apache.fluss.exception.RebalanceFailureException;
-import org.apache.fluss.server.coordinator.rebalance.ReBalancingAction;
+import org.apache.fluss.server.coordinator.rebalance.RebalancingAction;
 import org.apache.fluss.server.coordinator.rebalance.model.ClusterModel;
 import org.apache.fluss.server.coordinator.rebalance.model.ServerModel;
 
@@ -29,7 +29,7 @@ import java.util.HashSet;
 import java.util.Set;
 
 import static org.apache.fluss.server.coordinator.rebalance.ActionAcceptance.ACCEPT;
-import static org.apache.fluss.server.coordinator.rebalance.goal.GoalUtils.aliveServersNotExcludeForReplicaMove;
+import static org.apache.fluss.server.coordinator.rebalance.goal.GoalUtils.aliveServers;
 
 /** An abstract class for goals that are based on the distribution of replicas. */
 public abstract class ReplicaDistributionAbstractGoal extends AbstractGoal {
@@ -42,7 +42,7 @@ public abstract class ReplicaDistributionAbstractGoal extends AbstractGoal {
     protected int rebalanceUpperLimit;
     protected int rebalanceLowerLimit;
     // This is used to identify servers not excluded for replica moves.
-    protected Set<Integer> serversAllowedReplicaRemove;
+    protected Set<Integer> aliveServers;
 
     public ReplicaDistributionAbstractGoal() {
         serverIdsAboveRebalanceUpperLimit = new HashSet<>();
@@ -70,20 +70,20 @@ public abstract class ReplicaDistributionAbstractGoal extends AbstractGoal {
 
     boolean isReplicaCountUnderBalanceUpperLimitAfterChange(
             ServerModel server, int currentReplicaCount) {
-        int serverBalanceUpperLimit = server.isAlive() ? rebalanceUpperLimit : 0;
+        int serverBalanceUpperLimit = server.isOfflineTagged() ? 0 : rebalanceUpperLimit;
         return currentReplicaCount + 1 <= serverBalanceUpperLimit;
     }
 
     boolean isReplicaCountAboveBalanceLowerLimitAfterChange(
             ServerModel server, int currentReplicaCount) {
-        int serverBalanceLowerLimit = server.isAlive() ? rebalanceLowerLimit : 0;
+        int serverBalanceLowerLimit = server.isOfflineTagged() ? 0 : rebalanceLowerLimit;
         return currentReplicaCount - 1 >= serverBalanceLowerLimit;
     }
 
     @Override
     protected void initGoalState(ClusterModel clusterModel) throws RebalanceFailureException {
-        serversAllowedReplicaRemove = aliveServersNotExcludeForReplicaMove(clusterModel);
-        if (serversAllowedReplicaRemove.isEmpty()) {
+        aliveServers = aliveServers(clusterModel);
+        if (aliveServers.isEmpty()) {
             throw new RebalanceFailureException(
                     String.format(
                             "[%s] All alive tabletServers are excluded from replica moves.",
@@ -92,14 +92,14 @@ public abstract class ReplicaDistributionAbstractGoal extends AbstractGoal {
 
         // Initialize the average replicas on an alive server.
         avgReplicasOnAliveServer =
-                numInterestedReplicas(clusterModel) / (double) serversAllowedReplicaRemove.size();
+                numInterestedReplicas(clusterModel) / (double) aliveServers.size();
 
         rebalanceUpperLimit = rebalanceUpperLimit(balancePercentage());
         rebalanceLowerLimit = rebalanceLowerLimit(balancePercentage());
     }
 
     @Override
-    protected boolean selfSatisfied(ClusterModel clusterModel, ReBalancingAction action) {
+    protected boolean selfSatisfied(ClusterModel clusterModel, RebalancingAction action) {
         // Check that destination and source would not become unbalanced.
         return actionAcceptance(action, clusterModel) == ACCEPT;
     }
@@ -138,8 +138,8 @@ public abstract class ReplicaDistributionAbstractGoal extends AbstractGoal {
      */
     abstract double balancePercentage();
 
-    protected boolean isExcludedForReplicaMove(ServerModel server) {
-        return !serversAllowedReplicaRemove.contains(server.id());
+    protected boolean isAlive(ServerModel server) {
+        return aliveServers.contains(server.id());
     }
 
     /** Whether bring replica in or out. */

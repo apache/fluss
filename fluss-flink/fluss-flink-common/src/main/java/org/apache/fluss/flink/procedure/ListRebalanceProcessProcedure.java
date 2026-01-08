@@ -34,6 +34,7 @@ import java.text.NumberFormat;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 /**
  * Procedure to list rebalance progress.
@@ -45,10 +46,10 @@ import java.util.Map;
  *
  * <pre>
  * -- List the rebalance progress without rebalance id
- * CALL sys.list_rebalance_process();
+ * CALL sys.list_rebalance();
  *
  * -- List the rebalance progress with rebalance id
- * CALL sys.list_rebalance_process('xxx_xxx_xxx');
+ * CALL sys.list_rebalance('xxx_xxx_xxx');
  * </pre>
  */
 public class ListRebalanceProcessProcedure extends ProcedureBase {
@@ -61,8 +62,13 @@ public class ListRebalanceProcessProcedure extends ProcedureBase {
                         isOptional = true)
             })
     public String[] call(ProcedureContext context, @Nullable String rebalanceId) throws Exception {
-        RebalanceProgress progress = admin.listRebalanceProgress(rebalanceId).get();
-        return progressToString(progress);
+        Optional<RebalanceProgress> progressOpt = admin.listRebalanceProgress(rebalanceId).get();
+
+        if (!progressOpt.isPresent()) {
+            return new String[] {"No rebalance progress found."};
+        }
+
+        return progressToString(progressOpt.get());
     }
 
     private static String[] progressToString(RebalanceProgress progress) {
@@ -70,10 +76,10 @@ public class ListRebalanceProcessProcedure extends ProcedureBase {
         double rebalanceProgress = progress.progress();
         Map<TableBucket, RebalanceResultForBucket> bucketMap = progress.progressForBucketMap();
 
+        // TODO format the result into a row type, and the detail progress for bucket show in json
+        // format. Trace by: https://github.com/apache/fluss/issues/2325
         List<String> result = new ArrayList<>();
-        if (progress.rebalanceId() != null) {
-            result.add("Rebalance id: " + progress.rebalanceId());
-        }
+        result.add("Rebalance id: " + progress.rebalanceId());
         result.add("Reblance total status: " + status);
         result.add("Rebalance progress: " + formatAsPercentage(rebalanceProgress));
         result.add("Rebalance detail progress for bucket:");

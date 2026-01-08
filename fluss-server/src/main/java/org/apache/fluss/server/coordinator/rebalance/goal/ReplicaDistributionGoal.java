@@ -20,7 +20,7 @@ package org.apache.fluss.server.coordinator.rebalance.goal;
 import org.apache.fluss.exception.RebalanceFailureException;
 import org.apache.fluss.server.coordinator.rebalance.ActionAcceptance;
 import org.apache.fluss.server.coordinator.rebalance.ActionType;
-import org.apache.fluss.server.coordinator.rebalance.ReBalancingAction;
+import org.apache.fluss.server.coordinator.rebalance.RebalancingAction;
 import org.apache.fluss.server.coordinator.rebalance.model.ClusterModel;
 import org.apache.fluss.server.coordinator.rebalance.model.ClusterModelStats;
 import org.apache.fluss.server.coordinator.rebalance.model.ReplicaModel;
@@ -68,7 +68,7 @@ public class ReplicaDistributionGoal extends ReplicaDistributionAbstractGoal {
     private static final Double REPLICA_COUNT_REBALANCE_THRESHOLD = 1.10d;
 
     @Override
-    public ActionAcceptance actionAcceptance(ReBalancingAction action, ClusterModel clusterModel) {
+    public ActionAcceptance actionAcceptance(RebalancingAction action, ClusterModel clusterModel) {
         switch (action.getActionType()) {
             case LEADERSHIP_MOVEMENT:
                 return ACCEPT;
@@ -85,10 +85,10 @@ public class ReplicaDistributionGoal extends ReplicaDistributionAbstractGoal {
 
                 // Check that destination and source would not become unbalanced.
                 return (isReplicaCountUnderBalanceUpperLimitAfterChange(
-                                        destServer, destServer.replicas().size()))
-                                && (isExcludedForReplicaMove(sourceServer)
+                                        destServer, destServer.numReplicas()))
+                                && (!isAlive(sourceServer)
                                         || isReplicaCountAboveBalanceLowerLimitAfterChange(
-                                                sourceServer, sourceServer.replicas().size()))
+                                                sourceServer, sourceServer.numReplicas()))
                         ? ACCEPT
                         : REPLICA_REJECT;
             default:
@@ -106,13 +106,13 @@ public class ReplicaDistributionGoal extends ReplicaDistributionAbstractGoal {
                 server.id(),
                 rebalanceLowerLimit,
                 rebalanceUpperLimit);
-        int numReplicas = server.replicas().size();
-        boolean isExcludeForReplicaMove = isExcludedForReplicaMove(server);
+        int numReplicas = server.numReplicas();
+        boolean isAlive = isAlive(server);
 
         boolean requireLessReplicas =
-                numReplicas > rebalanceUpperLimit || isExcludeForReplicaMove || !server.isAlive();
+                numReplicas > rebalanceUpperLimit || !isAlive || server.isOfflineTagged();
         boolean requireMoreReplicas =
-                !isExcludeForReplicaMove && server.isAlive() && numReplicas < rebalanceLowerLimit;
+                isAlive && !server.isOfflineTagged() && numReplicas < rebalanceLowerLimit;
         if (!requireMoreReplicas && !requireLessReplicas) {
             // return if the server is already within the limit.
             return;
@@ -125,7 +125,7 @@ public class ReplicaDistributionGoal extends ReplicaDistributionAbstractGoal {
                     "Failed to sufficiently decrease replica count in server {} with replica movements. "
                             + "Replicas number after remove: {}.",
                     server.id(),
-                    server.replicas().size());
+                    server.numReplicas());
         }
 
         if (requireMoreReplicas
@@ -135,7 +135,7 @@ public class ReplicaDistributionGoal extends ReplicaDistributionAbstractGoal {
                     "Failed to sufficiently increase replica count in server {} with replica movements. "
                             + "Replicas number after remove: {}.",
                     server.id(),
-                    server.replicas().size());
+                    server.numReplicas());
         }
 
         if (!serverIdsAboveRebalanceUpperLimit.contains(server.id())
@@ -144,7 +144,7 @@ public class ReplicaDistributionGoal extends ReplicaDistributionAbstractGoal {
                     "Successfully balanced replica count for server {} by moving replicas. "
                             + "Replicas number after remove: {}",
                     server.id(),
-                    server.replicas().size());
+                    server.numReplicas());
         }
     }
 
@@ -167,15 +167,14 @@ public class ReplicaDistributionGoal extends ReplicaDistributionAbstractGoal {
             ServerModel server, ClusterModel cluster, Set<Goal> optimizedGoals) {
         SortedSet<ServerModel> candidateServers =
                 new TreeSet<>(
-                        Comparator.comparingInt((ServerModel b) -> b.replicas().size())
+                        Comparator.comparingInt(ServerModel::numReplicas)
                                 .thenComparingInt(ServerModel::id));
 
         candidateServers.addAll(
                 cluster.aliveServers().stream()
-                        .filter(b -> b.replicas().size() < rebalanceUpperLimit)
+                        .filter(b -> b.numReplicas() < rebalanceUpperLimit)
                         .collect(Collectors.toSet()));
-        int balanceUpperLimitForSourceServer =
-                isExcludedForReplicaMove(server) ? 0 : rebalanceUpperLimit;
+        int balanceUpperLimitForSourceServer = isAlive(server) ? rebalanceUpperLimit : 0;
 
         // Now let's do the replica out operation.
         // TODO maybe use a sorted replicas set
@@ -189,19 +188,19 @@ public class ReplicaDistributionGoal extends ReplicaDistributionAbstractGoal {
                             optimizedGoals);
             // Only check if we successfully moved something.
             if (b != null) {
-                if (server.replicas().size() <= balanceUpperLimitForSourceServer) {
+                if (server.numReplicas() <= balanceUpperLimitForSourceServer) {
                     return false;
                 }
 
                 // Remove and reinsert the server so the order is correct.
                 candidateServers.remove(b);
-                if (b.replicas().size() < rebalanceUpperLimit) {
+                if (b.numReplicas() < rebalanceUpperLimit) {
                     candidateServers.add(b);
                 }
             }
         }
 
-        return !server.replicas().isEmpty();
+        return server.numReplicas() != 0;
     }
 
     private boolean rebalanceByMovingReplicasIn(
@@ -211,7 +210,7 @@ public class ReplicaDistributionGoal extends ReplicaDistributionAbstractGoal {
                         (b1, b2) -> {
                             // Servers are sorted by (1) all replica count then (2) server id.
                             int resultByAllReplicas =
-                                    Integer.compare(b2.replicas().size(), b1.replicas().size());
+                                    Integer.compare(b2.numReplicas(), b1.numReplicas());
                             return resultByAllReplicas == 0
                                     ? Integer.compare(b1.id(), b2.id())
                                     : resultByAllReplicas;
@@ -219,8 +218,7 @@ public class ReplicaDistributionGoal extends ReplicaDistributionAbstractGoal {
 
         // Source server can be offline, alive.
         for (ServerModel sourceServer : cluster.servers()) {
-            if (sourceServer.replicas().size() > rebalanceLowerLimit
-                    || isExcludedForReplicaMove(sourceServer)) {
+            if (sourceServer.numReplicas() > rebalanceLowerLimit || !isAlive(sourceServer)) {
                 eligibleServers.add(sourceServer);
             }
         }
@@ -241,15 +239,17 @@ public class ReplicaDistributionGoal extends ReplicaDistributionAbstractGoal {
                 // that the source server has nothing to move in. In that case we will never
                 // re-enqueue that source server.
                 if (b != null) {
-                    if (aliveDestServer.replicas().size() >= rebalanceLowerLimit) {
+                    if (aliveDestServer.numReplicas() >= rebalanceLowerLimit) {
                         // Note that the server passed to this method is always alive; hence, there
                         // is no need to check if it is dead.
                         return false;
                     }
 
                     if (!eligibleServers.isEmpty()) {
-                        if (sourceServer.replicas().size()
-                                < eligibleServers.peek().replicas().size()) {
+                        // If the source server contains more total replicas than the next server in
+                        // the eligible server in the queue, we re-enqueue the source server and
+                        // switch to the next server.
+                        if (sourceServer.numReplicas() > eligibleServers.peek().numReplicas()) {
                             eligibleServers.add(sourceServer);
                             break;
                         }

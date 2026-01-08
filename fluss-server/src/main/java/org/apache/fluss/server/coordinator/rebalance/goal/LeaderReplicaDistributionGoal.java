@@ -20,7 +20,7 @@ package org.apache.fluss.server.coordinator.rebalance.goal;
 import org.apache.fluss.exception.RebalanceFailureException;
 import org.apache.fluss.server.coordinator.rebalance.ActionAcceptance;
 import org.apache.fluss.server.coordinator.rebalance.ActionType;
-import org.apache.fluss.server.coordinator.rebalance.ReBalancingAction;
+import org.apache.fluss.server.coordinator.rebalance.RebalancingAction;
 import org.apache.fluss.server.coordinator.rebalance.model.BucketModel;
 import org.apache.fluss.server.coordinator.rebalance.model.ClusterModel;
 import org.apache.fluss.server.coordinator.rebalance.model.ClusterModelStats;
@@ -71,7 +71,7 @@ public class LeaderReplicaDistributionGoal extends ReplicaDistributionAbstractGo
     private static final Double LEADER_REPLICA_COUNT_REBALANCE_THRESHOLD = 1.10d;
 
     @Override
-    public ActionAcceptance actionAcceptance(ReBalancingAction action, ClusterModel clusterModel) {
+    public ActionAcceptance actionAcceptance(RebalancingAction action, ClusterModel clusterModel) {
         ServerModel sourceServer = clusterModel.server(action.getSourceServerId());
         checkNotNull(
                 sourceServer, "Source server " + action.getSourceServerId() + " is not found.");
@@ -101,15 +101,12 @@ public class LeaderReplicaDistributionGoal extends ReplicaDistributionAbstractGo
                 server.id(),
                 rebalanceLowerLimit,
                 rebalanceUpperLimit);
-        int numLeaderReplicas = server.leaderReplicas().size();
-        boolean isExcludedForReplicaMove = isExcludedForReplicaMove(server);
+        int numLeaderReplicas = server.numLeaderReplicas();
+        boolean isAlive = isAlive(server);
         boolean requireLessLeaderReplicas =
-                numLeaderReplicas > (isExcludedForReplicaMove ? 0 : rebalanceUpperLimit)
-                        || !server.isAlive();
+                numLeaderReplicas > (isAlive ? rebalanceUpperLimit : 0) || server.isOfflineTagged();
         boolean requireMoreLeaderReplicas =
-                !isExcludedForReplicaMove
-                        && server.isAlive()
-                        && numLeaderReplicas < rebalanceLowerLimit;
+                isAlive && !server.isOfflineTagged() && numLeaderReplicas < rebalanceLowerLimit;
         // Update server ids over the balance limit for logging purposes.
         if (((requireLessLeaderReplicas
                         && rebalanceByMovingLeadershipOut(server, clusterModel, optimizedGoals)))
@@ -118,7 +115,7 @@ public class LeaderReplicaDistributionGoal extends ReplicaDistributionAbstractGo
             LOG.debug(
                     "Failed to sufficiently decrease leader replica count in server {}. Leader replicas: {}.",
                     server.id(),
-                    server.leaderReplicas().size());
+                    server.numLeaderReplicas());
         } else if (requireMoreLeaderReplicas
                 && rebalanceByMovingLeadershipIn(server, clusterModel, optimizedGoals)
                 && rebalanceByMovingLeaderReplicasIn(server, clusterModel, optimizedGoals)) {
@@ -126,7 +123,7 @@ public class LeaderReplicaDistributionGoal extends ReplicaDistributionAbstractGo
             LOG.debug(
                     "Failed to sufficiently increase leader replica count in server {}. Leader replicas: {}.",
                     server.id(),
-                    server.leaderReplicas().size());
+                    server.numLeaderReplicas());
         }
     }
 
@@ -148,10 +145,10 @@ public class LeaderReplicaDistributionGoal extends ReplicaDistributionAbstractGo
     private ActionAcceptance isLeaderMovementSatisfiable(
             ServerModel sourceServer, ServerModel destServer) {
         return (isReplicaCountUnderBalanceUpperLimitAfterChange(
-                                destServer, destServer.leaderReplicas().size())
-                        && (isExcludedForReplicaMove(sourceServer)
+                                destServer, destServer.numLeaderReplicas())
+                        && (!isAlive(sourceServer)
                                 || isReplicaCountAboveBalanceLowerLimitAfterChange(
-                                        sourceServer, sourceServer.leaderReplicas().size())))
+                                        sourceServer, sourceServer.numLeaderReplicas())))
                 ? ACCEPT
                 : REPLICA_REJECT;
     }
@@ -159,9 +156,8 @@ public class LeaderReplicaDistributionGoal extends ReplicaDistributionAbstractGo
     private boolean rebalanceByMovingLeadershipOut(
             ServerModel server, ClusterModel cluster, Set<Goal> optimizedGoals) {
         // If the source server is excluded for replica move, set its upper limit to 0.
-        int balanceUpperLimitForSourceServer =
-                isExcludedForReplicaMove(server) ? 0 : rebalanceUpperLimit;
-        int numLeaderReplicas = server.leaderReplicas().size();
+        int balanceUpperLimitForSourceServer = isAlive(server) ? rebalanceUpperLimit : 0;
+        int numLeaderReplicas = server.numLeaderReplicas();
         for (ReplicaModel leader : new HashSet<>(server.leaderReplicas())) {
             BucketModel bucketModel = cluster.bucket(leader.tableBucket());
             checkNotNull(bucketModel, "Bucket " + leader.tableBucket() + " is not found.");
@@ -188,7 +184,7 @@ public class LeaderReplicaDistributionGoal extends ReplicaDistributionAbstractGo
 
     private boolean rebalanceByMovingLeadershipIn(
             ServerModel server, ClusterModel cluster, Set<Goal> optimizedGoals) {
-        int numLeaderReplicas = server.leaderReplicas().size();
+        int numLeaderReplicas = server.numLeaderReplicas();
         Set<ServerModel> candidateServers = Collections.singleton(server);
         for (ReplicaModel replica : server.replicas()) {
             if (replica.isLeader()) {
@@ -220,15 +216,15 @@ public class LeaderReplicaDistributionGoal extends ReplicaDistributionAbstractGo
         SortedSet<ServerModel> candidateServers;
         candidateServers =
                 new TreeSet<>(
-                        Comparator.comparingInt((ServerModel b) -> b.leaderReplicas().size())
+                        Comparator.comparingInt(ServerModel::numLeaderReplicas)
                                 .thenComparingInt(ServerModel::id));
         candidateServers.addAll(
                 cluster.aliveServers().stream()
-                        .filter(b -> b.leaderReplicas().size() < rebalanceUpperLimit)
+                        .filter(b -> b.numLeaderReplicas() < rebalanceUpperLimit)
                         .collect(Collectors.toSet()));
 
-        int balanceUpperLimit = rebalanceUpperLimit;
-        int numReplicas = server.replicas().size();
+        int balanceUpperLimit = isAlive(server) ? rebalanceUpperLimit : 0;
+        int numReplicas = server.numReplicas();
         for (ReplicaModel replica : server.replicas()) {
             ServerModel b =
                     maybeApplyBalancingAction(
@@ -244,7 +240,7 @@ public class LeaderReplicaDistributionGoal extends ReplicaDistributionAbstractGo
                 }
                 // Remove and reinsert the server so the order is correct.
                 candidateServers.remove(b);
-                if (b.leaderReplicas().size() < rebalanceUpperLimit) {
+                if (b.numLeaderReplicas() < rebalanceUpperLimit) {
                     candidateServers.add(b);
                 }
             }
@@ -258,18 +254,17 @@ public class LeaderReplicaDistributionGoal extends ReplicaDistributionAbstractGo
                 new PriorityQueue<>(
                         (b1, b2) -> {
                             int result =
-                                    Integer.compare(
-                                            b2.leaderReplicas().size(), b1.leaderReplicas().size());
+                                    Integer.compare(b2.numLeaderReplicas(), b1.numLeaderReplicas());
                             return result == 0 ? Integer.compare(b1.id(), b2.id()) : result;
                         });
 
         for (ServerModel aliveServer : clusterModel.aliveServers()) {
-            if (aliveServer.leaderReplicas().size() > rebalanceLowerLimit) {
+            if (aliveServer.numLeaderReplicas() > rebalanceLowerLimit) {
                 eligibleServers.add(aliveServer);
             }
         }
         List<ServerModel> candidateServers = Collections.singletonList(server);
-        int numLeaderReplicas = server.leaderReplicas().size();
+        int numLeaderReplicas = server.numLeaderReplicas();
         while (!eligibleServers.isEmpty()) {
             ServerModel sourceServer = eligibleServers.poll();
             for (ReplicaModel replica : sourceServer.replicas()) {
@@ -287,12 +282,12 @@ public class LeaderReplicaDistributionGoal extends ReplicaDistributionAbstractGo
                     if (++numLeaderReplicas >= rebalanceLowerLimit) {
                         return false;
                     }
-                    // If the source server has a lower number of leader replicas than the next
-                    // server in the eligible server queue, we reenqueue the source server and
+                    // If the source servercontains more total leader replicas than the next
+                    // server in the eligible server queue, we re-enqueue the source server and
                     // switch to the next server.
                     if (!eligibleServers.isEmpty()
-                            && sourceServer.leaderReplicas().size()
-                                    < eligibleServers.peek().leaderReplicas().size()) {
+                            && sourceServer.numLeaderReplicas()
+                                    > eligibleServers.peek().numLeaderReplicas()) {
                         eligibleServers.add(sourceServer);
                         break;
                     }

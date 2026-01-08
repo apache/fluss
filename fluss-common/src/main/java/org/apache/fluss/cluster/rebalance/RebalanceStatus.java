@@ -30,12 +30,11 @@ import java.util.Set;
  */
 @PublicEvolving
 public enum RebalanceStatus {
-    NO_TASK(0),
-    NOT_STARTED(1),
-    REBALANCING(2),
-    FAILED(3),
-    COMPLETED(4),
-    CANCELED(5);
+    NOT_STARTED(0),
+    REBALANCING(1),
+    FAILED(2),
+    COMPLETED(3),
+    CANCELED(4);
 
     public static final Set<RebalanceStatus> FINAL_STATUSES =
             new HashSet<>(Arrays.asList(COMPLETED, CANCELED, FAILED));

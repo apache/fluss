@@ -36,7 +36,6 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
-import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.BytesViewLogRecords;
 import org.apache.fluss.record.DefaultKvRecordBatch;
@@ -126,7 +125,6 @@ import org.apache.fluss.rpc.messages.PbProduceLogRespForBucket;
 import org.apache.fluss.rpc.messages.PbPutKvReqForBucket;
 import org.apache.fluss.rpc.messages.PbPutKvRespForBucket;
 import org.apache.fluss.rpc.messages.PbRebalancePlanForBucket;
-import org.apache.fluss.rpc.messages.PbRebalancePlanForTable;
 import org.apache.fluss.rpc.messages.PbRebalanceProgressForBucket;
 import org.apache.fluss.rpc.messages.PbRemoteLogSegment;
 import org.apache.fluss.rpc.messages.PbRemotePathAndLocalFile;
@@ -177,7 +175,6 @@ import org.apache.fluss.server.metadata.ServerInfo;
 import org.apache.fluss.server.metadata.TableMetadata;
 import org.apache.fluss.server.zk.data.BucketSnapshot;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
-import org.apache.fluss.server.zk.data.RebalancePlan;
 import org.apache.fluss.server.zk.data.lake.LakeTable;
 import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
 import org.apache.fluss.utils.json.DataTypeJsonSerde;
@@ -1800,58 +1797,20 @@ public class ServerRpcMessageUtils {
                 .collect(Collectors.toList());
     }
 
-    public static RebalanceResponse makeRebalanceRespose(RebalancePlan rebalancePlan) {
-        RebalanceResponse response =
-                new RebalanceResponse().setRebalanceId(rebalancePlan.getRebalanceId());
-        List<PbRebalancePlanForTable> planForTables = new ArrayList<>();
-
-        // for none-partitioned tables.
-        for (Map.Entry<Long, List<RebalancePlanForBucket>> planForTable :
-                rebalancePlan.getPlanForBuckets().entrySet()) {
-            PbRebalancePlanForTable pbPlanForTable =
-                    response.addTablePlan().setTableId(planForTable.getKey());
-            List<PbRebalancePlanForBucket> planForBuckets = new ArrayList<>();
-            planForTable
-                    .getValue()
-                    .forEach(
-                            planForBucket ->
-                                    planForBuckets.add(toPbRebalancePlanForBucket(planForBucket)));
-            pbPlanForTable.addAllBucketsPlans(planForBuckets);
-            planForTables.add(pbPlanForTable);
-        }
-
-        // for partitioned tables.
-        Map<Long, PbRebalancePlanForTable> tableIdToPbPlanForTable = new HashMap<>();
-        for (Map.Entry<TablePartition, List<RebalancePlanForBucket>> planForTable :
-                rebalancePlan.getPlanForBucketsOfPartitionedTable().entrySet()) {
-            TablePartition tablePartition = planForTable.getKey();
-            long tableId = tablePartition.getTableId();
-            PbRebalancePlanForTable pbPlanForTable =
-                    tableIdToPbPlanForTable.computeIfAbsent(
-                            tableId, k -> new PbRebalancePlanForTable().setTableId(tableId));
-            List<PbRebalancePlanForBucket> planForBuckets = new ArrayList<>();
-            planForTable
-                    .getValue()
-                    .forEach(
-                            planForBucket ->
-                                    planForBuckets.add(toPbRebalancePlanForBucket(planForBucket)));
-            pbPlanForTable.addAllBucketsPlans(planForBuckets);
-        }
-
-        planForTables.addAll(tableIdToPbPlanForTable.values());
-        response.addAllTablePlans(planForTables);
-        return response;
+    public static RebalanceResponse makeRebalanceResponse(String rebalanceId) {
+        return new RebalanceResponse().setRebalanceId(rebalanceId);
     }
 
     public static ListRebalanceProgressResponse makeListRebalanceProgressResponse(
-            RebalanceProgress rebalanceProgress) {
+            @Nullable RebalanceProgress rebalanceProgress) {
+        if (rebalanceProgress == null) {
+            return new ListRebalanceProgressResponse();
+        }
+
         ListRebalanceProgressResponse response =
                 new ListRebalanceProgressResponse()
+                        .setRebalanceId(rebalanceProgress.rebalanceId())
                         .setRebalanceStatus(rebalanceProgress.status().getCode());
-
-        if (rebalanceProgress.rebalanceId() != null) {
-            response.setRebalanceId(rebalanceProgress.rebalanceId());
-        }
 
         Map<Long, List<PbRebalanceProgressForBucket>> tableIdToPbBuckets = new HashMap<>();
         for (Map.Entry<TableBucket, RebalanceResultForBucket> progressForBucket :

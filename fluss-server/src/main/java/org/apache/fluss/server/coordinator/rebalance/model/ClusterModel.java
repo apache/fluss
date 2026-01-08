@@ -60,7 +60,7 @@ public class ClusterModel {
         this.aliveServers = new HashSet<>();
         this.offlineServers = new TreeSet<>();
         for (ServerModel serverModel : servers) {
-            if (serverModel.isAlive()) {
+            if (!serverModel.isOfflineTagged()) {
                 aliveServers.add(serverModel);
             } else {
                 offlineServers.add(serverModel);
@@ -268,13 +268,11 @@ public class ClusterModel {
     }
 
     private @Nullable ReplicaModel removeReplica(int serverId, TableBucket tableBucket) {
-        for (RackModel rack : racksById.values()) {
-            ReplicaModel removedReplica = rack.removeReplica(serverId, tableBucket);
-            if (removedReplica != null) {
-                return removedReplica;
-            }
+        ServerModel server = server(serverId);
+        if (server == null) {
+            return null;
         }
-        return null;
+        return server.removeReplica(tableBucket);
     }
 
     @Override

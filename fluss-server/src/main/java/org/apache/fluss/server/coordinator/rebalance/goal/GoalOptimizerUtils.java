@@ -20,7 +20,7 @@ package org.apache.fluss.server.coordinator.rebalance.goal;
 import org.apache.fluss.cluster.rebalance.RebalancePlanForBucket;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.server.coordinator.rebalance.ActionAcceptance;
-import org.apache.fluss.server.coordinator.rebalance.ReBalancingAction;
+import org.apache.fluss.server.coordinator.rebalance.RebalancingAction;
 import org.apache.fluss.server.coordinator.rebalance.model.BucketModel;
 import org.apache.fluss.server.coordinator.rebalance.model.ClusterModel;
 import org.apache.fluss.server.coordinator.rebalance.model.ReplicaModel;
@@ -38,7 +38,7 @@ public class GoalOptimizerUtils {
 
     /** Check whether the given proposal is acceptable for all the given optimized goals. */
     public static ActionAcceptance isProposalAcceptableForOptimizedGoals(
-            Set<Goal> optimizedGoals, ReBalancingAction action, ClusterModel cluster) {
+            Set<Goal> optimizedGoals, RebalancingAction action, ClusterModel cluster) {
         for (Goal goal : optimizedGoals) {
             ActionAcceptance acceptance = goal.actionAcceptance(action, cluster);
             if (acceptance != ACCEPT) {

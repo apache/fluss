@@ -25,7 +25,6 @@ import org.apache.fluss.client.utils.ClientRpcMessageUtils;
 import org.apache.fluss.cluster.Cluster;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.rebalance.GoalType;
-import org.apache.fluss.cluster.rebalance.RebalancePlan;
 import org.apache.fluss.cluster.rebalance.RebalanceProgress;
 import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.config.cluster.AlterConfig;
@@ -80,6 +79,7 @@ import org.apache.fluss.rpc.messages.PbListOffsetsRespForBucket;
 import org.apache.fluss.rpc.messages.PbPartitionSpec;
 import org.apache.fluss.rpc.messages.PbTablePath;
 import org.apache.fluss.rpc.messages.RebalanceRequest;
+import org.apache.fluss.rpc.messages.RebalanceResponse;
 import org.apache.fluss.rpc.messages.RemoveServerTagRequest;
 import org.apache.fluss.rpc.messages.TableExistsRequest;
 import org.apache.fluss.rpc.messages.TableExistsResponse;
@@ -96,6 +96,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeAlterTableRequest;
@@ -556,15 +557,14 @@ public class FlussAdmin implements Admin {
     }
 
     @Override
-    public CompletableFuture<RebalancePlan> rebalance(
-            List<GoalType> priorityGoals, boolean dryRun) {
-        RebalanceRequest request = new RebalanceRequest().setDryRun(dryRun);
+    public CompletableFuture<String> rebalance(List<GoalType> priorityGoals) {
+        RebalanceRequest request = new RebalanceRequest();
         priorityGoals.forEach(goal -> request.addGoal(goal.value));
-        return gateway.rebalance(request).thenApply(ClientRpcMessageUtils::toRebalancePlan);
+        return gateway.rebalance(request).thenApply(RebalanceResponse::getRebalanceId);
     }
 
     @Override
-    public CompletableFuture<RebalanceProgress> listRebalanceProgress(
+    public CompletableFuture<Optional<RebalanceProgress>> listRebalanceProgress(
             @Nullable String rebalanceId) {
         ListRebalanceProgressRequest request = new ListRebalanceProgressRequest();
 

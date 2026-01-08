@@ -20,6 +20,7 @@ package org.apache.fluss.server.coordinator;
 import org.apache.fluss.cluster.Endpoint;
 import org.apache.fluss.cluster.TabletServerInfo;
 import org.apache.fluss.cluster.rebalance.RebalancePlanForBucket;
+import org.apache.fluss.cluster.rebalance.RebalanceStatus;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.FencedLeaderEpochException;
@@ -938,7 +939,8 @@ class CoordinatorEventProcessorTest {
         // try to execute.
         eventProcessor
                 .getRebalanceManager()
-                .registerRebalance("rebalance-task-jdsds1", rebalancePlan);
+                .registerRebalance(
+                        "rebalance-task-jdsds1", rebalancePlan, RebalanceStatus.NOT_STARTED);
 
         // Mock to finish rebalance tasks, in production case, this need to be trigged by receiving
         // AdjustIsrRequest.
@@ -965,16 +967,12 @@ class CoordinatorEventProcessorTest {
                         Duration.ofMinutes(1),
                         "leader not elected");
         LeaderAndIsr newLeaderAndIsrOfZk = zookeeperClient.getLeaderAndIsr(tb).get();
-        retry(
-                Duration.ofMinutes(1),
-                () -> {
-                    assertThat(leaderAndIsr.leader())
-                            .isEqualTo(newLeaderAndIsrOfZk.leader())
-                            .isEqualTo(expectedLeader);
-                    assertThat(leaderAndIsr.isr())
-                            .isEqualTo(newLeaderAndIsrOfZk.isr())
-                            .hasSameElementsAs(expectedIsr);
-                });
+        assertThat(leaderAndIsr.leader())
+                .isEqualTo(newLeaderAndIsrOfZk.leader())
+                .isEqualTo(expectedLeader);
+        assertThat(leaderAndIsr.isr())
+                .isEqualTo(newLeaderAndIsrOfZk.isr())
+                .hasSameElementsAs(expectedIsr);
     }
 
     private CoordinatorEventProcessor buildCoordinatorEventProcessor() {

@@ -21,7 +21,7 @@ import org.apache.fluss.exception.RebalanceFailureException;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.server.coordinator.rebalance.ActionAcceptance;
 import org.apache.fluss.server.coordinator.rebalance.ActionType;
-import org.apache.fluss.server.coordinator.rebalance.ReBalancingAction;
+import org.apache.fluss.server.coordinator.rebalance.RebalancingAction;
 import org.apache.fluss.server.coordinator.rebalance.model.ClusterModel;
 import org.apache.fluss.server.coordinator.rebalance.model.ClusterModelStats;
 import org.apache.fluss.server.coordinator.rebalance.model.ReplicaModel;
@@ -135,7 +135,7 @@ public abstract class AbstractGoal implements Goal {
      * Check if requirements of this goal are not violated if this action is applied to the given
      * cluster state, {@code false} otherwise.
      */
-    protected abstract boolean selfSatisfied(ClusterModel clusterModel, ReBalancingAction action);
+    protected abstract boolean selfSatisfied(ClusterModel clusterModel, RebalancingAction action);
 
     /**
      * Attempt to apply the given balancing action to the given replica in the given cluster. The
@@ -153,8 +153,8 @@ public abstract class AbstractGoal implements Goal {
         List<ServerModel> eligibleServers = new ArrayList<>(candidateServers);
         TableBucket tableBucket = replica.tableBucket();
         for (ServerModel server : eligibleServers) {
-            ReBalancingAction proposal =
-                    new ReBalancingAction(tableBucket, replica.server().id(), server.id(), action);
+            RebalancingAction proposal =
+                    new RebalancingAction(tableBucket, replica.server().id(), server.id(), action);
             // A replica should be moved if:
             // 0. The move is legit.
             // 1. The goal requirements are not violated if this action is applied to the given

@@ -28,10 +28,10 @@ public class ServerModelTest {
 
     @Test
     void testServerModel() {
-        ServerModel serverModel = new ServerModel(0, "rack0", true);
+        ServerModel serverModel = new ServerModel(0, "rack0", false);
         assertThat(serverModel.id()).isEqualTo(0);
         assertThat(serverModel.rack()).isEqualTo("rack0");
-        assertThat(serverModel.isAlive()).isTrue();
+        assertThat(serverModel.isOfflineTagged()).isFalse();
 
         // put some replicas.
         TableBucket t1b0 = new TableBucket(1L, 0);
@@ -50,7 +50,7 @@ public class ServerModelTest {
         serverModel.putReplica(t3p1b0, new ReplicaModel(t3p1b0, serverModel, false));
 
         assertThat(serverModel.replicas()).hasSize(7);
-        assertThat(serverModel.leaderReplicas()).hasSize(3);
+        assertThat(serverModel.numLeaderReplicas()).isEqualTo(3);
         assertThat(serverModel.tables()).containsExactly(1L, 2L, 3L);
 
         // make t1b0 as follower and make t1b1 as leader.
@@ -73,7 +73,7 @@ public class ServerModelTest {
         serverModel.removeReplica(t2b0);
         serverModel.removeReplica(t3p1b0);
         assertThat(serverModel.replicas()).hasSize(5);
-        assertThat(serverModel.leaderReplicas()).hasSize(2);
+        assertThat(serverModel.numLeaderReplicas()).isEqualTo(2);
         assertThat(serverModel.tables()).containsExactly(1L, 3L);
     }
 

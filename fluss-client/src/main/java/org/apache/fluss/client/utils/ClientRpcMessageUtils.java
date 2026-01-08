@@ -25,7 +25,6 @@ import org.apache.fluss.client.metadata.KvSnapshots;
 import org.apache.fluss.client.metadata.LakeSnapshot;
 import org.apache.fluss.client.write.KvWriteBatch;
 import org.apache.fluss.client.write.ReadyWriteBatch;
-import org.apache.fluss.cluster.rebalance.RebalancePlan;
 import org.apache.fluss.cluster.rebalance.RebalancePlanForBucket;
 import org.apache.fluss.cluster.rebalance.RebalanceProgress;
 import org.apache.fluss.cluster.rebalance.RebalanceResultForBucket;
@@ -68,7 +67,6 @@ import org.apache.fluss.rpc.messages.PbPrefixLookupReqForBucket;
 import org.apache.fluss.rpc.messages.PbProduceLogReqForBucket;
 import org.apache.fluss.rpc.messages.PbPutKvReqForBucket;
 import org.apache.fluss.rpc.messages.PbRebalancePlanForBucket;
-import org.apache.fluss.rpc.messages.PbRebalancePlanForTable;
 import org.apache.fluss.rpc.messages.PbRebalanceProgressForBucket;
 import org.apache.fluss.rpc.messages.PbRebalanceProgressForTable;
 import org.apache.fluss.rpc.messages.PbRemotePathAndLocalFile;
@@ -76,7 +74,6 @@ import org.apache.fluss.rpc.messages.PbRenameColumn;
 import org.apache.fluss.rpc.messages.PrefixLookupRequest;
 import org.apache.fluss.rpc.messages.ProduceLogRequest;
 import org.apache.fluss.rpc.messages.PutKvRequest;
-import org.apache.fluss.rpc.messages.RebalanceResponse;
 import org.apache.fluss.utils.json.DataTypeJsonSerde;
 import org.apache.fluss.utils.json.JsonSerdeUtils;
 
@@ -88,11 +85,13 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.cluster.rebalance.RebalanceStatus.FINAL_STATUSES;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toResolvedPartitionSpec;
+import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkState;
 
 /**
@@ -382,19 +381,13 @@ public class ClientRpcMessageUtils {
         return request;
     }
 
-    public static RebalancePlan toRebalancePlan(RebalanceResponse response) {
-        Map<TableBucket, RebalancePlanForBucket> rebalancePlan = new HashMap<>();
-        for (PbRebalancePlanForTable pbTable : response.getTablePlansList()) {
-            long tableId = pbTable.getTableId();
-            for (PbRebalancePlanForBucket pbBucket : pbTable.getBucketsPlansList()) {
-                RebalancePlanForBucket planForBucket = toRebalancePlanForBucket(tableId, pbBucket);
-                rebalancePlan.put(planForBucket.getTableBucket(), planForBucket);
-            }
+    public static Optional<RebalanceProgress> toRebalanceProgress(
+            ListRebalanceProgressResponse response) {
+        if (!response.hasRebalanceId()) {
+            return Optional.empty();
         }
-        return new RebalancePlan(response.getRebalanceId(), rebalancePlan);
-    }
 
-    public static RebalanceProgress toRebalanceProgress(ListRebalanceProgressResponse response) {
+        checkArgument(response.hasRebalanceStatus(), "Rebalance status is not set");
         RebalanceStatus totalRebalanceStatus = RebalanceStatus.of(response.getRebalanceStatus());
         int totalTask = 0;
         int finishedTask = 0;
@@ -422,11 +415,12 @@ public class ClientRpcMessageUtils {
             progress = (double) finishedTask / totalTask;
         }
 
-        return new RebalanceProgress(
-                response.hasRebalanceId() ? response.getRebalanceId() : null,
-                totalRebalanceStatus,
-                progress,
-                rebalanceProgress);
+        return Optional.of(
+                new RebalanceProgress(
+                        response.getRebalanceId(),
+                        totalRebalanceStatus,
+                        progress,
+                        rebalanceProgress));
     }
 
     private static RebalancePlanForBucket toRebalancePlanForBucket(

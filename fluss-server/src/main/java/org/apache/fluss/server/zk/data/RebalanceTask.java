@@ -17,6 +17,7 @@
 
 package org.apache.fluss.server.zk.data;
 
+import org.apache.fluss.cluster.rebalance.RebalancePlan;
 import org.apache.fluss.cluster.rebalance.RebalancePlanForBucket;
 import org.apache.fluss.cluster.rebalance.RebalanceStatus;
 import org.apache.fluss.metadata.TableBucket;
@@ -29,13 +30,14 @@ import java.util.Map;
 import java.util.Objects;
 
 /**
- * The generated rebalance plan for this cluster.
+ * The generated rebalance task for this cluster.
  *
- * <p>The latest execution rebalance plan will be stored in {@link ZkData.RebalanceZNode}.
+ * <p>The latest execution {@link RebalancePlan} and related execution {@link RebalanceStatus} will
+ * be stored in {@link ZkData.RebalanceZNode}.
  *
- * @see RebalancePlanJsonSerde for json serialization and deserialization.
+ * @see RebalanceTaskJsonSerde for json serialization and deserialization.
  */
-public class RebalancePlan {
+public class RebalanceTask {
 
     /** The rebalance id to trace rebalace task. */
     private final String rebalanceId;
@@ -50,7 +52,7 @@ public class RebalancePlan {
     private final Map<TablePartition, List<RebalancePlanForBucket>>
             planForBucketsOfPartitionedTable;
 
-    public RebalancePlan(
+    public RebalanceTask(
             String rebalanceId,
             RebalanceStatus rebalanceStatus,
             Map<TableBucket, RebalancePlanForBucket> bucketPlan) {
@@ -135,7 +137,7 @@ public class RebalancePlan {
             return false;
         }
 
-        RebalancePlan that = (RebalancePlan) o;
+        RebalanceTask that = (RebalanceTask) o;
         return rebalanceStatus == that.rebalanceStatus
                 && Objects.equals(rebalanceId, that.rebalanceId)
                 && Objects.equals(planForBuckets, that.planForBuckets)

@@ -18,7 +18,7 @@
 package org.apache.fluss.server.coordinator.rebalance.goal;
 
 import org.apache.fluss.server.coordinator.rebalance.ActionAcceptance;
-import org.apache.fluss.server.coordinator.rebalance.ReBalancingAction;
+import org.apache.fluss.server.coordinator.rebalance.RebalancingAction;
 import org.apache.fluss.server.coordinator.rebalance.model.ClusterModel;
 import org.apache.fluss.server.coordinator.rebalance.model.ClusterModelStats;
 
@@ -41,7 +41,7 @@ public interface Goal {
      *
      * <p>During the optimization, the implementation should make sure that all the previously
      * optimized goals are still satisfied after this method completes its execution. The
-     * implementation can use {@link #actionAcceptance(ReBalancingAction, ClusterModel)} to check
+     * implementation can use {@link #actionAcceptance(RebalancingAction, ClusterModel)} to check
      * whether an admin operation is allowed by a previously optimized goals.
      *
      * <p>The implementation of a soft goal should return a boolean indicating whether the goal has
@@ -55,7 +55,7 @@ public interface Goal {
      * by a goal if it violates its requirements. The return value indicates whether the action is
      * accepted or why it is rejected.
      */
-    ActionAcceptance actionAcceptance(ReBalancingAction action, ClusterModel clusterModel);
+    ActionAcceptance actionAcceptance(RebalancingAction action, ClusterModel clusterModel);
 
     /**
      * Get an instance of {@link ClusterModelStatsComparator} for this goal.

@@ -27,15 +27,15 @@ import java.util.Map;
 
 import static org.apache.fluss.cluster.rebalance.RebalanceStatus.NOT_STARTED;
 
-/** Test for {@link RebalancePlanJsonSerde}. */
-public class RebalancePlanJsonSerdeTest extends JsonSerdeTestBase<RebalancePlan> {
+/** Test for {@link RebalanceTaskJsonSerde}. */
+public class RebalanceTaskJsonSerdeTest extends JsonSerdeTestBase<RebalanceTask> {
 
-    RebalancePlanJsonSerdeTest() {
-        super(RebalancePlanJsonSerde.INSTANCE);
+    RebalanceTaskJsonSerdeTest() {
+        super(RebalanceTaskJsonSerde.INSTANCE);
     }
 
     @Override
-    protected RebalancePlan[] createObjects() {
+    protected RebalanceTask[] createObjects() {
         Map<TableBucket, RebalancePlanForBucket> bucketPlan = new HashMap<>();
         bucketPlan.put(
                 new TableBucket(0L, 0),
@@ -79,8 +79,8 @@ public class RebalancePlanJsonSerdeTest extends JsonSerdeTestBase<RebalancePlan>
                         3,
                         Arrays.asList(0, 1, 2),
                         Arrays.asList(3, 4, 5)));
-        return new RebalancePlan[] {
-            new RebalancePlan("rebalance-task-21jd", NOT_STARTED, bucketPlan)
+        return new RebalanceTask[] {
+            new RebalanceTask("rebalance-task-21jd", NOT_STARTED, bucketPlan)
         };
     }
 

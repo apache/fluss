@@ -27,24 +27,16 @@ import java.util.concurrent.CompletableFuture;
 public class RebalanceEvent implements CoordinatorEvent {
 
     private final List<Goal> goalsByPriority;
-    private final boolean isDryRun;
     private final CompletableFuture<RebalanceResponse> respCallback;
 
     public RebalanceEvent(
-            List<Goal> goalsByPriority,
-            boolean isDryRun,
-            CompletableFuture<RebalanceResponse> respCallback) {
+            List<Goal> goalsByPriority, CompletableFuture<RebalanceResponse> respCallback) {
         this.goalsByPriority = goalsByPriority;
-        this.isDryRun = isDryRun;
         this.respCallback = respCallback;
     }
 
     public List<Goal> getGoalsByPriority() {
         return goalsByPriority;
-    }
-
-    public boolean isDryRun() {
-        return isDryRun;
     }
 
     public CompletableFuture<RebalanceResponse> getRespCallback() {

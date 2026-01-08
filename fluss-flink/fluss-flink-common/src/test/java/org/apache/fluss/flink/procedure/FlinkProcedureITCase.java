@@ -138,7 +138,7 @@ public abstract class FlinkProcedureITCase {
                             "+I[sys.remove_server_tag]",
                             "+I[sys.rebalance]",
                             "+I[sys.cancel_rebalance]",
-                            "+I[sys.list_rebalance_progress]");
+                            "+I[sys.list_rebalance]");
             // make sure no more results is unread.
             assertResultsIgnoreOrder(showProceduresIterator, expectedShowProceduresResult, true);
         }
@@ -462,8 +462,8 @@ public abstract class FlinkProcedureITCase {
         String addMultiServerTag =
                 String.format(
                         upperCase
-                                ? "Call %s.sys.add_server_tag('1;2', 'PERMANENT_OFFLINE')"
-                                : "Call %s.sys.add_server_tag('1;2', 'permanent_offline')",
+                                ? "Call %s.sys.add_server_tag('1,2', 'PERMANENT_OFFLINE')"
+                                : "Call %s.sys.add_server_tag('1,2', 'permanent_offline')",
                         CATALOG_NAME);
         try (CloseableIterator<Row> listProceduresIterator =
                 tEnv.executeSql(addMultiServerTag).collect()) {
@@ -477,8 +477,8 @@ public abstract class FlinkProcedureITCase {
         String removeServerTag =
                 String.format(
                         upperCase
-                                ? "Call %s.sys.remove_server_tag('0;1;2', 'PERMANENT_OFFLINE')"
-                                : "Call %s.sys.remove_server_tag('0;1;2', 'permanent_offline')",
+                                ? "Call %s.sys.remove_server_tag('0,1,2', 'PERMANENT_OFFLINE')"
+                                : "Call %s.sys.remove_server_tag('0,1,2', 'permanent_offline')",
                         CATALOG_NAME);
         try (CloseableIterator<Row> listProceduresIterator =
                 tEnv.executeSql(removeServerTag).collect()) {
@@ -534,20 +534,15 @@ public abstract class FlinkProcedureITCase {
         String rebalance =
                 String.format(
                         upperCase
-                                ? "Call %s.sys.rebalance('REPLICA_DISTRIBUTION;LEADER_DISTRIBUTION', false)"
-                                : "Call %s.sys.rebalance('replica_distribution;leader_distribution', false)",
+                                ? "Call %s.sys.rebalance('REPLICA_DISTRIBUTION,LEADER_DISTRIBUTION')"
+                                : "Call %s.sys.rebalance('replica_distribution,leader_distribution')",
                         CATALOG_NAME);
         try (CloseableIterator<Row> rows = tEnv.executeSql(rebalance).collect()) {
             List<String> actual =
                     CollectionUtil.iteratorToList(rows).stream()
                             .map(Row::toString)
                             .collect(Collectors.toList());
-            assertThat(actual.size()).isGreaterThan(2);
-            assertThat(actual.get(0)).startsWith("+I[Rebalance id:");
-            assertThat(actual.get(1)).isEqualTo("+I[Detail rebalance plan:]");
-            for (int i = 2; i < actual.size(); i++) {
-                assertThat(actual.get(i)).startsWith("+I[RebalancePlanForBucket{tableBucket=");
-            }
+            assertThat(actual.size()).isEqualTo(1);
         }
 
         // test cancel an un-existed rebalance.
@@ -564,7 +559,9 @@ public abstract class FlinkProcedureITCase {
                         "Rebalance task id not-exist-id to cancel is not the current rebalance task id");
 
         // To compatibility with old version, that the call procedure input cannot be null.
-        RebalanceProgress progress = admin.listRebalanceProgress(null).get();
+        Optional<RebalanceProgress> progressOpt = admin.listRebalanceProgress(null).get();
+        assertThat(progressOpt).isPresent();
+        RebalanceProgress progress = progressOpt.get();
         // test cancel rebalance.
         try (CloseableIterator<Row> listProceduresIterator =
                 tEnv.executeSql(
@@ -617,7 +614,7 @@ public abstract class FlinkProcedureITCase {
 
         String rebalance =
                 String.format(
-                        "Call %s.sys.rebalance('REPLICA_DISTRIBUTION;LEADER_DISTRIBUTION', false)",
+                        "Call %s.sys.rebalance('REPLICA_DISTRIBUTION,LEADER_DISTRIBUTION')",
                         CATALOG_NAME);
         List<String> plan;
         try (CloseableIterator<Row> rows = tEnv.executeSql(rebalance).collect()) {
@@ -625,25 +622,26 @@ public abstract class FlinkProcedureITCase {
                     CollectionUtil.iteratorToList(rows).stream()
                             .map(Row::toString)
                             .collect(Collectors.toList());
-            assertThat(plan.size()).isGreaterThan(1);
+            assertThat(plan.size()).isEqualTo(1);
         }
 
         // To compatibility with old version, that the call procedure input cannot be null.
-        RebalanceProgress progress = admin.listRebalanceProgress(null).get();
+        Optional<RebalanceProgress> progressOpt = admin.listRebalanceProgress(null).get();
+        assertThat(progressOpt).isPresent();
+        RebalanceProgress progress = progressOpt.get();
         retry(
                 Duration.ofMinutes(2),
                 () -> {
                     try (CloseableIterator<Row> rows =
                             tEnv.executeSql(
                                             String.format(
-                                                    "Call %s.sys.list_rebalance_progress('%s')",
+                                                    "Call %s.sys.list_rebalance('%s')",
                                                     CATALOG_NAME, progress.rebalanceId()))
                                     .collect()) {
                         List<String> listProgressResult =
                                 CollectionUtil.iteratorToList(rows).stream()
                                         .map(Row::toString)
                                         .collect(Collectors.toList());
-                        assertThat(listProgressResult.size()).isEqualTo(plan.size() + 2);
                         assertThat(listProgressResult.get(0)).startsWith("+I[Rebalance id:");
                         assertThat(listProgressResult.get(1))
                                 .isEqualTo("+I[Reblance total status: COMPLETED]");
