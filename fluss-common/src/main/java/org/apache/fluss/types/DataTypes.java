@@ -317,17 +317,6 @@ public class DataTypes {
         return new DataField(name, type, fieldId);
     }
 
-    /**
-     * Creates a field definition with field name, data type, and a description.
-     *
-     * @param name the field name
-     * @param type the field data type
-     * @param description the field description
-     * @return a new data field with description but with default field ID (0)
-     * @deprecated Use {@link #FIELD(String, DataType, String, int)} instead to explicitly specify
-     *     field ID. Field ID is required for schema evolution support.
-     */
-    @Deprecated
     public static DataField FIELD(String name, DataType type, String description) {
         return new DataField(name, type, description);
     }
