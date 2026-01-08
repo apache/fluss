@@ -17,12 +17,18 @@
 
 package org.apache.fluss.flink.procedure;
 
+import org.apache.fluss.client.Connection;
+import org.apache.fluss.client.ConnectionFactory;
+import org.apache.fluss.client.admin.Admin;
+import org.apache.fluss.cluster.rebalance.RebalanceProgress;
 import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.MemorySize;
+import org.apache.fluss.exception.NoRebalanceInProgressException;
 import org.apache.fluss.exception.SecurityDisabledException;
 import org.apache.fluss.metadata.DataLakeFormat;
+import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.ServerTags;
@@ -32,6 +38,8 @@ import org.apache.flink.table.api.TableEnvironment;
 import org.apache.flink.types.Row;
 import org.apache.flink.util.CloseableIterator;
 import org.apache.flink.util.CollectionUtil;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
@@ -48,6 +56,8 @@ import java.util.stream.Collectors;
 
 import static org.apache.fluss.cluster.rebalance.ServerTag.PERMANENT_OFFLINE;
 import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.assertResultsIgnoreOrder;
+import static org.apache.fluss.server.testutils.FlussClusterExtension.BUILTIN_DATABASE;
+import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -57,15 +67,28 @@ public abstract class FlinkProcedureITCase {
     @RegisterExtension
     public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION =
             FlussClusterExtension.builder()
-                    .setNumOfTabletServers(3)
+                    .setNumOfTabletServers(4)
                     .setCoordinatorServerListeners("FLUSS://localhost:0, CLIENT://localhost:0")
                     .setTabletServerListeners("FLUSS://localhost:0, CLIENT://localhost:0")
                     .setClusterConf(initConfig())
                     .build();
 
     static final String CATALOG_NAME = "testcatalog";
+    static final String DEFAULT_DB = "defaultdb";
+    static Configuration clientConf;
+    static String bootstrapServers;
+    static Connection conn;
+    static Admin admin;
 
     TableEnvironment tEnv;
+
+    @BeforeAll
+    protected static void beforeAll() {
+        clientConf = FLUSS_CLUSTER_EXTENSION.getClientConfig();
+        bootstrapServers = FLUSS_CLUSTER_EXTENSION.getBootstrapServers();
+        conn = ConnectionFactory.createConnection(clientConf);
+        admin = conn.getAdmin();
+    }
 
     @BeforeEach
     void before() throws ExecutionException, InterruptedException {
@@ -90,6 +113,14 @@ public abstract class FlinkProcedureITCase {
                         CATALOG_NAME, bootstrapServers);
         tEnv.executeSql(catalogDDL).await();
         tEnv.executeSql("use catalog " + CATALOG_NAME);
+        tEnv.executeSql("create database " + DEFAULT_DB);
+        tEnv.useDatabase(DEFAULT_DB);
+    }
+
+    @AfterEach
+    void after() {
+        tEnv.useDatabase(BUILTIN_DATABASE);
+        tEnv.executeSql(String.format("drop database %s cascade", DEFAULT_DB));
     }
 
     @Test
@@ -104,7 +135,10 @@ public abstract class FlinkProcedureITCase {
                             "+I[sys.list_acl]",
                             "+I[sys.set_cluster_config]",
                             "+I[sys.add_server_tag]",
-                            "+I[sys.remove_server_tag]");
+                            "+I[sys.remove_server_tag]",
+                            "+I[sys.rebalance]",
+                            "+I[sys.cancel_rebalance]",
+                            "+I[sys.list_rebalance]");
             // make sure no more results is unread.
             assertResultsIgnoreOrder(showProceduresIterator, expectedShowProceduresResult, true);
         }
@@ -428,8 +462,8 @@ public abstract class FlinkProcedureITCase {
         String addMultiServerTag =
                 String.format(
                         upperCase
-                                ? "Call %s.sys.add_server_tag('1;2', 'PERMANENT_OFFLINE')"
-                                : "Call %s.sys.add_server_tag('1;2', 'permanent_offline')",
+                                ? "Call %s.sys.add_server_tag('1,2', 'PERMANENT_OFFLINE')"
+                                : "Call %s.sys.add_server_tag('1,2', 'permanent_offline')",
                         CATALOG_NAME);
         try (CloseableIterator<Row> listProceduresIterator =
                 tEnv.executeSql(addMultiServerTag).collect()) {
@@ -443,8 +477,8 @@ public abstract class FlinkProcedureITCase {
         String removeServerTag =
                 String.format(
                         upperCase
-                                ? "Call %s.sys.remove_server_tag('0;1;2', 'PERMANENT_OFFLINE')"
-                                : "Call %s.sys.remove_server_tag('0;1;2', 'permanent_offline')",
+                                ? "Call %s.sys.remove_server_tag('0,1,2', 'PERMANENT_OFFLINE')"
+                                : "Call %s.sys.remove_server_tag('0,1,2', 'permanent_offline')",
                         CATALOG_NAME);
         try (CloseableIterator<Row> listProceduresIterator =
                 tEnv.executeSql(removeServerTag).collect()) {
@@ -458,6 +492,165 @@ public abstract class FlinkProcedureITCase {
                 tEnv.executeSql(removeServerTag).collect()) {
             assertCallResult(listProceduresIterator, new String[] {"+I[success]"});
         }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testRebalance(boolean upperCase) throws Exception {
+        // add server tag PERMANENT_OFFLINE for server 3, this will avoid to generate bucket
+        // assignment on server 3 when create table.
+        try (CloseableIterator<Row> listProceduresIterator =
+                tEnv.executeSql(
+                                "Call "
+                                        + CATALOG_NAME
+                                        + ".sys.add_server_tag('3', 'PERMANENT_OFFLINE')")
+                        .collect()) {
+            assertCallResult(listProceduresIterator, new String[] {"+I[success]"});
+        }
+
+        // first create some unbalance assignment table.
+        for (int i = 0; i < 2; i++) {
+            String tableName = "reblance_test_tab_" + i;
+            tEnv.executeSql(
+                    String.format(
+                            "create table %s (a int, b varchar, c bigint, d int ) "
+                                    + "with ('connector' = 'fluss')",
+                            tableName));
+            long tableId =
+                    admin.getTableInfo(TablePath.of(DEFAULT_DB, tableName)).get().getTableId();
+            FLUSS_CLUSTER_EXTENSION.waitUntilTableReady(tableId);
+        }
+
+        // remove tag after crated table.
+        try (CloseableIterator<Row> listProceduresIterator =
+                tEnv.executeSql(
+                                "Call "
+                                        + CATALOG_NAME
+                                        + ".sys.remove_server_tag('3', 'PERMANENT_OFFLINE')")
+                        .collect()) {
+            assertCallResult(listProceduresIterator, new String[] {"+I[success]"});
+        }
+
+        String rebalance =
+                String.format(
+                        upperCase
+                                ? "Call %s.sys.rebalance('REPLICA_DISTRIBUTION,LEADER_DISTRIBUTION')"
+                                : "Call %s.sys.rebalance('replica_distribution,leader_distribution')",
+                        CATALOG_NAME);
+        try (CloseableIterator<Row> rows = tEnv.executeSql(rebalance).collect()) {
+            List<String> actual =
+                    CollectionUtil.iteratorToList(rows).stream()
+                            .map(Row::toString)
+                            .collect(Collectors.toList());
+            assertThat(actual.size()).isEqualTo(1);
+        }
+
+        // test cancel an un-existed rebalance.
+        assertThatThrownBy(
+                        () ->
+                                tEnv.executeSql(
+                                                String.format(
+                                                        "Call %s.sys.cancel_rebalance('not-exist-id')",
+                                                        CATALOG_NAME))
+                                        .await())
+                .rootCause()
+                .isInstanceOf(NoRebalanceInProgressException.class)
+                .hasMessageContaining(
+                        "Rebalance task id not-exist-id to cancel is not the current rebalance task id");
+
+        // To compatibility with old version, that the call procedure input cannot be null.
+        Optional<RebalanceProgress> progressOpt = admin.listRebalanceProgress(null).get();
+        assertThat(progressOpt).isPresent();
+        RebalanceProgress progress = progressOpt.get();
+        // test cancel rebalance.
+        try (CloseableIterator<Row> listProceduresIterator =
+                tEnv.executeSql(
+                                String.format(
+                                        "Call %s.sys.cancel_rebalance('%s')",
+                                        CATALOG_NAME, progress.rebalanceId()))
+                        .collect()) {
+            assertCallResult(listProceduresIterator, new String[] {"+I[success]"});
+        }
+
+        // delete rebalance plan to avoid conflict with other tests.
+        FLUSS_CLUSTER_EXTENSION.getZooKeeperClient().deleteRebalanceTask();
+    }
+
+    @Test
+    void testListRebalanceProgress() throws Exception {
+        // add server tag PERMANENT_OFFLINE for server 3, this will avoid to generate bucket
+        // assignment on server 3 when create table.
+        try (CloseableIterator<Row> listProceduresIterator =
+                tEnv.executeSql(
+                                "Call "
+                                        + CATALOG_NAME
+                                        + ".sys.add_server_tag('3', 'PERMANENT_OFFLINE')")
+                        .collect()) {
+            assertCallResult(listProceduresIterator, new String[] {"+I[success]"});
+        }
+
+        // first create some unbalance assignment table.
+        for (int i = 0; i < 10; i++) {
+            String tableName = "reblance_test_tab_" + i;
+            tEnv.executeSql(
+                    String.format(
+                            "create table %s (a int, b varchar, c bigint, d int ) "
+                                    + "with ('connector' = 'fluss')",
+                            tableName));
+            long tableId =
+                    admin.getTableInfo(TablePath.of(DEFAULT_DB, tableName)).get().getTableId();
+            FLUSS_CLUSTER_EXTENSION.waitUntilTableReady(tableId);
+        }
+
+        // remove tag after crated table.
+        try (CloseableIterator<Row> listProceduresIterator =
+                tEnv.executeSql(
+                                "Call "
+                                        + CATALOG_NAME
+                                        + ".sys.remove_server_tag('3', 'PERMANENT_OFFLINE')")
+                        .collect()) {
+            assertCallResult(listProceduresIterator, new String[] {"+I[success]"});
+        }
+
+        String rebalance =
+                String.format(
+                        "Call %s.sys.rebalance('REPLICA_DISTRIBUTION,LEADER_DISTRIBUTION')",
+                        CATALOG_NAME);
+        List<String> plan;
+        try (CloseableIterator<Row> rows = tEnv.executeSql(rebalance).collect()) {
+            plan =
+                    CollectionUtil.iteratorToList(rows).stream()
+                            .map(Row::toString)
+                            .collect(Collectors.toList());
+            assertThat(plan.size()).isEqualTo(1);
+        }
+
+        // To compatibility with old version, that the call procedure input cannot be null.
+        Optional<RebalanceProgress> progressOpt = admin.listRebalanceProgress(null).get();
+        assertThat(progressOpt).isPresent();
+        RebalanceProgress progress = progressOpt.get();
+        retry(
+                Duration.ofMinutes(2),
+                () -> {
+                    try (CloseableIterator<Row> rows =
+                            tEnv.executeSql(
+                                            String.format(
+                                                    "Call %s.sys.list_rebalance('%s')",
+                                                    CATALOG_NAME, progress.rebalanceId()))
+                                    .collect()) {
+                        List<String> listProgressResult =
+                                CollectionUtil.iteratorToList(rows).stream()
+                                        .map(Row::toString)
+                                        .collect(Collectors.toList());
+                        assertThat(listProgressResult.get(0)).startsWith("+I[Rebalance id:");
+                        assertThat(listProgressResult.get(1))
+                                .isEqualTo("+I[Reblance total status: COMPLETED]");
+                        assertThat(listProgressResult.get(2))
+                                .isEqualTo("+I[Rebalance progress: 100%]");
+                        assertThat(listProgressResult.get(3))
+                                .isEqualTo("+I[Rebalance detail progress for bucket:]");
+                    }
+                });
     }
 
     private static Configuration initConfig() {

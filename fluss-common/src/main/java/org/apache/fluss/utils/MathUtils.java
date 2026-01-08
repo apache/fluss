@@ -20,6 +20,8 @@ package org.apache.fluss.utils;
 /** Collection of simple mathematical routines. */
 public class MathUtils {
 
+    public static final double EPSILON = 1E-5;
+
     /**
      * Computes the logarithm of the given value to the base of 2. This method throws an error, if
      * the given argument is not a power of 2.
@@ -115,5 +117,27 @@ public class MathUtils {
             return q + 1;
         }
         return q;
+    }
+
+    /**
+     * Compare the given values.
+     *
+     * <pre>
+     *     1. Return 1 if first
+     *     2. -1 if first
+     *     3. 0 otherwise.
+     * </pre>
+     */
+    public static int compare(double d1, double d2, double epsilon) {
+        if (d2 - d1 > epsilon) {
+            // Second value is larger than the first value.
+            return -1;
+        }
+        if (d1 - d2 > epsilon) {
+            // First value is larger than the second value.
+            return 1;
+        }
+        // Given values are approximately equal.
+        return 0;
     }
 }

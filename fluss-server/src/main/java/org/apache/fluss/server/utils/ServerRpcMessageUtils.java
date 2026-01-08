@@ -20,6 +20,9 @@ package org.apache.fluss.server.utils;
 import org.apache.fluss.cluster.Endpoint;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.ServerType;
+import org.apache.fluss.cluster.rebalance.RebalancePlanForBucket;
+import org.apache.fluss.cluster.rebalance.RebalanceProgress;
+import org.apache.fluss.cluster.rebalance.RebalanceResultForBucket;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.cluster.AlterConfigOpType;
 import org.apache.fluss.config.cluster.ColumnPositionType;
@@ -72,6 +75,7 @@ import org.apache.fluss.rpc.messages.ListAclsResponse;
 import org.apache.fluss.rpc.messages.ListOffsetsRequest;
 import org.apache.fluss.rpc.messages.ListOffsetsResponse;
 import org.apache.fluss.rpc.messages.ListPartitionInfosResponse;
+import org.apache.fluss.rpc.messages.ListRebalanceProgressResponse;
 import org.apache.fluss.rpc.messages.LookupRequest;
 import org.apache.fluss.rpc.messages.LookupResponse;
 import org.apache.fluss.rpc.messages.MetadataResponse;
@@ -120,6 +124,8 @@ import org.apache.fluss.rpc.messages.PbProduceLogReqForBucket;
 import org.apache.fluss.rpc.messages.PbProduceLogRespForBucket;
 import org.apache.fluss.rpc.messages.PbPutKvReqForBucket;
 import org.apache.fluss.rpc.messages.PbPutKvRespForBucket;
+import org.apache.fluss.rpc.messages.PbRebalancePlanForBucket;
+import org.apache.fluss.rpc.messages.PbRebalanceProgressForBucket;
 import org.apache.fluss.rpc.messages.PbRemoteLogSegment;
 import org.apache.fluss.rpc.messages.PbRemotePathAndLocalFile;
 import org.apache.fluss.rpc.messages.PbRenameColumn;
@@ -138,6 +144,7 @@ import org.apache.fluss.rpc.messages.ProduceLogRequest;
 import org.apache.fluss.rpc.messages.ProduceLogResponse;
 import org.apache.fluss.rpc.messages.PutKvRequest;
 import org.apache.fluss.rpc.messages.PutKvResponse;
+import org.apache.fluss.rpc.messages.RebalanceResponse;
 import org.apache.fluss.rpc.messages.StopReplicaRequest;
 import org.apache.fluss.rpc.messages.StopReplicaResponse;
 import org.apache.fluss.rpc.messages.UpdateMetadataRequest;
@@ -1788,6 +1795,71 @@ public class ServerRpcMessageUtils {
                             return pbDescribeConfig;
                         })
                 .collect(Collectors.toList());
+    }
+
+    public static RebalanceResponse makeRebalanceResponse(String rebalanceId) {
+        return new RebalanceResponse().setRebalanceId(rebalanceId);
+    }
+
+    public static ListRebalanceProgressResponse makeListRebalanceProgressResponse(
+            @Nullable RebalanceProgress rebalanceProgress) {
+        if (rebalanceProgress == null) {
+            return new ListRebalanceProgressResponse();
+        }
+
+        ListRebalanceProgressResponse response =
+                new ListRebalanceProgressResponse()
+                        .setRebalanceId(rebalanceProgress.rebalanceId())
+                        .setRebalanceStatus(rebalanceProgress.status().getCode());
+
+        Map<Long, List<PbRebalanceProgressForBucket>> tableIdToPbBuckets = new HashMap<>();
+        for (Map.Entry<TableBucket, RebalanceResultForBucket> progressForBucket :
+                rebalanceProgress.progressForBucketMap().entrySet()) {
+            TableBucket tableBucket = progressForBucket.getKey();
+            RebalanceResultForBucket rebalanceResultForBucket = progressForBucket.getValue();
+            long tableId = tableBucket.getTableId();
+            List<PbRebalanceProgressForBucket> pbBuckets =
+                    tableIdToPbBuckets.computeIfAbsent(tableId, k -> new ArrayList<>());
+            pbBuckets.add(
+                    new PbRebalanceProgressForBucket()
+                            .setRebalancePlan(
+                                    toPbRebalancePlanForBucket(rebalanceResultForBucket.plan()))
+                            .setRebalanceStatus(rebalanceResultForBucket.status().getCode()));
+        }
+
+        for (Map.Entry<Long, List<PbRebalanceProgressForBucket>> entry :
+                tableIdToPbBuckets.entrySet()) {
+            response.addTableProgress()
+                    .setTableId(entry.getKey())
+                    .addAllBucketsProgresses(entry.getValue());
+        }
+
+        return response;
+    }
+
+    private static PbRebalancePlanForBucket toPbRebalancePlanForBucket(
+            RebalancePlanForBucket planForBucket) {
+        PbRebalancePlanForBucket pbRebalancePlanForBucket =
+                new PbRebalancePlanForBucket()
+                        .setBucketId(planForBucket.getBucketId())
+                        .setOriginalLeader(planForBucket.getOriginalLeader())
+                        .setNewLeader(planForBucket.getNewLeader());
+
+        Long partitionId = planForBucket.getTableBucket().getPartitionId();
+        if (partitionId != null) {
+            pbRebalancePlanForBucket.setPartitionId(partitionId);
+        }
+
+        pbRebalancePlanForBucket
+                .setOriginalReplicas(
+                        planForBucket.getOriginReplicas().stream()
+                                .mapToInt(Integer::intValue)
+                                .toArray())
+                .setNewReplicas(
+                        planForBucket.getNewReplicas().stream()
+                                .mapToInt(Integer::intValue)
+                                .toArray());
+        return pbRebalancePlanForBucket;
     }
 
     private static <T> Map<TableBucket, T> mergeResponse(

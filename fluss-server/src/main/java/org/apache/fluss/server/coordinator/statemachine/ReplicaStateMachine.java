@@ -101,7 +101,7 @@ public class ReplicaStateMachine {
     private Tuple2<Set<TableBucketReplica>, Set<TableBucketReplica>> initializeReplicaState() {
         Set<TableBucketReplica> onlineReplicas = new HashSet<>();
         Set<TableBucketReplica> offlineReplicas = new HashSet<>();
-        Set<TableBucket> allBuckets = coordinatorContext.allBuckets();
+        Set<TableBucket> allBuckets = coordinatorContext.getAllBuckets();
         for (TableBucket tableBucket : allBuckets) {
             List<Integer> replicas = coordinatorContext.getAssignment(tableBucket);
             for (Integer replica : replicas) {

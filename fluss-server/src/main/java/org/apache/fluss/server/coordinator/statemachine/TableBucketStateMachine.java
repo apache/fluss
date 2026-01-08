@@ -17,10 +17,14 @@
 
 package org.apache.fluss.server.coordinator.statemachine;
 
+import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.server.coordinator.CoordinatorContext;
 import org.apache.fluss.server.coordinator.CoordinatorRequestBatch;
+import org.apache.fluss.server.coordinator.statemachine.ReplicaLeaderElection.ControlledShutdownLeaderElection;
+import org.apache.fluss.server.coordinator.statemachine.ReplicaLeaderElection.DefaultLeaderElection;
+import org.apache.fluss.server.coordinator.statemachine.ReplicaLeaderElection.ReassignmentLeaderElection;
 import org.apache.fluss.server.entity.BatchRegisterLeadAndIsr;
 import org.apache.fluss.server.entity.RegisterTableBucketLeadAndIsrInfo;
 import org.apache.fluss.server.zk.ZooKeeperClient;
@@ -39,12 +43,6 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
-
-import static org.apache.fluss.server.coordinator.statemachine.ReplicaLeaderElectionAlgorithms.controlledShutdownReplicaLeaderElection;
-import static org.apache.fluss.server.coordinator.statemachine.ReplicaLeaderElectionAlgorithms.defaultReplicaLeaderElection;
-import static org.apache.fluss.server.coordinator.statemachine.ReplicaLeaderElectionAlgorithms.initReplicaLeaderElection;
-import static org.apache.fluss.server.coordinator.statemachine.ReplicaLeaderElectionStrategy.CONTROLLED_SHUTDOWN_ELECTION;
-import static org.apache.fluss.server.coordinator.statemachine.ReplicaLeaderElectionStrategy.DEFAULT_ELECTION;
 
 /* This file is based on source code of Apache Kafka Project (https://kafka.apache.org/), licensed by the Apache
  * Software Foundation (ASF) under the Apache License, Version 2.0. See the NOTICE file distributed with this work for
@@ -83,7 +81,7 @@ public class TableBucketStateMachine {
      * table buckets in zookeeper.
      */
     private void initializeBucketState() {
-        Set<TableBucket> tableBuckets = coordinatorContext.allBuckets();
+        Set<TableBucket> tableBuckets = coordinatorContext.getAllBuckets();
         for (TableBucket tableBucket : tableBuckets) {
             BucketState bucketState =
                     coordinatorContext
@@ -121,13 +119,13 @@ public class TableBucketStateMachine {
     }
 
     public void handleStateChange(Set<TableBucket> tableBuckets, BucketState targetState) {
-        handleStateChange(tableBuckets, targetState, DEFAULT_ELECTION);
+        handleStateChange(tableBuckets, targetState, new DefaultLeaderElection());
     }
 
     public void handleStateChange(
             Set<TableBucket> tableBuckets,
             BucketState targetState,
-            ReplicaLeaderElectionStrategy replicaLeaderElectionStrategy) {
+            ReplicaLeaderElection replicaLeaderElection) {
         try {
             coordinatorRequestBatch.newBatch();
 
@@ -136,7 +134,7 @@ public class TableBucketStateMachine {
                 batchHandleOnlineChangeAndInitLeader(tableBuckets);
             } else {
                 for (TableBucket tableBucket : tableBuckets) {
-                    doHandleStateChange(tableBucket, targetState, replicaLeaderElectionStrategy);
+                    doHandleStateChange(tableBucket, targetState, replicaLeaderElection);
                 }
             }
             coordinatorRequestBatch.sendRequestToTabletServers(
@@ -188,12 +186,12 @@ public class TableBucketStateMachine {
      *
      * @param tableBucket The table bucket that is to do state change
      * @param targetState the target state that is to change to
-     * @param replicaLeaderElectionStrategy the strategy to choose a new leader
+     * @param replicaLeaderElection the strategy to choose a new leader
      */
     private void doHandleStateChange(
             TableBucket tableBucket,
             BucketState targetState,
-            ReplicaLeaderElectionStrategy replicaLeaderElectionStrategy) {
+            ReplicaLeaderElection replicaLeaderElection) {
         coordinatorContext.putBucketStateIfNotExists(tableBucket, BucketState.NonExistentBucket);
         if (!checkValidTableBucketStateChange(tableBucket, targetState)) {
             return;
@@ -245,8 +243,7 @@ public class TableBucketStateMachine {
                     // current state is Online or Offline
                     // not new bucket, we then need to update leader/epoch for the bucket
                     Optional<ElectionResult> optionalElectionResult =
-                            electNewLeaderForTableBuckets(
-                                    tableBucket, replicaLeaderElectionStrategy);
+                            electNewLeaderForTableBuckets(tableBucket, replicaLeaderElection);
                     if (!optionalElectionResult.isPresent()) {
                         logFailedStateChange(
                                 tableBucket, currentState, targetState, "Elect result is empty.");
@@ -470,7 +467,7 @@ public class TableBucketStateMachine {
     }
 
     private Optional<ElectionResult> electNewLeaderForTableBuckets(
-            TableBucket tableBucket, ReplicaLeaderElectionStrategy electionStrategy) {
+            TableBucket tableBucket, ReplicaLeaderElection electionStrategy) {
         LeaderAndIsr leaderAndIsr;
         try {
             leaderAndIsr = zooKeeperClient.getLeaderAndIsr(tableBucket).get();
@@ -602,7 +599,7 @@ public class TableBucketStateMachine {
     private Optional<ElectionResult> electLeader(
             TableBucket tableBucket,
             LeaderAndIsr leaderAndIsr,
-            ReplicaLeaderElectionStrategy electionStrategy) {
+            ReplicaLeaderElection electionStrategy) {
         List<Integer> assignment = coordinatorContext.getAssignment(tableBucket);
         // filter out the live servers
         List<Integer> liveReplicas =
@@ -616,13 +613,23 @@ public class TableBucketStateMachine {
         }
 
         Optional<ElectionResult> resultOpt = Optional.empty();
-        if (electionStrategy == DEFAULT_ELECTION) {
-            resultOpt = defaultReplicaLeaderElection(assignment, liveReplicas, leaderAndIsr);
-        } else if (electionStrategy == CONTROLLED_SHUTDOWN_ELECTION) {
+        if (electionStrategy instanceof DefaultLeaderElection) {
+            resultOpt =
+                    ((DefaultLeaderElection) electionStrategy)
+                            .leaderElection(assignment, liveReplicas, leaderAndIsr);
+        } else if (electionStrategy instanceof ControlledShutdownLeaderElection) {
             Set<Integer> shuttingDownTabletServers = coordinatorContext.shuttingDownTabletServers();
             resultOpt =
-                    controlledShutdownReplicaLeaderElection(
-                            assignment, liveReplicas, leaderAndIsr, shuttingDownTabletServers);
+                    ((ControlledShutdownLeaderElection) electionStrategy)
+                            .leaderElection(
+                                    assignment,
+                                    liveReplicas,
+                                    leaderAndIsr,
+                                    shuttingDownTabletServers);
+        } else if (electionStrategy instanceof ReassignmentLeaderElection) {
+            resultOpt =
+                    ((ReassignmentLeaderElection) electionStrategy)
+                            .leaderElection(liveReplicas, leaderAndIsr);
         }
 
         if (!resultOpt.isPresent()) {
@@ -655,5 +662,31 @@ public class TableBucketStateMachine {
         public LeaderAndIsr getLeaderAndIsr() {
             return leaderAndIsr;
         }
+    }
+
+    /**
+     * Init replica leader election when the bucket is new created.
+     *
+     * @param assignments the assignments
+     * @param aliveReplicas the alive replicas
+     * @param coordinatorEpoch the coordinator epoch
+     * @return the election result
+     */
+    @VisibleForTesting
+    public static Optional<ElectionResult> initReplicaLeaderElection(
+            List<Integer> assignments, List<Integer> aliveReplicas, int coordinatorEpoch) {
+        // currently, we always use the first replica in assignment, which also in aliveReplicas and
+        // isr as the leader replica.
+        for (int assignment : assignments) {
+            if (aliveReplicas.contains(assignment)) {
+                return Optional.of(
+                        new ElectionResult(
+                                aliveReplicas,
+                                new LeaderAndIsr(
+                                        assignment, 0, aliveReplicas, coordinatorEpoch, 0)));
+            }
+        }
+
+        return Optional.empty();
     }
 }

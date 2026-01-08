@@ -15,10 +15,8 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.client.admin;
+package org.apache.fluss.cluster.rebalance;
 
-import org.apache.fluss.cluster.rebalance.RebalanceResultForBucket;
-import org.apache.fluss.cluster.rebalance.RebalanceStatus;
 import org.apache.fluss.metadata.TableBucket;
 
 import java.util.Map;
@@ -32,23 +30,35 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
  */
 public class RebalanceProgress {
 
+    /** The rebalance id. */
+    private final String rebalanceId;
+
     /** The rebalance status for the overall rebalance. */
     private final RebalanceStatus rebalanceStatus;
 
-    /** The rebalance progress for the overall rebalance. Between 0.0d to 1.0d */
+    /**
+     * The rebalance progress for the overall rebalance. Between 0.0d to 1.0d or a negative value.
+     * If this value lower than 0.0d, it means there are no bucket level rebalance tasks.
+     */
     private final double progress;
 
     /** The rebalance progress for each tabletBucket. */
     private final Map<TableBucket, RebalanceResultForBucket> progressForBucketMap;
 
     public RebalanceProgress(
+            String rebalanceId,
             RebalanceStatus rebalanceStatus,
             double progress,
             Map<TableBucket, RebalanceResultForBucket> progressForBucketMap) {
+        this.rebalanceId = rebalanceId;
         // TODO: we may derive the overall progress and status from progressForBucketMap
         this.rebalanceStatus = checkNotNull(rebalanceStatus);
         this.progress = progress;
         this.progressForBucketMap = checkNotNull(progressForBucketMap);
+    }
+
+    public String rebalanceId() {
+        return rebalanceId;
     }
 
     public RebalanceStatus status() {

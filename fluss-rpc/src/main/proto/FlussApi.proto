@@ -594,21 +594,24 @@ message RemoveServerTagResponse {
 
 message RebalanceRequest {
   repeated int32 goals = 1 [packed = true];
-  required bool dry_run = 2;
 }
 
 message RebalanceResponse {
-  repeated PbRebalancePlanForTable table_plan = 1;
+  required string rebalance_id = 1;
 }
 
 message ListRebalanceProgressRequest {
+  optional string rebalance_id = 1;
 }
 
 message ListRebalanceProgressResponse {
-  repeated PbRebalanceProgressForTable table_progress = 1;
+  optional string rebalance_id = 1;
+  optional int32 rebalance_status = 2;
+  repeated PbRebalanceProgressForTable table_progress = 3;
 }
 
 message CancelRebalanceRequest {
+  optional string rebalance_id = 1;
 }
 
 message CancelRebalanceResponse {

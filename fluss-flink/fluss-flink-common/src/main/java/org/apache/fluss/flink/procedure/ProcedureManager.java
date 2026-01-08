@@ -73,7 +73,10 @@ public class ProcedureManager {
         SET_CLUSTER_CONFIG("sys.set_cluster_config", SetClusterConfigProcedure.class),
         GET_CLUSTER_CONFIG("sys.get_cluster_config", GetClusterConfigProcedure.class),
         ADD_SERVER_TAG("sys.add_server_tag", AddServerTagProcedure.class),
-        REMOVE_SERVER_TAG("sys.remove_server_tag", RemoveServerTagProcedure.class);
+        REMOVE_SERVER_TAG("sys.remove_server_tag", RemoveServerTagProcedure.class),
+        REBALANCE("sys.rebalance", RebalanceProcedure.class),
+        CANCEL_REBALANCE("sys.cancel_rebalance", CancelRebalanceProcedure.class),
+        LIST_REBALANCE_PROGRESS("sys.list_rebalance", ListRebalanceProcessProcedure.class);
 
         private final String path;
         private final Class<? extends ProcedureBase> procedureClass;

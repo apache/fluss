@@ -18,6 +18,7 @@
 package org.apache.fluss.server.zk;
 
 import org.apache.fluss.annotation.Internal;
+import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.metadata.PhysicalTablePath;
@@ -42,7 +43,7 @@ import org.apache.fluss.server.zk.data.CoordinatorAddress;
 import org.apache.fluss.server.zk.data.DatabaseRegistration;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
-import org.apache.fluss.server.zk.data.RebalancePlan;
+import org.apache.fluss.server.zk.data.RebalanceTask;
 import org.apache.fluss.server.zk.data.RemoteLogManifestHandle;
 import org.apache.fluss.server.zk.data.ResourceAcl;
 import org.apache.fluss.server.zk.data.ServerTags;
@@ -296,7 +297,17 @@ public class ZooKeeperClient implements AutoCloseable {
             throws Exception {
         String path = TableIdZNode.path(tableId);
         zkClient.setData().forPath(path, TableIdZNode.encode(tableAssignment));
-        LOG.info("Updated table assignment {} for table id {}.", tableAssignment, tableId);
+        LOG.debug("Updated table assignment {} for table id {}.", tableAssignment, tableId);
+    }
+
+    public void updatePartitionAssignment(long partitionId, PartitionAssignment partitionAssignment)
+            throws Exception {
+        String path = PartitionIdZNode.path(partitionId);
+        zkClient.setData().forPath(path, PartitionIdZNode.encode(partitionAssignment));
+        LOG.debug(
+                "Updated partition assignment {} for partition id {}.",
+                partitionAssignment,
+                partitionId);
     }
 
     public void deleteTableAssignment(long tableId) throws Exception {
@@ -1218,22 +1229,28 @@ public class ZooKeeperClient implements AutoCloseable {
         deletePath(ServerTagsZNode.path());
     }
 
-    public void registerRebalancePlan(RebalancePlan rebalancePlan) throws Exception {
+    public void registerRebalanceTask(RebalanceTask rebalanceTask) throws Exception {
         String path = RebalanceZNode.path();
-        zkClient.create()
-                .creatingParentsIfNeeded()
-                .withMode(CreateMode.PERSISTENT)
-                .forPath(path, RebalanceZNode.encode(rebalancePlan));
+        Stat stat = zkClient.checkExists().forPath(path);
+        if (stat == null) {
+            zkClient.create()
+                    .creatingParentsIfNeeded()
+                    .withMode(CreateMode.PERSISTENT)
+                    .forPath(path, RebalanceZNode.encode(rebalanceTask));
+        } else {
+            zkClient.setData().forPath(path, RebalanceZNode.encode(rebalanceTask));
+        }
     }
 
-    public void updateRebalancePlan(RebalancePlan rebalancePlan) throws Exception {
-        String path = RebalanceZNode.path();
-        zkClient.setData().forPath(path, RebalanceZNode.encode(rebalancePlan));
-    }
-
-    public Optional<RebalancePlan> getRebalancePlan() throws Exception {
+    public Optional<RebalanceTask> getRebalanceTask() throws Exception {
         String path = RebalanceZNode.path();
         return getOrEmpty(path).map(RebalanceZNode::decode);
+    }
+
+    /** Deletes the rebalance task from ZooKeeper. Only for testing propose now */
+    @VisibleForTesting
+    public void deleteRebalanceTask() throws Exception {
+        deletePath(RebalanceZNode.path());
     }
 
     // --------------------------------------------------------------------------------------------

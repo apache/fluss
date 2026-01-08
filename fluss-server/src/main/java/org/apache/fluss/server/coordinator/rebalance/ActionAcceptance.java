@@ -15,10 +15,23 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.server.coordinator.statemachine;
+package org.apache.fluss.server.coordinator.rebalance;
 
-/** The strategies to elect the replica leader. */
-public enum ReplicaLeaderElectionStrategy {
-    DEFAULT_ELECTION,
-    CONTROLLED_SHUTDOWN_ELECTION
+/** Flags to indicate if an action is acceptable by the goal(s). */
+public enum ActionAcceptance {
+    /** Action is acceptable -- i.e. it does not violate goal constraints. */
+    ACCEPT,
+    /**
+     * Action is rejected in replica-level. But, the destination tabletServer may potentially accept
+     * actions of the same {@link ActionType} from the source tabletServer specified in the given
+     * action.
+     */
+    REPLICA_REJECT,
+
+    /**
+     * Action is rejected in server-level. hence, the destination tabletServer does not accept
+     * actions of the same {@link ActionType} from the source tabletServer specified in the given
+     * action.
+     */
+    SERVER_REJECT
 }

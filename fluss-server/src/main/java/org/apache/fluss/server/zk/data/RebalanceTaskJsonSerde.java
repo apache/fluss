@@ -33,13 +33,14 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 
-/** Json serializer and deserializer for {@link RebalancePlan}. */
-public class RebalancePlanJsonSerde
-        implements JsonSerializer<RebalancePlan>, JsonDeserializer<RebalancePlan> {
+/** Json serializer and deserializer for {@link RebalanceTask}. */
+public class RebalanceTaskJsonSerde
+        implements JsonSerializer<RebalanceTask>, JsonDeserializer<RebalanceTask> {
 
-    public static final RebalancePlanJsonSerde INSTANCE = new RebalancePlanJsonSerde();
+    public static final RebalanceTaskJsonSerde INSTANCE = new RebalanceTaskJsonSerde();
 
     private static final String VERSION_KEY = "version";
+    private static final String REBALANCE_ID = "rebalance_id";
     private static final String REBALANCE_STATUS = "rebalance_status";
     private static final String REBALANCE_PLAN = "rebalance_plan";
 
@@ -56,15 +57,16 @@ public class RebalancePlanJsonSerde
     private static final int VERSION = 1;
 
     @Override
-    public void serialize(RebalancePlan rebalancePlan, JsonGenerator generator) throws IOException {
+    public void serialize(RebalanceTask rebalanceTask, JsonGenerator generator) throws IOException {
         generator.writeStartObject();
         generator.writeNumberField(VERSION_KEY, VERSION);
-        generator.writeNumberField(REBALANCE_STATUS, rebalancePlan.getRebalanceStatus().getCode());
+        generator.writeStringField(REBALANCE_ID, rebalanceTask.getRebalanceId());
+        generator.writeNumberField(REBALANCE_STATUS, rebalanceTask.getRebalanceStatus().getCode());
 
         generator.writeArrayFieldStart(REBALANCE_PLAN);
         // first to write none-partitioned tables.
         for (Map.Entry<Long, List<RebalancePlanForBucket>> entry :
-                rebalancePlan.getPlanForBuckets().entrySet()) {
+                rebalanceTask.getPlanForBuckets().entrySet()) {
             generator.writeStartObject();
             generator.writeNumberField(TABLE_ID, entry.getKey());
             generator.writeArrayFieldStart(BUCKETS);
@@ -77,7 +79,7 @@ public class RebalancePlanJsonSerde
 
         // then to write partitioned tables.
         for (Map.Entry<TablePartition, List<RebalancePlanForBucket>> entry :
-                rebalancePlan.getPlanForBucketsOfPartitionedTable().entrySet()) {
+                rebalanceTask.getPlanForBucketsOfPartitionedTable().entrySet()) {
             generator.writeStartObject();
             generator.writeNumberField(TABLE_ID, entry.getKey().getTableId());
             generator.writeNumberField(PARTITION_ID, entry.getKey().getPartitionId());
@@ -95,9 +97,10 @@ public class RebalancePlanJsonSerde
     }
 
     @Override
-    public RebalancePlan deserialize(JsonNode node) {
+    public RebalanceTask deserialize(JsonNode node) {
         JsonNode rebalancePlanNode = node.get(REBALANCE_PLAN);
 
+        String rebalanceId = node.get(REBALANCE_ID).asText();
         RebalanceStatus rebalanceStatus = RebalanceStatus.of(node.get(REBALANCE_STATUS).asInt());
 
         Map<TableBucket, RebalancePlanForBucket> planForBuckets = new HashMap<>();
@@ -137,7 +140,7 @@ public class RebalancePlanJsonSerde
             }
         }
 
-        return new RebalancePlan(rebalanceStatus, planForBuckets);
+        return new RebalanceTask(rebalanceId, rebalanceStatus, planForBuckets);
     }
 
     private void serializeRebalancePlanForBucket(

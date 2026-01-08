@@ -25,6 +25,10 @@ import org.apache.fluss.client.metadata.KvSnapshots;
 import org.apache.fluss.client.metadata.LakeSnapshot;
 import org.apache.fluss.client.write.KvWriteBatch;
 import org.apache.fluss.client.write.ReadyWriteBatch;
+import org.apache.fluss.cluster.rebalance.RebalancePlanForBucket;
+import org.apache.fluss.cluster.rebalance.RebalanceProgress;
+import org.apache.fluss.cluster.rebalance.RebalanceResultForBucket;
+import org.apache.fluss.cluster.rebalance.RebalanceStatus;
 import org.apache.fluss.config.cluster.AlterConfigOpType;
 import org.apache.fluss.config.cluster.ColumnPositionType;
 import org.apache.fluss.config.cluster.ConfigEntry;
@@ -46,6 +50,7 @@ import org.apache.fluss.rpc.messages.GetLatestKvSnapshotsResponse;
 import org.apache.fluss.rpc.messages.GetLatestLakeSnapshotResponse;
 import org.apache.fluss.rpc.messages.ListOffsetsRequest;
 import org.apache.fluss.rpc.messages.ListPartitionInfosResponse;
+import org.apache.fluss.rpc.messages.ListRebalanceProgressResponse;
 import org.apache.fluss.rpc.messages.LookupRequest;
 import org.apache.fluss.rpc.messages.MetadataRequest;
 import org.apache.fluss.rpc.messages.PbAddColumn;
@@ -61,6 +66,9 @@ import org.apache.fluss.rpc.messages.PbPartitionSpec;
 import org.apache.fluss.rpc.messages.PbPrefixLookupReqForBucket;
 import org.apache.fluss.rpc.messages.PbProduceLogReqForBucket;
 import org.apache.fluss.rpc.messages.PbPutKvReqForBucket;
+import org.apache.fluss.rpc.messages.PbRebalancePlanForBucket;
+import org.apache.fluss.rpc.messages.PbRebalanceProgressForBucket;
+import org.apache.fluss.rpc.messages.PbRebalanceProgressForTable;
 import org.apache.fluss.rpc.messages.PbRemotePathAndLocalFile;
 import org.apache.fluss.rpc.messages.PbRenameColumn;
 import org.apache.fluss.rpc.messages.PrefixLookupRequest;
@@ -77,10 +85,13 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 
+import static org.apache.fluss.cluster.rebalance.RebalanceStatus.FINAL_STATUSES;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toResolvedPartitionSpec;
+import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkState;
 
 /**
@@ -368,6 +379,65 @@ public class ClientRpcMessageUtils {
                 .addAllRenameColumns(renameColumns)
                 .addAllModifyColumns(modifyColumns);
         return request;
+    }
+
+    public static Optional<RebalanceProgress> toRebalanceProgress(
+            ListRebalanceProgressResponse response) {
+        if (!response.hasRebalanceId()) {
+            return Optional.empty();
+        }
+
+        checkArgument(response.hasRebalanceStatus(), "Rebalance status is not set");
+        RebalanceStatus totalRebalanceStatus = RebalanceStatus.of(response.getRebalanceStatus());
+        int totalTask = 0;
+        int finishedTask = 0;
+        Map<TableBucket, RebalanceResultForBucket> rebalanceProgress = new HashMap<>();
+        for (PbRebalanceProgressForTable pbTable : response.getTableProgressesList()) {
+            long tableId = pbTable.getTableId();
+            for (PbRebalanceProgressForBucket pbBucket : pbTable.getBucketsProgressesList()) {
+                RebalanceStatus bucketStatus = RebalanceStatus.of(pbBucket.getRebalanceStatus());
+                RebalancePlanForBucket planForBucket =
+                        toRebalancePlanForBucket(tableId, pbBucket.getRebalancePlan());
+                rebalanceProgress.put(
+                        planForBucket.getTableBucket(),
+                        new RebalanceResultForBucket(planForBucket, bucketStatus));
+                if (FINAL_STATUSES.contains(bucketStatus)) {
+                    finishedTask++;
+                }
+                totalTask++;
+            }
+        }
+
+        // For these rebalance task without only bucket level rebalance tasks, we return -1 as
+        // progress.
+        double progress = -1d;
+        if (totalTask != 0) {
+            progress = (double) finishedTask / totalTask;
+        }
+
+        return Optional.of(
+                new RebalanceProgress(
+                        response.getRebalanceId(),
+                        totalRebalanceStatus,
+                        progress,
+                        rebalanceProgress));
+    }
+
+    private static RebalancePlanForBucket toRebalancePlanForBucket(
+            long tableId, PbRebalancePlanForBucket rebalancePlan) {
+        TableBucket tableBucket =
+                new TableBucket(
+                        tableId,
+                        rebalancePlan.hasPartitionId() ? rebalancePlan.getPartitionId() : null,
+                        rebalancePlan.getBucketId());
+        return new RebalancePlanForBucket(
+                tableBucket,
+                rebalancePlan.getOriginalLeader(),
+                rebalancePlan.getNewLeader(),
+                Arrays.stream(rebalancePlan.getOriginalReplicas())
+                        .boxed()
+                        .collect(Collectors.toList()),
+                Arrays.stream(rebalancePlan.getNewReplicas()).boxed().collect(Collectors.toList()));
     }
 
     public static List<PartitionInfo> toPartitionInfos(ListPartitionInfosResponse response) {

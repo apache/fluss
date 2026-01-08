@@ -810,12 +810,12 @@ public final class ZkData {
             return "/cluster/rebalance";
         }
 
-        public static byte[] encode(RebalancePlan rebalancePlan) {
-            return JsonSerdeUtils.writeValueAsBytes(rebalancePlan, RebalancePlanJsonSerde.INSTANCE);
+        public static byte[] encode(RebalanceTask rebalanceTask) {
+            return JsonSerdeUtils.writeValueAsBytes(rebalanceTask, RebalanceTaskJsonSerde.INSTANCE);
         }
 
-        public static RebalancePlan decode(byte[] json) {
-            return JsonSerdeUtils.readValue(json, RebalancePlanJsonSerde.INSTANCE);
+        public static RebalanceTask decode(byte[] json) {
+            return JsonSerdeUtils.readValue(json, RebalanceTaskJsonSerde.INSTANCE);
         }
     }
 }

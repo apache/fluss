@@ -20,6 +20,7 @@ package org.apache.fluss.server.coordinator;
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.cluster.TabletServerInfo;
+import org.apache.fluss.cluster.rebalance.GoalType;
 import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
@@ -113,12 +114,16 @@ import org.apache.fluss.server.authorizer.Authorizer;
 import org.apache.fluss.server.coordinator.event.AccessContextEvent;
 import org.apache.fluss.server.coordinator.event.AddServerTagEvent;
 import org.apache.fluss.server.coordinator.event.AdjustIsrReceivedEvent;
+import org.apache.fluss.server.coordinator.event.CancelRebalanceEvent;
 import org.apache.fluss.server.coordinator.event.CommitKvSnapshotEvent;
 import org.apache.fluss.server.coordinator.event.CommitLakeTableSnapshotEvent;
 import org.apache.fluss.server.coordinator.event.CommitRemoteLogManifestEvent;
 import org.apache.fluss.server.coordinator.event.ControlledShutdownEvent;
 import org.apache.fluss.server.coordinator.event.EventManager;
+import org.apache.fluss.server.coordinator.event.ListRebalanceProgressEvent;
+import org.apache.fluss.server.coordinator.event.RebalanceEvent;
 import org.apache.fluss.server.coordinator.event.RemoveServerTagEvent;
+import org.apache.fluss.server.coordinator.rebalance.goal.Goal;
 import org.apache.fluss.server.entity.CommitKvSnapshotData;
 import org.apache.fluss.server.entity.LakeTieringTableInfo;
 import org.apache.fluss.server.entity.TablePropertyChanges;
@@ -140,6 +145,7 @@ import org.apache.fluss.utils.json.TableBucketOffsets;
 import javax.annotation.Nullable;
 
 import java.io.UncheckedIOException;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
@@ -153,6 +159,7 @@ import java.util.stream.Collectors;
 import static org.apache.fluss.config.FlussConfigUtils.isTableStorageConfig;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toAclBindingFilters;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toAclBindings;
+import static org.apache.fluss.server.coordinator.rebalance.goal.GoalUtils.getGoalByType;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.fromTablePath;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getAdjustIsrData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getCommitLakeTableSnapshotData;
@@ -170,7 +177,6 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /** An RPC Gateway service for coordinator server. */
 public final class CoordinatorService extends RpcServiceBase implements CoordinatorGateway {
-
     private final int defaultBucketNumber;
     private final int defaultReplicationFactor;
     private final boolean logTableAllowCreation;
@@ -577,16 +583,15 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
 
         AccessContextEvent<MetadataResponse> metadataResponseAccessContextEvent =
                 new AccessContextEvent<>(
-                        ctx -> {
-                            return processMetadataRequest(
-                                    request,
-                                    listenerName,
-                                    session,
-                                    authorizer,
-                                    metadataCache,
-                                    new CoordinatorMetadataProvider(
-                                            zkClient, metadataManager, ctx));
-                        });
+                        ctx ->
+                                processMetadataRequest(
+                                        request,
+                                        listenerName,
+                                        session,
+                                        authorizer,
+                                        metadataCache,
+                                        new CoordinatorMetadataProvider(
+                                                zkClient, metadataManager, ctx)));
         eventManagerSupplier.get().put(metadataResponseAccessContextEvent);
         return metadataResponseAccessContextEvent.getResultFuture();
     }
@@ -851,19 +856,39 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
 
     @Override
     public CompletableFuture<RebalanceResponse> rebalance(RebalanceRequest request) {
-        throw new UnsupportedOperationException("Support soon!");
+        List<Goal> goalsByPriority = new ArrayList<>();
+        Arrays.stream(request.getGoals())
+                .forEach(goal -> goalsByPriority.add(getGoalByType(GoalType.valueOf(goal))));
+
+        CompletableFuture<RebalanceResponse> response = new CompletableFuture<>();
+        eventManagerSupplier.get().put(new RebalanceEvent(goalsByPriority, response));
+        return response;
     }
 
     @Override
     public CompletableFuture<ListRebalanceProgressResponse> listRebalanceProgress(
             ListRebalanceProgressRequest request) {
-        throw new UnsupportedOperationException("Support soon!");
+        CompletableFuture<ListRebalanceProgressResponse> response = new CompletableFuture<>();
+        eventManagerSupplier
+                .get()
+                .put(
+                        new ListRebalanceProgressEvent(
+                                request.hasRebalanceId() ? request.getRebalanceId() : null,
+                                response));
+        return response;
     }
 
     @Override
     public CompletableFuture<CancelRebalanceResponse> cancelRebalance(
             CancelRebalanceRequest request) {
-        throw new UnsupportedOperationException("Support soon!");
+        CompletableFuture<CancelRebalanceResponse> response = new CompletableFuture<>();
+        eventManagerSupplier
+                .get()
+                .put(
+                        new CancelRebalanceEvent(
+                                request.hasRebalanceId() ? request.getRebalanceId() : null,
+                                response));
+        return response;
     }
 
     @VisibleForTesting

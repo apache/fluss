@@ -32,13 +32,13 @@ public enum GoalType {
      * Goal to generate replica movement tasks to ensure that the number of replicas on each
      * tabletServer is near balanced.
      */
-    REPLICA_DISTRIBUTION_GOAL(0),
+    REPLICA_DISTRIBUTION(0),
 
     /**
      * Goal to generate leadership movement and leader replica movement tasks to ensure that the
      * number of leader replicas on each tabletServer is near balanced.
      */
-    LEADER_DISTRIBUTION_GOAL(1);
+    LEADER_DISTRIBUTION(1);
 
     public final int value;
 
@@ -47,14 +47,18 @@ public enum GoalType {
     }
 
     public static GoalType valueOf(int value) {
-        if (value == REPLICA_DISTRIBUTION_GOAL.value) {
-            return REPLICA_DISTRIBUTION_GOAL;
-        } else if (value == LEADER_DISTRIBUTION_GOAL.value) {
-            return LEADER_DISTRIBUTION_GOAL;
+        if (value == REPLICA_DISTRIBUTION.value) {
+            return REPLICA_DISTRIBUTION;
+        } else if (value == LEADER_DISTRIBUTION.value) {
+            return LEADER_DISTRIBUTION;
         } else {
             throw new IllegalArgumentException(
                     String.format(
                             "Value %s must be one of %s", value, Arrays.asList(GoalType.values())));
         }
+    }
+
+    public static GoalType fromName(String name) {
+        return valueOf(name.toUpperCase());
     }
 }

@@ -15,27 +15,20 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.client.admin;
+package org.apache.fluss.server.coordinator.rebalance;
 
-import org.apache.fluss.cluster.rebalance.RebalancePlanForBucket;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.server.coordinator.rebalance.model.ClusterModel;
 
-import java.util.Map;
+import java.util.List;
 
-/**
- * The rebalance plan.
- *
- * @since 0.9
- */
-public class RebalancePlan {
+/** A util class for rebalance test. */
+public class RebalanceTestUtils {
 
-    private final Map<TableBucket, RebalancePlanForBucket> planForBucketMap;
-
-    public RebalancePlan(Map<TableBucket, RebalancePlanForBucket> planForBucketMap) {
-        this.planForBucketMap = planForBucketMap;
-    }
-
-    public Map<TableBucket, RebalancePlanForBucket> getPlanForBucketMap() {
-        return planForBucketMap;
+    public static void addBucket(
+            ClusterModel clusterModel, TableBucket tb, List<Integer> replicas) {
+        for (int i = 0; i < replicas.size(); i++) {
+            clusterModel.createReplica(replicas.get(i), tb, i, i == 0);
+        }
     }
 }

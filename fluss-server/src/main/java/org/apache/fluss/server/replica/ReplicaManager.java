@@ -339,7 +339,8 @@ public class ReplicaManager {
                 this::physicalStorageRemoteLogSize);
     }
 
-    private Stream<Replica> onlineReplicas() {
+    @VisibleForTesting
+    public Stream<Replica> onlineReplicas() {
         return allReplicas.values().stream()
                 .map(
                         t -> {
@@ -363,6 +364,11 @@ public class ReplicaManager {
 
     private long atMinIsrCount() {
         return onlineReplicas().filter(Replica::isAtMinIsr).count();
+    }
+
+    @VisibleForTesting
+    public long leaderCount() {
+        return onlineReplicas().filter(Replica::isLeader).count();
     }
 
     private int writerIdCount() {
@@ -412,6 +418,11 @@ public class ReplicaManager {
                     List<NotifyLeaderAndIsrData> replicasToBeLeader = new ArrayList<>();
                     List<NotifyLeaderAndIsrData> replicasToBeFollower = new ArrayList<>();
                     for (NotifyLeaderAndIsrData data : notifyLeaderAndIsrDataList) {
+                        LOG.info(
+                                "Try to become leaderAndFollower for {} with isr {}, replicas: {}",
+                                data.getTableBucket(),
+                                data.getLeaderAndIsr(),
+                                data.getReplicas());
                         TableBucket tb = data.getTableBucket();
                         try {
                             boolean becomeLeader = validateAndGetIsBecomeLeader(data);

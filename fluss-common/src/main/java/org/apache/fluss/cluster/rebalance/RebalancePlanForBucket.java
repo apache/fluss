@@ -73,6 +73,10 @@ public class RebalancePlanForBucket {
         return newReplicas;
     }
 
+    public boolean isLeaderChanged() {
+        return originalLeader != newLeader;
+    }
+
     @Override
     public String toString() {
         return "RebalancePlanForBucket{"
