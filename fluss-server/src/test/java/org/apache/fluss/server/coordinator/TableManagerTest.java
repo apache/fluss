@@ -280,7 +280,7 @@ class TableManagerTest {
         String partitionName = "2024";
         long partitionId = zookeeperClient.getPartitionIdAndIncrement();
         zookeeperClient.registerPartitionAssignmentAndMetadata(
-                partitionId, partitionName, partitionAssignment, DATA1_TABLE_PATH, tableId);
+                partitionId, partitionName, partitionAssignment, null, DATA1_TABLE_PATH, tableId);
 
         // create partition
         tableManager.onCreateNewPartition(

@@ -21,6 +21,7 @@ import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.Schema;
@@ -43,6 +44,7 @@ import org.apache.fluss.server.zk.data.CoordinatorAddress;
 import org.apache.fluss.server.zk.data.DatabaseRegistration;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
+import org.apache.fluss.server.zk.data.PartitionRegistration;
 import org.apache.fluss.server.zk.data.RebalanceTask;
 import org.apache.fluss.server.zk.data.RemoteLogManifestHandle;
 import org.apache.fluss.server.zk.data.ResourceAcl;
@@ -646,7 +648,7 @@ public class ZooKeeperClient implements AutoCloseable {
     public Map<String, Long> getPartitionNameAndIds(TablePath tablePath) throws Exception {
         Map<String, Long> partitions = new HashMap<>();
         for (String partitionName : getPartitions(tablePath)) {
-            Optional<TablePartition> optPartition = getPartition(tablePath, partitionName);
+            Optional<PartitionRegistration> optPartition = getPartition(tablePath, partitionName);
             optPartition.ifPresent(
                     partition -> partitions.put(partitionName, partition.getPartitionId()));
         }
@@ -705,7 +707,8 @@ public class ZooKeeperClient implements AutoCloseable {
                     fromPartitionName(partitionKeys, partitionName);
             boolean contains = resolvedPartitionSpec.contains(partialPartitionSpec);
             if (contains) {
-                Optional<TablePartition> optPartition = getPartition(tablePath, partitionName);
+                Optional<PartitionRegistration> optPartition =
+                        getPartition(tablePath, partitionName);
                 optPartition.ifPresent(
                         partition -> partitions.put(partitionName, partition.getPartitionId()));
             }
@@ -751,7 +754,7 @@ public class ZooKeeperClient implements AutoCloseable {
     }
 
     /** Get a partition of a table in ZK. */
-    public Optional<TablePartition> getPartition(TablePath tablePath, String partitionName)
+    public Optional<PartitionRegistration> getPartition(TablePath tablePath, String partitionName)
             throws Exception {
         String path = PartitionZNode.path(tablePath, partitionName);
         return getOrEmpty(path).map(PartitionZNode::decode);
@@ -774,7 +777,7 @@ public class ZooKeeperClient implements AutoCloseable {
         return processGetDataResponses(
                 responses,
                 response -> path2PartitionPathMap.get(response.getPath()),
-                PartitionZNode::decode,
+                (byte[] data) -> PartitionZNode.decode(data).toTablePartition(),
                 "partition");
     }
 
@@ -799,6 +802,7 @@ public class ZooKeeperClient implements AutoCloseable {
             long partitionId,
             String partitionName,
             PartitionAssignment partitionAssignment,
+            FsPath remoteDataDir,
             TablePath tablePath,
             long tableId)
             throws Exception {
@@ -844,12 +848,15 @@ public class ZooKeeperClient implements AutoCloseable {
                         .withMode(CreateMode.PERSISTENT)
                         .forPath(
                                 metadataPath,
-                                PartitionZNode.encode(new TablePartition(tableId, partitionId)));
+                                PartitionZNode.encode(
+                                        new PartitionRegistration(
+                                                tableId, partitionId, remoteDataDir)));
 
         ops.add(tabletServerPartitionNode);
         ops.add(metadataPartitionNode);
         zkClient.transaction().forOperations(ops);
     }
+
     // --------------------------------------------------------------------------------------------
     // Schema
     // --------------------------------------------------------------------------------------------
