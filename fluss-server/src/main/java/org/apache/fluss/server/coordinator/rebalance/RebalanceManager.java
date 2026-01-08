@@ -134,6 +134,11 @@ public class RebalanceManager {
         finishedRebalanceTasks.clear();
 
         currentRebalanceId = rebalanceId;
+        if (rebalancePlan.isEmpty()) {
+            completeRebalance();
+            return;
+        }
+
         rebalancePlan.forEach(
                 ((tableBucket, planForBucket) -> {
                     if (FINAL_STATUSES.contains(newStatus)) {
@@ -173,7 +178,6 @@ public class RebalanceManager {
 
             if (inProgressRebalanceTasksQueue.isEmpty()) {
                 // All rebalance tasks are completed.
-                rebalanceStatus = COMPLETED;
                 completeRebalance();
             } else {
                 // Trigger one rebalance task to execute.
@@ -309,18 +313,22 @@ public class RebalanceManager {
         checkNotClosed();
         try {
             Optional<RebalanceTask> rebalanceTaskOpt = zkClient.getRebalanceTask();
+            Map<TableBucket, RebalancePlanForBucket> bucketPlan;
             if (rebalanceTaskOpt.isPresent()) {
-                RebalanceTask rebalanceTask = rebalanceTaskOpt.get();
-                zkClient.registerRebalanceTask(
-                        new RebalanceTask(
-                                rebalanceTask.getRebalanceId(),
-                                COMPLETED,
-                                rebalanceTask.getExecutePlan()));
+                bucketPlan = rebalanceTaskOpt.get().getExecutePlan();
+            } else {
+                LOG.warn(
+                        "Rebalance task is empty in zk when complete rebalance. "
+                                + "It will be treated as no rebalance tasks.");
+                bucketPlan = new HashMap<>();
             }
+            zkClient.registerRebalanceTask(
+                    new RebalanceTask(currentRebalanceId, COMPLETED, bucketPlan));
         } catch (Exception e) {
             LOG.error("Error when update rebalance plan from zookeeper.", e);
         }
 
+        rebalanceStatus = COMPLETED;
         inProgressRebalanceTasks.clear();
         inProgressRebalanceTasksQueue.clear();
 
@@ -394,5 +402,11 @@ public class RebalanceManager {
     @VisibleForTesting
     public ClusterModel buildClusterModel() {
         return buildClusterModel(eventProcessor.getCoordinatorContext());
+    }
+
+    @VisibleForTesting
+    @Nullable
+    RebalanceStatus getRebalanceStatus() {
+        return rebalanceStatus;
     }
 }
