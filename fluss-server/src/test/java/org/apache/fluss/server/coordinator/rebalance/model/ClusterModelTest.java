@@ -41,10 +41,10 @@ public class ClusterModelTest {
     @BeforeEach
     public void setup() {
         servers = new TreeSet<>();
-        server0 = new ServerModel(0, "rack0", true);
-        server1 = new ServerModel(1, "rack1", true);
-        server2 = new ServerModel(2, "rack2", true);
-        server3 = new ServerModel(3, "rack0", false);
+        server0 = new ServerModel(0, "rack0", false);
+        server1 = new ServerModel(1, "rack1", false);
+        server2 = new ServerModel(2, "rack2", false);
+        server3 = new ServerModel(3, "rack0", true);
         servers.add(server0);
         servers.add(server1);
         servers.add(server2);

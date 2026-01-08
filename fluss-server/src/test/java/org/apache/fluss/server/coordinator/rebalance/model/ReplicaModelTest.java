@@ -29,7 +29,7 @@ public class ReplicaModelTest {
     @Test
     void testReplicaModel() {
         ReplicaModel replicaModel =
-                new ReplicaModel(new TableBucket(1L, 0), new ServerModel(1, "rack1", true), false);
+                new ReplicaModel(new TableBucket(1L, 0), new ServerModel(1, "rack1", false), false);
         assertThat(replicaModel.tableBucket()).isEqualTo(new TableBucket(1L, 0));
         assertThat(replicaModel.isLeader()).isFalse();
         assertThat(replicaModel.server().id()).isEqualTo(1);
@@ -44,7 +44,7 @@ public class ReplicaModelTest {
         assertThat(replicaModel.isLeader()).isFalse();
 
         // set server.
-        replicaModel.setServer(new ServerModel(2, "rack2", true));
+        replicaModel.setServer(new ServerModel(2, "rack2", false));
         assertThat(replicaModel.server().id()).isEqualTo(2);
         assertThat(replicaModel.originalServer().id()).isEqualTo(1);
     }
@@ -52,13 +52,13 @@ public class ReplicaModelTest {
     @Test
     void testToString() {
         ReplicaModel replicaModel =
-                new ReplicaModel(new TableBucket(1L, 0), new ServerModel(1, "rack1", true), false);
+                new ReplicaModel(new TableBucket(1L, 0), new ServerModel(1, "rack1", false), false);
         assertThat(replicaModel.toString())
                 .isEqualTo(
                         "ReplicaModel[TableBucket=TableBucket{tableId=1, bucket=0},isLeader=false,rack=rack1,server=1,originalServer=1]");
 
         replicaModel.makeLeader();
-        replicaModel.setServer(new ServerModel(2, "rack2", true));
+        replicaModel.setServer(new ServerModel(2, "rack2", false));
         assertThat(replicaModel.toString())
                 .isEqualTo(
                         "ReplicaModel[TableBucket=TableBucket{tableId=1, bucket=0},isLeader=true,rack=rack2,server=2,originalServer=1]");
@@ -67,12 +67,12 @@ public class ReplicaModelTest {
     @Test
     void testEquals() {
         ReplicaModel replicaModel1 =
-                new ReplicaModel(new TableBucket(1L, 0), new ServerModel(1, "rack1", true), false);
+                new ReplicaModel(new TableBucket(1L, 0), new ServerModel(1, "rack1", false), false);
         ReplicaModel replicaModel2 =
-                new ReplicaModel(new TableBucket(1L, 0), new ServerModel(1, "rack1", true), false);
+                new ReplicaModel(new TableBucket(1L, 0), new ServerModel(1, "rack1", false), false);
         assertThat(replicaModel1).isEqualTo(replicaModel2);
 
-        replicaModel1.setServer(new ServerModel(2, "rack2", true));
+        replicaModel1.setServer(new ServerModel(2, "rack2", false));
         assertThat(replicaModel1).isEqualTo(replicaModel2);
 
         replicaModel1.setLeadership(true);

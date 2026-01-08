@@ -34,12 +34,12 @@ public class BucketModelTest {
         BucketModel bucketModel =
                 new BucketModel(
                         new TableBucket(1L, 0),
-                        Collections.singleton(new ServerModel(0, "rack0", true)));
+                        Collections.singleton(new ServerModel(0, "rack0", false)));
         assertThat(bucketModel.tableBucket()).isEqualTo(new TableBucket(1L, 0));
         assertThat(bucketModel.leader()).isNull();
         assertThat(bucketModel.bucketServers()).isEmpty();
         assertThat(bucketModel.replicas()).isEmpty();
-        assertThat(bucketModel.canAssignReplicaToServer(new ServerModel(0, "rack0", true)))
+        assertThat(bucketModel.canAssignReplicaToServer(new ServerModel(0, "rack0", false)))
                 .isFalse();
 
         // add a leader replica.
@@ -66,10 +66,10 @@ public class BucketModelTest {
 
         // add a follower replica.
         ReplicaModel replicaModel2 =
-                new ReplicaModel(new TableBucket(1L, 0), new ServerModel(2, "rack2", true), false);
+                new ReplicaModel(new TableBucket(1L, 0), new ServerModel(2, "rack2", false), false);
         bucketModel.addFollower(replicaModel2, 1);
         ReplicaModel replicaModel3 =
-                new ReplicaModel(new TableBucket(1L, 0), new ServerModel(3, "rack3", true), false);
+                new ReplicaModel(new TableBucket(1L, 0), new ServerModel(3, "rack3", false), false);
         bucketModel.addFollower(replicaModel3, 2);
 
         assertThat(bucketModel.replicas()).contains(replicaModel1, replicaModel2, replicaModel3);

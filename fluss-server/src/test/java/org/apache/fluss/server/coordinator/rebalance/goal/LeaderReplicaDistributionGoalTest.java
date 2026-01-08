@@ -41,10 +41,10 @@ public class LeaderReplicaDistributionGoalTest {
     @BeforeEach
     public void setup() {
         servers = new TreeSet<>();
-        ServerModel server0 = new ServerModel(0, "rack0", true);
-        ServerModel server1 = new ServerModel(1, "rack1", true);
-        ServerModel server2 = new ServerModel(2, "rack2", true);
-        ServerModel server3 = new ServerModel(3, "rack0", true);
+        ServerModel server0 = new ServerModel(0, "rack0", false);
+        ServerModel server1 = new ServerModel(1, "rack1", false);
+        ServerModel server2 = new ServerModel(2, "rack2", false);
+        ServerModel server3 = new ServerModel(3, "rack0", false);
         servers.add(server0);
         servers.add(server1);
         servers.add(server2);
@@ -82,7 +82,7 @@ public class LeaderReplicaDistributionGoalTest {
 
     @Test
     void testDoOptimizeWithOfflineServer() {
-        ServerModel server4 = new ServerModel(4, "rack0", false);
+        ServerModel server4 = new ServerModel(4, "rack0", true);
         servers.add(server4);
 
         LeaderReplicaDistributionGoal goal = new LeaderReplicaDistributionGoal();

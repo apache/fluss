@@ -32,7 +32,7 @@ public class RackModelTest {
         assertThat(rackModel.rack()).isEqualTo("rack0");
         assertThat(rackModel.server(0)).isNull();
 
-        ServerModel serverModel = new ServerModel(0, "rack0", true);
+        ServerModel serverModel = new ServerModel(0, "rack0", false);
         rackModel.addServer(serverModel);
         assertThat(rackModel.server(0)).isEqualTo(serverModel);
 
