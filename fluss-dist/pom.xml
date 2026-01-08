@@ -186,6 +186,8 @@
                                         </argument>
                                         <argument>${project.basedir}/../build-target</argument>
                                     </arguments>
+                                    <async>true</async>
+                                    <asyncDestroyOnShutdown>true</asyncDestroyOnShutdown>
                                 </configuration>
                             </execution>
                         </executions>
