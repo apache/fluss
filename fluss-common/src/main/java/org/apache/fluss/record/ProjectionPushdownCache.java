@@ -49,8 +49,9 @@ public class ProjectionPushdownCache {
     }
 
     @Nullable
-    public ProjectionInfo getProjectionInfo(long tableId, short schemaId, int[] selectedColumnIds) {
-        ProjectionKey key = new ProjectionKey(tableId, schemaId, selectedColumnIds);
+    public ProjectionInfo getProjectionInfo(
+            long tableId, short schemaId, int[] selectedFieldPositions) {
+        ProjectionKey key = new ProjectionKey(tableId, schemaId, selectedFieldPositions);
         return projectionCache.getIfPresent(key);
     }
 

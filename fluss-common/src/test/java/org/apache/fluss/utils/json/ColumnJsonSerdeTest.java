@@ -20,11 +20,13 @@ package org.apache.fluss.utils.json;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.IntType;
+import org.apache.fluss.types.RowType;
 
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -36,11 +38,21 @@ public class ColumnJsonSerdeTest extends JsonSerdeTestBase<Schema.Column> {
 
     @Override
     protected Schema.Column[] createObjects() {
-        Schema.Column[] columns = new Schema.Column[4];
+        Schema.Column[] columns = new Schema.Column[5];
         columns[0] = new Schema.Column("a", DataTypes.STRING());
         columns[1] = new Schema.Column("b", DataTypes.INT(), "hello b");
         columns[2] = new Schema.Column("c", new IntType(false), "hello c");
         columns[3] = new Schema.Column("d", new IntType(false), "hello c", (short) 2);
+        columns[4] =
+                new Schema.Column(
+                        "e",
+                        new RowType(
+                                true,
+                                Arrays.asList(
+                                        DataTypes.FIELD("f", DataTypes.STRING()),
+                                        DataTypes.FIELD("g", DataTypes.STRING(), 1))),
+                        "hello c",
+                        (short) 2);
         return columns;
     }
 
@@ -50,7 +62,8 @@ public class ColumnJsonSerdeTest extends JsonSerdeTestBase<Schema.Column> {
             "{\"name\":\"a\",\"data_type\":{\"type\":\"STRING\"},\"id\":-1}",
             "{\"name\":\"b\",\"data_type\":{\"type\":\"INTEGER\"},\"comment\":\"hello b\",\"id\":-1}",
             "{\"name\":\"c\",\"data_type\":{\"type\":\"INTEGER\",\"nullable\":false},\"comment\":\"hello c\",\"id\":-1}",
-            "{\"name\":\"d\",\"data_type\":{\"type\":\"INTEGER\",\"nullable\":false},\"comment\":\"hello c\",\"id\":2}"
+            "{\"name\":\"d\",\"data_type\":{\"type\":\"INTEGER\",\"nullable\":false},\"comment\":\"hello c\",\"id\":2}",
+            "{\"name\":\"e\",\"data_type\":{\"type\":\"ROW\",\"fields\":[{\"name\":\"f\",\"field_type\":{\"type\":\"STRING\"},\"field_id\":-1},{\"name\":\"g\",\"field_type\":{\"type\":\"STRING\"},\"field_id\":1}]},\"comment\":\"hello c\",\"id\":2}"
         };
     }
 

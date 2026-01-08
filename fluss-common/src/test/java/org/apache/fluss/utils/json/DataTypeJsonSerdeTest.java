@@ -24,6 +24,8 @@ import org.apache.fluss.types.BooleanType;
 import org.apache.fluss.types.BytesType;
 import org.apache.fluss.types.CharType;
 import org.apache.fluss.types.DataType;
+import org.apache.fluss.types.DataTypeChecks;
+import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.DateType;
 import org.apache.fluss.types.DecimalType;
 import org.apache.fluss.types.DoubleType;
@@ -38,15 +40,26 @@ import org.apache.fluss.types.TimeType;
 import org.apache.fluss.types.TimestampType;
 import org.apache.fluss.types.TinyIntType;
 
+import org.junit.jupiter.api.Test;
+
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+
+import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test for {@link DataTypeJsonSerde}. */
 public class DataTypeJsonSerdeTest extends JsonSerdeTestBase<DataType> {
 
     DataTypeJsonSerdeTest() {
         super(DataTypeJsonSerde.INSTANCE);
+    }
+
+    @Override
+    protected void assertEquals(DataType actual, DataType expected) {
+        // compare with field_id.
+        assertThat(DataTypeChecks.equalsWithFieldId(actual, expected)).isTrue();
     }
 
     @Override
@@ -77,7 +90,12 @@ public class DataTypeJsonSerdeTest extends JsonSerdeTestBase<DataType> {
                         new LocalZonedTimestampType(3),
                         new ArrayType(new IntType(false)),
                         new MapType(new BigIntType(false), new IntType(false)),
-                        RowType.of(new BigIntType(), new IntType(false), new StringType()));
+                        new RowType(
+                                true,
+                                Arrays.asList(
+                                        DataTypes.FIELD("f0", new BigIntType(), null),
+                                        DataTypes.FIELD("f1", new IntType(false), null, 1),
+                                        DataTypes.FIELD("f2", new StringType(), null, 2))));
 
         final List<DataType> allTypes = new ArrayList<>();
         // consider nullable
@@ -139,8 +157,27 @@ public class DataTypeJsonSerdeTest extends JsonSerdeTestBase<DataType> {
             "{\"type\":\"ARRAY\",\"nullable\":false,\"element_type\":{\"type\":\"INTEGER\",\"nullable\":false}}",
             "{\"type\":\"MAP\",\"key_type\":{\"type\":\"BIGINT\",\"nullable\":false},\"value_type\":{\"type\":\"INTEGER\",\"nullable\":false}}",
             "{\"type\":\"MAP\",\"nullable\":false,\"key_type\":{\"type\":\"BIGINT\",\"nullable\":false},\"value_type\":{\"type\":\"INTEGER\",\"nullable\":false}}",
-            "{\"type\":\"ROW\",\"fields\":[{\"name\":\"f0\",\"field_type\":{\"type\":\"BIGINT\"}},{\"name\":\"f1\",\"field_type\":{\"type\":\"INTEGER\",\"nullable\":false}},{\"name\":\"f2\",\"field_type\":{\"type\":\"STRING\"}}]}",
-            "{\"type\":\"ROW\",\"nullable\":false,\"fields\":[{\"name\":\"f0\",\"field_type\":{\"type\":\"BIGINT\"}},{\"name\":\"f1\",\"field_type\":{\"type\":\"INTEGER\",\"nullable\":false}},{\"name\":\"f2\",\"field_type\":{\"type\":\"STRING\"}}]}",
+            "{\"type\":\"ROW\",\"fields\":[{\"name\":\"f0\",\"field_type\":{\"type\":\"BIGINT\"},\"field_id\":-1},{\"name\":\"f1\",\"field_type\":{\"type\":\"INTEGER\",\"nullable\":false},\"field_id\":1},{\"name\":\"f2\",\"field_type\":{\"type\":\"STRING\"},\"field_id\":2}]}",
+            "{\"type\":\"ROW\",\"nullable\":false,\"fields\":[{\"name\":\"f0\",\"field_type\":{\"type\":\"BIGINT\"},\"field_id\":-1},{\"name\":\"f1\",\"field_type\":{\"type\":\"INTEGER\",\"nullable\":false},\"field_id\":1},{\"name\":\"f2\",\"field_type\":{\"type\":\"STRING\"},\"field_id\":2}]}"
         };
+    }
+
+    @Test
+    void testJsonLackOfFieldId() {
+        // some fields with field_id while others without field_id.
+        String testJsonWithInconsistencyFieldId =
+                "{\"type\":\"ROW\",\"nullable\":false,\"fields\":[{\"name\":\"f0\",\"field_type\":{\"type\":\"BIGINT\"}},{\"name\":\"f1\",\"field_type\":{\"type\":\"INTEGER\",\"nullable\":false},\"field_id\":1},{\"name\":\"f2\",\"field_type\":{\"type\":\"STRING\"},\"field_id\":2}]}";
+        DataType dataType =
+                JsonSerdeUtils.readValue(
+                        testJsonWithInconsistencyFieldId.getBytes(StandardCharsets.UTF_8),
+                        DataTypeJsonSerde.INSTANCE);
+        assertThat(dataType).isInstanceOf(RowType.class);
+        assertEquals(
+                dataType,
+                DataTypes.ROW(
+                                DataTypes.FIELD("f0", DataTypes.BIGINT()),
+                                DataTypes.FIELD("f1", DataTypes.INT().copy(false), 1),
+                                DataTypes.FIELD("f2", DataTypes.STRING(), 2))
+                        .copy(false));
     }
 }

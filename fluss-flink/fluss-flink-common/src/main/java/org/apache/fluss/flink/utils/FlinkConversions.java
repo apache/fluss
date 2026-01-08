@@ -198,16 +198,16 @@ public class FlinkConversions {
         }
 
         // first build schema with physical columns
-        schemBuilder.fromColumns(
-                resolvedSchema.getColumns().stream()
-                        .filter(Column::isPhysical)
-                        .map(
-                                column ->
-                                        new Schema.Column(
-                                                column.getName(),
-                                                FlinkConversions.toFlussType(column.getDataType()),
-                                                column.getComment().orElse(null)))
-                        .collect(Collectors.toList()));
+        resolvedSchema.getColumns().stream()
+                .filter(Column::isPhysical)
+                .forEachOrdered(
+                        column -> {
+                            schemBuilder
+                                    .column(
+                                            column.getName(),
+                                            FlinkConversions.toFlussType(column.getDataType()))
+                                    .withComment(column.getComment().orElse(null));
+                        });
 
         // convert some flink options to fluss table configs.
         Map<String, String> storageProperties =

@@ -19,9 +19,12 @@ package org.apache.fluss.metadata;
 
 import org.apache.fluss.annotation.PublicEvolving;
 import org.apache.fluss.annotation.PublicStable;
+import org.apache.fluss.types.ArrayType;
 import org.apache.fluss.types.DataField;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypeRoot;
+import org.apache.fluss.types.MapType;
+import org.apache.fluss.types.ReassignFieldId;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.EncodingUtils;
 import org.apache.fluss.utils.StringUtils;
@@ -75,7 +78,8 @@ public final class Schema implements Serializable {
             @Nullable PrimaryKey primaryKey,
             int highestFieldId,
             List<String> autoIncrementColumnNames) {
-        this.columns = normalizeColumns(columns, primaryKey, autoIncrementColumnNames);
+        this.columns =
+                normalizeColumns(columns, primaryKey, autoIncrementColumnNames, highestFieldId);
         this.primaryKey = primaryKey;
         this.autoIncrementColumnNames = autoIncrementColumnNames;
         // pre-create the row type as it is the most frequently used part of the schema
@@ -85,7 +89,9 @@ public final class Schema implements Serializable {
                                 .map(
                                         column ->
                                                 new DataField(
-                                                        column.getName(), column.getDataType()))
+                                                        column.getName(),
+                                                        column.getDataType(),
+                                                        column.columnId))
                                 .collect(Collectors.toList()));
         this.highestFieldId = highestFieldId;
     }
@@ -248,34 +254,32 @@ public final class Schema implements Serializable {
             return this;
         }
 
-        public Builder highestFieldId(int highestFieldId) {
-            this.highestFieldId = new AtomicInteger(highestFieldId);
-            return this;
-        }
-
-        public Builder fromRowType(RowType rowType) {
-            checkNotNull(rowType, "rowType must not be null.");
-            final List<DataType> fieldDataTypes = rowType.getChildren();
-            final List<String> fieldNames = rowType.getFieldNames();
-            IntStream.range(0, fieldDataTypes.size())
-                    .forEach(i -> column(fieldNames.get(i), fieldDataTypes.get(i)));
-            return this;
-        }
-
-        /** Adopts the given field names and field data types as physical columns of the schema. */
-        public Builder fromFields(
-                List<String> fieldNames, List<? extends DataType> fieldDataTypes) {
-            checkNotNull(fieldNames, "Field names must not be null.");
-            checkNotNull(fieldDataTypes, "Field data types must not be null.");
-            checkArgument(
-                    fieldNames.size() == fieldDataTypes.size(),
-                    "Field names and field data types must have the same length.");
-            IntStream.range(0, fieldNames.size())
-                    .forEach(i -> column(fieldNames.get(i), fieldDataTypes.get(i)));
-            return this;
-        }
-
-        /** Adopts all columns from the given list. */
+        /**
+         * Adopts all columns from the given list.
+         *
+         * <p>This method directly uses the columns as-is, preserving their existing column IDs and
+         * all nested field IDs within their data types (e.g., field IDs in {@link RowType}, {@link
+         * ArrayType}, {@link MapType}). No field ID reassignment will occur.
+         *
+         * <p>This behavior is different from {@link #column(String, DataType)}, which automatically
+         * assigns new column IDs and reassigns all nested field IDs to ensure global uniqueness.
+         *
+         * <p>Use this method when:
+         *
+         * <ul>
+         *   <li>Loading existing schema from storage where IDs are already assigned
+         *   <li>Preserving schema identity during schema evolution
+         *   <li>Reconstructing schema from serialized format
+         * </ul>
+         *
+         * <p>Note: All input columns must either have column IDs set or none of them should have
+         * column IDs. Mixed states are not allowed.
+         *
+         * @param inputColumns the list of columns to adopt
+         * @return this builder for fluent API
+         * @throws IllegalStateException if columns have inconsistent column ID states (some set,
+         *     some not set)
+         */
         public Builder fromColumns(List<Column> inputColumns) {
             boolean nonSetColumnId =
                     inputColumns.stream()
@@ -289,9 +293,9 @@ public final class Schema implements Serializable {
 
             if (allSetColumnId) {
                 columns.addAll(inputColumns);
+                List<Integer> allFieldIds = collectAllFieldIds(inputColumns);
                 highestFieldId =
-                        new AtomicInteger(
-                                columns.stream().mapToInt(Column::getColumnId).max().orElse(-1));
+                        new AtomicInteger(allFieldIds.stream().max(Integer::compareTo).orElse(-1));
             } else {
                 // if all columnId is not set, this maybe from old version schema. Just use its
                 // position as columnId.
@@ -310,6 +314,56 @@ public final class Schema implements Serializable {
             return this;
         }
 
+        public Builder highestFieldId(int highestFieldId) {
+            this.highestFieldId = new AtomicInteger(highestFieldId);
+            return this;
+        }
+
+        /**
+         * Adopts the field names and data types from the given {@link RowType} as physical columns
+         * of the schema.
+         *
+         * <p>This method internally calls {@link #column(String, DataType)} for each field, which
+         * means: The original field IDs in the RowType will be ignored and replaced with new ones.
+         * If you need to preserve existing field IDs, use {@link #fromColumns(List)} or {@link
+         * #fromSchema(Schema)} instead.
+         *
+         * @param rowType the row type to adopt fields from
+         * @return this builder for fluent API
+         */
+        public Builder fromRowType(RowType rowType) {
+            checkNotNull(rowType, "rowType must not be null.");
+            final List<DataType> fieldDataTypes = rowType.getChildren();
+            final List<String> fieldNames = rowType.getFieldNames();
+            IntStream.range(0, fieldDataTypes.size())
+                    .forEach(i -> column(fieldNames.get(i), fieldDataTypes.get(i)));
+            return this;
+        }
+
+        /**
+         * Adopts the given field names and field data types as physical columns of the schema.
+         *
+         * <p>This method internally calls {@link #column(String, DataType)} for each field, which
+         * means: The original field IDs in the RowType will be ignored and replaced with new ones.
+         * If you need to preserve existing field IDs, use {@link #fromColumns(List)} or {@link
+         * #fromSchema(Schema)} instead.
+         *
+         * @param fieldNames the list of field names
+         * @param fieldDataTypes the list of field data types
+         * @return this builder for fluent API
+         */
+        public Builder fromFields(
+                List<String> fieldNames, List<? extends DataType> fieldDataTypes) {
+            checkNotNull(fieldNames, "Field names must not be null.");
+            checkNotNull(fieldDataTypes, "Field data types must not be null.");
+            checkArgument(
+                    fieldNames.size() == fieldDataTypes.size(),
+                    "Field names and field data types must have the same length.");
+            IntStream.range(0, fieldNames.size())
+                    .forEach(i -> column(fieldNames.get(i), fieldDataTypes.get(i)));
+            return this;
+        }
+
         /**
          * Declares a column that is appended to this schema.
          *
@@ -317,13 +371,23 @@ public final class Schema implements Serializable {
          * and the order of fields in the data. Thus, columns represent the payload that is read
          * from and written to an external system.
          *
+         * <p>Note: If the data type contains nested types (e.g., {@link RowType}, {@link
+         * ArrayType}, {@link MapType}), all nested field IDs will be automatically reassigned to
+         * ensure global uniqueness. This is essential for schema evolution support. If you need to
+         * preserve existing field IDs, use {@link #fromColumns(List)} or {@link
+         * #fromSchema(Schema)} instead.
+         *
          * @param columnName column name
+         * @param dataType column data type
+         * @return this builder for fluent API
          */
         public Builder column(String columnName, DataType dataType) {
             checkNotNull(columnName, "Column name must not be null.");
             checkNotNull(dataType, "Data type must not be null.");
-            columns.add(
-                    new Column(columnName, dataType, null, highestFieldId.incrementAndGet(), null));
+            int id = highestFieldId.incrementAndGet();
+            // Reassign field id especially for nested types.
+            DataType reassignDataType = ReassignFieldId.reassign(dataType, highestFieldId);
+            columns.add(new Column(columnName, reassignDataType, null, id, null));
             return this;
         }
 
@@ -346,13 +410,10 @@ public final class Schema implements Serializable {
             checkNotNull(dataType, "Data type must not be null.");
             checkNotNull(aggFunction, "Aggregation function must not be null.");
 
-            columns.add(
-                    new Column(
-                            columnName,
-                            dataType,
-                            null,
-                            highestFieldId.incrementAndGet(),
-                            aggFunction));
+            int id = highestFieldId.incrementAndGet();
+            // Reassign field id especially for nested types.
+            DataType reassignDataType = ReassignFieldId.reassign(dataType, highestFieldId);
+            columns.add(new Column(columnName, reassignDataType, null, id, aggFunction));
             return this;
         }
 
@@ -441,17 +502,6 @@ public final class Schema implements Serializable {
 
         /** Returns an instance of an {@link Schema}. */
         public Schema build() {
-            Integer maximumColumnId =
-                    columns.stream().map(Column::getColumnId).max(Integer::compareTo).orElse(0);
-
-            checkState(
-                    columns.isEmpty() || highestFieldId.get() >= maximumColumnId,
-                    "Highest field id must be greater than or equal to the maximum column id.");
-
-            checkState(
-                    columns.stream().map(Column::getColumnId).distinct().count() == columns.size(),
-                    "Column ids must be unique.");
-
             return new Schema(columns, primaryKey, highestFieldId.get(), autoIncrementColumnNames);
         }
     }
@@ -629,8 +679,10 @@ public final class Schema implements Serializable {
     private static List<Column> normalizeColumns(
             List<Column> columns,
             @Nullable PrimaryKey primaryKey,
-            List<String> autoIncrementColumnNames) {
+            List<String> autoIncrementColumnNames,
+            int highestFieldId) {
 
+        checkFieldIds(columns, highestFieldId);
         List<String> columnNames =
                 columns.stream().map(Column::getName).collect(Collectors.toList());
 
@@ -727,5 +779,75 @@ public final class Schema implements Serializable {
             keyRowFields.add(rowFields.get(index));
         }
         return new RowType(keyRowFields);
+    }
+
+    /**
+     * Validates field IDs in the schema, including both top-level column IDs and nested field IDs.
+     *
+     * <p>This method performs the following checks:
+     *
+     * <ul>
+     *   <li>Ensures all top-level column IDs are unique
+     *   <li>Ensures all field IDs (including nested fields in ROW, ARRAY, MAP types) are globally
+     *       unique
+     *   <li>Verifies that the highest field ID is greater than or equal to all existing field IDs
+     * </ul>
+     *
+     * @param columns the list of columns to validate
+     * @param highestFieldId the highest field ID that should be greater than or equal to all field
+     *     IDs
+     * @throws IllegalStateException if any validation fails
+     */
+    private static void checkFieldIds(List<Column> columns, int highestFieldId) {
+
+        // Collect all field IDs (including nested fields) for validation
+        List<Integer> allFieldIds = collectAllFieldIds(columns);
+
+        // Validate all field IDs (including nested fields) are unique
+        long uniqueFieldIdsCount = allFieldIds.stream().distinct().count();
+        checkState(
+                uniqueFieldIdsCount == allFieldIds.size(),
+                "All field IDs (including nested fields) must be unique. Found %s unique IDs but expected %s.",
+                uniqueFieldIdsCount,
+                allFieldIds.size());
+
+        // Validate the highest field ID is greater than or equal to all field IDs
+        Integer maximumFieldId = allFieldIds.stream().max(Integer::compareTo).orElse(-1);
+        checkState(
+                columns.isEmpty() || highestFieldId >= maximumFieldId,
+                "Highest field ID (%s) must be greater than or equal to the maximum field ID (%s) including nested fields. Current columns is %s",
+                highestFieldId,
+                maximumFieldId,
+                columns);
+    }
+
+    /**
+     * Recursively collects all field IDs from a data type, including nested fields in ROW, ARRAY,
+     * and MAP types.
+     */
+    private static List<Integer> collectAllFieldIds(List<Column> columns) {
+        List<Integer> allFieldIds = new ArrayList<>();
+        for (Column column : columns) {
+            allFieldIds.add(column.getColumnId());
+            collectAllFieldIds(column.getDataType(), allFieldIds);
+        }
+        return allFieldIds;
+    }
+
+    private static void collectAllFieldIds(DataType dataType, List<Integer> fieldIds) {
+        if (dataType instanceof RowType) {
+            RowType rowType = (RowType) dataType;
+            for (DataField field : rowType.getFields()) {
+                fieldIds.add(field.getFieldId());
+                collectAllFieldIds(field.getType(), fieldIds);
+            }
+        } else if (dataType instanceof ArrayType) {
+            ArrayType arrayType = (ArrayType) dataType;
+            collectAllFieldIds(arrayType.getElementType(), fieldIds);
+        } else if (dataType instanceof MapType) {
+            MapType mapType = (MapType) dataType;
+            collectAllFieldIds(mapType.getKeyType(), fieldIds);
+            collectAllFieldIds(mapType.getValueType(), fieldIds);
+        }
     }
 }

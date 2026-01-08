@@ -608,6 +608,16 @@ public class DataTypesTest {
                                 new DataField("a1", new IntType(), "column a1"),
                                 new DataField("b", new CharType(5), "column b"))));
 
+        // test ignore field_id
+        dataTypeBaseAssert(
+                rowType,
+                true,
+                "ROW<`a` INT 'column a', `b` CHAR(5) 'column b'>",
+                new RowType(
+                        Arrays.asList(
+                                new DataField("a1", new IntType(), "column a1"),
+                                new DataField("b", new CharType(5), "column b"))));
+
         rowType =
                 new RowType(
                         false,
@@ -654,7 +664,7 @@ public class DataTypesTest {
                 new RowType(
                         Arrays.asList(
                                 new DataField("a1", new IntType(), "column a1"),
-                                new DataField("b", new CharType(5)))));
+                                new DataField("b", new CharType(5), 1))));
 
         rowType = RowType.of(DataTypes.CHAR(1), DataTypes.CHAR(2));
         dataTypeBaseAssert(

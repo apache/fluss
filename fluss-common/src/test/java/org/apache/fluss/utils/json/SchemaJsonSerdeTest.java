@@ -79,6 +79,18 @@ public class SchemaJsonSerdeTest extends JsonSerdeTestBase<Schema> {
                     .enableAutoIncrement("b")
                     .build();
 
+    static final Schema SCHEMA_5 =
+            Schema.newBuilder()
+                    .column("a", DataTypes.INT())
+                    .withComment("a is first column")
+                    .column(
+                            "b",
+                            DataTypes.ROW(
+                                    DataTypes.FIELD("c", DataTypes.INT(), "a is first column", 0),
+                                    DataTypes.FIELD("d", DataTypes.INT(), "a is first column", 1)))
+                    .withComment("b is second column")
+                    .build();
+
     static final String SCHEMA_JSON_0 =
             "{\"version\":1,\"columns\":[{\"name\":\"a\",\"data_type\":{\"type\":\"INTEGER\",\"nullable\":false},\"comment\":\"a is first column\",\"id\":0},{\"name\":\"b\",\"data_type\":{\"type\":\"STRING\"},\"comment\":\"b is second column\",\"id\":1},{\"name\":\"c\",\"data_type\":{\"type\":\"CHAR\",\"nullable\":false,\"length\":10},\"comment\":\"c is third column\",\"id\":2}],\"primary_key\":[\"a\",\"c\"],\"highest_field_id\":2}";
     static final String SCHEMA_JSON_1 =
@@ -89,6 +101,9 @@ public class SchemaJsonSerdeTest extends JsonSerdeTestBase<Schema> {
 
     static final String SCHEMA_JSON_4 =
             "{\"version\":1,\"columns\":[{\"name\":\"a\",\"data_type\":{\"type\":\"INTEGER\",\"nullable\":false},\"comment\":\"a is first column\",\"id\":0},{\"name\":\"b\",\"data_type\":{\"type\":\"INTEGER\",\"nullable\":false},\"comment\":\"b is second column\",\"id\":1},{\"name\":\"c\",\"data_type\":{\"type\":\"CHAR\",\"nullable\":false,\"length\":10},\"comment\":\"c is third column\",\"id\":2}],\"primary_key\":[\"a\",\"c\"],\"auto_increment_column\":[\"b\"],\"highest_field_id\":2}";
+
+    static final String SCHEMA_JSON_5 =
+            "{\"version\":1,\"columns\":[{\"name\":\"a\",\"data_type\":{\"type\":\"INTEGER\"},\"comment\":\"a is first column\",\"id\":0},{\"name\":\"b\",\"data_type\":{\"type\":\"ROW\",\"fields\":[{\"name\":\"c\",\"field_type\":{\"type\":\"INTEGER\"},\"description\":\"a is first column\",\"field_id\":2},{\"name\":\"d\",\"field_type\":{\"type\":\"INTEGER\"},\"description\":\"a is first column\",\"field_id\":3}]},\"comment\":\"b is second column\",\"id\":1}],\"highest_field_id\":3}";
 
     static final Schema SCHEMA_WITH_AGG =
             Schema.newBuilder()
@@ -113,8 +128,17 @@ public class SchemaJsonSerdeTest extends JsonSerdeTestBase<Schema> {
     }
 
     @Override
+    protected void assertEquals(Schema actual, Schema expected) {
+        assertThat(actual).isEqualTo(expected);
+        // compare field ids.
+        assertThat(actual.getRowType().equalsWithFieldId(expected.getRowType())).isTrue();
+    }
+
+    @Override
     protected Schema[] createObjects() {
-        return new Schema[] {SCHEMA_0, SCHEMA_1, SCHEMA_2, SCHEMA_3, SCHEMA_4, SCHEMA_WITH_AGG};
+        return new Schema[] {
+            SCHEMA_0, SCHEMA_1, SCHEMA_2, SCHEMA_3, SCHEMA_4, SCHEMA_5, SCHEMA_WITH_AGG
+        };
     }
 
     @Override
@@ -125,6 +149,7 @@ public class SchemaJsonSerdeTest extends JsonSerdeTestBase<Schema> {
             SCHEMA_JSON_1,
             SCHEMA_JSON_3,
             SCHEMA_JSON_4,
+            SCHEMA_JSON_5,
             SCHEMA_JSON_WITH_AGG
         };
     }
@@ -132,13 +157,12 @@ public class SchemaJsonSerdeTest extends JsonSerdeTestBase<Schema> {
     @Test
     void testCompatibilityFromJsonLackOfColumnId() {
         String[] jsons = jsonLackOfColumnId();
-        Schema[] expectedSchema = new Schema[] {SCHEMA_0, SCHEMA_1, SCHEMA_2, SCHEMA_3};
+        Schema[] expectedSchema = new Schema[] {SCHEMA_0, SCHEMA_1, SCHEMA_2, SCHEMA_3, SCHEMA_5};
         for (int i = 0; i < jsons.length; i++) {
-            assertThat(
-                            JsonSerdeUtils.readValue(
-                                    jsons[i].getBytes(StandardCharsets.UTF_8),
-                                    SchemaJsonSerde.INSTANCE))
-                    .isEqualTo(expectedSchema[i]);
+            assertEquals(
+                    JsonSerdeUtils.readValue(
+                            jsons[i].getBytes(StandardCharsets.UTF_8), SchemaJsonSerde.INSTANCE),
+                    expectedSchema[i]);
         }
     }
 

@@ -63,7 +63,9 @@ import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.BucketAssignment;
 import org.apache.fluss.server.zk.data.TableAssignment;
+import org.apache.fluss.types.DataTypeChecks;
 import org.apache.fluss.types.DataTypes;
+import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.json.DataTypeJsonSerde;
 import org.apache.fluss.utils.json.JsonSerdeUtils;
 
@@ -699,7 +701,19 @@ class TableManagerITCase {
                         pbTableMetadata.getCreatedTime(),
                         pbTableMetadata.getModifiedTime());
         List<Schema.Column> columns = tableInfo.getSchema().getColumns();
-        assertThat(columns.size()).isEqualTo(3);
+        assertThat(columns.size()).isEqualTo(4);
+        assertThat(tableInfo.getSchema().getColumnIds()).containsExactly(0, 1, 2, 5);
+        // check nested row's field_id.
+        assertThat(columns.get(2).getName()).isEqualTo("new_nested_column");
+        assertThat(
+                        DataTypeChecks.equalsWithFieldId(
+                                columns.get(2).getDataType(),
+                                new RowType(
+                                        true,
+                                        Arrays.asList(
+                                                DataTypes.FIELD("f0", DataTypes.STRING(), 3),
+                                                DataTypes.FIELD("f1", DataTypes.INT(), 4)))))
+                .isTrue();
     }
 
     private void checkBucketMetadata(int expectBucketCount, List<PbBucketMetadata> bucketMetadata) {
@@ -830,6 +844,17 @@ class TableManagerITCase {
 
     private static List<PbAddColumn> alterTableAddColumns() {
         List<PbAddColumn> addColumns = new ArrayList<>();
+        PbAddColumn newNestedColumn = new PbAddColumn();
+        newNestedColumn
+                .setColumnName("new_nested_column")
+                .setDataTypeJson(
+                        JsonSerdeUtils.writeValueAsBytes(
+                                DataTypes.ROW(DataTypes.STRING(), DataTypes.INT()),
+                                DataTypeJsonSerde.INSTANCE))
+                .setComment("new_nested_column")
+                .setColumnPositionType(0);
+        addColumns.add(newNestedColumn);
+
         PbAddColumn newColumn = new PbAddColumn();
         newColumn
                 .setColumnName("new_column")
@@ -839,6 +864,7 @@ class TableManagerITCase {
                 .setComment("new_column")
                 .setColumnPositionType(0);
         addColumns.add(newColumn);
+
         return addColumns;
     }
 

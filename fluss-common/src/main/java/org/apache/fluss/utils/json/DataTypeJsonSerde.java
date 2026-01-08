@@ -70,6 +70,7 @@ public class DataTypeJsonSerde implements JsonSerializer<DataType>, JsonDeserial
     static final String FIELD_NAME_FIELDS = "fields";
     static final String FIELD_NAME_FIELD_NAME = "name";
     static final String FIELD_NAME_FIELD_TYPE = "field_type";
+    static final String FIELD_NAME_FIELD_ID = "field_id";
     static final String FIELD_NAME_FIELD_DESCRIPTION = "description";
 
     @Override
@@ -190,6 +191,8 @@ public class DataTypeJsonSerde implements JsonSerializer<DataType>, JsonDeserial
                 jsonGenerator.writeStringField(
                         FIELD_NAME_FIELD_DESCRIPTION, dataField.getDescription().get());
             }
+
+            jsonGenerator.writeNumberField(FIELD_NAME_FIELD_ID, dataField.getFieldId());
             jsonGenerator.writeEndObject();
         }
         jsonGenerator.writeEndArray();
@@ -291,18 +294,23 @@ public class DataTypeJsonSerde implements JsonSerializer<DataType>, JsonDeserial
     private static DataType deserializeRow(JsonNode dataTypeNode) {
         final ArrayNode fieldNodes = (ArrayNode) dataTypeNode.get(FIELD_NAME_FIELDS);
         final List<DataField> fields = new ArrayList<>();
+
         for (JsonNode fieldNode : fieldNodes) {
             final String fieldName = fieldNode.get(FIELD_NAME_FIELD_NAME).asText();
             final DataType fieldType =
                     DataTypeJsonSerde.INSTANCE.deserialize(fieldNode.get(FIELD_NAME_FIELD_TYPE));
-            final String fieldDescription;
-            if (fieldNode.has(FIELD_NAME_FIELD_DESCRIPTION)) {
-                fieldDescription = fieldNode.get(FIELD_NAME_FIELD_DESCRIPTION).asText();
-            } else {
-                fieldDescription = null;
-            }
-            fields.add(new DataField(fieldName, fieldType, fieldDescription));
+            final String fieldDescription =
+                    fieldNode.has(FIELD_NAME_FIELD_DESCRIPTION)
+                            ? fieldNode.get(FIELD_NAME_FIELD_DESCRIPTION).asText()
+                            : null;
+
+            final int fieldId =
+                    fieldNode.has(FIELD_NAME_FIELD_ID)
+                            ? fieldNode.get(FIELD_NAME_FIELD_ID).asInt()
+                            : -1;
+            fields.add(new DataField(fieldName, fieldType, fieldDescription, fieldId));
         }
+
         return new RowType(fields);
     }
 }

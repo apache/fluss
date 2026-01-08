@@ -330,7 +330,7 @@ public class TabletServiceITCase {
                 tableId,
                 0,
                 Errors.INVALID_COLUMN_PROJECTION.code(),
-                "Projected field id 2 is not contained in [0, 1]");
+                "Projected fields [2, 3] is out of bound for schema with 2 fields.");
     }
 
     @Test

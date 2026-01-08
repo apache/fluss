@@ -18,10 +18,13 @@
 package org.apache.fluss.metadata;
 
 import org.apache.fluss.types.DataTypes;
+import org.apache.fluss.types.RowType;
 
 import org.junit.jupiter.api.Test;
 
+import java.util.Arrays;
 import java.util.Collections;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -120,6 +123,140 @@ class TableSchemaTest {
                                         .build())
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("Auto increment column can only be used in primary-key table.");
+    }
+
+    @Test
+    void testReassignFieldId() {
+        // Schema.Builder.column will reassign field id in flatten order.
+        Schema schema =
+                Schema.newBuilder()
+                        .column("f0", DataTypes.STRING().copy(false))
+                        .column(
+                                "f1",
+                                DataTypes.ROW(
+                                        DataTypes.FIELD("n0", DataTypes.TINYINT(), 0),
+                                        DataTypes.FIELD("n1", DataTypes.STRING(), 1),
+                                        DataTypes.FIELD(
+                                                "n2",
+                                                DataTypes.ROW(
+                                                        DataTypes.FIELD(
+                                                                "m1", DataTypes.TINYINT(), 0)),
+                                                2)))
+                        .column(
+                                "f2",
+                                DataTypes.ROW(
+                                        DataTypes.FIELD("n0", DataTypes.TINYINT(), 0),
+                                        DataTypes.FIELD("n1", DataTypes.STRING(), 1)))
+                        .column("f3", DataTypes.STRING())
+                        .primaryKey("f0")
+                        .build();
+        assertThat(schema.getColumnIds()).containsExactly(0, 1, 6, 9);
+        RowType expectedType =
+                new RowType(
+                        true,
+                        Arrays.asList(
+                                DataTypes.FIELD("f0", DataTypes.STRING().copy(false), 0),
+                                DataTypes.FIELD(
+                                        "f1",
+                                        DataTypes.ROW(
+                                                DataTypes.FIELD("n0", DataTypes.TINYINT(), 2),
+                                                DataTypes.FIELD("n1", DataTypes.STRING(), 3),
+                                                DataTypes.FIELD(
+                                                        "n2",
+                                                        DataTypes.ROW(
+                                                                DataTypes.FIELD(
+                                                                        "m1",
+                                                                        DataTypes.TINYINT(),
+                                                                        5)),
+                                                        4)),
+                                        1),
+                                DataTypes.FIELD(
+                                        "f2",
+                                        DataTypes.ROW(
+                                                DataTypes.FIELD("n0", DataTypes.TINYINT(), 7),
+                                                DataTypes.FIELD("n1", DataTypes.STRING(), 8)),
+                                        6),
+                                DataTypes.FIELD("f3", DataTypes.STRING(), 9)));
+        assertThat(schema.getRowType().equalsWithFieldId(expectedType)).isTrue();
+
+        // Schema.Builder.fromColumns won't reassign field id.
+        List<Schema.Column> columns =
+                Arrays.asList(
+                        new Schema.Column("f0", DataTypes.STRING().copy(false), null, 0),
+                        new Schema.Column(
+                                "f1",
+                                DataTypes.ROW(
+                                        DataTypes.FIELD("n0", DataTypes.TINYINT(), 0),
+                                        DataTypes.FIELD("n1", DataTypes.STRING(), 1),
+                                        DataTypes.FIELD(
+                                                "n2",
+                                                DataTypes.ROW(
+                                                        DataTypes.FIELD(
+                                                                "m1", DataTypes.TINYINT(), 1)),
+                                                2)),
+                                null,
+                                1),
+                        new Schema.Column(
+                                "f2",
+                                DataTypes.ROW(
+                                        DataTypes.FIELD("n0", DataTypes.TINYINT(), 0),
+                                        DataTypes.FIELD("n1", DataTypes.STRING(), 1)),
+                                null,
+                                2));
+        assertThatThrownBy(() -> Schema.newBuilder().fromColumns(columns).build())
+                .hasMessageContaining(
+                        "All field IDs (including nested fields) must be unique. Found 3 unique IDs but expected 9");
+        List<Schema.Column> columns2 =
+                Arrays.asList(
+                        new Schema.Column("f0", DataTypes.STRING().copy(false), null, 0),
+                        new Schema.Column(
+                                "f1",
+                                DataTypes.ROW(
+                                        DataTypes.FIELD("n0", DataTypes.TINYINT(), 6),
+                                        DataTypes.FIELD("n1", DataTypes.STRING(), 7),
+                                        DataTypes.FIELD(
+                                                "n2",
+                                                DataTypes.ROW(
+                                                        DataTypes.FIELD(
+                                                                "m1", DataTypes.TINYINT(), 11)),
+                                                8)),
+                                null,
+                                1),
+                        new Schema.Column(
+                                "f2",
+                                DataTypes.ROW(
+                                        DataTypes.FIELD("n0", DataTypes.TINYINT(), 9),
+                                        DataTypes.FIELD("n1", DataTypes.STRING(), 10)),
+                                null,
+                                2));
+        schema = Schema.newBuilder().fromColumns(columns2).build();
+        assertThat(schema.getColumnIds()).containsExactly(0, 1, 2);
+        expectedType =
+                new RowType(
+                        true,
+                        Arrays.asList(
+                                DataTypes.FIELD("f0", DataTypes.STRING().copy(false), 0),
+                                DataTypes.FIELD(
+                                        "f1",
+                                        DataTypes.ROW(
+                                                DataTypes.FIELD("n0", DataTypes.TINYINT(), 6),
+                                                DataTypes.FIELD("n1", DataTypes.STRING(), 7),
+                                                DataTypes.FIELD(
+                                                        "n2",
+                                                        DataTypes.ROW(
+                                                                DataTypes.FIELD(
+                                                                        "m1",
+                                                                        DataTypes.TINYINT(),
+                                                                        11)),
+                                                        8)),
+                                        1),
+                                DataTypes.FIELD(
+                                        "f2",
+                                        DataTypes.ROW(
+                                                DataTypes.FIELD("n0", DataTypes.TINYINT(), 9),
+                                                DataTypes.FIELD("n1", DataTypes.STRING(), 10)),
+                                        2)));
+        assertThat(schema.getRowType().equalsWithFieldId(expectedType)).isTrue();
     }
 
     @Test

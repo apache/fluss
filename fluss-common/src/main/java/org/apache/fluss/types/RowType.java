@@ -167,6 +167,11 @@ public final class RowType extends DataType {
         return fields.equals(rowType.fields);
     }
 
+    /** Checks whether two data types are equal including field ids for row types. */
+    public boolean equalsWithFieldId(DataType other) {
+        return DataTypeChecks.equalsWithFieldId(this, other);
+    }
+
     @Override
     public int hashCode() {
         return Objects.hash(super.hashCode(), fields);

@@ -57,6 +57,11 @@ public final class DataTypeChecks {
         return dataType.accept(FIELD_TYPES_EXTRACTOR);
     }
 
+    /** Checks whether two data types are equal including field ids for row types. */
+    public static boolean equalsWithFieldId(DataType original, DataType that) {
+        return that.accept(new DataTypeEqualsWithFieldId(original));
+    }
+
     private DataTypeChecks() {
         // no instantiation
     }
@@ -153,6 +158,40 @@ public final class DataTypeChecks {
         @Override
         public List<DataType> visit(RowType rowType) {
             return rowType.getFieldTypes();
+        }
+    }
+
+    private static class DataTypeEqualsWithFieldId extends DataTypeDefaultVisitor<Boolean> {
+        private final DataType original;
+
+        private DataTypeEqualsWithFieldId(DataType original) {
+            this.original = original;
+        }
+
+        @Override
+        public Boolean visit(RowType that) {
+            if (!original.equals(that)) {
+                return false;
+            }
+
+            // compare field ids.
+            List<DataField> originalFields = ((RowType) original).getFields();
+            List<DataField> thatFields = that.getFields();
+            for (int i = 0; i < that.getFieldCount(); i++) {
+                DataField originalField = originalFields.get(i);
+                DataField thatField = thatFields.get(i);
+                if (originalField.getFieldId() != thatField.getFieldId()
+                        || !equalsWithFieldId(originalField.getType(), thatField.getType())) {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        @Override
+        protected Boolean defaultMethod(DataType that) {
+            return original.equals(that);
         }
     }
 }

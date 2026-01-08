@@ -530,7 +530,7 @@ public class LogFetcher implements Closeable {
                             assert projection != null;
                             reqForTable
                                     .setProjectionPushdownEnabled(true)
-                                    .setProjectedFields(projection.getProjectionIdInOrder());
+                                    .setProjectedFields(projection.getProjectionInOrder());
                         } else {
                             reqForTable.setProjectionPushdownEnabled(false);
                         }

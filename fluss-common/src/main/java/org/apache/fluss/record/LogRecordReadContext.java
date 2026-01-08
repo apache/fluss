@@ -75,17 +75,14 @@ public class LogRecordReadContext implements LogRecordBatch.ReadContext, AutoClo
         int schemaId = tableInfo.getSchemaId();
         if (projection == null) {
             // set a default dummy projection to simplify code
-            projection =
-                    Projection.of(
-                            IntStream.range(0, rowType.getFieldCount()).toArray(),
-                            tableInfo.getSchema());
+            projection = Projection.of(IntStream.range(0, rowType.getFieldCount()).toArray());
         }
 
         if (logFormat == LogFormat.ARROW) {
             if (readFromRemote) {
                 // currently, for remote read, arrow log doesn't support projection pushdown,
                 // so set the rowType as is.
-                int[] selectedFields = projection.getProjectionPositions();
+                int[] selectedFields = projection.getProjection();
                 return createArrowReadContext(
                         rowType, schemaId, selectedFields, false, schemaGetter);
             } else {
@@ -101,10 +98,10 @@ public class LogRecordReadContext implements LogRecordBatch.ReadContext, AutoClo
                         schemaGetter);
             }
         } else if (logFormat == LogFormat.INDEXED) {
-            int[] selectedFields = projection.getProjectionPositions();
+            int[] selectedFields = projection.getProjection();
             return createIndexedReadContext(rowType, schemaId, selectedFields, schemaGetter);
         } else if (logFormat == LogFormat.COMPACTED) {
-            int[] selectedFields = projection.getProjectionPositions();
+            int[] selectedFields = projection.getProjection();
             return createCompactedRowReadContext(rowType, schemaId, selectedFields);
         } else {
             throw new IllegalArgumentException("Unsupported log format: " + logFormat);
@@ -143,6 +140,17 @@ public class LogRecordReadContext implements LogRecordBatch.ReadContext, AutoClo
             RowType rowType, int schemaId, SchemaGetter schemaGetter) {
         int[] selectedFields = IntStream.range(0, rowType.getFieldCount()).toArray();
         return createArrowReadContext(rowType, schemaId, selectedFields, false, schemaGetter);
+    }
+
+    @VisibleForTesting
+    public static LogRecordReadContext createArrowReadContext(
+            RowType rowType,
+            int schemaId,
+            SchemaGetter schemaGetter,
+            boolean projectionPushDowned) {
+        int[] selectedFields = IntStream.range(0, rowType.getFieldCount()).toArray();
+        return createArrowReadContext(
+                rowType, schemaId, selectedFields, projectionPushDowned, schemaGetter);
     }
 
     /**

@@ -24,7 +24,9 @@ import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.types.DataType;
+import org.apache.fluss.types.DataTypeChecks;
 import org.apache.fluss.types.DataTypes;
+import org.apache.fluss.types.RowType;
 
 import org.apache.flink.configuration.ConfigOption;
 import org.apache.flink.table.api.Schema;
@@ -55,6 +57,7 @@ import static org.apache.fluss.flink.FlinkConnectorOptions.BUCKET_KEY;
 import static org.apache.fluss.flink.FlinkConnectorOptions.BUCKET_NUMBER;
 import static org.apache.fluss.flink.utils.CatalogTableTestUtils.addOptions;
 import static org.apache.fluss.flink.utils.CatalogTableTestUtils.checkEqualsIgnoreSchema;
+import static org.apache.fluss.types.DataTypes.FIELD;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -85,8 +88,8 @@ public class FlinkConversionsTest {
                         DataTypes.ARRAY(DataTypes.STRING()),
                         DataTypes.MAP(DataTypes.INT(), DataTypes.STRING()),
                         DataTypes.ROW(
-                                DataTypes.FIELD("a", DataTypes.STRING().copy(false)),
-                                DataTypes.FIELD("b", DataTypes.INT())));
+                                FIELD("a", DataTypes.STRING().copy(false)),
+                                FIELD("b", DataTypes.INT())));
 
         // flink types
         List<org.apache.flink.table.types.DataType> flinkTypes =
@@ -133,6 +136,13 @@ public class FlinkConversionsTest {
         }
         assertThat(actualFlussTypes).isEqualTo(flussTypes);
 
+        // check the field id of rowType.
+        assertThat(
+                        DataTypeChecks.equalsWithFieldId(
+                                actualFlussTypes.get(actualFlussTypes.size() - 1),
+                                flussTypes.get(flinkTypes.size() - 1)))
+                .isTrue();
+
         // test conversion for data types not supported in Fluss
         assertThatThrownBy(() -> FlinkConversions.toFlussType(VARCHAR(10)))
                 .isInstanceOf(UnsupportedOperationException.class)
@@ -159,6 +169,34 @@ public class FlinkConversionsTest {
                                         "order_id",
                                         org.apache.flink.table.api.DataTypes.STRING().notNull()),
                                 Column.physical(
+                                        "item",
+                                        org.apache.flink.table.api.DataTypes.ROW(
+                                                org.apache.flink.table.api.DataTypes.FIELD(
+                                                        "item_id",
+                                                        org.apache.flink.table.api.DataTypes
+                                                                .STRING()),
+                                                org.apache.flink.table.api.DataTypes.FIELD(
+                                                        "item_price",
+                                                        org.apache.flink.table.api.DataTypes
+                                                                .STRING()),
+                                                org.apache.flink.table.api.DataTypes.FIELD(
+                                                        "item_details",
+                                                        org.apache.flink.table.api.DataTypes.ROW(
+                                                                org.apache.flink.table.api.DataTypes
+                                                                        .FIELD(
+                                                                                "category",
+                                                                                org.apache.flink
+                                                                                        .table.api
+                                                                                        .DataTypes
+                                                                                        .STRING()),
+                                                                org.apache.flink.table.api.DataTypes
+                                                                        .FIELD(
+                                                                                "specifications",
+                                                                                org.apache.flink
+                                                                                        .table.api
+                                                                                        .DataTypes
+                                                                                        .STRING()))))),
+                                Column.physical(
                                         "orig_ts",
                                         org.apache.flink.table.api.DataTypes.TIMESTAMP()),
                                 Column.computed("compute_ts", computeColExpr)),
@@ -181,18 +219,37 @@ public class FlinkConversionsTest {
         String expectFlussTableString =
                 "TableDescriptor{schema=("
                         + "order_id STRING NOT NULL,"
+                        + "item ROW<`item_id` STRING, `item_price` STRING, `item_details` ROW<`category` STRING, `specifications` STRING>>,"
                         + "orig_ts TIMESTAMP(6),"
                         + "CONSTRAINT PK_order_id PRIMARY KEY (order_id)"
                         + "), comment='test comment', partitionKeys=[], "
                         + "tableDistribution={bucketKeys=[order_id] bucketCount=null}, "
                         + "properties={}, "
-                        + "customProperties={schema.watermark.0.strategy.expr=orig_ts, "
-                        + "schema.2.expr=orig_ts, schema.2.data-type=TIMESTAMP(3), "
+                        + "customProperties={"
+                        + "schema.3.data-type=TIMESTAMP(3), "
+                        + "schema.watermark.0.strategy.expr=orig_ts, "
+                        + "schema.3.name=compute_ts, "
                         + "schema.watermark.0.rowtime=orig_ts, "
                         + "schema.watermark.0.strategy.data-type=TIMESTAMP(3), "
                         + "k1=v1, k2=v2, "
-                        + "schema.2.name=compute_ts}}";
+                        + "schema.3.expr=orig_ts}}";
         assertThat(flussTable.toString()).isEqualTo(expectFlussTableString);
+        assertThat(flussTable.getSchema().getColumnIds()).containsExactly(0, 1, 7);
+        // check the nested row column "item"
+        org.apache.fluss.metadata.Schema.Column column = flussTable.getSchema().getColumns().get(1);
+        assertThat(column.getName()).isEqualTo("item");
+        assertThat(column.getDataType()).isInstanceOf(RowType.class);
+        RowType rowType = (RowType) column.getDataType();
+        assertThat(rowType.getFields())
+                .containsExactly(
+                        FIELD("item_id", DataTypes.STRING(), 2),
+                        FIELD("item_price", DataTypes.STRING(), 3),
+                        FIELD(
+                                "item_details",
+                                DataTypes.ROW(
+                                        FIELD("category", DataTypes.STRING(), 5),
+                                        FIELD("specifications", DataTypes.STRING(), 6)),
+                                4));
 
         // test convert fluss table to flink table
         TablePath tablePath = TablePath.of("db", "table");

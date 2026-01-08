@@ -123,7 +123,7 @@ public class LogScannerImpl implements LogScanner {
                                     + tableRowType);
                 }
             }
-            return Projection.of(projectedFields, tableInfo.getSchema());
+            return Projection.of(projectedFields);
         } else {
             return null;
         }

@@ -17,7 +17,11 @@
 
 package org.apache.fluss.flink.sink;
 
+import org.apache.fluss.client.Connection;
+import org.apache.fluss.client.ConnectionFactory;
+import org.apache.fluss.client.table.Table;
 import org.apache.fluss.exception.InvalidTableException;
+import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 
 import org.apache.flink.api.common.RuntimeExecutionMode;
@@ -46,6 +50,7 @@ import java.util.List;
 import static org.apache.fluss.flink.FlinkConnectorOptions.BOOTSTRAP_SERVERS;
 import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.assertResultsIgnoreOrder;
 import static org.apache.fluss.server.testutils.FlussClusterExtension.BUILTIN_DATABASE;
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Integration tests for Array type support in Flink connector. */
@@ -591,5 +596,75 @@ abstract class FlinkComplexTypeITCase extends AbstractTestBase {
                 .hasRootCauseMessage(
                         "Bucket key column 'info' has unsupported data type ROW<`name` STRING, `age` INT>. "
                                 + "Currently, bucket key column does not support types: [ARRAY, MAP, ROW].");
+    }
+
+    @Test
+    void testProjectionAndAddColumnInLogTable() throws Exception {
+        tEnv.executeSql(
+                "create table row_log_test ("
+                        + "id int, "
+                        + "simple_row row<a int, b string>, "
+                        + "nested_row row<x int, y row<z int, w string>, v string>, "
+                        + "array_of_rows array<row<a int, b string>>, "
+                        + "data string "
+                        + ") with ('bucket.num' = '3')");
+
+        tEnv.executeSql(
+                        "INSERT INTO row_log_test VALUES "
+                                + "(1, ROW(10, 'hello'), ROW(20, ROW(30, 'nested'), 'row1'), "
+                                + "ARRAY[ROW(1, 'a'), ROW(2, 'b')], 'aa'), "
+                                + "(2, ROW(40, 'world'), ROW(50, ROW(60, 'test'), 'row2'), "
+                                + "ARRAY[ROW(3, 'c')], 'bb')")
+                .await();
+
+        CloseableIterator<Row> rowIter = tEnv.executeSql("select * from row_log_test").collect();
+        List<String> expectedRows =
+                Arrays.asList(
+                        "+I[1, +I[10, hello], +I[20, +I[30, nested], row1], [+I[1, a], +I[2, b]], aa]",
+                        "+I[2, +I[40, world], +I[50, +I[60, test], row2], [+I[3, c]], bb]");
+        assertResultsIgnoreOrder(rowIter, expectedRows, true);
+
+        // Currently, flink not supported push down nested row projection because
+        // FlinkTableSource.supportsNestedProjection returns false.
+        // Todo: support nested row projection pushdown in
+        // https://github.com/apache/fluss/issues/2311 later.
+        String s =
+                tEnv.explainSql("select id, simple_row.a, nested_row.y.z, data from row_log_test");
+        assertThat(s)
+                .contains(
+                        "TableSourceScan(table=[[testcatalog, defaultdb, row_log_test, project=[id, simple_row, nested_row, data]]]");
+        rowIter =
+                tEnv.executeSql("select id, simple_row.a, nested_row.y.z, data from row_log_test")
+                        .collect();
+        expectedRows = Arrays.asList("+I[1, 10, 30, aa]", "+I[2, 40, 60, bb]");
+        assertResultsIgnoreOrder(rowIter, expectedRows, true);
+        // Test add columns
+        tEnv.executeSql(
+                "alter table row_log_test add ("
+                        + "simple_row2 row<a int, b string>, "
+                        + "nested_row2 row<x int, y row<z int, w string>, v string>, "
+                        + "array_of_rows2 array<row<a int, b string>>)");
+
+        tEnv.executeSql(
+                        "INSERT INTO row_log_test VALUES "
+                                + "(1, ROW(10, 'hello'), ROW(20, ROW(30, 'nested'), 'row1'), ARRAY[ROW(1, 'a'), ROW(2, 'b')], 'aa',  ROW(10, 'hello'), ROW(20, ROW(30, 'nested'), 'row1'), ARRAY[ROW(1, 'a'), ROW(2, 'b')]),"
+                                + "(2, ROW(40, 'world'), ROW(50, ROW(60, 'test'), 'row2'), ARRAY[ROW(3, 'c')], 'bb', ROW(40, 'world'), ROW(50, ROW(60, 'test'), 'row2'), ARRAY[ROW(3, 'c')])")
+                .await();
+        rowIter = tEnv.executeSql("select * from row_log_test").collect();
+        expectedRows =
+                Arrays.asList(
+                        "+I[1, +I[10, hello], +I[20, +I[30, nested], row1], [+I[1, a], +I[2, b]], aa, null, null, null]",
+                        "+I[2, +I[40, world], +I[50, +I[60, test], row2], [+I[3, c]], bb, null, null, null]",
+                        "+I[1, +I[10, hello], +I[20, +I[30, nested], row1], [+I[1, a], +I[2, b]], aa, +I[10, hello], +I[20, +I[30, nested], row1], [+I[1, a], +I[2, b]]]",
+                        "+I[2, +I[40, world], +I[50, +I[60, test], row2], [+I[3, c]], bb, +I[40, world], +I[50, +I[60, test], row2], [+I[3, c]]]");
+        assertResultsIgnoreOrder(rowIter, expectedRows, true);
+        try (Connection conn =
+                        ConnectionFactory.createConnection(
+                                FLUSS_CLUSTER_EXTENSION.getClientConfig());
+                Table table = conn.getTable(TablePath.of(DEFAULT_DB, "row_log_test"))) {
+            // check field id
+            org.apache.fluss.metadata.Schema schema = table.getTableInfo().getSchema();
+            assertThat(schema.getColumnIds()).containsExactly(0, 1, 4, 10, 13, 14, 17, 23);
+        }
     }
 }
