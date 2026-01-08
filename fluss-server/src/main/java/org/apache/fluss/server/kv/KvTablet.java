@@ -46,6 +46,7 @@ import org.apache.fluss.row.arrow.ArrowWriterPool;
 import org.apache.fluss.row.arrow.ArrowWriterProvider;
 import org.apache.fluss.row.encode.ValueDecoder;
 import org.apache.fluss.server.kv.autoinc.AutoIncProcessor;
+import org.apache.fluss.server.kv.autoinc.AutoIncUpdater;
 import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer;
 import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer.TruncateReason;
 import org.apache.fluss.server.kv.rocksdb.RocksDBKv;
@@ -306,7 +307,8 @@ public final class KvTablet {
                     RowMerger currentMerger =
                             rowMerger.configureTargetColumns(
                                     targetColumns, latestSchemaId, latestSchema);
-                    autoIncProcessor.configureSchema(latestSchemaId);
+                    AutoIncUpdater currentAutoIncUpdater =
+                            autoIncProcessor.configureSchema(latestSchemaId);
 
                     RowType latestRowType = latestSchema.getRowType();
                     WalBuilder walBuilder = createWalBuilder(latestSchemaId, latestRowType);
@@ -323,6 +325,7 @@ public final class KvTablet {
                                 kvRecords,
                                 kvRecords.schemaId(),
                                 currentMerger,
+                                currentAutoIncUpdater,
                                 walBuilder,
                                 latestSchemaRow,
                                 logEndOffsetOfPrevBatch);
@@ -376,6 +379,7 @@ public final class KvTablet {
             KvRecordBatch kvRecords,
             short schemaIdOfNewData,
             RowMerger currentMerger,
+            AutoIncUpdater currentAutoIncUpdater,
             WalBuilder walBuilder,
             PaddingRow latestSchemaRow,
             long startLogOffset)
@@ -408,6 +412,7 @@ public final class KvTablet {
                                 key,
                                 currentValue,
                                 currentMerger,
+                                currentAutoIncUpdater,
                                 valueDecoder,
                                 walBuilder,
                                 latestSchemaRow,
@@ -457,6 +462,7 @@ public final class KvTablet {
             KvPreWriteBuffer.Key key,
             BinaryValue currentValue,
             RowMerger currentMerger,
+            AutoIncUpdater currentAutoIncUpdater,
             ValueDecoder valueDecoder,
             WalBuilder walBuilder,
             PaddingRow latestSchemaRow,
@@ -467,14 +473,19 @@ public final class KvTablet {
         // performance since the result always reflects the new value. In this case, both INSERT and
         // UPDATE will produce UPDATE_AFTER.
         if (changelogImage == ChangelogImage.WAL
-                && autoIncProcessor.isNoOpUpdate()
+                && currentAutoIncUpdater instanceof AutoIncUpdater.NoOpUpdater
                 && currentMerger instanceof DefaultRowMerger) {
             return applyUpdate(key, null, currentValue, walBuilder, latestSchemaRow, logOffset);
         }
 
         byte[] oldValueBytes = getFromBufferOrKv(key);
         if (oldValueBytes == null) {
-            return applyInsert(key, currentValue, walBuilder, latestSchemaRow, logOffset);
+            return applyInsert(
+                    key,
+                    currentAutoIncUpdater.updateAutoInc(currentValue),
+                    walBuilder,
+                    latestSchemaRow,
+                    logOffset);
         }
 
         BinaryValue oldValue = valueDecoder.decodeValue(oldValueBytes);
@@ -507,9 +518,8 @@ public final class KvTablet {
             PaddingRow latestSchemaRow,
             long logOffset)
             throws Exception {
-        BinaryValue newValue = autoIncProcessor.processAutoInc(currentValue);
-        walBuilder.append(ChangeType.INSERT, latestSchemaRow.replaceRow(newValue.row));
-        kvPreWriteBuffer.put(key, newValue.encodeValue(), logOffset);
+        walBuilder.append(ChangeType.INSERT, latestSchemaRow.replaceRow(currentValue.row));
+        kvPreWriteBuffer.put(key, currentValue.encodeValue(), logOffset);
         return logOffset + 1;
     }
 

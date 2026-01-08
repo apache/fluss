@@ -455,24 +455,6 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                                 + "because the lookup columns [b, a] must contain all bucket keys [a, b] in order.");
     }
 
-    private void partialUpdateRecords(String[] targetColumns, Object[][] records, Table table) {
-        UpsertWriter upsertWriter = table.newUpsert().partialUpdate(targetColumns).createWriter();
-        for (Object[] record : records) {
-            upsertWriter.upsert(row(record));
-        }
-        upsertWriter.flush();
-    }
-
-    private void verifyRecords(Object[][] records, Table table, Schema schema) throws Exception {
-        Lookuper lookuper = table.newLookup().createLookuper();
-        ProjectedRow keyRow = ProjectedRow.from(schema.getPrimaryKeyIndexes());
-        for (Object[] record : records) {
-            assertThatRow(lookupRow(lookuper, keyRow.replaceRow(row(record))))
-                    .withSchema(schema.getRowType())
-                    .isEqualTo(row(record));
-        }
-    }
-
     @Test
     void testSingleBucketPutAutoIncColumnAndLookup() throws Exception {
         Schema schema =
@@ -606,37 +588,41 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                 TablePath.of(DATA1_TABLE_PATH_PK.getDatabaseName(), "test_pk_table_auto_inc");
         createTable(tablePath, tableDescriptor, true);
         Table autoIncTable = conn.getTable(tablePath);
-        UpsertWriter upsertWriter =
-                autoIncTable.newUpsert().partialUpdate("dt", "col1", "col3").createWriter();
         Object[][] records = {
-            {"2026-01-06", "a", 0L, "batch1"},
-            {"2026-01-06", "b", 100000L, "batch1"},
+            {"2026-01-06", "a", null, "batch1"},
+            {"2026-01-06", "b", null, "batch1"},
+            {"2026-01-06", "c", null, "batch1"},
+            {"2026-01-06", "d", null, "batch1"},
+            {"2026-01-07", "e", null, "batch1"},
+            {"2026-01-06", "a", null, "batch2"},
+            {"2026-01-06", "b", null, "batch2"},
+        };
+
+        // upsert records with auto inc column col1 null value
+        partialUpdateRecords(new String[] {"dt", "col1", "col3"}, records, autoIncTable);
+        Object[][] expectedRecords = {
+            {"2026-01-06", "a", 0L, "batch2"},
+            {"2026-01-06", "b", 100000L, "batch2"},
             {"2026-01-06", "c", 1L, "batch1"},
             {"2026-01-06", "d", 100001L, "batch1"},
             {"2026-01-07", "e", 200000L, "batch1"}
         };
+        verifyRecords(expectedRecords, autoIncTable, schema);
+    }
 
-        // upsert records with auto inc column col1 null value
+    private void partialUpdateRecords(String[] targetColumns, Object[][] records, Table table) {
+        UpsertWriter upsertWriter = table.newUpsert().partialUpdate(targetColumns).createWriter();
         for (Object[] record : records) {
-            upsertWriter.upsert(row(record[0], record[1], null, record[3]));
+            upsertWriter.upsert(row(record));
+            // flush immediately to ensure auto-increment values are assigned sequentially across
+            // multiple buckets.
             upsertWriter.flush();
         }
+    }
 
-        Lookuper lookuper = autoIncTable.newLookup().createLookuper();
+    private void verifyRecords(Object[][] records, Table table, Schema schema) throws Exception {
+        Lookuper lookuper = table.newLookup().createLookuper();
         ProjectedRow keyRow = ProjectedRow.from(schema.getPrimaryKeyIndexes());
-        for (Object[] record : records) {
-            assertThatRow(lookupRow(lookuper, keyRow.replaceRow(row(record))))
-                    .withSchema(schema.getRowType())
-                    .isEqualTo(row(record));
-        }
-
-        // update col3 field
-        for (Object[] record : records) {
-            record[3] = "batch2";
-            upsertWriter.upsert(row(record[0], record[1], null, record[3]));
-            upsertWriter.flush();
-        }
-
         for (Object[] record : records) {
             assertThatRow(lookupRow(lookuper, keyRow.replaceRow(row(record))))
                     .withSchema(schema.getRowType())
