@@ -34,6 +34,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.File;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 
@@ -42,6 +43,15 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Unit test for {@link PaimonLakeCatalog}. */
 class PaimonLakeCatalogTest {
+    private static final Schema FLUSS_SCHEMA =
+            Schema.newBuilder()
+                    .column("id", DataTypes.BIGINT())
+                    .column("name", DataTypes.STRING())
+                    .column("amount", DataTypes.INT())
+                    .column("address", DataTypes.STRING())
+                    .build();
+    private static final TestingLakeCatalogContext LAKE_CATALOG_CONTEXT =
+            new TestingLakeCatalogContext(FLUSS_SCHEMA);
 
     @TempDir private File tempWarehouseDir;
 
@@ -70,7 +80,7 @@ class PaimonLakeCatalogTest {
         flussPaimonCatalog.alterTable(
                 tablePath,
                 Collections.singletonList(TableChange.set("key", "value")),
-                new TestingLakeCatalogContext());
+                LAKE_CATALOG_CONTEXT);
 
         table = flussPaimonCatalog.getPaimonCatalog().getTable(identifier);
         // we have set the value for key
@@ -80,7 +90,7 @@ class PaimonLakeCatalogTest {
         flussPaimonCatalog.alterTable(
                 tablePath,
                 Collections.singletonList(TableChange.reset("key")),
-                new TestingLakeCatalogContext());
+                LAKE_CATALOG_CONTEXT);
 
         table = flussPaimonCatalog.getPaimonCatalog().getTable(identifier);
         // we have reset the value for key
@@ -89,14 +99,13 @@ class PaimonLakeCatalogTest {
 
     @Test
     void alterTablePropertiesWithNonExistentTable() {
-        TestingLakeCatalogContext context = new TestingLakeCatalogContext();
         // db & table don't exist
         assertThatThrownBy(
                         () ->
                                 flussPaimonCatalog.alterTable(
                                         TablePath.of("non_existing_db", "non_existing_table"),
                                         Collections.singletonList(TableChange.set("key", "value")),
-                                        context))
+                                        LAKE_CATALOG_CONTEXT))
                 .isInstanceOf(TableNotExistException.class)
                 .hasMessage("Table non_existing_db.non_existing_table does not exist.");
 
@@ -110,7 +119,7 @@ class PaimonLakeCatalogTest {
                                 flussPaimonCatalog.alterTable(
                                         TablePath.of(database, "non_existing_table"),
                                         Collections.singletonList(TableChange.set("key", "value")),
-                                        context))
+                                        LAKE_CATALOG_CONTEXT))
                 .isInstanceOf(TableNotExistException.class)
                 .hasMessage("Table alter_props_db.non_existing_table does not exist.");
     }
@@ -131,7 +140,7 @@ class PaimonLakeCatalogTest {
                                 "new_col comment",
                                 TableChange.ColumnPosition.last()));
 
-        flussPaimonCatalog.alterTable(tablePath, changes, new TestingLakeCatalogContext());
+        flussPaimonCatalog.alterTable(tablePath, changes, LAKE_CATALOG_CONTEXT);
 
         Table table = flussPaimonCatalog.getPaimonCatalog().getTable(identifier);
         assertThat(table.rowType().getFieldNames())
@@ -164,7 +173,7 @@ class PaimonLakeCatalogTest {
         assertThatThrownBy(
                         () ->
                                 flussPaimonCatalog.alterTable(
-                                        tablePath, changes, new TestingLakeCatalogContext()))
+                                        tablePath, changes, LAKE_CATALOG_CONTEXT))
                 .isInstanceOf(UnsupportedOperationException.class)
                 .hasMessage("Only support to add column at last for paimon table.");
     }
@@ -187,13 +196,13 @@ class PaimonLakeCatalogTest {
         assertThatThrownBy(
                         () ->
                                 flussPaimonCatalog.alterTable(
-                                        tablePath, changes, new TestingLakeCatalogContext()))
+                                        tablePath, changes, LAKE_CATALOG_CONTEXT))
                 .isInstanceOf(UnsupportedOperationException.class)
                 .hasMessage("Only support to add nullable column for paimon table.");
     }
 
     @Test
-    void testAlterTableAddExistingColumn() {
+    void testAlterTableAddExistingColumns() {
         String database = "test_alter_table_add_existing_column_db";
         String tableName = "test_alter_table_add_existing_column_table";
         TablePath tablePath = TablePath.of(database, tableName);
@@ -207,13 +216,38 @@ class PaimonLakeCatalogTest {
                                 null,
                                 TableChange.ColumnPosition.last()));
 
-        // no exception thrown when adding existing column
-        flussPaimonCatalog.alterTable(tablePath, changes, new TestingLakeCatalogContext());
+        assertThatThrownBy(
+                        () ->
+                                flussPaimonCatalog.alterTable(
+                                        tablePath, changes, LAKE_CATALOG_CONTEXT))
+                .isInstanceOf(InvalidAlterTableException.class)
+                .hasMessageContaining(
+                        "Column address already exists in the test_alter_table_add_existing_column_db.test_alter_table_add_existing_column_table table.");
 
         List<TableChange> changes2 =
-                Collections.singletonList(
+                Arrays.asList(
                         TableChange.addColumn(
-                                "address",
+                                "new_column",
+                                DataTypes.INT(),
+                                null,
+                                TableChange.ColumnPosition.last()),
+                        TableChange.addColumn(
+                                "new_column2",
+                                DataTypes.STRING(),
+                                null,
+                                TableChange.ColumnPosition.last()));
+
+        // mock add columns to paimon successfully but fail to add columns to fluss.
+        flussPaimonCatalog.alterTable(tablePath, changes2, LAKE_CATALOG_CONTEXT);
+        List<TableChange> changes3 =
+                Arrays.asList(
+                        TableChange.addColumn(
+                                "new_column",
+                                DataTypes.INT(),
+                                null,
+                                TableChange.ColumnPosition.last()),
+                        TableChange.addColumn(
+                                "new_column2",
                                 DataTypes.INT(),
                                 null,
                                 TableChange.ColumnPosition.last()));
@@ -221,15 +255,20 @@ class PaimonLakeCatalogTest {
         assertThatThrownBy(
                         () ->
                                 flussPaimonCatalog.alterTable(
-                                        tablePath, changes2, new TestingLakeCatalogContext()))
+                                        tablePath, changes3, LAKE_CATALOG_CONTEXT))
                 .isInstanceOf(InvalidAlterTableException.class)
                 .hasMessage(
-                        "Column 'address' already exists but with different type. Existing: STRING, Expected: INT");
+                        "Column 'new_column2' already exists but with different type. Existing: STRING, Expected: INT");
 
-        List<TableChange> changes3 =
-                Collections.singletonList(
+        List<TableChange> changes4 =
+                Arrays.asList(
                         TableChange.addColumn(
-                                "address",
+                                "new_column",
+                                DataTypes.INT(),
+                                null,
+                                TableChange.ColumnPosition.last()),
+                        TableChange.addColumn(
+                                "new_column2",
                                 DataTypes.STRING(),
                                 "the address comment",
                                 TableChange.ColumnPosition.last()));
@@ -237,29 +276,74 @@ class PaimonLakeCatalogTest {
         assertThatThrownBy(
                         () ->
                                 flussPaimonCatalog.alterTable(
-                                        tablePath, changes3, new TestingLakeCatalogContext()))
+                                        tablePath, changes4, LAKE_CATALOG_CONTEXT))
                 .isInstanceOf(InvalidAlterTableException.class)
                 .hasMessage(
-                        "Column address already exists but with different comment. Existing: null, Expected: the address comment");
+                        "Column new_column2 already exists but with different comment. Existing: null, Expected: the address comment");
+
+        // no exception thrown only when adding existing column to match fluss and paimon.
+        flussPaimonCatalog.alterTable(tablePath, changes2, LAKE_CATALOG_CONTEXT);
+    }
+
+    @Test
+    void testAlterTableAddColumnWhenPaimonSchemaNotMatch() {
+        // this rarely happens only when new fluss lake table with an existed paimon table or use
+        // alter table in paimon side directly.
+        String database = "test_alter_table_add_column_fluss_wider";
+        String tableName = "test_alter_table_add_column_fluss_wider";
+        createTable(database, tableName);
+        TablePath tablePath = TablePath.of(database, tableName);
+
+        List<TableChange> changes =
+                Collections.singletonList(
+                        TableChange.addColumn(
+                                "new_col",
+                                DataTypes.INT(),
+                                "new_col comment",
+                                TableChange.ColumnPosition.last()));
+
+        assertThatThrownBy(
+                        () ->
+                                flussPaimonCatalog.alterTable(
+                                        tablePath,
+                                        changes,
+                                        new TestingLakeCatalogContext(
+                                                Schema.newBuilder()
+                                                        .column("id", DataTypes.BIGINT())
+                                                        .column("name", DataTypes.STRING())
+                                                        .column("amount", DataTypes.INT())
+                                                        .column("address", DataTypes.STRING())
+                                                        .column("phone", DataTypes.INT())
+                                                        .build())))
+                .isInstanceOf(InvalidAlterTableException.class)
+                .hasMessageContaining("Paimon table has less columns (4) than Fluss schema (5)");
+
+        assertThatThrownBy(
+                        () ->
+                                flussPaimonCatalog.alterTable(
+                                        tablePath,
+                                        changes,
+                                        new TestingLakeCatalogContext(
+                                                Schema.newBuilder()
+                                                        .column("id", DataTypes.BIGINT())
+                                                        .column("amount", DataTypes.INT())
+                                                        .column("name", DataTypes.STRING())
+                                                        .column("address", DataTypes.STRING())
+                                                        .build())))
+                .isInstanceOf(InvalidAlterTableException.class)
+                .hasMessageContaining(
+                        "Column mismatch at position 1. Paimon: 'name', Fluss: 'amount'");
     }
 
     private void createTable(String database, String tableName) {
-        Schema flussSchema =
-                Schema.newBuilder()
-                        .column("id", DataTypes.BIGINT())
-                        .column("name", DataTypes.STRING())
-                        .column("amount", DataTypes.INT())
-                        .column("address", DataTypes.STRING())
-                        .build();
-
         TableDescriptor td =
                 TableDescriptor.builder()
-                        .schema(flussSchema)
+                        .schema(FLUSS_SCHEMA)
                         .distributedBy(3) // no bucket key
                         .build();
 
         TablePath tablePath = TablePath.of(database, tableName);
 
-        flussPaimonCatalog.createTable(tablePath, td, new TestingLakeCatalogContext());
+        flussPaimonCatalog.createTable(tablePath, td, LAKE_CATALOG_CONTEXT);
     }
 }

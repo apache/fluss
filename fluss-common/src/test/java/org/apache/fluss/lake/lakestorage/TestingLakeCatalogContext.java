@@ -17,10 +17,21 @@
 
 package org.apache.fluss.lake.lakestorage;
 
+import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.security.acl.FlussPrincipal;
 
 /** A testing implementation of {@link LakeCatalog.Context}. */
 public class TestingLakeCatalogContext implements LakeCatalog.Context {
+
+    private final Schema schema;
+
+    public TestingLakeCatalogContext(Schema schema) {
+        this.schema = schema;
+    }
+
+    public TestingLakeCatalogContext() {
+        this(null);
+    }
 
     @Override
     public boolean isCreatingFlussTable() {
@@ -30,5 +41,10 @@ public class TestingLakeCatalogContext implements LakeCatalog.Context {
     @Override
     public FlussPrincipal getFlussPrincipal() {
         return null;
+    }
+
+    @Override
+    public Schema getFlussSchema() {
+        return schema;
     }
 }

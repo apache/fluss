@@ -20,6 +20,7 @@ package org.apache.fluss.lake.lakestorage;
 import org.apache.fluss.annotation.PublicEvolving;
 import org.apache.fluss.exception.TableAlreadyExistException;
 import org.apache.fluss.exception.TableNotExistException;
+import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
@@ -84,5 +85,13 @@ public interface LakeCatalog extends AutoCloseable {
 
         /** Get the fluss principal currently accessing the catalog. */
         FlussPrincipal getFlussPrincipal();
+
+        /**
+         * Get the current schema of fluss.
+         *
+         * @return the current schema of fluss.
+         * @since 0.10
+         */
+        Schema getFlussSchema();
     }
 }
