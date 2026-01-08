@@ -438,7 +438,7 @@ class PaimonTieringTest {
             // check system columns: __bucket, __offset, __timestamp
             assertThat(actualRow.getInt(4)).isEqualTo(expectBucket);
             assertThat(actualRow.getLong(5)).isEqualTo(expectRecord.logOffset());
-            assertThat(actualRow.getTimestamp(6, 6).getMillisecond())
+            assertThat(actualRow.getTimestamp(6, 3).getMillisecond())
                     .isEqualTo(expectRecord.timestamp());
         }
         assertThat(actualRecords.hasNext()).isFalse();
@@ -468,7 +468,7 @@ class PaimonTieringTest {
             // check system columns: __bucket, __offset, __timestamp
             assertThat(actualRow.getInt(5)).isEqualTo(expectBucket);
             assertThat(actualRow.getLong(6)).isEqualTo(expectRecord.logOffset());
-            assertThat(actualRow.getTimestamp(7, 6).getMillisecond())
+            assertThat(actualRow.getTimestamp(7, 3).getMillisecond())
                     .isEqualTo(expectRecord.timestamp());
         }
         assertThat(actualRecords.hasNext()).isFalse();
@@ -496,7 +496,7 @@ class PaimonTieringTest {
             // check system columns: __bucket, __offset, __timestamp
             assertThat(actualRow.getInt(3)).isEqualTo(expectBucket);
             assertThat(actualRow.getLong(4)).isEqualTo(expectRecord.logOffset());
-            assertThat(actualRow.getTimestamp(5, 6).getMillisecond())
+            assertThat(actualRow.getTimestamp(5, 3).getMillisecond())
                     .isEqualTo(expectRecord.timestamp());
         }
         assertThat(actualRecords.hasNext()).isFalse();
@@ -814,8 +814,7 @@ class PaimonTieringTest {
             throws Exception {
         paimonSchemaBuilder.column(BUCKET_COLUMN_NAME, DataTypes.INT());
         paimonSchemaBuilder.column(OFFSET_COLUMN_NAME, DataTypes.BIGINT());
-        paimonSchemaBuilder.column(
-                TIMESTAMP_COLUMN_NAME, DataTypes.TIMESTAMP_WITH_LOCAL_TIME_ZONE());
+        paimonSchemaBuilder.column(TIMESTAMP_COLUMN_NAME, DataTypes.TIMESTAMP_LTZ_MILLIS());
         paimonSchemaBuilder.option(
                 CoreOptions.COMMIT_CALLBACKS.key(),
                 PaimonLakeCommitter.PaimonCommitCallback.class.getName());
