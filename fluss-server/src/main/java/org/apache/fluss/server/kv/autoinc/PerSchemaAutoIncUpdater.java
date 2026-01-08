@@ -27,7 +27,14 @@ import org.apache.fluss.types.DataType;
 
 import javax.annotation.concurrent.NotThreadSafe;
 
-/** Default auto increment column updater. */
+/**
+ * An {@link AutoIncUpdater} implementation that assigns auto-increment values to a specific column
+ * based on a fixed schema. It is bound to a particular schema version and assumes the
+ * auto-increment column position remains constant within that schema.
+ *
+ * <p>This class is not thread-safe and is intended to be used within a single-threaded execution
+ * context.
+ */
 @NotThreadSafe
 public class PerSchemaAutoIncUpdater implements AutoIncUpdater {
     private final InternalRow.FieldGetter[] flussFieldGetters;

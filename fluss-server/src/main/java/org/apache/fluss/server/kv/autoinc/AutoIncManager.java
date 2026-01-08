@@ -36,7 +36,10 @@ import java.time.Duration;
 
 import static org.apache.fluss.utils.Preconditions.checkState;
 
-/** AutoIncProcessor is used to process auto increment column. */
+/**
+ * Manages auto-increment logic for tables, providing schema-specific updaters that handle
+ * auto-increment column assignment during row writes.
+ */
 @NotThreadSafe
 public class AutoIncManager {
     // No-op implementation that returns the input unchanged.
