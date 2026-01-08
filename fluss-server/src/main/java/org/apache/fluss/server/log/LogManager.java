@@ -351,6 +351,7 @@ public final class LogManager extends TabletManagerBase {
                         tableInfo.hasPrimaryKey(),
                         clock,
                         isCleanShutdown);
+        logTablet.updateIsDataLakeEnabled(tableInfo.getTableConfig().isDataLakeEnabled());
 
         if (currentLogs.containsKey(tableBucket)) {
             throw new IllegalStateException(

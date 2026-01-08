@@ -56,6 +56,8 @@ final class RemoteLogTTLTest extends RemoteLogTestBase {
         // Need to make leader by ReplicaManager.
         makeLogTableAsLeader(tb, partitionTable);
         LogTablet logTablet = replicaManager.getReplicaOrException(tb).getLogTablet();
+        // enable data lake
+        logTablet.updateIsDataLakeEnabled(true);
         addMultiSegmentsToLogTablet(logTablet, 5);
         // run RLMTask to copy local log segment to remote and commit snapshot.
         remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
@@ -65,8 +67,18 @@ final class RemoteLogTTLTest extends RemoteLogTestBase {
         assertThat(remoteLog.getRemoteLogStartOffset()).isEqualTo(0L);
 
         // manually trigger again to delete the expired log segment to remote and commit snapshot.
-        // default 7 days TTL, this should expire all remote segments.
+        // since data lake is enabled and no data has been tired to data lake,
+        // the expired segments should not be deleted.
         manualClock.advanceTime(Duration.ofDays(7).plusHours(1));
+        remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
+        assertThat(remoteLog.relevantRemoteLogSegments(0L).size()).isEqualTo(4);
+        assertThat(remoteLog.allRemoteLogSegments().size()).isEqualTo(4);
+        assertThat(remoteLog.getRemoteLogStartOffset()).isEqualTo(0);
+
+        // advance lake end offset
+        logTablet.updateLakeLogEndOffset(40L);
+        // manually trigger again to delete the expired log segment to remote and commit snapshot.
+        // now the expired segments should be deleted.
         remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
         assertThat(remoteLog.relevantRemoteLogSegments(0L).size()).isEqualTo(0);
         assertThat(remoteLog.allRemoteLogSegments()).isEmpty();
