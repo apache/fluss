@@ -33,24 +33,22 @@ import com.github.benmanes.caffeine.cache.Caffeine;
 import javax.annotation.concurrent.NotThreadSafe;
 
 import java.time.Duration;
-import java.util.HashMap;
-import java.util.Map;
 
 import static org.apache.fluss.utils.Preconditions.checkState;
 
 /** AutoIncProcessor is used to process auto increment column. */
 @NotThreadSafe
-public class AutoIncProcessor {
-    private static final AutoIncUpdater NO_OP_UPDATER = new AutoIncUpdater.NoOpUpdater();
+public class AutoIncManager {
+    // No-op implementation that returns the input unchanged.
+    public static final AutoIncUpdater NO_OP_UPDATER = rowValue -> rowValue;
 
     private final SchemaGetter schemaGetter;
-    private final KvFormat kvFormat;
     private final Cache<Integer, AutoIncUpdater> autoIncUpdaters;
-    private final Map<Integer, SequenceGenerator> sequenceGeneratorMap = new HashMap<>();
+    private final int autoIncColumnId;
+    private final SequenceGenerator sequenceGenerator;
 
-    public AutoIncProcessor(
+    public AutoIncManager(
             SchemaGetter schemaGetter,
-            KvFormat kvFormat,
             TablePath tablePath,
             Configuration properties,
             ZooKeeperClient zkClient) {
@@ -60,57 +58,54 @@ public class AutoIncProcessor {
                         .expireAfterAccess(Duration.ofMinutes(5))
                         .build();
         this.schemaGetter = schemaGetter;
-        this.kvFormat = kvFormat;
         int schemaId = schemaGetter.getLatestSchemaInfo().getSchemaId();
         Schema schema = schemaGetter.getSchema(schemaId);
         int[] autoIncColumnIds = schema.getAutoIncColumnIds();
 
-        if (autoIncColumnIds.length > 1) {
-            throw new IllegalStateException(
-                    "Only support one auto increment column for a table, but got "
-                            + autoIncColumnIds.length);
-        }
+        checkState(
+                autoIncColumnIds.length <= 1,
+                "Only support one auto increment column for a table, but got %d.",
+                autoIncColumnIds.length);
 
-        for (int autoIncColumnId : autoIncColumnIds) {
-            ZkSequenceIDCounter zkSequenceIDCounter =
-                    new ZkSequenceIDCounter(
-                            zkClient.getCuratorClient(),
-                            ZkData.AutoIncrementColumnZNode.path(tablePath, autoIncColumnId));
-            SequenceGenerator sequenceGenerator =
+        if (autoIncColumnIds.length == 1) {
+            autoIncColumnId = autoIncColumnIds[0];
+            sequenceGenerator =
                     new SegmentSequenceGenerator(
                             tablePath,
                             autoIncColumnId,
                             schema.getColumnName(autoIncColumnId),
-                            zkSequenceIDCounter,
+                            new ZkSequenceIDCounter(
+                                    zkClient.getCuratorClient(),
+                                    ZkData.AutoIncrementColumnZNode.path(
+                                            tablePath, autoIncColumnId)),
                             properties);
-            sequenceGeneratorMap.put(autoIncColumnId, sequenceGenerator);
+        } else {
+            autoIncColumnId = -1;
+            sequenceGenerator = null;
         }
-        autoIncUpdaters.put(schemaId, createAutoIncUpdater(schemaId));
     }
 
     // Supports removing or reordering columns; does NOT support adding an auto-increment column to
     // an existing table.
-    public AutoIncUpdater configureSchema(int latestSchemaId) {
-        return autoIncUpdaters.get(latestSchemaId, this::createAutoIncUpdater);
+    public AutoIncUpdater getUpdaterForSchema(KvFormat kvFormat, int latestSchemaId) {
+        return autoIncUpdaters.get(latestSchemaId, k -> createAutoIncUpdater(kvFormat, k));
     }
 
-    private AutoIncUpdater createAutoIncUpdater(int schemaId) {
+    private AutoIncUpdater createAutoIncUpdater(KvFormat kvFormat, int schemaId) {
         Schema schema = schemaGetter.getSchema(schemaId);
         int[] autoIncColumnIds = schema.getAutoIncColumnIds();
-        checkState(
-                autoIncColumnIds.length != sequenceGeneratorMap.size(),
-                String.format(
-                        "Auto-increment column count (%d) does not match sequence generator count (%d). Adding or dropping auto-increment columns is not supported.",
-                        autoIncColumnIds.length, sequenceGeneratorMap.size()));
-
+        if (autoIncColumnId == -1) {
+            checkState(
+                    autoIncColumnIds.length == 0,
+                    "Cannot add auto-increment column after table creation.");
+        } else {
+            checkState(
+                    autoIncColumnIds.length == 1 && autoIncColumnIds[0] == autoIncColumnId,
+                    "Auto-increment column cannot be changed after table creation.");
+        }
         if (autoIncColumnIds.length == 1) {
-            int autoIncColumnId = autoIncColumnIds[0];
-            return new AutoIncUpdater.DefaultAutoIncUpdater(
-                    kvFormat,
-                    (short) schemaId,
-                    schema,
-                    autoIncColumnId,
-                    sequenceGeneratorMap.get(autoIncColumnId));
+            return new PerSchemaAutoIncUpdater(
+                    kvFormat, (short) schemaId, schema, autoIncColumnIds[0], sequenceGenerator);
         } else {
             return NO_OP_UPDATER;
         }

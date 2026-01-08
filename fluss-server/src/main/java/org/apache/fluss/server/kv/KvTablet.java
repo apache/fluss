@@ -45,7 +45,7 @@ import org.apache.fluss.row.PaddingRow;
 import org.apache.fluss.row.arrow.ArrowWriterPool;
 import org.apache.fluss.row.arrow.ArrowWriterProvider;
 import org.apache.fluss.row.encode.ValueDecoder;
-import org.apache.fluss.server.kv.autoinc.AutoIncProcessor;
+import org.apache.fluss.server.kv.autoinc.AutoIncManager;
 import org.apache.fluss.server.kv.autoinc.AutoIncUpdater;
 import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer;
 import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer.TruncateReason;
@@ -115,7 +115,7 @@ public final class KvTablet {
     // defines how to merge rows on the same primary key
     private final RowMerger rowMerger;
     private final ArrowCompressionInfo arrowCompressionInfo;
-    private final AutoIncProcessor autoIncProcessor;
+    private final AutoIncManager autoIncManager;
 
     private final SchemaGetter schemaGetter;
 
@@ -151,7 +151,7 @@ public final class KvTablet {
             SchemaGetter schemaGetter,
             ChangelogImage changelogImage,
             @Nullable RocksDBStatistics rocksDBStatistics,
-            AutoIncProcessor autoIncProcessor) {
+            AutoIncManager autoIncManager) {
         this.physicalPath = physicalPath;
         this.tableBucket = tableBucket;
         this.logTablet = logTablet;
@@ -168,7 +168,7 @@ public final class KvTablet {
         this.schemaGetter = schemaGetter;
         this.changelogImage = changelogImage;
         this.rocksDBStatistics = rocksDBStatistics;
-        this.autoIncProcessor = autoIncProcessor;
+        this.autoIncManager = autoIncManager;
     }
 
     public static KvTablet create(
@@ -186,7 +186,7 @@ public final class KvTablet {
             SchemaGetter schemaGetter,
             ChangelogImage changelogImage,
             RateLimiter sharedRateLimiter,
-            AutoIncProcessor autoIncProcessor)
+            AutoIncManager autoIncManager)
             throws IOException {
         RocksDBKv kv = buildRocksDBKv(serverConf, kvTabletDir, sharedRateLimiter);
 
@@ -219,7 +219,7 @@ public final class KvTablet {
                 schemaGetter,
                 changelogImage,
                 rocksDBStatistics,
-                autoIncProcessor);
+                autoIncManager);
     }
 
     private static RocksDBKv buildRocksDBKv(
@@ -308,7 +308,7 @@ public final class KvTablet {
                             rowMerger.configureTargetColumns(
                                     targetColumns, latestSchemaId, latestSchema);
                     AutoIncUpdater currentAutoIncUpdater =
-                            autoIncProcessor.configureSchema(latestSchemaId);
+                            autoIncManager.getUpdaterForSchema(kvFormat, latestSchemaId);
 
                     RowType latestRowType = latestSchema.getRowType();
                     WalBuilder walBuilder = createWalBuilder(latestSchemaId, latestRowType);
@@ -473,7 +473,7 @@ public final class KvTablet {
         // performance since the result always reflects the new value. In this case, both INSERT and
         // UPDATE will produce UPDATE_AFTER.
         if (changelogImage == ChangelogImage.WAL
-                && currentAutoIncUpdater instanceof AutoIncUpdater.NoOpUpdater
+                && !currentAutoIncUpdater.hasAutoIncrement()
                 && currentMerger instanceof DefaultRowMerger) {
             return applyUpdate(key, null, currentValue, walBuilder, latestSchemaRow, logOffset);
         }
