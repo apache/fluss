@@ -282,12 +282,13 @@ public class LeaderReplicaDistributionGoal extends ReplicaDistributionAbstractGo
                     if (++numLeaderReplicas >= rebalanceLowerLimit) {
                         return false;
                     }
-                    // If the source servercontains more total leader replicas than the next
+                    // If the source server has a lower number of replicas than the next
                     // server in the eligible server queue, we re-enqueue the source server and
                     // switch to the next server.
+                    // TODO there maybe use source > eligibleServers.peek() to re-enqueue
                     if (!eligibleServers.isEmpty()
                             && sourceServer.numLeaderReplicas()
-                                    > eligibleServers.peek().numLeaderReplicas()) {
+                                    < eligibleServers.peek().numLeaderReplicas()) {
                         eligibleServers.add(sourceServer);
                         break;
                     }

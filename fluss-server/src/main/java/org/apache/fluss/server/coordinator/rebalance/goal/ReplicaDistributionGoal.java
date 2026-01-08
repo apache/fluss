@@ -246,10 +246,11 @@ public class ReplicaDistributionGoal extends ReplicaDistributionAbstractGoal {
                     }
 
                     if (!eligibleServers.isEmpty()) {
-                        // If the source server contains more total replicas than the next server in
-                        // the eligible server in the queue, we re-enqueue the source server and
+                        // If the source server has a lower number of replicas than the next server
+                        // in the eligible server in the queue, we re-enqueue the source server and
                         // switch to the next server.
-                        if (sourceServer.numReplicas() > eligibleServers.peek().numReplicas()) {
+                        // TODO there maybe use source > eligibleServers.peek() to re-enqueue
+                        if (sourceServer.numReplicas() < eligibleServers.peek().numReplicas()) {
                             eligibleServers.add(sourceServer);
                             break;
                         }
