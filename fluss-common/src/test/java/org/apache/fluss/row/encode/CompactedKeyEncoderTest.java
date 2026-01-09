@@ -33,8 +33,10 @@ import org.apache.fluss.types.RowType;
 
 import org.junit.jupiter.api.Test;
 
+import java.net.URL;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.Collections;
 import java.util.List;
 import java.util.regex.Pattern;
@@ -169,12 +171,9 @@ class CompactedKeyEncoderTest {
 
             InternalRow keyRow = decodeRow(keyDataTypes, keyBytes);
 
-            Path encodedKeyFilePath =
-                    Path.of(
-                            getClass()
-                                    .getClassLoader()
-                                    .getResource(ENCODED_KEY_HEX_FILE_PATH)
-                                    .getPath());
+            URL url = getClass().getClassLoader().getResource(ENCODED_KEY_HEX_FILE_PATH);
+            Path encodedKeyFilePath = Paths.get(url.toURI());
+
             String encodedKeyString = new String(Files.readAllBytes(encodedKeyFilePath));
             encodedKeyString = COMMENT_PATTERN.matcher(encodedKeyString).replaceAll("");
             encodedKeyString = NON_HEX_PATTERN.matcher(encodedKeyString).replaceAll("");
