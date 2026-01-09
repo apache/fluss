@@ -17,6 +17,7 @@
 
 package org.apache.fluss.lake.iceberg.source;
 
+import org.apache.fluss.lake.iceberg.FlussDataTypeToIcebergDataType;
 import org.apache.fluss.row.InternalArray;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.types.ArrayType;
@@ -178,6 +179,15 @@ public class FlussRowAsIcebergRecord implements Record {
                 return array == null
                         ? null
                         : new FlussArrayAsIcebergList(array, arrayType.getElementType());
+            };
+        } else if (flussType instanceof RowType) {
+            RowType rowType = (RowType) flussType;
+            Types.StructType nestedStructType =
+                    (Types.StructType) rowType.accept(FlussDataTypeToIcebergDataType.INSTANCE);
+
+            return row -> {
+                InternalRow nestedRow = row.getRow(pos, rowType.getFieldCount());
+                return new FlussRowAsIcebergRecord(nestedStructType, rowType, nestedRow);
             };
         } else {
             throw new UnsupportedOperationException(

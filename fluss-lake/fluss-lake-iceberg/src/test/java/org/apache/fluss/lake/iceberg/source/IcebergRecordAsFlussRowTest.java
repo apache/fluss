@@ -18,6 +18,8 @@
 
 package org.apache.fluss.lake.iceberg.source;
 
+import org.apache.fluss.row.InternalRow;
+
 import org.apache.iceberg.Schema;
 import org.apache.iceberg.data.GenericRecord;
 import org.apache.iceberg.data.Record;
@@ -61,10 +63,27 @@ class IcebergRecordAsFlussRowTest {
                         optional(11, "timestamp_ltz", Types.TimestampType.withZone()),
                         optional(12, "binary_data", Types.BinaryType.get()),
                         optional(13, "char_data", Types.StringType.get()),
+                        optional(
+                                14,
+                                "nested_row",
+                                Types.StructType.of(
+                                        required(15, "city", Types.StringType.get()),
+                                        required(
+                                                16,
+                                                "address",
+                                                Types.StructType.of(
+                                                        required(
+                                                                17,
+                                                                "subfield1",
+                                                                Types.StringType.get()),
+                                                        required(
+                                                                18,
+                                                                "subfield2",
+                                                                Types.IntegerType.get()))))),
                         // System columns
-                        required(14, "__bucket", Types.IntegerType.get()),
-                        required(15, "__offset", Types.LongType.get()),
-                        required(16, "__timestamp", Types.TimestampType.withZone()));
+                        required(19, "__bucket", Types.IntegerType.get()),
+                        required(20, "__offset", Types.LongType.get()),
+                        required(21, "__timestamp", Types.TimestampType.withZone()));
 
         record = GenericRecord.create(schema);
     }
@@ -82,7 +101,7 @@ class IcebergRecordAsFlussRowTest {
         icebergRecordAsFlussRow.replaceIcebergRecord(record);
 
         // Should return count excluding system columns (3 system columns)
-        assertThat(icebergRecordAsFlussRow.getFieldCount()).isEqualTo(13);
+        assertThat(icebergRecordAsFlussRow.getFieldCount()).isEqualTo(14);
     }
 
     @Test
@@ -145,6 +164,35 @@ class IcebergRecordAsFlussRowTest {
                 .isEqualTo("Hello"); // char_data
 
         // Test field count (excluding system columns)
-        assertThat(icebergRecordAsFlussRow.getFieldCount()).isEqualTo(13);
+        assertThat(icebergRecordAsFlussRow.getFieldCount()).isEqualTo(14);
+    }
+
+    @Test
+    void testNestedRow() {
+        String cityValue = "Seoul";
+        String subfield1Value = "string value";
+        Integer subfield2Value = 12345;
+        Record nestedRecord =
+                GenericRecord.create(record.struct().fields().get(13).type().asStructType());
+        nestedRecord.setField("city", "Seoul");
+
+        Record deepNestedRecord =
+                GenericRecord.create(nestedRecord.struct().fields().get(1).type().asStructType());
+        deepNestedRecord.setField("subfield1", subfield1Value);
+        deepNestedRecord.setField("subfield2", subfield2Value);
+
+        nestedRecord.setField("address", deepNestedRecord);
+
+        record.setField("nested_row", nestedRecord);
+        icebergRecordAsFlussRow.replaceIcebergRecord(record);
+
+        InternalRow nestedRow = icebergRecordAsFlussRow.getRow(13, 2);
+        assertThat(nestedRow).isNotNull();
+        assertThat(nestedRow.getString(0).toString()).isEqualTo(cityValue);
+
+        InternalRow deepNestedRow = nestedRow.getRow(1, 2);
+        assertThat(deepNestedRow).isNotNull();
+        assertThat(deepNestedRow.getString(0).toString()).isEqualTo(subfield1Value);
+        assertThat(deepNestedRow.getInt(1)).isEqualTo(subfield2Value);
     }
 }

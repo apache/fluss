@@ -24,6 +24,7 @@ import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
 
+import org.apache.iceberg.data.Record;
 import org.apache.iceberg.types.Types;
 import org.junit.jupiter.api.Test;
 
@@ -292,5 +293,124 @@ class FlussRowAsIcebergRecordTest {
 
         // Test null array
         assertThat(record.get(14)).isNull();
+    }
+
+    @Test
+    void testNestedRow() {
+        Types.StructType structType =
+                Types.StructType.of(
+                        // simple row
+                        Types.NestedField.required(
+                                0,
+                                "simple_row",
+                                Types.StructType.of(
+                                        Types.NestedField.required(
+                                                1, "id", Types.IntegerType.get()),
+                                        Types.NestedField.required(
+                                                2, "name", Types.StringType.get()))),
+                        // nested row
+                        Types.NestedField.required(
+                                3,
+                                "nested_row",
+                                Types.StructType.of(
+                                        Types.NestedField.required(
+                                                4, "id", Types.IntegerType.get()),
+                                        Types.NestedField.required(
+                                                5,
+                                                "inner",
+                                                Types.StructType.of(
+                                                        Types.NestedField.required(
+                                                                6, "val", Types.DoubleType.get()),
+                                                        Types.NestedField.required(
+                                                                7,
+                                                                "flag",
+                                                                Types.BooleanType.get()))))),
+                        // array row
+                        Types.NestedField.required(
+                                8,
+                                "array_row",
+                                Types.StructType.of(
+                                        Types.NestedField.required(
+                                                9,
+                                                "ids",
+                                                Types.ListType.ofRequired(
+                                                        10, Types.IntegerType.get())))),
+                        // nullable row
+                        Types.NestedField.optional(
+                                11,
+                                "nullable_row",
+                                Types.StructType.of(
+                                        Types.NestedField.required(
+                                                12, "id", Types.IntegerType.get()))));
+
+        RowType flussRowType =
+                RowType.of(
+                        // simple row
+                        DataTypes.ROW(
+                                DataTypes.FIELD("id", DataTypes.INT()),
+                                DataTypes.FIELD("name", DataTypes.STRING())),
+                        // nested row
+                        DataTypes.ROW(
+                                DataTypes.FIELD("id", DataTypes.INT()),
+                                DataTypes.FIELD(
+                                        "inner",
+                                        DataTypes.ROW(
+                                                DataTypes.FIELD("val", DataTypes.DOUBLE()),
+                                                DataTypes.FIELD("flag", DataTypes.BOOLEAN())))),
+                        // row_with array
+                        DataTypes.ROW(DataTypes.FIELD("ids", DataTypes.ARRAY(DataTypes.INT()))),
+                        // nullable row
+                        DataTypes.ROW(DataTypes.FIELD("id", DataTypes.INT())));
+
+        GenericRow genericRow = new GenericRow(4);
+
+        // Simple Row
+        GenericRow simpleRow = new GenericRow(2);
+        simpleRow.setField(0, 100);
+        simpleRow.setField(1, BinaryString.fromString("fluss"));
+        genericRow.setField(0, simpleRow);
+
+        // Nested Row
+        GenericRow innerRow = new GenericRow(2);
+        innerRow.setField(0, 3.14);
+        innerRow.setField(1, true);
+        GenericRow nestedRow = new GenericRow(2);
+        nestedRow.setField(0, 200);
+        nestedRow.setField(1, innerRow);
+        genericRow.setField(1, nestedRow);
+
+        // Array Row
+        GenericRow rowWithArray = new GenericRow(1);
+        rowWithArray.setField(0, new GenericArray(new int[] {1, 2, 3}));
+        genericRow.setField(2, rowWithArray);
+
+        // Nullable Row
+        genericRow.setField(3, null);
+
+        FlussRowAsIcebergRecord record = new FlussRowAsIcebergRecord(structType, flussRowType);
+        record.internalRow = genericRow;
+
+        // Verify Simple Row
+        Record icebergSimpleRow = (Record) record.get(0);
+        assertThat(icebergSimpleRow.get(0)).isEqualTo(100);
+        assertThat(icebergSimpleRow.get(1)).isEqualTo("fluss");
+
+        // Verify Nested Row
+        Record icebergNestedRow = (Record) record.get(1);
+        assertThat(icebergNestedRow.get(0)).isEqualTo(200);
+        Record icebergInnerRow = (Record) icebergNestedRow.get(1);
+        assertThat(icebergInnerRow.get(0)).isEqualTo(3.14);
+        assertThat(icebergInnerRow.get(1)).isEqualTo(true);
+
+        // Verify Row with Array
+        Record icebergRowWithArray = (Record) record.get(2);
+        List<?> ids = (List<?>) icebergRowWithArray.get(0);
+        assertThat(ids.size()).isEqualTo(3);
+        assertThat(ids.get(0)).isEqualTo(1);
+        assertThat(ids.get(1)).isEqualTo(2);
+        assertThat(ids.get(2)).isEqualTo(3);
+
+        // Verify Nullable Row
+        assertThat(record.get(3)).isNull();
     }
 }
