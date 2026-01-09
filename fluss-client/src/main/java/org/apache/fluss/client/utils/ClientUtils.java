@@ -32,6 +32,7 @@ import org.slf4j.LoggerFactory;
 import java.net.InetSocketAddress;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -131,5 +132,24 @@ public final class ClientUtils {
         PhysicalTablePath physicalTablePath = PhysicalTablePath.of(tablePath, partitionName);
         metadataUpdater.checkAndUpdatePartitionMetadata(physicalTablePath);
         return metadataUpdater.getCluster().getPartitionIdOrElseThrow(physicalTablePath);
+    }
+
+    /**
+     * Async version of getPartitionId that does not block the calling thread. This is used to avoid
+     * deadlock when called from Netty IO threads.
+     *
+     * <p>Return the id of the partition the row belongs to. It'll try to update the metadata if the
+     * partition doesn't exist. If the partition doesn't exist yet after update metadata, the
+     * returned future will be completed exceptionally with {@link PartitionNotExistException}.
+     */
+    public static CompletableFuture<Long> getPartitionIdAsync(
+            InternalRow row,
+            PartitionGetter partitionGetter,
+            TablePath tablePath,
+            MetadataUpdater metadataUpdater) {
+        checkNotNull(partitionGetter, "partitionGetter shouldn't be null.");
+        String partitionName = partitionGetter.getPartition(row);
+        PhysicalTablePath physicalTablePath = PhysicalTablePath.of(tablePath, partitionName);
+        return metadataUpdater.checkAndUpdatePartitionMetadataAsync(physicalTablePath);
     }
 }
