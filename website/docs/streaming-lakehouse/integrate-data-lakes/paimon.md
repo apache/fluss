@@ -92,7 +92,7 @@ SELECT * FROM orders$lake$snapshots;
 
 When you specify the `$lake` suffix in a query, the table behaves like a standard Paimon table and inherits all its capabilities.  
 This allows you to take full advantage of Flink's query support and optimizations on Paimon, such as querying system tables, time travel, and more.  
-For further information, refer to Paimon’s [SQL Query documentation](https://paimon.apache.org/docs/1.3/flink/sql-query/#sql-query).
+For further information, refer to Paimon's [SQL Query documentation](https://paimon.apache.org/docs/1.3/flink/sql-query/#sql-query).
 
 #### Union Read of Data in Fluss and Paimon
 
@@ -176,6 +176,7 @@ The following table shows the mapping between [Fluss data types](table-design/da
 | BINARY                                                          | BINARY                                                          |
 | BYTES                                                           | BYTES                                                           |
 | ARRAY\<t\>                                                      | ARRAY\<t\>                                                      |
+| MAP\<kt, vt\>                                                   | MAP\<kt, vt\>                                                   |
 | ROW\<n0 t0, n1 t1, ...\><br/>ROW\<n0 t0 'd0', n1 t1 'd1', ...\> | ROW\<n0 t0, n1 t1, ...\><br/>ROW\<n0 t0 'd0', n1 t1 'd1', ...\> |
 
 ## Snapshot Metadata
