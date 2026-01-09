@@ -172,6 +172,12 @@ class CompactedKeyEncoderTest {
             InternalRow keyRow = decodeRow(keyDataTypes, keyBytes);
 
             URL url = getClass().getClassLoader().getResource(ENCODED_KEY_HEX_FILE_PATH);
+
+            if (url == null) {
+                throw new RuntimeException(
+                        "Missing hex file for encoding test: " + ENCODED_KEY_HEX_FILE_PATH);
+            }
+
             Path encodedKeyFilePath = Paths.get(url.toURI());
 
             String encodedKeyString = new String(Files.readAllBytes(encodedKeyFilePath));
