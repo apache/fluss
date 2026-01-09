@@ -66,7 +66,7 @@ public class ValuesLakeCommitter
     @Override
     public CommittedLakeSnapshot getMissingLakeSnapshot(@Nullable Long latestLakeSnapshotIdOfFluss)
             throws IOException {
-        return null;
+        throw new RuntimeException("Not impl.");
     }
 
     @Override

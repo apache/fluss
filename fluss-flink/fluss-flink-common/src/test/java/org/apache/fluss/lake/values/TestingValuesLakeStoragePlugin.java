@@ -24,9 +24,11 @@ import org.apache.fluss.lake.lakestorage.LakeStoragePlugin;
 import org.apache.fluss.metadata.DataLakeFormat;
 
 /** Implementation of {@link LakeStoragePlugin} for values lake. */
-public class ValuesLakeStoragePlugin implements LakeStoragePlugin {
+public class TestingValuesLakeStoragePlugin implements LakeStoragePlugin {
 
-    private static final String IDENTIFIER = DataLakeFormat.VALUES.toString();
+    // Uses the default Fluss key encoder and bucketing function via the Lance format identifier.
+    // TODO: Make lake format pluggable
+    private static final String IDENTIFIER = DataLakeFormat.LANCE.toString();
 
     @Override
     public String identifier() {

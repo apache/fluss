@@ -43,8 +43,6 @@ public interface BucketingFunction {
             return new FlussBucketingFunction();
         } else if (lakeFormat == DataLakeFormat.ICEBERG) {
             return new IcebergBucketingFunction();
-        } else if (lakeFormat == DataLakeFormat.VALUES) {
-            return new FlussBucketingFunction();
         } else {
             throw new UnsupportedOperationException("Unsupported lake format: " + lakeFormat);
         }

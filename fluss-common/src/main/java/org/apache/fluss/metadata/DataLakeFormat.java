@@ -21,8 +21,7 @@ package org.apache.fluss.metadata;
 public enum DataLakeFormat {
     PAIMON("paimon"),
     LANCE("lance"),
-    ICEBERG("iceberg"),
-    VALUES("values");
+    ICEBERG("iceberg");
 
     private final String value;
 

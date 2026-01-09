@@ -16,4 +16,4 @@
 # limitations under the License.
 #
 
-org.apache.fluss.lake.values.ValuesLakeStoragePlugin
+org.apache.fluss.lake.values.TestingValuesLakeStoragePlugin

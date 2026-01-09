@@ -32,7 +32,7 @@ public class ValuesLakeCatalog implements LakeCatalog {
     @Override
     public void createTable(TablePath tablePath, TableDescriptor tableDescriptor, Context context)
             throws TableAlreadyExistException {
-        ValuesLake.createTable(tablePath.toString(), tableDescriptor.getSchema());
+        ValuesLake.createTable(tablePath.toString());
     }
 
     @Override

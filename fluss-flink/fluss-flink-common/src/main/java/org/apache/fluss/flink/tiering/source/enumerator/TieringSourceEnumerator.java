@@ -297,7 +297,7 @@ public class TieringSourceEnumerator
     }
 
     private void assignSplits() {
-        //we don't assign splits during failovering
+        // we don't assign splits during failovering
         if (isFailOvering) {
             return;
         }

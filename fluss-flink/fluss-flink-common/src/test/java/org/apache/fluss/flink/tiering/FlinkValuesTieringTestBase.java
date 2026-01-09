@@ -26,6 +26,7 @@ import org.apache.fluss.client.table.writer.TableWriter;
 import org.apache.fluss.client.table.writer.UpsertWriter;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.lake.values.ValuesLake;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.Schema;
@@ -35,6 +36,7 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.server.replica.Replica;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
+import org.apache.fluss.server.zk.data.lake.LakeTable;
 
 import org.apache.flink.api.common.RuntimeExecutionMode;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
@@ -47,6 +49,7 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 
+import static org.apache.fluss.lake.committer.LakeCommitter.FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -71,8 +74,8 @@ class FlinkValuesTieringTestBase {
         conf.set(ConfigOptions.KV_SNAPSHOT_INTERVAL, Duration.ofSeconds(1))
                 .set(ConfigOptions.KV_MAX_RETAINED_SNAPSHOTS, Integer.MAX_VALUE);
 
-        // Configure the tiering sink to be Iceberg
-        conf.set(ConfigOptions.DATALAKE_FORMAT, DataLakeFormat.VALUES);
+        // Configure the tiering sink to be Paimon
+        conf.set(ConfigOptions.DATALAKE_FORMAT, DataLakeFormat.LANCE);
         return conf;
     }
 
@@ -158,11 +161,16 @@ class FlinkValuesTieringTestBase {
         }
     }
 
-    protected void checkSnapshotPropertyInValues(
-            TablePath tablePath, Map<String, String> expectedProperties) throws Exception {
+    protected void checkFlussOffsetsInValues(
+            TablePath tablePath, Map<TableBucket, Long> expectedOffset) throws Exception {
         ValuesLake.ValuesTable table = ValuesLake.getTable(tablePath.toString());
-        Map<String, String> snapshotProperties = table.currentSnapshotProperties();
-        assertThat(snapshotProperties).containsAllEntriesOf(expectedProperties);
+        String offsetFile =
+                table.currentSnapshotProperties().get(FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY);
+        Map<TableBucket, Long> recordedOffsets =
+                new LakeTable(new LakeTable.LakeSnapshotMetadata(-1, new FsPath(offsetFile), null))
+                        .getOrReadLatestTableSnapshot()
+                        .getBucketLogEndOffset();
+        assertThat(recordedOffsets).containsAllEntriesOf(expectedOffset);
     }
 
     @SuppressWarnings("resource")

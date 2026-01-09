@@ -29,13 +29,8 @@ import org.apache.fluss.lake.writer.LakeTieringFactory;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
-import org.apache.fluss.row.BinaryString;
-import org.apache.fluss.row.Decimal;
 import org.apache.fluss.row.InternalRow;
-import org.apache.fluss.row.TimestampLtz;
-import org.apache.fluss.row.TimestampNtz;
 import org.apache.fluss.types.DataTypes;
-import org.apache.fluss.utils.TypeUtils;
 
 import org.apache.flink.api.common.eventtime.WatermarkStrategy;
 import org.apache.flink.configuration.PipelineOptions;
@@ -49,30 +44,26 @@ import org.junit.jupiter.api.Test;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.HashMap;
+import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
-import java.util.Map;
 
 import static org.apache.fluss.flink.tiering.source.TieringSource.TIERING_SOURCE_TRANSFORMATION_UID;
 import static org.apache.fluss.flink.tiering.source.TieringSourceOptions.POLL_TIERING_TABLE_INTERVAL;
-import static org.apache.fluss.lake.committer.BucketOffset.FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY;
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.assertj.core.api.Assertions.assertThat;
 
-/**
- * Test tiering failover.
- */
+/** Test tiering failover. */
 class TieringFailoverITCase extends FlinkValuesTieringTestBase {
     protected static final String DEFAULT_DB = "fluss";
 
     private static StreamExecutionEnvironment execEnv;
 
-    private static final Schema pkSchema =
+    private static final Schema schema =
             Schema.newBuilder()
                     .column("f_int", DataTypes.INT())
                     .column("f_string", DataTypes.STRING())
-                    .primaryKey("f_int")
+                    .primaryKey("f_string")
                     .build();
 
     @BeforeAll
@@ -87,14 +78,10 @@ class TieringFailoverITCase extends FlinkValuesTieringTestBase {
     void testTiering() throws Exception {
         // create a pk table, write some records and wait until snapshot finished
         TablePath t1 = TablePath.of(DEFAULT_DB, "pkTable");
-        long t1Id = createPkTable(t1, 1, false, pkSchema);
+        long t1Id = createPkTable(t1, 1, false, schema);
         TableBucket t1Bucket = new TableBucket(t1Id, 0);
         // write records
-        List<InternalRow> rows =
-                Arrays.asList(
-                        row(1, "v1"),
-                        row(2, "v1"),
-                        row(3, "v1"));
+        List<InternalRow> rows = Arrays.asList(row(1, "i1"), row(2, "i2"), row(3, "i3"));
         List<InternalRow> expectedRows = new ArrayList<>(rows);
         writeRows(t1, rows);
         waitUntilSnapshot(t1Id, 1, 0);
@@ -108,25 +95,13 @@ class TieringFailoverITCase extends FlinkValuesTieringTestBase {
             // check the status of replica after synced
             assertReplicaStatus(t1Bucket, 3);
 
-            checkDataInValuesPrimaryKeyTable(t1, rows);
+            checkDataInValuesTable(t1, rows);
             // check snapshot property in values lake
-            Map<String, String> properties =
-                    new HashMap<String, String>() {
-                        {
-                            put(
-                                    FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY,
-                                    "[{\"bucket\":0,\"offset\":3}]");
-                        }
-                    };
-            checkSnapshotPropertyInValues(t1, properties);
+            checkFlussOffsetsInValues(t1, Collections.singletonMap(t1Bucket, 3L));
 
             // then write data to the pk tables
             // write records
-            rows =
-                    Arrays.asList(
-                            row(1, "v111"),
-                            row(2, "v222"),
-                            row(3, "v333"));
+            rows = Arrays.asList(row(1, "i11"), row(2, "i22"), row(3, "i33"));
             expectedRows.addAll(rows);
             // write records
             writeRows(t1, rows);
@@ -136,12 +111,13 @@ class TieringFailoverITCase extends FlinkValuesTieringTestBase {
             // update start log offset for primary key table
             assertReplicaStatus(t1Bucket, expectedRows.size());
 
-            checkDataInValuesPrimaryKeyTable(t1, expectedRows);
+            checkDataInValuesTable(t1, expectedRows);
         } finally {
             jobClient.cancel().get();
         }
     }
 
+    @SuppressWarnings({"rawtypes", "unchecked"})
     protected JobClient buildTieringJob(StreamExecutionEnvironment execEnv) throws Exception {
         Configuration flussConfig = new Configuration(clientConf);
         flussConfig.set(POLL_TIERING_TABLE_INTERVAL, Duration.ofMillis(500L));
@@ -170,7 +146,10 @@ class TieringFailoverITCase extends FlinkValuesTieringTestBase {
                         "TieringCommitter",
                         CommittableMessageTypeInfo.of(
                                 () -> lakeTieringFactory.getCommittableSerializer()),
-                        new TieringCommitOperatorFactory(flussConfig, lakeTieringFactory))
+                        new TieringCommitOperatorFactory(
+                                flussConfig,
+                                Configuration.fromMap(Collections.emptyMap()),
+                                lakeTieringFactory))
                 .setParallelism(1)
                 .setMaxParallelism(1)
                 .sinkTo(new DiscardingSink())
@@ -184,15 +163,15 @@ class TieringFailoverITCase extends FlinkValuesTieringTestBase {
         return execEnv.executeAsync(jobName);
     }
 
-    private void checkDataInValuesPrimaryKeyTable(
-            TablePath tablePath, List<InternalRow> expectedRows) throws Exception {
+    private void checkDataInValuesTable(TablePath tablePath, List<InternalRow> expectedRows)
+            throws Exception {
         Iterator<InternalRow> actualIterator = getValuesRecords(tablePath).iterator();
         Iterator<InternalRow> iterator = expectedRows.iterator();
         while (iterator.hasNext() && actualIterator.hasNext()) {
             InternalRow row = iterator.next();
             InternalRow record = actualIterator.next();
-            assertThat(record.getInt(3)).isEqualTo(row.getInt(3));
-            assertThat(record.getString(7)).isEqualTo(row.getString(7));
+            assertThat(record.getInt(0)).isEqualTo(row.getInt(0));
+            assertThat(record.getString(1)).isEqualTo(row.getString(1));
         }
         assertThat(actualIterator.hasNext()).isFalse();
         assertThat(iterator.hasNext()).isFalse();
