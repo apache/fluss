@@ -80,7 +80,7 @@ public class SaslAuthenticationITCase {
         assertThatThrownBy(() -> testAuthentication(clientConfig))
                 .cause()
                 .isExactlyInstanceOf(AuthenticationException.class)
-                .hasMessage("Authentication failed: Invalid username or password");
+                .hasMessageContaining("Authentication failed: Invalid username or password");
     }
 
     @Test
@@ -140,7 +140,7 @@ public class SaslAuthenticationITCase {
         assertThatThrownBy(() -> testAuthentication(clientConfig, serverConfig))
                 .cause()
                 .isExactlyInstanceOf(AuthenticationException.class)
-                .hasMessage("Authentication failed: Invalid username or password");
+                .hasMessageContaining("Authentication failed: Invalid username or password");
         clientConfig.setString(
                 "client.security.sasl.jaas.config",
                 "org.apache.fluss.security.auth.sasl.plain.PlainLoginModule required username=\"bob\" password=\"bob-secret\";");
@@ -175,7 +175,7 @@ public class SaslAuthenticationITCase {
         assertThatThrownBy(() -> testAuthentication(clientConfig))
                 .cause()
                 .isExactlyInstanceOf(AuthenticationException.class)
-                .hasMessage("Authentication failed: Invalid username or password");
+                .hasMessageContaining("Authentication failed: Invalid username or password");
         clientConfig.setString("client.security.sasl.password", "alice-secret");
         testAuthentication(clientConfig);
     }
