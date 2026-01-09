@@ -501,6 +501,7 @@ When integrating with Iceberg, Fluss automatically converts between Fluss data t
 | BINARY                        | BINARY                        |                     |
 | BYTES                         | BINARY                        | Converted to BINARY |
 | ARRAY                         | LIST                          |                     |
+| ROW                           | STRUCT                        |                     |
 
 
 ## Maintenance and Optimization
@@ -581,5 +582,5 @@ For partitioned tables, the metadata structure includes partition information:
 
 ## Current Limitations
 
-- **Complex Types**: Array, Map, and Row types are not supported
+- **Complex Types**: Map type is not supported
 - **Multiple bucket keys**: Not supported until Iceberg implements multi-argument partition transforms
