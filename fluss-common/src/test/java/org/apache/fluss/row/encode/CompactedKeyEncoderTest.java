@@ -175,7 +175,7 @@ class CompactedKeyEncoderTest {
                                     .getClassLoader()
                                     .getResource(ENCODED_KEY_HEX_FILE_PATH)
                                     .getPath());
-            String encodedKeyString = Files.readString(encodedKeyFilePath);
+            String encodedKeyString = new String(Files.readAllBytes(encodedKeyFilePath));
             encodedKeyString = COMMENT_PATTERN.matcher(encodedKeyString).replaceAll("");
             encodedKeyString = NON_HEX_PATTERN.matcher(encodedKeyString).replaceAll("");
             byte[] expected = BaseEncoding.base16().decode(encodedKeyString);
