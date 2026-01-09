@@ -22,6 +22,7 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.fs.FsPath;
+import org.apache.fluss.fs.local.LocalFileSystem;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
@@ -43,6 +44,7 @@ import org.junit.jupiter.api.io.TempDir;
 import java.nio.file.Path;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
@@ -88,17 +90,7 @@ class LakeTableHelperTest {
             // first create a table
             long tableId = 1;
             TablePath tablePath = TablePath.of("test_db", "test_table");
-            TableRegistration tableReg =
-                    new TableRegistration(
-                            tableId,
-                            "test table",
-                            Collections.emptyList(),
-                            new TableDescriptor.TableDistribution(
-                                    1, Collections.singletonList("a")),
-                            Collections.emptyMap(),
-                            Collections.emptyMap(),
-                            System.currentTimeMillis(),
-                            System.currentTimeMillis());
+            TableRegistration tableReg = createTableReg(tableId);
             zookeeperClient.registerTable(tablePath, tableReg);
 
             // Create a legacy version 1 LakeTableSnapshot (full data in ZK)
@@ -148,7 +140,7 @@ class LakeTableHelperTest {
             assertThat(fileSystem.exists(snapshot2FileHandle)).isTrue();
 
             Optional<LakeTableSnapshot> optMergedSnapshot =
-                    zooKeeperClient.getLakeTableSnapshot(tableId);
+                    zooKeeperClient.getLakeTableSnapshot(tableId, null);
             assertThat(optMergedSnapshot).isPresent();
             LakeTableSnapshot mergedSnapshot = optMergedSnapshot.get();
 
@@ -171,5 +163,106 @@ class LakeTableHelperTest {
             // verify snapshot 3 is discarded
             assertThat(fileSystem.exists(snapshot2FileHandle)).isFalse();
         }
+    }
+
+    @Test
+    void testRegisterLakeTableSnapshotWithRetention(@TempDir Path tempDir) throws Exception {
+        LakeTableHelper lakeTableHelper = new LakeTableHelper(zookeeperClient, tempDir.toString());
+        long tableId = 1L;
+        TablePath tablePath = TablePath.of("test_db", "retention_test");
+
+        // --- Setup: Register table and initialize filesystem ---
+        zookeeperClient.registerTable(tablePath, createTableReg(tableId));
+        FileSystem fs = LocalFileSystem.getSharedInstance();
+
+        // 1. Create Snapshot 1 (ID=1)
+        FsPath path1 = storeOffsetFile(lakeTableHelper, tablePath, tableId, 100L);
+        LakeTable.LakeSnapshotMetadata meta1 = new LakeTable.LakeSnapshotMetadata(1L, path1, path1);
+        lakeTableHelper.registerLakeTableSnapshotV2(tableId, meta1, -1L); // -1: Keep all history
+
+        // 2. Create Snapshot 2 (ID=2)
+        FsPath path2 = storeOffsetFile(lakeTableHelper, tablePath, tableId, 200L);
+        LakeTable.LakeSnapshotMetadata meta2 = new LakeTable.LakeSnapshotMetadata(2L, path2, path2);
+        lakeTableHelper.registerLakeTableSnapshotV2(tableId, meta2, -1L); // -1: Keep all history
+
+        List<LakeTable.LakeSnapshotMetadata> metadatasAfterStep2 =
+                zookeeperClient.getLakeTable(tableId).get().getLakeSnapshotMetadatas();
+        assertThat(metadatasAfterStep2).hasSize(2);
+        assertThat(metadatasAfterStep2)
+                .extracting(LakeTable.LakeSnapshotMetadata::getSnapshotId)
+                .containsExactly(1L, 2L);
+
+        // --- Scenario A: earliestSnapshotIDToKeep = null (Aggressive Cleanup) ---
+        // Expected behavior: Only the latest snapshot is retained; all previous ones are discarded.
+        FsPath path3 = storeOffsetFile(lakeTableHelper, tablePath, tableId, 300L);
+        LakeTable.LakeSnapshotMetadata meta3 = new LakeTable.LakeSnapshotMetadata(3L, path3, path3);
+
+        lakeTableHelper.registerLakeTableSnapshotV2(tableId, meta3, null);
+
+        // Verify physical files: 1 and 2 should be deleted, 3 must exist.
+        assertThat(fs.exists(path1)).isFalse();
+        assertThat(fs.exists(path2)).isFalse();
+        assertThat(fs.exists(path3)).isTrue();
+        // Verify metadata: Only 1 entry should remain in ZK.
+        assertThat(zookeeperClient.getLakeTable(tableId).get().getLakeSnapshotMetadatas())
+                .hasSize(1);
+
+        // --- Scenario B: earliestSnapshotIDToKeep = -1 (Infinite Retention) ---
+        // Expected behavior: No previous snapshots are discarded regardless of history size.
+        FsPath path4 = storeOffsetFile(lakeTableHelper, tablePath, tableId, 400L);
+        LakeTable.LakeSnapshotMetadata meta4 = new LakeTable.LakeSnapshotMetadata(4L, path4, path4);
+
+        lakeTableHelper.registerLakeTableSnapshotV2(tableId, meta4, -1L);
+
+        // Verify both snapshots 3 and 4 are preserved.
+        assertThat(fs.exists(path3)).isTrue();
+        assertThat(fs.exists(path4)).isTrue();
+        assertThat(zookeeperClient.getLakeTable(tableId).get().getLakeSnapshotMetadatas())
+                .hasSize(2);
+
+        // --- Scenario C: earliestSnapshotIDToKeep = Specific ID (Positional Slicing) ---
+        // Setup: Current history [3, 4], adding [5, 6].
+        FsPath path5 = storeOffsetFile(lakeTableHelper, tablePath, tableId, 500L);
+        LakeTable.LakeSnapshotMetadata meta5 = new LakeTable.LakeSnapshotMetadata(5L, path5, path5);
+        lakeTableHelper.registerLakeTableSnapshotV2(tableId, meta5, -1L);
+
+        FsPath path6 = storeOffsetFile(lakeTableHelper, tablePath, tableId, 600L);
+        LakeTable.LakeSnapshotMetadata meta6 = new LakeTable.LakeSnapshotMetadata(6L, path6, path6);
+
+        // Action: Set retention boundary to Snapshot 4.
+        // Expected behavior: Snapshot 3 (before the boundary) is discarded; 4, 5, and 6 are kept.
+        lakeTableHelper.registerLakeTableSnapshotV2(tableId, meta6, 4L);
+
+        // Verify physical cleanup.
+        assertThat(fs.exists(path3)).isFalse();
+        assertThat(fs.exists(path4)).isTrue();
+        assertThat(fs.exists(path5)).isTrue();
+        assertThat(fs.exists(path6)).isTrue();
+
+        // Verify metadata sequence in Zookeeper.
+        assertThat(zookeeperClient.getLakeTable(tableId).get().getLakeSnapshotMetadatas())
+                .extracting(LakeTable.LakeSnapshotMetadata::getSnapshotId)
+                .containsExactly(4L, 5L, 6L);
+    }
+
+    /** Helper to store offset files and return the FsPath. */
+    private FsPath storeOffsetFile(
+            LakeTableHelper helper, TablePath path, long tableId, long offset) throws Exception {
+        Map<TableBucket, Long> offsets = new HashMap<>();
+        offsets.put(new TableBucket(tableId, 0), offset);
+        return helper.storeLakeTableOffsetsFile(path, new TableBucketOffsets(tableId, offsets));
+    }
+
+    /** Helper to create a basic TableRegistration. */
+    private TableRegistration createTableReg(long tableId) {
+        return new TableRegistration(
+                tableId,
+                "test",
+                Collections.emptyList(),
+                new TableDescriptor.TableDistribution(1, Collections.singletonList("a")),
+                Collections.emptyMap(),
+                Collections.emptyMap(),
+                System.currentTimeMillis(),
+                System.currentTimeMillis());
     }
 }
