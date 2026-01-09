@@ -24,6 +24,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.lang.reflect.Field;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -171,10 +172,53 @@ class FlussSinkBuilderTest {
                         .setTable(tableName)
                         .setOption("key1", "value1")
                         .setOptions(new HashMap<>())
-                        .setShuffleByBucketId(false);
+                        .setShuffleByBucketId(false)
+                        .setPartialUpdateColumns("id", "price");
 
         // Verify the builder instance is returned
         assertThat(chainedBuilder).isInstanceOf(FlussSinkBuilder.class);
+    }
+
+    @Test
+    void testComputeTargetColumnIndexesFullUpdate() {
+        int[] result =
+                FlussSinkBuilder.computeTargetColumnIndexes(
+                        Arrays.asList("id", "name", "price"), Arrays.asList("id"), null);
+        assertThat(result).isNull();
+    }
+
+    @Test
+    void testComputeTargetColumnIndexesValidPartialIncludesPk() {
+        int[] result =
+                FlussSinkBuilder.computeTargetColumnIndexes(
+                        Arrays.asList("id", "name", "price", "ts"),
+                        Arrays.asList("id"),
+                        Arrays.asList("id", "price"));
+        assertThat(result).containsExactly(0, 2);
+    }
+
+    @Test
+    void testComputeTargetColumnIndexesMissingPkThrows() {
+        assertThatThrownBy(
+                        () ->
+                                FlussSinkBuilder.computeTargetColumnIndexes(
+                                        Arrays.asList("id", "name", "price"),
+                                        Arrays.asList("id"),
+                                        Arrays.asList("name", "price")))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Partial updates must include all primary key columns");
+    }
+
+    @Test
+    void testComputeTargetColumnIndexesUnknownColumnThrows() {
+        assertThatThrownBy(
+                        () ->
+                                FlussSinkBuilder.computeTargetColumnIndexes(
+                                        Arrays.asList("id", "name"),
+                                        Arrays.asList("id"),
+                                        Arrays.asList("id", "unknown")))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("not found in table schema");
     }
 
     // Helper method to get private field values using reflection
