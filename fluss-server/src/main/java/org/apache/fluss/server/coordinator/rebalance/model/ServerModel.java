@@ -25,6 +25,7 @@ import javax.annotation.Nullable;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -203,11 +204,13 @@ public class ServerModel implements Comparable<ServerModel> {
             return false;
         }
         ServerModel that = (ServerModel) o;
-        return serverId == that.serverId;
+        return serverId == that.serverId
+                && isOfflineTagged == that.isOfflineTagged
+                && Objects.equals(rack, that.rack);
     }
 
     @Override
     public int hashCode() {
-        return serverId;
+        return Objects.hash(serverId, isOfflineTagged, rack);
     }
 }
