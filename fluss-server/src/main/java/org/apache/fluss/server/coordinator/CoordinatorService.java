@@ -773,6 +773,10 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     @Override
     public CompletableFuture<ControlledShutdownResponse> controlledShutdown(
             ControlledShutdownRequest request) {
+        if (authorizer != null) {
+            authorizer.authorize(currentSession(), OperationType.ALTER, Resource.cluster());
+        }
+
         CompletableFuture<ControlledShutdownResponse> response = new CompletableFuture<>();
         eventManagerSupplier
                 .get()
@@ -825,6 +829,10 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
 
     @Override
     public CompletableFuture<AddServerTagResponse> addServerTag(AddServerTagRequest request) {
+        if (authorizer != null) {
+            authorizer.authorize(currentSession(), OperationType.ALTER, Resource.cluster());
+        }
+
         CompletableFuture<AddServerTagResponse> response = new CompletableFuture<>();
         eventManagerSupplier
                 .get()
@@ -841,6 +849,10 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     @Override
     public CompletableFuture<RemoveServerTagResponse> removeServerTag(
             RemoveServerTagRequest request) {
+        if (authorizer != null) {
+            authorizer.authorize(currentSession(), OperationType.ALTER, Resource.cluster());
+        }
+
         CompletableFuture<RemoveServerTagResponse> response = new CompletableFuture<>();
         eventManagerSupplier
                 .get()
@@ -856,6 +868,10 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
 
     @Override
     public CompletableFuture<RebalanceResponse> rebalance(RebalanceRequest request) {
+        if (authorizer != null) {
+            authorizer.authorize(currentSession(), OperationType.WRITE, Resource.cluster());
+        }
+
         List<Goal> goalsByPriority = new ArrayList<>();
         Arrays.stream(request.getGoals())
                 .forEach(goal -> goalsByPriority.add(getGoalByType(GoalType.valueOf(goal))));
@@ -868,6 +884,10 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     @Override
     public CompletableFuture<ListRebalanceProgressResponse> listRebalanceProgress(
             ListRebalanceProgressRequest request) {
+        if (authorizer != null) {
+            authorizer.authorize(currentSession(), OperationType.DESCRIBE, Resource.cluster());
+        }
+
         CompletableFuture<ListRebalanceProgressResponse> response = new CompletableFuture<>();
         eventManagerSupplier
                 .get()
@@ -881,6 +901,10 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     @Override
     public CompletableFuture<CancelRebalanceResponse> cancelRebalance(
             CancelRebalanceRequest request) {
+        if (authorizer != null) {
+            authorizer.authorize(currentSession(), OperationType.WRITE, Resource.cluster());
+        }
+
         CompletableFuture<CancelRebalanceResponse> response = new CompletableFuture<>();
         eventManagerSupplier
                 .get()
