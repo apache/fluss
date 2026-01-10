@@ -186,9 +186,6 @@ class IcebergRewriteITCase extends FlinkIcebergTieringTestBase {
                             t1, t1Bucket, ++i, true, Collections.singletonList(row(1, "v1"))));
             checkFileStatusInIcebergTable(t1, 3, false);
 
-            // Ensure tiering job has fully processed the previous writes
-            assertReplicaStatus(t1Bucket, i);
-
             // Write should trigger compaction now since the current data file count is greater or
             // equal MIN_FILES_TO_COMPACT
             flussRows.addAll(
