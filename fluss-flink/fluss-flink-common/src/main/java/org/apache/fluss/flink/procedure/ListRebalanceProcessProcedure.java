@@ -23,6 +23,7 @@ import org.apache.fluss.cluster.rebalance.RebalanceProgress;
 import org.apache.fluss.cluster.rebalance.RebalanceResultForBucket;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.utils.json.JsonSerdeUtils;
+import org.apache.fluss.utils.json.RebalancePlanForBucketJsonSerde;
 
 import org.apache.flink.table.annotation.ArgumentHint;
 import org.apache.flink.table.annotation.DataTypeHint;

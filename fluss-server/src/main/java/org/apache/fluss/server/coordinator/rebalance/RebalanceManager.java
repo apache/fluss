@@ -35,8 +35,8 @@ import org.apache.fluss.server.coordinator.rebalance.model.ServerModel;
 import org.apache.fluss.server.metadata.ServerInfo;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
-import org.apache.fluss.server.zk.data.RebalanceTask;
 import org.apache.fluss.utils.MapUtils;
+import org.apache.fluss.utils.json.RebalanceTask;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;

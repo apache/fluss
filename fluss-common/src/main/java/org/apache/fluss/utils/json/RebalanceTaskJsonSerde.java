@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.server.zk.data;
+package org.apache.fluss.utils.json;
 
 import org.apache.fluss.cluster.rebalance.RebalancePlanForBucket;
 import org.apache.fluss.cluster.rebalance.RebalanceStatus;
@@ -23,13 +23,9 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.core.JsonGenerator;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
-import org.apache.fluss.utils.json.JsonDeserializer;
-import org.apache.fluss.utils.json.JsonSerializer;
 
 import java.io.IOException;
-import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 
@@ -45,14 +41,8 @@ public class RebalanceTaskJsonSerde
     private static final String REBALANCE_PLAN = "rebalance_plan";
 
     private static final String TABLE_ID = "table_id";
-    private static final String PARTITION_ID = "partition_id";
 
     private static final String BUCKETS = "buckets";
-    private static final String BUCKET_ID = "bucket_id";
-    private static final String ORIGINAL_LEADER = "original_leader";
-    private static final String NEW_LEADER = "new_leader";
-    private static final String ORIGIN_REPLICAS = "origin_replicas";
-    private static final String NEW_REPLICAS = "new_replicas";
 
     private static final int VERSION = 1;
 
@@ -82,7 +72,6 @@ public class RebalanceTaskJsonSerde
                 rebalanceTask.getPlanForBucketsOfPartitionedTable().entrySet()) {
             generator.writeStartObject();
             generator.writeNumberField(TABLE_ID, entry.getKey().getTableId());
-            generator.writeNumberField(PARTITION_ID, entry.getKey().getPartitionId());
             generator.writeArrayFieldStart(BUCKETS);
             for (RebalancePlanForBucket bucketPlan : entry.getValue()) {
                 serializeRebalancePlanForBucket(generator, bucketPlan);
@@ -105,38 +94,11 @@ public class RebalanceTaskJsonSerde
 
         Map<TableBucket, RebalancePlanForBucket> planForBuckets = new HashMap<>();
         for (JsonNode tablePartitionPlanNode : rebalancePlanNode) {
-            long tableId = tablePartitionPlanNode.get(TABLE_ID).asLong();
-
-            Long partitionId = null;
-            if (tablePartitionPlanNode.has(PARTITION_ID)) {
-                partitionId = tablePartitionPlanNode.get(PARTITION_ID).asLong();
-            }
-
             JsonNode bucketPlanNodes = tablePartitionPlanNode.get(BUCKETS);
             for (JsonNode bucketPlanNode : bucketPlanNodes) {
-                int bucketId = bucketPlanNode.get(BUCKET_ID).asInt();
-                TableBucket tableBucket = new TableBucket(tableId, partitionId, bucketId);
-
-                int originLeader = bucketPlanNode.get(ORIGINAL_LEADER).asInt();
-
-                int newLeader = bucketPlanNode.get(NEW_LEADER).asInt();
-
-                List<Integer> originReplicas = new ArrayList<>();
-                Iterator<JsonNode> elements = bucketPlanNode.get(ORIGIN_REPLICAS).elements();
-                while (elements.hasNext()) {
-                    originReplicas.add(elements.next().asInt());
-                }
-
-                List<Integer> newReplicas = new ArrayList<>();
-                elements = bucketPlanNode.get(NEW_REPLICAS).elements();
-                while (elements.hasNext()) {
-                    newReplicas.add(elements.next().asInt());
-                }
-
-                planForBuckets.put(
-                        tableBucket,
-                        new RebalancePlanForBucket(
-                                tableBucket, originLeader, newLeader, originReplicas, newReplicas));
+                RebalancePlanForBucket rebalancePlanForBucket =
+                        RebalancePlanForBucketJsonSerde.INSTANCE.deserialize(bucketPlanNode);
+                planForBuckets.put(rebalancePlanForBucket.getTableBucket(), rebalancePlanForBucket);
             }
         }
 
@@ -145,20 +107,6 @@ public class RebalanceTaskJsonSerde
 
     private void serializeRebalancePlanForBucket(
             JsonGenerator generator, RebalancePlanForBucket bucketPlan) throws IOException {
-        generator.writeStartObject();
-        generator.writeNumberField(BUCKET_ID, bucketPlan.getBucketId());
-        generator.writeNumberField(ORIGINAL_LEADER, bucketPlan.getOriginalLeader());
-        generator.writeNumberField(NEW_LEADER, bucketPlan.getNewLeader());
-        generator.writeArrayFieldStart(ORIGIN_REPLICAS);
-        for (Integer replica : bucketPlan.getOriginReplicas()) {
-            generator.writeNumber(replica);
-        }
-        generator.writeEndArray();
-        generator.writeArrayFieldStart(NEW_REPLICAS);
-        for (Integer replica : bucketPlan.getNewReplicas()) {
-            generator.writeNumber(replica);
-        }
-        generator.writeEndArray();
-        generator.writeEndObject();
+        RebalancePlanForBucketJsonSerde.INSTANCE.serialize(bucketPlan, generator);
     }
 }

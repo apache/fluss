@@ -15,14 +15,12 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.flink.procedure;
+package org.apache.fluss.utils.json;
 
 import org.apache.fluss.cluster.rebalance.RebalancePlanForBucket;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.core.JsonGenerator;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
-import org.apache.fluss.utils.json.JsonDeserializer;
-import org.apache.fluss.utils.json.JsonSerializer;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -40,14 +38,14 @@ public class RebalancePlanForBucketJsonSerde
     private static final String VERSION_KEY = "version";
     private static final int VERSION = 1;
 
-    private static final String TABLE_ID = "tableId";
+    private static final String TABLE_ID = "table_id";
     private static final String BUCKET = "bucket";
-    private static final String PARTITION_ID = "partitionId";
+    private static final String PARTITION_ID = "partition_id";
 
-    private static final String ORIGINAL_LEADER = "originalLeader";
-    private static final String NEW_LEADER = "newLeader";
-    private static final String ORIGIN_REPLICAS = "originReplicas";
-    private static final String NEW_REPLICAS = "newReplicas";
+    private static final String ORIGINAL_LEADER = "original_leader";
+    private static final String NEW_LEADER = "new_leader";
+    private static final String ORIGIN_REPLICAS = "origin_replicas";
+    private static final String NEW_REPLICAS = "new_replicas";
 
     @Override
     public RebalancePlanForBucket deserialize(JsonNode node) {

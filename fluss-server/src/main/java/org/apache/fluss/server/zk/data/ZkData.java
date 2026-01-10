@@ -27,6 +27,8 @@ import org.apache.fluss.security.acl.ResourceType;
 import org.apache.fluss.server.zk.data.lake.LakeTable;
 import org.apache.fluss.server.zk.data.lake.LakeTableJsonSerde;
 import org.apache.fluss.utils.json.JsonSerdeUtils;
+import org.apache.fluss.utils.json.RebalanceTask;
+import org.apache.fluss.utils.json.RebalanceTaskJsonSerde;
 import org.apache.fluss.utils.types.Tuple2;
 
 import javax.annotation.Nullable;
