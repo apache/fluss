@@ -258,7 +258,7 @@ TableDescriptor.builder()
 
 Computes the product of values across multiple rows.
 
-- **Supported Data Types**: TINYINT, SMALLINT, INT, BIGINT, FLOAT, DOUBLE, DECIMAL
+- **Supported Data Types**: `TINYINT`, `SMALLINT`, `INT`, `BIGINT`, `FLOAT`, `DOUBLE`, `DECIMAL`
 - **Behavior**: Multiplies incoming values with the accumulator
 - **Null Handling**: Null values are ignored
 
@@ -314,7 +314,7 @@ TableDescriptor.builder()
 
 Identifies and retains the maximum value.
 
-- **Supported Data Types**: CHAR, STRING, TINYINT, SMALLINT, INT, BIGINT, FLOAT, DOUBLE, DECIMAL, DATE, TIME, TIMESTAMP, TIMESTAMP_LTZ
+- **Supported Data Types**: `CHAR`, `STRING`, `TINYINT`, `SMALLINT`, `INT`, `BIGINT`, `FLOAT`, `DOUBLE`, `DECIMAL`, `DATE`, `TIME`, `TIMESTAMP`, `TIMESTAMP_LTZ`
 - **Behavior**: Keeps the larger value between accumulator and incoming value
 - **Null Handling**: Null values are ignored
 
@@ -372,7 +372,7 @@ TableDescriptor.builder()
 
 Identifies and retains the minimum value.
 
-- **Supported Data Types**: CHAR, STRING, TINYINT, SMALLINT, INT, BIGINT, FLOAT, DOUBLE, DECIMAL, DATE, TIME, TIMESTAMP, TIMESTAMP_LTZ
+- **Supported Data Types**: `CHAR`, `STRING`, `TINYINT`, `SMALLINT`, `INT`, `BIGINT`, `FLOAT`, `DOUBLE`, `DECIMAL`, `DATE`, `TIME`, `TIMESTAMP`, `TIMESTAMP_LTZ`
 - **Behavior**: Keeps the smaller value between accumulator and incoming value
 - **Null Handling**: Null values are ignored
 
@@ -695,7 +695,7 @@ TableDescriptor.builder()
 
 Concatenates multiple string values into a single string with a delimiter.
 
-- **Supported Data Types**: STRING, CHAR
+- **Supported Data Types**: `STRING`, `CHAR`
 - **Behavior**: Concatenates values using the specified delimiter
 - **Null Handling**: Null values are skipped
 - **Delimiter**: Specify delimiter directly in the aggregation function (default is comma `,`)
@@ -757,7 +757,7 @@ TableDescriptor.builder()
 
 Alias for `listagg`. Concatenates multiple string values into a single string with a delimiter.
 
-- **Supported Data Types**: STRING, CHAR
+- **Supported Data Types**: `STRING`, `CHAR`
 - **Behavior**: Same as `listagg` - concatenates values using the specified delimiter
 - **Null Handling**: Null values are skipped
 - **Delimiter**: Specify delimiter directly in the aggregation function (default is comma `,`)
@@ -824,7 +824,7 @@ TableDescriptor.builder()
 
 Evaluates whether all boolean values in a set are true (logical AND).
 
-- **Supported Data Types**: BOOLEAN
+- **Supported Data Types**: `BOOLEAN`
 - **Behavior**: Returns true only if all values are true
 - **Null Handling**: Null values are ignored
 
@@ -881,7 +881,7 @@ TableDescriptor.builder()
 
 Checks if at least one boolean value in a set is true (logical OR).
 
-- **Supported Data Types**: BOOLEAN
+- **Supported Data Types**: `BOOLEAN`
 - **Behavior**: Returns true if any value is true
 - **Null Handling**: Null values are ignored
 
