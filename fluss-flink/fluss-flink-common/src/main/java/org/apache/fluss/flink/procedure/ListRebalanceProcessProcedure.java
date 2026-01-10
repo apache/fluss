@@ -18,23 +18,25 @@
 package org.apache.fluss.flink.procedure;
 
 import org.apache.fluss.client.admin.Admin;
+import org.apache.fluss.cluster.rebalance.RebalancePlanForBucket;
 import org.apache.fluss.cluster.rebalance.RebalanceProgress;
 import org.apache.fluss.cluster.rebalance.RebalanceResultForBucket;
-import org.apache.fluss.cluster.rebalance.RebalanceStatus;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.utils.json.JsonSerdeUtils;
 
 import org.apache.flink.table.annotation.ArgumentHint;
 import org.apache.flink.table.annotation.DataTypeHint;
 import org.apache.flink.table.annotation.ProcedureHint;
 import org.apache.flink.table.procedure.ProcedureContext;
+import org.apache.flink.types.Row;
 
 import javax.annotation.Nullable;
 
+import java.nio.charset.StandardCharsets;
 import java.text.NumberFormat;
-import java.util.ArrayList;
-import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.StringJoiner;
 
 /**
  * Procedure to list rebalance progress.
@@ -60,33 +62,41 @@ public class ListRebalanceProcessProcedure extends ProcedureBase {
                         name = "rebalanceId",
                         type = @DataTypeHint("STRING"),
                         isOptional = true)
-            })
-    public String[] call(ProcedureContext context, @Nullable String rebalanceId) throws Exception {
+            },
+            output =
+                    @DataTypeHint(
+                            "ROW<rebalance_id STRING, rebalance_status STRING, rebalance_progress STRING, rebalance_plan STRING>"))
+    public Row[] call(ProcedureContext context, @Nullable String rebalanceId) throws Exception {
         Optional<RebalanceProgress> progressOpt = admin.listRebalanceProgress(rebalanceId).get();
 
         if (!progressOpt.isPresent()) {
-            return new String[] {"No rebalance progress found."};
+            return new Row[] {Row.of("No rebalance progress found.")};
         }
 
         return progressToString(progressOpt.get());
     }
 
-    private static String[] progressToString(RebalanceProgress progress) {
-        RebalanceStatus status = progress.status();
+    private static Row[] progressToString(RebalanceProgress progress) {
         double rebalanceProgress = progress.progress();
         Map<TableBucket, RebalanceResultForBucket> bucketMap = progress.progressForBucketMap();
 
-        // TODO format the result into a row type, and the detail progress for bucket show in json
-        // format. Trace by: https://github.com/apache/fluss/issues/2325
-        List<String> result = new ArrayList<>();
-        result.add("Rebalance id: " + progress.rebalanceId());
-        result.add("Reblance total status: " + status);
-        result.add("Rebalance progress: " + formatAsPercentage(rebalanceProgress));
-        result.add("Rebalance detail progress for bucket:");
+        StringJoiner planResult = new StringJoiner(", ");
+
         for (RebalanceResultForBucket resultForBucket : bucketMap.values()) {
-            result.add(resultForBucket.toString());
+            RebalancePlanForBucket plan = resultForBucket.plan();
+            planResult.add(
+                    new String(
+                            JsonSerdeUtils.writeValueAsBytes(
+                                    plan, RebalancePlanForBucketJsonSerde.INSTANCE),
+                            StandardCharsets.UTF_8));
         }
-        return result.toArray(new String[0]);
+        return new Row[] {
+            Row.of(
+                    progress.rebalanceId(),
+                    progress.status(),
+                    formatAsPercentage(rebalanceProgress),
+                    planResult.toString())
+        };
     }
 
     public static String formatAsPercentage(double value) {
