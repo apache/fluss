@@ -42,6 +42,7 @@ import java.util.ArrayDeque;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
+import java.util.Queue;
 import java.util.concurrent.TimeUnit;
 
 import static org.apache.fluss.server.coordinator.LakeTableTieringManager.TIERING_SERVICE_TIMEOUT_MS;
@@ -310,6 +311,65 @@ class LakeTableTieringManagerTest {
         } finally {
             manager.close();
         }
+    }
+
+    @Test
+    void testRemoveLakeTableRemovesAllPendingQueueOccurrences() throws Exception {
+        long tableId1 = 1L;
+        TablePath tablePath1 = TablePath.of("db", "table1");
+        TableInfo tableInfo1 = createTableInfo(tableId1, tablePath1, Duration.ofSeconds(10));
+        tableTieringManager.addNewLakeTable(tableInfo1);
+
+        long tableId2 = 2L;
+        TablePath tablePath2 = TablePath.of("db", "table2");
+        TableInfo tableInfo2 = createTableInfo(tableId2, tablePath2, Duration.ofSeconds(10));
+        tableTieringManager.addNewLakeTable(tableInfo2);
+
+        // Trigger scheduling
+        manualClock.advanceTime(Duration.ofSeconds(10));
+
+        // Wait until at least ONE table is pending and can be requested
+        LakeTieringTableInfo first =
+                waitValue(
+                        () -> Optional.ofNullable(tableTieringManager.requestTable()),
+                        Duration.ofSeconds(10),
+                        "Request tiering table timeout");
+
+        // Force it back into the pending state due to failure
+        tableTieringManager.reportTieringFail(first.tableId(), first.tieringEpoch());
+
+        // Inject duplicates into the queue (simulating retries, potential late timers, etc.)
+        Queue<Long> pendingQueue = getPrivateField(tableTieringManager, "pendingTieringTables");
+        pendingQueue.add(tableId1);
+        pendingQueue.add(tableId1);
+        pendingQueue.add(tableId1);
+
+        assertThat(countOccurrences(pendingQueue, tableId1)).isGreaterThanOrEqualTo(2);
+
+        // Purge tableId1 (and any duplicates)
+        tableTieringManager.removeLakeTable(tableId1);
+
+        assertThat(countOccurrences(pendingQueue, tableId1)).isZero();
+
+        // Now table2 should still be requestable eventually (don't assume immediate next poll).
+        LakeTieringTableInfo t2 =
+                waitValue(
+                        () -> Optional.ofNullable(tableTieringManager.requestTable()),
+                        Duration.ofSeconds(10),
+                        "Request tiering table timeout");
+
+        assertThat(t2.tableId()).isEqualTo(tableId2);
+        assertThat(t2.tablePath()).isEqualTo(tablePath2);
+    }
+
+    private static int countOccurrences(Queue<Long> queue, long tableId) {
+        int count = 0;
+        for (Long v : queue) {
+            if (v != null && v == tableId) {
+                count++;
+            }
+        }
+        return count;
     }
 
     /**
