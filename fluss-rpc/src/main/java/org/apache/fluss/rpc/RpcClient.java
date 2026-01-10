@@ -78,4 +78,11 @@ public interface RpcClient extends AutoCloseable {
      * first.
      */
     CompletableFuture<ApiMessage> sendRequest(ServerNode node, ApiKeys apiKey, ApiMessage request);
+
+    /**
+     * Send an RPC request to the given server and return a future for the response, and have retry
+     * mechanism.
+     */
+    CompletableFuture<ApiMessage> sendRequestWithRetries(
+            ServerNode node, ApiKeys apiKey, ApiMessage request, int maxRetries);
 }
