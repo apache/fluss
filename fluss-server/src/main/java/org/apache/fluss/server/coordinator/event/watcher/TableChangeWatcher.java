@@ -139,7 +139,8 @@ public class TableChangeWatcher {
                                 PartitionZNode.parsePath(oldData.getPath());
                         if (physicalTablePath != null) {
                             // it's for deletion of a table partition node
-                            TablePartition partition = PartitionZNode.decode(oldData.getData());
+                            TablePartition partition =
+                                    PartitionZNode.decode(oldData.getData()).toTablePartition();
                             eventManager.put(
                                     new DropPartitionEvent(
                                             partition.getTableId(),
@@ -213,7 +214,8 @@ public class TableChangeWatcher {
 
         private void processCreatePartition(
                 TablePath tablePath, String partitionName, ChildData partitionData) {
-            TablePartition partition = PartitionZNode.decode(partitionData.getData());
+            TablePartition partition =
+                    PartitionZNode.decode(partitionData.getData()).toTablePartition();
             long partitionId = partition.getPartitionId();
             long tableId = partition.getTableId();
             PartitionAssignment partitionAssignment;

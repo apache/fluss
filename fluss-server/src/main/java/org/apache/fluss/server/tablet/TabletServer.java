@@ -22,7 +22,6 @@ import org.apache.fluss.cluster.Endpoint;
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
-import org.apache.fluss.exception.IllegalConfigurationException;
 import org.apache.fluss.exception.InvalidServerRackInfoException;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metrics.registry.MetricRegistry;
@@ -71,7 +70,6 @@ import javax.annotation.concurrent.GuardedBy;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
-import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -79,6 +77,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.apache.fluss.config.ConfigOptions.BACKGROUND_THREADS;
+import static org.apache.fluss.config.FlussConfigUtils.validateTabletConfigs;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toTableBucket;
 
 /**
@@ -177,7 +176,7 @@ public class TabletServer extends ServerBase {
 
     public TabletServer(Configuration conf, Clock clock) {
         super(conf);
-        validateConfigs(conf);
+        validateTabletConfigs(conf);
         this.terminationFuture = new CompletableFuture<>();
         this.serverId = conf.getInt(ConfigOptions.TABLET_SERVER_ID);
         this.rack = conf.getString(ConfigOptions.TABLET_SERVER_RACK);
@@ -556,40 +555,6 @@ public class TabletServer extends ServerBase {
     @VisibleForTesting
     public @Nullable Authorizer getAuthorizer() {
         return authorizer;
-    }
-
-    private static void validateConfigs(Configuration conf) {
-        Optional<Integer> serverId = conf.getOptional(ConfigOptions.TABLET_SERVER_ID);
-        if (!serverId.isPresent()) {
-            throw new IllegalConfigurationException(
-                    String.format("Configuration %s must be set.", ConfigOptions.TABLET_SERVER_ID));
-        }
-
-        if (serverId.get() < 0) {
-            throw new IllegalConfigurationException(
-                    String.format(
-                            "Invalid configuration for %s, it must be greater than or equal 0.",
-                            ConfigOptions.TABLET_SERVER_ID.key()));
-        }
-
-        if (conf.get(ConfigOptions.BACKGROUND_THREADS) < 1) {
-            throw new IllegalConfigurationException(
-                    String.format(
-                            "Invalid configuration for %s, it must be greater than or equal 1.",
-                            ConfigOptions.BACKGROUND_THREADS.key()));
-        }
-
-        if (conf.get(ConfigOptions.REMOTE_DATA_DIR) == null) {
-            throw new IllegalConfigurationException(
-                    String.format("Configuration %s must be set.", ConfigOptions.REMOTE_DATA_DIR));
-        }
-
-        if (conf.get(ConfigOptions.LOG_SEGMENT_FILE_SIZE).getBytes() > Integer.MAX_VALUE) {
-            throw new IllegalConfigurationException(
-                    String.format(
-                            "Invalid configuration for %s, it must be less than or equal %d bytes.",
-                            ConfigOptions.LOG_SEGMENT_FILE_SIZE.key(), Integer.MAX_VALUE));
-        }
     }
 
     @VisibleForTesting

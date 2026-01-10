@@ -35,6 +35,7 @@ import org.apache.fluss.server.coordinator.LakeTableTieringManager;
 import org.apache.fluss.server.coordinator.MetadataManager;
 import org.apache.fluss.server.coordinator.TestCoordinatorChannelManager;
 import org.apache.fluss.server.coordinator.event.CoordinatorEventManager;
+import org.apache.fluss.server.coordinator.remote.RemoteDirDynamicLoader;
 import org.apache.fluss.server.coordinator.statemachine.ReplicaLeaderElection.ControlledShutdownLeaderElection;
 import org.apache.fluss.server.coordinator.statemachine.TableBucketStateMachine.ElectionResult;
 import org.apache.fluss.server.metadata.CoordinatorMetadataCache;
@@ -117,6 +118,7 @@ class TableBucketStateMachineTest {
                                 zookeeperClient,
                                 new Configuration(),
                                 new LakeCatalogDynamicLoader(new Configuration(), null, true)),
+                        new RemoteDirDynamicLoader(conf),
                         new Configuration());
         lakeTableTieringManager = new LakeTableTieringManager();
     }
