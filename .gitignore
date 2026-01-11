@@ -45,3 +45,4 @@ website/versioned_docs
 website/versioned_sidebars
 website/versions.json
 website/pnpm-lock.yaml
+/.claude/
