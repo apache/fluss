@@ -60,6 +60,11 @@ public final class TableDescriptor implements Serializable {
     public static final String TIMESTAMP_COLUMN_NAME = "__timestamp";
     public static final String BUCKET_COLUMN_NAME = "__bucket";
 
+    // Reserved column names for $changelog virtual table metadata
+    public static final String CHANGELOG_CHANGE_TYPE_COLUMN = "_change_type";
+    public static final String CHANGELOG_LOG_OFFSET_COLUMN = "_log_offset";
+    public static final String CHANGELOG_COMMIT_TIMESTAMP_COLUMN = "_commit_timestamp";
+
     private final Schema schema;
     private final @Nullable String comment;
     private final List<String> partitionKeys;
