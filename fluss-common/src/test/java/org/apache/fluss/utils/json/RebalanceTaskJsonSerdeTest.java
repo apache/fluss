@@ -88,13 +88,13 @@ public class RebalanceTaskJsonSerdeTest extends JsonSerdeTestBase<RebalanceTask>
         return new String[] {
             "{\"version\":1,\"rebalance_id\":\"rebalance-task-21jd\",\"rebalance_status\":0,\"rebalance_plan\":"
                     + "[{\"table_id\":0,\"buckets\":"
-                    + "[{\"version\":1,\"table_id\":0,\"bucket\":1,\"original_leader\":1,\"new_leader\":1,\"origin_replicas\":[0,1,2],\"new_replicas\":[1,2,3]},"
-                    + "{\"version\":1,\"table_id\":0,\"bucket\":0,\"original_leader\":0,\"new_leader\":3,\"origin_replicas\":[0,1,2],\"new_replicas\":[3,4,5]}]},"
+                    + "[{\"version\":1,\"table_id\":0,\"bucket_id\":1,\"original_leader\":1,\"new_leader\":1,\"origin_replicas\":[0,1,2],\"new_replicas\":[1,2,3]},"
+                    + "{\"version\":1,\"table_id\":0,\"bucket_id\":0,\"original_leader\":0,\"new_leader\":3,\"origin_replicas\":[0,1,2],\"new_replicas\":[3,4,5]}]},"
                     + "{\"table_id\":1,\"buckets\":"
-                    + "[{\"version\":1,\"table_id\":1,\"bucket\":0,\"partition_id\":0,\"original_leader\":0,\"new_leader\":3,\"origin_replicas\":[0,1,2],\"new_replicas\":[3,4,5]},"
-                    + "{\"version\":1,\"table_id\":1,\"bucket\":1,\"partition_id\":0,\"original_leader\":1,\"new_leader\":1,\"origin_replicas\":[0,1,2],\"new_replicas\":[1,2,3]}]},"
+                    + "[{\"version\":1,\"table_id\":1,\"bucket_id\":0,\"partition_id\":0,\"original_leader\":0,\"new_leader\":3,\"origin_replicas\":[0,1,2],\"new_replicas\":[3,4,5]},"
+                    + "{\"version\":1,\"table_id\":1,\"bucket_id\":1,\"partition_id\":0,\"original_leader\":1,\"new_leader\":1,\"origin_replicas\":[0,1,2],\"new_replicas\":[1,2,3]}]},"
                     + "{\"table_id\":1,\"buckets\":"
-                    + "[{\"version\":1,\"table_id\":1,\"bucket\":0,\"partition_id\":1,\"original_leader\":0,\"new_leader\":3,\"origin_replicas\":[0,1,2],\"new_replicas\":[3,4,5]}]}]}"
+                    + "[{\"version\":1,\"table_id\":1,\"bucket_id\":0,\"partition_id\":1,\"original_leader\":0,\"new_leader\":3,\"origin_replicas\":[0,1,2],\"new_replicas\":[3,4,5]}]}]}"
         };
     }
 }

@@ -40,7 +40,7 @@ public class RebalancePlanForBucketJsonSerdeTest extends JsonSerdeTestBase<Rebal
     @Override
     protected String[] expectedJsons() {
         return new String[] {
-            "{\"version\":1,\"table_id\":0,\"bucket\":0,\"original_leader\":0,\"new_leader\":3,\"origin_replicas\":[0,1,2],\"new_replicas\":[3,4,5]}"
+            "{\"version\":1,\"table_id\":0,\"bucket_id\":0,\"original_leader\":0,\"new_leader\":3,\"origin_replicas\":[0,1,2],\"new_replicas\":[3,4,5]}"
         };
     }
 }

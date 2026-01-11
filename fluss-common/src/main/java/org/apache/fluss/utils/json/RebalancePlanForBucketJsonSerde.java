@@ -39,7 +39,7 @@ public class RebalancePlanForBucketJsonSerde
     private static final int VERSION = 1;
 
     private static final String TABLE_ID = "table_id";
-    private static final String BUCKET = "bucket";
+    private static final String BUCKET_ID = "bucket_id";
     private static final String PARTITION_ID = "partition_id";
 
     private static final String ORIGINAL_LEADER = "original_leader";
@@ -54,7 +54,7 @@ public class RebalancePlanForBucketJsonSerde
         if (node.has(PARTITION_ID)) {
             partitionId = node.get(PARTITION_ID).asLong();
         }
-        int bucketId = node.get(BUCKET).asInt();
+        int bucketId = node.get(BUCKET_ID).asInt();
         TableBucket tableBucket = new TableBucket(tableId, partitionId, bucketId);
 
         int originLeader = node.get(ORIGINAL_LEADER).asInt();
@@ -83,7 +83,7 @@ public class RebalancePlanForBucketJsonSerde
 
         TableBucket tableBucket = rebalancePlanForBucket.getTableBucket();
         generator.writeNumberField(TABLE_ID, tableBucket.getTableId());
-        generator.writeNumberField(BUCKET, tableBucket.getBucket());
+        generator.writeNumberField(BUCKET_ID, tableBucket.getBucket());
         Long partitionId = tableBucket.getPartitionId();
         if (null != partitionId) {
             generator.writeNumberField(PARTITION_ID, partitionId);
