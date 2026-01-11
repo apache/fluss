@@ -112,6 +112,8 @@ import static org.apache.fluss.flink.utils.FlinkConversions.toFlussDatabase;
 public class FlinkCatalog extends AbstractCatalog {
 
     public static final String LAKE_TABLE_SPLITTER = "$lake";
+    public static final String CHANGELOG_TABLE_SUFFIX = "$changelog";
+    public static final String BINLOG_TABLE_SUFFIX = "$binlog";
 
     protected final ClassLoader classLoader;
 
@@ -303,6 +305,18 @@ public class FlinkCatalog extends AbstractCatalog {
             throws TableNotExistException, CatalogException {
         // may be should be as a datalake table
         String tableName = objectPath.getObjectName();
+
+        // Check if this is a virtual table ($changelog or $binlog)
+        if (tableName.endsWith(CHANGELOG_TABLE_SUFFIX)) {
+            return getVirtualChangelogTable(objectPath);
+        } else if (tableName.endsWith(BINLOG_TABLE_SUFFIX)) {
+            // TODO: Implement binlog virtual table in future
+            throw new UnsupportedOperationException(
+                    String.format(
+                            "$binlog virtual tables are not yet supported for table %s",
+                            objectPath));
+        }
+
         TablePath tablePath = toTablePath(objectPath);
         try {
             TableInfo tableInfo;
@@ -861,5 +875,109 @@ public class FlinkCatalog extends AbstractCatalog {
             }
         }
         return true;
+    }
+
+    /**
+     * Creates a virtual $changelog table by modifying the base table's to include metadata columns.
+     */
+    private CatalogBaseTable getVirtualChangelogTable(ObjectPath objectPath)
+            throws TableNotExistException, CatalogException {
+        // Extract the base table name (remove $changelog suffix)
+        String virtualTableName = objectPath.getObjectName();
+        String baseTableName =
+                virtualTableName.substring(
+                        0, virtualTableName.length() - CHANGELOG_TABLE_SUFFIX.length());
+
+        // Get the base table
+        ObjectPath baseObjectPath = new ObjectPath(objectPath.getDatabaseName(), baseTableName);
+        TablePath baseTablePath = toTablePath(baseObjectPath);
+
+        try {
+            // Retrieve base table info
+            TableInfo tableInfo = admin.getTableInfo(baseTablePath).get();
+
+            // Validate that this is a primary key table
+            if (tableInfo.getPhysicalPrimaryKeys().isEmpty()) {
+                throw new UnsupportedOperationException(
+                        String.format(
+                                "Virtual $changelog tables are only supported for primary key tables. "
+                                        + "Table %s does not have a primary key.",
+                                baseTablePath));
+            }
+
+            // Convert to Flink table
+            CatalogBaseTable catalogBaseTable = FlinkConversions.toFlinkTable(tableInfo);
+
+            if (!(catalogBaseTable instanceof CatalogTable)) {
+                throw new UnsupportedOperationException(
+                        "Virtual $changelog tables are only supported for regular tables");
+            }
+
+            CatalogTable baseTable = (CatalogTable) catalogBaseTable;
+
+            // Build the changelog schema by adding metadata columns
+            Schema originalSchema = baseTable.getUnresolvedSchema();
+            Schema changelogSchema = buildChangelogSchema(originalSchema);
+
+            // Copy options from base table
+            Map<String, String> newOptions = new HashMap<>(baseTable.getOptions());
+            newOptions.put(BOOTSTRAP_SERVERS.key(), bootstrapServers);
+            newOptions.putAll(securityConfigs);
+
+            // Create a new CatalogTable with the modified schema
+            return CatalogTable.of(
+                    changelogSchema,
+                    baseTable.getComment(),
+                    baseTable.getPartitionKeys(),
+                    newOptions);
+
+        } catch (Exception e) {
+            Throwable t = ExceptionUtils.stripExecutionException(e);
+            if (isTableNotExist(t)) {
+                throw new TableNotExistException(getName(), baseObjectPath);
+            } else {
+                throw new CatalogException(
+                        String.format(
+                                "Failed to get virtual changelog table %s in %s",
+                                objectPath, getName()),
+                        t);
+            }
+        }
+    }
+
+    private Schema buildChangelogSchema(Schema originalSchema) {
+        Schema.Builder builder = Schema.newBuilder();
+
+        // Add metadata columns first
+        builder.column("_change_type", org.apache.flink.table.api.DataTypes.STRING().notNull());
+        builder.column("_log_offset", org.apache.flink.table.api.DataTypes.BIGINT().notNull());
+        builder.column(
+                "_commit_timestamp", org.apache.flink.table.api.DataTypes.TIMESTAMP(3).notNull());
+
+        // Add all original columns
+        for (Schema.UnresolvedColumn column : originalSchema.getColumns()) {
+            if (column instanceof Schema.UnresolvedPhysicalColumn) {
+                Schema.UnresolvedPhysicalColumn physicalColumn =
+                        (Schema.UnresolvedPhysicalColumn) column;
+                builder.column(physicalColumn.getName(), physicalColumn.getDataType());
+            } else if (column instanceof Schema.UnresolvedComputedColumn) {
+                Schema.UnresolvedComputedColumn computedColumn =
+                        (Schema.UnresolvedComputedColumn) column;
+                builder.columnByExpression(
+                        computedColumn.getName(), computedColumn.getExpression());
+            } else if (column instanceof Schema.UnresolvedMetadataColumn) {
+                Schema.UnresolvedMetadataColumn metadataColumn =
+                        (Schema.UnresolvedMetadataColumn) column;
+                builder.columnByMetadata(
+                        metadataColumn.getName(),
+                        metadataColumn.getDataType(),
+                        metadataColumn.getMetadataKey(),
+                        metadataColumn.isVirtual());
+            }
+        }
+
+        // Note: We don't copy primary keys or watermarks for virtual tables
+
+        return builder.build();
     }
 }

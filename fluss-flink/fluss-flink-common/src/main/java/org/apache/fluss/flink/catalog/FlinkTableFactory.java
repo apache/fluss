@@ -23,6 +23,7 @@ import org.apache.fluss.flink.FlinkConnectorOptions;
 import org.apache.fluss.flink.lake.LakeFlinkCatalog;
 import org.apache.fluss.flink.lake.LakeTableFactory;
 import org.apache.fluss.flink.sink.FlinkTableSink;
+import org.apache.fluss.flink.source.ChangelogFlinkTableSource;
 import org.apache.fluss.flink.sink.shuffle.DistributionMode;
 import org.apache.fluss.flink.source.FlinkTableSource;
 import org.apache.fluss.flink.utils.FlinkConnectorOptionsUtils;
@@ -88,6 +89,11 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
 
             lakeTableFactory = mayInitLakeTableFactory();
             return lakeTableFactory.createDynamicTableSource(context, lakeTableName);
+        }
+
+        // Check if this is a $changelog suffix in table name
+        if (tableName.endsWith(FlinkCatalog.CHANGELOG_TABLE_SUFFIX)) {
+            return createChangelogTableSource(context, tableIdentifier, tableName);
         }
 
         FactoryUtil.TableFactoryHelper helper = FactoryUtil.createTableFactoryHelper(this, context);
@@ -266,5 +272,73 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
             }
         }
         return lakeTableFactory;
+    }
+
+    /** Creates a ChangelogFlinkTableSource for $changelog virtual tables. */
+    private DynamicTableSource createChangelogTableSource(
+            Context context, ObjectIdentifier tableIdentifier, String tableName) {
+        // Extract the base table name by removing the $changelog suffix
+        String baseTableName =
+                tableName.substring(
+                        0, tableName.length() - FlinkCatalog.CHANGELOG_TABLE_SUFFIX.length());
+
+        boolean isStreamingMode =
+                context.getConfiguration().get(ExecutionOptions.RUNTIME_MODE)
+                        == RuntimeExecutionMode.STREAMING;
+
+        // tableOutputType includes metadata columns: [_change_type, _log_offset, _commit_timestamp,
+        // data_cols...]
+        RowType tableOutputType = (RowType) context.getPhysicalRowDataType().getLogicalType();
+
+        // Extract data columns type (skip the 3 metadata columns) for index calculations
+        int numMetadataColumns = 3;
+        List<RowType.RowField> dataFields =
+                tableOutputType
+                        .getFields()
+                        .subList(numMetadataColumns, tableOutputType.getFieldCount());
+        RowType dataColumnsType = new RowType(new ArrayList<>(dataFields));
+
+        Map<String, String> catalogTableOptions = context.getCatalogTable().getOptions();
+        FactoryUtil.TableFactoryHelper helper = FactoryUtil.createTableFactoryHelper(this, context);
+        final ReadableConfig tableOptions = helper.getOptions();
+
+        ZoneId timeZone =
+                FlinkConnectorOptionsUtils.getLocalTimeZone(
+                        context.getConfiguration().get(TableConfigOptions.LOCAL_TIME_ZONE));
+        final FlinkConnectorOptionsUtils.StartupOptions startupOptions =
+                FlinkConnectorOptionsUtils.getStartupOptions(tableOptions, timeZone);
+
+        ResolvedCatalogTable resolvedCatalogTable = context.getCatalogTable();
+
+        // bucket.key is set from the base table's primary key
+        int[] bucketKeyIndexes = getBucketKeyIndexes(tableOptions, dataColumnsType);
+
+        // For changelog virtual tables, if bucket key is present, base table has a PK
+        int[] primaryKeyIndexes = bucketKeyIndexes;
+
+        // Partition key indexes based on data columns
+        int[] partitionKeyIndexes =
+                resolvedCatalogTable.getPartitionKeys().stream()
+                        .mapToInt(dataColumnsType::getFieldIndex)
+                        .toArray();
+
+        long partitionDiscoveryIntervalMs =
+                tableOptions
+                        .get(FlinkConnectorOptions.SCAN_PARTITION_DISCOVERY_INTERVAL)
+                        .toMillis();
+
+        return new ChangelogFlinkTableSource(
+                TablePath.of(tableIdentifier.getDatabaseName(), baseTableName),
+                toFlussClientConfig(catalogTableOptions, context.getConfiguration()),
+                tableOutputType,
+                primaryKeyIndexes,
+                bucketKeyIndexes,
+                partitionKeyIndexes,
+                isStreamingMode,
+                startupOptions,
+                partitionDiscoveryIntervalMs,
+                tableOptions.get(toFlinkOption(ConfigOptions.TABLE_DATALAKE_ENABLED)),
+                tableOptions.get(toFlinkOption(ConfigOptions.TABLE_MERGE_ENGINE)),
+                catalogTableOptions);
     }
 }
