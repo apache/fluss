@@ -18,21 +18,15 @@
 package org.apache.fluss.lake.lance.utils;
 
 import org.apache.fluss.lake.lance.LanceConfig;
-import org.apache.fluss.lake.lance.tiering.LanceArrowWriter;
-import org.apache.fluss.types.RowType;
 
 import com.lancedb.lance.Dataset;
-import com.lancedb.lance.Fragment;
 import com.lancedb.lance.FragmentMetadata;
 import com.lancedb.lance.ReadOptions;
 import com.lancedb.lance.Transaction;
 import com.lancedb.lance.WriteParams;
 import com.lancedb.lance.operation.Append;
-import org.apache.arrow.c.ArrowArrayStream;
-import org.apache.arrow.c.Data;
 import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.memory.RootAllocator;
-import org.apache.arrow.vector.ipc.ArrowReader;
 import org.apache.arrow.vector.types.pojo.Schema;
 
 import java.util.List;
@@ -72,18 +66,6 @@ public class LanceDatasetAdapter {
                 // note: lance dataset version starts from 1
                 return appendedDataset.version();
             }
-        }
-    }
-
-    public static LanceArrowWriter getArrowWriter(Schema schema, int batchSize, RowType rowType) {
-        return new LanceArrowWriter(allocator, schema, batchSize, rowType);
-    }
-
-    public static List<FragmentMetadata> createFragment(
-            String datasetUri, ArrowReader reader, WriteParams params) {
-        try (ArrowArrayStream arrowStream = ArrowArrayStream.allocateNew(allocator)) {
-            Data.exportArrayStream(allocator, reader, arrowStream);
-            return Fragment.create(datasetUri, arrowStream, params);
         }
     }
 }
