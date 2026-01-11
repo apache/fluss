@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.server.zk.data;
+package org.apache.fluss.utils.json;
 
 import org.apache.fluss.cluster.rebalance.RebalancePlan;
 import org.apache.fluss.cluster.rebalance.RebalancePlanForBucket;
@@ -33,7 +33,7 @@ import java.util.Objects;
  * The generated rebalance task for this cluster.
  *
  * <p>The latest execution {@link RebalancePlan} and related execution {@link RebalanceStatus} will
- * be stored in {@link ZkData.RebalanceZNode}.
+ * be stored in zookeeper.
  *
  * @see RebalanceTaskJsonSerde for json serialization and deserialization.
  */
