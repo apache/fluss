@@ -262,13 +262,6 @@ abstract class FlinkCatalogITCase {
                 .isInstanceOf(InvalidAlterTableException.class)
                 .hasMessage("The option 'table.kv.format' is not supported to alter yet.");
 
-        String unSupportedDml3 =
-                "alter table test_alter_table_append_only set ('bucket.num' = '1000')";
-        assertThatThrownBy(() -> tEnv.executeSql(unSupportedDml3))
-                .rootCause()
-                .isInstanceOf(CatalogException.class)
-                .hasMessage("The option 'bucket.num' is not supported to alter yet.");
-
         String unSupportedDml4 =
                 "alter table test_alter_table_append_only set ('bucket.key' = 'a')";
         assertThatThrownBy(() -> tEnv.executeSql(unSupportedDml4))
@@ -309,6 +302,49 @@ abstract class FlinkCatalogITCase {
                         .column("c", DataTypes.INT())
                         .build();
         assertThat(table.getUnresolvedSchema()).isEqualTo(expectedSchema);
+    }
+
+    @Test
+    void testAlterTableBucket() throws Exception {
+        String ddl =
+                "create table test_alter_table_bucket ("
+                        + "a string, "
+                        + "b int) "
+                        + "with ('bucket.num' = '5')";
+        tEnv.executeSql(ddl);
+
+        CatalogTable table =
+                (CatalogTable)
+                        catalog.getTable(new ObjectPath(DEFAULT_DB, "test_alter_table_bucket"));
+        Map<String, String> expectedOptions = new HashMap<>();
+        expectedOptions.put("bucket.num", "5");
+        expectedOptions.put("table.datalake.format", "paimon");
+        assertOptionsEqual(table.getOptions(), expectedOptions);
+
+        // test alter add bucket number
+        String alter = "alter table test_alter_table_bucket set ('bucket.num' = '10')";
+        tEnv.executeSql(alter);
+        table =
+                (CatalogTable)
+                        catalog.getTable(new ObjectPath(DEFAULT_DB, "test_alter_table_bucket"));
+        expectedOptions.put("bucket.num", "10");
+        assertOptionsEqual(table.getOptions(), expectedOptions);
+
+        String alterSub = "alter table test_alter_table_bucket set ('bucket.num' = '5')";
+        assertThatThrownBy(() -> tEnv.executeSql(alterSub))
+                .cause()
+                .cause()
+                .isInstanceOf(InvalidAlterTableException.class)
+                .hasMessageContaining(
+                        "Bucket number cannot be reduced, current bucket number is 10, new bucket number is 5");
+
+        // test alter invalid bucket number
+        alter = "alter table test_alter_table_bucket set ('bucket.num' = 'x')";
+        String finalAlter = alter;
+        assertThatThrownBy(() -> tEnv.executeSql(finalAlter))
+                .cause()
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("Invalid bucket num: x.");
     }
 
     @Test

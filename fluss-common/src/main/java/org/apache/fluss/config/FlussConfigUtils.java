@@ -30,6 +30,8 @@ import java.util.Map;
 @Internal
 public class FlussConfigUtils {
 
+    public static final String BUCKET_NUM = "bucket.num";
+
     public static final Map<String, ConfigOption<?>> TABLE_OPTIONS;
     public static final Map<String, ConfigOption<?>> CLIENT_OPTIONS;
     public static final String TABLE_PREFIX = "table.";

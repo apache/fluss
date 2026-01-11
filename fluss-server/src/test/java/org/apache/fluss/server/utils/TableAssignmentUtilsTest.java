@@ -38,6 +38,7 @@ import java.util.Set;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.server.utils.TableAssignmentUtils.generateAssignment;
+import static org.apache.fluss.server.utils.TableAssignmentUtils.generateAssignmentOfNewlyAddedBuckets;
 import static org.apache.fluss.server.utils.TableAssignmentUtils.getRackAlternatedTabletServerList;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -94,6 +95,7 @@ class TableAssignmentUtilsTest {
                         1,
                         toTabletServerInfo(Collections.emptyMap(), Arrays.asList(0, 1, 2, 3)),
                         0,
+                        0,
                         0);
         TableAssignment expectedAssignment =
                 TableAssignment.builder()
@@ -110,6 +112,7 @@ class TableAssignmentUtilsTest {
                         3,
                         toTabletServerInfo(Collections.emptyMap(), Arrays.asList(0, 1, 2, 3)),
                         1,
+                        0,
                         0);
         expectedAssignment =
                 TableAssignment.builder()
@@ -125,6 +128,7 @@ class TableAssignmentUtilsTest {
                         10,
                         3,
                         toTabletServerInfo(Collections.emptyMap(), Arrays.asList(0, 1, 2, 3, 4)),
+                        0,
                         0,
                         0);
         expectedAssignment =
@@ -483,6 +487,113 @@ class TableAssignmentUtilsTest {
                 .isInstanceOf(InvalidServerRackInfoException.class)
                 .hasMessageContaining(
                         "Not all tabletServers have rack information for replica rack aware assignment.");
+    }
+
+    @Test
+    void testAssignmentOfNewlyAddedBucketsWithFixedStartAndShift() {
+        // Test servers without rack
+        List<Integer> servers = Arrays.asList(0, 1, 2, 3, 4, 5);
+        TableAssignment fullAssignmentWithoutRack =
+                generateAssignment(
+                        12, 3, toTabletServerInfo(Collections.emptyMap(), servers), 0, 1, 0);
+        TableAssignment newlyAddedBucketsAssignmentWithoutRack =
+                generateAssignment(
+                        6, 3, toTabletServerInfo(Collections.emptyMap(), servers), 0, 1, 6);
+        // we use fix startIndex and nextReplicaShift, so the newly added buckets assignment should
+        // be a proper subset of full assignment
+        assertThat(fullAssignmentWithoutRack.getBucketAssignments())
+                .containsAllEntriesOf(
+                        newlyAddedBucketsAssignmentWithoutRack.getBucketAssignments());
+
+        // Test servers with rack
+        Map<Integer, String> rackMap = new HashMap<>();
+        rackMap.put(0, "rack1");
+        rackMap.put(1, "rack2");
+        rackMap.put(2, "rack2");
+        rackMap.put(3, "rack3");
+        rackMap.put(4, "rack3");
+        rackMap.put(5, "rack1");
+
+        TableAssignment fullAssignment =
+                generateAssignment(
+                        12, 3, toTabletServerInfo(rackMap, Collections.emptyList()), 0, 1, 0);
+        TableAssignment incrementAssignment =
+                generateAssignment(
+                        6, 3, toTabletServerInfo(rackMap, Collections.emptyList()), 0, 1, 6);
+        // we use fix startIndex and nextReplicaShift, so the newly added buckets assignment should
+        // be a proper subset of full assignment
+        assertThat(fullAssignment.getBucketAssignments())
+                .containsAllEntriesOf(incrementAssignment.getBucketAssignments());
+    }
+
+    @Test
+    void testAssignmentOfNewlyAddedBuckets() {
+        // Test servers without rack
+        List<Integer> servers = Arrays.asList(0, 1, 2, 3, 4, 5);
+        TableAssignment fullAssignmentWithoutRack =
+                generateAssignment(
+                        12, 3, toTabletServerInfo(Collections.emptyMap(), servers), 0, 1, 0);
+        TableAssignment firstAssignmentWithoutRack =
+                generateAssignment(
+                        6, 3, toTabletServerInfo(Collections.emptyMap(), servers), 0, 1, 0);
+        TableAssignment newlyAddedBucketsAssignmentWithoutRack =
+                generateAssignmentOfNewlyAddedBuckets(
+                        6,
+                        3,
+                        toTabletServerInfo(Collections.emptyMap(), servers),
+                        firstAssignmentWithoutRack);
+
+        // generateAssignmentOfNewlyAddedBuckets() will reuse the startIndex of the first
+        // assignment,
+        // however, the nextReplicaShift of the first assignment is not accessible.
+        // so only the leader and the leader in the full assignment can be ensured to be identical.
+        assertThat(
+                        fullAssignmentWithoutRack.getBucketAssignments().entrySet().stream()
+                                .filter(entry -> entry.getKey() >= 6)
+                                .map(entry -> entry.getValue().getReplicas().get(0))
+                                .collect(Collectors.toSet()))
+                .containsExactlyInAnyOrderElementsOf(
+                        newlyAddedBucketsAssignmentWithoutRack
+                                .getBucketAssignments()
+                                .values()
+                                .stream()
+                                .map(entry -> entry.getReplicas().get(0))
+                                .collect(Collectors.toSet()));
+
+        // Test servers with rack
+        Map<Integer, String> rackMap = new HashMap<>();
+        rackMap.put(0, "rack1");
+        rackMap.put(1, "rack2");
+        rackMap.put(2, "rack2");
+        rackMap.put(3, "rack3");
+        rackMap.put(4, "rack3");
+        rackMap.put(5, "rack1");
+
+        TableAssignment fullAssignment =
+                generateAssignment(
+                        12, 3, toTabletServerInfo(rackMap, Collections.emptyList()), 0, 1, 0);
+        TableAssignment firstAssignment =
+                generateAssignment(
+                        6, 3, toTabletServerInfo(rackMap, Collections.emptyList()), 0, 1, 0);
+        TableAssignment newlyAddedBucketsAssignment =
+                generateAssignmentOfNewlyAddedBuckets(
+                        6,
+                        3,
+                        toTabletServerInfo(rackMap, Collections.emptyList()),
+                        firstAssignment);
+        // generateAssignmentOfNewlyAddedBuckets() will reuse the startIndex of the first
+        // assignment,
+        // however, the nextReplicaShift of the first assignment is not accessible.
+        // so only the leader and the leader in the full assignment can be ensured to be identical.
+        assertThat(
+                        fullAssignment.getBucketAssignments().entrySet().stream()
+                                .filter(entry -> entry.getKey() >= 6)
+                                .map(entry -> entry.getValue().getReplicas().get(0))
+                                .collect(Collectors.toSet()))
+                .containsExactlyInAnyOrderElementsOf(
+                        newlyAddedBucketsAssignment.getBucketAssignments().values().stream()
+                                .map(entry -> entry.getReplicas().get(0))
+                                .collect(Collectors.toSet()));
     }
 
     private static void checkTableAssignment(

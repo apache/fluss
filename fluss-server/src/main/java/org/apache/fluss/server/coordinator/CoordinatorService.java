@@ -386,7 +386,8 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                     request.isIgnoreIfNotExists(),
                     lakeCatalogContainer.getLakeCatalog(),
                     lakeTableTieringManager,
-                    lakeCatalogContext);
+                    metadataCache,
+                    new DefaultLakeCatalogContext(false, currentSession().getPrincipal()));
         }
 
         return CompletableFuture.completedFuture(new AlterTableResponse());
@@ -399,7 +400,11 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         }
 
         for (TableChange tableChange : tableChanges) {
-            if (tableChange instanceof TableChange.SetOption) {
+            if (tableChange instanceof TableChange.BucketNumOption) {
+                TableChange.BucketNumOption bucketNumOption =
+                        (TableChange.BucketNumOption) tableChange;
+                builder.setBucketNum(bucketNumOption.getBucketNum());
+            } else if (tableChange instanceof TableChange.SetOption) {
                 TableChange.SetOption setOption = (TableChange.SetOption) tableChange;
                 String optionKey = setOption.getKey();
                 if (isTableStorageConfig(optionKey)) {

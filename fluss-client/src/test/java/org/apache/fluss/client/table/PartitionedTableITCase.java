@@ -17,17 +17,25 @@
 
 package org.apache.fluss.client.table;
 
+import org.apache.fluss.client.Connection;
+import org.apache.fluss.client.ConnectionFactory;
 import org.apache.fluss.client.admin.ClientToServerITCaseBase;
 import org.apache.fluss.client.lookup.Lookuper;
+import org.apache.fluss.client.table.scanner.log.LogScanner;
+import org.apache.fluss.client.table.scanner.log.ScanRecords;
 import org.apache.fluss.client.table.writer.AppendWriter;
 import org.apache.fluss.client.table.writer.UpsertWriter;
 import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.exception.TooManyPartitionsException;
 import org.apache.fluss.metadata.PartitionInfo;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.Schema;
+import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
+import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
@@ -37,10 +45,13 @@ import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH_PK;
 import static org.apache.fluss.testutils.DataTestUtils.row;
@@ -144,6 +155,95 @@ class PartitionedTableITCase extends ClientToServerITCaseBase {
 
         // then, let's verify the logs
         verifyPartitionLogs(table, schema.getRowType(), expectPartitionAppendRows);
+    }
+
+    @Test
+    void testAppendForAlterPartitionTableBucket() throws Exception {
+        TablePath tablePath = TablePath.of("test_db_1", "test_alter_partition_table_bucket");
+        createPartitionedTable(tablePath, false);
+        TableInfo tableInfo = admin.getTableInfo(tablePath).get();
+
+        List<PartitionInfo> partitionInfos = admin.listPartitionInfos(tablePath).get();
+        assertThat(partitionInfos.isEmpty()).isTrue();
+
+        // add 1 partition
+        admin.createPartition(tablePath, newPartitionSpec("c", "c0"), false).get();
+        partitionInfos = admin.listPartitionInfos(tablePath).get();
+        assertThat(partitionInfos.size()).isEqualTo(1);
+
+        // verify append for 1 partition with 1 bucket
+        int lastCount = verifyAppendForAlterPartitionTableBucket(tablePath, partitionInfos, 1, 0);
+
+        // alter table bucket from 1 to 2
+        List<TableChange> tableChanges = Collections.singletonList(TableChange.bucketNum(2));
+        admin.alterTable(tablePath, tableChanges, false);
+
+        // wait until new bucket replicas are ready
+        for (PartitionInfo partitionInfo : partitionInfos) {
+            waitAllReplicasReady(tableInfo.getTableId(), partitionInfo.getPartitionId(), 2);
+        }
+
+        // verify append for 1 partition with 2 bucket
+        lastCount =
+                verifyAppendForAlterPartitionTableBucket(tablePath, partitionInfos, 2, lastCount);
+
+        // add another partition, which may have 2 buckets
+        admin.createPartition(tablePath, newPartitionSpec("c", "c1"), false).get();
+        partitionInfos = admin.listPartitionInfos(tablePath).get();
+        assertThat(partitionInfos.size()).isEqualTo(2);
+
+        // wait until new bucket replicas are ready
+        for (PartitionInfo partitionInfo : partitionInfos) {
+            waitAllReplicasReady(tableInfo.getTableId(), partitionInfo.getPartitionId(), 2);
+        }
+
+        // newly created partition should also have 2 buckets
+        verifyAppendForAlterPartitionTableBucket(tablePath, partitionInfos, 2, lastCount);
+    }
+
+    private int verifyAppendForAlterPartitionTableBucket(
+            TablePath tablePath, List<PartitionInfo> partitionInfos, int bucketNum, int lastCount)
+            throws Exception {
+        Configuration clientConf = FLUSS_CLUSTER_EXTENSION.getClientConfig();
+        // use round-robin bucket assigner, so that we can append data to all buckets
+        clientConf.set(
+                ConfigOptions.CLIENT_WRITER_BUCKET_NO_KEY_ASSIGNER,
+                ConfigOptions.NoKeyAssigner.ROUND_ROBIN);
+        Connection conn = ConnectionFactory.createConnection(clientConf);
+        Table table = conn.getTable(tablePath);
+        AppendWriter appendWriter = table.newAppend().createWriter();
+
+        int recordsPerPartition = 5;
+        for (PartitionInfo partitionInfo : partitionInfos) {
+            String partitionName = partitionInfo.getPartitionName();
+            for (int j = 0; j < recordsPerPartition; j++) {
+                InternalRow row = row(j, "a" + j, partitionName);
+                appendWriter.append(row);
+            }
+        }
+        appendWriter.flush();
+
+        int expectedCount = partitionInfos.size() * recordsPerPartition + lastCount;
+        try (LogScanner logScanner = table.newScan().createLogScanner()) {
+            for (PartitionInfo partitionInfo : partitionInfos) {
+                for (int i = 0; i < bucketNum; i++) {
+                    logScanner.subscribeFromBeginning(partitionInfo.getPartitionId(), i);
+                }
+            }
+
+            int count = 0;
+            Set<TableBucket> allBuckets = new HashSet<>();
+            while (count < expectedCount) {
+                ScanRecords scanRecords = logScanner.poll(Duration.ofSeconds(1));
+                allBuckets.addAll(scanRecords.buckets());
+
+                count += scanRecords.count();
+            }
+            assertThat(allBuckets.size()).isEqualTo(partitionInfos.size() * bucketNum);
+            assertThat(count).isEqualTo(expectedCount);
+        }
+        conn.close();
+        return expectedCount;
     }
 
     @Test

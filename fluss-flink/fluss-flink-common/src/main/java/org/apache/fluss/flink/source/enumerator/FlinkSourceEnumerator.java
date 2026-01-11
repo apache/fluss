@@ -463,6 +463,26 @@ public class FlinkSourceEnumerator
                     () -> initPartitionedSplits(partitionChange.newPartitions),
                     this::handleSplitsAdd);
         }
+
+        // We also need to handle unchanged partitions, because the assigned buckets within a
+        // partition may also change.
+        // This mainly occurs in two situations:
+        // 1. During restore, only a subset of buckets under a partition may have been assigned,
+        // and we need to assign the remaining buckets. This is required for all types of
+        // partitioned tables.
+        // 2. When the number of buckets in a table is changed, new buckets may be added under a
+        // partition, and we need to assign these newly added buckets. Currently, this situation
+        // only occurs in log tables without bucket keys.
+        if (!partitionChange.unchangedPartitions.isEmpty()) {
+            LOG.info(
+                    "Handling {} unchanged partitions for table {}: {}",
+                    partitionChange.unchangedPartitions.size(),
+                    tablePath,
+                    partitionChange.unchangedPartitions);
+            workerExecutor.callAsync(
+                    () -> initPartitionedSplits(partitionChange.unchangedPartitions),
+                    this::handleSplitsAdd);
+        }
     }
 
     private PartitionChange getPartitionChange(Set<PartitionInfo> fetchedPartitionInfos) {
@@ -471,6 +491,7 @@ public class FlinkSourceEnumerator
                         .map(p -> new Partition(p.getPartitionId(), p.getPartitionName()))
                         .collect(Collectors.toSet());
         final Set<Partition> removedPartitions = new HashSet<>();
+        final Set<Partition> unchangedPartitions = new HashSet<>();
 
         Set<Partition> assignedOrPendingPartitions = new HashSet<>();
         assignedPartitions.forEach(
@@ -497,6 +518,8 @@ public class FlinkSourceEnumerator
                 p -> {
                     if (!newPartitions.remove(p)) {
                         removedPartitions.add(p);
+                    } else {
+                        unchangedPartitions.add(p);
                     }
                 });
 
@@ -507,7 +530,7 @@ public class FlinkSourceEnumerator
             LOG.info("Discovered new partitions: {}", newPartitions);
         }
 
-        return new PartitionChange(newPartitions, removedPartitions);
+        return new PartitionChange(newPartitions, removedPartitions, unchangedPartitions);
     }
 
     private List<SourceSplitBase> initPartitionedSplits(Collection<Partition> newPartitions) {
@@ -658,9 +681,14 @@ public class FlinkSourceEnumerator
     }
 
     private boolean ignoreTableBucket(TableBucket tableBucket) {
-        // if the bucket has been assigned, we can ignore it
-        // the bucket has been assigned, skip
-        return assignedTableBuckets.contains(tableBucket);
+        // if the bucket has been assigned or pending, we can ignore it
+        // the bucket has been assigned or pending, skip
+        Set<TableBucket> pendingBuckets =
+                pendingSplitAssignment.values().stream()
+                        .flatMap(Collection::stream)
+                        .map(SourceSplitBase::getTableBucket)
+                        .collect(Collectors.toSet());
+        return assignedTableBuckets.contains(tableBucket) || pendingBuckets.contains(tableBucket);
     }
 
     private void handlePartitionsRemoved(Collection<Partition> removedPartitionInfo) {
@@ -950,15 +978,21 @@ public class FlinkSourceEnumerator
     private static class PartitionChange {
         private final Collection<Partition> newPartitions;
         private final Collection<Partition> removedPartitions;
+        private final Collection<Partition> unchangedPartitions;
 
         PartitionChange(
-                Collection<Partition> newPartitions, Collection<Partition> removedPartitions) {
+                Collection<Partition> newPartitions,
+                Collection<Partition> removedPartitions,
+                Collection<Partition> noChangePartitions) {
             this.newPartitions = newPartitions;
             this.removedPartitions = removedPartitions;
+            this.unchangedPartitions = noChangePartitions;
         }
 
         public boolean isEmpty() {
-            return newPartitions.isEmpty() && removedPartitions.isEmpty();
+            return newPartitions.isEmpty()
+                    && removedPartitions.isEmpty()
+                    && unchangedPartitions.isEmpty();
         }
     }
 

@@ -146,7 +146,7 @@ public class TableManager {
         onCreateNewTableBucket(tableId, newTableBuckets);
     }
 
-    private void onCreateNewTableBucket(long tableId, Set<TableBucket> tableBuckets) {
+    public void onCreateNewTableBucket(long tableId, Set<TableBucket> tableBuckets) {
         LOG.info(
                 "New table buckets: {} for table {}.",
                 tableBuckets,

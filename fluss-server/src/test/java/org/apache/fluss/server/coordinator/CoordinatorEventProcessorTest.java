@@ -45,6 +45,7 @@ import org.apache.fluss.rpc.messages.UpdateMetadataRequest;
 import org.apache.fluss.rpc.protocol.ApiKeys;
 import org.apache.fluss.server.coordinator.event.AccessContextEvent;
 import org.apache.fluss.server.coordinator.event.AdjustIsrReceivedEvent;
+import org.apache.fluss.server.coordinator.event.AlterTableOrPartitionBucketEvent;
 import org.apache.fluss.server.coordinator.event.CommitKvSnapshotEvent;
 import org.apache.fluss.server.coordinator.event.CommitRemoteLogManifestEvent;
 import org.apache.fluss.server.coordinator.event.CoordinatorEventManager;
@@ -973,6 +974,101 @@ class CoordinatorEventProcessorTest {
         assertThat(leaderAndIsr.isr())
                 .isEqualTo(newLeaderAndIsrOfZk.isr())
                 .hasSameElementsAs(expectedIsr);
+    }
+
+    @Test
+    void testAlterTableOrPartitionBucket() throws Exception {
+        // make sure all request to gateway should be successful
+        initCoordinatorChannel();
+
+        int nBuckets = 3;
+        int replicationFactor = 3;
+        TabletServerInfo[] tabletServerInfos =
+                new TabletServerInfo[] {
+                    new TabletServerInfo(0, "rack0"),
+                    new TabletServerInfo(1, "rack1"),
+                    new TabletServerInfo(2, "rack2")
+                };
+
+        // 1. test for non-partitioned table
+        // create a table
+        TablePath t1 = TablePath.of(defaultDatabase, "test_alter_bucket_t1");
+        TableDescriptor t1Descriptor = TEST_TABLE;
+        TableAssignment t1Assignment =
+                generateAssignment(nBuckets, replicationFactor, tabletServerInfos);
+        long t1Id = metadataManager.createTable(t1, t1Descriptor, t1Assignment, false);
+        verifyTableCreated(t1Id, t1Assignment, nBuckets, replicationFactor);
+
+        // generate new buckets assignments
+        TableAssignment incrementTableAssignment =
+                generateAssignment(nBuckets, replicationFactor, tabletServerInfos, 0, nBuckets);
+        Map<Integer, BucketAssignment> mergeAssignments = new HashMap<>();
+        mergeAssignments.putAll(t1Assignment.getBucketAssignments());
+        mergeAssignments.putAll(incrementTableAssignment.getBucketAssignments());
+        TableAssignment mergeTableAssignment = new TableAssignment(mergeAssignments);
+        // alter bucket
+        eventProcessor
+                .getCoordinatorEventManager()
+                .put(new AlterTableOrPartitionBucketEvent(t1Id, mergeTableAssignment));
+        verifyTableCreated(t1Id, mergeTableAssignment, nBuckets * 2, replicationFactor);
+
+        // 2. test for partitioned table
+        TablePath t2 = TablePath.of(defaultDatabase, "test_alter_bucket_t2");
+        // create a partitioned table
+        TableDescriptor t2TableDescriptor = getPartitionedTable();
+        long t2Id = metadataManager.createTable(t2, t2TableDescriptor, null, false);
+        Map<Integer, BucketAssignment> assignments =
+                generateAssignment(nBuckets, replicationFactor, tabletServerInfos)
+                        .getBucketAssignments();
+        PartitionAssignment partitionAssignment = new PartitionAssignment(t2Id, assignments);
+        Tuple2<PartitionIdName, PartitionIdName> partitionIdAndNameTuple2 =
+                preparePartitionAssignment(t2, t2Id, partitionAssignment);
+
+        long partition1Id = partitionIdAndNameTuple2.f0.partitionId;
+        long partition2Id = partitionIdAndNameTuple2.f1.partitionId;
+
+        verifyPartitionCreated(
+                new TablePartition(t2Id, partition1Id),
+                partitionAssignment,
+                nBuckets,
+                replicationFactor);
+        verifyPartitionCreated(
+                new TablePartition(t2Id, partition2Id),
+                partitionAssignment,
+                nBuckets,
+                replicationFactor);
+
+        // generate new partition assignments
+        Map<Integer, BucketAssignment> incrementAssignments =
+                generateAssignment(nBuckets, replicationFactor, tabletServerInfos, 0, nBuckets)
+                        .getBucketAssignments();
+        mergeAssignments = new HashMap<>();
+        mergeAssignments.putAll(assignments);
+        mergeAssignments.putAll(incrementAssignments);
+        PartitionAssignment mergePartitionAssignment =
+                new PartitionAssignment(t2Id, mergeAssignments);
+
+        // alter partitions bucket
+        eventProcessor
+                .getCoordinatorEventManager()
+                .put(
+                        new AlterTableOrPartitionBucketEvent(
+                                t2Id, partition1Id, mergePartitionAssignment));
+        eventProcessor
+                .getCoordinatorEventManager()
+                .put(
+                        new AlterTableOrPartitionBucketEvent(
+                                t2Id, partition2Id, mergePartitionAssignment));
+        verifyPartitionCreated(
+                new TablePartition(t2Id, partition1Id),
+                mergePartitionAssignment,
+                nBuckets * 2,
+                replicationFactor);
+        verifyPartitionCreated(
+                new TablePartition(t2Id, partition2Id),
+                mergePartitionAssignment,
+                nBuckets * 2,
+                replicationFactor);
     }
 
     private CoordinatorEventProcessor buildCoordinatorEventProcessor() {

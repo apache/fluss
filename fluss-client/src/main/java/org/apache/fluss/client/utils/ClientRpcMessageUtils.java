@@ -90,6 +90,7 @@ import java.util.Set;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.cluster.rebalance.RebalanceStatus.FINAL_STATUSES;
+import static org.apache.fluss.config.FlussConfigUtils.BUCKET_NUM;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toResolvedPartitionSpec;
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkState;
@@ -366,7 +367,8 @@ public class ClientRpcMessageUtils {
             } else if (tableChange instanceof TableChange.ModifyColumn) {
                 modifyColumns.add(toPbModifyColumn((TableChange.ModifyColumn) tableChange));
             } else if (tableChange instanceof TableChange.SetOption
-                    || tableChange instanceof TableChange.ResetOption) {
+                    || tableChange instanceof TableChange.ResetOption
+                    || tableChange instanceof TableChange.BucketNumOption) {
                 alterConfigs.add(toPbAlterConfigs(tableChange));
             } else {
                 throw new IllegalArgumentException(
@@ -468,7 +470,12 @@ public class ClientRpcMessageUtils {
 
     public static PbAlterConfig toPbAlterConfigs(TableChange tableChange) {
         PbAlterConfig info = new PbAlterConfig();
-        if (tableChange instanceof TableChange.SetOption) {
+        if (tableChange instanceof TableChange.BucketNumOption) {
+            TableChange.BucketNumOption bucketNumOption = (TableChange.BucketNumOption) tableChange;
+            info.setConfigKey(BUCKET_NUM);
+            info.setConfigValue(String.valueOf(bucketNumOption.getBucketNum()));
+            info.setOpType(AlterConfigOpType.SET.value());
+        } else if (tableChange instanceof TableChange.SetOption) {
             TableChange.SetOption setOption = (TableChange.SetOption) tableChange;
             info.setConfigKey(setOption.getKey());
             info.setConfigValue(setOption.getValue());

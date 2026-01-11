@@ -62,6 +62,7 @@ import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.server.coordinator.event.AccessContextEvent;
 import org.apache.fluss.server.coordinator.event.AddServerTagEvent;
 import org.apache.fluss.server.coordinator.event.AdjustIsrReceivedEvent;
+import org.apache.fluss.server.coordinator.event.AlterTableOrPartitionBucketEvent;
 import org.apache.fluss.server.coordinator.event.CancelRebalanceEvent;
 import org.apache.fluss.server.coordinator.event.CommitKvSnapshotEvent;
 import org.apache.fluss.server.coordinator.event.CommitLakeTableSnapshotEvent;
@@ -85,6 +86,8 @@ import org.apache.fluss.server.coordinator.event.NotifyLeaderAndIsrResponseRecei
 import org.apache.fluss.server.coordinator.event.RebalanceEvent;
 import org.apache.fluss.server.coordinator.event.RemoveServerTagEvent;
 import org.apache.fluss.server.coordinator.event.SchemaChangeEvent;
+import org.apache.fluss.server.coordinator.event.watcher.PartitionAssignmentChangeWatcher;
+import org.apache.fluss.server.coordinator.event.watcher.TableAssignmentChangeWatcher;
 import org.apache.fluss.server.coordinator.event.watcher.TableChangeWatcher;
 import org.apache.fluss.server.coordinator.event.watcher.TabletServerChangeWatcher;
 import org.apache.fluss.server.coordinator.rebalance.RebalanceManager;
@@ -170,6 +173,8 @@ public class CoordinatorEventProcessor implements EventProcessor {
     private final TableChangeWatcher tableChangeWatcher;
     private final CoordinatorChannelManager coordinatorChannelManager;
     private final TabletServerChangeWatcher tabletServerChangeWatcher;
+    private final TableAssignmentChangeWatcher tableAssignmentChangeWatcher;
+    private final PartitionAssignmentChangeWatcher partitionAssignmentChangeWatcher;
     private final CoordinatorMetadataCache serverMetadataCache;
     private final CoordinatorRequestBatch coordinatorRequestBatch;
     private final String internalListenerName;
@@ -224,6 +229,10 @@ public class CoordinatorEventProcessor implements EventProcessor {
         this.tableChangeWatcher = new TableChangeWatcher(zooKeeperClient, coordinatorEventManager);
         this.tabletServerChangeWatcher =
                 new TabletServerChangeWatcher(zooKeeperClient, coordinatorEventManager);
+        this.tableAssignmentChangeWatcher =
+                new TableAssignmentChangeWatcher(zooKeeperClient, coordinatorEventManager);
+        this.partitionAssignmentChangeWatcher =
+                new PartitionAssignmentChangeWatcher(zooKeeperClient, coordinatorEventManager);
         this.coordinatorRequestBatch =
                 new CoordinatorRequestBatch(
                         coordinatorChannelManager, coordinatorEventManager, coordinatorContext);
@@ -260,6 +269,8 @@ public class CoordinatorEventProcessor implements EventProcessor {
         // start watchers first so that we won't miss node in zk;
         tabletServerChangeWatcher.start();
         tableChangeWatcher.start();
+        tableAssignmentChangeWatcher.start();
+        partitionAssignmentChangeWatcher.start();
         LOG.info("Initializing coordinator context.");
         try {
             initCoordinatorContext();
@@ -545,6 +556,8 @@ public class CoordinatorEventProcessor implements EventProcessor {
         // then stop watchers
         tableChangeWatcher.stop();
         tabletServerChangeWatcher.stop();
+        tableAssignmentChangeWatcher.stop();
+        partitionAssignmentChangeWatcher.stop();
     }
 
     @Override
@@ -557,6 +570,8 @@ public class CoordinatorEventProcessor implements EventProcessor {
             processDropTable((DropTableEvent) event);
         } else if (event instanceof DropPartitionEvent) {
             processDropPartition((DropPartitionEvent) event);
+        } else if (event instanceof AlterTableOrPartitionBucketEvent) {
+            processAlterTableOrPartitionBucket((AlterTableOrPartitionBucketEvent) event);
         } else if (event instanceof SchemaChangeEvent) {
             SchemaChangeEvent schemaChangeEvent = (SchemaChangeEvent) event;
             processSchemaChange(schemaChangeEvent);
@@ -820,6 +835,137 @@ public class CoordinatorEventProcessor implements EventProcessor {
         // remove partition metrics.
         coordinatorMetricGroup.removeTablePartitionMetricsGroup(
                 dropTableInfo.getTablePath(), tableId, tablePartition.getPartitionId());
+    }
+
+    private void processAlterTableOrPartitionBucket(
+            AlterTableOrPartitionBucketEvent alterTableOrPartitionBucketEvent) {
+        long tableId = alterTableOrPartitionBucketEvent.getTableId();
+        Long partitionId = alterTableOrPartitionBucketEvent.getPartitionId();
+        boolean isPartitionedTable = partitionId != null;
+
+        Map<TableBucket, BucketAssignment> bucketsToBeAdded;
+        if (!isPartitionedTable) {
+            bucketsToBeAdded =
+                    alterTableOrPartitionBucketEvent
+                            .getTableOrPartitionAssignment()
+                            .getBucketAssignments()
+                            .entrySet()
+                            .stream()
+                            .filter(
+                                    e ->
+                                            !coordinatorContext
+                                                    .getTableAssignment(tableId)
+                                                    .containsKey(e.getKey()))
+                            .collect(
+                                    Collectors.toMap(
+                                            e -> new TableBucket(tableId, e.getKey()),
+                                            Map.Entry::getValue));
+        } else {
+            bucketsToBeAdded =
+                    alterTableOrPartitionBucketEvent
+                            .getTableOrPartitionAssignment()
+                            .getBucketAssignments()
+                            .entrySet()
+                            .stream()
+                            .filter(
+                                    e ->
+                                            !coordinatorContext
+                                                    .getPartitionAssignment(
+                                                            new TablePartition(
+                                                                    tableId, partitionId))
+                                                    .containsKey(e.getKey()))
+                            .collect(
+                                    Collectors.toMap(
+                                            e -> new TableBucket(tableId, partitionId, e.getKey()),
+                                            Map.Entry::getValue));
+        }
+
+        // Update table info with new bucket number
+        TableInfo tableInfo = coordinatorContext.getTableInfoById(tableId);
+        coordinatorContext.putTableInfo(
+                tableInfo.toNewTableInfo(
+                        alterTableOrPartitionBucketEvent
+                                .getTableOrPartitionAssignment()
+                                .getBucketAssignments()
+                                .size()));
+
+        if (coordinatorContext.isTableQueuedForDeletion(tableId)) {
+            if (!bucketsToBeAdded.isEmpty()) {
+                LOG.warn(
+                        "Skipping adding buckets {} for table {} since it is currently being deleted.",
+                        bucketsToBeAdded,
+                        tableId);
+                restoreBucketReplicaAssignment(tableId, partitionId);
+            } else {
+                LOG.info(
+                        "Ignoring bucket change during table deletion as no new buckets are added");
+            }
+        } else if (!bucketsToBeAdded.isEmpty()) {
+            LOG.info("New buckets to be added {}", bucketsToBeAdded);
+            bucketsToBeAdded.forEach(
+                    (tableBucket, bucketAssignment) ->
+                            coordinatorContext.updateBucketReplicaAssignment(
+                                    tableBucket, bucketAssignment.getReplicas()));
+            tableManager.onCreateNewTableBucket(tableId, bucketsToBeAdded.keySet());
+
+            Set<TableBucket> tableBuckets = new HashSet<>();
+            alterTableOrPartitionBucketEvent
+                    .getTableOrPartitionAssignment()
+                    .getBucketAssignments()
+                    .keySet()
+                    .forEach(
+                            bucketId ->
+                                    tableBuckets.add(
+                                            new TableBucket(tableId, partitionId, bucketId)));
+
+            updateTabletServerMetadataCache(
+                    new HashSet<>(coordinatorContext.getLiveTabletServers().values()),
+                    null,
+                    null,
+                    tableBuckets);
+        }
+    }
+
+    private void restoreBucketReplicaAssignment(long tableId, @Nullable Long partitionId) {
+        LOG.info(
+                "Restoring the bucket replica assignment for table {}, partition {}",
+                tableId,
+                partitionId);
+
+        if (partitionId == null) {
+            Map<Integer, BucketAssignment> oldTableAssignment =
+                    coordinatorContext.getTableAssignment(tableId).entrySet().stream()
+                            .collect(
+                                    Collectors.toMap(
+                                            Map.Entry::getKey,
+                                            entry -> new BucketAssignment(entry.getValue())));
+            try {
+                zooKeeperClient.updateTableAssignment(
+                        tableId, new TableAssignment(oldTableAssignment));
+            } catch (Exception e) {
+                LOG.error("Failed to restore table assignment for table {}", tableId, e);
+            }
+        } else {
+            Map<Integer, BucketAssignment> oldPartitionAssignment =
+                    coordinatorContext
+                            .getPartitionAssignment(new TablePartition(tableId, partitionId))
+                            .entrySet()
+                            .stream()
+                            .collect(
+                                    Collectors.toMap(
+                                            Map.Entry::getKey,
+                                            entry -> new BucketAssignment(entry.getValue())));
+            try {
+                zooKeeperClient.updatePartitionAssignment(
+                        tableId, new PartitionAssignment(tableId, oldPartitionAssignment));
+            } catch (Exception e) {
+                LOG.error(
+                        "Failed to restore partition assignment for table {} partition {}",
+                        tableId,
+                        partitionId,
+                        e);
+            }
+        }
     }
 
     private void processDeleteReplicaResponseReceived(
