@@ -659,6 +659,11 @@ class KvTabletSnapshotTargetTest {
         public long getAndIncrement() {
             return snapshotIdGenerator.getAndIncrement();
         }
+
+        @Override
+        public long getAndAdd(Long delta) {
+            return snapshotIdGenerator.getAndAdd(delta);
+        }
     }
 
     private enum SnapshotFailType {

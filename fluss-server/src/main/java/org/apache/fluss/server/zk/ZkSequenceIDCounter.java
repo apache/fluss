@@ -34,9 +34,11 @@ public class ZkSequenceIDCounter implements SequenceIDCounter {
     private static final int BASE_SLEEP_MS = 100;
     private static final int MAX_SLEEP_MS = 1000;
 
+    private final String sequenceIDPath;
     private final DistributedAtomicLong sequenceIdCounter;
 
     public ZkSequenceIDCounter(CuratorFramework curatorClient, String sequenceIDPath) {
+        this.sequenceIDPath = sequenceIDPath;
         sequenceIdCounter =
                 new DistributedAtomicLong(
                         curatorClient,
@@ -56,7 +58,28 @@ public class ZkSequenceIDCounter implements SequenceIDCounter {
         if (incrementValue.succeeded()) {
             return incrementValue.preValue();
         } else {
-            throw new Exception("Failed to increment sequence id counter.");
+            throw new Exception(
+                    String.format(
+                            "Failed to increment sequence id counter. ZooKeeper sequence ID path: %s.",
+                            sequenceIDPath));
+        }
+    }
+
+    /**
+     * Atomically adds the given delta to the current sequence ID.
+     *
+     * @return The previous sequence ID
+     */
+    @Override
+    public long getAndAdd(Long delta) throws Exception {
+        AtomicValue<Long> incrementValue = sequenceIdCounter.add(delta);
+        if (incrementValue.succeeded()) {
+            return incrementValue.preValue();
+        } else {
+            throw new Exception(
+                    String.format(
+                            "Failed to increment sequence id counter. ZooKeeper sequence ID path: %s, Delta value: %d.",
+                            sequenceIDPath, delta));
         }
     }
 }
