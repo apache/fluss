@@ -18,6 +18,8 @@
 package org.apache.fluss.server.kv.rocksdb;
 
 import org.apache.fluss.exception.FlussRuntimeException;
+import org.apache.fluss.metrics.Counter;
+import org.apache.fluss.metrics.Histogram;
 import org.apache.fluss.rocksdb.RocksDBOperationUtils;
 import org.apache.fluss.server.utils.ResourceGuard;
 import org.apache.fluss.utils.BytesUtils;
@@ -89,8 +91,9 @@ public class RocksDBKv implements AutoCloseable {
         return rocksDBResourceGuard;
     }
 
-    public RocksDBWriteBatchWrapper newWriteBatch(long writeBatchSize) {
-        return new RocksDBWriteBatchWrapper(db, writeBatchSize);
+    public RocksDBWriteBatchWrapper newWriteBatch(
+            long writeBatchSize, Counter flushCount, Histogram flushLatencyHistogram) {
+        return new RocksDBWriteBatchWrapper(db, writeBatchSize, flushCount, flushLatencyHistogram);
     }
 
     public @Nullable byte[] get(byte[] key) throws IOException {
