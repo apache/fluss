@@ -23,8 +23,17 @@ import org.apache.fluss.flink.row.RowWithOp;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.PaddingRow;
 import org.apache.fluss.row.ProjectedRow;
+import org.apache.fluss.types.BinaryType;
+import org.apache.fluss.types.CharType;
+import org.apache.fluss.types.DataField;
+import org.apache.fluss.types.DataTypeRoot;
+import org.apache.fluss.types.DecimalType;
+import org.apache.fluss.types.RowType;
 
 import org.apache.flink.table.data.RowData;
+import org.apache.flink.table.data.StringData;
+import org.apache.flink.table.data.binary.BinaryFormat;
+import org.apache.flink.table.data.binary.BinaryStringData;
 import org.apache.flink.types.RowKind;
 
 import javax.annotation.Nullable;
@@ -157,6 +166,66 @@ public class RowDataSerializationSchema implements FlussSerializationSchema<RowD
         OperationType opType = toOperationType(value.getRowKind());
 
         return new RowWithOp(row, opType);
+    }
+
+    @Override
+    public long size(RowData value, RowType rowType) {
+        if (value instanceof BinaryFormat) {
+            return ((BinaryFormat) value).getSizeInBytes();
+        }
+
+        long size = 0;
+        for (int i = 0; i < rowType.getFieldCount(); i++) {
+            DataField field = rowType.getFields().get(i);
+            DataTypeRoot typeRoot = field.getType().getTypeRoot();
+            if (value.isNullAt(i)) {
+                continue;
+            }
+            switch (typeRoot) {
+                case CHAR:
+                    size += ((CharType) (field.getType())).getLength();
+                    break;
+                case STRING:
+                    StringData stringData = value.getString(i);
+                    if (stringData instanceof BinaryStringData) {
+                        size += ((BinaryStringData) stringData).getSizeInBytes();
+                    } else {
+                        size += converter.getString(i).getSizeInBytes();
+                    }
+                    break;
+                case BINARY:
+                    size += ((BinaryType) (field.getType())).getLength();
+                    break;
+                case BYTES:
+                    size += converter.getBytes(i).length;
+                    break;
+                case DECIMAL:
+                    size += ((DecimalType) (field.getType())).getPrecision();
+                    break;
+                case BOOLEAN:
+                case TINYINT:
+                    size += 1;
+                    break;
+                case SMALLINT:
+                    size += 2;
+                    break;
+                case INTEGER:
+                case FLOAT:
+                case DATE:
+                case TIME_WITHOUT_TIME_ZONE:
+                    size += 4;
+                    break;
+                case BIGINT:
+                case DOUBLE:
+                case TIMESTAMP_WITHOUT_TIME_ZONE:
+                case TIMESTAMP_WITH_LOCAL_TIME_ZONE:
+                    size += 8;
+                    break;
+                default:
+                    throw new IllegalArgumentException("Illegal type: " + typeRoot);
+            }
+        }
+        return size;
     }
 
     /**
