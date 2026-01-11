@@ -404,9 +404,14 @@ public class FlinkConversions {
     public static List<TableChange> toFlussTableChanges(
             org.apache.flink.table.catalog.TableChange tableChange) {
         if (tableChange instanceof org.apache.flink.table.catalog.TableChange.SetOption) {
-            return Collections.singletonList(
-                    convertSetOption(
-                            (org.apache.flink.table.catalog.TableChange.SetOption) tableChange));
+            org.apache.flink.table.catalog.TableChange.SetOption setOption =
+                    (org.apache.flink.table.catalog.TableChange.SetOption) tableChange;
+            // convert to bucket num if the key is bucket.num
+            if (BUCKET_NUMBER.key().equals(setOption.getKey())) {
+                return Collections.singletonList(convertBucketNumOption(setOption));
+            }
+
+            return Collections.singletonList(convertSetOption(setOption));
         } else if (tableChange instanceof org.apache.flink.table.catalog.TableChange.AddColumn) {
             org.apache.flink.table.catalog.TableChange.AddColumn addColumn =
                     (org.apache.flink.table.catalog.TableChange.AddColumn) tableChange;
@@ -456,6 +461,16 @@ public class FlinkConversions {
         } else {
             throw new UnsupportedOperationException(
                     String.format("Unsupported flink table change: %s.", tableChange));
+        }
+    }
+
+    private static TableChange.BucketNumOption convertBucketNumOption(
+            org.apache.flink.table.catalog.TableChange.SetOption flinkSetOption) {
+        try {
+            return TableChange.bucketNum(Integer.parseInt(flinkSetOption.getValue()));
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException(
+                    String.format("Invalid bucket num: %s.", flinkSetOption.getValue()), e);
         }
     }
 
