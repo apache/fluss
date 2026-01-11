@@ -23,22 +23,33 @@ import org.apache.fluss.lake.lance.utils.LanceDatasetAdapter;
 import org.apache.fluss.lake.writer.LakeWriter;
 import org.apache.fluss.lake.writer.WriterInitContext;
 import org.apache.fluss.record.LogRecord;
+import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.types.RowType;
 
+import com.lancedb.lance.Fragment;
 import com.lancedb.lance.FragmentMetadata;
 import com.lancedb.lance.WriteParams;
+import org.apache.arrow.memory.BufferAllocator;
+import org.apache.arrow.memory.RootAllocator;
+import org.apache.arrow.vector.VectorSchemaRoot;
 import org.apache.arrow.vector.types.pojo.Schema;
 
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
-import java.util.concurrent.Callable;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.FutureTask;
 
-/** Implementation of {@link LakeWriter} for Lance. */
+/** Implementation of {@link LakeWriter} for Lance using batch processing. */
 public class LanceLakeWriter implements LakeWriter<LanceWriteResult> {
-    private final LanceArrowWriter arrowWriter;
-    private final FutureTask<List<FragmentMetadata>> fragmentCreationTask;
+    private final BufferAllocator allocator;
+    private final Schema arrowSchema;
+    private final RowType rowType;
+    private final int batchSize;
+    private final String datasetUri;
+    private final WriteParams writeParams;
+
+    private final List<InternalRow> buffer;
+    private List<FragmentMetadata> allFragments;
 
     public LanceLakeWriter(Configuration options, WriterInitContext writerInitContext)
             throws IOException {
@@ -48,47 +59,70 @@ public class LanceLakeWriter implements LakeWriter<LanceWriteResult> {
                         writerInitContext.tableInfo().getCustomProperties().toMap(),
                         writerInitContext.tablePath().getDatabaseName(),
                         writerInitContext.tablePath().getTableName());
-        int batchSize = LanceConfig.getBatchSize(config);
+
+        this.batchSize = LanceConfig.getBatchSize(config);
+        this.datasetUri = config.getDatasetUri();
+        this.writeParams = LanceConfig.genWriteParamsFromConfig(config);
+        this.rowType = writerInitContext.tableInfo().getRowType();
+        this.allocator = new RootAllocator();
+        this.buffer = new ArrayList<>(batchSize);
+        this.allFragments = new ArrayList<>();
+
         Optional<Schema> schema = LanceDatasetAdapter.getSchema(config);
         if (!schema.isPresent()) {
-            throw new IOException("Fail to get dataset " + config.getDatasetUri() + " in Lance.");
+            throw new IOException("Fail to get dataset " + datasetUri + " in Lance.");
         }
-
-        this.arrowWriter =
-                LanceDatasetAdapter.getArrowWriter(
-                        schema.get(), batchSize, writerInitContext.tableInfo().getRowType());
-
-        WriteParams params = LanceConfig.genWriteParamsFromConfig(config);
-        Callable<List<FragmentMetadata>> fragmentCreator =
-                () ->
-                        LanceDatasetAdapter.createFragment(
-                                config.getDatasetUri(), arrowWriter, params);
-        fragmentCreationTask = new FutureTask<>(fragmentCreator);
-        Thread fragmentCreationThread = new Thread(fragmentCreationTask);
-        fragmentCreationThread.start();
+        this.arrowSchema = schema.get();
     }
 
     @Override
     public void write(LogRecord record) throws IOException {
-        arrowWriter.write(record);
+        buffer.add(record.getRow());
+
+        // Flush when buffer reaches batch size
+        if (buffer.size() >= batchSize) {
+            flush();
+        }
     }
 
-    @Override
-    public LanceWriteResult complete() throws IOException {
-        arrowWriter.setFinished();
-        try {
-            List<FragmentMetadata> fragmentMetadata = fragmentCreationTask.get();
-            return new LanceWriteResult(fragmentMetadata);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new IOException("Interrupted while waiting for reader thread to finish", e);
-        } catch (ExecutionException e) {
-            throw new IOException("Exception in reader thread", e);
+    private void flush() throws IOException {
+        if (buffer.isEmpty()) {
+            return;
+        }
+
+        try (VectorSchemaRoot root = VectorSchemaRoot.create(arrowSchema, allocator)) {
+            // Allocate memory and write data
+            root.allocateNew();
+            LanceArrowWriter writer = LanceArrowWriter.create(root, rowType);
+
+            for (InternalRow row : buffer) {
+                writer.writeRow(row);
+            }
+            writer.finish();
+
+            // Create fragment directly using VectorSchemaRoot
+            List<FragmentMetadata> fragments =
+                    Fragment.create(datasetUri, allocator, root, writeParams);
+
+            allFragments.addAll(fragments);
+            buffer.clear();
+        } catch (Exception e) {
+            throw new IOException("Failed to write Lance fragment", e);
         }
     }
 
     @Override
+    public LanceWriteResult complete() throws IOException {
+        // Flush any remaining data
+        flush();
+        return new LanceWriteResult(allFragments);
+    }
+
+    @Override
     public void close() throws IOException {
-        arrowWriter.close();
+        buffer.clear();
+        if (allocator != null) {
+            allocator.close();
+        }
     }
 }

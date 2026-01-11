@@ -41,7 +41,6 @@
             <groupId>org.apache.fluss</groupId>
             <artifactId>fluss-common</artifactId>
             <version>${project.version}</version>
-            <scope>provided</scope>
         </dependency>
 
         <dependency>
