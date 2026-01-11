@@ -166,7 +166,11 @@ class LakeEnabledTableCreateITCase {
         Field logC10 =
                 new Field("log_c10", FieldType.nullable(new ArrowType.FixedSizeBinary(10)), null);
         Field logC11 = new Field("log_c11", FieldType.nullable(new ArrowType.Binary()), null);
-        Field logC12 = new Field("log_c12", FieldType.nullable(new ArrowType.Decimal(10, 2)), null);
+        Field logC12 =
+                new Field(
+                        "log_c12",
+                        FieldType.nullable(ArrowType.Decimal.createDecimal(10, 2, null)),
+                        null);
         Field logC13 =
                 new Field("log_c13", FieldType.nullable(new ArrowType.Date(DateUnit.DAY)), null);
         Field logC14 =
