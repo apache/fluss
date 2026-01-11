@@ -26,6 +26,8 @@ import org.junit.jupiter.api.Test;
 import java.math.BigDecimal;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -227,5 +229,232 @@ class ProjectedRowTest {
                 .isEqualTo(new BigDecimal("13145678.1"));
         assertThat(projectedRow.isNullAt(2)).isTrue();
         assertThat(projectedRow.isNullAt(3)).isTrue();
+    }
+
+    @Test
+    void testProjectedRowsWithComplexTypes() {
+        // Test projection with Array, Map, and Row types
+        // Original row: (a bigint, b string, c map<string,int>, d row<d1 int, d2 string>,
+        //                e array<string>, f date)
+        // Projection: [0, 2, 3, 5] -> select a, c, d, f
+        final ProjectedRow projectedRow = ProjectedRow.from(new int[] {0, 2, 3, 5});
+        assertThat(projectedRow.getFieldCount()).isEqualTo(4);
+
+        // Create test data with complex types
+        Map<BinaryString, Integer> map1 = new HashMap<>();
+        map1.put(BinaryString.fromString("key1"), 100);
+        map1.put(BinaryString.fromString("key2"), 200);
+        GenericMap genericMap1 = new GenericMap(map1);
+
+        GenericRow nestedRow1 = GenericRow.of(10, BinaryString.fromString("nested1"));
+
+        GenericArray array1 =
+                new GenericArray(
+                        new Object[] {
+                            BinaryString.fromString("a"),
+                            BinaryString.fromString("b"),
+                            BinaryString.fromString("c")
+                        });
+
+        // Original row: (100L, "value1", map1, nestedRow1, array1, 20231)
+        GenericRow originalRow1 =
+                GenericRow.of(
+                        100L,
+                        BinaryString.fromString("value1"),
+                        genericMap1,
+                        nestedRow1,
+                        array1,
+                        20231);
+
+        projectedRow.replaceRow(originalRow1);
+
+        // Verify projection: should be (100L, map1, nestedRow1, 20231)
+        assertThat(projectedRow.getLong(0)).isEqualTo(100L);
+
+        // Verify map projection
+        InternalMap projectedMap = projectedRow.getMap(1);
+        assertThat(projectedMap).isNotNull();
+        assertThat(projectedMap.size()).isEqualTo(2);
+
+        // Verify row projection
+        InternalRow projectedNestedRow = projectedRow.getRow(2, 2);
+        assertThat(projectedNestedRow).isNotNull();
+        assertThat(projectedNestedRow.getInt(0)).isEqualTo(10);
+        assertThat(projectedNestedRow.getString(1).toString()).isEqualTo("nested1");
+
+        // Verify simple type at the end
+        assertThat(projectedRow.getInt(3)).isEqualTo(20231);
+
+        // Test with different data
+        Map<BinaryString, Integer> map2 = new HashMap<>();
+        map2.put(BinaryString.fromString("key3"), 300);
+        GenericMap genericMap2 = new GenericMap(map2);
+
+        GenericRow nestedRow2 = GenericRow.of(20, BinaryString.fromString("nested2"));
+
+        GenericArray array2 =
+                new GenericArray(
+                        new Object[] {BinaryString.fromString("d"), BinaryString.fromString("e")});
+
+        GenericRow originalRow2 =
+                GenericRow.of(
+                        200L,
+                        BinaryString.fromString("value2"),
+                        genericMap2,
+                        nestedRow2,
+                        array2,
+                        20232);
+
+        projectedRow.replaceRow(originalRow2);
+
+        // Verify second projection
+        assertThat(projectedRow.getLong(0)).isEqualTo(200L);
+
+        InternalMap projectedMap2 = projectedRow.getMap(1);
+        assertThat(projectedMap2).isNotNull();
+        assertThat(projectedMap2.size()).isEqualTo(1);
+
+        InternalRow projectedNestedRow2 = projectedRow.getRow(2, 2);
+        assertThat(projectedNestedRow2).isNotNull();
+        assertThat(projectedNestedRow2.getInt(0)).isEqualTo(20);
+        assertThat(projectedNestedRow2.getString(1).toString()).isEqualTo("nested2");
+
+        assertThat(projectedRow.getInt(3)).isEqualTo(20232);
+    }
+
+    @Test
+    void testProjectedRowsWithArrayOnly() {
+        // Test projection focusing on array types
+        // Original row: (a int, b array<int>, c array<string>, d bigint)
+        // Projection: [1, 2] -> select b, c
+        final ProjectedRow projectedRow = ProjectedRow.from(new int[] {1, 2});
+        assertThat(projectedRow.getFieldCount()).isEqualTo(2);
+
+        GenericArray intArray = new GenericArray(new Object[] {1, 2, 3, 4, 5});
+        GenericArray stringArray =
+                new GenericArray(
+                        new Object[] {
+                            BinaryString.fromString("x"),
+                            BinaryString.fromString("y"),
+                            BinaryString.fromString("z")
+                        });
+
+        GenericRow originalRow = GenericRow.of(100, intArray, stringArray, 1000L);
+        projectedRow.replaceRow(originalRow);
+
+        // Verify int array projection
+        InternalArray projectedIntArray = projectedRow.getArray(0);
+        assertThat(projectedIntArray).isNotNull();
+        assertThat(projectedIntArray.size()).isEqualTo(5);
+        assertThat(projectedIntArray.getInt(0)).isEqualTo(1);
+        assertThat(projectedIntArray.getInt(4)).isEqualTo(5);
+
+        // Verify string array projection
+        InternalArray projectedStringArray = projectedRow.getArray(1);
+        assertThat(projectedStringArray).isNotNull();
+        assertThat(projectedStringArray.size()).isEqualTo(3);
+        assertThat(projectedStringArray.getString(0).toString()).isEqualTo("x");
+        assertThat(projectedStringArray.getString(2).toString()).isEqualTo("z");
+    }
+
+    @Test
+    void testProjectedRowsWithMapOnly() {
+        // Test projection focusing on map types
+        // Original row: (a int, b map<string,int>, c map<int,string>, d bigint)
+        // Projection: [1, 2] -> select b, c
+        final ProjectedRow projectedRow = ProjectedRow.from(new int[] {1, 2});
+        assertThat(projectedRow.getFieldCount()).isEqualTo(2);
+
+        Map<BinaryString, Integer> stringIntMap = new HashMap<>();
+        stringIntMap.put(BinaryString.fromString("k1"), 10);
+        stringIntMap.put(BinaryString.fromString("k2"), 20);
+        GenericMap genericMap1 = new GenericMap(stringIntMap);
+
+        Map<Integer, BinaryString> intStringMap = new HashMap<>();
+        intStringMap.put(1, BinaryString.fromString("v1"));
+        intStringMap.put(2, BinaryString.fromString("v2"));
+        GenericMap genericMap2 = new GenericMap(intStringMap);
+
+        GenericRow originalRow = GenericRow.of(100, genericMap1, genericMap2, 1000L);
+        projectedRow.replaceRow(originalRow);
+
+        // Verify string-int map projection
+        InternalMap projectedMap1 = projectedRow.getMap(0);
+        assertThat(projectedMap1).isNotNull();
+        assertThat(projectedMap1.size()).isEqualTo(2);
+
+        // Verify int-string map projection
+        InternalMap projectedMap2 = projectedRow.getMap(1);
+        assertThat(projectedMap2).isNotNull();
+        assertThat(projectedMap2.size()).isEqualTo(2);
+    }
+
+    @Test
+    void testProjectedRowsWithNullComplexTypes() {
+        // Test projection with null complex type values
+        // Projection: [0, 2, 3, 4] -> select a, c (map), d (row), e (array)
+        final ProjectedRow projectedRow = ProjectedRow.from(new int[] {0, 2, 3, 4});
+        assertThat(projectedRow.getFieldCount()).isEqualTo(4);
+
+        // Row with null complex types
+        GenericRow originalRow =
+                GenericRow.of(100L, BinaryString.fromString("value"), null, null, null);
+        projectedRow.replaceRow(originalRow);
+
+        assertThat(projectedRow.getLong(0)).isEqualTo(100L);
+        assertThat(projectedRow.isNullAt(1)).isTrue();
+        assertThat(projectedRow.isNullAt(2)).isTrue();
+        assertThat(projectedRow.isNullAt(3)).isTrue();
+
+        // Row with non-null complex types
+        Map<BinaryString, Integer> map = new HashMap<>();
+        map.put(BinaryString.fromString("key"), 100);
+        GenericMap genericMap = new GenericMap(map);
+        GenericRow nestedRow = GenericRow.of(10, BinaryString.fromString("nested"));
+        GenericArray array = new GenericArray(new Object[] {BinaryString.fromString("a")});
+
+        GenericRow originalRow2 =
+                GenericRow.of(
+                        200L, BinaryString.fromString("value2"), genericMap, nestedRow, array);
+        projectedRow.replaceRow(originalRow2);
+
+        assertThat(projectedRow.getLong(0)).isEqualTo(200L);
+        assertThat(projectedRow.isNullAt(1)).isFalse();
+        assertThat(projectedRow.getMap(1)).isNotNull();
+        assertThat(projectedRow.isNullAt(2)).isFalse();
+        assertThat(projectedRow.getRow(2, 2)).isNotNull();
+        assertThat(projectedRow.isNullAt(3)).isFalse();
+        assertThat(projectedRow.getArray(3)).isNotNull();
+    }
+
+    @Test
+    void testProjectedRowsWithReordering() {
+        // Test projection with reordering of complex types
+        // Original row: (a array<int>, b map<string,int>, c row<x int, y string>, d bigint)
+        // Projection: [3, 1, 0] -> select d, b, a (reordered)
+        final ProjectedRow projectedRow = ProjectedRow.from(new int[] {3, 1, 0});
+        assertThat(projectedRow.getFieldCount()).isEqualTo(3);
+
+        GenericArray array = new GenericArray(new Object[] {1, 2, 3});
+        Map<BinaryString, Integer> map = new HashMap<>();
+        map.put(BinaryString.fromString("key"), 100);
+        GenericMap genericMap = new GenericMap(map);
+        GenericRow nestedRow = GenericRow.of(10, BinaryString.fromString("test"));
+
+        GenericRow originalRow = GenericRow.of(array, genericMap, nestedRow, 1000L);
+        projectedRow.replaceRow(originalRow);
+
+        // Verify reordered projection: (1000L, map, array)
+        assertThat(projectedRow.getLong(0)).isEqualTo(1000L);
+
+        InternalMap projectedMap = projectedRow.getMap(1);
+        assertThat(projectedMap).isNotNull();
+        assertThat(projectedMap.size()).isEqualTo(1);
+
+        InternalArray projectedArray = projectedRow.getArray(2);
+        assertThat(projectedArray).isNotNull();
+        assertThat(projectedArray.size()).isEqualTo(3);
+        assertThat(projectedArray.getInt(0)).isEqualTo(1);
+        assertThat(projectedArray.getInt(2)).isEqualTo(3);
     }
 }
