@@ -170,6 +170,20 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
         return provider;
     }
 
+    public abstract void authorizeTable(OperationType operationType, long tableId);
+
+    public void authorizeDatabase(OperationType operationType, String databaseName) {
+        if (authorizer != null) {
+            authorizer.authorize(currentSession(), operationType, Resource.database(databaseName));
+        }
+    }
+
+    public void authorizeTable(OperationType operationType, TablePath tablePath) {
+        if (authorizer != null) {
+            authorizer.authorize(currentSession(), operationType, Resource.table(tablePath));
+        }
+    }
+
     @Override
     public CompletableFuture<ApiVersionsResponse> apiVersions(ApiVersionsRequest request) {
         Set<ApiKeys> apiKeys = apiManager.enabledApis();
@@ -210,15 +224,11 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
     @Override
     public CompletableFuture<GetDatabaseInfoResponse> getDatabaseInfo(
             GetDatabaseInfoRequest request) {
-        if (authorizer != null) {
-            authorizer.authorize(
-                    currentSession(),
-                    OperationType.DESCRIBE,
-                    Resource.database(request.getDatabaseName()));
-        }
+        String databaseName = request.getDatabaseName();
+        authorizeDatabase(OperationType.DESCRIBE, databaseName);
 
         GetDatabaseInfoResponse response = new GetDatabaseInfoResponse();
-        DatabaseInfo databaseInfo = metadataManager.getDatabase(request.getDatabaseName());
+        DatabaseInfo databaseInfo = metadataManager.getDatabase(databaseName);
         response.setDatabaseJson(databaseInfo.getDatabaseDescriptor().toJsonBytes())
                 .setCreatedTime(databaseInfo.getCreatedTime())
                 .setModifiedTime(databaseInfo.getModifiedTime());
@@ -227,6 +237,7 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
 
     @Override
     public CompletableFuture<DatabaseExistsResponse> databaseExists(DatabaseExistsRequest request) {
+        // By design: database exists not need to check database authorization.
         DatabaseExistsResponse response = new DatabaseExistsResponse();
         boolean exists = metadataManager.databaseExists(request.getDatabaseName());
         response.setExists(exists);
@@ -258,12 +269,7 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
     @Override
     public CompletableFuture<GetTableInfoResponse> getTableInfo(GetTableInfoRequest request) {
         TablePath tablePath = toTablePath(request.getTablePath());
-        if (authorizer != null) {
-            authorizer.authorize(
-                    currentSession(),
-                    OperationType.DESCRIBE,
-                    Resource.table(tablePath.getDatabaseName(), tablePath.getTableName()));
-        }
+        authorizeTable(OperationType.DESCRIBE, tablePath);
 
         GetTableInfoResponse response = new GetTableInfoResponse();
         TableInfo tableInfo = metadataManager.getTable(tablePath);
@@ -278,6 +284,8 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
     @Override
     public CompletableFuture<GetTableSchemaResponse> getTableSchema(GetTableSchemaRequest request) {
         TablePath tablePath = toTablePath(request.getTablePath());
+        authorizeTable(OperationType.DESCRIBE, tablePath);
+
         final SchemaInfo schemaInfo;
         if (request.hasSchemaId()) {
             schemaInfo = metadataManager.getSchemaById(tablePath, request.getSchemaId());
@@ -292,6 +300,7 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
 
     @Override
     public CompletableFuture<TableExistsResponse> tableExists(TableExistsRequest request) {
+        // By design: table exists not need to check table authorization.
         TableExistsResponse response = new TableExistsResponse();
         boolean exists = metadataManager.tableExists(toTablePath(request.getTablePath()));
         response.setExists(exists);
@@ -302,6 +311,8 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
     public CompletableFuture<GetLatestKvSnapshotsResponse> getLatestKvSnapshots(
             GetLatestKvSnapshotsRequest request) {
         TablePath tablePath = toTablePath(request.getTablePath());
+        authorizeTable(OperationType.DESCRIBE, tablePath);
+
         // get table info
         TableInfo tableInfo = metadataManager.getTable(tablePath);
 
@@ -363,9 +374,12 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
     @Override
     public CompletableFuture<GetKvSnapshotMetadataResponse> getKvSnapshotMetadata(
             GetKvSnapshotMetadataRequest request) {
+        long tableId = request.getTableId();
+        authorizeTable(OperationType.DESCRIBE, tableId);
+
         TableBucket tableBucket =
                 new TableBucket(
-                        request.getTableId(),
+                        tableId,
                         request.hasPartitionId() ? request.getPartitionId() : null,
                         request.getBucketId());
         long snapshotId = request.getSnapshotId();
@@ -412,6 +426,8 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
     public CompletableFuture<ListPartitionInfosResponse> listPartitionInfos(
             ListPartitionInfosRequest request) {
         TablePath tablePath = toTablePath(request.getTablePath());
+        authorizeTable(OperationType.DESCRIBE, tablePath);
+
         Map<String, Long> partitionNameAndIds;
         if (request.hasPartialPartitionSpec()) {
             ResolvedPartitionSpec partitionSpecFromRequest =
@@ -430,8 +446,10 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
     @Override
     public CompletableFuture<GetLatestLakeSnapshotResponse> getLatestLakeSnapshot(
             GetLatestLakeSnapshotRequest request) {
-        // get table info
         TablePath tablePath = toTablePath(request.getTablePath());
+        authorizeTable(OperationType.DESCRIBE, tablePath);
+
+        // get table info
         TableInfo tableInfo = metadataManager.getTable(tablePath);
         // get table id
         long tableId = tableInfo.getTableId();

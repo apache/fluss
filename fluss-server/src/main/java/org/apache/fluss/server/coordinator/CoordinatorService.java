@@ -34,6 +34,8 @@ import org.apache.fluss.exception.LakeTableAlreadyExistException;
 import org.apache.fluss.exception.SecurityDisabledException;
 import org.apache.fluss.exception.TableAlreadyExistException;
 import org.apache.fluss.exception.TableNotPartitionedException;
+import org.apache.fluss.exception.UnknownServerException;
+import org.apache.fluss.exception.UnknownTableOrBucketException;
 import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.lake.lakestorage.LakeCatalog;
@@ -237,6 +239,31 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     }
 
     @Override
+    public void authorizeTable(OperationType operationType, long tableId) {
+        if (authorizer != null) {
+            TablePath tablePath;
+            try {
+                AccessContextEvent<TablePath> getTablePathEvent =
+                        new AccessContextEvent<>(ctx -> ctx.getTablePathById(tableId));
+                eventManagerSupplier.get().put(getTablePathEvent);
+                tablePath = getTablePathEvent.getResultFuture().get();
+            } catch (Exception e) {
+                throw new UnknownServerException("Failed to get table path by ID " + tableId, e);
+            }
+
+            if (tablePath == null) {
+                throw new UnknownTableOrBucketException(
+                        String.format(
+                                "This server %s does not know this table ID %s. This may happen when the table "
+                                        + "metadata cache in the server is not updated yet.",
+                                name(), tableId));
+            }
+
+            authorizeTable(operationType, tablePath);
+        }
+    }
+
+    @Override
     public CompletableFuture<CreateDatabaseResponse> createDatabase(CreateDatabaseRequest request) {
         if (authorizer != null) {
             authorizer.authorize(currentSession(), OperationType.CREATE, Resource.cluster());
@@ -262,13 +289,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
 
     @Override
     public CompletableFuture<DropDatabaseResponse> dropDatabase(DropDatabaseRequest request) {
-        if (authorizer != null) {
-            authorizer.authorize(
-                    currentSession(),
-                    OperationType.DROP,
-                    Resource.database(request.getDatabaseName()));
-        }
-
+        authorizeDatabase(OperationType.DROP, request.getDatabaseName());
         DropDatabaseResponse response = new DropDatabaseResponse();
         metadataManager.dropDatabase(
                 request.getDatabaseName(), request.isIgnoreIfNotExists(), request.isCascade());
@@ -279,12 +300,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     public CompletableFuture<CreateTableResponse> createTable(CreateTableRequest request) {
         TablePath tablePath = toTablePath(request.getTablePath());
         tablePath.validate();
-        if (authorizer != null) {
-            authorizer.authorize(
-                    currentSession(),
-                    OperationType.CREATE,
-                    Resource.database(tablePath.getDatabaseName()));
-        }
+        authorizeDatabase(OperationType.CREATE, tablePath.getDatabaseName());
 
         TableDescriptor tableDescriptor;
         try {
@@ -348,9 +364,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     public CompletableFuture<AlterTableResponse> alterTable(AlterTableRequest request) {
         TablePath tablePath = toTablePath(request.getTablePath());
         tablePath.validate();
-        if (authorizer != null) {
-            authorizer.authorize(currentSession(), OperationType.ALTER, Resource.table(tablePath));
-        }
+        authorizeTable(OperationType.ALTER, tablePath);
 
         List<TableChange> alterTableConfigChanges =
                 toAlterTableConfigChanges(request.getConfigChangesList());
@@ -495,12 +509,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     @Override
     public CompletableFuture<DropTableResponse> dropTable(DropTableRequest request) {
         TablePath tablePath = toTablePath(request.getTablePath());
-        if (authorizer != null) {
-            authorizer.authorize(
-                    currentSession(),
-                    OperationType.DROP,
-                    Resource.table(tablePath.getDatabaseName(), tablePath.getTableName()));
-        }
+        authorizeTable(OperationType.DROP, tablePath);
 
         DropTableResponse response = new DropTableResponse();
         metadataManager.dropTable(tablePath, request.isIgnoreIfNotExists());
@@ -511,12 +520,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     public CompletableFuture<CreatePartitionResponse> createPartition(
             CreatePartitionRequest request) {
         TablePath tablePath = toTablePath(request.getTablePath());
-        if (authorizer != null) {
-            authorizer.authorize(
-                    currentSession(),
-                    OperationType.WRITE,
-                    Resource.table(tablePath.getDatabaseName(), tablePath.getTableName()));
-        }
+        authorizeTable(OperationType.WRITE, tablePath);
 
         CreatePartitionResponse response = new CreatePartitionResponse();
         TableRegistration table = metadataManager.getTableRegistration(tablePath);
@@ -552,12 +556,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     @Override
     public CompletableFuture<DropPartitionResponse> dropPartition(DropPartitionRequest request) {
         TablePath tablePath = toTablePath(request.getTablePath());
-        if (authorizer != null) {
-            authorizer.authorize(
-                    currentSession(),
-                    OperationType.WRITE,
-                    Resource.table(tablePath.getDatabaseName(), tablePath.getTableName()));
-        }
+        authorizeTable(OperationType.WRITE, tablePath);
 
         DropPartitionResponse response = new DropPartitionResponse();
         TableRegistration table = metadataManager.getTableRegistration(tablePath);

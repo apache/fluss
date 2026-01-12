@@ -383,8 +383,9 @@ abstract class FlinkAuthorizationITCase extends AbstractTestBase {
                 .rootCause()
                 .hasMessageContaining(
                         String.format(
-                                "No permission to READ table %s in database %s",
-                                tablePath.getTableName(), tablePath.getDatabaseName()));
+                                "Principal FlussPrincipal{name='guest', type='User'} have no authorization to "
+                                        + "operate READ on resource Resource{type=TABLE, name='%s'} ",
+                                tablePath));
         addAcl(Resource.database(tablePath.getDatabaseName()), READ);
         assertQueryResultExactOrder(
                 tBatchEnv,
