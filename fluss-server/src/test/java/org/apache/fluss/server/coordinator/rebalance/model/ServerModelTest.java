@@ -92,11 +92,30 @@ public class ServerModelTest {
 
     @Test
     void testEquals() {
-        // TODO add more test for this method. trace by https://github.com/apache/fluss/issues/2315
-        // equals by server Id.
         ServerModel serverModel1 = new ServerModel(0, "rack0", true);
         ServerModel serverModel2 = new ServerModel(0, "rack0", true);
+        // Same ID and same metadata -> Equal
         assertThat(serverModel1).isEqualTo(serverModel2);
+
+        ServerModel serverModel3 = new ServerModel(0, "rack1", false);
+        // Same ID but different rack/status -> Still Equal (as requested by maintainer)
+        assertThat(serverModel1).isEqualTo(serverModel3);
+
+        ServerModel serverModel4 = new ServerModel(1, "rack0", true);
+        // Different ID -> Not Equal
+        assertThat(serverModel1).isNotEqualTo(serverModel4);
+    }
+
+    @Test
+    void testHashCode() {
+        ServerModel serverModel1 = new ServerModel(0, "rack0", true);
+        ServerModel serverModel2 = new ServerModel(0, "rack1", false);
+        // Same ID must result in same HashCode
+        assertThat(serverModel1.hashCode()).isEqualTo(serverModel2.hashCode());
+
+        ServerModel serverModel3 = new ServerModel(1, "rack0", true);
+        // Different ID results in different HashCode
+        assertThat(serverModel1.hashCode()).isNotEqualTo(serverModel3.hashCode());
     }
 
     @Test
