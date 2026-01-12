@@ -132,8 +132,10 @@ public class TableRegistration {
                 currentMillis);
     }
 
-    public TableRegistration newProperties(
-            Map<String, String> newProperties, Map<String, String> newCustomProperties) {
+    public TableRegistration newBucketCountAndProperties(
+            Integer bucketCount,
+            Map<String, String> newProperties,
+            Map<String, String> newCustomProperties) {
         final long currentMillis = System.currentTimeMillis();
         return new TableRegistration(
                 tableId,

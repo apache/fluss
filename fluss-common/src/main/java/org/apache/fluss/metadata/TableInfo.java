@@ -308,6 +308,22 @@ public final class TableInfo {
                 .build();
     }
 
+    public TableInfo toNewTableInfo(int numBuckets) {
+        return new TableInfo(
+                tablePath,
+                tableId,
+                schemaId,
+                schema,
+                bucketKeys,
+                partitionKeys,
+                numBuckets,
+                properties,
+                customProperties,
+                comment,
+                createdTime,
+                modifiedTime);
+    }
+
     /** Utility to create a {@link TableInfo} from a {@link TableDescriptor} and other metadata. */
     public static TableInfo of(
             TablePath tablePath,
