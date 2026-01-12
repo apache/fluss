@@ -66,7 +66,19 @@ public class ValuesLakeCommitter
     @Override
     public CommittedLakeSnapshot getMissingLakeSnapshot(@Nullable Long latestLakeSnapshotIdOfFluss)
             throws IOException {
-        throw new RuntimeException("Not impl.");
+        ValuesLake.ValuesTable table = ValuesLake.getTable(tableId);
+        long latestSnapshotId = table.getSnapshotId();
+        if (latestSnapshotId < 0) {
+            return null;
+        }
+        if (latestLakeSnapshotIdOfFluss != null
+                && latestSnapshotId == latestLakeSnapshotIdOfFluss) {
+            if (latestSnapshotId <= latestLakeSnapshotIdOfFluss) {
+                return null;
+            }
+        }
+        return new CommittedLakeSnapshot(
+                latestSnapshotId, table.getSnapshotProperties(latestSnapshotId));
     }
 
     @Override

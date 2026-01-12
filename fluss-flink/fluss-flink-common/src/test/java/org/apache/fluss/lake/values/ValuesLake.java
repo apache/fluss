@@ -110,7 +110,7 @@ public class ValuesLake {
         private final List<InternalRow> records;
         private final Map<String, List<LogRecord>> stageRecords;
 
-        private long snapshotId = 0L;
+        private long snapshotId = -1L;
 
         private final Map<Long, Map<String, String>> snapshotProperties = new HashMap<>();
 
