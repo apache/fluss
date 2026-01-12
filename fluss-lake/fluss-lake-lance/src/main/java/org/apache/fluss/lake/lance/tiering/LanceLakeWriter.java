@@ -19,6 +19,7 @@ package org.apache.fluss.lake.lance.tiering;
 
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.lake.lance.LanceConfig;
+import org.apache.fluss.lake.lance.utils.ArrowDataConverter;
 import org.apache.fluss.lake.lance.utils.LanceDatasetAdapter;
 import org.apache.fluss.lake.writer.LakeWriter;
 import org.apache.fluss.lake.writer.WriterInitContext;
@@ -41,8 +42,10 @@ import java.util.Optional;
 
 /** Implementation of {@link LakeWriter} for Lance using batch processing. */
 public class LanceLakeWriter implements LakeWriter<LanceWriteResult> {
-    private final BufferAllocator allocator;
-    private final Schema arrowSchema;
+    private final BufferAllocator nonShadedAllocator;
+    private final org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator
+            shadedAllocator;
+    private final Schema nonShadedSchema;
     private final RowType rowType;
     private final int batchSize;
     private final String datasetUri;
@@ -64,7 +67,9 @@ public class LanceLakeWriter implements LakeWriter<LanceWriteResult> {
         this.datasetUri = config.getDatasetUri();
         this.writeParams = LanceConfig.genWriteParamsFromConfig(config);
         this.rowType = writerInitContext.tableInfo().getRowType();
-        this.allocator = new RootAllocator();
+        this.nonShadedAllocator = new RootAllocator();
+        this.shadedAllocator =
+                new org.apache.fluss.shaded.arrow.org.apache.arrow.memory.RootAllocator();
         this.buffer = new ArrayList<>(batchSize);
         this.allFragments = new ArrayList<>();
 
@@ -72,7 +77,7 @@ public class LanceLakeWriter implements LakeWriter<LanceWriteResult> {
         if (!schema.isPresent()) {
             throw new IOException("Fail to get dataset " + datasetUri + " in Lance.");
         }
-        this.arrowSchema = schema.get();
+        this.nonShadedSchema = schema.get();
     }
 
     @Override
@@ -90,24 +95,35 @@ public class LanceLakeWriter implements LakeWriter<LanceWriteResult> {
             return;
         }
 
-        try (VectorSchemaRoot root = VectorSchemaRoot.create(arrowSchema, allocator)) {
-            // Allocate memory and write data
-            root.allocateNew();
-            LanceArrowWriter writer = LanceArrowWriter.create(root, rowType);
+        ShadedArrowBatchWriter shadedWriter = null;
+        VectorSchemaRoot nonShadedRoot = null;
+
+        try {
+            shadedWriter = new ShadedArrowBatchWriter(shadedAllocator, rowType);
 
             for (InternalRow row : buffer) {
-                writer.writeRow(row);
+                shadedWriter.writeRow(row);
             }
-            writer.finish();
+            shadedWriter.finish();
 
-            // Create fragment directly using VectorSchemaRoot
+            nonShadedRoot =
+                    ArrowDataConverter.convertToNonShaded(
+                            shadedWriter.getShadedRoot(), nonShadedAllocator, nonShadedSchema);
+
             List<FragmentMetadata> fragments =
-                    Fragment.create(datasetUri, allocator, root, writeParams);
+                    Fragment.create(datasetUri, nonShadedAllocator, nonShadedRoot, writeParams);
 
             allFragments.addAll(fragments);
             buffer.clear();
         } catch (Exception e) {
             throw new IOException("Failed to write Lance fragment", e);
+        } finally {
+            if (shadedWriter != null) {
+                shadedWriter.close();
+            }
+            if (nonShadedRoot != null) {
+                nonShadedRoot.close();
+            }
         }
     }
 
@@ -121,8 +137,11 @@ public class LanceLakeWriter implements LakeWriter<LanceWriteResult> {
     @Override
     public void close() throws IOException {
         buffer.clear();
-        if (allocator != null) {
-            allocator.close();
+        if (shadedAllocator != null) {
+            shadedAllocator.close();
+        }
+        if (nonShadedAllocator != null) {
+            nonShadedAllocator.close();
         }
     }
 }
