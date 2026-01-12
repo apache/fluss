@@ -108,6 +108,12 @@ public class FlinkTestBase extends AbstractTestBase {
                     .distributedBy(DEFAULT_BUCKET_NUM, "id")
                     .build();
 
+    protected static final TableDescriptor LOG_TABLE_WITHOUT_BK_DESCRIPTOR =
+            TableDescriptor.builder()
+                    .schema(DEFAULT_LOG_TABLE_SCHEMA)
+                    .distributedBy(DEFAULT_BUCKET_NUM)
+                    .build();
+
     protected static final TableDescriptor DEFAULT_AUTO_PARTITIONED_LOG_TABLE_DESCRIPTOR =
             TableDescriptor.builder()
                     .schema(
