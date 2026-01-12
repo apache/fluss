@@ -21,6 +21,7 @@ import org.apache.fluss.client.Connection;
 import org.apache.fluss.client.ConnectionFactory;
 import org.apache.fluss.client.FlussConnection;
 import org.apache.fluss.client.admin.Admin;
+import org.apache.fluss.client.admin.FlussAdmin;
 import org.apache.fluss.client.table.Table;
 import org.apache.fluss.client.table.scanner.batch.BatchScanner;
 import org.apache.fluss.client.table.writer.AppendWriter;
@@ -33,6 +34,9 @@ import org.apache.fluss.config.cluster.AlterConfig;
 import org.apache.fluss.config.cluster.AlterConfigOpType;
 import org.apache.fluss.config.cluster.ConfigEntry;
 import org.apache.fluss.exception.AuthorizationException;
+import org.apache.fluss.exception.KvSnapshotNotExistException;
+import org.apache.fluss.exception.LakeTableSnapshotNotExistException;
+import org.apache.fluss.exception.TableNotPartitionedException;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.TableBucket;
@@ -43,9 +47,11 @@ import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.rpc.GatewayClientProxy;
 import org.apache.fluss.rpc.RpcClient;
 import org.apache.fluss.rpc.gateway.AdminGateway;
+import org.apache.fluss.rpc.gateway.AdminReadOnlyGateway;
 import org.apache.fluss.rpc.gateway.CoordinatorGateway;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.ControlledShutdownRequest;
+import org.apache.fluss.rpc.messages.GetKvSnapshotMetadataRequest;
 import org.apache.fluss.rpc.messages.InitWriterRequest;
 import org.apache.fluss.rpc.messages.InitWriterResponse;
 import org.apache.fluss.rpc.messages.MetadataRequest;
@@ -60,13 +66,18 @@ import org.apache.fluss.security.acl.PermissionType;
 import org.apache.fluss.security.acl.Resource;
 import org.apache.fluss.security.acl.ResourceFilter;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
+import org.apache.fluss.server.zk.ZooKeeperClient;
+import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.shaded.guava32.com.google.common.collect.Lists;
 import org.apache.fluss.utils.CloseableIterator;
 
+import org.assertj.core.api.ThrowableAssert;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.time.Duration;
 import java.util.Arrays;
@@ -77,8 +88,10 @@ import java.util.concurrent.ExecutionException;
 
 import static org.apache.fluss.config.ConfigOptions.DATALAKE_FORMAT;
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
+import static org.apache.fluss.record.TestData.DATA1_SCHEMA_PK;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR_PK;
+import static org.apache.fluss.record.TestData.DATA1_TABLE_INFO_PK;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH_PK;
 import static org.apache.fluss.security.acl.AccessControlEntry.WILD_CARD_HOST;
@@ -390,10 +403,26 @@ public class FlussAuthorizationITCase {
     }
 
     @Test
-    void testListTables() throws Exception {
+    void testDescribeTableOperation() throws Exception {
+        // test describe table operations like:
+        // 1. listTables
+        // 2. getTableInfo
+        // 3. getTableSchema
+        // 4. getLatestKvSnapshots
+        // 5. listPartitionInfos
+        // 6. getLatestLakeSnapshot
+
+        // first check call these methods without authorization.
         assertThat(guestAdmin.listTables(DATA1_TABLE_PATH_PK.getDatabaseName()).get())
                 .isEqualTo(Collections.emptyList());
+        assertNoTableDescribeAuth(() -> guestAdmin.getTableInfo(DATA1_TABLE_PATH_PK).get());
+        assertNoTableDescribeAuth(() -> guestAdmin.getTableSchema(DATA1_TABLE_PATH_PK).get());
+        assertNoTableDescribeAuth(() -> guestAdmin.getLatestKvSnapshots(DATA1_TABLE_PATH_PK).get());
+        assertNoTableDescribeAuth(() -> guestAdmin.listPartitionInfos(DATA1_TABLE_PATH_PK).get());
+        assertNoTableDescribeAuth(
+                () -> guestAdmin.getLatestLakeSnapshot(DATA1_TABLE_PATH_PK).get());
 
+        // add acl to allow guest describe table resource
         List<AclBinding> aclBindings =
                 Collections.singletonList(
                         new AclBinding(
@@ -405,8 +434,70 @@ public class FlussAuthorizationITCase {
                                         PermissionType.ALLOW)));
         rootAdmin.createAcls(aclBindings).all().get();
         FLUSS_CLUSTER_EXTENSION.waitUntilAuthenticationSync(aclBindings, true);
+
+        // check call these methods with authorization.
         assertThat(guestAdmin.listTables(DATA1_TABLE_PATH_PK.getDatabaseName()).get())
                 .isEqualTo(Collections.singletonList(DATA1_TABLE_PATH_PK.getTableName()));
+        assertThat(guestAdmin.getTableInfo(DATA1_TABLE_PATH_PK).get().getTablePath())
+                .isEqualTo(DATA1_TABLE_INFO_PK.getTablePath());
+        assertThat(guestAdmin.getTableSchema(DATA1_TABLE_PATH_PK).get().getSchema())
+                .isEqualTo(DATA1_SCHEMA_PK);
+        assertThat(guestAdmin.tableExists(DATA1_TABLE_PATH_PK).get()).isTrue();
+        assertThat(guestAdmin.getLatestKvSnapshots(DATA1_TABLE_PATH_PK).get().getBucketIds())
+                .containsExactlyInAnyOrder(0, 1, 2);
+        assertThatThrownBy(() -> guestAdmin.listPartitionInfos(DATA1_TABLE_PATH_PK).get())
+                .rootCause()
+                .isInstanceOf(TableNotPartitionedException.class)
+                .hasMessageContaining(
+                        "Table 'test_db_1.test_pk_table_1' is not a partitioned table.");
+        assertThatThrownBy(() -> guestAdmin.getLatestLakeSnapshot(DATA1_TABLE_PATH_PK).get())
+                .rootCause()
+                .isInstanceOf(LakeTableSnapshotNotExistException.class)
+                .hasMessageContaining("Lake table snapshot not exist for table");
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"CoordinatorServer", "TabletServer"})
+    void testGetKvSnapshotMetadata(String serverType) throws Exception {
+        AdminReadOnlyGateway readOnlyGateway;
+        if (serverType.equals("CoordinatorServer")) {
+            readOnlyGateway = ((FlussAdmin) guestAdmin).getAdminGateway();
+        } else {
+            readOnlyGateway = ((FlussAdmin) guestAdmin).getAdminReadOnlyGateway();
+        }
+
+        ZooKeeperClient zooKeeperClient = FLUSS_CLUSTER_EXTENSION.getZooKeeperClient();
+        TableRegistration tableRegistration = zooKeeperClient.getTable(DATA1_TABLE_PATH_PK).get();
+        long tableId = tableRegistration.tableId;
+        FLUSS_CLUSTER_EXTENSION.waitUntilTableReady(tableId);
+
+        GetKvSnapshotMetadataRequest request = new GetKvSnapshotMetadataRequest();
+        request.setTableId(tableId).setBucketId(0).setSnapshotId(0);
+        // Make sure all tabletServer has ready replica and ready metadata for the table.
+        FLUSS_CLUSTER_EXTENSION.waitUntilAllReplicaReady(new TableBucket(tableId, 0));
+
+        // call getKvSnapshotMetadata without authorization.
+        assertNoTableDescribeAuth(() -> readOnlyGateway.getKvSnapshotMetadata(request).get());
+
+        // add acl to allow guest describe table resource
+        List<AclBinding> aclBindings =
+                Collections.singletonList(
+                        new AclBinding(
+                                Resource.database(DATA1_TABLE_PATH_PK.getDatabaseName()),
+                                new AccessControlEntry(
+                                        guestPrincipal,
+                                        "*",
+                                        OperationType.DESCRIBE,
+                                        PermissionType.ALLOW)));
+        rootAdmin.createAcls(aclBindings).all().get();
+        FLUSS_CLUSTER_EXTENSION.waitUntilAuthenticationSync(aclBindings, true);
+
+        // call getKvSnapshotMetadata with authorization. no authorization exception should be
+        // thrown.
+        assertThatThrownBy(() -> readOnlyGateway.getKvSnapshotMetadata(request).get())
+                .rootCause()
+                .isInstanceOf(KvSnapshotNotExistException.class)
+                .hasMessageContaining("Failed to get kv snapshot metadata for table bucket");
     }
 
     @Test
@@ -572,9 +663,9 @@ public class FlussAuthorizationITCase {
                     .rootCause()
                     .hasMessageContaining(
                             String.format(
-                                    "No permission to WRITE table %s in database %s",
-                                    noWriteAclTable.getTableName(),
-                                    noWriteAclTable.getDatabaseName()));
+                                    "Principal FlussPrincipal{name='guest', type='User'} have no authorization to "
+                                            + "operate WRITE on resource Resource{type=TABLE, name='%s'} ",
+                                    noWriteAclTable));
         }
     }
 
@@ -609,10 +700,9 @@ public class FlussAuthorizationITCase {
                 assertThatThrownBy(() -> batchScanner.pollBatch(Duration.ofMinutes(1)))
                         .hasMessageContaining(
                                 String.format(
-                                        "No permission to %s table %s in database %s",
-                                        READ,
-                                        DATA1_TABLE_PATH.getTableName(),
-                                        DATA1_TABLE_PATH.getDatabaseName()));
+                                        "Principal FlussPrincipal{name='guest', type='User'} have no authorization to "
+                                                + "operate %s on resource Resource{type=TABLE, name='%s'}",
+                                        READ, DATA1_TABLE_PATH));
             }
             rootAdmin
                     .createAcls(
@@ -954,5 +1044,14 @@ public class FlussAuthorizationITCase {
         conf.set(ConfigOptions.SUPER_USERS, "User:root");
         conf.set(ConfigOptions.AUTHORIZER_ENABLED, true);
         return conf;
+    }
+
+    private void assertNoTableDescribeAuth(ThrowableAssert.ThrowingCallable callable) {
+        assertThatThrownBy(callable)
+                .cause()
+                .isInstanceOf(AuthorizationException.class)
+                .hasMessageContaining(
+                        "Principal FlussPrincipal{name='guest', type='User'} have no authorization to "
+                                + "operate DESCRIBE on resource Resource{type=TABLE, name='test_db_1.test_pk_table_1'}");
     }
 }

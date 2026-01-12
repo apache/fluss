@@ -386,7 +386,8 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
         return response;
     }
 
-    private void authorizeTable(OperationType operationType, long tableId) {
+    @Override
+    public void authorizeTable(OperationType operationType, long tableId) {
         if (authorizer != null) {
             TablePath tablePath = metadataCache.getTablePath(tableId).orElse(null);
             if (tablePath == null) {
@@ -396,15 +397,7 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
                                         + "metadata cache in the server is not updated yet.",
                                 serviceName, tableId));
             }
-            if (!authorizer.isAuthorized(
-                    currentSession(), operationType, Resource.table(tablePath))) {
-                throw new AuthorizationException(
-                        String.format(
-                                "No permission to %s table %s in database %s",
-                                operationType,
-                                tablePath.getTableName(),
-                                tablePath.getDatabaseName()));
-            }
+            authorizeTable(operationType, tablePath);
         }
     }
 

@@ -17,6 +17,7 @@
 
 package org.apache.fluss.client.admin;
 
+import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.client.metadata.KvSnapshotMetadata;
 import org.apache.fluss.client.metadata.KvSnapshots;
 import org.apache.fluss.client.metadata.LakeSnapshot;
@@ -648,5 +649,15 @@ public class FlussAdmin implements Admin {
                                         });
                     }
                 });
+    }
+
+    @VisibleForTesting
+    public AdminGateway getAdminGateway() {
+        return gateway;
+    }
+
+    @VisibleForTesting
+    public AdminReadOnlyGateway getAdminReadOnlyGateway() {
+        return readOnlyGateway;
     }
 }
