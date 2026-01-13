@@ -352,7 +352,7 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
         // Verify projection pushdown in the execution plan
         assertThat(tEnv.explainSql(query))
                 .contains(
-                        "TableSourceScan(table=[[testcatalog, defaultdb, complex_type_projection_test, project=[a, c, d, f]]]");
+                        "TableSourceScan(table=[[testcatalog, defaultdb, complex_type_projection_test, project=[a, c, d, f]]], fields=[a, c, d, f])");
 
         CloseableIterator<Row> rowIter = tEnv.executeSql(query).collect();
         List<String> expected =
@@ -386,7 +386,7 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
 
         assertThat(tEnv.explainSql(query))
                 .contains(
-                        "TableSourceScan(table=[[testcatalog, defaultdb, array_projection_test, project=[id, int_array, string_array]]]");
+                        "TableSourceScan(table=[[testcatalog, defaultdb, array_projection_test, project=[id, int_array, string_array]]], fields=[id, int_array, string_array])");
 
         CloseableIterator<Row> rowIter = tEnv.executeSql(query).collect();
         List<String> expected =
@@ -420,7 +420,7 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
 
         assertThat(tEnv.explainSql(query))
                 .contains(
-                        "TableSourceScan(table=[[testcatalog, defaultdb, map_projection_test, project=[id, map1, map2]]]");
+                        "TableSourceScan(table=[[testcatalog, defaultdb, map_projection_test, project=[id, map1, map2]]], fields=[id, map1, map2])");
 
         CloseableIterator<Row> rowIter = tEnv.executeSql(query).collect();
         List<String> expected =
@@ -454,7 +454,7 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
 
         assertThat(tEnv.explainSql(query))
                 .contains(
-                        "TableSourceScan(table=[[testcatalog, defaultdb, row_projection_test, project=[id, simple_row, nested_row]]]");
+                        "TableSourceScan(table=[[testcatalog, defaultdb, row_projection_test, project=[id, simple_row, nested_row]]], fields=[id, simple_row, nested_row])");
 
         CloseableIterator<Row> rowIter = tEnv.executeSql(query).collect();
         List<String> expected =
@@ -490,7 +490,7 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
 
         assertThat(tEnv.explainSql(query))
                 .contains(
-                        "TableSourceScan(table=[[testcatalog, defaultdb, null_complex_test, project=[id, arr, mp, rw]]]");
+                        "TableSourceScan(table=[[testcatalog, defaultdb, null_complex_test, project=[id, arr, mp, rw]]], fields=[id, arr, mp, rw])");
 
         CloseableIterator<Row> rowIter = tEnv.executeSql(query).collect();
         List<String> expected =
@@ -532,7 +532,7 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
         assertThat(tEnv.explainSql(query))
                 .contains(
                         String.format(
-                                "TableSourceScan(table=[[testcatalog, defaultdb, %s, project=[id, tags, address]]]",
+                                "TableSourceScan(table=[[testcatalog, defaultdb, %s, project=[id, tags, address]]], fields=[id, tags, address])",
                                 tableName));
 
         CloseableIterator<Row> rowIter = tEnv.executeSql(query).collect();
