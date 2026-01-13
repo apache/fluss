@@ -20,6 +20,7 @@ package org.apache.fluss.server.zk.data;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.TableConfig;
+import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableDescriptor;
@@ -52,6 +53,7 @@ public class TableRegistration {
     public final int bucketCount;
     public final Map<String, String> properties;
     public final Map<String, String> customProperties;
+    public final @Nullable FsPath remoteDataDir;
     public final long createdTime;
     public final long modifiedTime;
 
@@ -62,6 +64,7 @@ public class TableRegistration {
             TableDistribution tableDistribution,
             Map<String, String> properties,
             Map<String, String> customProperties,
+            @Nullable FsPath remoteDataDir,
             long createdTime,
             long modifiedTime) {
         checkArgument(
@@ -74,6 +77,7 @@ public class TableRegistration {
         this.bucketKeys = tableDistribution.getBucketKeys();
         this.properties = properties;
         this.customProperties = customProperties;
+        this.remoteDataDir = remoteDataDir;
         this.createdTime = createdTime;
         this.modifiedTime = modifiedTime;
     }
@@ -116,7 +120,8 @@ public class TableRegistration {
                 this.modifiedTime);
     }
 
-    public static TableRegistration newTable(long tableId, TableDescriptor tableDescriptor) {
+    public static TableRegistration newTable(
+            long tableId, @Nullable FsPath remoteDataDir, TableDescriptor tableDescriptor) {
         checkArgument(
                 tableDescriptor.getTableDistribution().isPresent(),
                 "Table distribution is required for table registration.");
@@ -128,6 +133,7 @@ public class TableRegistration {
                 tableDescriptor.getTableDistribution().get(),
                 tableDescriptor.getProperties(),
                 tableDescriptor.getCustomProperties(),
+                remoteDataDir,
                 currentMillis,
                 currentMillis);
     }
@@ -142,6 +148,7 @@ public class TableRegistration {
                 new TableDistribution(bucketCount, bucketKeys),
                 newProperties,
                 newCustomProperties,
+                remoteDataDir,
                 createdTime,
                 currentMillis);
     }

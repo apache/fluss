@@ -97,6 +97,7 @@ class LakeTableHelperTest {
                                     1, Collections.singletonList("a")),
                             Collections.emptyMap(),
                             Collections.emptyMap(),
+                            null,
                             System.currentTimeMillis(),
                             System.currentTimeMillis());
             zookeeperClient.registerTable(tablePath, tableReg);
