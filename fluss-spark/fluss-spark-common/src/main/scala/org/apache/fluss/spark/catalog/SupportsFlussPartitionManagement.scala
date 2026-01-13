@@ -117,9 +117,7 @@ object SupportsFlussPartitionManagement {
 
   private def toPartitionSpec(row: InternalRow, partitionSchema: StructType): PartitionSpec = {
     val map = partitionSchema.fields.zipWithIndex.map {
-      e =>
-        val field = e._1
-        val idx = e._2
+      case (field, idx) =>
         (field.name, row.get(idx, field.dataType).toString)
     }.toMap
     new PartitionSpec(map.asJava)

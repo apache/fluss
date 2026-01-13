@@ -20,7 +20,8 @@ package org.apache.fluss.spark
 import org.apache.fluss.metadata._
 import org.apache.fluss.types.{DataTypes, RowType}
 
-import org.apache.spark.sql.Row
+import org.apache.spark.sql.{AnalysisException, Row}
+import org.apache.spark.sql.catalyst.analysis.PartitionsAlreadyExistException
 import org.apache.spark.sql.connector.catalog.Identifier
 import org.assertj.core.api.Assertions.{assertThat, assertThatList}
 
@@ -191,7 +192,7 @@ class SparkCatalogTest extends FlussSparkTestBase {
     checkAnswer(sql("SHOW DATABASES"), Row(DEFAULT_DATABASE) :: Nil)
   }
 
-  test("show partitions") {
+  test("Partition: show partitions") {
     withTable("t") {
       sql(s"CREATE TABLE t (id int, name string, pt1 string, pt2 int) PARTITIONED BY (pt1, pt2)")
       sql(s"INSERT INTO t values(1, 'a', 'a', 1), (2, 'b', 'a', 2), (3, 'c', 'c', 3)")
@@ -203,7 +204,7 @@ class SparkCatalogTest extends FlussSparkTestBase {
     }
   }
 
-  test("add partition") {
+  test("Partition: add partition") {
     withTable("t") {
       sql("CREATE TABLE t (id int, name string, pt1 string, pt2 int) PARTITIONED BY (pt1, pt2)")
 
@@ -219,10 +220,15 @@ class SparkCatalogTest extends FlussSparkTestBase {
       admin.createPartition(createTablePath("t"), new PartitionSpec(map.asJava), false).get()
       expect = Seq(Row("pt1=b/pt2=1"), Row("pt1=b/pt2=2"))
       checkAnswer(sql(s"SHOW PARTITIONS t"), expect)
+
+      intercept[AnalysisException](sql(s"ALTER TABLE t ADD PARTITION (pt1 = 'b', pt2 = 1)"))
+      intercept[AnalysisException](sql(s"ALTER TABLE t ADD PARTITION (pt1 = 'b', pt3 = 1)"))
+      intercept[PartitionsAlreadyExistException](
+        sql(s"ALTER TABLE t ADD PARTITION (pt1 = 'b', pt2 = 1)"))
     }
   }
 
-  test("drop partition") {
+  test("Partition: drop partition") {
     withTable("t") {
       sql("CREATE TABLE t (id int, name string, pt1 string, pt2 int) PARTITIONED BY (pt1, pt2)")
       sql(s"INSERT INTO t values(1, 'a', 'a', 1), (2, 'b', 'a', 2), (3, 'c', 'c', 3)")
@@ -239,6 +245,9 @@ class SparkCatalogTest extends FlussSparkTestBase {
       admin.dropPartition(createTablePath("t"), new PartitionSpec(map.asJava), false).get()
       expect = Seq(Row("pt1=a/pt2=1"))
       checkAnswer(sql(s"SHOW PARTITIONS t"), expect)
+
+      // spark does not support drop partial partition
+      intercept[AnalysisException](sql(s"ALTER TABLE t DROP PARTITION (pt1 = 'a')"))
     }
   }
 }
