@@ -21,6 +21,7 @@ import org.apache.fluss.config.Configuration
 import org.apache.fluss.metadata.TablePath
 
 import org.apache.spark.sql.connector.write.{BatchWrite, Write}
+import org.apache.spark.sql.connector.write.streaming.StreamingWrite
 import org.apache.spark.sql.types.StructType
 
 /** An interface that extends from Spark [[Write]]. */
@@ -35,6 +36,8 @@ case class FlussAppendWrite(
 
   override def toBatch: BatchWrite = new FlussAppendBatchWrite(tablePath, dataSchema, flussConfig)
 
+  override def toStreaming: StreamingWrite =
+    new FlussAppendStreamingWrite(tablePath, dataSchema, flussConfig)
 }
 
 /** Fluss Upsert Write. */
@@ -46,4 +49,6 @@ case class FlussUpsertWrite(
 
   override def toBatch: BatchWrite = FlussUpsertBatchWrite(tablePath, dataSchema, flussConfig)
 
+  override def toStreaming: StreamingWrite =
+    FlussUpsertStreamingWrite(tablePath, dataSchema, flussConfig)
 }
