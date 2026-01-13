@@ -39,6 +39,7 @@ import org.apache.fluss.utils.types.Tuple2;
 
 import org.apache.flink.core.execution.JobClient;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
+import org.apache.flink.table.api.bridge.java.StreamTableEnvironment;
 import org.apache.paimon.catalog.Catalog;
 import org.apache.paimon.catalog.Identifier;
 import org.apache.paimon.reader.RecordReader;
@@ -67,6 +68,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.stream.Stream;
 
+import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.collectRowsWithTimeout;
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -83,6 +85,7 @@ class PaimonTieringITCase extends FlinkPaimonTieringTestBase {
     protected static final String DEFAULT_DB = "fluss";
 
     private static StreamExecutionEnvironment execEnv;
+    private static StreamTableEnvironment tEnv;
     private static Catalog paimonCatalog;
 
     @BeforeAll
@@ -92,6 +95,19 @@ class PaimonTieringITCase extends FlinkPaimonTieringTestBase {
         execEnv = StreamExecutionEnvironment.getExecutionEnvironment();
         execEnv.setParallelism(2);
         execEnv.enableCheckpointing(1000);
+
+        tEnv = StreamTableEnvironment.create(execEnv);
+        String catalogName = "fluss_catalog";
+
+        tEnv.executeSql(
+                String.format(
+                        "CREATE CATALOG %s WITH ('type'='fluss', 'bootstrap.servers'='%s')",
+                        catalogName, FLUSS_CLUSTER_EXTENSION.getBootstrapServers()));
+        tEnv.executeSql("USE CATALOG " + catalogName);
+
+        tEnv.executeSql("CREATE DATABASE IF NOT EXISTS " + DEFAULT_DB);
+        tEnv.useDatabase(DEFAULT_DB);
+
         paimonCatalog = getPaimonCatalog();
     }
 
@@ -612,6 +628,53 @@ class PaimonTieringITCase extends FlinkPaimonTieringTestBase {
             expectedRows.add(row(6, "v6", 60));
 
             checkDataInPaimonAppendOnlyTable(tablePath, expectedRows, 0);
+
+        } finally {
+            jobClient.cancel().get();
+        }
+    }
+
+    @Test
+    void testUnionReadWithAddColumn() throws Exception {
+        // 1. Create a table with initial schema
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "unionReadAddColumnTable");
+        long tableId = createLogTable(tablePath);
+        TableBucket tableBucket = new TableBucket(tableId, 0);
+
+        // 2. Write initial data and start tiering job
+        List<InternalRow> initialRows = Arrays.asList(row(1, "v1"), row(2, "v2"));
+        writeRows(tablePath, initialRows, true);
+        JobClient jobClient = buildTieringJob(execEnv);
+
+        try {
+            // 3.  Wait for initial data to be tiered to Paimon
+            assertReplicaStatus(tableBucket, 2);
+
+            // 4. Add new column "c3"
+            List<TableChange> addColumnChanges =
+                    Collections.singletonList(
+                            TableChange.addColumn(
+                                    "c3",
+                                    DataTypes.INT(),
+                                    "new column",
+                                    TableChange.ColumnPosition.last()));
+            admin.alterTable(tablePath, addColumnChanges, false).get();
+
+            // 5.  Write new data after schema change
+            List<InternalRow> newRows = Collections.singletonList(row(3, "v3", 30));
+            writeRows(tablePath, newRows, true);
+
+            // 6. Perform union reads via Flink SQL
+            org.apache.flink.util.CloseableIterator<org.apache.flink.types.Row> iterator =
+                    tEnv.executeSql("SELECT * FROM " + tablePath.getTableName()).collect();
+
+            int expectedRowCount = 3;
+            List<String> actualRows = collectRowsWithTimeout(iterator, expectedRowCount, true);
+
+            // 7. Verify union read correctly handles schema evolution
+            assertThat(actualRows)
+                    .containsExactlyInAnyOrder(
+                            "+I[1, v1, null]", "+I[2, v2, null]", "+I[3, v3, 30]");
 
         } finally {
             jobClient.cancel().get();
