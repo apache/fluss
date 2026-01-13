@@ -21,7 +21,7 @@ import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.annotation.VisibleForTesting;
 
 import java.lang.reflect.Field;
-import java.util.Collections;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -42,7 +42,9 @@ public class FlussConfigUtils {
         TABLE_OPTIONS = extractConfigOptions("table.");
         CLIENT_OPTIONS = extractConfigOptions("client.");
         ALTERABLE_TABLE_OPTIONS =
-                Collections.singletonList(ConfigOptions.TABLE_DATALAKE_ENABLED.key());
+                Arrays.asList(
+                        ConfigOptions.TABLE_DATALAKE_ENABLED.key(),
+                        ConfigOptions.TABLE_DATALAKE_FRESHNESS.key());
     }
 
     public static boolean isTableStorageConfig(String key) {
