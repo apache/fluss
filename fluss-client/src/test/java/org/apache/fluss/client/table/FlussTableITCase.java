@@ -19,6 +19,7 @@ package org.apache.fluss.client.table;
 
 import org.apache.fluss.client.Connection;
 import org.apache.fluss.client.ConnectionFactory;
+import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.client.admin.ClientToServerITCaseBase;
 import org.apache.fluss.client.lookup.LookupResult;
 import org.apache.fluss.client.lookup.Lookuper;
@@ -35,6 +36,7 @@ import org.apache.fluss.config.MemorySize;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.fs.TestFileSystem;
 import org.apache.fluss.metadata.DataLakeFormat;
+import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.MergeEngineType;
@@ -49,6 +51,7 @@ import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.indexed.IndexedRow;
+import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.types.BigIntType;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
@@ -71,6 +74,7 @@ import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
 import static org.apache.fluss.client.table.scanner.batch.BatchScanUtils.collectRows;
+import static org.apache.fluss.record.LogRecordBatchFormat.V0_RECORD_BATCH_HEADER_SIZE;
 import static org.apache.fluss.record.TestData.DATA1_ROW_TYPE;
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA_PK;
@@ -1160,6 +1164,26 @@ class FlussTableITCase extends ClientToServerITCaseBase {
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
     void testFirstRowMergeEngine(boolean doProjection) throws Exception {
+        Configuration conf = initConfig();
+        // To better mock the issue https://github.com/apache/fluss/issues/2369:
+        // 1. disable remote log task so that won't read remote log.
+        // 2. Set LOG_SEGMENT_FILE_SIZE to make sure one segment before last segment is contain
+        // empty batch at the end.
+        //  In this way, if skip empty batch, the read will in stuck forever.
+        conf.set(ConfigOptions.REMOTE_LOG_TASK_INTERVAL_DURATION, Duration.ZERO);
+        conf.set(
+                ConfigOptions.LOG_SEGMENT_FILE_SIZE,
+                new MemorySize(5 * V0_RECORD_BATCH_HEADER_SIZE));
+        conf.set(
+                ConfigOptions.CLIENT_SCANNER_LOG_FETCH_MAX_BYTES_FOR_BUCKET,
+                new MemorySize(5 * V0_RECORD_BATCH_HEADER_SIZE));
+        final FlussClusterExtension flussClusterExtension =
+                FlussClusterExtension.builder()
+                        .setNumOfTabletServers(3)
+                        .setClusterConf(conf)
+                        .build();
+        flussClusterExtension.start();
+
         TableDescriptor tableDescriptor =
                 TableDescriptor.builder()
                         .schema(DATA1_SCHEMA_PK)
@@ -1171,13 +1195,22 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                         "test_first_row_merge_engine_with_%s",
                         doProjection ? "projection" : "no_projection");
         TablePath tablePath = TablePath.of("test_db_1", tableName);
-        createTable(tablePath, tableDescriptor, false);
 
         int rows = 5;
         int duplicateNum = 10;
         int batchSize = 3;
         int count = 0;
-        try (Table table = conn.getTable(tablePath)) {
+        // Case1: Test normal update to generator not empty cdc logs.
+        Table table = null;
+        LogScanner logScanner = null;
+        try (Connection connection =
+                        ConnectionFactory.createConnection(
+                                flussClusterExtension.getClientConfig());
+                Admin admin = connection.getAdmin()) {
+            admin.createDatabase(tablePath.getDatabaseName(), DatabaseDescriptor.EMPTY, false)
+                    .get();
+            admin.createTable(tablePath, tableDescriptor, false).get();
+            table = connection.getTable(tablePath);
             // first, put rows
             UpsertWriter upsertWriter = table.newUpsert().createWriter();
             List<InternalRow> expectedScanRows = new ArrayList<>(rows);
@@ -1208,7 +1241,7 @@ class FlussTableITCase extends ClientToServerITCaseBase {
             if (doProjection) {
                 scan = scan.project(new int[] {0}); // do projection.
             }
-            LogScanner logScanner = scan.createLogScanner();
+            logScanner = scan.createLogScanner();
 
             logScanner.subscribeFromBeginning(0);
             List<ScanRecord> actualLogRecords = new ArrayList<>(0);
@@ -1216,7 +1249,6 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                 ScanRecords scanRecords = logScanner.poll(Duration.ofSeconds(1));
                 scanRecords.forEach(actualLogRecords::add);
             }
-            logScanner.close();
             assertThat(actualLogRecords).hasSize(rows);
             for (int i = 0; i < actualLogRecords.size(); i++) {
                 ScanRecord scanRecord = actualLogRecords.get(i);
@@ -1225,6 +1257,38 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                         .withSchema(doProjection ? rowType.project(new int[] {0}) : rowType)
                         .isEqualTo(expectedScanRows.get(i));
             }
+
+            // Case2: Test all the update in the write batch are duplicate(Thus generate empty cdc
+            // logs).
+            // insert duplicate rows again to generate empty cdc log.
+            for (int num = 0; num < duplicateNum; num++) {
+                upsertWriter.upsert(row(0, "value_" + num));
+                upsertWriter.flush();
+            }
+
+            // insert a new row.
+            upsertWriter.upsert(row(rows + 1, "new_value"));
+
+            actualLogRecords = new ArrayList<>(0);
+            while (actualLogRecords.isEmpty()) {
+                ScanRecords scanRecords = logScanner.poll(Duration.ofSeconds(1));
+                scanRecords.forEach(actualLogRecords::add);
+            }
+            logScanner.close();
+            assertThat(actualLogRecords).hasSize(1);
+            ScanRecord scanRecord = actualLogRecords.get(0);
+            assertThat(scanRecord.getChangeType()).isEqualTo(ChangeType.INSERT);
+            assertThatRow(scanRecord.getRow())
+                    .withSchema(doProjection ? rowType.project(new int[] {0}) : rowType)
+                    .isEqualTo(doProjection ? row(rows + 1) : row(rows + 1, "new_value"));
+        } finally {
+            if (logScanner != null) {
+                logScanner.close();
+            }
+            if (table != null) {
+                table.close();
+            }
+            flussClusterExtension.close();
         }
     }
 

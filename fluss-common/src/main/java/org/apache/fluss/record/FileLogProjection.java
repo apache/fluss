@@ -140,7 +140,7 @@ public class FileLogProjection {
         // So we use V0 header size here for a conservative judgment. In the end, the condition
         // of (position >= end - recordBatchHeaderSize) will ensure the final correctness.
         while (maxBytes > V0_RECORD_BATCH_HEADER_SIZE) {
-            if (position >= end - V0_RECORD_BATCH_HEADER_SIZE) {
+            if (position > end - V0_RECORD_BATCH_HEADER_SIZE) {
                 // the remaining bytes in the file are not enough to read a batch header up to
                 // magic.
                 return new BytesViewLogRecords(builder.build());
@@ -166,10 +166,12 @@ public class FileLogProjection {
                 return new BytesViewLogRecords(builder.build());
             }
 
-            // Skip empty batch. The empty batch was generated when build cdc log batch when there
+            // Return empty batch to push forward log offset. The empty batch was generated when
+            // build cdc log batch when there
             // is no cdc log generated for this kv batch. See the comments about the field
             // 'lastOffsetDelta' in DefaultLogRecordBatch.
             if (batchSizeInBytes == recordBatchHeaderSize) {
+                builder.addBytes(channel, position, batchSizeInBytes);
                 position += batchSizeInBytes;
                 continue;
             }
