@@ -1,0 +1,145 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
+ *
+ *    http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package org.apache.fluss.spark.lake.paimon
+
+import org.apache.fluss.client.{Connection, ConnectionFactory}
+import org.apache.fluss.client.admin.Admin
+import org.apache.fluss.config.{ConfigOptions, Configuration}
+import org.apache.fluss.exception.FlussRuntimeException
+import org.apache.fluss.flink.tiering.LakeTieringJobBuilder
+import org.apache.fluss.flink.tiering.source.TieringSourceOptions.POLL_TIERING_TABLE_INTERVAL
+import org.apache.fluss.metadata.DataLakeFormat
+import org.apache.fluss.server.testutils.FlussClusterExtension
+import org.apache.fluss.server.utils.LakeStorageUtils.extractLakeProperties
+import org.apache.fluss.spark.SparkCatalog
+
+import org.apache.flink.api.common.RuntimeExecutionMode
+import org.apache.flink.core.execution.JobClient
+import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment
+import org.apache.paimon.catalog.{Catalog, CatalogContext, CatalogFactory}
+import org.apache.paimon.options.Options
+import org.apache.spark.sql.QueryTest
+import org.apache.spark.sql.test.SharedSparkSession
+
+import java.nio.file.Files
+import java.time.Duration
+import java.util
+
+class SparkLakePaimonTestBase extends QueryTest with SharedSparkSession {
+
+  protected val DEFAULT_CATALOG = "fluss_catalog"
+  protected val DEFAULT_DATABASE = "fluss"
+
+  protected var conn: Connection = _
+  protected var admin: Admin = _
+
+  private var execEnv: StreamExecutionEnvironment = _
+
+  val flussServer: FlussClusterExtension =
+    FlussClusterExtension.builder
+      .setClusterConf(flussConf)
+      .setNumOfTabletServers(3)
+      .build
+
+  protected var paimonCatalog: Catalog = _
+  protected var warehousePath: String = _
+
+  protected def flussConf: Configuration = {
+    val conf = new Configuration
+    conf
+      .set(ConfigOptions.KV_SNAPSHOT_INTERVAL, Duration.ofSeconds(1))
+    conf.setInt(ConfigOptions.KV_MAX_RETAINED_SNAPSHOTS, Integer.MAX_VALUE)
+    conf.setString("datalake.format", "paimon")
+    conf.setString("datalake.paimon.metastore", "filesystem")
+    conf.setString("datalake.paimon.cache-enabled", "false")
+    try {
+      warehousePath =
+        Files.createTempDirectory("fluss-testing-datalake-tiered").resolve("warehouse").toString
+    } catch {
+      case e: Exception =>
+        throw new FlussRuntimeException("Failed to create warehouse path")
+    }
+    conf.setString("datalake.paimon.warehouse", warehousePath)
+    paimonCatalog = CatalogFactory.createCatalog(
+      CatalogContext.create(Options.fromMap(extractLakeProperties(conf))))
+    conf
+  }
+
+  override protected def beforeAll(): Unit = {
+    super.beforeAll()
+
+    flussServer.start()
+    conn = ConnectionFactory.createConnection(flussServer.getClientConfig)
+    admin = conn.getAdmin
+
+    spark.conf.set(s"spark.sql.catalog.$DEFAULT_CATALOG", classOf[SparkCatalog].getName)
+    spark.conf.set(
+      s"spark.sql.catalog.$DEFAULT_CATALOG.bootstrap.servers",
+      flussServer.getBootstrapServers)
+    spark.conf.set("spark.sql.defaultCatalog", DEFAULT_CATALOG)
+
+    sql(s"USE $DEFAULT_DATABASE")
+
+    execEnv = StreamExecutionEnvironment.getExecutionEnvironment
+    execEnv.setParallelism(2)
+    execEnv.enableCheckpointing(1000)
+  }
+
+  override protected def afterAll(): Unit = {
+    super.afterAll()
+
+    if (admin != null) {
+      admin.close()
+      admin = null
+    }
+    if (conn != null) {
+      conn.close()
+      conn = null
+    }
+    flussServer.close()
+  }
+
+  override protected def beforeEach(): Unit = {
+    super.beforeEach()
+
+    execEnv = StreamExecutionEnvironment.getExecutionEnvironment
+    execEnv.setRuntimeMode(RuntimeExecutionMode.STREAMING)
+    execEnv.setParallelism(2)
+    execEnv = StreamExecutionEnvironment.getExecutionEnvironment
+  }
+
+  protected def buildTieringJob(execEnv: StreamExecutionEnvironment): JobClient = {
+    val flussConfig = new Configuration(flussServer.getClientConfig)
+    flussConfig.set(POLL_TIERING_TABLE_INTERVAL, Duration.ofMillis(500L))
+    LakeTieringJobBuilder
+      .newBuilder(
+        execEnv,
+        flussConfig,
+        Configuration.fromMap(getPaimonCatalogConf),
+        new Configuration,
+        DataLakeFormat.PAIMON.toString)
+      .build
+  }
+
+  protected def getPaimonCatalogConf: util.Map[String, String] = {
+    val paimonConf = new util.HashMap[String, String]
+    paimonConf.put("metastore", "filesystem")
+    paimonConf.put("warehouse", warehousePath)
+    paimonConf
+  }
+}
