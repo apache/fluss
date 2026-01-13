@@ -54,7 +54,7 @@ INSERT INTO pk_table2 /*+ OPTIONS('sink.ignore-delete'='true') */ select * from 
 Using `ALTER TABLE ... SET` statement to modify the table options. For example, to enable lakehouse storage for an existing table, you can run the following SQL command:
 
 ```sql
-ALTER TABLE log_table SET ('table.datalake.enable' = 'true');
+ALTER TABLE log_table SET ('table.datalake.enabled' = 'true');
 ```
 
 See more details about [ALTER TABLE ... SET](engine-flink/ddl.md#set-properties) and [ALTER TABLE ... RESET](engine-flink/ddl.md#reset-properties) documentation.
