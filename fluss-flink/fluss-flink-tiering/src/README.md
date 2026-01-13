@@ -18,7 +18,9 @@
 
 # Fluss Flink Tiering
 
-This module contains one class FlussLakeTiering.
+This module provides the infrastructure for tiering Fluss data to lake formats (e.g., Apache Paimon),
+consisting of FlussLakeTiering which encapsulates the core configuration and job graph logic,
+and FlussLakeTieringEntrypoint which serves as the official Flink job main class and entrypoint.
 
 The reason for extracting it as a separate module is that: When executing the Flink jar job, a jar must be specified.
 If a `fluss-flink.jar` is specified, it may cause various classloader issues, as there are also `fluss-flink.jar`
