@@ -123,21 +123,11 @@ class TableChangeWatcherTest {
                                 new TabletServerInfo(1, "rack1"),
                                 new TabletServerInfo(2, "rack2")
                             });
-            long tableId =
-                    metadataManager.createTable(tablePath, TEST_TABLE, tableAssignment, false);
+            metadataManager.createTable(tablePath, TEST_TABLE, tableAssignment, false);
             SchemaInfo schemaInfo = metadataManager.getLatestSchema(tablePath);
-            long currentMillis = System.currentTimeMillis();
+            TableInfo tableInfo = metadataManager.getTable(tablePath);
             expectedEvents.add(new SchemaChangeEvent(tablePath, schemaInfo));
-            expectedEvents.add(
-                    new CreateTableEvent(
-                            TableInfo.of(
-                                    tablePath,
-                                    tableId,
-                                    schemaInfo.getSchemaId(),
-                                    TEST_TABLE,
-                                    currentMillis,
-                                    currentMillis),
-                            tableAssignment));
+            expectedEvents.add(new CreateTableEvent(tableInfo, tableAssignment));
         }
 
         retry(
@@ -184,22 +174,13 @@ class TableChangeWatcherTest {
                         .property(ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT.key(), "DAY")
                         .build()
                         .withReplicationFactor(3);
-        long tableId = metadataManager.createTable(tablePath, partitionedTable, null, false);
+        metadataManager.createTable(tablePath, partitionedTable, null, false);
         List<CoordinatorEvent> expectedEvents = new ArrayList<>();
         SchemaInfo schemaInfo = metadataManager.getLatestSchema(tablePath);
-        // create table event
-        long currentMillis = System.currentTimeMillis();
+        TableInfo tableInfo = metadataManager.getTable(tablePath);
+        long tableId = tableInfo.getTableId();
         expectedEvents.add(new SchemaChangeEvent(tablePath, schemaInfo));
-        expectedEvents.add(
-                new CreateTableEvent(
-                        TableInfo.of(
-                                tablePath,
-                                tableId,
-                                schemaInfo.getSchemaId(),
-                                partitionedTable,
-                                currentMillis,
-                                currentMillis),
-                        TableAssignment.builder().build()));
+        expectedEvents.add(new CreateTableEvent(tableInfo, TableAssignment.builder().build()));
 
         // register partition
         PartitionAssignment partitionAssignment =
@@ -262,21 +243,11 @@ class TableChangeWatcherTest {
                                 new TabletServerInfo(1, "rack1"),
                                 new TabletServerInfo(2, "rack2")
                             });
-            long tableId =
-                    metadataManager.createTable(tablePath, TEST_TABLE, tableAssignment, false);
+            metadataManager.createTable(tablePath, TEST_TABLE, tableAssignment, false);
             SchemaInfo schemaInfo = metadataManager.getLatestSchema(tablePath);
-            long currentMillis = System.currentTimeMillis();
+            TableInfo tableInfo = metadataManager.getTable(tablePath);
             expectedEvents.add(new SchemaChangeEvent(tablePath, schemaInfo));
-            expectedEvents.add(
-                    new CreateTableEvent(
-                            TableInfo.of(
-                                    tablePath,
-                                    tableId,
-                                    schemaInfo.getSchemaId(),
-                                    TEST_TABLE,
-                                    currentMillis,
-                                    currentMillis),
-                            tableAssignment));
+            expectedEvents.add(new CreateTableEvent(tableInfo, tableAssignment));
         }
 
         retry(
