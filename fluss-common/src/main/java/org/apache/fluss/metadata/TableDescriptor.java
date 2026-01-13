@@ -150,6 +150,11 @@ public final class TableDescriptor implements Serializable {
                 .orElse(Collections.emptyList());
     }
 
+    public Optional<Integer> getBucketCount() {
+        return this.getTableDistribution()
+                .flatMap(TableDescriptor.TableDistribution::getBucketCount);
+    }
+
     /**
      * Check if the table is using a default bucket key. A default bucket key is:
      *
@@ -288,6 +293,29 @@ public final class TableDescriptor implements Serializable {
                                 .orElse(Collections.emptyList())),
                 properties,
                 customProperties);
+    }
+
+    /**
+     * Returns a new TableDescriptor instance that is a copy of this TableDescriptor with a new
+     * bucket count, new properties and new customProperties.
+     */
+    public TableDescriptor withBucketCountAndProperties(
+            @Nullable Integer newBucketCount,
+            Map<String, String> newProperties,
+            Map<String, String> newCustomProperties) {
+        return new TableDescriptor(
+                schema,
+                comment,
+                partitionKeys,
+                newBucketCount != null
+                        ? new TableDistribution(
+                                newBucketCount,
+                                Optional.ofNullable(tableDistribution)
+                                        .map(TableDistribution::getBucketKeys)
+                                        .orElse(Collections.emptyList()))
+                        : tableDistribution,
+                newProperties,
+                newCustomProperties);
     }
 
     public Optional<String> getComment() {

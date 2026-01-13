@@ -380,6 +380,24 @@ public final class ZkData {
             return TableIdsZNode.path() + "/" + tableId;
         }
 
+        /**
+         * Extracts the tableId from the given zookeeper path. If the given path is not a valid
+         * {@link TableIdZNode} path, returns null.
+         */
+        @Nullable
+        public static Long parsePath(String zkPath) {
+            String[] split = zkPath.split("/tables/");
+            if (split.length != 2) {
+                return null;
+            }
+
+            try {
+                return Long.parseLong(split[1]);
+            } catch (NumberFormatException e) {
+                return null;
+            }
+        }
+
         public static byte[] encode(TableAssignment tableAssignment) {
             return JsonSerdeUtils.writeValueAsBytes(
                     tableAssignment, TableAssignmentJsonSerde.INSTANCE);
@@ -400,6 +418,24 @@ public final class ZkData {
     public static final class PartitionIdZNode {
         public static String path(long partitionId) {
             return PartitionIdsZNode.path() + "/" + partitionId;
+        }
+
+        /**
+         * Extracts the partitionId from the given zookeeper path. If the given path is not a valid
+         * {@link PartitionIdZNode} path, returns null.
+         */
+        @Nullable
+        public static Long parsePath(String zkPath) {
+            String[] split = zkPath.split("/partitions/");
+            if (split.length != 2) {
+                return null;
+            }
+
+            try {
+                return Long.parseLong(split[1]);
+            } catch (NumberFormatException e) {
+                return null;
+            }
         }
 
         public static byte[] encode(PartitionAssignment tableAssignment) {

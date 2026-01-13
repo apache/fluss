@@ -34,6 +34,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Random;
 import java.util.Set;
+import java.util.stream.IntStream;
 
 /** Utils for the assignment of tables. */
 public class TableAssignmentUtils {
@@ -46,7 +47,8 @@ public class TableAssignmentUtils {
             int replicationFactor,
             TabletServerInfo[] servers,
             int startIndex,
-            int nextReplicaShift) {
+            int nextReplicaShift,
+            int startBucketId) {
         if (nBuckets <= 0) {
             throw new InvalidBucketsException("Number of buckets must be larger than 0.");
         }
@@ -68,14 +70,20 @@ public class TableAssignmentUtils {
                     replicationFactor,
                     Arrays.stream(servers).mapToInt(TabletServerInfo::getId).toArray(),
                     startIndex,
-                    nextReplicaShift);
+                    nextReplicaShift,
+                    startBucketId);
         } else {
             if (Arrays.stream(servers).anyMatch(tsInfo -> tsInfo.getRack() == null)) {
                 throw new InvalidServerRackInfoException(
                         "Not all tabletServers have rack information for replica rack aware assignment.");
             } else {
                 return generateRackAwareAssigment(
-                        nBuckets, replicationFactor, servers, startIndex, nextReplicaShift);
+                        nBuckets,
+                        replicationFactor,
+                        servers,
+                        startIndex,
+                        nextReplicaShift,
+                        startBucketId);
             }
         }
     }
@@ -162,14 +170,77 @@ public class TableAssignmentUtils {
      * replica distribution is even across tabletServers and racks.
      */
     public static TableAssignment generateAssignment(
-            int nBuckets, int replicationFactor, TabletServerInfo[] servers)
+            int nBuckets,
+            int replicationFactor,
+            TabletServerInfo[] servers,
+            int fixStartIndex,
+            int startBucketId)
             throws InvalidReplicationFactorException {
         return generateAssignment(
                 nBuckets,
                 replicationFactor,
                 servers,
+                fixStartIndex,
+                fixStartIndex >= 0 ? fixStartIndex : randomInt(servers.length),
+                startBucketId);
+    }
+
+    public static TableAssignment generateAssignment(
+            int nBuckets, int replicationFactor, TabletServerInfo[] servers)
+            throws InvalidBucketsException, InvalidReplicationFactorException {
+        return generateAssignment(
+                nBuckets,
+                replicationFactor,
+                servers,
                 randomInt(servers.length),
-                randomInt(servers.length));
+                randomInt(servers.length),
+                0);
+    }
+
+    /**
+     * Generate the assignment of new buckets for a table or partition when expanding the number of
+     * buckets.
+     *
+     * <p>This method is used when a table or partition needs to be scaled out by adding new
+     * buckets. It ensures that the assignment of new buckets follows the same distribution strategy
+     * as the existing buckets, maintaining consistency in replica placement across the cluster.
+     *
+     * @param newlyAddedBuckets the number of new buckets to assign (must be greater than 0)
+     * @param replicationFactor the replication factor for each bucket (must be greater than 0 and
+     *     not exceed the number of available servers)
+     * @param servers the array of available tablet servers for assignment
+     * @param existingAssignment the current table assignment, which must contain at least bucket 0
+     * @return a new {@link TableAssignment} containing only the assignments for the newly added
+     *     buckets, with bucket IDs starting from the current number of buckets
+     * @throws InvalidBucketsException if newlyAddedBuckets is less than or equal to 0, or if the
+     *     existing assignment is invalid (missing bucket 0)
+     * @throws InvalidReplicationFactorException if replicationFactor is invalid or exceeds the
+     *     number of available servers
+     */
+    public static TableAssignment generateAssignmentOfNewlyAddedBuckets(
+            int newlyAddedBuckets,
+            int replicationFactor,
+            TabletServerInfo[] servers,
+            TableAssignment existingAssignment)
+            throws InvalidBucketsException, InvalidReplicationFactorException {
+        if (newlyAddedBuckets <= 0) {
+            throw new InvalidBucketsException(
+                    "The newly added number of buckets must be larger than 0.");
+        }
+
+        BucketAssignment existingAssignmentBucket0 = existingAssignment.getBucketAssignment(0);
+        if (existingAssignmentBucket0 == null) {
+            // Fluss ensures that every created table or partition contains at least one bucket,
+            // so this situation should not occur under normal circumstances.
+            throw new InvalidBucketsException(
+                    "Unexpected existing bucket assignment, bucket id 0 is missing. Assignment: "
+                            + existingAssignment);
+        }
+
+        int startIndex = getStartIndex(servers, existingAssignmentBucket0);
+        int oldNumBuckets = existingAssignment.getBuckets().size();
+        return generateAssignment(
+                newlyAddedBuckets, replicationFactor, servers, startIndex, oldNumBuckets);
     }
 
     private static TableAssignment generateRackUnawareAssigment(
@@ -177,9 +248,10 @@ public class TableAssignmentUtils {
             int replicationFactor,
             int[] serverIds,
             int startIndex,
-            int nextReplicaShift) {
+            int nextReplicaShift,
+            int startBucketId) {
         Map<Integer, BucketAssignment> assignments = new HashMap<>();
-        int currentBucketId = 0;
+        int currentBucketId = Math.max(0, startBucketId);
         for (int i = 0; i < nBuckets; i++) {
             if (currentBucketId > 0 && (currentBucketId % serverIds.length == 0)) {
                 nextReplicaShift += 1;
@@ -203,7 +275,8 @@ public class TableAssignmentUtils {
             int replicationFactor,
             TabletServerInfo[] servers,
             int startIndex,
-            int nextReplicaShift) {
+            int nextReplicaShift,
+            int startBucketId) {
         Map<Integer, String> serverRackMap = new HashMap<>();
         for (TabletServerInfo server : servers) {
             serverRackMap.put(server.getId(), server.getRack());
@@ -212,7 +285,7 @@ public class TableAssignmentUtils {
         List<Integer> arrangedServerList = getRackAlternatedTabletServerList(serverRackMap);
         int numServers = arrangedServerList.size();
         Map<Integer, BucketAssignment> assignments = new HashMap<>();
-        int currentBucketId = 0;
+        int currentBucketId = Math.max(0, startBucketId);
         for (int i = 0; i < nBuckets; i++) {
             if (currentBucketId > 0 && (currentBucketId % arrangedServerList.size() == 0)) {
                 nextReplicaShift += 1;
@@ -312,5 +385,31 @@ public class TableAssignmentUtils {
                 (id, rack) -> results.computeIfAbsent(rack, key -> new ArrayList<>()).add(id));
         results.forEach((rack, rackAndIdList) -> rackAndIdList.sort(Integer::compareTo));
         return results;
+    }
+
+    /**
+     * Calculate the start index for assigning new buckets based on the existing assignment.
+     *
+     * <p>This ensures that when new buckets are assigned, they follow the same distribution pattern
+     * as the existing buckets, maintaining consistency in the assignment strategy. For example, if
+     * bucket 0's first replica is on server with ID 5, and the server array is [3, 4, 5, 6, 7],
+     * this method will return index 2 (the position of server 5), so new buckets will start their
+     * round-robin assignment from that position.
+     *
+     * @param servers the array of available tablet servers, sorted by ID
+     * @param existingAssignmentBucket0 the bucket assignment for bucket 0, which must contain at
+     *     least one replica
+     * @return the index in the server array where the round-robin assignment should start for new
+     *     buckets (always >= 0)
+     */
+    private static int getStartIndex(
+            TabletServerInfo[] servers, BucketAssignment existingAssignmentBucket0) {
+        int headId = existingAssignmentBucket0.getReplicas().get(0);
+        int index =
+                IntStream.range(0, servers.length)
+                        .filter(i -> servers[i].getId() >= headId)
+                        .findFirst()
+                        .orElse(-1);
+        return Math.max(0, index);
     }
 }
