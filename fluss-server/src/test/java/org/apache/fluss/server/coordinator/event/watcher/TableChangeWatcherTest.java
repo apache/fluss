@@ -127,6 +127,7 @@ class TableChangeWatcherTest {
                     metadataManager.createTable(tablePath, TEST_TABLE, tableAssignment, false);
             SchemaInfo schemaInfo = metadataManager.getLatestSchema(tablePath);
             long currentMillis = System.currentTimeMillis();
+            expectedEvents.add(new SchemaChangeEvent(tablePath, schemaInfo));
             expectedEvents.add(
                     new CreateTableEvent(
                             TableInfo.of(
@@ -137,7 +138,6 @@ class TableChangeWatcherTest {
                                     currentMillis,
                                     currentMillis),
                             tableAssignment));
-            expectedEvents.add(new SchemaChangeEvent(tablePath, schemaInfo));
         }
 
         retry(
@@ -189,6 +189,7 @@ class TableChangeWatcherTest {
         SchemaInfo schemaInfo = metadataManager.getLatestSchema(tablePath);
         // create table event
         long currentMillis = System.currentTimeMillis();
+        expectedEvents.add(new SchemaChangeEvent(tablePath, schemaInfo));
         expectedEvents.add(
                 new CreateTableEvent(
                         TableInfo.of(
@@ -199,7 +200,6 @@ class TableChangeWatcherTest {
                                 currentMillis,
                                 currentMillis),
                         TableAssignment.builder().build()));
-        expectedEvents.add(new SchemaChangeEvent(tablePath, schemaInfo));
 
         // register partition
         PartitionAssignment partitionAssignment =
@@ -266,6 +266,7 @@ class TableChangeWatcherTest {
                     metadataManager.createTable(tablePath, TEST_TABLE, tableAssignment, false);
             SchemaInfo schemaInfo = metadataManager.getLatestSchema(tablePath);
             long currentMillis = System.currentTimeMillis();
+            expectedEvents.add(new SchemaChangeEvent(tablePath, schemaInfo));
             expectedEvents.add(
                     new CreateTableEvent(
                             TableInfo.of(
@@ -276,7 +277,6 @@ class TableChangeWatcherTest {
                                     currentMillis,
                                     currentMillis),
                             tableAssignment));
-            expectedEvents.add(new SchemaChangeEvent(tablePath, schemaInfo));
         }
 
         retry(
