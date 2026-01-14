@@ -88,7 +88,6 @@ public class LogFetcher implements Closeable {
     private static final Logger LOG = LoggerFactory.getLogger(LogFetcher.class);
 
     private final TablePath tablePath;
-    private final long tableId;
     private final boolean isPartitioned;
     private final LogRecordReadContext readContext;
     // TODO this context can be merge with readContext. Introduce it only because log remote read
@@ -125,7 +124,6 @@ public class LogFetcher implements Closeable {
             RemoteFileDownloader remoteFileDownloader,
             SchemaGetter schemaGetter) {
         this.tablePath = tableInfo.getTablePath();
-        this.tableId = tableInfo.getTableId();
         this.isPartitioned = tableInfo.isPartitioned();
         this.readContext =
                 LogRecordReadContext.createReadContext(tableInfo, false, projection, schemaGetter);
@@ -232,15 +230,30 @@ public class LogFetcher implements Closeable {
                 metadataUpdater.updateTableOrPartitionMetadata(tablePath, null);
             }
 
-            // Check if the table still exists and matches the tableId
-            Optional<Long> currentTableId = metadataUpdater.getCluster().getTableId(tablePath);
-            if (!currentTableId.isPresent()) {
-                throw new TableNotExistException("Table " + tablePath + " does not exist.");
-            }
-            if (currentTableId.get() != tableId) {
-                throw new TableNotExistException("Table " + tablePath + " has been recreated.");
+            if (!tableBuckets.isEmpty()) {
+                checkTableId(tableBuckets.get(0).getTableId());
             }
         } catch (Exception e) {
+            // If exception occurs, we suspect table might be gone or recreated.
+            // We force update table metadata.
+            try {
+                metadataUpdater.updateTableOrPartitionMetadata(tablePath, null);
+                if (!tableBuckets.isEmpty()) {
+                    checkTableId(tableBuckets.get(0).getTableId());
+                }
+            } catch (Exception ex) {
+                // If checkTableId threw exception, rethrow it.
+                if (ex instanceof TableNotExistException) {
+                    throw (TableNotExistException) ex;
+                }
+
+                // If updateTableOrPartitionMetadata failed, check if it's because table missing.
+                if (isTableNotExistException(ex)) {
+                    // Table is truly gone.
+                    throw new TableNotExistException("Table " + tablePath + " does not exist.", ex);
+                }
+            }
+
             if (e instanceof PartitionNotExistException) {
                 // ignore this exception, this is probably happen because the partition is deleted.
                 // The fetcher can also work fine. The caller like flink can remove the partition
@@ -252,6 +265,17 @@ public class LogFetcher implements Closeable {
                 }
                 throw e;
             }
+        }
+    }
+
+    private void checkTableId(long tableId) {
+        // Check if the table still exists and matches the tableId
+        Optional<Long> currentTableId = metadataUpdater.getCluster().getTableId(tablePath);
+        if (!currentTableId.isPresent()) {
+            throw new TableNotExistException("Table " + tablePath + " does not exist.");
+        }
+        if (currentTableId.get() != tableId) {
+            throw new TableNotExistException("Table " + tablePath + " has been recreated.");
         }
     }
 
