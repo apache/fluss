@@ -31,6 +31,7 @@ import java.io.IOException;
 import java.net.URI;
 import java.util.Objects;
 
+import static org.apache.fluss.fs.abfs.token.AzureDelegationTokenProvider.ACCOUNT_KEY;
 import static org.apache.fluss.fs.abfs.token.AzureDelegationTokenProvider.CLIENT_ID;
 import static org.apache.fluss.fs.abfs.token.AzureDelegationTokenReceiver.PROVIDER_CONFIG_NAME;
 
@@ -61,7 +62,7 @@ public class AbfsFileSystemPlugin implements FileSystemPlugin {
     }
 
     private void setCredentialProvider(org.apache.hadoop.conf.Configuration hadoopConfig) {
-        if (hadoopConfig.get(CLIENT_ID) == null) {
+        if (hadoopConfig.get(ACCOUNT_KEY) == null) {
             if (Objects.equals(getScheme(), "abfs")) {
                 AzureDelegationTokenReceiver.updateHadoopConfig(hadoopConfig);
             } else if (Objects.equals(getScheme(), "abfss")) {
@@ -78,7 +79,7 @@ public class AbfsFileSystemPlugin implements FileSystemPlugin {
                     CLIENT_ID,
                     hadoopConfig.get(PROVIDER_CONFIG_NAME));
         } else {
-            LOG.info("{} is set, using provided access key id and secret.", CLIENT_ID);
+            LOG.info("{} is set, using provided account key.", ACCOUNT_KEY);
         }
     }
 

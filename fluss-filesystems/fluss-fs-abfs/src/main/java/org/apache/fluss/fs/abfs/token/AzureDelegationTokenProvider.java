@@ -36,6 +36,7 @@ public class AzureDelegationTokenProvider {
 
     private static final Logger LOG = LoggerFactory.getLogger(AzureDelegationTokenProvider.class);
 
+    public static final String ACCOUNT_KEY = "fs.azure.account.key";
     public static final String CLIENT_ID = "fs.azure.account.oauth2.client.id";
     private static final String CLIENT_SECRET = "fs.azure.account.oauth2.client.secret";
 
@@ -55,6 +56,8 @@ public class AzureDelegationTokenProvider {
         this.clientSecret = conf.get(CLIENT_SECRET);
         this.authEndpoint = conf.get(ENDPOINT_KEY);
         this.additionInfos = new HashMap<>();
+
+        LOG.info("Setting the endpoint key " + ENDPOINT_KEY);
 
         for (String key : Collections.singleton(ENDPOINT_KEY)) {
             if (conf.get(key) != null) {
