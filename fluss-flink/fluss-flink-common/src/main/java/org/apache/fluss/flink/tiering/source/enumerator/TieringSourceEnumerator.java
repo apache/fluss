@@ -60,6 +60,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.flink.tiering.source.enumerator.TieringSourceEnumerator.HeartBeatHelper.basicHeartBeat;
@@ -529,7 +530,7 @@ public class TieringSourceEnumerator
         static LakeTieringHeartbeatResponse waitHeartbeatResponse(
                 CompletableFuture<LakeTieringHeartbeatResponse> responseCompletableFuture) {
             try {
-                return responseCompletableFuture.get();
+                return responseCompletableFuture.get(3, TimeUnit.MINUTES);
             } catch (Exception e) {
                 LOG.error("Failed to wait heartbeat response due to ", e);
                 throw new FlinkRuntimeException("Failed to wait heartbeat response due to ", e);
