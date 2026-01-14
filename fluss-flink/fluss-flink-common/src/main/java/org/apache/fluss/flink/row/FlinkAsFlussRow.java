@@ -19,6 +19,8 @@ package org.apache.fluss.flink.row;
 
 import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.Decimal;
+import org.apache.fluss.row.InternalArray;
+import org.apache.fluss.row.InternalMap;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
@@ -33,6 +35,10 @@ public class FlinkAsFlussRow implements InternalRow {
     private RowData flinkRow;
 
     public FlinkAsFlussRow() {}
+
+    public FlinkAsFlussRow(RowData flinkRow) {
+        this.flinkRow = flinkRow;
+    }
 
     public FlinkAsFlussRow replace(RowData flinkRow) {
         this.flinkRow = flinkRow;
@@ -131,5 +137,20 @@ public class FlinkAsFlussRow implements InternalRow {
     @Override
     public byte[] getBytes(int pos) {
         return flinkRow.getBinary(pos);
+    }
+
+    @Override
+    public InternalArray getArray(int pos) {
+        return new FlinkAsFlussArray(flinkRow.getArray(pos));
+    }
+
+    @Override
+    public InternalMap getMap(int pos) {
+        return new FlinkAsFlussMap(flinkRow.getMap(pos));
+    }
+
+    @Override
+    public InternalRow getRow(int pos, int numFields) {
+        return new FlinkAsFlussRow(flinkRow.getRow(pos, numFields));
     }
 }

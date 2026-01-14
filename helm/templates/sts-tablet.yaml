@@ -35,6 +35,9 @@ spec:
         {{- include "fluss.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: tablet
     spec:
+      {{- if .Values.serviceAccount.create }}
+      serviceAccountName: {{ .Values.serviceAccount.name | default (include "fluss.fullname" .) }}
+      {{- end }}
       containers:
         - name: {{ .Chart.Name }}-tablet
           image: "{{.Values.image.repository}}:{{ .Values.image.tag }}"

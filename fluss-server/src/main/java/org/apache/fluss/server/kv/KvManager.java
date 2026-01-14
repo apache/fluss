@@ -20,7 +20,10 @@ package org.apache.fluss.server.kv;
 import org.apache.fluss.compression.ArrowCompressionInfo;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.MemorySize;
 import org.apache.fluss.config.TableConfig;
+import org.apache.fluss.config.cluster.ServerReconfigurable;
+import org.apache.fluss.exception.ConfigException;
 import org.apache.fluss.exception.KvStorageException;
 import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.fs.FsPath;
@@ -28,7 +31,7 @@ import org.apache.fluss.memory.LazyMemorySegmentPool;
 import org.apache.fluss.memory.MemorySegmentPool;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
-import org.apache.fluss.metadata.Schema;
+import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
@@ -45,6 +48,9 @@ import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.MapUtils;
 import org.apache.fluss.utils.types.Tuple2;
 
+import org.rocksdb.RateLimiter;
+import org.rocksdb.RateLimiterMode;
+import org.rocksdb.RocksDB;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -65,9 +71,42 @@ import static org.apache.fluss.utils.concurrent.LockUtils.inLock;
  * the individual instances.
  */
 @ThreadSafe
-public final class KvManager extends TabletManagerBase {
+public final class KvManager extends TabletManagerBase implements ServerReconfigurable {
 
     private static final Logger LOG = LoggerFactory.getLogger(KvManager.class);
+
+    /**
+     * Default global rate limiter with unlimited rate (Long.MAX_VALUE bytes per second).
+     *
+     * <p>This is used by RocksDBResourceContainer when no rate limiter is explicitly provided,
+     * ensuring the API is safer and more robust by avoiding null checks throughout the code.
+     */
+    private static final RateLimiter DEFAULT_RATE_LIMITER = createDefaultRateLimiter();
+
+    /**
+     * Creates a default rate limiter with unlimited rate (Long.MAX_VALUE bytes per second).
+     *
+     * @return a default rate limiter instance
+     */
+    private static RateLimiter createDefaultRateLimiter() {
+        RocksDB.loadLibrary();
+        // Create a rate limiter with unlimited rate (effectively no limit)
+        // Using default refill period and fairness values
+        return new RateLimiter(Long.MAX_VALUE);
+    }
+
+    /**
+     * Returns the default global rate limiter with unlimited rate.
+     *
+     * <p>This method provides access to the default rate limiter for use in
+     * RocksDBResourceContainer when no rate limiter is explicitly provided.
+     *
+     * @return the default rate limiter instance
+     */
+    public static RateLimiter getDefaultRateLimiter() {
+        return DEFAULT_RATE_LIMITER;
+    }
+
     private final LogManager logManager;
 
     private final TabletServerMetricGroup serverMetricGroup;
@@ -89,6 +128,16 @@ public final class KvManager extends TabletManagerBase {
 
     private final FileSystem remoteFileSystem;
 
+    /**
+     * The shared rate limiter for all RocksDB instances to control flush and compaction write rate.
+     */
+    private final RateLimiter sharedRocksDBRateLimiter;
+
+    /** Current shared rate limiter configuration in bytes per second. */
+    private volatile long currentSharedRateLimitBytesPerSec;
+
+    private volatile boolean isShutdown = false;
+
     private KvManager(
             File dataDir,
             Configuration conf,
@@ -105,6 +154,27 @@ public final class KvManager extends TabletManagerBase {
         this.remoteKvDir = FlussPaths.remoteKvDir(conf);
         this.remoteFileSystem = remoteKvDir.getFileSystem();
         this.serverMetricGroup = tabletServerMetricGroup;
+        this.sharedRocksDBRateLimiter = createSharedRateLimiter(conf);
+        this.currentSharedRateLimitBytesPerSec =
+                conf.get(ConfigOptions.KV_SHARED_RATE_LIMITER_BYTES_PER_SEC).getBytes();
+    }
+
+    private static RateLimiter createSharedRateLimiter(Configuration conf) {
+        long sharedRateLimitBytesPerSecond =
+                conf.get(ConfigOptions.KV_SHARED_RATE_LIMITER_BYTES_PER_SEC).getBytes();
+
+        RocksDB.loadLibrary();
+        // Always create a shared rate limiter with the configured rate limit.
+        // The rate limiter is always enabled with a default value of Long.MAX_VALUE (effectively
+        // unlimited).
+        // This avoids the overhead of dynamically enabling/disabling the rate limiter.
+        // refill_period_us is set to 100ms, fairness is set to 10
+        return new RateLimiter(
+                sharedRateLimitBytesPerSecond,
+                RateLimiter.DEFAULT_REFILL_PERIOD_MICROS,
+                RateLimiter.DEFAULT_FAIRNESS,
+                RateLimiterMode.WRITES_ONLY,
+                false);
     }
 
     public static KvManager create(
@@ -130,6 +200,7 @@ public final class KvManager extends TabletManagerBase {
 
     public void shutdown() {
         LOG.info("Shutting down KvManager");
+        isShutdown = true;
         List<KvTablet> kvs = new ArrayList<>(currentKvs.values());
         for (KvTablet kvTablet : kvs) {
             try {
@@ -140,6 +211,9 @@ public final class KvManager extends TabletManagerBase {
         }
         arrowBufferAllocator.close();
         memorySegmentPool.close();
+        if (sharedRocksDBRateLimiter != null) {
+            sharedRocksDBRateLimiter.close();
+        }
         LOG.info("Shut down KvManager complete.");
     }
 
@@ -161,7 +235,7 @@ public final class KvManager extends TabletManagerBase {
             TableBucket tableBucket,
             LogTablet logTablet,
             KvFormat kvFormat,
-            Schema schema,
+            SchemaGetter schemaGetter,
             TableConfig tableConfig,
             ArrowCompressionInfo arrowCompressionInfo)
             throws Exception {
@@ -173,10 +247,11 @@ public final class KvManager extends TabletManagerBase {
                     }
 
                     File tabletDir = getOrCreateTabletDir(tablePath, tableBucket);
-
-                    RowMerger merger = RowMerger.create(tableConfig, schema, kvFormat);
+                    RowMerger merger = RowMerger.create(tableConfig, kvFormat, schemaGetter);
                     KvTablet tablet =
                             KvTablet.create(
+                                    tablePath,
+                                    tableBucket,
                                     logTablet,
                                     tabletDir,
                                     conf,
@@ -184,9 +259,11 @@ public final class KvManager extends TabletManagerBase {
                                     arrowBufferAllocator,
                                     memorySegmentPool,
                                     kvFormat,
-                                    schema,
                                     merger,
-                                    arrowCompressionInfo);
+                                    arrowCompressionInfo,
+                                    schemaGetter,
+                                    tableConfig.getChangelogImage(),
+                                    sharedRocksDBRateLimiter);
                     currentKvs.put(tableBucket, tablet);
 
                     LOG.info(
@@ -256,7 +333,7 @@ public final class KvManager extends TabletManagerBase {
         }
     }
 
-    public KvTablet loadKv(File tabletDir) throws Exception {
+    public KvTablet loadKv(File tabletDir, SchemaGetter schemaGetter) throws Exception {
         Tuple2<PhysicalTablePath, TableBucket> pathAndBucket = FlussPaths.parseTabletDir(tabletDir);
         PhysicalTablePath physicalTablePath = pathAndBucket.f0;
         TableBucket tableBucket = pathAndBucket.f1;
@@ -277,11 +354,10 @@ public final class KvManager extends TabletManagerBase {
         // TODO: we should support recover schema from disk to decouple put and schema.
         TablePath tablePath = physicalTablePath.getTablePath();
         TableInfo tableInfo = getTableInfo(zkClient, tablePath);
+
+        TableConfig tableConfig = tableInfo.getTableConfig();
         RowMerger rowMerger =
-                RowMerger.create(
-                        tableInfo.getTableConfig(),
-                        tableInfo.getSchema(),
-                        tableInfo.getTableConfig().getKvFormat());
+                RowMerger.create(tableConfig, tableConfig.getKvFormat(), schemaGetter);
         KvTablet kvTablet =
                 KvTablet.create(
                         physicalTablePath,
@@ -292,10 +368,12 @@ public final class KvManager extends TabletManagerBase {
                         serverMetricGroup,
                         arrowBufferAllocator,
                         memorySegmentPool,
-                        tableInfo.getTableConfig().getKvFormat(),
-                        tableInfo.getSchema(),
+                        tableConfig.getKvFormat(),
                         rowMerger,
-                        tableInfo.getTableConfig().getArrowCompressionInfo());
+                        tableConfig.getArrowCompressionInfo(),
+                        schemaGetter,
+                        tableConfig.getChangelogImage(),
+                        sharedRocksDBRateLimiter);
         if (this.currentKvs.containsKey(tableBucket)) {
             throw new IllegalStateException(
                     String.format(
@@ -309,6 +387,7 @@ public final class KvManager extends TabletManagerBase {
                             currentKvs.get(tableBucket).getKvTabletDir().getAbsolutePath()));
         }
         this.currentKvs.put(tableBucket, kvTablet);
+
         return kvTablet;
     }
 
@@ -326,6 +405,57 @@ public final class KvManager extends TabletManagerBase {
                     "Delete table's remote bucket snapshot dir of {} failed.",
                     remoteKvTabletDir,
                     e);
+        }
+    }
+
+    // ============ ServerReconfigurable Implementation ============
+
+    @Override
+    public void validate(Configuration newConfig) throws ConfigException {
+        // Config validation is already handled by KvConfigValidator which is registered
+        // on both CoordinatorServer and TabletServer. Here we only need to check runtime state.
+
+        // Check if KvManager is in a valid state to accept reconfiguration
+        if (isShutdown) {
+            throw new ConfigException("Cannot reconfigure KvManager during shutdown");
+        }
+
+        // All config value validations are delegated to KvConfigValidator
+        LOG.debug("KvManager runtime state validation passed for reconfiguration");
+    }
+
+    @Override
+    public void reconfigure(Configuration newConfig) throws ConfigException {
+        long newSharedRateLimitBytes =
+                newConfig.get(ConfigOptions.KV_SHARED_RATE_LIMITER_BYTES_PER_SEC).getBytes();
+
+        // If value hasn't changed, skip
+        if (newSharedRateLimitBytes == currentSharedRateLimitBytesPerSec) {
+            LOG.debug(
+                    "Shared RocksDB rate limiter config unchanged: {} bytes/sec",
+                    newSharedRateLimitBytes);
+            return;
+        }
+
+        long oldValue = currentSharedRateLimitBytesPerSec;
+
+        try {
+            // Apply new configuration using RocksDB API (thread-safe)
+            // The rate limiter is always enabled, so we can safely reconfigure it
+            sharedRocksDBRateLimiter.setBytesPerSecond(newSharedRateLimitBytes);
+            currentSharedRateLimitBytesPerSec = newSharedRateLimitBytes;
+
+            LOG.info(
+                    "Shared RocksDB rate limiter reconfigured: {} bytes/sec ({}) -> {} bytes/sec ({})",
+                    oldValue,
+                    new MemorySize(oldValue).toHumanReadableString(),
+                    newSharedRateLimitBytes,
+                    new MemorySize(newSharedRateLimitBytes).toHumanReadableString());
+
+        } catch (Exception e) {
+            // If setting fails, throw ConfigException to trigger rollback
+            throw new ConfigException(
+                    "Failed to reconfigure shared RocksDB rate limiter: " + e.getMessage(), e);
         }
     }
 }

@@ -116,8 +116,8 @@ The Docker Compose environment consists of the following containers:
 - **Fluss Cluster:** a Fluss `CoordinatorServer`, a Fluss `TabletServer` and a `ZooKeeper` server.
 - **Flink Cluster**: a Flink `JobManager` and a Flink `TaskManager` container to execute queries.
 
-**Note:** The `apache/fluss-quickstart-flink` image is based on [flink:1.20.1-java17](https://hub.docker.com/layers/library/flink/1.20-java17/images/sha256:bf1af6406c4f4ad8faa46efe2b3d0a0bf811d1034849c42c1e3484712bc83505) and
-includes the [fluss-flink](engine-flink/getting-started.md), [paimon-flink](https://paimon.apache.org/docs/1.0/flink/quick-start/) and
+**Note:** The `apache/fluss-quickstart-flink` image is based on [flink:1.20.3-java17](https://hub.docker.com/layers/library/flink/1.20-java17/images/sha256:296c7c23fa40a9a3547771b08fc65e25f06bc4cfd3549eee243c99890778cafc) and
+includes the [fluss-flink](engine-flink/getting-started.md), [paimon-flink](https://paimon.apache.org/docs/1.3/flink/quick-start/) and
 [flink-connector-faker](https://flink-packages.org/packages/flink-faker) to simplify this guide.
 
 3. To start all containers, run:
@@ -128,7 +128,7 @@ This command automatically starts all the containers defined in the Docker Compo
 
 Run 
 ```shell
-docker container ls -a
+docker compose ps
 ```
 to check whether all containers are running properly.
 
@@ -136,7 +136,7 @@ You can also visit http://localhost:8083/ to see if Flink is running normally.
 
 :::note
 - If you want to additionally use an observability stack, follow one of the provided quickstart guides [here](maintenance/observability/quickstart.md) and then continue with this guide.
-- If you want to run with your own Flink environment, remember to download the [fluss-flink connector jar](/downloads), [flink-connector-faker](https://github.com/knaufk/flink-faker/releases), [paimon-flink connector jar](https://paimon.apache.org/docs/1.0/flink/quick-start/) and then put them to `FLINK_HOME/lib/`.
+- If you want to run with your own Flink environment, remember to download the [fluss-flink connector jar](/downloads), [flink-connector-faker](https://github.com/knaufk/flink-faker/releases), [paimon-flink connector jar](https://paimon.apache.org/docs/1.3/flink/quick-start/) and then put them to `FLINK_HOME/lib/`.
 - All the following commands involving `docker compose` should be executed in the created working directory that contains the `docker-compose.yml` file.
 :::
 
@@ -260,7 +260,7 @@ The Docker Compose environment consists of the following containers:
 - **Fluss Cluster:** a Fluss `CoordinatorServer`, a Fluss `TabletServer` and a `ZooKeeper` server.
 - **Flink Cluster**: a Flink `JobManager` and a Flink `TaskManager` container to execute queries.
 
-**Note:** The `apache/fluss-quickstart-flink` image is based on [flink:1.20.1-java17](https://hub.docker.com/layers/library/flink/1.20-java17/images/sha256:bf1af6406c4f4ad8faa46efe2b3d0a0bf811d1034849c42c1e3484712bc83505) and
+**Note:** The `apache/fluss-quickstart-flink` image is based on [flink:1.20.3-java17](https://hub.docker.com/layers/library/flink/1.20-java17/images/sha256:296c7c23fa40a9a3547771b08fc65e25f06bc4cfd3549eee243c99890778cafc) and
 includes the [fluss-flink](engine-flink/getting-started.md), [iceberg-flink](https://iceberg.apache.org/docs/latest/flink/) and
 [flink-connector-faker](https://flink-packages.org/packages/flink-faker) to simplify this guide.
 
@@ -332,6 +332,10 @@ For further information how to store catalog configurations, see [Flink's Catalo
 :::
 
 ### Create Tables
+<Tabs groupId="lake-tabs">
+  <TabItem value="paimon" label="Paimon" default>
+
+
 Running the following SQL to create Fluss tables to be used in this guide:
 ```sql  title="Flink SQL"
 CREATE TABLE fluss_order (
@@ -366,6 +370,46 @@ CREATE TABLE fluss_nation (
 );
 ```
 
+  </TabItem>
+
+  <TabItem value="iceberg" label="Iceberg">
+
+
+Running the following SQL to create Fluss tables to be used in this guide:
+```sql  title="Flink SQL"
+CREATE TABLE fluss_order (
+    `order_key` BIGINT,
+    `cust_key` INT NOT NULL,
+    `total_price` DECIMAL(15, 2),
+    `order_date` DATE,
+    `order_priority` STRING,
+    `clerk` STRING,
+    `ptime` AS PROCTIME()
+);
+```
+
+```sql  title="Flink SQL"
+CREATE TABLE fluss_customer (
+    `cust_key` INT NOT NULL,
+    `name` STRING,
+    `phone` STRING,
+    `nation_key` INT NOT NULL,
+    `acctbal` DECIMAL(15, 2),
+    `mktsegment` STRING,
+    PRIMARY KEY (`cust_key`) NOT ENFORCED
+);
+```
+
+```sql  title="Flink SQL"
+CREATE TABLE fluss_nation (
+  `nation_key` INT NOT NULL,
+  `name`       STRING,
+   PRIMARY KEY (`nation_key`) NOT ENFORCED
+);
+```
+
+  </TabItem>
+</Tabs>
 ## Streaming into Fluss
 
 First, run the following SQL to sync data from source tables to Fluss tables:
@@ -520,13 +564,10 @@ SELECT o.order_key,
        c.acctbal,
        c.mktsegment,
        n.name
-FROM (
-    SELECT *, PROCTIME() as ptime
-    FROM `default_catalog`.`default_database`.source_order
-) o
-LEFT JOIN fluss_customer FOR SYSTEM_TIME AS OF o.ptime AS c
+FROM fluss_order o
+LEFT JOIN fluss_customer FOR SYSTEM_TIME AS OF `o`.`ptime` AS `c`
     ON o.cust_key = c.cust_key
-LEFT JOIN fluss_nation FOR SYSTEM_TIME AS OF o.ptime AS n
+LEFT JOIN fluss_nation FOR SYSTEM_TIME AS OF `o`.`ptime` AS `n`
     ON c.nation_key = n.nation_key;
 ```
 

@@ -26,9 +26,12 @@ import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.InternalRow.FieldGetter;
+import org.apache.fluss.row.compacted.CompactedRow;
+import org.apache.fluss.row.encode.CompactedRowEncoder;
 import org.apache.fluss.row.encode.IndexedRowEncoder;
 import org.apache.fluss.row.encode.KeyEncoder;
 import org.apache.fluss.row.indexed.IndexedRow;
+import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.RowType;
 
 import javax.annotation.Nullable;
@@ -44,7 +47,9 @@ class AppendWriterImpl extends AbstractTableWriter implements AppendWriter {
 
     private final LogFormat logFormat;
     private final IndexedRowEncoder indexedRowEncoder;
+    private final CompactedRowEncoder compactedRowEncoder;
     private final FieldGetter[] fieldGetters;
+    private final TableInfo tableInfo;
 
     AppendWriterImpl(TablePath tablePath, TableInfo tableInfo, WriterClient writerClient) {
         super(tablePath, tableInfo, writerClient);
@@ -57,9 +62,14 @@ class AppendWriterImpl extends AbstractTableWriter implements AppendWriter {
             this.bucketKeyEncoder = KeyEncoder.of(rowType, bucketKeys, lakeFormat);
         }
 
+        DataType[] fieldDataTypes =
+                tableInfo.getSchema().getRowType().getChildren().toArray(new DataType[0]);
+
         this.logFormat = tableInfo.getTableConfig().getLogFormat();
         this.indexedRowEncoder = new IndexedRowEncoder(tableInfo.getRowType());
+        this.compactedRowEncoder = new CompactedRowEncoder(fieldDataTypes);
         this.fieldGetters = InternalRow.createFieldGetters(tableInfo.getRowType());
+        this.tableInfo = tableInfo;
     }
 
     /**
@@ -77,12 +87,29 @@ class AppendWriterImpl extends AbstractTableWriter implements AppendWriter {
         final WriteRecord record;
         if (logFormat == LogFormat.INDEXED) {
             IndexedRow indexedRow = encodeIndexedRow(row);
-            record = WriteRecord.forIndexedAppend(physicalPath, indexedRow, bucketKey);
+            record = WriteRecord.forIndexedAppend(tableInfo, physicalPath, indexedRow, bucketKey);
+        } else if (logFormat == LogFormat.COMPACTED) {
+            CompactedRow compactedRow = encodeCompactedRow(row);
+            record =
+                    WriteRecord.forCompactedAppend(
+                            tableInfo, physicalPath, compactedRow, bucketKey);
         } else {
             // ARROW format supports general internal row
-            record = WriteRecord.forArrowAppend(physicalPath, row, bucketKey);
+            record = WriteRecord.forArrowAppend(tableInfo, physicalPath, row, bucketKey);
         }
         return send(record).thenApply(ignored -> APPEND_SUCCESS);
+    }
+
+    private CompactedRow encodeCompactedRow(InternalRow row) {
+        if (row instanceof CompactedRow) {
+            return (CompactedRow) row;
+        }
+
+        compactedRowEncoder.startNewRow();
+        for (int i = 0; i < fieldCount; i++) {
+            compactedRowEncoder.encodeField(i, fieldGetters[i].getFieldOrNull(row));
+        }
+        return compactedRowEncoder.finishRow();
     }
 
     private IndexedRow encodeIndexedRow(InternalRow row) {

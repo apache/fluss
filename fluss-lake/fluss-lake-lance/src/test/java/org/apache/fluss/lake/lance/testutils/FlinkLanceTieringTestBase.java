@@ -206,6 +206,7 @@ public class FlinkLanceTieringTestBase {
                         execEnv,
                         flussConfig,
                         Configuration.fromMap(getLanceCatalogConf()),
+                        new Configuration(),
                         DataLakeFormat.LANCE.toString())
                 .build();
     }

@@ -17,13 +17,19 @@
 
 package org.apache.fluss.testutils;
 
-import org.apache.fluss.row.GenericRow;
+import org.apache.fluss.row.InternalArray;
+import org.apache.fluss.row.InternalMap;
 import org.apache.fluss.row.InternalRow;
-import org.apache.fluss.row.indexed.IndexedRow;
+import org.apache.fluss.types.ArrayType;
+import org.apache.fluss.types.DataType;
+import org.apache.fluss.types.MapType;
 import org.apache.fluss.types.RowType;
 
 import org.assertj.core.api.AbstractAssert;
 
+import static org.apache.fluss.types.DataTypeRoot.ARRAY;
+import static org.apache.fluss.types.DataTypeRoot.MAP;
+import static org.apache.fluss.types.DataTypeRoot.ROW;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Extend assertj assertions to easily assert {@link InternalRow}. */
@@ -51,11 +57,6 @@ public class InternalRowAssert extends AbstractAssert<InternalRowAssert, Interna
     }
 
     public InternalRowAssert isEqualTo(InternalRow expected) {
-        if ((actual instanceof IndexedRow && expected instanceof IndexedRow)
-                || (actual instanceof GenericRow && expected instanceof GenericRow)) {
-            assertThat(actual).isEqualTo(expected);
-        }
-
         if (rowType == null) {
             throw new IllegalStateException(
                     "InternalRowAssert#isEqualTo(InternalRow) must be invoked after #withSchema(RowType).");
@@ -68,9 +69,30 @@ public class InternalRowAssert extends AbstractAssert<InternalRowAssert, Interna
                     .as("InternalRow#isNullAt(" + i + ")")
                     .isEqualTo(expected.isNullAt(i));
             if (!actual.isNullAt(i)) {
-                assertThat(fieldGetters[i].getFieldOrNull(actual))
-                        .as("InternalRow#get" + rowType.getTypeAt(i).getTypeRoot() + "(" + i + ")")
-                        .isEqualTo(fieldGetters[i].getFieldOrNull(expected));
+                DataType fieldType = rowType.getTypeAt(i);
+                Object actualField = fieldGetters[i].getFieldOrNull(actual);
+                Object expectedField = fieldGetters[i].getFieldOrNull(expected);
+
+                if (fieldType.getTypeRoot() == ARRAY) {
+                    InternalArrayAssert.assertThatArray((InternalArray) actualField)
+                            .withElementType(((ArrayType) fieldType).getElementType())
+                            .as("InternalRow#get" + fieldType.getTypeRoot() + "(" + i + ")")
+                            .isEqualTo((InternalArray) expectedField);
+                } else if (fieldType.getTypeRoot() == MAP) {
+                    InternalMapAssert.assertThatMap((InternalMap) actualField)
+                            .withMapType((MapType) fieldType)
+                            .as("InternalRow#get" + fieldType.getTypeRoot() + "(" + i + ")")
+                            .isEqualTo((InternalMap) expectedField);
+                } else if (fieldType.getTypeRoot() == ROW) {
+                    assertThatRow((InternalRow) actualField)
+                            .withSchema((RowType) fieldType)
+                            .as("InternalRow#get" + fieldType.getTypeRoot() + "(" + i + ")")
+                            .isEqualTo((InternalRow) expectedField);
+                } else {
+                    assertThat(actualField)
+                            .as("InternalRow#get" + fieldType.getTypeRoot() + "(" + i + ")")
+                            .isEqualTo(expectedField);
+                }
             }
         }
         return this;

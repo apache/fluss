@@ -22,6 +22,7 @@ import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.utils.concurrent.ExecutorThreadFactory;
 
 import org.slf4j.Logger;
@@ -43,9 +44,9 @@ import java.util.concurrent.TimeUnit;
  * that is responsible for turning these lookup operations into network requests and transmitting
  * them to the cluster.
  *
- * <p>The {@link #lookup(TableBucket, byte[])} method is asynchronous, when called, it adds the
- * lookup operation to a queue of pending lookup operations and immediately returns. This allows the
- * lookup operations to batch together individual lookup operations for efficiency.
+ * <p>The {@link #lookup(TablePath, TableBucket, byte[])} method is asynchronous, when called, it
+ * adds the lookup operation to a queue of pending lookup operations and immediately returns. This
+ * allows the lookup operations to batch together individual lookup operations for efficiency.
  */
 @ThreadSafe
 @Internal
@@ -67,7 +68,8 @@ public class LookupClient {
                 new LookupSender(
                         metadataUpdater,
                         lookupQueue,
-                        conf.getInt(ConfigOptions.CLIENT_LOOKUP_MAX_INFLIGHT_SIZE));
+                        conf.getInt(ConfigOptions.CLIENT_LOOKUP_MAX_INFLIGHT_SIZE),
+                        conf.getInt(ConfigOptions.CLIENT_LOOKUP_MAX_RETRIES));
         lookupSenderThreadPool.submit(lookupSender);
     }
 
@@ -77,14 +79,16 @@ public class LookupClient {
         return Executors.newFixedThreadPool(1, new ExecutorThreadFactory(LOOKUP_THREAD_PREFIX));
     }
 
-    public CompletableFuture<byte[]> lookup(TableBucket tableBucket, byte[] keyBytes) {
-        LookupQuery lookup = new LookupQuery(tableBucket, keyBytes);
+    public CompletableFuture<byte[]> lookup(
+            TablePath tablePath, TableBucket tableBucket, byte[] keyBytes) {
+        LookupQuery lookup = new LookupQuery(tablePath, tableBucket, keyBytes);
         lookupQueue.appendLookup(lookup);
         return lookup.future();
     }
 
-    public CompletableFuture<List<byte[]>> prefixLookup(TableBucket tableBucket, byte[] keyBytes) {
-        PrefixLookupQuery prefixLookup = new PrefixLookupQuery(tableBucket, keyBytes);
+    public CompletableFuture<List<byte[]>> prefixLookup(
+            TablePath tablePath, TableBucket tableBucket, byte[] keyBytes) {
+        PrefixLookupQuery prefixLookup = new PrefixLookupQuery(tablePath, tableBucket, keyBytes);
         lookupQueue.appendLookup(prefixLookup);
         return prefixLookup.future();
     }

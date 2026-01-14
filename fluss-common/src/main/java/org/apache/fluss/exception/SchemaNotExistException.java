@@ -25,7 +25,7 @@ import org.apache.fluss.annotation.PublicEvolving;
  * @since 0.1
  */
 @PublicEvolving
-public class SchemaNotExistException extends ApiException {
+public class SchemaNotExistException extends RetriableException {
 
     public SchemaNotExistException(String message, Throwable cause) {
         super(message, cause);

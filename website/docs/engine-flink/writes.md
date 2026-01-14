@@ -1,7 +1,7 @@
 ---
 sidebar_label: Writes
 title: Flink Writes
-sidebar_position: 3
+sidebar_position: 4
 ---
 
 # Flink Writes

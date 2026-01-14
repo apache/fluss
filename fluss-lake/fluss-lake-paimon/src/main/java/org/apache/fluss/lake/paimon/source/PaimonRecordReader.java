@@ -48,12 +48,11 @@ public class PaimonRecordReader implements RecordReader {
 
     protected PaimonRowAsFlussRecordIterator iterator;
     protected @Nullable int[][] project;
-    protected @Nullable Predicate predicate;
     protected RowType paimonRowType;
 
     public PaimonRecordReader(
             FileStoreTable fileStoreTable,
-            PaimonSplit split,
+            @Nullable PaimonSplit split,
             @Nullable int[][] project,
             @Nullable Predicate predicate)
             throws IOException {
@@ -69,12 +68,17 @@ public class PaimonRecordReader implements RecordReader {
 
         TableRead tableRead = readBuilder.newRead().executeFilter();
         paimonRowType = readBuilder.readType();
-
-        org.apache.paimon.reader.RecordReader<InternalRow> recordReader =
-                tableRead.createReader(split.dataSplit());
-        iterator =
-                new PaimonRecordReader.PaimonRowAsFlussRecordIterator(
-                        recordReader.toCloseableIterator(), paimonRowType);
+        if (split == null) {
+            iterator =
+                    new PaimonRecordReader.PaimonRowAsFlussRecordIterator(
+                            org.apache.paimon.utils.CloseableIterator.empty(), paimonRowType);
+        } else {
+            org.apache.paimon.reader.RecordReader<InternalRow> recordReader =
+                    tableRead.createReader(split.dataSplit());
+            iterator =
+                    new PaimonRecordReader.PaimonRowAsFlussRecordIterator(
+                            recordReader.toCloseableIterator(), paimonRowType);
+        }
     }
 
     @Override

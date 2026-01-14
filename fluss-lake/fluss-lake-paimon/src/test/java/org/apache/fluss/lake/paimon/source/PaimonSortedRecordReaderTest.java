@@ -27,6 +27,7 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.row.Decimal;
 import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.row.ProjectedRow;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
 import org.apache.fluss.utils.CloseableIterator;
@@ -70,6 +71,9 @@ class PaimonSortedRecordReaderTest extends PaimonSourceTestBase {
 
         LakeSource<PaimonSplit> lakeSource = lakeStorage.createLakeSource(tablePath);
         Table table = getTable(tablePath);
+
+        int[] pkIndex = table.rowType().getFieldIndices(table.primaryKeys());
+        ProjectedRow projectedPkRow = ProjectedRow.from(pkIndex);
         Snapshot snapshot = table.latestSnapshot().get();
         List<PaimonSplit> paimonSplits = lakeSource.createPlanner(snapshot::id).plan();
 
@@ -77,10 +81,15 @@ class PaimonSortedRecordReaderTest extends PaimonSourceTestBase {
             RecordReader recordReader = lakeSource.createRecordReader(() -> paimonSplit);
             assertThat(recordReader).isInstanceOf(PaimonSortedRecordReader.class);
             CloseableIterator<LogRecord> iterator = recordReader.read();
+
             assertThat(
                             isSorted(
                                     TransformingCloseableIterator.transform(
-                                            iterator, LogRecord::getRow),
+                                            iterator,
+                                            record -> {
+                                                projectedPkRow.replaceRow(record.getRow());
+                                                return projectedPkRow;
+                                            }),
                                     ((SortedRecordReader) recordReader).order()))
                     .isTrue();
             iterator.close();

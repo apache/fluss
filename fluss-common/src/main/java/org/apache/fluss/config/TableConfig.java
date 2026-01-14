@@ -19,6 +19,7 @@ package org.apache.fluss.config;
 
 import org.apache.fluss.annotation.PublicEvolving;
 import org.apache.fluss.compression.ArrowCompressionInfo;
+import org.apache.fluss.metadata.ChangelogImage;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.DeleteBehavior;
 import org.apache.fluss.metadata.KvFormat;
@@ -100,6 +101,11 @@ public class TableConfig {
         return config.get(ConfigOptions.TABLE_DATALAKE_AUTO_COMPACTION);
     }
 
+    /** Whether auto expire snapshot is enabled. */
+    public boolean isDataLakeAutoExpireSnapshot() {
+        return config.get(ConfigOptions.TABLE_DATALAKE_AUTO_EXPIRE_SNAPSHOT);
+    }
+
     /** Gets the optional merge engine type of the table. */
     public Optional<MergeEngineType> getMergeEngineType() {
         return config.getOptional(ConfigOptions.TABLE_MERGE_ENGINE);
@@ -115,6 +121,14 @@ public class TableConfig {
     /** Gets the delete behavior of the table. */
     public Optional<DeleteBehavior> getDeleteBehavior() {
         return config.getOptional(ConfigOptions.TABLE_DELETE_BEHAVIOR);
+    }
+
+    /**
+     * Gets the changelog image mode of the table. The changelog image mode defines what information
+     * is included in the changelog for update operations.
+     */
+    public ChangelogImage getChangelogImage() {
+        return config.get(ConfigOptions.TABLE_CHANGELOG_IMAGE);
     }
 
     /** Gets the Arrow compression type and compression level of the table. */

@@ -23,7 +23,6 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.rpc.gateway.CoordinatorGateway;
 import org.apache.fluss.rpc.messages.AdjustIsrRequest;
 import org.apache.fluss.rpc.messages.AdjustIsrResponse;
-import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.server.entity.AdjustIsrResultForBucket;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.utils.MapUtils;
@@ -102,7 +101,15 @@ public class AdjustIsrManager {
             // Copy current unsent ISRs but don't remove from the map, they get cleared in the
             // response callback.
             List<AdjustIsrItem> adjustIsrItemList = new ArrayList<>(unsentAdjustIsrMap.values());
-            sendAdjustIsrRequest(adjustIsrItemList);
+            try {
+                sendAdjustIsrRequest(adjustIsrItemList);
+            } catch (Throwable e) {
+                // Caught any top level exceptions
+                handleAdjustIsrRequestError(adjustIsrItemList, e);
+                // If we received a top-level error from the coordinator, retry
+                // the request in near future.
+                scheduler.scheduleOnce("send-adjust-isr", this::maybePropagateIsrAdjust, 50);
+            }
         }
     }
 
@@ -123,28 +130,35 @@ public class AdjustIsrManager {
                 .adjustIsr(adjustIsrRequest)
                 .whenComplete(
                         (response, exception) -> {
-                            Errors errors;
                             try {
-                                if (exception != null) {
-                                    errors = Errors.forException(exception);
+                                if (null != exception) {
+                                    handleAdjustIsrRequestError(adjustIsrItemList, exception);
+                                    // If we received a top-level error from the coordinator, retry
+                                    // the request in near future.
+                                    scheduler.scheduleOnce(
+                                            "send-adjust-isr", this::maybePropagateIsrAdjust, 50);
+                                    return;
                                 } else {
                                     handleAdjustIsrResponse(response, adjustIsrItemList);
-                                    errors = Errors.NONE;
                                 }
                             } finally {
                                 // clear the flag so future requests can proceed.
                                 clearInFlightRequest();
                             }
-
-                            if (errors == Errors.NONE) {
-                                maybePropagateIsrAdjust();
-                            } else {
-                                // If we received a top-level error from the coordinator, retry
-                                // the request in near future.
-                                scheduler.scheduleOnce(
-                                        "send-adjust-isr", this::maybePropagateIsrAdjust, 50);
-                            }
+                            maybePropagateIsrAdjust();
                         });
+    }
+
+    private void handleAdjustIsrRequestError(
+            List<AdjustIsrItem> adjustIsrItemList, Throwable error) {
+        LOG.error("Request adjust isr failed.", error);
+        adjustIsrItemList.forEach(
+                item -> {
+                    AdjustIsrItem adjustIsrItem = unsentAdjustIsrMap.remove(item.tableBucket);
+                    if (null != adjustIsrItem) {
+                        adjustIsrItem.future.completeExceptionally(error);
+                    }
+                });
     }
 
     private void handleAdjustIsrResponse(

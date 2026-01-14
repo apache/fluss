@@ -31,19 +31,18 @@ import java.util.concurrent.CompletableFuture;
 public interface UpsertWriter extends TableWriter {
 
     /**
-     * Inserts row into Fluss table if they do not already exist, or updates them if they do exist.
+     * Inserts a record into Fluss table if it does not already exist, or updates it if it does.
      *
-     * @param row the row to upsert.
+     * @param record the record to upsert.
      * @return A {@link CompletableFuture} that always returns upsert result when complete normally.
      */
-    CompletableFuture<UpsertResult> upsert(InternalRow row);
+    CompletableFuture<UpsertResult> upsert(InternalRow record);
 
     /**
-     * Delete certain row by the input row in Fluss table, the input row must contain the primary
-     * key.
+     * Delete a certain record from the Fluss table. The input must contain the primary key fields.
      *
-     * @param row the row to delete.
+     * @param record the record to delete.
      * @return A {@link CompletableFuture} that always delete result when complete normally.
      */
-    CompletableFuture<DeleteResult> delete(InternalRow row);
+    CompletableFuture<DeleteResult> delete(InternalRow record);
 }

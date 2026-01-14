@@ -19,6 +19,8 @@ package org.apache.fluss.server.coordinator;
 
 import org.apache.fluss.cluster.Endpoint;
 import org.apache.fluss.cluster.TabletServerInfo;
+import org.apache.fluss.cluster.rebalance.RebalancePlanForBucket;
+import org.apache.fluss.cluster.rebalance.RebalanceStatus;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.FencedLeaderEpochException;
@@ -28,14 +30,19 @@ import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableBucketReplica;
+import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
+import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.messages.AdjustIsrResponse;
+import org.apache.fluss.rpc.messages.ApiMessage;
 import org.apache.fluss.rpc.messages.CommitKvSnapshotResponse;
 import org.apache.fluss.rpc.messages.CommitRemoteLogManifestResponse;
 import org.apache.fluss.rpc.messages.NotifyKvSnapshotOffsetRequest;
 import org.apache.fluss.rpc.messages.NotifyRemoteLogOffsetsRequest;
+import org.apache.fluss.rpc.messages.UpdateMetadataRequest;
+import org.apache.fluss.rpc.protocol.ApiKeys;
 import org.apache.fluss.server.coordinator.event.AccessContextEvent;
 import org.apache.fluss.server.coordinator.event.AdjustIsrReceivedEvent;
 import org.apache.fluss.server.coordinator.event.CommitKvSnapshotEvent;
@@ -48,8 +55,11 @@ import org.apache.fluss.server.entity.CommitKvSnapshotData;
 import org.apache.fluss.server.entity.CommitRemoteLogManifestData;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
 import org.apache.fluss.server.kv.snapshot.ZooKeeperCompletedSnapshotHandleStore;
+import org.apache.fluss.server.metadata.BucketMetadata;
+import org.apache.fluss.server.metadata.ClusterMetadata;
 import org.apache.fluss.server.metadata.CoordinatorMetadataCache;
 import org.apache.fluss.server.metadata.ServerInfo;
+import org.apache.fluss.server.metadata.TableMetadata;
 import org.apache.fluss.server.metrics.group.TestingMetricGroups;
 import org.apache.fluss.server.tablet.TestTabletServerGateway;
 import org.apache.fluss.server.zk.NOPErrorHandler;
@@ -61,6 +71,7 @@ import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
 import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.server.zk.data.TabletServerRegistration;
+import org.apache.fluss.server.zk.data.ZkData;
 import org.apache.fluss.server.zk.data.ZkData.PartitionIdsZNode;
 import org.apache.fluss.server.zk.data.ZkData.TableIdsZNode;
 import org.apache.fluss.testutils.common.AllCallbackWrapper;
@@ -104,6 +115,7 @@ import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.Offl
 import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.OnlineReplica;
 import static org.apache.fluss.server.testutils.KvTestUtils.mockCompletedSnapshot;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getAdjustIsrResponseData;
+import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getUpdateMetadataRequestData;
 import static org.apache.fluss.server.utils.TableAssignmentUtils.generateAssignment;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.apache.fluss.testutils.common.CommonTestUtils.waitValue;
@@ -439,6 +451,9 @@ class CoordinatorEventProcessorTest {
 
         t2Bucket0State = fromCtx(ctx -> ctx.getBucketState(t2Bucket0));
         assertThat(t2Bucket0State).isEqualTo(OnlineBucket);
+
+        // clean up the tablet server 3
+        ZOO_KEEPER_EXTENSION_WRAPPER.getCustomExtension().cleanupPath(ZkData.ServerIdZNode.path(3));
     }
 
     @Test
@@ -707,7 +722,7 @@ class CoordinatorEventProcessorTest {
 
     @Test
     void testNotifyOffsetsWithShrinkISR(@TempDir Path tempDir) throws Exception {
-        initCoordinatorChannel();
+        initCoordinatorChannel(Collections.singleton(ApiKeys.UPDATE_METADATA));
         TablePath t1 = TablePath.of(defaultDatabase, "test_notify_with_shrink_isr");
         final long t1Id =
                 createTable(
@@ -764,7 +779,7 @@ class CoordinatorEventProcessorTest {
         verifyReceiveRequestExceptFor(3, leader, NotifyRemoteLogOffsetsRequest.class);
 
         // verify CommitKvSnapshot trigger notify offsets request
-        initCoordinatorChannel();
+        initCoordinatorChannel(Collections.singleton(ApiKeys.UPDATE_METADATA));
         CompletedSnapshot completedSnapshot = mockCompletedSnapshot(tempDir, tableBucket, 0);
         CompletableFuture<CommitKvSnapshotResponse> responseCompletableFuture2 =
                 new CompletableFuture<>();
@@ -833,6 +848,133 @@ class CoordinatorEventProcessorTest {
         assertThat(resultForBucketMap.values()).allMatch(AdjustIsrResultForBucket::succeeded);
     }
 
+    @Test
+    void testSchemaChange() throws Exception {
+        // make sure all request to gateway should be successful
+        initCoordinatorChannel();
+        // create a table,
+        TablePath t1 = TablePath.of(defaultDatabase, "create_schema_change");
+        int nBuckets = 1;
+        int replicationFactor = 3;
+        TableAssignment tableAssignment =
+                generateAssignment(
+                        nBuckets,
+                        replicationFactor,
+                        new TabletServerInfo[] {
+                            new TabletServerInfo(0, "rack0"),
+                            new TabletServerInfo(1, "rack1"),
+                            new TabletServerInfo(2, "rack2")
+                        });
+        // create table
+        List<Integer> replicas = tableAssignment.getBucketAssignment(0).getReplicas();
+        metadataManager.createTable(t1, TEST_TABLE, tableAssignment, false);
+        TableInfo tableInfo = metadataManager.getTable(t1);
+
+        retry(
+                Duration.ofMinutes(1),
+                () ->
+                        verifyMetadataUpdateRequest(
+                                3,
+                                new TableMetadata(
+                                        tableInfo,
+                                        Collections.singletonList(
+                                                new BucketMetadata(
+                                                        0, replicas.get(0), 0, replicas)))));
+
+        // alter table column.
+        alterTable(
+                t1,
+                Collections.singletonList(
+                        TableChange.addColumn(
+                                "add_column",
+                                DataTypes.INT(),
+                                null,
+                                TableChange.ColumnPosition.last())));
+        TableInfo tableInfo2 = metadataManager.getTable(t1);
+        assertThat(tableInfo2.getSchema())
+                .isEqualTo(
+                        Schema.newBuilder()
+                                .column("a", DataTypes.INT())
+                                .column("add_column", DataTypes.INT())
+                                .primaryKey("a")
+                                .build());
+
+        retry(
+                Duration.ofMinutes(1),
+                () ->
+                        verifyMetadataUpdateRequest(
+                                3, new TableMetadata(tableInfo2, Collections.emptyList())));
+    }
+
+    @Test
+    void testDoBucketReassignment() throws Exception {
+        zookeeperClient.registerTabletServer(
+                3,
+                new TabletServerRegistration(
+                        "rack3",
+                        Collections.singletonList(
+                                new Endpoint("host3", 1001, DEFAULT_LISTENER_NAME)),
+                        System.currentTimeMillis()));
+
+        initCoordinatorChannel();
+        TablePath t1 = TablePath.of(defaultDatabase, "test_bucket_reassignment_table");
+        // Mock un-balanced table assignment.
+        Map<Integer, BucketAssignment> bucketAssignments = new HashMap<>();
+        bucketAssignments.put(0, BucketAssignment.of(0, 1, 3));
+        TableAssignment tableAssignment = new TableAssignment(bucketAssignments);
+        long t1Id =
+                metadataManager.createTable(
+                        t1, CoordinatorEventProcessorTest.TEST_TABLE, tableAssignment, false);
+        TableBucket tb0 = new TableBucket(t1Id, 0);
+        verifyIsr(tb0, 0, Arrays.asList(0, 1, 3));
+
+        // trigger bucket reassignment for tb0:
+        // bucket0 -> (0, 1, 2)
+        Map<TableBucket, RebalancePlanForBucket> rebalancePlan = new HashMap<>();
+        RebalancePlanForBucket planForBucket0 =
+                new RebalancePlanForBucket(
+                        tb0, 0, 0, Arrays.asList(0, 1, 3), Arrays.asList(0, 1, 2));
+
+        rebalancePlan.put(tb0, planForBucket0);
+        // try to execute.
+        eventProcessor
+                .getRebalanceManager()
+                .registerRebalance(
+                        "rebalance-task-jdsds1", rebalancePlan, RebalanceStatus.NOT_STARTED);
+
+        // Mock to finish rebalance tasks, in production case, this need to be trigged by receiving
+        // AdjustIsrRequest.
+        Map<TableBucket, LeaderAndIsr> leaderAndIsrMap = new HashMap<>();
+        CompletableFuture<AdjustIsrResponse> respCallback = new CompletableFuture<>();
+
+        // This isr list equals originReplicas + addingReplicas. the bucket epoch is 1.
+        leaderAndIsrMap.put(tb0, new LeaderAndIsr(0, 0, Arrays.asList(0, 1, 2, 3), 0, 1));
+        eventProcessor
+                .getCoordinatorEventManager()
+                .put(new AdjustIsrReceivedEvent(leaderAndIsrMap, respCallback));
+        respCallback.get();
+        verifyIsr(tb0, 0, Arrays.asList(0, 1, 2));
+
+        // clean up the tablet server 3
+        ZOO_KEEPER_EXTENSION_WRAPPER.getCustomExtension().cleanupPath(ZkData.ServerIdZNode.path(3));
+    }
+
+    private void verifyIsr(TableBucket tb, int expectedLeader, List<Integer> expectedIsr)
+            throws Exception {
+        LeaderAndIsr leaderAndIsr =
+                waitValue(
+                        () -> fromCtx((ctx) -> ctx.getBucketLeaderAndIsr(tb)),
+                        Duration.ofMinutes(1),
+                        "leader not elected");
+        LeaderAndIsr newLeaderAndIsrOfZk = zookeeperClient.getLeaderAndIsr(tb).get();
+        assertThat(leaderAndIsr.leader())
+                .isEqualTo(newLeaderAndIsrOfZk.leader())
+                .isEqualTo(expectedLeader);
+        assertThat(leaderAndIsr.isr())
+                .isEqualTo(newLeaderAndIsrOfZk.isr())
+                .hasSameElementsAs(expectedIsr);
+    }
+
     private CoordinatorEventProcessor buildCoordinatorEventProcessor() {
         return new CoordinatorEventProcessor(
                 zookeeperClient,
@@ -852,7 +994,17 @@ class CoordinatorEventProcessorTest {
                 testCoordinatorChannelManager,
                 Arrays.stream(zookeeperClient.getSortedTabletServerList())
                         .boxed()
-                        .collect(Collectors.toSet()));
+                        .collect(Collectors.toSet()),
+                Collections.emptySet());
+    }
+
+    private void initCoordinatorChannel(Set<ApiKeys> ignoreApiKeys) throws Exception {
+        makeSendLeaderAndStopRequestAlwaysSuccess(
+                testCoordinatorChannelManager,
+                Arrays.stream(zookeeperClient.getSortedTabletServerList())
+                        .boxed()
+                        .collect(Collectors.toSet()),
+                ignoreApiKeys);
     }
 
     private void initCoordinatorChannel(int failedServer) throws Exception {
@@ -1093,13 +1245,30 @@ class CoordinatorEventProcessorTest {
             if (i == notReceiveServer) {
                 // should not contain NotifyKvSnapshotOffsetRequest
                 assertThatThrownBy(() -> testTabletServerGateway.getRequest(0))
-                        .isInstanceOf(IllegalStateException.class)
-                        .hasMessage("No requests pending for inbound response.");
+                        .isInstanceOf(IllegalStateException.class);
             } else {
                 // should contain NotifyKvSnapshotOffsetRequest
                 assertThat(testTabletServerGateway.pendingRequestSize()).isNotZero();
                 assertThat(testTabletServerGateway.getRequest(0)).isInstanceOf(requestClass);
             }
+        }
+    }
+
+    private void verifyMetadataUpdateRequest(int serverCount, TableMetadata tableMetadata) {
+        // make sure all follower should receive notify offsets request
+        for (int i = 0; i < serverCount; i++) {
+            TestTabletServerGateway testTabletServerGateway =
+                    (TestTabletServerGateway)
+                            testCoordinatorChannelManager.getTabletServerGateway(i).get();
+            assertThat(testTabletServerGateway.pendingRequestSize()).isNotZero();
+            ApiMessage lastRequest =
+                    testTabletServerGateway.getRequest(
+                            testTabletServerGateway.pendingRequestSize() - 1);
+            assertThat(lastRequest).isInstanceOf(UpdateMetadataRequest.class);
+
+            ClusterMetadata clusterMetadata =
+                    getUpdateMetadataRequestData((UpdateMetadataRequest) lastRequest);
+            assertThat(clusterMetadata.getTableMetadataList()).containsExactly(tableMetadata);
         }
     }
 
@@ -1133,6 +1302,10 @@ class CoordinatorEventProcessorTest {
                 generateAssignment(N_BUCKETS, REPLICATION_FACTOR, servers);
         return metadataManager.createTable(
                 tablePath, CoordinatorEventProcessorTest.TEST_TABLE, tableAssignment, false);
+    }
+
+    private void alterTable(TablePath tablePath, List<TableChange> schemaChanges) {
+        metadataManager.alterTableSchema(tablePath, schemaChanges, true, null, null);
     }
 
     private TableDescriptor getPartitionedTable() {

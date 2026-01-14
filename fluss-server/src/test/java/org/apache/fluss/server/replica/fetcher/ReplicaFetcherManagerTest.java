@@ -63,7 +63,7 @@ class ReplicaFetcherManagerTest extends ReplicaTestBase {
                                 conf,
                                 TABLET_SERVER_ID,
                                 leader.id(),
-                                new TestTabletServerGateway(false)),
+                                new TestTabletServerGateway(false, Collections.emptySet())),
                         (int)
                                 conf.get(ConfigOptions.LOG_REPLICA_FETCH_BACKOFF_INTERVAL)
                                         .toMillis());

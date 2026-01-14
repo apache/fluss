@@ -27,10 +27,11 @@ import java.util.Objects;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /**
- * Data type of an associative array that maps keys (including {@code NULL}) to values (including
- * {@code NULL}). A map cannot contain duplicate keys; each key can map to at most one value. There
- * is no restriction of key types; it is the responsibility of the user to ensure uniqueness. The
- * map type is an extension to the SQL standard.
+ * Data type of an associative array that maps keys to values (including {@code NULL}). A map cannot
+ * contain duplicate keys; each key can map to at most one value. Map keys are always non-nullable
+ * and will be automatically converted to non-nullable types if a nullable key type is provided.
+ * There is no restriction of key types; it is the responsibility of the user to ensure uniqueness.
+ * The map type is an extension to the SQL standard.
  *
  * @since 0.1
  */
@@ -46,8 +47,11 @@ public final class MapType extends DataType {
 
     public MapType(boolean isNullable, DataType keyType, DataType valueType) {
         super(isNullable, DataTypeRoot.MAP);
-        this.keyType = checkNotNull(keyType, "Key type must not be null.");
-        this.valueType = checkNotNull(valueType, "Value type must not be null.");
+        checkNotNull(keyType, "Key type must not be null.");
+        checkNotNull(valueType, "Value type must not be null.");
+        // Map keys are always non-nullable, convert automatically if needed
+        this.keyType = keyType.isNullable() ? keyType.copy(false) : keyType;
+        this.valueType = valueType;
     }
 
     public MapType(DataType keyType, DataType valueType) {

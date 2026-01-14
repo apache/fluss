@@ -18,13 +18,18 @@
 package org.apache.fluss.flink.utils;
 
 import org.apache.fluss.client.table.scanner.ScanRecord;
+import org.apache.fluss.flink.row.FlinkAsFlussArray;
 import org.apache.fluss.record.ChangeType;
+import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.indexed.IndexedRow;
 import org.apache.fluss.row.indexed.IndexedRowWriter;
 import org.apache.fluss.types.DataType;
+import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.DateTimeUtils;
 
+import org.apache.flink.table.data.ArrayData;
+import org.apache.flink.table.data.MapData;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.types.RowKind;
 import org.junit.jupiter.api.Test;
@@ -34,6 +39,7 @@ import java.math.BigInteger;
 import java.time.LocalDate;
 import java.time.LocalTime;
 
+import static org.apache.fluss.row.BinaryString.fromString;
 import static org.apache.fluss.row.TestInternalRowGenerator.createAllRowType;
 import static org.apache.fluss.row.TestInternalRowGenerator.createAllTypes;
 import static org.apache.fluss.row.indexed.IndexedRowTest.genRecordForAllTypes;
@@ -90,7 +96,54 @@ class FlussRowToFlinkRowConverterTest {
 
             assertThat(flinkRow.getTimestamp(17, 1).toString())
                     .isEqualTo("2023-10-25T12:01:13.182");
-            assertThat(flinkRow.isNullAt(18)).isTrue();
+            assertThat(flinkRow.getTimestamp(18, 5).toString())
+                    .isEqualTo("2023-10-25T12:01:13.182");
+
+            // array of int
+            Integer[] array1 =
+                    new FlinkAsFlussArray(flinkRow.getArray(19)).toObjectArray(DataTypes.INT());
+            assertThat(array1).isEqualTo(new Integer[] {1, 2, 3, 4, 5, -11, null, 444, 102234});
+
+            // array of float
+            Float[] array2 =
+                    new FlinkAsFlussArray(flinkRow.getArray(20)).toObjectArray(DataTypes.FLOAT());
+            assertThat(array2)
+                    .isEqualTo(
+                            new Float[] {
+                                0.1f, 1.1f, -0.5f, 6.6f, Float.MAX_VALUE, Float.MIN_VALUE
+                            });
+
+            // array of string
+            assertThat(flinkRow.getArray(21).size()).isEqualTo(3);
+            BinaryString[] stringArray1 =
+                    new FlinkAsFlussArray(flinkRow.getArray(21).getArray(0))
+                            .toObjectArray(DataTypes.STRING());
+            assertThat(stringArray1)
+                    .isEqualTo(new BinaryString[] {fromString("a"), null, fromString("c")});
+            assertThat(flinkRow.getArray(21).isNullAt(1)).isTrue();
+            BinaryString[] stringArray2 =
+                    new FlinkAsFlussArray(flinkRow.getArray(21).getArray(2))
+                            .toObjectArray(DataTypes.STRING());
+            assertThat(stringArray2)
+                    .isEqualTo(new BinaryString[] {fromString("hello"), fromString("world")});
+
+            // map
+            MapData mapData = flinkRow.getMap(22);
+            ArrayData keyArray = mapData.keyArray();
+            ArrayData valueArray = mapData.valueArray();
+            assertThat(keyArray.getInt(0)).isEqualTo(0);
+            assertThat(valueArray.isNullAt(0)).isTrue();
+            assertThat(keyArray.getInt(1)).isEqualTo(1);
+            assertThat(valueArray.getString(1).toString()).isEqualTo("1");
+            assertThat(keyArray.getInt(2)).isEqualTo(2);
+            assertThat(valueArray.getString(2).toString()).isEqualTo("2");
+
+            // nested row: ROW<u1: INT, u2: ROW<v1: INT>, u3: STRING>
+            assertThat(flinkRow.getRow(23, 3)).isNotNull();
+            assertThat(flinkRow.getRow(23, 3).getInt(0)).isEqualTo(123);
+            assertThat(flinkRow.getRow(23, 3).getRow(1, 1)).isNotNull();
+            assertThat(flinkRow.getRow(23, 3).getRow(1, 1).getInt(0)).isEqualTo(22);
+            assertThat(flinkRow.getRow(23, 3).getString(2).toString()).isEqualTo("Test");
         }
     }
 }

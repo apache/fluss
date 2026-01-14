@@ -53,7 +53,7 @@ public class PaimonLakeTieringFactory
     @Override
     public LakeCommitter<PaimonWriteResult, PaimonCommittable> createLakeCommitter(
             CommitterInitContext committerInitContext) throws IOException {
-        return new PaimonLakeCommitter(paimonCatalogProvider, committerInitContext.tablePath());
+        return new PaimonLakeCommitter(paimonCatalogProvider, committerInitContext);
     }
 
     @Override

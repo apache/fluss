@@ -18,6 +18,7 @@
 package org.apache.fluss.config;
 
 import org.apache.fluss.annotation.PublicStable;
+import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.utils.CollectionUtils;
 
 import org.slf4j.Logger;
@@ -643,7 +644,8 @@ public class Configuration implements Serializable, ReadableConfig {
         }
     }
 
-    private Optional<Object> getRawValue(String key) {
+    @VisibleForTesting
+    public Optional<Object> getRawValue(String key) {
         if (key == null) {
             throw new NullPointerException("Key must not be null.");
         }

@@ -37,7 +37,9 @@ import org.junit.jupiter.api.Test;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -125,7 +127,7 @@ public class FlussDeserializationSchemaTest {
 
     @Test
     public void testJsonStringDeserialize() throws Exception {
-        List<DataField> fields =
+        List<DataField> sourceFields =
                 Arrays.asList(
                         new DataField("char", DataTypes.CHAR(64)),
                         new DataField("string", DataTypes.STRING()),
@@ -145,7 +147,12 @@ public class FlussDeserializationSchemaTest {
                         new DataField("timestampWithLocalTimeZone", DataTypes.TIMESTAMP_LTZ()),
                         new DataField("nullVal", DataTypes.STRING()));
 
-        RowType rowType = new RowType(fields);
+        RowType sourceRowType = new RowType(sourceFields);
+
+        List<DataField> targetFields = new ArrayList<>(sourceFields);
+        targetFields.add(new DataField("new_column", DataTypes.STRING()));
+        Collections.reverse(targetFields);
+        RowType targetRowType = new RowType(targetFields);
 
         // Mon Apr 21 2025 10:00:00 GMT+0000
         long testTimestampInSeconds = 1745229600;
@@ -174,7 +181,7 @@ public class FlussDeserializationSchemaTest {
         // Create deserializer
         JsonStringDeserializationSchema deserializer = new JsonStringDeserializationSchema();
         // Test deserialization
-        deserializer.open(new DeserializerInitContextImpl(null, null, rowType));
+        deserializer.open(new DeserializerInitContextImpl(null, null, sourceRowType));
         String result = deserializer.deserialize(scanRecord);
 
         String rowJson =

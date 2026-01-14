@@ -19,8 +19,8 @@ package org.apache.fluss.flink.tiering;
 
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.flink.adapter.MultipleParameterToolAdapter;
 
-import org.apache.flink.api.java.utils.MultipleParameterTool;
 import org.apache.flink.configuration.JobManagerOptions;
 import org.apache.flink.core.execution.JobClient;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
@@ -30,16 +30,18 @@ import java.util.Map;
 import static org.apache.flink.runtime.executiongraph.failover.FailoverStrategyFactoryLoader.FULL_RESTART_STRATEGY_NAME;
 import static org.apache.fluss.flink.tiering.source.TieringSourceOptions.DATA_LAKE_CONFIG_PREFIX;
 import static org.apache.fluss.utils.PropertiesUtils.extractAndRemovePrefix;
+import static org.apache.fluss.utils.PropertiesUtils.extractPrefix;
 
 /** The entrypoint for Flink to tier fluss data to lake format like paimon. */
 public class FlussLakeTieringEntrypoint {
 
     private static final String FLUSS_CONF_PREFIX = "fluss.";
+    private static final String LAKE_TIERING_CONFIG_PREFIX = "lake.tiering.";
 
     public static void main(String[] args) throws Exception {
 
         // parse params
-        final MultipleParameterTool params = MultipleParameterTool.fromArgs(args);
+        final MultipleParameterToolAdapter params = MultipleParameterToolAdapter.fromArgs(args);
         Map<String, String> paramsMap = params.toMap();
 
         // extract fluss config
@@ -65,6 +67,10 @@ public class FlussLakeTieringEntrypoint {
                 extractAndRemovePrefix(
                         paramsMap, String.format("%s%s.", DATA_LAKE_CONFIG_PREFIX, dataLake));
 
+        // extract tiering service config
+        Map<String, String> lakeTieringConfigMap =
+                extractPrefix(paramsMap, LAKE_TIERING_CONFIG_PREFIX);
+
         // now, we must use full restart strategy if any task is failed,
         // since committer is stateless, if tiering committer is failover, committer
         // will lost the collected committable, and will never collect all committable to do commit
@@ -83,6 +89,7 @@ public class FlussLakeTieringEntrypoint {
                                 execEnv,
                                 Configuration.fromMap(flussConfigMap),
                                 Configuration.fromMap(lakeConfigMap),
+                                Configuration.fromMap(lakeTieringConfigMap),
                                 dataLake)
                         .build();
 

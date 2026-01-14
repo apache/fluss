@@ -38,4 +38,9 @@ public class TableAppend implements Append {
     public AppendWriter createWriter() {
         return new AppendWriterImpl(tablePath, tableInfo, writerClient);
     }
+
+    @Override
+    public <T> TypedAppendWriter<T> createTypedWriter(Class<T> pojoClass) {
+        return new TypedAppendWriterImpl<>(createWriter(), pojoClass, tableInfo);
+    }
 }

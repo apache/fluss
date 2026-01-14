@@ -170,12 +170,21 @@ public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
                 authenticator.isCompleted()
                         ? ConnectionState.READY
                         : ConnectionState.AUTHENTICATING);
+
+        // Register this channel with its RequestChannel. The RequestChannel will manage this
+        // channel's lifecycle and backpressure state.
+        requestChannel.registerChannel(ctx.channel());
+
         // TODO: connection metrics (count, client tags, receive request avg idle time, etc.)
     }
 
     @Override
     public void channelInactive(ChannelHandlerContext ctx) throws Exception {
         super.channelInactive(ctx);
+
+        // Unregister this channel from its RequestChannel. The RequestChannel will clean up both
+        // the association and any paused state.
+        requestChannel.unregisterChannel(ctx.channel());
     }
 
     @Override

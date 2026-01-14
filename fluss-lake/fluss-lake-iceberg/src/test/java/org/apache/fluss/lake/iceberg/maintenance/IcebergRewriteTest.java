@@ -41,14 +41,13 @@ import org.apache.iceberg.expressions.Expressions;
 import org.apache.iceberg.io.CloseableIterable;
 import org.apache.iceberg.io.TaskWriter;
 import org.apache.iceberg.types.Types;
+import org.apache.iceberg.util.DataFileSet;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.File;
 import java.io.IOException;
-import java.util.ArrayList;
-import java.util.List;
 
 import static org.apache.fluss.lake.iceberg.utils.IcebergConversions.toIceberg;
 import static org.apache.fluss.metadata.TableDescriptor.BUCKET_COLUMN_NAME;
@@ -232,7 +231,7 @@ class IcebergRewriteTest {
 
     private static void appendTinyFilesWithRowsAndBucket(
             Table table, int files, int rowsPerFile, int baseOffset, int bucket) throws Exception {
-        List<DataFile> toAppend = new ArrayList<>(files);
+        DataFileSet toAppend = DataFileSet.create();
         for (int i = 0; i < files; i++) {
             toAppend.add(
                     writeTinyDataFile(table, rowsPerFile, baseOffset + (i * rowsPerFile), bucket));

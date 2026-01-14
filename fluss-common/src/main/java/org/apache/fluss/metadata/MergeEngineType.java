@@ -52,9 +52,16 @@ public enum MergeEngineType {
      *   <li>Null version value is treated as the smallest version (i.e., Long.MIN_VALUE)
      * </ul>
      */
-    VERSIONED;
+    VERSIONED,
 
-    // introduce AGGREGATE merge engine in the future
+    /**
+     * A merge engine that aggregates rows with the same primary key using field-level aggregate
+     * functions. Each non-primary-key field can have its own aggregate function (e.g., sum, max,
+     * min, last_value, etc.). This allows for flexible aggregation semantics at the field level.
+     *
+     * @since 0.9
+     */
+    AGGREGATION;
 
     /** Creates a {@link MergeEngineType} from the given string. */
     public static MergeEngineType fromString(String type) {
@@ -63,6 +70,8 @@ public enum MergeEngineType {
                 return FIRST_ROW;
             case "VERSIONED":
                 return VERSIONED;
+            case "AGGREGATION":
+                return AGGREGATION;
             default:
                 throw new IllegalArgumentException("Unsupported merge engine type: " + type);
         }

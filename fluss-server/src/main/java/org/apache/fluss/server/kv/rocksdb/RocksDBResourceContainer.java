@@ -22,17 +22,21 @@ import org.apache.fluss.config.ConfigOption;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.ReadableConfig;
+import org.apache.fluss.server.kv.KvManager;
 import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.IOUtils;
 
 import org.rocksdb.BlockBasedTableConfig;
 import org.rocksdb.BloomFilter;
+import org.rocksdb.Cache;
 import org.rocksdb.ColumnFamilyOptions;
 import org.rocksdb.CompactionStyle;
 import org.rocksdb.CompressionType;
 import org.rocksdb.DBOptions;
 import org.rocksdb.InfoLogLevel;
+import org.rocksdb.LRUCache;
 import org.rocksdb.PlainTableConfig;
+import org.rocksdb.RateLimiter;
 import org.rocksdb.ReadOptions;
 import org.rocksdb.Statistics;
 import org.rocksdb.TableFormatConfig;
@@ -47,6 +51,8 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
+
+import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /* This file is based on source code of Apache Flink Project (https://flink.apache.org/), licensed by the Apache
  * Software Foundation (ASF) under the Apache License, Version 2.0. See the NOTICE file distributed with this work for
@@ -73,22 +79,39 @@ public class RocksDBResourceContainer implements AutoCloseable {
 
     private final boolean enableStatistics;
 
+    /** The shared rate limiter for all RocksDB instances. */
+    private final RateLimiter sharedRateLimiter;
+
+    /** The statistics object for RocksDB, null if statistics is disabled. */
+    @Nullable private Statistics statistics;
+
+    /** The block cache for RocksDB, shared across column families. */
+    @Nullable private Cache blockCache;
+
     /** The handles to be closed when the container is closed. */
     private final ArrayList<AutoCloseable> handlesToClose;
 
     @VisibleForTesting
     RocksDBResourceContainer() {
-        this(new Configuration(), null, false);
+        this(new Configuration(), null, false, KvManager.getDefaultRateLimiter());
     }
 
     public RocksDBResourceContainer(ReadableConfig configuration, @Nullable File instanceBasePath) {
-        this(configuration, instanceBasePath, false);
+        this(configuration, instanceBasePath, false, KvManager.getDefaultRateLimiter());
     }
 
     public RocksDBResourceContainer(
             ReadableConfig configuration,
             @Nullable File instanceBasePath,
             boolean enableStatistics) {
+        this(configuration, instanceBasePath, enableStatistics, KvManager.getDefaultRateLimiter());
+    }
+
+    public RocksDBResourceContainer(
+            ReadableConfig configuration,
+            @Nullable File instanceBasePath,
+            boolean enableStatistics,
+            RateLimiter sharedRateLimiter) {
         this.configuration = configuration;
 
         this.instanceRocksDBPath =
@@ -96,6 +119,8 @@ public class RocksDBResourceContainer implements AutoCloseable {
                         ? RocksDBKvBuilder.getInstanceRocksDBPath(instanceBasePath)
                         : null;
         this.enableStatistics = enableStatistics;
+        this.sharedRateLimiter =
+                checkNotNull(sharedRateLimiter, "sharedRateLimiter must not be null");
 
         this.handlesToClose = new ArrayList<>();
     }
@@ -117,13 +142,28 @@ public class RocksDBResourceContainer implements AutoCloseable {
         // add necessary default options
         opt = opt.setCreateIfMissing(true);
 
+        // set shared rate limiter
+        opt.setRateLimiter(sharedRateLimiter);
+
         if (enableStatistics) {
-            Statistics statistics = new Statistics();
+            statistics = new Statistics();
             opt.setStatistics(statistics);
             handlesToClose.add(statistics);
         }
 
         return opt;
+    }
+
+    /** Gets the Statistics object if statistics is enabled, null otherwise. */
+    @Nullable
+    public Statistics getStatistics() {
+        return statistics;
+    }
+
+    /** Gets the block cache used by RocksDB, null if not yet initialized. */
+    @Nullable
+    public Cache getBlockCache() {
+        return blockCache;
     }
 
     /** Gets the RocksDB {@link ColumnFamilyOptions} to be used for all RocksDB instances. */
@@ -262,8 +302,11 @@ public class RocksDBResourceContainer implements AutoCloseable {
         blockBasedTableConfig.setMetadataBlockSize(
                 internalGetOption(ConfigOptions.KV_METADATA_BLOCK_SIZE).getBytes());
 
-        blockBasedTableConfig.setBlockCacheSize(
-                internalGetOption(ConfigOptions.KV_BLOCK_CACHE_SIZE).getBytes());
+        // Create explicit LRUCache for accurate memory tracking
+        long blockCacheSize = internalGetOption(ConfigOptions.KV_BLOCK_CACHE_SIZE).getBytes();
+        blockCache = new LRUCache(blockCacheSize);
+        handlesToClose.add(blockCache);
+        blockBasedTableConfig.setBlockCache(blockCache);
 
         if (internalGetOption(ConfigOptions.KV_USE_BLOOM_FILTER)) {
             final double bitsPerKey = internalGetOption(ConfigOptions.KV_BLOOM_FILTER_BITS_PER_KEY);

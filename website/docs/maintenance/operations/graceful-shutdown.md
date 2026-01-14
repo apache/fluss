@@ -131,6 +131,6 @@ Monitor shutdown-related metrics:
 
 ## See Also
 
-- [Configuration](../configuration.md)
-- [Monitoring and Observability](../observability/monitor-metrics.md)
+- [Configuration](maintenance/configuration.md)
+- [Monitoring and Observability](maintenance/observability/monitor-metrics.md)
 - [Upgrading Fluss](upgrading.md)

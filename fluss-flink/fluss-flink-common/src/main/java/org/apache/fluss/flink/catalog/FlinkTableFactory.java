@@ -30,7 +30,6 @@ import org.apache.fluss.metadata.TablePath;
 
 import org.apache.flink.api.common.RuntimeExecutionMode;
 import org.apache.flink.configuration.ConfigOption;
-import org.apache.flink.configuration.CoreOptions;
 import org.apache.flink.configuration.ExecutionOptions;
 import org.apache.flink.configuration.ReadableConfig;
 import org.apache.flink.table.api.config.TableConfigOptions;
@@ -47,7 +46,6 @@ import org.apache.flink.table.factories.DynamicTableSourceFactory;
 import org.apache.flink.table.factories.FactoryUtil;
 import org.apache.flink.table.types.logical.RowType;
 
-import java.io.File;
 import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -148,7 +146,6 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
                 partitionKeyIndexes,
                 isStreamingMode,
                 startupOptions,
-                tableOptions.get(LookupOptions.MAX_RETRIES),
                 tableOptions.get(FlinkConnectorOptions.LOOKUP_ASYNC),
                 cache,
                 partitionDiscoveryIntervalMs,
@@ -244,10 +241,10 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
                     }
                 });
 
-        // pass flink io tmp dir to fluss client.
-        flussConfig.setString(
-                ConfigOptions.CLIENT_SCANNER_IO_TMP_DIR,
-                new File(flinkConfig.get(CoreOptions.TMP_DIRS), "/fluss").getAbsolutePath());
+        // Todo support LookupOptions.MAX_RETRIES. Currently, Fluss doesn't support connector level
+        // retry. The option 'client.lookup.max-retries' is only for dealing with the
+        // RetriableException return by server not all exceptions. Trace by:
+        // https://github.com/apache/fluss/issues/2099
         return flussConfig;
     }
 

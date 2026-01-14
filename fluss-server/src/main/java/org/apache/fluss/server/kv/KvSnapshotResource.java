@@ -46,11 +46,6 @@ public class KvSnapshotResource {
     /** Thread pool for async snapshot workers. */
     private final ExecutorService asyncOperationsThreadPool;
 
-    /**
-     * The executor service that the snapshot data uploader/downloader to upload and download data.
-     */
-    private final ExecutorService snapshotDataTransferService;
-
     /** A uploader to upload snapshot data in the async phase of kv snapshot. */
     private final KvSnapshotDataUploader kvSnapshotDataUploader;
 
@@ -59,12 +54,10 @@ public class KvSnapshotResource {
 
     private KvSnapshotResource(
             ScheduledExecutorService kvSnapshotScheduler,
-            ExecutorService snapshotDataTransferService,
             KvSnapshotDataUploader kvSnapshotDataUploader,
             KvSnapshotDataDownloader kvSnapshotDataDownloader,
             ExecutorService asyncOperationsThreadPool) {
         this.kvSnapshotScheduler = kvSnapshotScheduler;
-        this.snapshotDataTransferService = snapshotDataTransferService;
         this.kvSnapshotDataUploader = kvSnapshotDataUploader;
         this.kvSnapshotDataDownloader = kvSnapshotDataDownloader;
         this.asyncOperationsThreadPool = asyncOperationsThreadPool;
@@ -86,17 +79,12 @@ public class KvSnapshotResource {
         return kvSnapshotDataDownloader;
     }
 
-    public static KvSnapshotResource create(int serverId, Configuration conf) {
-        ExecutorService dataTransferThreadPool =
-                Executors.newFixedThreadPool(
-                        conf.getInt(ConfigOptions.KV_SNAPSHOT_TRANSFER_THREAD_NUM),
-                        new ExecutorThreadFactory("fluss-kv-snapshot-data-transfer"));
-
-        KvSnapshotDataUploader kvSnapshotDataUploader =
-                new KvSnapshotDataUploader(dataTransferThreadPool);
+    public static KvSnapshotResource create(
+            int serverId, Configuration conf, ExecutorService ioExecutor) {
+        KvSnapshotDataUploader kvSnapshotDataUploader = new KvSnapshotDataUploader(ioExecutor);
 
         KvSnapshotDataDownloader kvSnapshotDataDownloader =
-                new KvSnapshotDataDownloader(dataTransferThreadPool);
+                new KvSnapshotDataDownloader(ioExecutor);
 
         ScheduledExecutorService kvSnapshotScheduler =
                 Executors.newScheduledThreadPool(
@@ -116,17 +104,12 @@ public class KvSnapshotResource {
                         new ExecutorThreadFactory("fluss-kv-snapshot-async-operations"));
         return new KvSnapshotResource(
                 kvSnapshotScheduler,
-                dataTransferThreadPool,
                 kvSnapshotDataUploader,
                 kvSnapshotDataDownloader,
                 asyncOperationsThreadPool);
     }
 
     public void close() {
-        // both kvSnapshotDataUploader and kvSnapshotDataDownloader use snapshotDataTransferService
-        // so, we only need to close snapshotDataTransferService
-        snapshotDataTransferService.shutdownNow();
-
         // shutdown asyncOperationsThreadPool now
         asyncOperationsThreadPool.shutdownNow();
         // close kvSnapshotScheduler, also stop any actively executing task immediately

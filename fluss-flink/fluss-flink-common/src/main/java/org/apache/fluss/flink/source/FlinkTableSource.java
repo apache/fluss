@@ -31,6 +31,7 @@ import org.apache.fluss.flink.utils.PushdownUtils;
 import org.apache.fluss.flink.utils.PushdownUtils.FieldEqual;
 import org.apache.fluss.lake.source.LakeSource;
 import org.apache.fluss.lake.source.LakeSplit;
+import org.apache.fluss.metadata.ChangelogImage;
 import org.apache.fluss.metadata.DeleteBehavior;
 import org.apache.fluss.metadata.MergeEngineType;
 import org.apache.fluss.metadata.TablePath;
@@ -127,7 +128,6 @@ public class FlinkTableSource
     private final FlinkConnectorOptionsUtils.StartupOptions startupOptions;
 
     // options for lookup source
-    private final int lookupMaxRetryTimes;
     private final boolean lookupAsync;
     @Nullable private final LookupCache cache;
 
@@ -166,7 +166,6 @@ public class FlinkTableSource
             int[] partitionKeyIndexes,
             boolean streaming,
             FlinkConnectorOptionsUtils.StartupOptions startupOptions,
-            int lookupMaxRetryTimes,
             boolean lookupAsync,
             @Nullable LookupCache cache,
             long scanPartitionDiscoveryIntervalMs,
@@ -183,7 +182,6 @@ public class FlinkTableSource
         this.streaming = streaming;
         this.startupOptions = checkNotNull(startupOptions, "startupOptions must not be null");
 
-        this.lookupMaxRetryTimes = lookupMaxRetryTimes;
         this.lookupAsync = lookupAsync;
         this.cache = cache;
 
@@ -209,10 +207,32 @@ public class FlinkTableSource
                 if (mergeEngineType == MergeEngineType.FIRST_ROW) {
                     return ChangelogMode.insertOnly();
                 } else {
-                    // Check delete behavior configuration
                     Configuration tableConf = Configuration.fromMap(tableOptions);
                     DeleteBehavior deleteBehavior =
                             tableConf.get(ConfigOptions.TABLE_DELETE_BEHAVIOR);
+                    ChangelogImage changelogImage =
+                            tableConf.get(ConfigOptions.TABLE_CHANGELOG_IMAGE);
+                    if (changelogImage == ChangelogImage.WAL) {
+                        // When using WAL mode, produce INSERT and UPDATE_AFTER (and DELETE if
+                        // allowed), without UPDATE_BEFORE. Note: with default merge engine and full
+                        // row updates, an optimization converts INSERT to UPDATE_AFTER.
+                        if (deleteBehavior == DeleteBehavior.ALLOW) {
+                            // DELETE is still produced when delete behavior is allowed
+                            return ChangelogMode.newBuilder()
+                                    .addContainedKind(RowKind.INSERT)
+                                    .addContainedKind(RowKind.UPDATE_AFTER)
+                                    .addContainedKind(RowKind.DELETE)
+                                    .build();
+                        } else {
+                            // No DELETE when delete operations are ignored or disabled
+                            return ChangelogMode.newBuilder()
+                                    .addContainedKind(RowKind.INSERT)
+                                    .addContainedKind(RowKind.UPDATE_AFTER)
+                                    .build();
+                        }
+                    }
+
+                    // Using FULL mode, produce full changelog
                     if (deleteBehavior == DeleteBehavior.ALLOW) {
                         return ChangelogMode.all();
                     } else {
@@ -253,7 +273,6 @@ public class FlinkTableSource
                                 flussConfig,
                                 tableOutputType,
                                 primaryKeyIndexes,
-                                lookupMaxRetryTimes,
                                 projectedFields);
             } else if (limit > 0) {
                 results =
@@ -412,7 +431,6 @@ public class FlinkTableSource
                             flussConfig,
                             tablePath,
                             tableOutputType,
-                            lookupMaxRetryTimes,
                             lookupNormalizer,
                             projectedFields);
             if (cache != null) {
@@ -426,7 +444,6 @@ public class FlinkTableSource
                             flussConfig,
                             tablePath,
                             tableOutputType,
-                            lookupMaxRetryTimes,
                             lookupNormalizer,
                             projectedFields);
             if (cache != null) {
@@ -449,7 +466,6 @@ public class FlinkTableSource
                         partitionKeyIndexes,
                         streaming,
                         startupOptions,
-                        lookupMaxRetryTimes,
                         lookupAsync,
                         cache,
                         scanPartitionDiscoveryIntervalMs,
@@ -520,7 +536,11 @@ public class FlinkTableSource
                 return Result.of(Collections.emptyList(), filters);
             }
             singleRowFilter = lookupRow;
-            return Result.of(acceptedFilters, remainingFilters);
+
+            // FLINK-38635 We cannot determine whether this source will ultimately be used as a scan
+            // source or a lookup source. Since fluss lookup sources cannot accept filters yet, to
+            // be safe, we return all filters to the Flink planner.
+            return Result.of(acceptedFilters, filters);
         } else if (isPartitioned()) {
             // apply partition filter pushdown
             List<Predicate> converted = new ArrayList<>();
@@ -572,7 +592,11 @@ public class FlinkTableSource
                     }
                 }
             }
-            return Result.of(acceptedFilters, remainingFilters);
+
+            // FLINK-38635 We cannot determine whether this source will ultimately be used as a scan
+            // source or a lookup source. Since fluss lookup sources cannot accept filters yet, to
+            // be safe, we return all filters to the Flink planner.
+            return Result.of(acceptedFilters, filters);
         }
 
         return Result.of(Collections.emptyList(), filters);

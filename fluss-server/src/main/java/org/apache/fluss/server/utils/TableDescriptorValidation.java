@@ -26,10 +26,12 @@ import org.apache.fluss.exception.InvalidAlterTableException;
 import org.apache.fluss.exception.InvalidConfigException;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.TooManyBucketsException;
+import org.apache.fluss.metadata.AggFunction;
 import org.apache.fluss.metadata.DeleteBehavior;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.MergeEngineType;
+import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.types.DataType;
@@ -66,15 +68,19 @@ public class TableDescriptorValidation {
                                     TIMESTAMP_COLUMN_NAME,
                                     BUCKET_COLUMN_NAME)));
 
+    private static final List<DataTypeRoot> KEY_UNSUPPORTED_TYPES =
+            Arrays.asList(DataTypeRoot.ARRAY, DataTypeRoot.MAP, DataTypeRoot.ROW);
+
     /** Validate table descriptor to create is valid and contain all necessary information. */
     public static void validateTableDescriptor(TableDescriptor tableDescriptor, int maxBucketNum) {
-        boolean hasPrimaryKey = tableDescriptor.getSchema().getPrimaryKey().isPresent();
-        RowType schema = tableDescriptor.getSchema().getRowType();
+        Schema schema = tableDescriptor.getSchema();
+        boolean hasPrimaryKey = schema.getPrimaryKey().isPresent();
         Configuration tableConf = Configuration.fromMap(tableDescriptor.getProperties());
 
         // check properties should only contain table.* options,
         // and this cluster know it, and value is valid
         for (String key : tableConf.keySet()) {
+
             if (!TABLE_OPTIONS.containsKey(key)) {
                 if (isTableStorageConfig(key)) {
                     throw new InvalidConfigException(
@@ -95,7 +101,7 @@ public class TableDescriptorValidation {
 
         // check distribution
         checkDistribution(tableDescriptor, maxBucketNum);
-
+        checkPrimaryKey(tableDescriptor);
         // check individual options
         checkReplicationFactor(tableConf);
         checkLogFormat(tableConf, hasPrimaryKey);
@@ -103,21 +109,30 @@ public class TableDescriptorValidation {
         checkMergeEngine(tableConf, hasPrimaryKey, schema);
         checkDeleteBehavior(tableConf, hasPrimaryKey);
         checkTieredLog(tableConf);
-        checkPartition(tableConf, tableDescriptor.getPartitionKeys(), schema);
-        checkSystemColumns(schema);
+        checkPartition(tableConf, tableDescriptor.getPartitionKeys(), schema.getRowType());
+        checkSystemColumns(schema.getRowType());
     }
 
     public static void validateAlterTableProperties(
             TableInfo currentTable, Set<String> tableKeysToChange, Set<String> customKeysToChange) {
+        TableConfig currentConfig = currentTable.getTableConfig();
         tableKeysToChange.forEach(
                 k -> {
                     if (isTableStorageConfig(k) && !isAlterableTableOption(k)) {
                         throw new InvalidAlterTableException(
                                 "The option '" + k + "' is not supported to alter yet.");
                     }
+
+                    if (!currentConfig.getDataLakeFormat().isPresent()
+                            && ConfigOptions.TABLE_DATALAKE_ENABLED.key().equals(k)) {
+                        throw new InvalidAlterTableException(
+                                String.format(
+                                        "The option '%s' cannot be altered for tables that were"
+                                                + " created before the Fluss cluster enabled datalake.",
+                                        ConfigOptions.TABLE_DATALAKE_ENABLED.key()));
+                    }
                 });
 
-        TableConfig currentConfig = currentTable.getTableConfig();
         if (currentConfig.isDataLakeEnabled() && currentConfig.getDataLakeFormat().isPresent()) {
             String format = currentConfig.getDataLakeFormat().get().toString();
             customKeysToChange.forEach(
@@ -162,6 +177,41 @@ public class TableDescriptorValidation {
                             "Bucket count %s exceeds the maximum limit %s.",
                             bucketCount, maxBucketNum));
         }
+        List<String> bucketKeys = tableDescriptor.getTableDistribution().get().getBucketKeys();
+        if (!bucketKeys.isEmpty()) {
+            // check bucket key type
+            RowType schema = tableDescriptor.getSchema().getRowType();
+            for (String bkColumn : bucketKeys) {
+                int bkIndex = schema.getFieldIndex(bkColumn);
+                DataType bkDataType = schema.getTypeAt(bkIndex);
+                if (KEY_UNSUPPORTED_TYPES.contains(bkDataType.getTypeRoot())) {
+                    throw new InvalidTableException(
+                            String.format(
+                                    "Bucket key column '%s' has unsupported data type %s. "
+                                            + "Currently, bucket key column does not support types: %s.",
+                                    bkColumn, bkDataType, KEY_UNSUPPORTED_TYPES));
+                }
+            }
+        }
+    }
+
+    private static void checkPrimaryKey(TableDescriptor tableDescriptor) {
+        if (tableDescriptor.hasPrimaryKey()) {
+            // check primary key type
+            RowType schema = tableDescriptor.getSchema().getRowType();
+            Schema.PrimaryKey primaryKey = tableDescriptor.getSchema().getPrimaryKey().get();
+            for (String pkColumn : primaryKey.getColumnNames()) {
+                int pkIndex = schema.getFieldIndex(pkColumn);
+                DataType pkDataType = schema.getTypeAt(pkIndex);
+                if (KEY_UNSUPPORTED_TYPES.contains(pkDataType.getTypeRoot())) {
+                    throw new InvalidTableException(
+                            String.format(
+                                    "Primary key column '%s' has unsupported data type %s. "
+                                            + "Currently, primary key column does not support types: %s.",
+                                    pkColumn, pkDataType, KEY_UNSUPPORTED_TYPES));
+                }
+            }
+        }
     }
 
     private static void checkReplicationFactor(Configuration tableConf) {
@@ -182,9 +232,13 @@ public class TableDescriptorValidation {
     private static void checkLogFormat(Configuration tableConf, boolean hasPrimaryKey) {
         KvFormat kvFormat = tableConf.get(ConfigOptions.TABLE_KV_FORMAT);
         LogFormat logFormat = tableConf.get(ConfigOptions.TABLE_LOG_FORMAT);
-        if (hasPrimaryKey && kvFormat == KvFormat.COMPACTED && logFormat != LogFormat.ARROW) {
+
+        // Allow COMPACTED and ARROW log formats when KV format is COMPACTED for primary key tables
+        if (hasPrimaryKey
+                && kvFormat == KvFormat.COMPACTED
+                && !(logFormat == LogFormat.ARROW || logFormat == LogFormat.COMPACTED)) {
             throw new InvalidConfigException(
-                    "Currently, Primary Key Table only supports ARROW log format if kv format is COMPACTED.");
+                    "Currently, Primary Key Table supports ARROW or COMPACTED log format when kv format is COMPACTED.");
         }
     }
 
@@ -202,7 +256,7 @@ public class TableDescriptorValidation {
     }
 
     private static void checkMergeEngine(
-            Configuration tableConf, boolean hasPrimaryKey, RowType schema) {
+            Configuration tableConf, boolean hasPrimaryKey, Schema schema) {
         MergeEngineType mergeEngine = tableConf.get(ConfigOptions.TABLE_MERGE_ENGINE);
         if (mergeEngine != null) {
             if (!hasPrimaryKey) {
@@ -218,7 +272,8 @@ public class TableDescriptorValidation {
                                     "'%s' must be set for versioned merge engine.",
                                     ConfigOptions.TABLE_MERGE_ENGINE_VERSION_COLUMN.key()));
                 }
-                int columnIndex = schema.getFieldIndex(versionColumn.get());
+                RowType rowType = schema.getRowType();
+                int columnIndex = rowType.getFieldIndex(versionColumn.get());
                 if (columnIndex < 0) {
                     throw new InvalidConfigException(
                             String.format(
@@ -231,7 +286,7 @@ public class TableDescriptorValidation {
                                 DataTypeRoot.BIGINT,
                                 DataTypeRoot.TIMESTAMP_WITHOUT_TIME_ZONE,
                                 DataTypeRoot.TIMESTAMP_WITH_LOCAL_TIME_ZONE);
-                DataType columnType = schema.getTypeAt(columnIndex);
+                DataType columnType = rowType.getTypeAt(columnIndex);
                 if (!supportedTypes.contains(columnType.getTypeRoot())) {
                     throw new InvalidConfigException(
                             String.format(
@@ -240,6 +295,45 @@ public class TableDescriptorValidation {
                                             + ", but got %s.",
                                     versionColumn.get(), columnType));
                 }
+            } else if (mergeEngine == MergeEngineType.AGGREGATION) {
+                // Validate aggregation function parameters for aggregation merge engine
+                validateAggregationFunctionParameters(schema);
+            }
+        }
+    }
+
+    /**
+     * Validates aggregation function parameters in the schema.
+     *
+     * <p>This method delegates to {@link AggFunction#validate()} to ensure all parameters are valid
+     * according to the function's requirements.
+     *
+     * @param schema the schema to validate
+     * @throws InvalidConfigException if any aggregation function has invalid parameters
+     */
+    private static void validateAggregationFunctionParameters(Schema schema) {
+        // Get primary key columns for early exit
+        List<String> primaryKeys = schema.getPrimaryKeyColumnNames();
+
+        for (Schema.Column column : schema.getColumns()) {
+            // Skip primary key columns (they don't use user-defined aggregation functions)
+            if (primaryKeys.contains(column.getName())) {
+                continue;
+            }
+
+            Optional<AggFunction> aggFunctionOpt = column.getAggFunction();
+            if (!aggFunctionOpt.isPresent()) {
+                continue;
+            }
+
+            // Validate aggregation function parameters
+            try {
+                aggFunctionOpt.get().validate();
+            } catch (IllegalArgumentException e) {
+                throw new InvalidConfigException(
+                        String.format(
+                                "Invalid aggregation function for column '%s': %s",
+                                column.getName(), e.getMessage()));
             }
         }
     }
@@ -328,16 +422,24 @@ public class TableDescriptorValidation {
 
         // For tables with merge engines, automatically set appropriate delete behavior
         MergeEngineType mergeEngine = tableConf.get(ConfigOptions.TABLE_MERGE_ENGINE);
-        if (mergeEngine == MergeEngineType.FIRST_ROW || mergeEngine == MergeEngineType.VERSIONED) {
-            // For FIRST_ROW and VERSIONED merge engines, delete operations are not supported
-            // If user explicitly sets delete behavior to ALLOW, throw an exception
+        if (mergeEngine == MergeEngineType.FIRST_ROW
+                || mergeEngine == MergeEngineType.VERSIONED
+                || mergeEngine == MergeEngineType.AGGREGATION) {
+            // For FIRST_ROW, VERSIONED and AGGREGATION merge engines, delete operations are not
+            // supported by default
+            // If user explicitly sets delete behavior to ALLOW, validate it
             if (deleteBehaviorOptional.isPresent()
                     && deleteBehaviorOptional.get() == DeleteBehavior.ALLOW) {
-                throw new InvalidConfigException(
-                        String.format(
-                                "Table with '%s' merge engine does not support delete operations. "
-                                        + "The 'table.delete.behavior' config must be set to 'ignore' or 'disable', but got 'allow'.",
-                                mergeEngine));
+                // For FIRST_ROW and VERSIONED, ALLOW is not permitted
+                if (mergeEngine == MergeEngineType.FIRST_ROW
+                        || mergeEngine == MergeEngineType.VERSIONED) {
+                    throw new InvalidConfigException(
+                            String.format(
+                                    "Table with '%s' merge engine does not support delete operations. "
+                                            + "The 'table.delete.behavior' config must be set to 'ignore' or 'disable', but got 'allow'.",
+                                    mergeEngine));
+                }
+                // For AGGREGATION, ALLOW is permitted (removes entire record)
             }
         }
     }

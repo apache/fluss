@@ -32,6 +32,9 @@ public interface Append {
     // TODO: Add more methods to configure the AppendWriter, such as apply static partitions,
     //  apply overwrites, etc.
 
-    /** Create a new {@link AppendWriter} to write data to a Log Table. */
+    /** Create a new {@link AppendWriter} to write data to a Log Table using InternalRow. */
     AppendWriter createWriter();
+
+    /** Create a new typed {@link AppendWriter} to write POJOs directly. */
+    <T> TypedAppendWriter<T> createTypedWriter(Class<T> pojoClass);
 }

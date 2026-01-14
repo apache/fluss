@@ -17,6 +17,7 @@
 
 package org.apache.fluss.server.replica;
 
+import org.apache.fluss.exception.NetworkException;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.server.coordinator.TestCoordinatorGateway;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
@@ -28,6 +29,7 @@ import java.util.Arrays;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link AdjustIsrManager}. */
 class AdjustIsrManagerTest {
@@ -55,5 +57,32 @@ class AdjustIsrManagerTest {
         result = adjustIsrManager.submit(tb, adjustIsr).get();
         assertThat(result)
                 .isEqualTo(new LeaderAndIsr(tabletServerId, 0, Arrays.asList(1, 2, 3), 0, 2));
+    }
+
+    @Test
+    void testSubmitPropagatesRpcLevelErrorAndAllowsRetry() throws Exception {
+        int tabletServerId = 0;
+        TestCoordinatorGateway coordinatorGateway = new TestCoordinatorGateway();
+        // Make all AdjustIsr requests fail with NetworkException.
+        coordinatorGateway.setNetworkIssueEnable(true);
+        AdjustIsrManager adjustIsrManager =
+                new AdjustIsrManager(new FlussScheduler(1), coordinatorGateway, tabletServerId);
+
+        // The RPC-level exception is propagated to the submit future.
+        TableBucket tb = new TableBucket(150001L, 0);
+        List<Integer> currentIsr = Arrays.asList(1, 2);
+        LeaderAndIsr adjustIsr = new LeaderAndIsr(tabletServerId, 0, currentIsr, 0, 0);
+        assertThatThrownBy(() -> adjustIsrManager.submit(tb, adjustIsr).get())
+                .rootCause()
+                .isInstanceOf(NetworkException.class)
+                .hasMessage("Mock network issue.");
+
+        coordinatorGateway.setNetworkIssueEnable(false);
+
+        // After the network issue is cleared, a retry should not be blocked by any previous
+        // submit.
+        LeaderAndIsr result = adjustIsrManager.submit(tb, adjustIsr).get();
+        assertThat(result)
+                .isEqualTo(new LeaderAndIsr(tabletServerId, 0, Arrays.asList(1, 2), 0, 1));
     }
 }

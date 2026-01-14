@@ -29,6 +29,7 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.flink.tiering.LakeTieringJobBuilder;
+import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
@@ -38,6 +39,7 @@ import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.server.replica.Replica;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.server.zk.ZooKeeperClient;
+import org.apache.fluss.server.zk.data.lake.LakeTable;
 import org.apache.fluss.types.DataTypes;
 
 import org.apache.flink.api.common.RuntimeExecutionMode;
@@ -61,12 +63,15 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 import static org.apache.fluss.flink.tiering.source.TieringSourceOptions.POLL_TIERING_TABLE_INTERVAL;
+import static org.apache.fluss.lake.committer.LakeCommitter.FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY;
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.apache.fluss.testutils.common.CommonTestUtils.waitUntil;
@@ -126,6 +131,7 @@ public abstract class FlinkPaimonTieringTestBase {
                         execEnv,
                         flussConfig,
                         Configuration.fromMap(getPaimonCatalogConf()),
+                        new Configuration(),
                         DataLakeFormat.PAIMON.toString())
                 .build();
     }
@@ -386,26 +392,11 @@ public abstract class FlinkPaimonTieringTestBase {
         return Identifier.create(tablePath.getDatabaseName(), tablePath.getTableName());
     }
 
-    protected void assertReplicaStatus(
-            TablePath tablePath,
-            long tableId,
-            int bucketCount,
-            boolean isPartitioned,
-            Map<TableBucket, Long> expectedLogEndOffset) {
-        if (isPartitioned) {
-            Map<Long, String> partitionById =
-                    waitUntilPartitions(getFlussClusterExtension().getZooKeeperClient(), tablePath);
-            for (Long partitionId : partitionById.keySet()) {
-                for (int i = 0; i < bucketCount; i++) {
-                    TableBucket tableBucket = new TableBucket(tableId, partitionId, i);
-                    assertReplicaStatus(tableBucket, expectedLogEndOffset.get(tableBucket));
-                }
-            }
-        } else {
-            for (int i = 0; i < bucketCount; i++) {
-                TableBucket tableBucket = new TableBucket(tableId, i);
-                assertReplicaStatus(tableBucket, expectedLogEndOffset.get(tableBucket));
-            }
+    protected void assertReplicaStatus(Map<TableBucket, Long> expectedLogEndOffset) {
+        for (Map.Entry<TableBucket, Long> expectedLogEndOffsetEntry :
+                expectedLogEndOffset.entrySet()) {
+            assertReplicaStatus(
+                    expectedLogEndOffsetEntry.getKey(), expectedLogEndOffsetEntry.getValue());
         }
     }
 
@@ -423,19 +414,27 @@ public abstract class FlinkPaimonTieringTestBase {
 
     protected void waitUntilBucketSynced(
             TablePath tablePath, long tableId, int bucketCount, boolean isPartition) {
+        Set<TableBucket> tableBuckets = new HashSet<>();
         if (isPartition) {
             Map<Long, String> partitionById = waitUntilPartitions(tablePath);
             for (Long partitionId : partitionById.keySet()) {
                 for (int i = 0; i < bucketCount; i++) {
                     TableBucket tableBucket = new TableBucket(tableId, partitionId, i);
-                    waitUntilBucketSynced(tableBucket);
+                    tableBuckets.add(tableBucket);
                 }
             }
         } else {
             for (int i = 0; i < bucketCount; i++) {
                 TableBucket tableBucket = new TableBucket(tableId, i);
-                waitUntilBucketSynced(tableBucket);
+                tableBuckets.add(tableBucket);
             }
+        }
+        waitUntilBucketsSynced(tableBuckets);
+    }
+
+    protected void waitUntilBucketsSynced(Set<TableBucket> tableBuckets) {
+        for (TableBucket tableBucket : tableBuckets) {
+            waitUntilBucketSynced(tableBucket);
         }
     }
 
@@ -474,8 +473,8 @@ public abstract class FlinkPaimonTieringTestBase {
         return reader.toCloseableIterator();
     }
 
-    protected void checkSnapshotPropertyInPaimon(
-            TablePath tablePath, Map<String, String> expectedProperties) throws Exception {
+    protected void checkFlussOffsetsInSnapshot(
+            TablePath tablePath, Map<TableBucket, Long> expectedOffsets) throws Exception {
         FileStoreTable table =
                 (FileStoreTable)
                         getPaimonCatalog()
@@ -485,6 +484,15 @@ public abstract class FlinkPaimonTieringTestBase {
                                                 tablePath.getTableName()));
         Snapshot snapshot = table.snapshotManager().latestSnapshot();
         assertThat(snapshot).isNotNull();
-        assertThat(snapshot.properties()).isEqualTo(expectedProperties);
+
+        String offsetFile = snapshot.properties().get(FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY);
+        Map<TableBucket, Long> recordedOffsets =
+                new LakeTable(
+                                new LakeTable.LakeSnapshotMetadata(
+                                        // don't care about snapshot id
+                                        -1, new FsPath(offsetFile), null))
+                        .getOrReadLatestTableSnapshot()
+                        .getBucketLogEndOffset();
+        assertThat(recordedOffsets).isEqualTo(expectedOffsets);
     }
 }

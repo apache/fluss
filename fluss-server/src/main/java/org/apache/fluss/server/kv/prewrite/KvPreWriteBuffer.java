@@ -20,7 +20,6 @@ package org.apache.fluss.server.kv.prewrite;
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.metrics.Counter;
-import org.apache.fluss.metrics.Histogram;
 import org.apache.fluss.server.kv.KvBatchWriter;
 import org.apache.fluss.server.metrics.group.TabletServerMetricGroup;
 import org.apache.fluss.utils.MurmurHashUtils;
@@ -95,8 +94,6 @@ public class KvPreWriteBuffer implements AutoCloseable {
     private final LinkedList<KvEntry> allKvEntries = new LinkedList<>();
 
     // metrics related.
-    private final Counter flushCount;
-    private final Histogram flushLatencyHistogram;
     private final Counter truncateAsDuplicatedCount;
     private final Counter truncateAsErrorCount;
 
@@ -107,8 +104,6 @@ public class KvPreWriteBuffer implements AutoCloseable {
             KvBatchWriter kvBatchWriter, TabletServerMetricGroup serverMetricGroup) {
         this.kvBatchWriter = kvBatchWriter;
 
-        flushCount = serverMetricGroup.kvFlushCount();
-        flushLatencyHistogram = serverMetricGroup.kvFlushLatencyHistogram();
         truncateAsDuplicatedCount = serverMetricGroup.kvTruncateAsDuplicatedCount();
         truncateAsErrorCount = serverMetricGroup.kvTruncateAsErrorCount();
     }
@@ -236,10 +231,7 @@ public class KvPreWriteBuffer implements AutoCloseable {
         }
         // flush to underlying kv tablet
         if (flushedCount > 0) {
-            long start = System.nanoTime();
             kvBatchWriter.flush();
-            flushCount.inc();
-            flushLatencyHistogram.update((System.nanoTime() - start) / 1_000_000);
         }
     }
 
@@ -263,14 +255,6 @@ public class KvPreWriteBuffer implements AutoCloseable {
         if (kvBatchWriter != null) {
             kvBatchWriter.close();
         }
-    }
-
-    public Histogram getFlushLatencyHistogram() {
-        return flushLatencyHistogram;
-    }
-
-    public Counter getFlushCount() {
-        return flushCount;
     }
 
     public Counter getTruncateAsDuplicatedCount() {

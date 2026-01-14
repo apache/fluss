@@ -27,6 +27,7 @@ import org.apache.paimon.data.InternalMap;
 import org.apache.paimon.data.InternalRow;
 import org.apache.paimon.data.Timestamp;
 import org.apache.paimon.data.variant.Variant;
+import org.apache.paimon.types.ArrayType;
 import org.apache.paimon.types.DataType;
 import org.apache.paimon.types.RowKind;
 import org.apache.paimon.types.RowType;
@@ -159,19 +160,31 @@ public class FlussRowAsPaimonRow implements InternalRow {
 
     @Override
     public InternalArray getArray(int pos) {
-        throw new UnsupportedOperationException(
-                "getArray is not support for Fluss record currently.");
+        org.apache.fluss.row.InternalArray flussArray = internalRow.getArray(pos);
+        return flussArray == null
+                ? null
+                : new FlussArrayAsPaimonArray(
+                        flussArray, ((ArrayType) tableRowType.getTypeAt(pos)).getElementType());
     }
 
     @Override
     public InternalMap getMap(int pos) {
-        throw new UnsupportedOperationException(
-                "getMap is not support for Fluss record currently.");
+        org.apache.fluss.row.InternalMap flussMap = internalRow.getMap(pos);
+        if (flussMap == null) {
+            return null;
+        }
+        org.apache.paimon.types.MapType mapType =
+                (org.apache.paimon.types.MapType) tableRowType.getTypeAt(pos);
+        return new FlussMapAsPaimonMap(flussMap, mapType.getKeyType(), mapType.getValueType());
     }
 
     @Override
-    public InternalRow getRow(int pos, int pos1) {
-        throw new UnsupportedOperationException(
-                "getRow is not support for Fluss record currently.");
+    public InternalRow getRow(int pos, int numFields) {
+        org.apache.fluss.row.InternalRow nestedFlussRow = internalRow.getRow(pos, numFields);
+        return nestedFlussRow == null
+                ? null
+                : new FlussRowAsPaimonRow(
+                        nestedFlussRow,
+                        (org.apache.paimon.types.RowType) tableRowType.getTypeAt(pos));
     }
 }

@@ -133,6 +133,7 @@ public class RemoteLogITCase {
                 .fetchLogRecords(
                         new FetchParams(-1, Integer.MAX_VALUE),
                         Collections.singletonMap(tb, new FetchReqInfo(tableId, 0, 10240)),
+                        null,
                         future::complete);
 
         Map<TableBucket, FetchLogResultForBucket> result = future.get();

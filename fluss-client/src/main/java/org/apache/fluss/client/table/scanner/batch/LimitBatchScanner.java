@@ -19,6 +19,8 @@ package org.apache.fluss.client.table.scanner.batch;
 
 import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.exception.LeaderNotAvailableException;
+import org.apache.fluss.metadata.KvFormat;
+import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.record.DefaultValueRecordBatch;
@@ -32,14 +34,12 @@ import org.apache.fluss.record.ValueRecordReadContext;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.ProjectedRow;
-import org.apache.fluss.row.decode.RowDecoder;
-import org.apache.fluss.row.encode.ValueDecoder;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.LimitScanRequest;
 import org.apache.fluss.rpc.messages.LimitScanResponse;
-import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.CloseableIterator;
+import org.apache.fluss.utils.SchemaUtil;
 
 import javax.annotation.Nullable;
 
@@ -48,7 +48,9 @@ import java.nio.ByteBuffer;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
@@ -61,20 +63,30 @@ public class LimitBatchScanner implements BatchScanner {
     private final int limit;
     private final InternalRow.FieldGetter[] fieldGetters;
     private final CompletableFuture<LimitScanResponse> scanFuture;
-    private final ValueDecoder kvValueDecoder;
+    private final SchemaGetter schemaGetter;
+    private final KvFormat kvFormat;
+    private final int targetSchemaId;
+
+    /**
+     * A cache for schema projection mapping from source schema to target. Use HashMap here, because
+     * LimitBatchScanner is used in single thread only.
+     */
+    private final Map<Short, int[]> schemaProjectionCache = new HashMap<>();
 
     private boolean endOfInput;
 
     public LimitBatchScanner(
             TableInfo tableInfo,
             TableBucket tableBucket,
+            SchemaGetter schemaGetter,
             MetadataUpdater metadataUpdater,
             @Nullable int[] projectedFields,
             int limit) {
         this.tableInfo = tableInfo;
         this.projectedFields = projectedFields;
         this.limit = limit;
-
+        this.targetSchemaId = tableInfo.getSchemaId();
+        this.schemaGetter = schemaGetter;
         RowType rowType = tableInfo.getRowType();
         this.fieldGetters = new InternalRow.FieldGetter[rowType.getFieldCount()];
         for (int i = 0; i < rowType.getFieldCount(); i++) {
@@ -93,7 +105,7 @@ public class LimitBatchScanner implements BatchScanner {
         }
 
         // because that rocksdb is not suitable to projection, thus do it in client.
-        int leader = metadataUpdater.leaderFor(tableBucket);
+        int leader = metadataUpdater.leaderFor(tableInfo.getTablePath(), tableBucket);
         TabletServerGateway gateway = metadataUpdater.newTabletServerClientForNode(leader);
         if (gateway == null) {
             // TODO handle this exception, like retry.
@@ -102,11 +114,7 @@ public class LimitBatchScanner implements BatchScanner {
         }
         this.scanFuture = gateway.limitScan(limitScanRequest);
 
-        this.kvValueDecoder =
-                new ValueDecoder(
-                        RowDecoder.create(
-                                tableInfo.getTableConfig().getKvFormat(),
-                                rowType.getChildren().toArray(new DataType[0])));
+        this.kvFormat = tableInfo.getTableConfig().getKvFormat();
         this.endOfInput = false;
     }
 
@@ -139,13 +147,24 @@ public class LimitBatchScanner implements BatchScanner {
             DefaultValueRecordBatch valueRecords =
                     DefaultValueRecordBatch.pointToByteBuffer(recordsBuffer);
             ValueRecordReadContext readContext =
-                    new ValueRecordReadContext(kvValueDecoder.getRowDecoder());
+                    ValueRecordReadContext.createReadContext(schemaGetter, kvFormat);
             for (ValueRecord record : valueRecords.records(readContext)) {
-                scanRows.add(maybeProject(record.getRow()));
+                InternalRow row = record.getRow();
+                if (targetSchemaId != record.schemaId()) {
+                    int[] indexMapping =
+                            schemaProjectionCache.computeIfAbsent(
+                                    record.schemaId(),
+                                    sourceSchemaId ->
+                                            SchemaUtil.getIndexMapping(
+                                                    schemaGetter.getSchema(sourceSchemaId),
+                                                    schemaGetter.getSchema(targetSchemaId)));
+                    row = ProjectedRow.from(indexMapping).replaceRow(row);
+                }
+                scanRows.add(maybeProject(row));
             }
         } else {
             LogRecordReadContext readContext =
-                    LogRecordReadContext.createReadContext(tableInfo, false, null);
+                    LogRecordReadContext.createReadContext(tableInfo, false, null, schemaGetter);
             LogRecords records = MemoryLogRecords.pointToByteBuffer(recordsBuffer);
             for (LogRecordBatch logRecordBatch : records.batches()) {
                 // A batch of log record maybe little more than limit, thus we need slice the

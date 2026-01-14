@@ -113,8 +113,11 @@ message AlterTableRequest {
   required PbTablePath table_path = 1;
   required bool ignore_if_not_exists = 2;
   repeated PbAlterConfig config_changes = 3;
+  repeated PbAddColumn add_columns = 4;
+  repeated PbDropColumn drop_columns = 5;
+  repeated PbRenameColumn rename_columns = 6;
+  repeated PbModifyColumn modify_columns = 7;
 }
-
 
 message AlterTableResponse {
 }
@@ -446,23 +449,27 @@ message NotifyRemoteLogOffsetsRequest {
 message NotifyRemoteLogOffsetsResponse {
 }
 
+message PrepareLakeTableSnapshotRequest {
+  repeated PbTableOffsets bucket_offsets = 1;
+}
+
+message PrepareLakeTableSnapshotResponse {
+  repeated PbPrepareLakeTableRespForTable prepare_lake_table_resp = 1;
+}
+
 message CommitLakeTableSnapshotRequest {
+  // Deprecated: PbLakeTableSnapshotInfo is no longer used for committing lake table snapshots.
+  // Currently, it is only used to allow the coordinator to notify tablet servers about the current
+  // synchronized log end offsets, which are then reported to metrics. In the future, we plan to
+  // have tiering directly report to metrics, and this field will be fully removed.
+  // Still reserve it for protocol compatibility.
   repeated PbLakeTableSnapshotInfo tables_req = 1;
-}
-
-message PbLakeTableSnapshotInfo {
-  optional int64 table_id = 1;
-  required int64 snapshot_id = 2;
-  repeated PbLakeTableOffsetForBucket buckets_req = 3;
-}
-
-message PbLakeTableOffsetForBucket {
-  optional int64 partition_id = 1;
-  required int32 bucket_id = 2;
-  optional int64 log_start_offset = 3;
-  optional int64 log_end_offset = 4;
-  optional string partition_name = 5;
-  optional int64 max_timestamp = 6;
+  // The metadata for lake table snapshots to be committed. Each entry contains the table ID,
+  // snapshot ID, and the file paths where the snapshot data (containing bucket log end offset
+  // information) is stored. The tiered_snapshot_file_path points to the file storing tiered log
+  // end offsets, while readable_snapshot_file_path (if present) points to the file storing readable
+  // log end offsets.
+  repeated PbLakeTableSnapshotMetadata lake_table_snapshot_metadata = 2;
 }
 
 message CommitLakeTableSnapshotResponse {
@@ -470,9 +477,9 @@ message CommitLakeTableSnapshotResponse {
 }
 
 message PbCommitLakeTableSnapshotRespForTable {
-  required int64 table_id = 1;
-  optional int32 error_code = 2;
-  optional string error_message = 3;
+  optional int32 error_code = 1;
+  optional string error_message = 2;
+  required int64 table_id = 3;
 }
 
 message NotifyLakeTableOffsetRequest {
@@ -569,6 +576,47 @@ message AlterClusterConfigsRequest{
 message AlterClusterConfigsResponse{
 }
 
+message AddServerTagRequest {
+  repeated int32 server_ids = 1 [packed = true];
+  required int32 server_tag = 2;
+}
+
+message AddServerTagResponse {
+}
+
+message RemoveServerTagRequest {
+  repeated int32 server_ids = 1 [packed = true];
+  required int32 server_tag = 2;
+}
+
+message RemoveServerTagResponse {
+}
+
+message RebalanceRequest {
+  repeated int32 goals = 1 [packed = true];
+}
+
+message RebalanceResponse {
+  required string rebalance_id = 1;
+}
+
+message ListRebalanceProgressRequest {
+  optional string rebalance_id = 1;
+}
+
+message ListRebalanceProgressResponse {
+  optional string rebalance_id = 1;
+  optional int32 rebalance_status = 2;
+  repeated PbRebalanceProgressForTable table_progress = 3;
+}
+
+message CancelRebalanceRequest {
+  optional string rebalance_id = 1;
+}
+
+message CancelRebalanceResponse {
+}
+
 
 
 // --------------- Inner classes ----------------
@@ -606,6 +654,9 @@ message PbTableMetadata {
   required PbTablePath table_path = 1;
   required int64 table_id = 2;
   required int32 schema_id = 3;
+  // TODO Starting from version 0.9, fluss-client no longer get table info from metadata response. However, for backward
+  //  compatibility, we will still retain the field in the request. Once metadataV2 is introduced, table info will be
+  //  officially omitted from the new metadata response.
   required bytes table_json = 4;
   repeated PbBucketMetadata bucket_metadata = 5;
   required int64 created_time = 6;
@@ -915,9 +966,100 @@ message PbAlterConfig {
   required int32 op_type = 3; // SET=0, DELETE=1, APPEND=2, SUBTRACT=3
 }
 
-message PbDescribeConfig{
+message PbAddColumn {
+  required string column_name = 1;
+  required bytes data_type_json = 2;
+  optional string comment = 3;
+  required int32 column_position_type = 4; // LAST=0,FIRST=1,AFTER=3
+}
+
+message PbDropColumn {
+  required string column_name = 1;
+}
+
+message PbRenameColumn {
+  required string old_column_name = 1;
+  required string new_column_name = 2;
+}
+
+message PbModifyColumn {
+  required string column_name = 1;
+  optional bytes data_type_json = 2;
+  optional string comment = 3;
+  optional int32 column_position_type = 4; // LAST=0,FIRST=1,AFTER=3
+}
+
+message PbDescribeConfig {
   required string config_key = 1;
   optional string config_value = 2;
   required string config_source = 3;
 }
 
+message PbRebalancePlanForTable {
+  required int64 table_id = 1;
+  repeated PbRebalancePlanForBucket buckets_plan = 2;
+}
+
+message PbRebalanceProgressForTable {
+  required int64 table_id = 1;
+  repeated PbRebalanceProgressForBucket buckets_progress = 2;
+}
+
+message PbRebalanceProgressForBucket {
+  required PbRebalancePlanForBucket rebalance_plan = 1;
+  required int32 rebalance_status = 2;
+}
+
+message PbRebalancePlanForBucket {
+  optional int64 partition_id = 1;
+  required int32 bucket_id = 2;
+  optional int32 original_leader = 3;
+  optional int32 new_leader = 4;
+  repeated int32 original_replicas = 5 [packed = true];
+  repeated int32 new_replicas = 6 [packed = true];
+}
+
+message PbLakeTableSnapshotMetadata {
+  required int64 table_id = 1;
+  required int64 snapshot_id = 2;
+  required string tiered_bucket_offsets_file_path = 3;
+  optional string readable_bucket_offsets_file_path = 4;
+}
+
+message PbLakeTableSnapshotInfo {
+  optional int64 table_id = 1;
+  required int64 snapshot_id = 2;
+  repeated PbLakeTableOffsetForBucket buckets_req = 3;
+  // add table path to reduce get table_path by table id
+  optional PbTablePath table_path = 4;
+}
+
+message PbLakeTableOffsetForBucket {
+  optional int64 partition_id = 1;
+  required int32 bucket_id = 2;
+  // Deprecated: log_start_offset is no longer used. Field number 3 is reserved for protocol compatibility.
+  // optional int64 log_start_offset = 3;
+  optional int64 log_end_offset = 4;
+  // Deprecated: partition_name is no longer used. Field number 5 is reserved for protocol compatibility.
+  // optional string partition_name = 5;
+  optional int64 max_timestamp = 6;
+}
+
+message PbPrepareLakeTableRespForTable {
+  optional int32 error_code = 1;
+  optional string error_message = 2;
+  optional int64 table_id = 3;
+  optional string lake_table_offsets_path = 4;
+}
+
+message PbTableOffsets {
+  required int64 table_id = 1;
+  required PbTablePath table_path = 2;
+  repeated PbBucketOffset bucket_offsets = 3;
+}
+
+message PbBucketOffset {
+  optional int64 partition_id = 1;
+  required int32 bucket_id = 2;
+  optional int64 log_end_offset = 4;
+}

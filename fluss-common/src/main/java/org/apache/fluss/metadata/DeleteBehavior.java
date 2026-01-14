@@ -36,7 +36,7 @@ public enum DeleteBehavior {
     /**
      * Silently ignore delete requests without error. Delete operations will be dropped at the
      * server side, and no deletion will be performed. This is the default behavior for tables with
-     * FIRST_ROW or VERSIONED merge engines.
+     * FIRST_ROW, VERSIONED, or AGGREGATION merge engines.
      */
     IGNORE,
 

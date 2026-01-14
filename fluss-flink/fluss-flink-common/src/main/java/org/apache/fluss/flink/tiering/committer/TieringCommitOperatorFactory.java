@@ -33,12 +33,15 @@ public class TieringCommitOperatorFactory<WriteResult, Committable>
                 TableBucketWriteResult<WriteResult>, CommittableMessage<Committable>> {
 
     private final Configuration flussConfig;
+    private final Configuration lakeTieringConfig;
     private final LakeTieringFactory<WriteResult, Committable> lakeTieringFactory;
 
     public TieringCommitOperatorFactory(
             Configuration flussConfig,
+            Configuration lakeTieringConfig,
             LakeTieringFactory<WriteResult, Committable> lakeTieringFactory) {
         this.flussConfig = flussConfig;
+        this.lakeTieringConfig = lakeTieringConfig;
         this.lakeTieringFactory = lakeTieringFactory;
     }
 
@@ -47,7 +50,8 @@ public class TieringCommitOperatorFactory<WriteResult, Committable>
             StreamOperatorParameters<CommittableMessage<Committable>> parameters) {
 
         TieringCommitOperator<WriteResult, Committable> commitOperator =
-                new TieringCommitOperator<>(parameters, flussConfig, lakeTieringFactory);
+                new TieringCommitOperator<>(
+                        parameters, flussConfig, lakeTieringConfig, lakeTieringFactory);
 
         @SuppressWarnings("unchecked")
         final T castedOperator = (T) commitOperator;

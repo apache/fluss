@@ -63,6 +63,11 @@ public class ArrowLogWriteBatch extends WriteBatch {
     }
 
     @Override
+    public boolean isLogBatch() {
+        return true;
+    }
+
+    @Override
     public boolean tryAppend(WriteRecord writeRecord, WriteCallback callback) throws Exception {
         InternalRow row = writeRecord.getRow();
         checkArgument(

@@ -20,6 +20,8 @@ package org.apache.fluss.server.coordinator;
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.cluster.TabletServerInfo;
+import org.apache.fluss.cluster.rebalance.GoalType;
+import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.cluster.AlterConfig;
@@ -32,7 +34,10 @@ import org.apache.fluss.exception.LakeTableAlreadyExistException;
 import org.apache.fluss.exception.SecurityDisabledException;
 import org.apache.fluss.exception.TableAlreadyExistException;
 import org.apache.fluss.exception.TableNotPartitionedException;
+import org.apache.fluss.exception.UnknownServerException;
+import org.apache.fluss.exception.UnknownTableOrBucketException;
 import org.apache.fluss.fs.FileSystem;
+import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.lake.lakestorage.LakeCatalog;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.DatabaseDescriptor;
@@ -44,12 +49,16 @@ import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.gateway.CoordinatorGateway;
+import org.apache.fluss.rpc.messages.AddServerTagRequest;
+import org.apache.fluss.rpc.messages.AddServerTagResponse;
 import org.apache.fluss.rpc.messages.AdjustIsrRequest;
 import org.apache.fluss.rpc.messages.AdjustIsrResponse;
 import org.apache.fluss.rpc.messages.AlterClusterConfigsRequest;
 import org.apache.fluss.rpc.messages.AlterClusterConfigsResponse;
 import org.apache.fluss.rpc.messages.AlterTableRequest;
 import org.apache.fluss.rpc.messages.AlterTableResponse;
+import org.apache.fluss.rpc.messages.CancelRebalanceRequest;
+import org.apache.fluss.rpc.messages.CancelRebalanceResponse;
 import org.apache.fluss.rpc.messages.CommitKvSnapshotRequest;
 import org.apache.fluss.rpc.messages.CommitKvSnapshotResponse;
 import org.apache.fluss.rpc.messages.CommitLakeTableSnapshotRequest;
@@ -76,13 +85,24 @@ import org.apache.fluss.rpc.messages.DropTableRequest;
 import org.apache.fluss.rpc.messages.DropTableResponse;
 import org.apache.fluss.rpc.messages.LakeTieringHeartbeatRequest;
 import org.apache.fluss.rpc.messages.LakeTieringHeartbeatResponse;
+import org.apache.fluss.rpc.messages.ListRebalanceProgressRequest;
+import org.apache.fluss.rpc.messages.ListRebalanceProgressResponse;
 import org.apache.fluss.rpc.messages.MetadataRequest;
 import org.apache.fluss.rpc.messages.MetadataResponse;
 import org.apache.fluss.rpc.messages.PbAlterConfig;
 import org.apache.fluss.rpc.messages.PbHeartbeatReqForTable;
 import org.apache.fluss.rpc.messages.PbHeartbeatRespForTable;
+import org.apache.fluss.rpc.messages.PbPrepareLakeTableRespForTable;
+import org.apache.fluss.rpc.messages.PbTableOffsets;
+import org.apache.fluss.rpc.messages.PrepareLakeTableSnapshotRequest;
+import org.apache.fluss.rpc.messages.PrepareLakeTableSnapshotResponse;
+import org.apache.fluss.rpc.messages.RebalanceRequest;
+import org.apache.fluss.rpc.messages.RebalanceResponse;
+import org.apache.fluss.rpc.messages.RemoveServerTagRequest;
+import org.apache.fluss.rpc.messages.RemoveServerTagResponse;
 import org.apache.fluss.rpc.netty.server.Session;
 import org.apache.fluss.rpc.protocol.ApiError;
+import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.security.acl.AclBinding;
 import org.apache.fluss.security.acl.AclBindingFilter;
 import org.apache.fluss.security.acl.FlussPrincipal;
@@ -94,12 +114,18 @@ import org.apache.fluss.server.authorizer.AclCreateResult;
 import org.apache.fluss.server.authorizer.AclDeleteResult;
 import org.apache.fluss.server.authorizer.Authorizer;
 import org.apache.fluss.server.coordinator.event.AccessContextEvent;
+import org.apache.fluss.server.coordinator.event.AddServerTagEvent;
 import org.apache.fluss.server.coordinator.event.AdjustIsrReceivedEvent;
+import org.apache.fluss.server.coordinator.event.CancelRebalanceEvent;
 import org.apache.fluss.server.coordinator.event.CommitKvSnapshotEvent;
 import org.apache.fluss.server.coordinator.event.CommitLakeTableSnapshotEvent;
 import org.apache.fluss.server.coordinator.event.CommitRemoteLogManifestEvent;
 import org.apache.fluss.server.coordinator.event.ControlledShutdownEvent;
 import org.apache.fluss.server.coordinator.event.EventManager;
+import org.apache.fluss.server.coordinator.event.ListRebalanceProgressEvent;
+import org.apache.fluss.server.coordinator.event.RebalanceEvent;
+import org.apache.fluss.server.coordinator.event.RemoveServerTagEvent;
+import org.apache.fluss.server.coordinator.rebalance.goal.Goal;
 import org.apache.fluss.server.entity.CommitKvSnapshotData;
 import org.apache.fluss.server.entity.LakeTieringTableInfo;
 import org.apache.fluss.server.entity.TablePropertyChanges;
@@ -112,22 +138,30 @@ import org.apache.fluss.server.zk.data.BucketAssignment;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
 import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.server.zk.data.TableRegistration;
+import org.apache.fluss.server.zk.data.lake.LakeTable;
+import org.apache.fluss.server.zk.data.lake.LakeTableHelper;
 import org.apache.fluss.utils.IOUtils;
 import org.apache.fluss.utils.concurrent.FutureUtils;
+import org.apache.fluss.utils.json.TableBucketOffsets;
 
 import javax.annotation.Nullable;
 
 import java.io.UncheckedIOException;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.config.FlussConfigUtils.isTableStorageConfig;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toAclBindingFilters;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toAclBindings;
+import static org.apache.fluss.server.coordinator.rebalance.goal.GoalUtils.getGoalByType;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.fromTablePath;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getAdjustIsrData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getCommitLakeTableSnapshotData;
@@ -135,7 +169,9 @@ import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getCommitRemot
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getPartitionSpec;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeCreateAclsResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeDropAclsResponse;
-import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toTableChanges;
+import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toAlterTableConfigChanges;
+import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toAlterTableSchemaChanges;
+import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toTableBucketOffsets;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toTablePath;
 import static org.apache.fluss.server.utils.TableAssignmentUtils.generateAssignment;
 import static org.apache.fluss.utils.PartitionUtils.validatePartitionSpec;
@@ -143,7 +179,6 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /** An RPC Gateway service for coordinator server. */
 public final class CoordinatorService extends RpcServiceBase implements CoordinatorGateway {
-
     private final int defaultBucketNumber;
     private final int defaultReplicationFactor;
     private final boolean logTableAllowCreation;
@@ -154,6 +189,8 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
 
     private final LakeTableTieringManager lakeTableTieringManager;
     private final LakeCatalogDynamicLoader lakeCatalogDynamicLoader;
+    private final ExecutorService ioExecutor;
+    private final LakeTableHelper lakeTableHelper;
 
     public CoordinatorService(
             Configuration conf,
@@ -165,14 +202,16 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
             @Nullable Authorizer authorizer,
             LakeCatalogDynamicLoader lakeCatalogDynamicLoader,
             LakeTableTieringManager lakeTableTieringManager,
-            DynamicConfigManager dynamicConfigManager) {
+            DynamicConfigManager dynamicConfigManager,
+            ExecutorService ioExecutor) {
         super(
                 remoteFileSystem,
                 ServerType.COORDINATOR,
                 zkClient,
                 metadataManager,
                 authorizer,
-                dynamicConfigManager);
+                dynamicConfigManager,
+                ioExecutor);
         this.defaultBucketNumber = conf.getInt(ConfigOptions.DEFAULT_BUCKET_NUMBER);
         this.defaultReplicationFactor = conf.getInt(ConfigOptions.DEFAULT_REPLICATION_FACTOR);
         this.logTableAllowCreation = conf.getBoolean(ConfigOptions.LOG_TABLE_ALLOW_CREATION);
@@ -184,6 +223,9 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         this.lakeTableTieringManager = lakeTableTieringManager;
         this.metadataCache = metadataCache;
         this.lakeCatalogDynamicLoader = lakeCatalogDynamicLoader;
+        this.ioExecutor = ioExecutor;
+        this.lakeTableHelper =
+                new LakeTableHelper(zkClient, conf.getString(ConfigOptions.REMOTE_DATA_DIR));
     }
 
     @Override
@@ -194,6 +236,31 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     @Override
     public void shutdown() {
         IOUtils.closeQuietly(lakeCatalogDynamicLoader, "lake catalog");
+    }
+
+    @Override
+    public void authorizeTable(OperationType operationType, long tableId) {
+        if (authorizer != null) {
+            TablePath tablePath;
+            try {
+                AccessContextEvent<TablePath> getTablePathEvent =
+                        new AccessContextEvent<>(ctx -> ctx.getTablePathById(tableId));
+                eventManagerSupplier.get().put(getTablePathEvent);
+                tablePath = getTablePathEvent.getResultFuture().get();
+            } catch (Exception e) {
+                throw new UnknownServerException("Failed to get table path by ID " + tableId, e);
+            }
+
+            if (tablePath == null) {
+                throw new UnknownTableOrBucketException(
+                        String.format(
+                                "This server %s does not know this table ID %s. This may happen when the table "
+                                        + "metadata cache in the server is not updated yet.",
+                                name(), tableId));
+            }
+
+            authorizeTable(operationType, tablePath);
+        }
     }
 
     @Override
@@ -222,13 +289,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
 
     @Override
     public CompletableFuture<DropDatabaseResponse> dropDatabase(DropDatabaseRequest request) {
-        if (authorizer != null) {
-            authorizer.authorize(
-                    currentSession(),
-                    OperationType.DROP,
-                    Resource.database(request.getDatabaseName()));
-        }
-
+        authorizeDatabase(OperationType.DROP, request.getDatabaseName());
         DropDatabaseResponse response = new DropDatabaseResponse();
         metadataManager.dropDatabase(
                 request.getDatabaseName(), request.isIgnoreIfNotExists(), request.isCascade());
@@ -239,12 +300,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     public CompletableFuture<CreateTableResponse> createTable(CreateTableRequest request) {
         TablePath tablePath = toTablePath(request.getTablePath());
         tablePath.validate();
-        if (authorizer != null) {
-            authorizer.authorize(
-                    currentSession(),
-                    OperationType.CREATE,
-                    Resource.database(tablePath.getDatabaseName()));
-        }
+        authorizeDatabase(OperationType.CREATE, tablePath.getDatabaseName());
 
         TableDescriptor tableDescriptor;
         try {
@@ -308,23 +364,44 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     public CompletableFuture<AlterTableResponse> alterTable(AlterTableRequest request) {
         TablePath tablePath = toTablePath(request.getTablePath());
         tablePath.validate();
-        if (authorizer != null) {
-            authorizer.authorize(currentSession(), OperationType.ALTER, Resource.table(tablePath));
-        }
+        authorizeTable(OperationType.ALTER, tablePath);
 
-        List<TableChange> tableChanges = toTableChanges(request.getConfigChangesList());
-        TablePropertyChanges tablePropertyChanges = toTablePropertyChanges(tableChanges);
+        List<TableChange> alterTableConfigChanges =
+                toAlterTableConfigChanges(request.getConfigChangesList());
+        TablePropertyChanges tablePropertyChanges = toTablePropertyChanges(alterTableConfigChanges);
+        List<TableChange> alterSchemaChanges = toAlterTableSchemaChanges(request);
+
+        if (!alterSchemaChanges.isEmpty() && !alterTableConfigChanges.isEmpty()) {
+            // Only support one of alterTableConfigChanges and alterSchemaChanges for atomic change.
+            throw new InvalidAlterTableException(
+                    "Table alteration can only be applied to one of the following: "
+                            + "table properties or table schema.");
+        }
 
         LakeCatalogDynamicLoader.LakeCatalogContainer lakeCatalogContainer =
                 lakeCatalogDynamicLoader.getLakeCatalogContainer();
-        metadataManager.alterTableProperties(
-                tablePath,
-                tableChanges,
-                tablePropertyChanges,
-                request.isIgnoreIfNotExists(),
-                lakeCatalogContainer.getLakeCatalog(),
-                lakeTableTieringManager,
-                new DefaultLakeCatalogContext(false, currentSession().getPrincipal()));
+        LakeCatalog.Context lakeCatalogContext =
+                new DefaultLakeCatalogContext(false, currentSession().getPrincipal());
+
+        if (!alterSchemaChanges.isEmpty()) {
+            metadataManager.alterTableSchema(
+                    tablePath,
+                    alterSchemaChanges,
+                    request.isIgnoreIfNotExists(),
+                    lakeCatalogContainer.getLakeCatalog(),
+                    lakeCatalogContext);
+        }
+
+        if (!alterTableConfigChanges.isEmpty()) {
+            metadataManager.alterTableProperties(
+                    tablePath,
+                    alterTableConfigChanges,
+                    tablePropertyChanges,
+                    request.isIgnoreIfNotExists(),
+                    lakeCatalogContainer.getLakeCatalog(),
+                    lakeTableTieringManager,
+                    lakeCatalogContext);
+        }
 
         return CompletableFuture.completedFuture(new AlterTableResponse());
     }
@@ -404,12 +481,14 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                             ConfigOptions.TABLE_DATALAKE_ENABLED.key()));
         }
 
-        // For tables with first_row or versioned merge engines, automatically set to IGNORE if
-        // delete behavior is not set
+        // For tables with first_row, versioned or aggregation merge engines, automatically set to
+        // IGNORE if delete behavior is not set
         Configuration tableConf = Configuration.fromMap(tableDescriptor.getProperties());
         MergeEngineType mergeEngine =
                 tableConf.getOptional(ConfigOptions.TABLE_MERGE_ENGINE).orElse(null);
-        if (mergeEngine == MergeEngineType.FIRST_ROW || mergeEngine == MergeEngineType.VERSIONED) {
+        if (mergeEngine == MergeEngineType.FIRST_ROW
+                || mergeEngine == MergeEngineType.VERSIONED
+                || mergeEngine == MergeEngineType.AGGREGATION) {
             if (tableDescriptor.hasPrimaryKey()
                     && !tableConf.getOptional(ConfigOptions.TABLE_DELETE_BEHAVIOR).isPresent()) {
                 Map<String, String> newProperties = new HashMap<>(newDescriptor.getProperties());
@@ -430,12 +509,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     @Override
     public CompletableFuture<DropTableResponse> dropTable(DropTableRequest request) {
         TablePath tablePath = toTablePath(request.getTablePath());
-        if (authorizer != null) {
-            authorizer.authorize(
-                    currentSession(),
-                    OperationType.DROP,
-                    Resource.table(tablePath.getDatabaseName(), tablePath.getTableName()));
-        }
+        authorizeTable(OperationType.DROP, tablePath);
 
         DropTableResponse response = new DropTableResponse();
         metadataManager.dropTable(tablePath, request.isIgnoreIfNotExists());
@@ -446,12 +520,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     public CompletableFuture<CreatePartitionResponse> createPartition(
             CreatePartitionRequest request) {
         TablePath tablePath = toTablePath(request.getTablePath());
-        if (authorizer != null) {
-            authorizer.authorize(
-                    currentSession(),
-                    OperationType.WRITE,
-                    Resource.table(tablePath.getDatabaseName(), tablePath.getTableName()));
-        }
+        authorizeTable(OperationType.WRITE, tablePath);
 
         CreatePartitionResponse response = new CreatePartitionResponse();
         TableRegistration table = metadataManager.getTableRegistration(tablePath);
@@ -487,12 +556,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     @Override
     public CompletableFuture<DropPartitionResponse> dropPartition(DropPartitionRequest request) {
         TablePath tablePath = toTablePath(request.getTablePath());
-        if (authorizer != null) {
-            authorizer.authorize(
-                    currentSession(),
-                    OperationType.WRITE,
-                    Resource.table(tablePath.getDatabaseName(), tablePath.getTableName()));
-        }
+        authorizeTable(OperationType.WRITE, tablePath);
 
         DropPartitionResponse response = new DropPartitionResponse();
         TableRegistration table = metadataManager.getTableRegistration(tablePath);
@@ -518,16 +582,15 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
 
         AccessContextEvent<MetadataResponse> metadataResponseAccessContextEvent =
                 new AccessContextEvent<>(
-                        ctx -> {
-                            return processMetadataRequest(
-                                    request,
-                                    listenerName,
-                                    session,
-                                    authorizer,
-                                    metadataCache,
-                                    new CoordinatorMetadataProvider(
-                                            zkClient, metadataManager, ctx));
-                        });
+                        ctx ->
+                                processMetadataRequest(
+                                        request,
+                                        listenerName,
+                                        session,
+                                        authorizer,
+                                        metadataCache,
+                                        new CoordinatorMetadataProvider(
+                                                zkClient, metadataManager, ctx)));
         eventManagerSupplier.get().put(metadataResponseAccessContextEvent);
         return metadataResponseAccessContextEvent.getResultFuture();
     }
@@ -587,6 +650,52 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         List<AclBindingFilter> filters = toAclBindingFilters(request.getAclFiltersList());
         List<AclDeleteResult> aclDeleteResults = authorizer.dropAcls(currentSession(), filters);
         return CompletableFuture.completedFuture(makeDropAclsResponse(aclDeleteResults));
+    }
+
+    @Override
+    public CompletableFuture<PrepareLakeTableSnapshotResponse> prepareLakeTableSnapshot(
+            PrepareLakeTableSnapshotRequest request) {
+        CompletableFuture<PrepareLakeTableSnapshotResponse> future = new CompletableFuture<>();
+        ioExecutor.submit(
+                () -> {
+                    PrepareLakeTableSnapshotResponse response =
+                            new PrepareLakeTableSnapshotResponse();
+                    try {
+                        for (PbTableOffsets bucketOffsets : request.getBucketOffsetsList()) {
+                            PbPrepareLakeTableRespForTable pbPrepareLakeTableRespForTable =
+                                    response.addPrepareLakeTableResp();
+                            try {
+                                long tableId = bucketOffsets.getTableId();
+                                TableBucketOffsets tableBucketOffsets =
+                                        toTableBucketOffsets(bucketOffsets);
+                                // get previous lake tables
+                                Optional<LakeTable> optPreviousLakeTable =
+                                        zkClient.getLakeTable(tableId);
+                                if (optPreviousLakeTable.isPresent()) {
+                                    // need to merge with previous lake table
+                                    tableBucketOffsets =
+                                            lakeTableHelper.mergeTableBucketOffsets(
+                                                    optPreviousLakeTable.get(), tableBucketOffsets);
+                                }
+                                TablePath tablePath = toTablePath(bucketOffsets.getTablePath());
+                                FsPath fsPath =
+                                        lakeTableHelper.storeLakeTableOffsetsFile(
+                                                tablePath, tableBucketOffsets);
+                                pbPrepareLakeTableRespForTable.setTableId(tableId);
+                                pbPrepareLakeTableRespForTable.setLakeTableOffsetsPath(
+                                        fsPath.toString());
+                            } catch (Exception e) {
+                                Errors error = ApiError.fromThrowable(e).error();
+                                pbPrepareLakeTableRespForTable.setError(
+                                        error.code(), error.message());
+                            }
+                        }
+                        future.complete(response);
+                    } catch (Exception e) {
+                        future.completeExceptionally(e);
+                    }
+                });
+        return future;
     }
 
     @Override
@@ -663,6 +772,10 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     @Override
     public CompletableFuture<ControlledShutdownResponse> controlledShutdown(
             ControlledShutdownRequest request) {
+        if (authorizer != null) {
+            authorizer.authorize(currentSession(), OperationType.ALTER, Resource.cluster());
+        }
+
         CompletableFuture<ControlledShutdownResponse> response = new CompletableFuture<>();
         eventManagerSupplier
                 .get()
@@ -711,6 +824,94 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                         });
         eventManagerSupplier.get().put(accessContextEvent);
         return future;
+    }
+
+    @Override
+    public CompletableFuture<AddServerTagResponse> addServerTag(AddServerTagRequest request) {
+        if (authorizer != null) {
+            authorizer.authorize(currentSession(), OperationType.ALTER, Resource.cluster());
+        }
+
+        CompletableFuture<AddServerTagResponse> response = new CompletableFuture<>();
+        eventManagerSupplier
+                .get()
+                .put(
+                        new AddServerTagEvent(
+                                Arrays.stream(request.getServerIds())
+                                        .boxed()
+                                        .collect(Collectors.toList()),
+                                ServerTag.valueOf(request.getServerTag()),
+                                response));
+        return response;
+    }
+
+    @Override
+    public CompletableFuture<RemoveServerTagResponse> removeServerTag(
+            RemoveServerTagRequest request) {
+        if (authorizer != null) {
+            authorizer.authorize(currentSession(), OperationType.ALTER, Resource.cluster());
+        }
+
+        CompletableFuture<RemoveServerTagResponse> response = new CompletableFuture<>();
+        eventManagerSupplier
+                .get()
+                .put(
+                        new RemoveServerTagEvent(
+                                Arrays.stream(request.getServerIds())
+                                        .boxed()
+                                        .collect(Collectors.toList()),
+                                ServerTag.valueOf(request.getServerTag()),
+                                response));
+        return response;
+    }
+
+    @Override
+    public CompletableFuture<RebalanceResponse> rebalance(RebalanceRequest request) {
+        if (authorizer != null) {
+            authorizer.authorize(currentSession(), OperationType.WRITE, Resource.cluster());
+        }
+
+        List<Goal> goalsByPriority = new ArrayList<>();
+        Arrays.stream(request.getGoals())
+                .forEach(goal -> goalsByPriority.add(getGoalByType(GoalType.valueOf(goal))));
+
+        CompletableFuture<RebalanceResponse> response = new CompletableFuture<>();
+        eventManagerSupplier.get().put(new RebalanceEvent(goalsByPriority, response));
+        return response;
+    }
+
+    @Override
+    public CompletableFuture<ListRebalanceProgressResponse> listRebalanceProgress(
+            ListRebalanceProgressRequest request) {
+        if (authorizer != null) {
+            authorizer.authorize(currentSession(), OperationType.DESCRIBE, Resource.cluster());
+        }
+
+        CompletableFuture<ListRebalanceProgressResponse> response = new CompletableFuture<>();
+        eventManagerSupplier
+                .get()
+                .put(
+                        new ListRebalanceProgressEvent(
+                                request.hasRebalanceId() ? request.getRebalanceId() : null,
+                                response));
+        return response;
+    }
+
+    @Override
+    public CompletableFuture<CancelRebalanceResponse> cancelRebalance(
+            CancelRebalanceRequest request) {
+        if (authorizer != null) {
+            authorizer.authorize(currentSession(), OperationType.WRITE, Resource.cluster());
+        }
+
+        CompletableFuture<CancelRebalanceResponse> response = new CompletableFuture<>();
+        eventManagerSupplier
+                .get()
+                .put(
+                        new CancelRebalanceEvent(
+                                request.hasRebalanceId() ? request.getRebalanceId() : null,
+                                response));
+        return response;
     }
 
     @VisibleForTesting

@@ -18,38 +18,24 @@
 package org.apache.fluss.row.arrow.writers;
 
 import org.apache.fluss.annotation.Internal;
-import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.row.DataGetters;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.BigIntVector;
 
 /** {@link ArrowFieldWriter} for BigInt. */
 @Internal
-public class ArrowBigIntWriter extends ArrowFieldWriter<InternalRow> {
+public class ArrowBigIntWriter extends ArrowFieldWriter {
 
-    public static ArrowBigIntWriter forField(BigIntVector bigIntVector) {
-        return new ArrowBigIntWriter(bigIntVector);
-    }
-
-    private ArrowBigIntWriter(BigIntVector bigIntVector) {
+    public ArrowBigIntWriter(BigIntVector bigIntVector) {
         super(bigIntVector);
     }
 
     @Override
-    public void doWrite(InternalRow row, int ordinal, boolean handleSafe) {
-        BigIntVector vector = (BigIntVector) getValueVector();
-        if (isNullAt(row, ordinal)) {
-            vector.setNull(getCount());
-        } else if (handleSafe) {
-            vector.setSafe(getCount(), readLong(row, ordinal));
+    public void doWrite(int rowIndex, DataGetters row, int ordinal, boolean handleSafe) {
+        BigIntVector vector = (BigIntVector) fieldVector;
+        if (handleSafe) {
+            vector.setSafe(rowIndex, row.getLong(ordinal));
         } else {
-            vector.set(getCount(), readLong(row, ordinal));
+            vector.set(rowIndex, row.getLong(ordinal));
         }
-    }
-
-    private boolean isNullAt(InternalRow row, int ordinal) {
-        return row.isNullAt(ordinal);
-    }
-
-    private long readLong(InternalRow row, int ordinal) {
-        return row.getLong(ordinal);
     }
 }

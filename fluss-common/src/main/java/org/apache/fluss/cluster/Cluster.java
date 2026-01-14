@@ -20,9 +20,7 @@ package org.apache.fluss.cluster;
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.metadata.PhysicalTablePath;
-import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableBucket;
-import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 
 import javax.annotation.Nullable;
@@ -55,22 +53,17 @@ public final class Cluster {
     private final Map<PhysicalTablePath, Long> partitionsIdByPath;
     private final Map<Long, String> partitionNameById;
 
-    /** Only latest schema of table will be put in it. */
-    private final Map<TablePath, TableInfo> tableInfoByPath;
-
     public Cluster(
             Map<Integer, ServerNode> aliveTabletServersById,
             @Nullable ServerNode coordinatorServer,
             Map<PhysicalTablePath, List<BucketLocation>> bucketLocationsByPath,
             Map<TablePath, Long> tableIdByPath,
-            Map<PhysicalTablePath, Long> partitionsIdByPath,
-            Map<TablePath, TableInfo> tableInfoByPath) {
+            Map<PhysicalTablePath, Long> partitionsIdByPath) {
         this.coordinatorServer = coordinatorServer;
         this.aliveTabletServersById = Collections.unmodifiableMap(aliveTabletServersById);
         this.aliveTabletServers =
                 Collections.unmodifiableList(new ArrayList<>(aliveTabletServersById.values()));
         this.tableIdByPath = Collections.unmodifiableMap(tableIdByPath);
-        this.tableInfoByPath = Collections.unmodifiableMap(tableInfoByPath);
         this.partitionsIdByPath = Collections.unmodifiableMap(partitionsIdByPath);
 
         // Index the bucket locations by table path, and index bucket location by bucket.
@@ -139,8 +132,7 @@ public final class Cluster {
                 coordinatorServer,
                 newBucketLocationsByPath,
                 new HashMap<>(tableIdByPath),
-                new HashMap<>(partitionsIdByPath),
-                new HashMap<>(tableInfoByPath));
+                new HashMap<>(partitionsIdByPath));
     }
 
     @Nullable
@@ -159,17 +151,6 @@ public final class Cluster {
         return aliveTabletServers;
     }
 
-    /**
-     * Get the table id for this table.
-     *
-     * @param tablePath the table path
-     * @return the table id, if metadata cache contains the table path, return the table path,
-     *     otherwise return {@link TableInfo#UNKNOWN_TABLE_ID}
-     */
-    public long getTableId(TablePath tablePath) {
-        return tableIdByPath.getOrDefault(tablePath, TableInfo.UNKNOWN_TABLE_ID);
-    }
-
     /** Get the table path for this table id. */
     public Optional<TablePath> getTablePath(long tableId) {
         return Optional.ofNullable(pathByTableId.get(tableId));
@@ -183,10 +164,6 @@ public final class Cluster {
                                         "table path not found for tableId "
                                                 + tableId
                                                 + " in cluster"));
-    }
-
-    public int getBucketCount(TablePath tablePath) {
-        return tableInfoByPath.get(tablePath).getNumBuckets();
     }
 
     /** Get the bucket location for this table-bucket. */
@@ -224,9 +201,8 @@ public final class Cluster {
         return availableLocationsByPath.getOrDefault(physicalTablePath, Collections.emptyList());
     }
 
-    /** Get the table info for this table. */
-    public Optional<TableInfo> getTable(TablePath tablePath) {
-        return Optional.ofNullable(tableInfoByPath.get(tablePath));
+    public Optional<Long> getTableId(TablePath tablePath) {
+        return Optional.ofNullable(tableIdByPath.get(tablePath));
     }
 
     /** Get the partition id for this partition. */
@@ -234,31 +210,13 @@ public final class Cluster {
         return Optional.ofNullable(partitionsIdByPath.get(physicalTablePath));
     }
 
-    /** Return whether the cluster contains the given physical table path or not. */
-    public boolean contains(PhysicalTablePath physicalTablePath) {
-        if (physicalTablePath.getPartitionName() == null) {
-            return getTable(physicalTablePath.getTablePath()).isPresent();
-        } else {
-            return getPartitionId(physicalTablePath).isPresent();
-        }
-    }
-
-    public TableInfo getTableOrElseThrow(TablePath tablePath) {
-        return getTable(tablePath)
-                .orElseThrow(
-                        () ->
-                                new IllegalArgumentException(
-                                        String.format(
-                                                "table: %s not found in cluster", tablePath)));
-    }
-
-    public TableBucket getTableBucket(PhysicalTablePath physicalTablePath, int bucketId) {
-        TableInfo tableInfo = getTableOrElseThrow(physicalTablePath.getTablePath());
+    public TableBucket getTableBucket(
+            long tableId, PhysicalTablePath physicalTablePath, int bucketId) {
         if (physicalTablePath.getPartitionName() != null) {
             Long partitionId = getPartitionIdOrElseThrow(physicalTablePath);
-            return new TableBucket(tableInfo.getTableId(), partitionId, bucketId);
+            return new TableBucket(tableId, partitionId, bucketId);
         } else {
-            return new TableBucket(tableInfo.getTableId(), bucketId);
+            return new TableBucket(tableId, bucketId);
         }
     }
 
@@ -286,20 +244,9 @@ public final class Cluster {
         return Optional.ofNullable(partitionNameById.get(partitionId));
     }
 
-    /** Get the latest schema for the given table. */
-    public Optional<SchemaInfo> getSchema(TablePath tablePath) {
-        return getTable(tablePath)
-                .map(tableInfo -> new SchemaInfo(tableInfo.getSchema(), tableInfo.getSchemaId()));
-    }
-
     /** Get the table path to table id map. */
     public Map<TablePath, Long> getTableIdByPath() {
         return tableIdByPath;
-    }
-
-    /** Get the table info by table. */
-    public Map<TablePath, TableInfo> getTableInfoByPath() {
-        return tableInfoByPath;
     }
 
     /** Get the bucket by a physical table path. */
@@ -316,7 +263,6 @@ public final class Cluster {
         return new Cluster(
                 Collections.emptyMap(),
                 null,
-                Collections.emptyMap(),
                 Collections.emptyMap(),
                 Collections.emptyMap(),
                 Collections.emptyMap());

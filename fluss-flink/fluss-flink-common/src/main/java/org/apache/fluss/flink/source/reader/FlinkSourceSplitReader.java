@@ -17,6 +17,7 @@
 
 package org.apache.fluss.flink.source.reader;
 
+import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.client.Connection;
 import org.apache.fluss.client.ConnectionFactory;
 import org.apache.fluss.client.table.Table;
@@ -101,10 +102,9 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
     private final Table table;
     private final FlinkMetricRegistry flinkMetricRegistry;
 
-    @Nullable private LakeSource<LakeSplit> lakeSource;
+    @Nullable private final LakeSource<LakeSplit> lakeSource;
 
-    // table id, will be null when haven't received any split
-    private Long tableId;
+    private final Long tableId;
 
     private final Map<TableBucket, Long> stoppingOffsets;
     private LakeSplitReaderGenerator lakeSplitReaderGenerator;
@@ -126,10 +126,12 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
                 new FlinkMetricRegistry(flinkSourceReaderMetrics.getSourceReaderMetricGroup());
         this.connection = ConnectionFactory.createConnection(flussConf, flinkMetricRegistry);
         this.table = connection.getTable(tablePath);
+        this.tableId = table.getTableInfo().getTableId();
         this.sourceOutputType = sourceOutputType;
         this.boundedSplits = new ArrayDeque<>();
         this.subscribedBuckets = new HashMap<>();
         this.projectedFields = projectedFields;
+
         this.flinkSourceReaderMetrics = flinkSourceReaderMetrics;
         sanityCheck(table.getTableInfo().getRowType(), projectedFields);
         this.logScanner = table.newScan().project(projectedFields).createLogScanner();
@@ -185,15 +187,15 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
         }
         for (SourceSplitBase sourceSplitBase : splitsChanges.splits()) {
             LOG.info("add split {}", sourceSplitBase.splitId());
-            // init table id
-            if (tableId == null) {
-                tableId = sourceSplitBase.getTableBucket().getTableId();
-            } else {
-                checkArgument(
-                        tableId.equals(sourceSplitBase.getTableBucket().getTableId()),
-                        "table id not equal across splits {}",
-                        splitsChanges.splits());
-            }
+            checkArgument(
+                    tableId.equals(sourceSplitBase.getTableBucket().getTableId()),
+                    "Table ID mismatch: expected %s, but split contains %s for table '%s'. "
+                            + "This usually happens when a table with the same name was dropped and recreated "
+                            + "between job runs, causing metadata inconsistency. "
+                            + "To resolve this, please restart the job **without** using the previous savepoint or checkpoint.",
+                    tableId,
+                    sourceSplitBase.getTableBucket().getTableId(),
+                    table.getTableInfo().getTablePath());
 
             if (sourceSplitBase.isHybridSnapshotLogSplit()) {
                 HybridSnapshotLogSplit hybridSnapshotLogSplit =
@@ -310,9 +312,12 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
     }
 
     public Set<TableBucket> removePartitions(Map<Long, String> removedPartitions) {
-        // First, if the current active bounded split belongs to a removed partition,
-        // finish it so it will not be restored.
-        if (currentBoundedSplit != null) {
+        // First, if the current active bounded split belongs to a removed partition and is not
+        // LakeSnapshotSplit, finish it so it will not be restored.
+        // Splits contains lake splits cannot be terminated even if its corresponding partition has
+        // expired in Fluss; otherwise, union reads will fail to correctly read partitions that
+        // exist in the lake but have already expired in Fluss.
+        if (currentBoundedSplit != null && !currentBoundedSplit.isLakeSplit()) {
             TableBucket currentBucket = currentBoundedSplit.getTableBucket();
             if (removedPartitions.containsKey(currentBucket.getPartitionId())) {
                 try {
@@ -338,7 +343,11 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
         while (snapshotSplitIterator.hasNext()) {
             SourceSplitBase split = snapshotSplitIterator.next();
             TableBucket tableBucket = split.getTableBucket();
-            if (removedPartitions.containsKey(tableBucket.getPartitionId())) {
+            // Splits contains lake splits cannot be terminated even if its corresponding partition
+            // has expired in Fluss; otherwise, union reads will fail to correctly read partitions
+            // that exist in the lake but have already expired in Fluss.
+            if (removedPartitions.containsKey(tableBucket.getPartitionId())
+                    && !split.isLakeSplit()) {
                 removedSplits.add(split.splitId());
                 snapshotSplitIterator.remove();
                 unsubscribedTableBuckets.add(tableBucket);
@@ -564,7 +573,8 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
         RowType tableRowType =
                 projectedFields != null
                         ? flussTableRowType.project(projectedFields)
-                        : flussTableRowType;
+                        // only read the output fields from source
+                        : flussTableRowType.project(sourceOutputType.getFieldNames());
         if (!sourceOutputType.copy(false).equals(tableRowType.copy(false))) {
             // The default nullability of Flink row type and Fluss row type might be not the same,
             // thus we need to compare the row type without nullability here.
@@ -590,5 +600,10 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
                             + sourceOutputType
                             + flussSchemaMsg);
         }
+    }
+
+    @VisibleForTesting
+    int[] getProjectedFields() {
+        return projectedFields;
     }
 }

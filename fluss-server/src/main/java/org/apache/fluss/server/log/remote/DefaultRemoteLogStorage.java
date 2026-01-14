@@ -30,7 +30,6 @@ import org.apache.fluss.utils.CloseableRegistry;
 import org.apache.fluss.utils.ExceptionUtils;
 import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.IOUtils;
-import org.apache.fluss.utils.concurrent.ExecutorThreadFactory;
 import org.apache.fluss.utils.concurrent.FutureUtils;
 import org.apache.fluss.utils.function.ThrowingRunnable;
 
@@ -52,7 +51,6 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 
 import static org.apache.fluss.utils.FlussPaths.INDEX_FILE_SUFFIX;
 import static org.apache.fluss.utils.FlussPaths.TIME_INDEX_FILE_SUFFIX;
@@ -69,17 +67,15 @@ public class DefaultRemoteLogStorage implements RemoteLogStorage {
 
     private final FsPath remoteLogDir;
     private final FileSystem fileSystem;
-    private final ExecutorService dataTransferThreadPool;
+    private final ExecutorService ioExecutor;
     private final int writeBufferSize;
 
-    public DefaultRemoteLogStorage(Configuration conf) throws IOException {
+    public DefaultRemoteLogStorage(Configuration conf, ExecutorService ioExecutor)
+            throws IOException {
         this.remoteLogDir = FlussPaths.remoteLogDir(conf);
         this.fileSystem = remoteLogDir.getFileSystem();
         this.writeBufferSize = (int) conf.get(ConfigOptions.REMOTE_FS_WRITE_BUFFER_SIZE).getBytes();
-        this.dataTransferThreadPool =
-                Executors.newFixedThreadPool(
-                        conf.getInt(ConfigOptions.REMOTE_LOG_DATA_TRANSFER_THREAD_NUM),
-                        new ExecutorThreadFactory("fluss-remote-log-data-transfer"));
+        this.ioExecutor = ioExecutor;
     }
 
     @Override
@@ -281,7 +277,7 @@ public class DefaultRemoteLogStorage implements RemoteLogStorage {
                                                     Files.newInputStream(localFile),
                                                     rlsPath,
                                                     localFile.getFileName().toString())),
-                            dataTransferThreadPool);
+                            ioExecutor);
             list.add(voidCompletableFuture);
         }
         return list;
@@ -333,8 +329,6 @@ public class DefaultRemoteLogStorage implements RemoteLogStorage {
 
     @Override
     public void close() throws IOException {
-        if (dataTransferThreadPool != null) {
-            dataTransferThreadPool.shutdownNow();
-        }
+        // do nothing
     }
 }

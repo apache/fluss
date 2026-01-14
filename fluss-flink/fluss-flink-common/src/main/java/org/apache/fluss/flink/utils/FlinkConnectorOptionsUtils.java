@@ -17,14 +17,17 @@
 
 package org.apache.fluss.flink.utils;
 
+import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.FlinkConnectorOptions;
 import org.apache.fluss.flink.FlinkConnectorOptions.ScanStartupMode;
 
+import org.apache.flink.configuration.CoreOptions;
 import org.apache.flink.configuration.ReadableConfig;
 import org.apache.flink.table.api.ValidationException;
 import org.apache.flink.table.api.config.TableConfigOptions;
 import org.apache.flink.table.types.logical.RowType;
 
+import java.io.File;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
@@ -34,6 +37,8 @@ import java.util.List;
 import java.util.Optional;
 import java.util.stream.Collectors;
 
+import static org.apache.flink.configuration.CoreOptions.TMP_DIRS;
+import static org.apache.fluss.config.ConfigOptions.CLIENT_SCANNER_IO_TMP_DIR;
 import static org.apache.fluss.flink.FlinkConnectorOptions.SCAN_STARTUP_MODE;
 import static org.apache.fluss.flink.FlinkConnectorOptions.SCAN_STARTUP_TIMESTAMP;
 import static org.apache.fluss.flink.FlinkConnectorOptions.ScanStartupMode.TIMESTAMP;
@@ -146,6 +151,17 @@ public class FlinkConnectorOptionsUtils {
                             optionKey, timestampStr),
                     e);
         }
+    }
+
+    public static String getClientScannerIoTmpDir(
+            Configuration flussConf, org.apache.flink.configuration.Configuration flinkConfig) {
+        if (!flussConf.contains(CLIENT_SCANNER_IO_TMP_DIR)) {
+            if (flinkConfig.contains(TMP_DIRS)) {
+                // pass flink io tmp dir to fluss client.
+                return new File(flinkConfig.get(CoreOptions.TMP_DIRS), "/fluss").getAbsolutePath();
+            }
+        }
+        return flussConf.getString(CLIENT_SCANNER_IO_TMP_DIR);
     }
 
     /** Fluss startup options. * */

@@ -28,6 +28,7 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.rpc.entity.FetchLogResultForBucket;
 import org.apache.fluss.rpc.messages.FetchLogRequest;
 import org.apache.fluss.server.entity.FetchReqInfo;
+import org.apache.fluss.server.entity.UserContext;
 import org.apache.fluss.server.log.FetchIsolation;
 import org.apache.fluss.server.log.FetchParams;
 import org.apache.fluss.server.log.LogOffsetMetadata;
@@ -39,6 +40,8 @@ import org.apache.fluss.server.replica.ReplicaManager.LogReadResult;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import javax.annotation.Nullable;
 
 import java.io.IOException;
 import java.util.HashMap;
@@ -59,19 +62,22 @@ public class DelayedFetchLog extends DelayedOperation {
     private final Map<TableBucket, FetchBucketStatus> fetchBucketStatusMap;
     private final Consumer<Map<TableBucket, FetchLogResultForBucket>> responseCallback;
     private final TabletServerMetricGroup serverMetricGroup;
+    @Nullable private final UserContext userContext;
 
     public DelayedFetchLog(
             FetchParams params,
             ReplicaManager replicaManager,
             Map<TableBucket, FetchBucketStatus> fetchBucketStatusMap,
             Consumer<Map<TableBucket, FetchLogResultForBucket>> responseCallback,
-            TabletServerMetricGroup serverMetricGroup) {
+            TabletServerMetricGroup serverMetricGroup,
+            @Nullable UserContext userContext) {
         super(params.maxWaitMs());
         this.params = params;
         this.replicaManager = replicaManager;
         this.fetchBucketStatusMap = fetchBucketStatusMap;
         this.responseCallback = responseCallback;
         this.serverMetricGroup = serverMetricGroup;
+        this.userContext = userContext;
     }
 
     /** Upon completion, read whatever data is available and pass to the complete callback. */
@@ -93,7 +99,7 @@ public class DelayedFetchLog extends DelayedOperation {
 
         // re-fetch data.
         Map<TableBucket, LogReadResult> reReadResult =
-                replicaManager.readFromLog(params, reFetchBuckets);
+                replicaManager.readFromLog(params, reFetchBuckets, userContext);
         reReadResult.forEach((key, value) -> result.put(key, value.getFetchLogResultForBucket()));
         responseCallback.accept(result);
     }

@@ -20,6 +20,7 @@ package org.apache.fluss.flink.source.event;
 import org.apache.flink.api.connector.source.SourceEvent;
 
 import java.util.Map;
+import java.util.Objects;
 
 /**
  * A source event to represent partitions is removed to send from enumerator to reader.
@@ -39,6 +40,20 @@ public class PartitionsRemovedEvent implements SourceEvent {
 
     public Map<Long, String> getRemovedPartitions() {
         return removedPartitions;
+    }
+
+    @Override
+    public boolean equals(Object o) {
+        if (o == null || getClass() != o.getClass()) {
+            return false;
+        }
+        PartitionsRemovedEvent that = (PartitionsRemovedEvent) o;
+        return Objects.equals(removedPartitions, that.removedPartitions);
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hashCode(removedPartitions);
     }
 
     @Override

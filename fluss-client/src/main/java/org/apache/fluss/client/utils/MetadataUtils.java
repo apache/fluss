@@ -21,12 +21,9 @@ import org.apache.fluss.cluster.BucketLocation;
 import org.apache.fluss.cluster.Cluster;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.ServerType;
-import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.StaleMetadataException;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
-import org.apache.fluss.metadata.TableDescriptor;
-import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.GatewayClientProxy;
 import org.apache.fluss.rpc.RpcClient;
@@ -38,6 +35,9 @@ import org.apache.fluss.rpc.messages.PbPartitionMetadata;
 import org.apache.fluss.rpc.messages.PbServerNode;
 import org.apache.fluss.rpc.messages.PbTableMetadata;
 import org.apache.fluss.rpc.messages.PbTablePath;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
 
@@ -54,6 +54,8 @@ import java.util.concurrent.TimeoutException;
 
 /** Utils for metadata for client. */
 public class MetadataUtils {
+
+    private static final Logger LOG = LoggerFactory.getLogger(MetadataUtils.class);
 
     private static final Random randOffset = new Random();
 
@@ -79,13 +81,12 @@ public class MetadataUtils {
             RpcClient client,
             @Nullable Set<TablePath> tablePaths,
             @Nullable Collection<PhysicalTablePath> tablePartitionNames,
-            @Nullable Collection<Long> tablePartitionIds)
+            @Nullable Collection<Long> tablePartitionIds,
+            ServerNode serverNode)
             throws ExecutionException, InterruptedException, TimeoutException {
         AdminReadOnlyGateway gateway =
                 GatewayClientProxy.createGatewayProxy(
-                        () -> getOneAvailableTabletServerNode(cluster),
-                        client,
-                        AdminReadOnlyGateway.class);
+                        () -> serverNode, client, AdminReadOnlyGateway.class);
         return sendMetadataRequestAndRebuildCluster(
                 gateway, true, cluster, tablePaths, tablePartitionNames, tablePartitionIds);
     }
@@ -118,7 +119,6 @@ public class MetadataUtils {
                             ServerNode coordinatorServer = getCoordinatorServer(response);
 
                             Map<TablePath, Long> newTablePathToTableId;
-                            Map<TablePath, TableInfo> newTablePathToTableInfo;
                             Map<PhysicalTablePath, List<BucketLocation>> newBucketLocations;
                             Map<PhysicalTablePath, Long> newPartitionIdByPath;
 
@@ -130,16 +130,12 @@ public class MetadataUtils {
                                 // the origin cluster.
                                 newTablePathToTableId =
                                         new HashMap<>(originCluster.getTableIdByPath());
-                                newTablePathToTableInfo =
-                                        new HashMap<>(originCluster.getTableInfoByPath());
                                 newBucketLocations =
                                         new HashMap<>(originCluster.getBucketLocationsByPath());
                                 newPartitionIdByPath =
                                         new HashMap<>(originCluster.getPartitionIdByPath());
 
                                 newTablePathToTableId.putAll(newTableMetadata.tablePathToTableId);
-                                newTablePathToTableInfo.putAll(
-                                        newTableMetadata.tablePathToTableInfo);
                                 newBucketLocations.putAll(newTableMetadata.bucketLocations);
                                 newPartitionIdByPath.putAll(newTableMetadata.partitionIdByPath);
 
@@ -147,7 +143,6 @@ public class MetadataUtils {
                                 // If full update, we will clear all tables info out ot the origin
                                 // cluster.
                                 newTablePathToTableId = newTableMetadata.tablePathToTableId;
-                                newTablePathToTableInfo = newTableMetadata.tablePathToTableInfo;
                                 newBucketLocations = newTableMetadata.bucketLocations;
                                 newPartitionIdByPath = newTableMetadata.partitionIdByPath;
                             }
@@ -157,8 +152,7 @@ public class MetadataUtils {
                                     coordinatorServer,
                                     newBucketLocations,
                                     newTablePathToTableId,
-                                    newPartitionIdByPath,
-                                    newTablePathToTableInfo);
+                                    newPartitionIdByPath);
                         })
                 .get(30, TimeUnit.SECONDS); // TODO currently, we don't have timeout logic in
         // RpcClient, it will let the get() block forever. So we
@@ -168,7 +162,6 @@ public class MetadataUtils {
     private static NewTableMetadata getTableMetadataToUpdate(
             Cluster cluster, MetadataResponse metadataResponse) {
         Map<TablePath, Long> newTablePathToTableId = new HashMap<>();
-        Map<TablePath, TableInfo> newTablePathToTableInfo = new HashMap<>();
         Map<PhysicalTablePath, List<BucketLocation>> newBucketLocations = new HashMap<>();
         Map<PhysicalTablePath, Long> newPartitionIdByPath = new HashMap<>();
 
@@ -184,17 +177,6 @@ public class MetadataUtils {
                                     protoTablePath.getDatabaseName(),
                                     protoTablePath.getTableName());
                     newTablePathToTableId.put(tablePath, tableId);
-                    TableDescriptor tableDescriptor =
-                            TableDescriptor.fromJsonBytes(pbTableMetadata.getTableJson());
-                    newTablePathToTableInfo.put(
-                            tablePath,
-                            TableInfo.of(
-                                    tablePath,
-                                    pbTableMetadata.getTableId(),
-                                    pbTableMetadata.getSchemaId(),
-                                    tableDescriptor,
-                                    pbTableMetadata.getCreatedTime(),
-                                    pbTableMetadata.getModifiedTime()));
 
                     // Get all buckets for the table.
                     List<PbBucketMetadata> pbBucketMetadataList =
@@ -229,34 +211,34 @@ public class MetadataUtils {
                 });
 
         return new NewTableMetadata(
-                newTablePathToTableId,
-                newTablePathToTableInfo,
-                newBucketLocations,
-                newPartitionIdByPath);
+                newTablePathToTableId, newBucketLocations, newPartitionIdByPath);
     }
 
     private static final class NewTableMetadata {
         private final Map<TablePath, Long> tablePathToTableId;
-        private final Map<TablePath, TableInfo> tablePathToTableInfo;
         private final Map<PhysicalTablePath, List<BucketLocation>> bucketLocations;
         private final Map<PhysicalTablePath, Long> partitionIdByPath;
 
         public NewTableMetadata(
                 Map<TablePath, Long> tablePathToTableId,
-                Map<TablePath, TableInfo> tablePathToTableInfo,
                 Map<PhysicalTablePath, List<BucketLocation>> bucketLocations,
                 Map<PhysicalTablePath, Long> partitionIdByPath) {
             this.tablePathToTableId = tablePathToTableId;
-            this.tablePathToTableInfo = tablePathToTableInfo;
             this.bucketLocations = bucketLocations;
             this.partitionIdByPath = partitionIdByPath;
         }
     }
 
-    public static ServerNode getOneAvailableTabletServerNode(Cluster cluster) {
-        List<ServerNode> aliveTabletServers = cluster.getAliveTabletServerList();
+    public static @Nullable ServerNode getOneAvailableTabletServerNode(
+            Cluster cluster, Set<Integer> unavailableTabletServerIds) {
+        List<ServerNode> aliveTabletServers = new ArrayList<>(cluster.getAliveTabletServerList());
+        if (!unavailableTabletServerIds.isEmpty()) {
+            aliveTabletServers.removeIf(
+                    serverNode -> unavailableTabletServerIds.contains(serverNode.id()));
+        }
+
         if (aliveTabletServers.isEmpty()) {
-            throw new FlussRuntimeException("no alive tablet server in cluster");
+            return null;
         }
         // just pick one random server node
         int offset = randOffset.nextInt(aliveTabletServers.size());

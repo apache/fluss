@@ -224,31 +224,31 @@ public class TableAssignmentUtils {
             replicas.add(leader);
             Set<String> racksWithReplicas = new HashSet<>();
             racksWithReplicas.add(serverRackMap.get(leader));
-            Set<Integer> brokersWithReplicas = new HashSet<>();
-            brokersWithReplicas.add(leader);
+            Set<Integer> tabletServersWithReplicas = new HashSet<>();
+            tabletServersWithReplicas.add(leader);
             int k = 0;
             for (int j = 0; j < replicationFactor - 1; j++) {
                 boolean done = false;
                 while (!done) {
-                    Integer broker =
+                    Integer server =
                             arrangedServerList.get(
                                     replicaIndex(
                                             firstReplicaIndex,
                                             nextReplicaShift * numRacks,
                                             k,
                                             arrangedServerList.size()));
-                    String rack = serverRackMap.get(broker);
+                    String rack = serverRackMap.get(server);
                     // Skip this tabletServer if
                     // 1. there is already a tabletServer in the same rack that has assigned a
                     // replica AND there is one or more racks that do not have any replica, or
                     // 2. the tabletServer has already assigned a replica AND there is one or more
                     // tabletServers that do not have replica assigned
                     if ((!racksWithReplicas.contains(rack) || racksWithReplicas.size() == numRacks)
-                            && (!brokersWithReplicas.contains(broker)
-                                    || brokersWithReplicas.size() == numServers)) {
-                        replicas.add(broker);
+                            && (!tabletServersWithReplicas.contains(server)
+                                    || tabletServersWithReplicas.size() == numServers)) {
+                        replicas.add(server);
                         racksWithReplicas.add(rack);
-                        brokersWithReplicas.add(broker);
+                        tabletServersWithReplicas.add(server);
                         done = true;
                     }
                     k += 1;

@@ -64,15 +64,15 @@
 
         <!-- TODO: these two dependencies need to be shaded. -->
         <dependency>
-            <groupId>org.lz4</groupId>
+            <groupId>at.yawk.lz4</groupId>
             <artifactId>lz4-java</artifactId>
-            <version>1.8.0</version>
+            <version>1.10.2</version>
         </dependency>
 
         <dependency>
             <groupId>com.github.luben</groupId>
             <artifactId>zstd-jni</artifactId>
-            <version>1.5.7-1</version>
+            <version>1.5.7-6</version>
         </dependency>
 
         <!-- RocksDB dependencies -->

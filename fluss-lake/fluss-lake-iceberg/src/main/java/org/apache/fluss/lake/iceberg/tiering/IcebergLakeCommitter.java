@@ -17,14 +17,10 @@
 
 package org.apache.fluss.lake.iceberg.tiering;
 
-import org.apache.fluss.lake.committer.BucketOffset;
 import org.apache.fluss.lake.committer.CommittedLakeSnapshot;
 import org.apache.fluss.lake.committer.LakeCommitter;
 import org.apache.fluss.lake.iceberg.maintenance.RewriteDataFileResult;
 import org.apache.fluss.metadata.TablePath;
-import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
-import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.ObjectMapper;
-import org.apache.fluss.utils.json.BucketOffsetJsonSerde;
 
 import org.apache.iceberg.AppendFiles;
 import org.apache.iceberg.CatalogUtil;
@@ -48,12 +44,10 @@ import org.slf4j.LoggerFactory;
 import javax.annotation.Nullable;
 
 import java.io.IOException;
-import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 
-import static org.apache.fluss.lake.committer.BucketOffset.FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY;
 import static org.apache.fluss.lake.iceberg.utils.IcebergConversions.toIceberg;
 import static org.apache.fluss.lake.writer.LakeTieringFactory.FLUSS_LAKE_TIERING_COMMIT_USER;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
@@ -67,7 +61,6 @@ public class IcebergLakeCommitter implements LakeCommitter<IcebergWriteResult, I
 
     private final Catalog icebergCatalog;
     private final Table icebergTable;
-    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
     private static final ThreadLocal<Long> currentCommitSnapshotId = new ThreadLocal<>();
 
     public IcebergLakeCommitter(IcebergCatalogProvider icebergCatalogProvider, TablePath tablePath)
@@ -115,9 +108,7 @@ public class IcebergLakeCommitter implements LakeCommitter<IcebergWriteResult, I
             if (committable.getDeleteFiles().isEmpty()) {
                 // Simple append-only case: only data files, no delete files or compaction
                 AppendFiles appendFiles = icebergTable.newAppend();
-                for (DataFile dataFile : committable.getDataFiles()) {
-                    appendFiles.appendFile(dataFile);
-                }
+                committable.getDataFiles().forEach(appendFiles::appendFile);
                 snapshotUpdate = appendFiles;
             } else {
                 /*
@@ -131,10 +122,8 @@ public class IcebergLakeCommitter implements LakeCommitter<IcebergWriteResult, I
                  being committed.
                 */
                 RowDelta rowDelta = icebergTable.newRowDelta();
-                Arrays.stream(committable.getDataFiles().stream().toArray(DataFile[]::new))
-                        .forEach(rowDelta::addRows);
-                Arrays.stream(committable.getDeleteFiles().stream().toArray(DeleteFile[]::new))
-                        .forEach(rowDelta::addDeletes);
+                committable.getDataFiles().forEach(rowDelta::addRows);
+                committable.getDeleteFiles().forEach(rowDelta::addDeletes);
                 snapshotUpdate = rowDelta;
             }
 
@@ -212,13 +201,13 @@ public class IcebergLakeCommitter implements LakeCommitter<IcebergWriteResult, I
     public void abort(IcebergCommittable committable) {
         List<String> dataFilesToDelete =
                 committable.getDataFiles().stream()
-                        .map(file -> file.path().toString())
+                        .map(ContentFile::location)
                         .collect(Collectors.toList());
         CatalogUtil.deleteFiles(icebergTable.io(), dataFilesToDelete, "data file", true);
 
         List<String> deleteFilesToDelete =
                 committable.getDeleteFiles().stream()
-                        .map(file -> file.path().toString())
+                        .map(ContentFile::location)
                         .collect(Collectors.toList());
         CatalogUtil.deleteFiles(icebergTable.io(), deleteFilesToDelete, "delete file", true);
     }
@@ -227,7 +216,6 @@ public class IcebergLakeCommitter implements LakeCommitter<IcebergWriteResult, I
     @Override
     public CommittedLakeSnapshot getMissingLakeSnapshot(@Nullable Long latestLakeSnapshotIdOfFluss)
             throws IOException {
-        // todo: may refactor to common methods?
         Snapshot latestLakeSnapshot =
                 getCommittedLatestSnapshotOfLake(FLUSS_LAKE_TIERING_COMMIT_USER);
 
@@ -251,9 +239,6 @@ public class IcebergLakeCommitter implements LakeCommitter<IcebergWriteResult, I
             }
         }
 
-        CommittedLakeSnapshot committedLakeSnapshot =
-                new CommittedLakeSnapshot(latestLakeSnapshot.snapshotId());
-
         // Reconstruct bucket offsets from snapshot properties
         Map<String, String> properties = latestLakeSnapshot.summary();
         if (properties == null) {
@@ -261,28 +246,7 @@ public class IcebergLakeCommitter implements LakeCommitter<IcebergWriteResult, I
                     "Failed to load committed lake snapshot properties from Iceberg.");
         }
 
-        String flussOffsetProperties = properties.get(FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY);
-        if (flussOffsetProperties == null) {
-            throw new IllegalArgumentException(
-                    "Cannot resume tiering from snapshot without bucket offset properties. "
-                            + "The snapshot was committed to Iceberg but missing Fluss metadata.");
-        }
-
-        for (JsonNode node : OBJECT_MAPPER.readTree(flussOffsetProperties)) {
-            BucketOffset bucketOffset = BucketOffsetJsonSerde.INSTANCE.deserialize(node);
-            if (bucketOffset.getPartitionId() != null) {
-                committedLakeSnapshot.addPartitionBucket(
-                        bucketOffset.getPartitionId(),
-                        bucketOffset.getPartitionQualifiedName(),
-                        bucketOffset.getBucket(),
-                        bucketOffset.getLogOffset());
-            } else {
-                committedLakeSnapshot.addBucket(
-                        bucketOffset.getBucket(), bucketOffset.getLogOffset());
-            }
-        }
-
-        return committedLakeSnapshot;
+        return new CommittedLakeSnapshot(latestLakeSnapshot.snapshotId(), properties);
     }
 
     @Override

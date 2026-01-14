@@ -18,38 +18,28 @@
 package org.apache.fluss.row.arrow.writers;
 
 import org.apache.fluss.annotation.Internal;
-import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.row.DataGetters;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.IntVector;
 
 /** {@link ArrowFieldWriter} for Int. */
 @Internal
-public class ArrowIntWriter extends ArrowFieldWriter<InternalRow> {
+public class ArrowIntWriter extends ArrowFieldWriter {
 
-    public static ArrowIntWriter forField(IntVector intVector) {
-        return new ArrowIntWriter(intVector);
-    }
-
-    private ArrowIntWriter(IntVector intVector) {
+    public ArrowIntWriter(IntVector intVector) {
         super(intVector);
     }
 
     @Override
-    public void doWrite(InternalRow row, int ordinal, boolean handleSafe) {
-        IntVector vector = (IntVector) getValueVector();
-        if (isNullAt(row, ordinal)) {
-            vector.setNull(getCount());
-        } else if (handleSafe) {
-            vector.setSafe(getCount(), readInt(row, ordinal));
+    public void doWrite(int rowIndex, DataGetters row, int ordinal, boolean handleSafe) {
+        IntVector vector = (IntVector) fieldVector;
+        if (handleSafe) {
+            vector.setSafe(rowIndex, readInt(row, ordinal));
         } else {
-            vector.set(getCount(), readInt(row, ordinal));
+            vector.set(rowIndex, readInt(row, ordinal));
         }
     }
 
-    private boolean isNullAt(InternalRow row, int ordinal) {
-        return row.isNullAt(ordinal);
-    }
-
-    int readInt(InternalRow row, int ordinal) {
+    int readInt(DataGetters row, int ordinal) {
         return row.getInt(ordinal);
     }
 }

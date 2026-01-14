@@ -43,8 +43,8 @@ import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
 import org.apache.fluss.server.metadata.BucketMetadata;
 import org.apache.fluss.server.metadata.PartitionMetadata;
 import org.apache.fluss.server.metadata.TableMetadata;
-import org.apache.fluss.server.zk.data.LakeTableSnapshot;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
+import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -279,8 +279,10 @@ public class CoordinatorRequestBatch {
      *   <li>case7: Leader and isr is changed for these input tableBuckets
      *   <li>case8: One newly tabletServer added into cluster
      *   <li>case9: One tabletServer is removed from cluster
+     *   <li>case10: schemaId is changed after table is created.
      * </ol>
      */
+    // todo: improve this with different phase enum.
     public void addUpdateMetadataRequestForTabletServers(
             Set<Integer> tabletServers,
             @Nullable Long tableId,
@@ -298,7 +300,7 @@ public class CoordinatorRequestBatch {
                         .computeIfAbsent(tableId, k -> new HashMap<>())
                         .put(partitionId, Collections.emptyList());
             } else {
-                // case3, case4
+                // case3, case4, case10
                 updateMetadataRequestBucketMap.put(tableId, Collections.emptyList());
             }
         } else {
@@ -306,6 +308,7 @@ public class CoordinatorRequestBatch {
             for (TableBucket tableBucket : tableBuckets) {
                 long currentTableId = tableBucket.getTableId();
                 Long currentPartitionId = tableBucket.getPartitionId();
+                // case1, case2
                 Optional<LeaderAndIsr> bucketLeaderAndIsr =
                         coordinatorContext.getBucketLeaderAndIsr(tableBucket);
                 Integer leaderEpoch =
@@ -375,7 +378,8 @@ public class CoordinatorRequestBatch {
     public void addNotifyLakeTableOffsetRequestForTableServers(
             List<Integer> tabletServers,
             TableBucket tableBucket,
-            LakeTableSnapshot lakeTableSnapshot) {
+            LakeTableSnapshot lakeTableSnapshot,
+            @Nullable Long maxTieredTimestamp) {
         tabletServers.stream()
                 .filter(s -> s >= 0)
                 .forEach(
@@ -387,7 +391,7 @@ public class CoordinatorRequestBatch {
                             notifyLakeTableOffsetReqForBucketMap.put(
                                     tableBucket,
                                     makeNotifyLakeTableOffsetForBucket(
-                                            tableBucket, lakeTableSnapshot));
+                                            tableBucket, lakeTableSnapshot, maxTieredTimestamp));
                         });
     }
 

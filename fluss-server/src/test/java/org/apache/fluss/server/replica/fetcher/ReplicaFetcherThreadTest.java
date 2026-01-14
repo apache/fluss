@@ -51,6 +51,7 @@ import org.apache.fluss.utils.clock.ManualClock;
 import org.apache.fluss.utils.concurrent.FlussScheduler;
 import org.apache.fluss.utils.concurrent.Scheduler;
 
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -65,6 +66,8 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.function.Consumer;
 
 import static org.apache.fluss.record.TestData.DATA1;
@@ -73,6 +76,7 @@ import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_ID;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
 import static org.apache.fluss.server.coordinator.CoordinatorContext.INITIAL_COORDINATOR_EPOCH;
+import static org.apache.fluss.server.metrics.group.TestingMetricGroups.USER_METRICS;
 import static org.apache.fluss.server.zk.data.LeaderAndIsr.INITIAL_BUCKET_EPOCH;
 import static org.apache.fluss.server.zk.data.LeaderAndIsr.INITIAL_LEADER_EPOCH;
 import static org.apache.fluss.testutils.DataTestUtils.genMemoryLogRecordsByObject;
@@ -96,6 +100,7 @@ public class ReplicaFetcherThreadTest {
     private ServerNode leader;
     private ReplicaManager followerRM;
     private ReplicaFetcherThread followerFetcher;
+    private ExecutorService ioExecutor;
 
     @BeforeAll
     static void baseBeforeAll() {
@@ -126,10 +131,18 @@ public class ReplicaFetcherThreadTest {
                         followerRM,
                         new TestingLeaderEndpoint(conf, leaderRM, follower),
                         1000);
+        ioExecutor = Executors.newSingleThreadExecutor();
 
         registerTableInZkClient();
         // make the tb(table, 0) to be leader in leaderRM and to be follower in followerRM.
         makeLeaderAndFollower();
+    }
+
+    @AfterEach
+    public void tearDown() throws Exception {
+        if (ioExecutor != null) {
+            ioExecutor.shutdownNow();
+        }
     }
 
     @Test
@@ -140,6 +153,7 @@ public class ReplicaFetcherThreadTest {
                 1000,
                 1,
                 Collections.singletonMap(tb, genMemoryLogRecordsByObject(DATA1)),
+                null,
                 future::complete);
         assertThat(future.get()).containsOnly(new ProduceLogResultForBucket(tb, 0, 10L));
 
@@ -163,6 +177,7 @@ public class ReplicaFetcherThreadTest {
                 1000,
                 1,
                 Collections.singletonMap(tb, genMemoryLogRecordsByObject(DATA1)),
+                null,
                 future::complete);
         assertThat(future.get()).containsOnly(new ProduceLogResultForBucket(tb, 10L, 20L));
         retry(
@@ -196,6 +211,7 @@ public class ReplicaFetcherThreadTest {
                     1000,
                     1, // don't wait ack
                     Collections.singletonMap(tb, genMemoryLogRecordsByObject(DATA1)),
+                    null,
                     future::complete);
             assertThat(future.get())
                     .containsOnly(new ProduceLogResultForBucket(tb, baseOffset, baseOffset + 10L));
@@ -228,6 +244,7 @@ public class ReplicaFetcherThreadTest {
                         1,
                         Collections.singletonMap(
                                 tb, genMemoryLogRecordsWithWriterId(DATA1, writerId, i, 0)),
+                        null,
                         future::complete);
                 assertThat(future.get())
                         .containsOnly(
@@ -262,6 +279,7 @@ public class ReplicaFetcherThreadTest {
                 1000,
                 1,
                 Collections.singletonMap(tb, genMemoryLogRecordsWithWriterId(DATA1, 101L, 5, 100L)),
+                null,
                 future::complete);
         assertThat(future.get()).containsOnly(new ProduceLogResultForBucket(tb, 100L, 110L));
 
@@ -273,6 +291,7 @@ public class ReplicaFetcherThreadTest {
                 1000,
                 1,
                 Collections.singletonMap(tb, genMemoryLogRecordsWithWriterId(DATA1, 100L, 5, 110L)),
+                null,
                 future::complete);
         assertThat(future.get()).containsOnly(new ProduceLogResultForBucket(tb, 110L, 120L));
         retry(
@@ -294,6 +313,7 @@ public class ReplicaFetcherThreadTest {
                 1,
                 Collections.singletonMap(
                         tb, genMemoryLogRecordsWithWriterId(DATA1, writerId, 0, 0)),
+                null,
                 future::complete);
         assertThat(future.get()).containsOnly(new ProduceLogResultForBucket(tb, 0L, 10L));
 
@@ -314,6 +334,7 @@ public class ReplicaFetcherThreadTest {
                 1,
                 Collections.singletonMap(
                         tb, genMemoryLogRecordsWithWriterId(DATA1, writerId, 1, 0)),
+                null,
                 future::complete);
         assertThat(future.get()).containsOnly(new ProduceLogResultForBucket(tb, 10L, 20L));
 
@@ -343,6 +364,7 @@ public class ReplicaFetcherThreadTest {
                 1,
                 Collections.singletonMap(
                         tb, genMemoryLogRecordsWithWriterId(DATA1, writerId, 2, 0)),
+                null,
                 future::complete);
         assertThat(future.get()).containsOnly(new ProduceLogResultForBucket(tb, 20L, 30L));
         // now fetcher will work well since the state of writerId=101 is established
@@ -356,7 +378,7 @@ public class ReplicaFetcherThreadTest {
         zkClient.registerTable(
                 DATA1_TABLE_PATH,
                 TableRegistration.newTable(DATA1_TABLE_ID, DATA1_TABLE_DESCRIPTOR));
-        zkClient.registerSchema(DATA1_TABLE_PATH, DATA1_SCHEMA);
+        zkClient.registerFirstSchema(DATA1_TABLE_PATH, DATA1_SCHEMA);
     }
 
     private void makeLeaderAndFollower() {
@@ -420,7 +442,8 @@ public class ReplicaFetcherThreadTest {
                                         new LakeCatalogDynamicLoader(conf, null, true))),
                         RpcClient.create(conf, TestingClientMetricGroup.newInstance(), false),
                         TestingMetricGroups.TABLET_SERVER_METRICS,
-                        manualClock);
+                        manualClock,
+                        ioExecutor);
         replicaManager.startup();
         return replicaManager;
     }
@@ -440,7 +463,8 @@ public class ReplicaFetcherThreadTest {
                 TabletServerMetadataCache metadataCache,
                 RpcClient rpcClient,
                 TabletServerMetricGroup serverMetricGroup,
-                Clock clock)
+                Clock clock,
+                ExecutorService ioExecutor)
                 throws IOException {
             super(
                     conf,
@@ -455,7 +479,9 @@ public class ReplicaFetcherThreadTest {
                     new TestingCompletedKvSnapshotCommitter(),
                     NOPErrorHandler.INSTANCE,
                     serverMetricGroup,
-                    clock);
+                    USER_METRICS,
+                    clock,
+                    ioExecutor);
         }
 
         @Override

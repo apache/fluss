@@ -20,6 +20,7 @@ package org.apache.fluss.client.table.scanner.log;
 import org.apache.fluss.client.table.scanner.ScanRecord;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.Schema;
+import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
@@ -28,8 +29,14 @@ import org.apache.fluss.record.FileLogProjection;
 import org.apache.fluss.record.FileLogRecords;
 import org.apache.fluss.record.LogRecordReadContext;
 import org.apache.fluss.record.MemoryLogRecords;
+import org.apache.fluss.record.ProjectionPushdownCache;
+import org.apache.fluss.record.TestingSchemaGetter;
+import org.apache.fluss.row.GenericArray;
+import org.apache.fluss.row.GenericMap;
+import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.rpc.entity.FetchLogResultForBucket;
+import org.apache.fluss.testutils.InternalRowAssert;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.FlussPaths;
@@ -61,6 +68,7 @@ import static org.apache.fluss.record.TestData.DATA2_TABLE_ID;
 import static org.apache.fluss.record.TestData.DATA2_TABLE_INFO;
 import static org.apache.fluss.record.TestData.DATA2_TABLE_PATH;
 import static org.apache.fluss.record.TestData.DEFAULT_SCHEMA_ID;
+import static org.apache.fluss.row.BinaryString.fromString;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toByteBuffer;
 import static org.apache.fluss.testutils.DataTestUtils.createRecordsWithoutBaseLogOffset;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -71,9 +79,13 @@ public class DefaultCompletedFetchTest {
     private @TempDir File tempDir;
     private TableInfo tableInfo;
     private RowType rowType;
+    private TestingSchemaGetter testingSchemaGetter;
 
     @BeforeEach
     void beforeEach() {
+        testingSchemaGetter =
+                new TestingSchemaGetter(
+                        new SchemaInfo(DATA2_TABLE_INFO.getSchema(), DEFAULT_SCHEMA_ID));
         tableInfo = DATA2_TABLE_INFO;
         rowType = DATA2_ROW_TYPE;
         Map<TableBucket, Long> scanBuckets = new HashMap<>();
@@ -212,6 +224,157 @@ public class DefaultCompletedFetchTest {
         }
     }
 
+    @Test
+    void testComplexTypeFetch() throws Exception {
+        List<Object[]> complexData =
+                Arrays.asList(
+                        new Object[] {
+                            1,
+                            new Object[] {fromString("a"), fromString("b")},
+                            new Object[] {
+                                new GenericArray(new int[] {1, 2}),
+                                new GenericArray(new int[] {3, 4})
+                            },
+                            new Object[] {
+                                10, new Object[] {20, fromString("nested")}, fromString("row1")
+                            },
+                            GenericMap.of(1, fromString("one"), 2, fromString("two")),
+                            GenericMap.of(
+                                    fromString("k1"),
+                                    GenericMap.of(10, fromString("v1"), 20, fromString("v2"))),
+                            GenericMap.of(
+                                    fromString("arr1"),
+                                    new GenericArray(new int[] {1, 2}),
+                                    fromString("arr2"),
+                                    new GenericArray(new int[] {3, 4, 5}))
+                        },
+                        new Object[] {
+                            2,
+                            new Object[] {fromString("c"), null},
+                            new Object[] {null, new GenericArray(new int[] {3, 4})},
+                            new Object[] {
+                                30, new Object[] {40, fromString("test")}, fromString("row2")
+                            },
+                            GenericMap.of(3, null, 4, fromString("four")),
+                            GenericMap.of(fromString("k2"), GenericMap.of(30, fromString("v3"))),
+                            GenericMap.of(fromString("arr3"), new GenericArray(new int[] {6}))
+                        },
+                        new Object[] {
+                            3,
+                            new Object[] {fromString("e"), fromString("f")},
+                            new Object[] {
+                                new GenericArray(new int[] {5, 6, 7}),
+                                new GenericArray(new int[] {8})
+                            },
+                            new Object[] {
+                                50, new Object[] {60, fromString("value")}, fromString("row3")
+                            },
+                            GenericMap.of(5, fromString("five")),
+                            GenericMap.of(
+                                    fromString("k3"),
+                                    GenericMap.of(50, fromString("v5"), 60, fromString("v6"))),
+                            GenericMap.of(
+                                    fromString("arr4"),
+                                    new GenericArray(new int[] {7, 8}),
+                                    fromString("arr5"),
+                                    new GenericArray(new int[] {9}))
+                        });
+        Schema schema =
+                Schema.newBuilder()
+                        .column("a", DataTypes.INT())
+                        .column("b", DataTypes.ARRAY(DataTypes.STRING()))
+                        .column("c", DataTypes.ARRAY(DataTypes.ARRAY(DataTypes.INT())))
+                        .column(
+                                "d",
+                                DataTypes.ROW(
+                                        DataTypes.INT(),
+                                        DataTypes.ROW(DataTypes.INT(), DataTypes.STRING()),
+                                        DataTypes.STRING()))
+                        .column("e", DataTypes.MAP(DataTypes.INT().copy(false), DataTypes.STRING()))
+                        .column(
+                                "f",
+                                DataTypes.MAP(
+                                        DataTypes.STRING().copy(false),
+                                        DataTypes.MAP(
+                                                DataTypes.INT().copy(false), DataTypes.STRING())))
+                        .column(
+                                "g",
+                                DataTypes.MAP(
+                                        DataTypes.STRING().copy(false),
+                                        DataTypes.ARRAY(DataTypes.INT())))
+                        .build();
+        TableInfo tableInfo =
+                TableInfo.of(
+                        DATA2_TABLE_PATH,
+                        DATA2_TABLE_ID,
+                        DEFAULT_SCHEMA_ID,
+                        TableDescriptor.builder()
+                                .schema(schema)
+                                .distributedBy(3)
+                                .logFormat(LogFormat.ARROW)
+                                .build(),
+                        System.currentTimeMillis(),
+                        System.currentTimeMillis());
+        long fetchOffset = 0L;
+        int bucketId = 0;
+        TableBucket tb = new TableBucket(DATA2_TABLE_ID, bucketId);
+        FetchLogResultForBucket resultForBucket =
+                new FetchLogResultForBucket(
+                        tb,
+                        createRecordsWithoutBaseLogOffset(
+                                schema.getRowType(),
+                                DEFAULT_SCHEMA_ID,
+                                0L,
+                                1000L,
+                                LOG_MAGIC_VALUE_V0,
+                                complexData,
+                                LogFormat.ARROW),
+                        3L);
+        DefaultCompletedFetch defaultCompletedFetch =
+                new DefaultCompletedFetch(
+                        tb,
+                        resultForBucket,
+                        LogRecordReadContext.createReadContext(
+                                tableInfo,
+                                false,
+                                null,
+                                new TestingSchemaGetter(
+                                        tableInfo.getSchemaId(), tableInfo.getSchema())),
+                        logScannerStatus,
+                        true,
+                        fetchOffset);
+        List<ScanRecord> scanRecords = defaultCompletedFetch.fetchRecords(3);
+        // close the read context to release arrow root resource,
+        // this is important to test complex types
+        defaultCompletedFetch.readContext.close();
+        assertThat(scanRecords.size()).isEqualTo(3);
+
+        List<GenericRow> expectedRows = new ArrayList<>();
+        for (Object[] data : complexData) {
+            Object[] rowData = (Object[]) data[3];
+            Object[] nestedRowData = (Object[]) rowData[1];
+            GenericRow nestedRow = GenericRow.of(nestedRowData[0], nestedRowData[1]);
+            GenericRow row = GenericRow.of(rowData[0], nestedRow, rowData[2]);
+            expectedRows.add(
+                    GenericRow.of(
+                            data[0],
+                            new GenericArray((Object[]) data[1]),
+                            new GenericArray((Object[]) data[2]),
+                            row,
+                            data[4],
+                            data[5],
+                            data[6]));
+        }
+
+        for (int i = 0; i < scanRecords.size(); i++) {
+            ScanRecord record = scanRecords.get(i);
+            assertThat(record.logOffset()).isEqualTo(i);
+            InternalRowAssert.assertThatRow(record.getRow())
+                    .withSchema(schema.getRowType())
+                    .isEqualTo(expectedRows.get(i));
+        }
+    }
+
     private DefaultCompletedFetch makeCompletedFetch(
             TableBucket tableBucket, FetchLogResultForBucket resultForBucket, long offset) {
         return makeCompletedFetch(tableBucket, resultForBucket, offset, null);
@@ -225,7 +388,11 @@ public class DefaultCompletedFetchTest {
         return new DefaultCompletedFetch(
                 tableBucket,
                 resultForBucket,
-                LogRecordReadContext.createReadContext(tableInfo, false, projection),
+                LogRecordReadContext.createReadContext(
+                        tableInfo,
+                        false,
+                        projection,
+                        new TestingSchemaGetter(tableInfo.getSchemaId(), tableInfo.getSchema())),
                 logScannerStatus,
                 true,
                 offset);
@@ -255,9 +422,12 @@ public class DefaultCompletedFetchTest {
                         rowType, DEFAULT_SCHEMA_ID, 0L, 1000L, magic, objects, LogFormat.ARROW));
         fileLogRecords.flush();
 
-        FileLogProjection fileLogProjection = new FileLogProjection();
+        FileLogProjection fileLogProjection = new FileLogProjection(new ProjectionPushdownCache());
         fileLogProjection.setCurrentProjection(
-                DATA2_TABLE_ID, rowType, DEFAULT_COMPRESSION, projection.getProjectionInOrder());
+                DATA2_TABLE_ID,
+                testingSchemaGetter,
+                DEFAULT_COMPRESSION,
+                projection.getProjectionInOrder());
         ByteBuffer buffer =
                 toByteBuffer(
                         fileLogProjection

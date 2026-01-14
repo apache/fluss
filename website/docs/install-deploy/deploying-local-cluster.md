@@ -4,6 +4,11 @@ sidebar_position: 2
 ---
 
 # Deploying Local Cluster
+:::warning
+**This setup deploys Fluss to a single machine only.** The Fluss endpoint will **only be accessible locally** (e.g. via `localhost`).
+If you need access your Fluss cluster from a different machine or deploy across multiple servers, please refer to the [Deploying Distributed Cluster](install-deploy/deploying-distributed-cluster.md).
+That guide explains how to use `coordinator-server.sh` and `tablet-server.sh` with an externally accessible homename and port.
+:::
 
 This page provides instructions on how to deploy a *local cluster* (on one machine, but in separate processes) for Fluss.
 
@@ -12,7 +17,7 @@ This page provides instructions on how to deploy a *local cluster* (on one machi
 Fluss runs on all *UNIX-like environments*, e.g. **Linux**, **Mac OS X**.
 Before you start to set up the system, make sure you have the following software installed on your test machine:
 
-- **Java 17** or higher (Java 8 and Java 11 are not recommended)
+- **Java 11** or higher (Java 8 is not supported; **Java 17 or higher is strongly recommended** for better performance)
 
 If your cluster does not fulfill these software requirements you will need to install/upgrade it.
 

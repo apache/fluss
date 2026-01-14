@@ -18,8 +18,6 @@
 package org.apache.fluss.cluster;
 
 import org.apache.fluss.metadata.PhysicalTablePath;
-import org.apache.fluss.metadata.SchemaInfo;
-import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -34,13 +32,9 @@ import java.util.Map;
 import java.util.Set;
 
 import static org.apache.fluss.record.TestData.DATA1_PHYSICAL_TABLE_PATH;
-import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_ID;
-import static org.apache.fluss.record.TestData.DATA1_TABLE_INFO;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
-import static org.apache.fluss.record.TestData.DATA2_SCHEMA;
 import static org.apache.fluss.record.TestData.DATA2_TABLE_ID;
-import static org.apache.fluss.record.TestData.DATA2_TABLE_INFO;
 import static org.apache.fluss.record.TestData.DATA2_TABLE_PATH;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -88,17 +82,6 @@ class ClusterTest {
     }
 
     @Test
-    void testGetTable() {
-        Cluster cluster = createCluster(aliveTabletServersById);
-        assertThat(cluster.getTable(DATA1_TABLE_PATH).get()).isEqualTo(DATA1_TABLE_INFO);
-        assertThat(cluster.getTable(DATA2_TABLE_PATH).get()).isEqualTo(DATA2_TABLE_INFO);
-        assertThat(cluster.getSchema(DATA1_TABLE_PATH).get())
-                .isEqualTo(new SchemaInfo(DATA1_SCHEMA, 1));
-        assertThat(cluster.getSchema(DATA2_TABLE_PATH).get())
-                .isEqualTo(new SchemaInfo(DATA2_SCHEMA, 1));
-    }
-
-    @Test
     void testInvalidMetaAndUpdate() {
         Cluster cluster = createCluster(aliveTabletServersById);
         for (int i = 0; i < 10000; i++) {
@@ -113,8 +96,7 @@ class ClusterTest {
                             COORDINATOR_SERVER,
                             new HashMap<>(cluster.getBucketLocationsByPath()),
                             new HashMap<>(cluster.getTableIdByPath()),
-                            Collections.emptyMap(),
-                            new HashMap<>(cluster.getTableInfoByPath()));
+                            Collections.emptyMap());
         }
 
         // verify available buckets
@@ -190,16 +172,11 @@ class ClusterTest {
         tablePathToTableId.put(DATA1_TABLE_PATH, DATA1_TABLE_ID);
         tablePathToTableId.put(DATA2_TABLE_PATH, DATA2_TABLE_ID);
 
-        Map<TablePath, TableInfo> tablePathToTableInfo = new HashMap<>();
-        tablePathToTableInfo.put(DATA1_TABLE_PATH, DATA1_TABLE_INFO);
-        tablePathToTableInfo.put(DATA2_TABLE_PATH, DATA2_TABLE_INFO);
-
         return new Cluster(
                 aliveTabletServersById,
                 COORDINATOR_SERVER,
                 tablePathToBucketLocations,
                 tablePathToTableId,
-                Collections.emptyMap(),
-                tablePathToTableInfo);
+                Collections.emptyMap());
     }
 }

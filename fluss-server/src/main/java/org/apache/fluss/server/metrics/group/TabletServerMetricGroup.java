@@ -30,6 +30,7 @@ import org.apache.fluss.metrics.SimpleCounter;
 import org.apache.fluss.metrics.ThreadSafeSimpleCounter;
 import org.apache.fluss.metrics.groups.AbstractMetricGroup;
 import org.apache.fluss.metrics.registry.MetricRegistry;
+import org.apache.fluss.server.kv.rocksdb.RocksDBStatistics;
 import org.apache.fluss.utils.MapUtils;
 
 import java.util.Map;
@@ -133,6 +134,24 @@ public class TabletServerMetricGroup extends AbstractMetricGroup {
         meter(MetricNames.ISR_SHRINKS_RATE, new MeterView(isrShrinks));
         failedIsrUpdates = new SimpleCounter();
         meter(MetricNames.FAILED_ISR_UPDATES_RATE, new MeterView(failedIsrUpdates));
+
+        // Register server-level RocksDB aggregated metrics
+        registerServerRocksDBMetrics();
+    }
+
+    /**
+     * Register server-level RocksDB aggregated metrics. These metrics aggregate memory usage from
+     * all tables.
+     */
+    private void registerServerRocksDBMetrics() {
+        // Total memory usage across all RocksDB instances in this server.
+        gauge(
+                MetricNames.ROCKSDB_MEMORY_USAGE_TOTAL,
+                () ->
+                        metricGroupByTable.values().stream()
+                                .flatMap(TableMetricGroup::allRocksDBStatistics)
+                                .mapToLong(RocksDBStatistics::getTotalMemoryUsage)
+                                .sum());
     }
 
     @Override

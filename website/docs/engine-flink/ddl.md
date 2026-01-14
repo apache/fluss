@@ -21,13 +21,14 @@ USE CATALOG fluss_catalog;
 
 The following properties can be set if using the Fluss catalog:
 
-| Option                         | Required | Default   | Description                                                                                                                                                                          |
-|--------------------------------|----------|-----------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| type                           | required | (none)    | Catalog type, must be 'fluss' here.                                                                                                                                               |
-| bootstrap.servers              | required | (none)    | Comma separated list of Fluss servers.                                                                                                                                               |
-| default-database               | optional | fluss     | The default database to use when switching to this catalog.                                                                                                                          |
-| client.security.protocol       | optional | PLAINTEXT | The security protocol used to communicate with brokers. Currently, only `PLAINTEXT` and `SASL` are supported, the configuration value is case insensitive.                           |
-| `client.security.{protocol}.*` | optional | (none)    | Client-side configuration properties for a specific authentication protocol. E.g., client.security.sasl.jaas.config. More Details in [authentication](../security/authentication.md) |
+| Option                         | Required | Default   | Description                                                                                                                                                                                                            |
+|--------------------------------|----------|-----------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| type                           | required | (none)    | Catalog type, must be 'fluss' here.                                                                                                                                                                                    |
+| bootstrap.servers              | required | (none)    | Comma separated list of Fluss servers.                                                                                                                                                                                 |
+| default-database               | optional | fluss     | The default database to use when switching to this catalog.                                                                                                                                                            |
+| client.security.protocol       | optional | PLAINTEXT | The security protocol used to communicate with brokers. Currently, only `PLAINTEXT` and `SASL` are supported, the configuration value is case insensitive.                                                             |
+| `client.security.{protocol}.*` | optional | (none)    | Client-side configuration properties for a specific authentication protocol. E.g., client.security.sasl.jaas.config. More Details in [authentication](security/authentication.md)                                   |
+| `{lake-format}.*`              | optional | (none)    | Extra properties to be passed to the lake catalog. This is useful for configuring sensitive settings, such as the username and password required for lake catalog authentication. E.g., `paimon.jdbc.password = pass`. |
 
 The following statements assume that the current catalog has been switched to the Fluss catalog using the `USE CATALOG <catalog_name>` statement.
 
@@ -61,7 +62,7 @@ DROP DATABASE my_db;
 
 ### Primary Key Table
 
-The following SQL statement will create a [Primary Key Table](table-design/table-types/pk-table/index.md) with a primary key consisting of shop_id and user_id.
+The following SQL statement will create a [Primary Key Table](table-design/table-types/pk-table.md) with a primary key consisting of shop_id and user_id.
 ```sql title="Flink SQL"
 CREATE TABLE my_pk_table (
   shop_id BIGINT,
@@ -221,6 +222,36 @@ DROP TABLE my_table;
 This will entirely remove all the data of the table in the Fluss cluster.
 
 ## Alter Table
+
+### Add Columns
+
+Fluss allows you to evolve a table's schema by adding new columns. This is a lightweight, metadata-only operation that offers the following benefits:
+
+- **Zero Data Rewrite**: Adding a column does not require rewriting or migrating existing data files.
+- **Instant Execution**: The operation completes in milli-seconds, regardless of the table size.
+- **Availability**: The table remains online and fully accessible throughout schema evolution, with no disruption to active clients.
+
+Currently, this feature has the following characteristics:
+
+- **Position**: New columns are always appended to the end of the existing column list.
+- **Nullability**: Only nullable columns can be added to an existing table to ensure compatibility with existing data.
+- **Type Support**: You can add columns of any data type, including complex types such as `ROW`, `MAP`, and `ARRAY`.
+- **Nested Fields**: Currently, adding fields within an existing nested `ROW` is not supported. Such operations are categorized as "updating column types" and will be supported in future versions.
+
+You can add a single column or multiple columns using the `ALTER TABLE statement.
+
+```sql title="Flink SQL"
+-- Add a single column at the end of the table
+ALTER TABLE my_table ADD user_email STRING COMMENT 'User email address';
+
+-- Add multiple columns at the end of the table
+ALTER TABLE MyTable ADD (
+    user_email STRING COMMENT 'User email address',
+    order_quantity INT
+);
+```
+
+
 ### SET properties
 The SET statement allows users to configure one or more connector options including the [Storage Options](engine-flink/options.md#storage-options) for a specified table. If a particular option is already configured on the table, it will be overridden with the new value.
 
@@ -247,7 +278,6 @@ The following example illustrates reset the `table.datalake.enabled` option to i
 ```sql title="Flink SQL"
 ALTER TABLE my_table RESET ('table.datalake.enabled');
 ```
-
 
 ## Add Partition
 

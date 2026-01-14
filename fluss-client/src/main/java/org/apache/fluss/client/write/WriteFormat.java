@@ -18,11 +18,52 @@
 package org.apache.fluss.client.write;
 
 import org.apache.fluss.annotation.Internal;
+import org.apache.fluss.metadata.KvFormat;
 
 /** The format of the write record. */
 @Internal
 public enum WriteFormat {
-    ARROW_LOG,
-    INDEXED_LOG,
-    KV
+    ARROW_LOG(true),
+    INDEXED_LOG(true),
+    COMPACTED_LOG(true),
+    INDEXED_KV(false),
+    COMPACTED_KV(false);
+
+    private final boolean isLog;
+
+    WriteFormat(boolean isLog) {
+        this.isLog = isLog;
+    }
+
+    public boolean isLog() {
+        return isLog;
+    }
+
+    public boolean isKv() {
+        return !isLog;
+    }
+
+    /** Converts this {@link WriteFormat} to a {@link KvFormat}. */
+    public KvFormat toKvFormat() {
+        switch (this) {
+            case INDEXED_KV:
+                return KvFormat.INDEXED;
+            case COMPACTED_KV:
+                return KvFormat.COMPACTED;
+            default:
+                throw new IllegalArgumentException("WriteFormat " + this + " is not a KvFormat");
+        }
+    }
+
+    /** Converts a {@link KvFormat} to a {@link WriteFormat}. */
+    public static WriteFormat fromKvFormat(KvFormat kvFormat) {
+        switch (kvFormat) {
+            case INDEXED:
+                return INDEXED_KV;
+            case COMPACTED:
+                return COMPACTED_KV;
+            default:
+                throw new IllegalArgumentException("Unknown KvFormat: " + kvFormat);
+        }
+    }
 }

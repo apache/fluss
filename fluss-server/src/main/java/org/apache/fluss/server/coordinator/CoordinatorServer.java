@@ -33,6 +33,7 @@ import org.apache.fluss.server.DynamicConfigManager;
 import org.apache.fluss.server.ServerBase;
 import org.apache.fluss.server.authorizer.Authorizer;
 import org.apache.fluss.server.authorizer.AuthorizerLoader;
+import org.apache.fluss.server.coordinator.rebalance.RebalanceManager;
 import org.apache.fluss.server.metadata.CoordinatorMetadataCache;
 import org.apache.fluss.server.metadata.ServerMetadataCache;
 import org.apache.fluss.server.metrics.ServerMetricUtils;
@@ -173,7 +174,10 @@ public class CoordinatorServer extends ServerBase {
 
             this.lakeCatalogDynamicLoader = new LakeCatalogDynamicLoader(conf, pluginManager, true);
             this.dynamicConfigManager = new DynamicConfigManager(zkClient, conf, true);
+
+            // Register server reconfigurable components
             dynamicConfigManager.register(lakeCatalogDynamicLoader);
+
             dynamicConfigManager.startup();
 
             this.coordinatorContext = new CoordinatorContext();
@@ -188,6 +192,10 @@ public class CoordinatorServer extends ServerBase {
 
             MetadataManager metadataManager =
                     new MetadataManager(zkClient, conf, lakeCatalogDynamicLoader);
+            this.ioExecutor =
+                    Executors.newFixedThreadPool(
+                            conf.get(ConfigOptions.SERVER_IO_POOL_SIZE),
+                            new ExecutorThreadFactory("coordinator-io"));
             this.coordinatorService =
                     new CoordinatorService(
                             conf,
@@ -199,7 +207,8 @@ public class CoordinatorServer extends ServerBase {
                             authorizer,
                             lakeCatalogDynamicLoader,
                             lakeTableTieringManager,
-                            dynamicConfigManager);
+                            dynamicConfigManager,
+                            ioExecutor);
 
             this.rpcServer =
                     RpcServer.create(
@@ -224,11 +233,6 @@ public class CoordinatorServer extends ServerBase {
             this.autoPartitionManager =
                     new AutoPartitionManager(metadataCache, metadataManager, conf);
             autoPartitionManager.start();
-
-            int ioExecutorPoolSize = conf.get(ConfigOptions.COORDINATOR_IO_POOL_SIZE);
-            this.ioExecutor =
-                    Executors.newFixedThreadPool(
-                            ioExecutorPoolSize, new ExecutorThreadFactory("coordinator-io"));
 
             // start coordinator event processor after we register coordinator leader to zk
             // so that the event processor can get the coordinator leader node from zk during start
@@ -367,15 +371,6 @@ public class CoordinatorServer extends ServerBase {
             }
 
             try {
-                if (ioExecutor != null) {
-                    // shutdown io executor
-                    ExecutorUtils.gracefulShutdown(5, TimeUnit.SECONDS, ioExecutor);
-                }
-            } catch (Throwable t) {
-                exception = ExceptionUtils.firstOrSuppressed(t, exception);
-            }
-
-            try {
                 if (coordinatorEventProcessor != null) {
                     coordinatorEventProcessor.shutdown();
                 }
@@ -408,6 +403,15 @@ public class CoordinatorServer extends ServerBase {
             }
 
             try {
+                if (ioExecutor != null) {
+                    // shutdown io executor
+                    ExecutorUtils.gracefulShutdown(5, TimeUnit.SECONDS, ioExecutor);
+                }
+            } catch (Throwable t) {
+                exception = ExceptionUtils.firstOrSuppressed(t, exception);
+            }
+
+            try {
                 if (coordinatorContext != null) {
                     // then reset coordinatorContext
                     coordinatorContext.resetContext();
@@ -419,14 +423,6 @@ public class CoordinatorServer extends ServerBase {
             try {
                 if (lakeTableTieringManager != null) {
                     lakeTableTieringManager.close();
-                }
-            } catch (Throwable t) {
-                exception = ExceptionUtils.firstOrSuppressed(t, exception);
-            }
-
-            try {
-                if (zkClient != null) {
-                    zkClient.close();
                 }
             } catch (Throwable t) {
                 exception = ExceptionUtils.firstOrSuppressed(t, exception);
@@ -447,6 +443,14 @@ public class CoordinatorServer extends ServerBase {
 
                 if (lakeCatalogDynamicLoader != null) {
                     lakeCatalogDynamicLoader.close();
+                }
+            } catch (Throwable t) {
+                exception = ExceptionUtils.firstOrSuppressed(t, exception);
+            }
+
+            try {
+                if (zkClient != null) {
+                    zkClient.close();
                 }
             } catch (Throwable t) {
                 exception = ExceptionUtils.firstOrSuppressed(t, exception);
@@ -505,6 +509,11 @@ public class CoordinatorServer extends ServerBase {
         return dynamicConfigManager;
     }
 
+    @VisibleForTesting
+    public RebalanceManager getRebalanceManager() {
+        return coordinatorEventProcessor.getRebalanceManager();
+    }
+
     private static void validateConfigs(Configuration conf) {
         if (conf.get(ConfigOptions.DEFAULT_REPLICATION_FACTOR) < 1) {
             throw new IllegalConfigurationException(
@@ -519,11 +528,11 @@ public class CoordinatorServer extends ServerBase {
                             ConfigOptions.KV_MAX_RETAINED_SNAPSHOTS.key()));
         }
 
-        if (conf.get(ConfigOptions.COORDINATOR_IO_POOL_SIZE) < 1) {
+        if (conf.get(ConfigOptions.SERVER_IO_POOL_SIZE) < 1) {
             throw new IllegalConfigurationException(
                     String.format(
                             "Invalid configuration for %s, it must be greater than or equal 1.",
-                            ConfigOptions.COORDINATOR_IO_POOL_SIZE.key()));
+                            ConfigOptions.SERVER_IO_POOL_SIZE.key()));
         }
 
         if (conf.get(ConfigOptions.REMOTE_DATA_DIR) == null) {

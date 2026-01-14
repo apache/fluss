@@ -40,6 +40,7 @@ import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.MergeEngineType;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
@@ -241,6 +242,7 @@ class FlussTableITCase extends ClientToServerITCaseBase {
 
         Table table = conn.getTable(tablePath);
         verifyPutAndLookup(table, new Object[] {1, "a"});
+        TableInfo tableInfo = table.getTableInfo();
 
         // test put/lookup data for primary table with pk index is not 0
         Schema schema =
@@ -261,6 +263,29 @@ class FlussTableITCase extends ClientToServerITCaseBase {
         // now, check put/lookup data
         Table table2 = conn.getTable(data1PkTablePath2);
         verifyPutAndLookup(table2, new Object[] {"a", 1});
+
+        // Test schema change: add new column which equals to DATA2_ROW_TYPE
+        admin.alterTable(
+                        tableInfo.getTablePath(),
+                        Collections.singletonList(
+                                TableChange.addColumn(
+                                        "c",
+                                        DataTypes.STRING(),
+                                        null,
+                                        TableChange.ColumnPosition.last())),
+                        false)
+                .get();
+        Table newSchemaTable = conn.getTable(tableInfo.getTablePath());
+        // schema change case1: read new data with new schema.
+        verifyPutAndLookup(newSchemaTable, new Object[] {2, "b", "bb"});
+        // schema change case2: read new data with old schema.
+        assertThatRow(lookupRow(table.newLookup().createLookuper(), row(2)))
+                .withSchema(tableInfo.getSchema().getRowType())
+                .isEqualTo(row(2, "b"));
+        // schema change case3: read old data with new schema.
+        assertThatRow(lookupRow(newSchemaTable.newLookup().createLookuper(), row(1)))
+                .withSchema(newSchemaTable.getTableInfo().getSchema().getRowType())
+                .isEqualTo(row(1, "a", null));
     }
 
     @Test
@@ -278,6 +303,7 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                 TableDescriptor.builder().schema(schema).distributedBy(3, "a", "b").build();
         createTable(tablePath, descriptor, false);
         Table table = conn.getTable(tablePath);
+        TableInfo tableInfo = table.getTableInfo();
         verifyPutAndLookup(table, new Object[] {1, "a", 1L, "value1"});
         verifyPutAndLookup(table, new Object[] {1, "a", 2L, "value2"});
         verifyPutAndLookup(table, new Object[] {1, "a", 3L, "value3"});
@@ -315,6 +341,63 @@ class FlussTableITCase extends ClientToServerITCaseBase {
         assertThat(prefixLookupResult).isNotNull();
         rowList = prefixLookupResult.getRowList();
         assertThat(rowList.size()).isEqualTo(0);
+
+        // Test schema change: add new column.
+        Schema newSchema =
+                Schema.newBuilder()
+                        .column("a", DataTypes.INT())
+                        .column("b", DataTypes.STRING())
+                        .column("c", DataTypes.BIGINT())
+                        .column("d", DataTypes.STRING())
+                        .column("e", DataTypes.STRING())
+                        .primaryKey("a", "b", "c")
+                        .build();
+        admin.alterTable(
+                        tableInfo.getTablePath(),
+                        Collections.singletonList(
+                                TableChange.addColumn(
+                                        "e",
+                                        DataTypes.STRING(),
+                                        null,
+                                        TableChange.ColumnPosition.last())),
+                        false)
+                .get();
+        try (Connection connection = ConnectionFactory.createConnection(clientConf);
+                Table newSchemaTable = connection.getTable(tableInfo.getTablePath())) {
+            // schema change case1: read new data with new schema.
+            verifyPutAndLookup(
+                    newSchemaTable, new Object[] {1, "a", 4L, "value4", "add_column_value"});
+            // schema change case2: read new data with old schema.
+            result = prefixLookuper.lookup(row(1, "a"));
+            prefixLookupResult = result.get();
+            assertThat(prefixLookupResult).isNotNull();
+            rowList = prefixLookupResult.getRowList();
+            assertThat(rowList.size()).isEqualTo(4);
+            for (int i = 0; i < rowList.size(); i++) {
+                assertRowValueEquals(
+                        rowType, rowList.get(i), new Object[] {1, "a", i + 1L, "value" + (i + 1)});
+            }
+            admin.getTableSchema(tablePath, 1).get();
+            // schema change case3: read old data with new schema.
+            Lookuper newPrefixLookuper =
+                    newSchemaTable
+                            .newLookup()
+                            .lookupBy(prefixKeyRowType.getFieldNames())
+                            .createLookuper();
+            result = newPrefixLookuper.lookup(row(1, "a"));
+            prefixLookupResult = result.get();
+            assertThat(prefixLookupResult).isNotNull();
+            rowList = prefixLookupResult.getRowList();
+            assertThat(rowList.size()).isEqualTo(4);
+            for (int i = 0; i < rowList.size(); i++) {
+                assertRowValueEquals(
+                        rowType,
+                        rowList.get(i),
+                        new Object[] {
+                            1, "a", i + 1L, "value" + (i + 1), i == 3 ? "add_column_value" : null
+                        });
+            }
+        }
     }
 
     @Test
@@ -577,6 +660,29 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                     .hasMessage(
                             "Invalid target column index: 3 for table test_db_1.test_pk_table_1. The table only has 3 columns.");
         }
+
+        // test invalid auto increment column upsert
+        schema =
+                Schema.newBuilder()
+                        .column("a", DataTypes.INT())
+                        .column("b", DataTypes.INT())
+                        .column("c", DataTypes.INT())
+                        .primaryKey("a")
+                        .enableAutoIncrement("c")
+                        .build();
+        tableDescriptor = TableDescriptor.builder().schema(schema).distributedBy(3, "a").build();
+        TablePath tablePath =
+                TablePath.of("test_db_1", "test_invalid_auto_increment_column_upsert");
+        createTable(tablePath, tableDescriptor, true);
+        try (Table table = conn.getTable(tablePath)) {
+            assertThatThrownBy(() -> table.newUpsert().createWriter())
+                    .hasMessage(
+                            "This table has auto increment column [c]. Explicitly specifying values for an auto increment column is not allowed. Please specify non-auto-increment columns as target columns using partialUpdate first.");
+
+            assertThatThrownBy(() -> table.newUpsert().partialUpdate("a", "c").createWriter())
+                    .hasMessage(
+                            "Explicitly specifying values for the auto increment column c is not allowed.");
+        }
     }
 
     @Test
@@ -634,7 +740,7 @@ class FlussTableITCase extends ClientToServerITCaseBase {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"INDEXED", "ARROW"})
+    @ValueSource(strings = {"INDEXED", "ARROW", "COMPACTED"})
     void testAppendAndPoll(String format) throws Exception {
         verifyAppendOrPut(true, format, null);
     }
@@ -643,6 +749,11 @@ class FlussTableITCase extends ClientToServerITCaseBase {
     @ValueSource(strings = {"INDEXED", "COMPACTED"})
     void testPutAndPoll(String kvFormat) throws Exception {
         verifyAppendOrPut(false, "ARROW", kvFormat);
+    }
+
+    @Test
+    void testPutAndPollCompacted() throws Exception {
+        verifyAppendOrPut(false, "COMPACTED", "COMPACTED");
     }
 
     void verifyAppendOrPut(boolean append, String logFormat, @Nullable String kvFormat)
@@ -803,8 +914,9 @@ class FlussTableITCase extends ClientToServerITCaseBase {
         }
     }
 
-    @Test
-    void testPutAndProject() throws Exception {
+    @ParameterizedTest
+    @ValueSource(strings = {"ARROW", "COMPACTED"})
+    void testPutAndProject(String changelogFormat) throws Exception {
         Schema schema =
                 Schema.newBuilder()
                         .column("a", DataTypes.INT())
@@ -813,7 +925,11 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                         .column("d", DataTypes.BIGINT())
                         .primaryKey("a")
                         .build();
-        TableDescriptor tableDescriptor = TableDescriptor.builder().schema(schema).build();
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(schema)
+                        .property(ConfigOptions.TABLE_LOG_FORMAT.key(), changelogFormat)
+                        .build();
         TablePath tablePath = TablePath.of("test_db_1", "test_pk_table_1");
         createTable(tablePath, tableDescriptor, false);
 
@@ -905,6 +1021,125 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                 }
             }
             assertThat(count).isEqualTo(expectedSize);
+        }
+    }
+
+    @Test
+    void testPutAndProjectDuringAddColumn() throws Exception {
+        Schema schema =
+                Schema.newBuilder()
+                        .column("a", DataTypes.INT())
+                        .column("b", DataTypes.INT())
+                        .column("c", DataTypes.STRING())
+                        .primaryKey("a")
+                        .build();
+        TableDescriptor tableDescriptor = TableDescriptor.builder().schema(schema).build();
+        TablePath tablePath = TablePath.of("test_db_1", "test_pk_table_1");
+        createTable(tablePath, tableDescriptor, false);
+
+        int batches = 3;
+        int keyId = 0;
+        int expectedSize = 0;
+
+        try (Table table = conn.getTable(tablePath)) {
+            // produce data with new schema.
+            // Test schema change: add new column which equals to DATA2_ROW_TYPE
+            admin.alterTable(
+                            tablePath,
+                            Collections.singletonList(
+                                    TableChange.addColumn(
+                                            "d",
+                                            DataTypes.BIGINT(),
+                                            "add new column",
+                                            TableChange.ColumnPosition.last())),
+                            false)
+                    .get();
+            try (Connection connection = ConnectionFactory.createConnection(clientConf);
+                    Table newSchemaTable = connection.getTable(tablePath)) {
+                UpsertWriter oldSchemaUpsertWriter = table.newUpsert().createWriter();
+                UpsertWriter newSchemaUpsertWriter = newSchemaTable.newUpsert().createWriter();
+                for (int b = 0; b < batches; b++) {
+                    // insert 10 rows with old schema.
+                    for (int i = keyId; i < keyId + 10; i++) {
+                        InternalRow row = row(i, 100, "hello, friend" + i);
+                        oldSchemaUpsertWriter.upsert(row);
+                        expectedSize += 1;
+                        oldSchemaUpsertWriter.flush();
+                    }
+                    // update 5 rows with new schema: [keyId, keyId+4]
+                    for (int i = keyId; i < keyId + 5; i++) {
+                        InternalRow row = row(i, 100, "HELLO, FRIEND" + i, i * 10L);
+                        newSchemaUpsertWriter.upsert(row);
+                        expectedSize += 2;
+                        newSchemaUpsertWriter.flush();
+                    }
+                    // delete 1 row with old schema: [keyId+5]
+                    int deleteKey = keyId + 5;
+                    InternalRow row = row(deleteKey, 100, "hello, friend" + deleteKey);
+                    oldSchemaUpsertWriter.delete(row);
+                    expectedSize += 1;
+                    // flush the mutation batch
+                    oldSchemaUpsertWriter.flush();
+                    keyId += 10;
+                }
+
+                // read with new schema
+                try (LogScanner logScanner = createLogScanner(newSchemaTable, new int[] {2, 0})) {
+                    subscribeFromBeginning(logScanner, table);
+                    int count = 0;
+                    int id = 0;
+                    while (count < expectedSize) {
+                        ScanRecords scanRecords = logScanner.poll(Duration.ofSeconds(1));
+                        Iterator<ScanRecord> iterator = scanRecords.iterator();
+                        while (iterator.hasNext()) {
+                            // 10 inserts
+                            for (int i = 0; i < 10; i++) {
+                                ScanRecord scanRecord = iterator.next();
+                                assertThat(scanRecord.getChangeType()).isEqualTo(ChangeType.INSERT);
+                                assertThat(scanRecord.getRow().getFieldCount()).isEqualTo(2);
+                                assertThat(scanRecord.getRow().getInt(1)).isEqualTo(id);
+                                assertThat(scanRecord.getRow().getString(0).toString())
+                                        .isEqualTo("hello, friend" + id);
+                                count++;
+                                id++;
+                            }
+                            id -= 10;
+                            // 10 updates
+                            for (int i = 0; i < 5; i++) {
+                                ScanRecord beforeRecord = iterator.next();
+                                assertThat(beforeRecord.getChangeType())
+                                        .isEqualTo(ChangeType.UPDATE_BEFORE);
+                                assertThat(beforeRecord.getRow().getFieldCount()).isEqualTo(2);
+                                assertThat(beforeRecord.getRow().getInt(1)).isEqualTo(id);
+                                assertThat(beforeRecord.getRow().getString(0).toString())
+                                        .isEqualTo("hello, friend" + id);
+
+                                ScanRecord afterRecord = iterator.next();
+                                assertThat(afterRecord.getChangeType())
+                                        .isEqualTo(ChangeType.UPDATE_AFTER);
+                                assertThat(afterRecord.getRow().getFieldCount()).isEqualTo(2);
+                                assertThat(afterRecord.getRow().getInt(1)).isEqualTo(id);
+                                assertThat(afterRecord.getRow().getString(0).toString())
+                                        .isEqualTo("HELLO, FRIEND" + id);
+
+                                id++;
+                                count += 2;
+                            }
+
+                            // 1 delete
+                            ScanRecord beforeRecord = iterator.next();
+                            assertThat(beforeRecord.getChangeType()).isEqualTo(ChangeType.DELETE);
+                            assertThat(beforeRecord.getRow().getFieldCount()).isEqualTo(2);
+                            assertThat(beforeRecord.getRow().getInt(1)).isEqualTo(id);
+                            assertThat(beforeRecord.getRow().getString(0).toString())
+                                    .isEqualTo("hello, friend" + id);
+                            count++;
+                            id += 5;
+                        }
+                    }
+                    assertThat(count).isEqualTo(expectedSize);
+                }
+            }
         }
     }
 
@@ -1177,6 +1412,199 @@ class FlussTableITCase extends ClientToServerITCaseBase {
             assertThat(filesystemConf.toMap())
                     .containsExactlyEntriesOf(
                             Collections.singletonMap("client.fs.test.key", "fs_test_value"));
+        }
+    }
+
+    // ---------------------- PK with COMPACTED log tests ----------------------
+    @Test
+    void testPkUpsertAndPollWithCompactedLog() throws Exception {
+        Schema schema =
+                Schema.newBuilder()
+                        .column("a", DataTypes.INT())
+                        .column("b", DataTypes.INT())
+                        .column("c", DataTypes.STRING())
+                        .column("d", DataTypes.BIGINT())
+                        .primaryKey("a")
+                        .build();
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(schema)
+                        .kvFormat(KvFormat.COMPACTED)
+                        .logFormat(LogFormat.COMPACTED)
+                        .build();
+        TablePath tablePath = TablePath.of("test_db_1", "test_pk_compacted_upsert_poll");
+        createTable(tablePath, tableDescriptor, false);
+
+        int expectedSize = 30;
+        try (Table table = conn.getTable(tablePath)) {
+            UpsertWriter upsertWriter = table.newUpsert().createWriter();
+            for (int i = 0; i < expectedSize; i++) {
+                String value = i % 2 == 0 ? "hello, friend" + i : null;
+                GenericRow r = row(i, 100, value, i * 10L);
+                upsertWriter.upsert(r);
+                if (i % 10 == 0) {
+                    upsertWriter.flush();
+                }
+            }
+            upsertWriter.flush();
+
+            // normal scan
+            try (LogScanner logScanner = createLogScanner(table)) {
+                subscribeFromBeginning(logScanner, table);
+                int count = 0;
+                while (count < expectedSize) {
+                    ScanRecords scanRecords = logScanner.poll(Duration.ofSeconds(1));
+                    for (ScanRecord scanRecord : scanRecords) {
+                        assertThat(scanRecord.getChangeType()).isEqualTo(ChangeType.INSERT);
+                        InternalRow rr = scanRecord.getRow();
+                        assertThat(rr.getFieldCount()).isEqualTo(4);
+                        assertThat(rr.getInt(0)).isEqualTo(count);
+                        assertThat(rr.getInt(1)).isEqualTo(100);
+                        if (count % 2 == 0) {
+                            assertThat(rr.getString(2).toString())
+                                    .isEqualTo("hello, friend" + count);
+                        } else {
+                            assertThat(rr.isNullAt(2)).isTrue();
+                        }
+                        assertThat(rr.getLong(3)).isEqualTo(count * 10L);
+                        count++;
+                    }
+                }
+                assertThat(count).isEqualTo(expectedSize);
+            }
+
+            // Creating a projected log scanner for COMPACTED should work
+            try (LogScanner scanner = createLogScanner(table, new int[] {0, 2})) {
+                subscribeFromBeginning(scanner, table);
+                int count = 0;
+                while (count < expectedSize) {
+                    ScanRecords records = scanner.poll(Duration.ofSeconds(1));
+                    for (ScanRecord record : records) {
+                        InternalRow row = record.getRow();
+                        assertThat(row.getFieldCount()).isEqualTo(2);
+                        assertThat(row.getInt(0)).isEqualTo(count);
+                        if (count % 2 == 0) {
+                            assertThat(row.getString(1).toString())
+                                    .isEqualTo("hello, friend" + count);
+                        } else {
+                            assertThat(row.isNullAt(1)).isTrue();
+                        }
+                        count++;
+                    }
+                }
+                assertThat(count).isEqualTo(expectedSize);
+            }
+        }
+    }
+
+    @Test
+    void testPkUpdateAndDeleteWithCompactedLog() throws Exception {
+        Schema schema =
+                Schema.newBuilder()
+                        .column("a", DataTypes.INT())
+                        .column("b", DataTypes.INT())
+                        .primaryKey("a")
+                        .build();
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(schema)
+                        .kvFormat(KvFormat.COMPACTED)
+                        .logFormat(LogFormat.COMPACTED)
+                        .build();
+        TablePath tablePath = TablePath.of("test_db_1", "test_pk_compacted_update_delete");
+        createTable(tablePath, tableDescriptor, false);
+
+        try (Table table = conn.getTable(tablePath)) {
+            UpsertWriter upsertWriter = table.newUpsert().createWriter();
+            // initial insert
+            upsertWriter.upsert(row(1, 10));
+            upsertWriter.flush();
+            // update same key
+            upsertWriter.upsert(row(1, 20));
+            upsertWriter.flush();
+            // delete the key
+            upsertWriter.delete(row(1, 20));
+            upsertWriter.flush();
+
+            LogScanner scanner = createLogScanner(table);
+            subscribeFromBeginning(scanner, table);
+            // Expect: +I(1,10), -U(1,10), +U(1,20), -D(1,20)
+            ChangeType[] expected = {
+                ChangeType.INSERT,
+                ChangeType.UPDATE_BEFORE,
+                ChangeType.UPDATE_AFTER,
+                ChangeType.DELETE
+            };
+            int seen = 0;
+            while (seen < expected.length) {
+                ScanRecords recs = scanner.poll(Duration.ofSeconds(1));
+                for (ScanRecord r : recs) {
+                    assertThat(r.getChangeType()).isEqualTo(expected[seen]);
+                    InternalRow row = r.getRow();
+                    assertThat(row.getInt(0)).isEqualTo(1);
+                    // value field present
+                    if (expected[seen] == ChangeType.UPDATE_AFTER
+                            || expected[seen] == ChangeType.DELETE) {
+                        assertThat(row.getInt(1)).isEqualTo(20);
+                    } else {
+                        assertThat(row.getInt(1)).isEqualTo(10);
+                    }
+                    seen++;
+                }
+            }
+            assertThat(seen).isEqualTo(expected.length);
+            scanner.close();
+        }
+    }
+
+    @Test
+    void testPkCompactedPollFromLatestNoRecords() throws Exception {
+        Schema schema =
+                Schema.newBuilder()
+                        .column("a", DataTypes.INT())
+                        .column("b", DataTypes.INT())
+                        .primaryKey("a")
+                        .build();
+        TableDescriptor td =
+                TableDescriptor.builder()
+                        .schema(schema)
+                        .kvFormat(KvFormat.COMPACTED)
+                        .logFormat(LogFormat.COMPACTED)
+                        .build();
+        TablePath path = TablePath.of("test_db_1", "test_pk_compacted_latest");
+        createTable(path, td, false);
+
+        try (Table table = conn.getTable(path)) {
+            LogScanner scanner = createLogScanner(table);
+            subscribeFromLatestOffset(path, null, null, table, scanner, admin);
+            // Now write a few rows and ensure only these are seen
+            UpsertWriter upsert = table.newUpsert().createWriter();
+            for (int i = 0; i < 5; i++) {
+                upsert.upsert(row(i, i));
+            }
+            upsert.flush();
+
+            int seen = 0;
+            while (seen < 5) {
+                ScanRecords recs = scanner.poll(Duration.ofSeconds(1));
+                for (ScanRecord r : recs) {
+                    assertThat(r.getChangeType()).isEqualTo(ChangeType.INSERT);
+                    assertThat(r.getRow().getInt(0)).isBetween(0, 4);
+                    seen++;
+                }
+            }
+
+            // delete non-existent key
+            upsert.delete(row(42, 0));
+            upsert.flush();
+            // poll a few times to ensure no accidental records
+            int total = 0;
+            for (int i = 0; i < 3; i++) {
+                total += scanner.poll(Duration.ofSeconds(1)).count();
+            }
+            assertThat(total).isEqualTo(0);
+
+            scanner.close();
         }
     }
 }

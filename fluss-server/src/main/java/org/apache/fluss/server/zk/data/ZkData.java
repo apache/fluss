@@ -24,7 +24,10 @@ import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.security.acl.Resource;
 import org.apache.fluss.security.acl.ResourceType;
+import org.apache.fluss.server.zk.data.lake.LakeTable;
+import org.apache.fluss.server.zk.data.lake.LakeTableJsonSerde;
 import org.apache.fluss.utils.json.JsonSerdeUtils;
+import org.apache.fluss.utils.types.Tuple2;
 
 import javax.annotation.Nullable;
 
@@ -130,6 +133,7 @@ public final class ZkData {
      * <p>/metadata/databases/[databaseName]/tables/[tableName]/schemas
      */
     public static final class SchemasZNode {
+
         public static String path(TablePath tablePath) {
             return TableZNode.path(tablePath) + "/schemas";
         }
@@ -142,6 +146,32 @@ public final class ZkData {
      * <p>/metadata/databases/[databaseName]/tables/[tableName]/schemas/[schemaId]
      */
     public static final class SchemaZNode {
+
+        @Nullable
+        public static Tuple2<TablePath, Integer> parsePath(String zkPath) {
+            String splitter = "/schemas/";
+            if (!zkPath.contains(splitter)) {
+                return null;
+            }
+
+            String[] split = zkPath.split(splitter);
+            if (split.length != 2) {
+                return null;
+            }
+            TablePath tablePath = TableZNode.parsePath(split[0]);
+            if (tablePath == null) {
+                return null;
+            }
+
+            int schemaId;
+            try {
+                schemaId = Integer.parseInt(split[1]);
+                return Tuple2.of(tablePath, schemaId);
+            } catch (NumberFormatException e) {
+                return null;
+            }
+        }
+
         public static String path(TablePath tablePath, int schemaId) {
             return SchemasZNode.path(tablePath) + "/" + schemaId;
         }
@@ -536,22 +566,69 @@ public final class ZkData {
     }
 
     /**
-     * The znode for the info of lake data for a table. The znode path is:
+     * The znode for lake table snapshot information. The znode path is:
      *
      * <p>/tabletservers/tables/[tableId]/laketable
+     *
+     * <p>This znode stores {@link LakeTable} in:
+     *
+     * <ul>
+     *   <li>Version 1 (legacy): Full snapshot data stored directly in ZK
+     *   <li>Version 2 (current): A list of snapshot metadata, with metadata file path stored in ZK,
+     *       actual data in remote file
+     * </ul>
      */
     public static final class LakeTableZNode {
+        /**
+         * Returns the ZK path for the lake table znode of the given table.
+         *
+         * @param tableId the table ID
+         * @return the ZK path
+         */
         public static String path(long tableId) {
             return TableIdZNode.path(tableId) + "/laketable";
         }
 
-        public static byte[] encode(LakeTableSnapshot lakeTableSnapshot) {
-            return JsonSerdeUtils.writeValueAsBytes(
-                    lakeTableSnapshot, LakeTableSnapshotJsonSerde.INSTANCE);
+        /**
+         * Encodes a LakeTable to JSON bytes for storage in ZK.
+         *
+         * @param lakeTable the LakeTable to encode
+         * @return the encoded bytes
+         */
+        public static byte[] encode(LakeTable lakeTable) {
+            return JsonSerdeUtils.writeValueAsBytes(lakeTable, LakeTableJsonSerde.INSTANCE);
         }
 
-        public static LakeTableSnapshot decode(byte[] json) {
-            return JsonSerdeUtils.readValue(json, LakeTableSnapshotJsonSerde.INSTANCE);
+        /**
+         * Decodes JSON bytes from ZK to a LakeTable.
+         *
+         * <p>This method handles both version 1 (legacy) and version 2 (current) formats
+         * automatically through {@link LakeTableJsonSerde}.
+         *
+         * @param json the JSON bytes from ZK
+         * @return the decoded LakeTable
+         */
+        public static LakeTable decode(byte[] json) {
+            return JsonSerdeUtils.readValue(json, LakeTableJsonSerde.INSTANCE);
+        }
+    }
+
+    /**
+     * The znode for server tags. The znode path is:
+     *
+     * <p>/tabletServers/server_tags
+     */
+    public static final class ServerTagsZNode {
+        public static String path() {
+            return "/tabletservers/server_tags";
+        }
+
+        public static byte[] encode(ServerTags serverTag) {
+            return JsonSerdeUtils.writeValueAsBytes(serverTag, ServerTagsJsonSerde.INSTANCE);
+        }
+
+        public static ServerTags decode(byte[] json) {
+            return JsonSerdeUtils.readValue(json, ServerTagsJsonSerde.INSTANCE);
         }
     }
 
@@ -716,6 +793,29 @@ public final class ZkData {
 
         public static byte[] encode() {
             return new byte[0];
+        }
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // ZNodes under "/cluster/"
+    // ------------------------------------------------------------------------------------------
+
+    /**
+     * The znode for rebalance. The znode path is:
+     *
+     * <p>/cluster/rebalance
+     */
+    public static final class RebalanceZNode {
+        public static String path() {
+            return "/cluster/rebalance";
+        }
+
+        public static byte[] encode(RebalanceTask rebalanceTask) {
+            return JsonSerdeUtils.writeValueAsBytes(rebalanceTask, RebalanceTaskJsonSerde.INSTANCE);
+        }
+
+        public static RebalanceTask decode(byte[] json) {
+            return JsonSerdeUtils.readValue(json, RebalanceTaskJsonSerde.INSTANCE);
         }
     }
 }

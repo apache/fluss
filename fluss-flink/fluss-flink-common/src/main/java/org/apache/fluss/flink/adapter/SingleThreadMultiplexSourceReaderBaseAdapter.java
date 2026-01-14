@@ -29,6 +29,8 @@ import org.apache.flink.connector.base.source.reader.synchronization.FutureCompl
 /**
  * Adapter for {@link SingleThreadMultiplexSourceReaderBase}.TODO: remove it until not supported in
  * flink 1.18.
+ *
+ * <p>TODO: remove this class when no longer support all the Flink 1.x series.
  */
 public abstract class SingleThreadMultiplexSourceReaderBaseAdapter<
                 E, T, SplitT extends SourceSplit, SplitStateT>

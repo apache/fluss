@@ -42,7 +42,6 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
@@ -62,7 +61,6 @@ public class LakeSnapshotAndLogSplitScanner implements BatchScanner {
     // the indexes of primary key in emitted row by paimon and fluss
     private int[] keyIndexesInRow;
     @Nullable private int[] adjustProjectedFields;
-    private final int[] newProjectedFields;
 
     // the sorted logs in memory, mapping from key -> value
     private Map<InternalRow, KeyValueRow> logRows;
@@ -81,7 +79,7 @@ public class LakeSnapshotAndLogSplitScanner implements BatchScanner {
         this.pkIndexes = table.getTableInfo().getSchema().getPrimaryKeyIndexes();
         this.lakeSnapshotSplitAndFlussLogSplit = lakeSnapshotAndFlussLogSplit;
         this.lakeSource = lakeSource;
-        this.newProjectedFields = getNeedProjectFields(table, projectedFields);
+        int[] newProjectedFields = getNeedProjectFields(table, projectedFields);
 
         this.logScanner = table.newScan().project(newProjectedFields).createLogScanner();
         this.lakeSource.withProject(
@@ -109,7 +107,9 @@ public class LakeSnapshotAndLogSplitScanner implements BatchScanner {
                                                 "StoppingOffset is null for split: "
                                                         + lakeSnapshotAndFlussLogSplit));
 
-        this.logScanFinished = lakeSnapshotAndFlussLogSplit.getStartingOffset() >= stoppingOffset;
+        this.logScanFinished =
+                lakeSnapshotAndFlussLogSplit.getStartingOffset() >= stoppingOffset
+                        || stoppingOffset <= 0;
     }
 
     private int[] getNeedProjectFields(Table flussTable, @Nullable int[] projectedFields) {
@@ -192,23 +192,26 @@ public class LakeSnapshotAndLogSplitScanner implements BatchScanner {
             return currentSortMergeReader.readBatch();
         } else {
             if (lakeRecordIterators.isEmpty()) {
+                List<RecordReader> recordReaders = new ArrayList<>();
                 if (lakeSnapshotSplitAndFlussLogSplit.getLakeSplits() == null
                         || lakeSnapshotSplitAndFlussLogSplit.getLakeSplits().isEmpty()) {
-                    lakeRecordIterators = Collections.emptyList();
-                    logRows = new LinkedHashMap<>();
+                    // pass null split to get rowComparator
+                    recordReaders.add(lakeSource.createRecordReader(() -> null));
                 } else {
                     for (LakeSplit lakeSplit : lakeSnapshotSplitAndFlussLogSplit.getLakeSplits()) {
-                        RecordReader reader = lakeSource.createRecordReader(() -> lakeSplit);
-                        if (reader instanceof SortedRecordReader) {
-                            rowComparator = ((SortedRecordReader) reader).order();
-                        } else {
-                            throw new UnsupportedOperationException(
-                                    "lake records must instance of sorted view.");
-                        }
-                        lakeRecordIterators.add(reader.read());
+                        recordReaders.add(lakeSource.createRecordReader(() -> lakeSplit));
                     }
-                    logRows = new TreeMap<>(rowComparator);
                 }
+                for (RecordReader reader : recordReaders) {
+                    if (reader instanceof SortedRecordReader) {
+                        rowComparator = ((SortedRecordReader) reader).order();
+                    } else {
+                        throw new UnsupportedOperationException(
+                                "lake records must instance of sorted view.");
+                    }
+                    lakeRecordIterators.add(reader.read());
+                }
+                logRows = new TreeMap<>(rowComparator);
             }
             pollLogRecords(timeout);
             return CloseableIterator.wrap(Collections.emptyIterator());

@@ -22,9 +22,13 @@ import org.apache.fluss.client.metadata.KvSnapshotMetadata;
 import org.apache.fluss.client.metadata.KvSnapshots;
 import org.apache.fluss.client.metadata.LakeSnapshot;
 import org.apache.fluss.cluster.ServerNode;
+import org.apache.fluss.cluster.rebalance.GoalType;
+import org.apache.fluss.cluster.rebalance.RebalanceProgress;
+import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.cluster.AlterConfig;
 import org.apache.fluss.config.cluster.ConfigEntry;
+import org.apache.fluss.exception.AuthorizationException;
 import org.apache.fluss.exception.DatabaseAlreadyExistException;
 import org.apache.fluss.exception.DatabaseNotEmptyException;
 import org.apache.fluss.exception.DatabaseNotExistException;
@@ -35,10 +39,15 @@ import org.apache.fluss.exception.InvalidReplicationFactorException;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.KvSnapshotNotExistException;
 import org.apache.fluss.exception.LakeTableSnapshotNotExistException;
+import org.apache.fluss.exception.NoRebalanceInProgressException;
 import org.apache.fluss.exception.NonPrimaryKeyTableException;
 import org.apache.fluss.exception.PartitionAlreadyExistsException;
 import org.apache.fluss.exception.PartitionNotExistException;
+import org.apache.fluss.exception.RebalanceFailureException;
 import org.apache.fluss.exception.SchemaNotExistException;
+import org.apache.fluss.exception.ServerNotExistException;
+import org.apache.fluss.exception.ServerTagAlreadyExistException;
+import org.apache.fluss.exception.ServerTagNotExistException;
 import org.apache.fluss.exception.TableAlreadyExistException;
 import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.exception.TableNotPartitionedException;
@@ -58,8 +67,11 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.security.acl.AclBinding;
 import org.apache.fluss.security.acl.AclBindingFilter;
 
+import javax.annotation.Nullable;
+
 import java.util.Collection;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 
 /**
@@ -492,4 +504,104 @@ public interface Admin extends AutoCloseable {
      * @return A CompletableFuture indicating completion of the operation.
      */
     CompletableFuture<Void> alterClusterConfigs(Collection<AlterConfig> configs);
+
+    /**
+     * Add server tag to the specified tabletServers, one tabletServer can only have one serverTag.
+     *
+     * <p>If one tabletServer failed adding tag, none of the tags will take effect.
+     *
+     * <p>If one tabletServer already has a serverTag, and the serverTag is same with the existing
+     * one, this operation will be ignored.
+     *
+     * <ul>
+     *   <li>{@link AuthorizationException} If the authenticated user doesn't have cluster
+     *       permissions.
+     *   <li>{@link ServerNotExistException} If the tabletServer in {@code tabletServers} does not
+     *       exist.
+     *   <li>{@link ServerTagAlreadyExistException} If the server tag already exists for any one of
+     *       the tabletServers, and the server tag is different from the existing one.
+     * </ul>
+     *
+     * @param tabletServers the tabletServers we want to add server tags.
+     * @param serverTag the server tag to be added.
+     */
+    CompletableFuture<Void> addServerTag(List<Integer> tabletServers, ServerTag serverTag);
+
+    /**
+     * Remove server tag from the specified tabletServers.
+     *
+     * <p>If one tabletServer failed removing tag, none of the tags will be removed.
+     *
+     * <p>No exception will be thrown if the server already has no any server tag now.
+     *
+     * <ul>
+     *   <li>{@link AuthorizationException} If the authenticated user doesn't have cluster
+     *       permissions.
+     *   <li>{@link ServerNotExistException} If the tabletServer in {@code tabletServers} does not
+     *       exist.
+     *   <li>{@link ServerTagNotExistException} If the server tag does not exist for any one of the
+     *       tabletServers.
+     * </ul>
+     *
+     * @param tabletServers the tabletServers we want to remove server tags.
+     */
+    CompletableFuture<Void> removeServerTag(List<Integer> tabletServers, ServerTag serverTag);
+
+    /**
+     * Based on the provided {@code priorityGoals}, Fluss performs load balancing on the cluster's
+     * bucket load.
+     *
+     * <p>More details, Fluss collects the cluster's load information and optimizes to perform load
+     * balancing according to the user-defined {@code priorityGoals}.
+     *
+     * <p>Currently, Fluss only supports one active rebalance task in the cluster. If an uncompleted
+     * rebalance task exists, Fluss will return the uncompleted rebalance task's progress.
+     *
+     * <p>If you want to cancel the rebalance task, you can use {@link #cancelRebalance(String)}
+     *
+     * <ul>
+     *   <li>{@link AuthorizationException} If the authenticated user doesn't have cluster
+     *       permissions.
+     *   <li>{@link RebalanceFailureException} If the rebalance failed. Such as there is an
+     *       inProgress execution.
+     * </ul>
+     *
+     * @param priorityGoals the goals to be optimized.
+     * @return the rebalance id. If there is no rebalance task in progress, it will trigger a new
+     *     rebalance task and return the rebalance id.
+     */
+    CompletableFuture<String> rebalance(List<GoalType> priorityGoals);
+
+    /**
+     * List the rebalance progress.
+     *
+     * <ul>
+     *   <li>{@link AuthorizationException} If the authenticated user doesn't have cluster
+     *       permissions.
+     *   <li>{@link NoRebalanceInProgressException} If there are no rebalance tasks in progress for
+     *       the input rebalanceId.
+     * </ul>
+     *
+     * @param rebalanceId the rebalance id to list progress, if it is null means list the in
+     *     progress rebalance task's.
+     * @return the rebalance process.
+     */
+    CompletableFuture<Optional<RebalanceProgress>> listRebalanceProgress(
+            @Nullable String rebalanceId);
+
+    /**
+     * Cannel the rebalance task.
+     *
+     * <ul>
+     *   <li>{@link AuthorizationException} If the authenticated user doesn't have cluster
+     *       permissions.
+     *   <li>{@link NoRebalanceInProgressException} If there are no rebalance tasks in progress or
+     *       the rebalance id is not exists.
+     * </ul>
+     *
+     * @param rebalanceId the rebalance id to cancel, if it is null means cancel the exists
+     *     rebalance task. If rebalanceId is not exists in server, {@link
+     *     NoRebalanceInProgressException} will be thrown.
+     */
+    CompletableFuture<Void> cancelRebalance(@Nullable String rebalanceId);
 }

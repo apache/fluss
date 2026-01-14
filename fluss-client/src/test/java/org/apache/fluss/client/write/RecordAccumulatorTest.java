@@ -25,8 +25,9 @@ import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.MemorySize;
-import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
+import org.apache.fluss.metadata.SchemaGetter;
+import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
@@ -38,6 +39,7 @@ import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.record.LogRecordBatch;
 import org.apache.fluss.record.LogRecordReadContext;
 import org.apache.fluss.record.MemoryLogRecords;
+import org.apache.fluss.record.TestingSchemaGetter;
 import org.apache.fluss.row.BinaryRow;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.arrow.ArrowWriter;
@@ -127,12 +129,14 @@ class RecordAccumulatorTest {
     private final ManualClock clock = new ManualClock(System.currentTimeMillis());
     private Configuration conf;
     private Cluster cluster;
+    private SchemaGetter schemaGetter;
 
     @BeforeEach
     public void start() {
         conf = new Configuration();
         // init cluster.
         cluster = updateCluster(Arrays.asList(bucket1, bucket2, bucket3));
+        schemaGetter = new TestingSchemaGetter(new SchemaInfo(DATA1_SCHEMA, (short) 1));
     }
 
     // TODO Add more tests to test lingMs, retryBackoffMs, deliveryTimeoutMs and
@@ -242,7 +246,7 @@ class RecordAccumulatorTest {
         while (true) {
             GenericRow row = row(1, RandomStringUtils.random(10));
             PhysicalTablePath tablePath = PhysicalTablePath.of(ZSTD_TABLE_INFO.getTablePath());
-            WriteRecord record = WriteRecord.forArrowAppend(tablePath, row, null);
+            WriteRecord record = WriteRecord.forArrowAppend(ZSTD_TABLE_INFO, tablePath, row, null);
             // append until the batch is full
             if (accum.append(record, writeCallback, cluster, bucketId, false).batchIsFull) {
                 break;
@@ -292,7 +296,7 @@ class RecordAccumulatorTest {
         Iterator<LogRecordBatch> iterator = memoryLogRecords.batches().iterator();
         try (LogRecordReadContext readContext =
                         LogRecordReadContext.createIndexedReadContext(
-                                DATA1_ROW_TYPE, DATA1_TABLE_INFO.getSchemaId());
+                                DATA1_ROW_TYPE, DATA1_TABLE_INFO.getSchemaId(), schemaGetter);
                 CloseableIterator<LogRecord> iter = iterator.next().records(readContext)) {
             for (int i = 0; i < appends; i++) {
                 LogRecord record = iter.next();
@@ -329,7 +333,7 @@ class RecordAccumulatorTest {
         LogRecordBatch logRecordBatch = iterator.next();
         try (LogRecordReadContext readContext =
                 LogRecordReadContext.createIndexedReadContext(
-                        DATA1_ROW_TYPE, DATA1_TABLE_INFO.getSchemaId())) {
+                        DATA1_ROW_TYPE, DATA1_TABLE_INFO.getSchemaId(), schemaGetter)) {
             LogRecord record = logRecordBatch.records(readContext).next();
             assertThat(record.getChangeType()).isEqualTo(ChangeType.APPEND_ONLY);
             assertThat(record.logOffset()).isEqualTo(0L);
@@ -343,7 +347,8 @@ class RecordAccumulatorTest {
         int batchSize = 100;
         IndexedRow row = indexedRow(DATA1_ROW_TYPE, new Object[] {1, "a"});
 
-        StickyBucketAssigner bucketAssigner = new StickyBucketAssigner(DATA1_PHYSICAL_TABLE_PATH);
+        StickyBucketAssigner bucketAssigner =
+                new StickyBucketAssigner(DATA1_PHYSICAL_TABLE_PATH, 3);
         RecordAccumulator accum =
                 createTestRecordAccumulator(
                         (int) Duration.ofMinutes(1).toMillis(),
@@ -543,7 +548,7 @@ class RecordAccumulatorTest {
      * format , see {@link #updateCluster(List)}.
      */
     private WriteRecord createRecord(IndexedRow row) {
-        return WriteRecord.forIndexedAppend(DATA1_PHYSICAL_TABLE_PATH, row, null);
+        return WriteRecord.forIndexedAppend(DATA1_TABLE_INFO, DATA1_PHYSICAL_TABLE_PATH, row, null);
     }
 
     private Cluster updateCluster(List<BucketLocation> bucketLocations) {
@@ -557,32 +562,14 @@ class RecordAccumulatorTest {
 
         Map<TablePath, Long> tableIdByPath = new HashMap<>();
         tableIdByPath.put(DATA1_TABLE_PATH, DATA1_TABLE_ID);
-
-        TableInfo data1NonPkTableInfo =
-                TableInfo.of(
-                        DATA1_TABLE_PATH,
-                        DATA1_TABLE_ID,
-                        1,
-                        TableDescriptor.builder()
-                                // use INDEXED format better memory control
-                                // to test RecordAccumulator
-                                .logFormat(LogFormat.INDEXED)
-                                .schema(DATA1_SCHEMA)
-                                .distributedBy(3)
-                                .build(),
-                        System.currentTimeMillis(),
-                        System.currentTimeMillis());
         Map<TablePath, TableInfo> tableInfoByPath = new HashMap<>();
-        tableInfoByPath.put(DATA1_TABLE_PATH, data1NonPkTableInfo);
-        tableInfoByPath.put(ZSTD_TABLE_INFO.getTablePath(), ZSTD_TABLE_INFO);
-
+        tableInfoByPath.put(DATA1_TABLE_PATH, DATA1_TABLE_INFO);
         return new Cluster(
                 aliveTabletServersById,
                 new ServerNode(0, "localhost", 89, ServerType.COORDINATOR),
                 bucketsByPath,
                 tableIdByPath,
-                Collections.emptyMap(),
-                tableInfoByPath);
+                Collections.emptyMap());
     }
 
     private void delayedInterrupt(final Thread thread, final long delayMs) {

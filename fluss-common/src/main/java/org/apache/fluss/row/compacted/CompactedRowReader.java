@@ -21,10 +21,17 @@ import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.row.BinarySegmentUtils;
 import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.Decimal;
+import org.apache.fluss.row.InternalArray;
+import org.apache.fluss.row.InternalMap;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
+import org.apache.fluss.row.array.CompactedArray;
+import org.apache.fluss.row.map.CompactedMap;
+import org.apache.fluss.types.ArrayType;
 import org.apache.fluss.types.DataType;
+import org.apache.fluss.types.MapType;
+import org.apache.fluss.types.RowType;
 
 import java.io.Serializable;
 
@@ -40,7 +47,6 @@ import static org.apache.fluss.types.DataTypeChecks.getScale;
  * <p>See {@link CompactedRowWriter}.
  */
 public class CompactedRowReader {
-
     // Including null bits.
     private final int headerSizeInBytes;
 
@@ -204,6 +210,12 @@ public class CompactedRowReader {
         return string;
     }
 
+    public BinaryString readChar(int length) {
+        BinaryString string = BinaryString.fromAddress(segments, position, length);
+        position += length;
+        return string;
+    }
+
     public Decimal readDecimal(int precision, int scale) {
         return Decimal.isCompact(precision)
                 ? Decimal.fromUnscaledLong(readLong(), precision, scale)
@@ -230,6 +242,10 @@ public class CompactedRowReader {
 
     public byte[] readBytes() {
         int length = readInt();
+        return readBytesInternal(length);
+    }
+
+    public byte[] readBinary(int length) {
         return readBytesInternal(length);
     }
 
@@ -263,6 +279,7 @@ public class CompactedRowReader {
         // ordered by type root definition
         switch (fieldType.getTypeRoot()) {
             case CHAR:
+                // TODO: use readChar(length) in the future, but need to keep compatibility
             case STRING:
                 fieldReader = (reader, pos) -> reader.readString();
                 break;
@@ -270,6 +287,7 @@ public class CompactedRowReader {
                 fieldReader = (reader, pos) -> reader.readBoolean();
                 break;
             case BINARY:
+                // TODO: use readBinary(length) in the future, but need to keep compatibility
             case BYTES:
                 fieldReader = (reader, pos) -> reader.readBytes();
                 break;
@@ -306,6 +324,19 @@ public class CompactedRowReader {
                 final int timestampLtzPrecision = getPrecision(fieldType);
                 fieldReader = (reader, pos) -> reader.readTimestampLtz(timestampLtzPrecision);
                 break;
+            case ARRAY:
+                DataType elementType = ((ArrayType) fieldType).getElementType();
+                fieldReader = (reader, pos) -> reader.readArray(elementType);
+                break;
+            case MAP:
+                MapType mapType = (MapType) fieldType;
+                fieldReader = (reader, pos) -> reader.readMap(mapType);
+                break;
+            case ROW:
+                DataType[] nestedFieldTypes =
+                        ((RowType) fieldType).getFieldTypes().toArray(new DataType[0]);
+                fieldReader = (reader, pos) -> reader.readRow(nestedFieldTypes);
+                break;
             default:
                 throw new IllegalArgumentException("Unsupported type for IndexedRow: " + fieldType);
         }
@@ -318,6 +349,31 @@ public class CompactedRowReader {
             }
             return fieldReader.readField(reader, pos);
         };
+    }
+
+    public InternalArray readArray(DataType elementType) {
+        int length = readInt();
+        InternalArray array =
+                BinarySegmentUtils.readBinaryArray(
+                        segments, position, length, new CompactedArray(elementType));
+        position += length;
+        return array;
+    }
+
+    public InternalMap readMap(MapType mapType) {
+        int length = readInt();
+        CompactedMap map = new CompactedMap(mapType.getKeyType(), mapType.getValueType());
+        map.pointTo(segments, position, length);
+        position += length;
+        return map;
+    }
+
+    public InternalRow readRow(DataType[] nestedFieldTypes) {
+        int length = readInt();
+        CompactedRow row = new CompactedRow(nestedFieldTypes);
+        row.pointTo(segments, position, length);
+        position += length;
+        return row;
     }
 
     /**

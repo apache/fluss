@@ -70,6 +70,7 @@ import org.apache.fluss.server.authorizer.Authorizer;
 import org.apache.fluss.server.coordinator.MetadataManager;
 import org.apache.fluss.server.entity.FetchReqInfo;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
+import org.apache.fluss.server.entity.UserContext;
 import org.apache.fluss.server.log.FetchParams;
 import org.apache.fluss.server.log.ListOffsetsParam;
 import org.apache.fluss.server.metadata.TabletServerMetadataCache;
@@ -87,6 +88,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
 import java.util.function.BiFunction;
 import java.util.stream.Collectors;
 
@@ -134,14 +136,16 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
             TabletServerMetadataCache metadataCache,
             MetadataManager metadataManager,
             @Nullable Authorizer authorizer,
-            DynamicConfigManager dynamicConfigManager) {
+            DynamicConfigManager dynamicConfigManager,
+            ExecutorService ioExecutor) {
         super(
                 remoteFileSystem,
                 ServerType.TABLET_SERVER,
                 zkClient,
                 metadataManager,
                 authorizer,
-                dynamicConfigManager);
+                dynamicConfigManager,
+                ioExecutor);
         this.serviceName = "server-" + serverId;
         this.replicaManager = replicaManager;
         this.metadataCache = metadataCache;
@@ -166,6 +170,7 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
                 request.getTimeoutMs(),
                 request.getAcks(),
                 produceLogData,
+                new UserContext(currentSession().getPrincipal()),
                 bucketResponseMap -> response.complete(makeProduceLogResponse(bucketResponseMap)));
         return response;
     }
@@ -190,6 +195,7 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
         replicaManager.fetchLogRecords(
                 fetchParams,
                 interesting,
+                new UserContext(currentSession().getPrincipal()),
                 fetchResponseMap ->
                         response.complete(
                                 makeFetchLogResponse(fetchResponseMap, errorResponseMap)));
@@ -380,7 +386,8 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
         return response;
     }
 
-    private void authorizeTable(OperationType operationType, long tableId) {
+    @Override
+    public void authorizeTable(OperationType operationType, long tableId) {
         if (authorizer != null) {
             TablePath tablePath = metadataCache.getTablePath(tableId).orElse(null);
             if (tablePath == null) {
@@ -390,15 +397,7 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
                                         + "metadata cache in the server is not updated yet.",
                                 serviceName, tableId));
             }
-            if (!authorizer.isAuthorized(
-                    currentSession(), operationType, Resource.table(tablePath))) {
-                throw new AuthorizationException(
-                        String.format(
-                                "No permission to %s table %s in database %s",
-                                operationType,
-                                tablePath.getTableName(),
-                                tablePath.getDatabaseName()));
-            }
+            authorizeTable(operationType, tablePath);
         }
     }
 

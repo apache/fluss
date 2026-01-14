@@ -82,6 +82,7 @@ final class RemoteLogTTLTest extends RemoteLogTestBase {
         replicaManager.fetchLogRecords(
                 new FetchParams(-1, Integer.MAX_VALUE),
                 Collections.singletonMap(tb, new FetchReqInfo(tb.getTableId(), 0L, 1024 * 1024)),
+                null,
                 future::complete);
         Map<TableBucket, FetchLogResultForBucket> result = future.get();
         assertThat(result.size()).isEqualTo(1);

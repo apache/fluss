@@ -21,6 +21,7 @@ import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.FencedLeaderEpochException;
+import org.apache.fluss.exception.InvalidColumnProjectionException;
 import org.apache.fluss.exception.InvalidCoordinatorException;
 import org.apache.fluss.exception.InvalidRequiredAcksException;
 import org.apache.fluss.exception.LogOffsetOutOfRangeException;
@@ -29,6 +30,7 @@ import org.apache.fluss.exception.NotLeaderOrFollowerException;
 import org.apache.fluss.exception.StorageException;
 import org.apache.fluss.exception.UnknownTableOrBucketException;
 import org.apache.fluss.fs.FsPath;
+import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
@@ -37,6 +39,7 @@ import org.apache.fluss.metrics.MetricNames;
 import org.apache.fluss.metrics.groups.MetricGroup;
 import org.apache.fluss.record.KvRecordBatch;
 import org.apache.fluss.record.MemoryLogRecords;
+import org.apache.fluss.record.ProjectionPushdownCache;
 import org.apache.fluss.remote.RemoteLogFetchInfo;
 import org.apache.fluss.remote.RemoteLogSegment;
 import org.apache.fluss.rpc.RpcClient;
@@ -64,6 +67,7 @@ import org.apache.fluss.server.entity.NotifyLeaderAndIsrResultForBucket;
 import org.apache.fluss.server.entity.NotifyRemoteLogOffsetsData;
 import org.apache.fluss.server.entity.StopReplicaData;
 import org.apache.fluss.server.entity.StopReplicaResultForBucket;
+import org.apache.fluss.server.entity.UserContext;
 import org.apache.fluss.server.kv.KvManager;
 import org.apache.fluss.server.kv.KvSnapshotResource;
 import org.apache.fluss.server.kv.snapshot.CompletedKvSnapshotCommitter;
@@ -81,6 +85,7 @@ import org.apache.fluss.server.log.checkpoint.OffsetCheckpointFile;
 import org.apache.fluss.server.log.remote.RemoteLogManager;
 import org.apache.fluss.server.metadata.ClusterMetadata;
 import org.apache.fluss.server.metadata.TabletServerMetadataCache;
+import org.apache.fluss.server.metrics.UserMetrics;
 import org.apache.fluss.server.metrics.group.BucketMetricGroup;
 import org.apache.fluss.server.metrics.group.TableMetricGroup;
 import org.apache.fluss.server.metrics.group.TabletServerMetricGroup;
@@ -93,7 +98,7 @@ import org.apache.fluss.server.replica.fetcher.InitialFetchStatus;
 import org.apache.fluss.server.replica.fetcher.ReplicaFetcherManager;
 import org.apache.fluss.server.utils.FatalErrorHandler;
 import org.apache.fluss.server.zk.ZooKeeperClient;
-import org.apache.fluss.server.zk.data.LakeTableSnapshot;
+import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
 import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.MapUtils;
@@ -117,6 +122,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
@@ -147,6 +153,8 @@ public class ReplicaManager {
     private final Map<TableBucket, HostedReplica> allReplicas = MapUtils.newConcurrentHashMap();
 
     private final TabletServerMetadataCache metadataCache;
+    private final ExecutorService ioExecutor;
+    private final ProjectionPushdownCache projectionsCache = new ProjectionPushdownCache();
     private final Lock replicaStateChangeLock = new ReentrantLock();
 
     /**
@@ -180,6 +188,7 @@ public class ReplicaManager {
 
     // for metrics
     private final TabletServerMetricGroup serverMetricGroup;
+    private final UserMetrics userMetrics;
     private final String internalListenerName;
 
     private final Clock clock;
@@ -197,7 +206,9 @@ public class ReplicaManager {
             CompletedKvSnapshotCommitter completedKvSnapshotCommitter,
             FatalErrorHandler fatalErrorHandler,
             TabletServerMetricGroup serverMetricGroup,
-            Clock clock)
+            UserMetrics userMetrics,
+            Clock clock,
+            ExecutorService ioExecutor)
             throws IOException {
         this(
                 conf,
@@ -212,8 +223,10 @@ public class ReplicaManager {
                 completedKvSnapshotCommitter,
                 fatalErrorHandler,
                 serverMetricGroup,
-                new RemoteLogManager(conf, zkClient, coordinatorGateway, clock),
-                clock);
+                userMetrics,
+                new RemoteLogManager(conf, zkClient, coordinatorGateway, clock, ioExecutor),
+                clock,
+                ioExecutor);
     }
 
     @VisibleForTesting
@@ -230,8 +243,10 @@ public class ReplicaManager {
             CompletedKvSnapshotCommitter completedKvSnapshotCommitter,
             FatalErrorHandler fatalErrorHandler,
             TabletServerMetricGroup serverMetricGroup,
+            UserMetrics userMetrics,
             RemoteLogManager remoteLogManager,
-            Clock clock)
+            Clock clock,
+            ExecutorService ioExecutor)
             throws IOException {
         this.conf = conf;
         this.zkClient = zkClient;
@@ -269,13 +284,15 @@ public class ReplicaManager {
         this.fatalErrorHandler = fatalErrorHandler;
 
         // for kv snapshot
-        this.kvSnapshotResource = KvSnapshotResource.create(serverId, conf);
+        this.kvSnapshotResource = KvSnapshotResource.create(serverId, conf, ioExecutor);
         this.kvSnapshotContext =
                 DefaultSnapshotContext.create(
                         zkClient, completedKvSnapshotCommitter, kvSnapshotResource, conf);
         this.remoteLogManager = remoteLogManager;
         this.serverMetricGroup = serverMetricGroup;
+        this.userMetrics = userMetrics;
         this.clock = clock;
+        this.ioExecutor = ioExecutor;
         registerMetrics();
     }
 
@@ -322,7 +339,8 @@ public class ReplicaManager {
                 this::physicalStorageRemoteLogSize);
     }
 
-    private Stream<Replica> onlineReplicas() {
+    @VisibleForTesting
+    public Stream<Replica> onlineReplicas() {
         return allReplicas.values().stream()
                 .map(
                         t -> {
@@ -346,6 +364,11 @@ public class ReplicaManager {
 
     private long atMinIsrCount() {
         return onlineReplicas().filter(Replica::isAtMinIsr).count();
+    }
+
+    @VisibleForTesting
+    public long leaderCount() {
+        return onlineReplicas().filter(Replica::isLeader).count();
     }
 
     private int writerIdCount() {
@@ -395,6 +418,11 @@ public class ReplicaManager {
                     List<NotifyLeaderAndIsrData> replicasToBeLeader = new ArrayList<>();
                     List<NotifyLeaderAndIsrData> replicasToBeFollower = new ArrayList<>();
                     for (NotifyLeaderAndIsrData data : notifyLeaderAndIsrDataList) {
+                        LOG.info(
+                                "Try to become leaderAndFollower for {} with isr {}, replicas: {}",
+                                data.getTableBucket(),
+                                data.getLeaderAndIsr(),
+                                data.getReplicas());
                         TableBucket tb = data.getTableBucket();
                         try {
                             boolean becomeLeader = validateAndGetIsBecomeLeader(data);
@@ -446,6 +474,7 @@ public class ReplicaManager {
             int timeoutMs,
             int requiredAcks,
             Map<TableBucket, MemoryLogRecords> entriesPerBucket,
+            @Nullable UserContext userContext,
             Consumer<List<ProduceLogResultForBucket>> responseCallback) {
         if (isRequiredAcksInvalid(requiredAcks)) {
             throw new InvalidRequiredAcksException("Invalid required acks: " + requiredAcks);
@@ -453,7 +482,7 @@ public class ReplicaManager {
 
         long startTime = System.currentTimeMillis();
         Map<TableBucket, ProduceLogResultForBucket> appendResult =
-                appendToLocalLog(entriesPerBucket, requiredAcks);
+                appendToLocalLog(entriesPerBucket, requiredAcks, userContext);
         LOG.debug("Append records to local log in {} ms", System.currentTimeMillis() - startTime);
 
         // maybe do delay write operation.
@@ -470,9 +499,11 @@ public class ReplicaManager {
     public void fetchLogRecords(
             FetchParams params,
             Map<TableBucket, FetchReqInfo> bucketFetchInfo,
+            @Nullable UserContext userContext,
             Consumer<Map<TableBucket, FetchLogResultForBucket>> responseCallback) {
         long startTime = System.currentTimeMillis();
-        Map<TableBucket, LogReadResult> logReadResults = readFromLog(params, bucketFetchInfo);
+        Map<TableBucket, LogReadResult> logReadResults =
+                readFromLog(params, bucketFetchInfo, userContext);
         if (LOG.isTraceEnabled()) {
             LOG.trace(
                     "Fetch log records from local log in {} ms",
@@ -480,7 +511,8 @@ public class ReplicaManager {
         }
 
         // maybe do delay fetch log operation.
-        maybeAddDelayedFetchLog(params, bucketFetchInfo, logReadResults, responseCallback);
+        maybeAddDelayedFetchLog(
+                params, bucketFetchInfo, logReadResults, userContext, responseCallback);
     }
 
     /**
@@ -808,6 +840,7 @@ public class ReplicaManager {
         }
     }
 
+    // NOTE: This method can be removed when fetchFromLake is deprecated
     private void updateWithLakeTableSnapshot(Replica replica) throws Exception {
         TableBucket tb = replica.getTableBucket();
         Optional<LakeTableSnapshot> optLakeTableSnapshot =
@@ -816,18 +849,9 @@ public class ReplicaManager {
             LakeTableSnapshot lakeTableSnapshot = optLakeTableSnapshot.get();
             long snapshotId = optLakeTableSnapshot.get().getSnapshotId();
             replica.getLogTablet().updateLakeTableSnapshotId(snapshotId);
-
-            lakeTableSnapshot
-                    .getLogStartOffset(tb)
-                    .ifPresent(replica.getLogTablet()::updateLakeLogStartOffset);
-
             lakeTableSnapshot
                     .getLogEndOffset(tb)
                     .ifPresent(replica.getLogTablet()::updateLakeLogEndOffset);
-
-            lakeTableSnapshot
-                    .getMaxTimestamp(tb)
-                    .ifPresent(replica.getLogTablet()::updateLakeMaxTimestamp);
         }
     }
 
@@ -839,7 +863,7 @@ public class ReplicaManager {
      *      2. Stop fetchers for these replicas so that no more data can be added by the replica fetcher threads.
      *      3. Truncate the log and checkpoint offsets for these replicas.
      *      4. Clear the delayed produce in the purgatory.
-     *      5. If the server is not shutting down, add the fetcher to the new leaders.
+     *      5. If the server is not shutting down,add the fetcher to the new leaders.
      * </pre>
      */
     private void makeFollowers(
@@ -923,18 +947,23 @@ public class ReplicaManager {
 
     /** Append log records to leader replicas of the buckets. */
     private Map<TableBucket, ProduceLogResultForBucket> appendToLocalLog(
-            Map<TableBucket, MemoryLogRecords> entriesPerBucket, int requiredAcks) {
+            Map<TableBucket, MemoryLogRecords> entriesPerBucket,
+            int requiredAcks,
+            @Nullable UserContext userContext) {
         Map<TableBucket, ProduceLogResultForBucket> resultForBucketMap = new HashMap<>();
         for (Map.Entry<TableBucket, MemoryLogRecords> entry : entriesPerBucket.entrySet()) {
             TableBucket tb = entry.getKey();
+            MemoryLogRecords records = entry.getValue();
             TableMetricGroup tableMetrics = null;
             try {
                 Replica replica = getReplicaOrException(tb);
                 tableMetrics = replica.tableMetrics();
                 tableMetrics.totalProduceLogRequests().inc();
+                // record user metrics before appending to log,
+                // so that if appending fails, we still account the bytes.
+                userMetrics.incBytesIn(userContext, replica.getTablePath(), records.sizeInBytes());
                 LOG.trace("Append records to local log tablet for table bucket {}", tb);
-                LogAppendInfo appendInfo =
-                        replica.appendRecordsToLeader(entry.getValue(), requiredAcks);
+                LogAppendInfo appendInfo = replica.appendRecordsToLeader(records, requiredAcks);
 
                 long baseOffset = appendInfo.firstOffset();
                 LOG.trace(
@@ -1047,7 +1076,9 @@ public class ReplicaManager {
     }
 
     public Map<TableBucket, LogReadResult> readFromLog(
-            FetchParams fetchParams, Map<TableBucket, FetchReqInfo> bucketFetchInfo) {
+            FetchParams fetchParams,
+            Map<TableBucket, FetchReqInfo> bucketFetchInfo,
+            @Nullable UserContext userContext) {
         Map<TableBucket, LogReadResult> logReadResult = new HashMap<>();
         boolean isFromFollower = fetchParams.isFromFollower();
         int limitBytes = fetchParams.maxFetchBytes();
@@ -1066,14 +1097,23 @@ public class ReplicaManager {
                         "Fetching log record for replica {}, offset {}",
                         tb,
                         fetchReqInfo.getFetchOffset());
-                replica.checkProjection(fetchReqInfo.getProjectFields());
+                // todo: change here to modified project fields.
+                if (fetchReqInfo.getProjectFields() != null
+                        && replica.getLogFormat() != LogFormat.ARROW) {
+                    throw new InvalidColumnProjectionException(
+                            String.format(
+                                    "Column projection is only supported for ARROW format, but the table %s is %s format.",
+                                    replica.getTablePath(), replica.getLogFormat()));
+                }
+
                 fetchParams.setCurrentFetch(
                         tb.getTableId(),
                         fetchOffset,
                         adjustedMaxBytes,
-                        replica.getRowType(),
+                        replica.getSchemaGetter(),
                         replica.getArrowCompressionInfo(),
-                        fetchReqInfo.getProjectFields());
+                        fetchReqInfo.getProjectFields(),
+                        projectionsCache);
                 LogReadInfo readInfo = replica.fetchRecords(fetchParams);
 
                 // Once we read from a non-empty bucket, we stop ignoring request and bucket
@@ -1097,6 +1137,7 @@ public class ReplicaManager {
                     serverMetricGroup.replicationBytesOut().inc(recordBatchSize);
                 } else {
                     tableMetrics.incLogBytesOut(recordBatchSize);
+                    userMetrics.incBytesOut(userContext, replica.getTablePath(), recordBatchSize);
                 }
             } catch (Exception e) {
                 if (isUnexpectedException(e)) {
@@ -1286,19 +1327,33 @@ public class ReplicaManager {
             FetchParams params,
             Map<TableBucket, FetchReqInfo> bucketFetchInfo,
             Map<TableBucket, LogReadResult> logReadResults,
+            @Nullable UserContext userContext,
             Consumer<Map<TableBucket, FetchLogResultForBucket>> responseCallback) {
         long bytesReadable = 0;
         boolean errorReadingData = false;
         boolean hasFetchFromLocal = false;
         Map<TableBucket, FetchBucketStatus> fetchBucketStatusMap = new HashMap<>();
+        Map<TableBucket, FetchLogResultForBucket> expectedErrorBuckets = new HashMap<>();
         for (Map.Entry<TableBucket, LogReadResult> logReadResultEntry : logReadResults.entrySet()) {
             TableBucket tb = logReadResultEntry.getKey();
             LogReadResult logReadResult = logReadResultEntry.getValue();
             FetchLogResultForBucket fetchLogResultForBucket =
                     logReadResult.getFetchLogResultForBucket();
             if (fetchLogResultForBucket.failed()) {
-                errorReadingData = true;
-                break;
+                // Check if this is an expected error (like NOT_LEADER_OR_FOLLOWER,
+                // UNKNOWN_TABLE_OR_BUCKET) which should not
+                // short-circuit the entire fetch request.
+                Errors error = fetchLogResultForBucket.getError().error();
+                if (isNonCriticalFetchError(error)) {
+                    // Expected errors should not prevent other buckets from being delayed.
+                    // Save the error bucket to be returned later, and continue processing others.
+                    expectedErrorBuckets.put(tb, fetchLogResultForBucket);
+                    continue;
+                } else {
+                    // Severe/unexpected error - short-circuit and return immediately
+                    errorReadingData = true;
+                    break;
+                }
             }
 
             if (!fetchLogResultForBucket.fetchFromRemote()) {
@@ -1334,8 +1389,13 @@ public class ReplicaManager {
                             params,
                             this,
                             fetchBucketStatusMap,
-                            responseCallback,
-                            serverMetricGroup);
+                            delayedResponse -> {
+                                // Merge expected error buckets with delayed response
+                                delayedResponse.putAll(expectedErrorBuckets);
+                                responseCallback.accept(delayedResponse);
+                            },
+                            serverMetricGroup,
+                            userContext);
 
             // try to complete the request immediately, otherwise put it into the
             // delayedFetchLogManager; this is because while the delayed fetch log operation is
@@ -1346,6 +1406,19 @@ public class ReplicaManager {
                             .map(DelayedTableBucketKey::new)
                             .collect(Collectors.toList()));
         }
+    }
+
+    /**
+     * Check if the error is an expected fetch error that should not short-circuit the entire fetch
+     * request. These errors are common during normal operations (e.g., leader changes, bucket
+     * migrations) and should not prevent other buckets from being delayed.
+     *
+     * @param error the error to check
+     * @return true if the error is expected and should not short-circuit
+     */
+    private boolean isNonCriticalFetchError(Errors error) {
+        return error == Errors.NOT_LEADER_OR_FOLLOWER
+                || error == Errors.UNKNOWN_TABLE_OR_BUCKET_EXCEPTION;
     }
 
     private void completeDelayedOperations(TableBucket tableBucket) {
@@ -1522,6 +1595,7 @@ public class ReplicaManager {
                 PhysicalTablePath physicalTablePath = data.getPhysicalTablePath();
                 TablePath tablePath = physicalTablePath.getTablePath();
                 TableInfo tableInfo = getTableInfo(zkClient, tablePath);
+
                 boolean isKvTable = tableInfo.hasPrimaryKey();
                 BucketMetricGroup bucketMetricGroup =
                         serverMetricGroup.addTableBucketMetricGroup(

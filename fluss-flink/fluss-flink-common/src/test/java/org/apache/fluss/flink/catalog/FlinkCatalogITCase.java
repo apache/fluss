@@ -17,6 +17,9 @@
 
 package org.apache.fluss.flink.catalog;
 
+import org.apache.fluss.client.Connection;
+import org.apache.fluss.client.ConnectionFactory;
+import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
@@ -25,6 +28,7 @@ import org.apache.fluss.exception.InvalidAlterTableException;
 import org.apache.fluss.exception.InvalidConfigException;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.metadata.DataLakeFormat;
+import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 
@@ -35,6 +39,7 @@ import org.apache.flink.table.api.TableEnvironment;
 import org.apache.flink.table.api.ValidationException;
 import org.apache.flink.table.api.config.TableConfigOptions;
 import org.apache.flink.table.catalog.Catalog;
+import org.apache.flink.table.catalog.CatalogBaseTable;
 import org.apache.flink.table.catalog.CatalogTable;
 import org.apache.flink.table.catalog.ObjectPath;
 import org.apache.flink.table.catalog.exceptions.CatalogException;
@@ -115,7 +120,8 @@ abstract class FlinkCatalogITCase {
                         DEFAULT_DB,
                         bootstrapServers,
                         Thread.currentThread().getContextClassLoader(),
-                        Collections.emptyMap());
+                        Collections.emptyMap(),
+                        Collections::emptyMap);
         catalog.open();
     }
 
@@ -203,7 +209,7 @@ abstract class FlinkCatalogITCase {
     }
 
     @Test
-    void testAlterTable() throws Exception {
+    void testAlterTableConfig() throws Exception {
         String ddl =
                 "create table test_alter_table_append_only ("
                         + "a string, "
@@ -284,6 +290,25 @@ abstract class FlinkCatalogITCase {
                 .isInstanceOf(InvalidConfigException.class)
                 .hasMessage(
                         "Property 'paimon.file.format' is not supported to alter which is for datalake table.");
+    }
+
+    @Test
+    void testAlterTableSchema() throws Exception {
+        ObjectPath objectPath = new ObjectPath(DEFAULT_DB, "append_only_table");
+        tEnv.executeSql(
+                        "create table append_only_table(a int, b STRING) with ('bucket.num' = '10')")
+                .await();
+        tEnv.executeSql("alter table append_only_table add c int").await();
+        CatalogTable table = (CatalogTable) catalog.getTable(objectPath);
+
+        Schema.Builder schemaBuilder = Schema.newBuilder();
+        Schema expectedSchema =
+                schemaBuilder
+                        .column("a", DataTypes.INT())
+                        .column("b", DataTypes.STRING())
+                        .column("c", DataTypes.INT())
+                        .build();
+        assertThat(table.getUnresolvedSchema()).isEqualTo(expectedSchema);
     }
 
     @Test
@@ -565,7 +590,9 @@ abstract class FlinkCatalogITCase {
                         + "    cost AS price * quantity,\n"
                         + "    order_time TIMESTAMP(3),\n"
                         + "    WATERMARK FOR order_time AS order_time - INTERVAL '5' SECOND\n"
-                        + ") with ('k1' = 'v1')");
+                        + ") with ('k1' = 'v1', 'bucket.num' = '2', "
+                        + "'table.datalake.format' = 'paimon', "
+                        + "'client.connect-timeout' = '120s')");
         CatalogTable table =
                 (CatalogTable) catalog.getTable(new ObjectPath(DEFAULT_DB, "expression_test"));
         Schema.Builder schemaBuilder = Schema.newBuilder();
@@ -585,9 +612,36 @@ abstract class FlinkCatalogITCase {
         Map<String, String> expectedOptions = new HashMap<>();
         expectedOptions.put("k1", "v1");
         expectedOptions.put(BUCKET_KEY.key(), "user");
-        expectedOptions.put(BUCKET_NUMBER.key(), "1");
+        expectedOptions.put(BUCKET_NUMBER.key(), "2");
         expectedOptions.put("table.datalake.format", "paimon");
+        expectedOptions.put("client.connect-timeout", "120s");
         assertOptionsEqual(table.getOptions(), expectedOptions);
+
+        // assert the stored table/custom configs
+        Configuration clientConfig = FLUSS_CLUSTER_EXTENSION.getClientConfig();
+        try (Connection conn = ConnectionFactory.createConnection(clientConfig)) {
+            Admin admin = conn.getAdmin();
+            TableInfo tableInfo =
+                    admin.getTableInfo(TablePath.of(DEFAULT_DB, "expression_test")).get();
+
+            Map<String, String> expectedTableProperties = new HashMap<>();
+            expectedTableProperties.put("table.datalake.format", "paimon");
+            expectedTableProperties.put("table.replication.factor", "1");
+            assertThat(tableInfo.getProperties().toMap()).isEqualTo(expectedTableProperties);
+
+            Map<String, String> expectedCustomProperties = new HashMap<>();
+            expectedCustomProperties.put("k1", "v1");
+            expectedCustomProperties.put("client.connect-timeout", "120s");
+            expectedCustomProperties.put(
+                    "schema.watermark.0.strategy.expr", "`order_time` - INTERVAL '5' SECOND");
+            expectedCustomProperties.put("schema.watermark.0.rowtime", "order_time");
+            expectedCustomProperties.put("schema.watermark.0.strategy.data-type", "TIMESTAMP(3)");
+            expectedCustomProperties.put("schema.4.name", "cost");
+            expectedCustomProperties.put("schema.4.expr", "`price` * `quantity`");
+            expectedCustomProperties.put("schema.4.data-type", "DOUBLE");
+            expectedCustomProperties.put("bucket.num", "2");
+            assertThat(tableInfo.getCustomProperties().toMap()).isEqualTo(expectedCustomProperties);
+        }
     }
 
     @Test
@@ -750,7 +804,8 @@ abstract class FlinkCatalogITCase {
                             DEFAULT_DB,
                             bootstrapServers,
                             Thread.currentThread().getContextClassLoader(),
-                            Collections.emptyMap());
+                            Collections.emptyMap(),
+                            Collections::emptyMap);
             Catalog finalAuthenticateCatalog = authenticateCatalog;
             assertThatThrownBy(finalAuthenticateCatalog::open)
                     .cause()
@@ -768,7 +823,8 @@ abstract class FlinkCatalogITCase {
                             DEFAULT_DB,
                             bootstrapServers,
                             Thread.currentThread().getContextClassLoader(),
-                            clientConfig);
+                            clientConfig,
+                            Collections::emptyMap);
             authenticateCatalog.open();
             assertThat(authenticateCatalog.listDatabases())
                     .containsExactlyInAnyOrderElementsOf(Collections.singletonList(DEFAULT_DB));
@@ -794,6 +850,32 @@ abstract class FlinkCatalogITCase {
                 .isExactlyInstanceOf(CatalogException.class)
                 .hasMessage(
                         "The configured default-database 'non-exist' does not exist in the Fluss cluster.");
+    }
+
+    @Test
+    void testCreateCatalogWithLakeProperties() throws Exception {
+        Map<String, String> properties = new HashMap<>();
+        properties.put("paimon.jdbc.password", "pass");
+        tEnv.executeSql(
+                String.format(
+                        "create catalog test_catalog_with_lake_properties with ('type' = 'fluss', '%s' = '%s', 'paimon.jdbc.password' = 'pass')",
+                        BOOTSTRAP_SERVERS.key(), FLUSS_CLUSTER_EXTENSION.getBootstrapServers()));
+        FlinkCatalog catalog =
+                (FlinkCatalog) tEnv.getCatalog("test_catalog_with_lake_properties").get();
+
+        assertOptionsEqual(catalog.getLakeCatalogProperties(), properties);
+
+        String ddl =
+                "create table test_get_lake_table ("
+                        + "a string, "
+                        + "b int) "
+                        + "with ('bucket.num' = '5', 'table.datalake.enabled' = 'true')";
+        tEnv.executeSql(ddl);
+
+        CatalogBaseTable catalogTable =
+                catalog.getTable(new ObjectPath(DEFAULT_DB, "test_get_lake_table"));
+        assertThat(catalogTable.getOptions())
+                .containsEntry("table.datalake.paimon.jdbc.password", "pass");
     }
 
     /**

@@ -17,12 +17,16 @@
 
 package org.apache.fluss.flink.utils;
 
+import org.apache.fluss.config.Configuration;
+
 import org.apache.flink.table.api.ValidationException;
 import org.junit.jupiter.api.Test;
 
 import java.time.ZoneId;
 import java.util.TimeZone;
 
+import static org.apache.flink.configuration.CoreOptions.TMP_DIRS;
+import static org.apache.fluss.config.ConfigOptions.CLIENT_SCANNER_IO_TMP_DIR;
 import static org.apache.fluss.flink.FlinkConnectorOptions.SCAN_STARTUP_TIMESTAMP;
 import static org.apache.fluss.flink.utils.FlinkConnectorOptionsUtils.parseTimestamp;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -57,5 +61,32 @@ class FlinkConnectorOptionsUtilTest {
                         "Invalid properties 'scan.startup.timestamp' should follow the format 'yyyy-MM-dd HH:mm:ss' "
                                 + "or 'timestamp', but is '2023-12-09T23:09:12'. "
                                 + "You can config like: '2023-12-09 23:09:12' or '1678883047356'.");
+    }
+
+    @Test
+    void testGetClientScannerIoTmpDir() {
+        Configuration flussConfig =
+                new Configuration().set(CLIENT_SCANNER_IO_TMP_DIR, "/fluss_tmp_dir");
+        org.apache.flink.configuration.Configuration flinkConfig =
+                new org.apache.flink.configuration.Configuration().set(TMP_DIRS, "/flink_tmp_dir");
+        assertThat(
+                        FlinkConnectorOptionsUtils.getClientScannerIoTmpDir(
+                                flussConfig, new org.apache.flink.configuration.Configuration()))
+                .isEqualTo("/fluss_tmp_dir");
+        assertThat(FlinkConnectorOptionsUtils.getClientScannerIoTmpDir(flussConfig, flinkConfig))
+                .isEqualTo("/fluss_tmp_dir");
+        String property = System.getProperty("java.io.tmpdir");
+        assertThat(
+                        FlinkConnectorOptionsUtils.getClientScannerIoTmpDir(
+                                new Configuration(),
+                                new org.apache.flink.configuration.Configuration()))
+                .isEqualTo(property + "/fluss");
+
+        // only replace when flussConfig not contains CLIENT_SCANNER_IO_TMP_DIR while flinkConfig
+        // contains TMP_DIRS.
+        assertThat(
+                        FlinkConnectorOptionsUtils.getClientScannerIoTmpDir(
+                                new Configuration(), flinkConfig))
+                .isEqualTo("/flink_tmp_dir/fluss");
     }
 }

@@ -19,6 +19,7 @@ package org.apache.fluss.flink.tiering.committer;
 
 import org.apache.fluss.client.metadata.LakeSnapshot;
 import org.apache.fluss.exception.LakeTableSnapshotNotExistException;
+import org.apache.fluss.flink.adapter.StreamOperatorParametersAdapter;
 import org.apache.fluss.flink.tiering.TestingLakeTieringFactory;
 import org.apache.fluss.flink.tiering.TestingWriteResult;
 import org.apache.fluss.flink.tiering.event.FailedTieringEvent;
@@ -26,12 +27,8 @@ import org.apache.fluss.flink.tiering.event.FinishedTieringEvent;
 import org.apache.fluss.flink.tiering.source.TableBucketWriteResult;
 import org.apache.fluss.flink.utils.FlinkTestBase;
 import org.apache.fluss.lake.committer.CommittedLakeSnapshot;
-import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
-import org.apache.fluss.server.zk.ZooKeeperClient;
-import org.apache.fluss.server.zk.data.LakeTableSnapshot;
-import org.apache.fluss.utils.types.Tuple2;
 
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.runtime.jobgraph.OperatorID;
@@ -58,8 +55,8 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 
+import static org.apache.fluss.lake.committer.LakeCommitter.FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY;
 import static org.apache.fluss.record.TestData.DATA1_PARTITIONED_TABLE_DESCRIPTOR;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -77,7 +74,7 @@ class TieringCommitOperatorTest extends FlinkTestBase {
         MockOperatorEventDispatcher mockOperatorEventDispatcher =
                 new MockOperatorEventDispatcher(mockOperatorEventGateway);
         parameters =
-                new StreamOperatorParameters<>(
+                StreamOperatorParametersAdapter.create(
                         new SourceOperatorStreamTask<String>(new DummyEnvironment()),
                         new MockStreamConfig(new Configuration(), 1),
                         new MockOutput<>(new ArrayList<>()),
@@ -89,6 +86,7 @@ class TieringCommitOperatorTest extends FlinkTestBase {
                 new TieringCommitOperator<>(
                         parameters,
                         FLUSS_CLUSTER_EXTENSION.getClientConfig(),
+                        new org.apache.fluss.config.Configuration(),
                         new TestingLakeTieringFactory());
         committerOperator.open();
     }
@@ -132,7 +130,7 @@ class TieringCommitOperatorTest extends FlinkTestBase {
                         tablePath2, t2b1, 2, 22, 32L, numberOfWriteResults));
         verifyNoLakeSnapshot(tablePath2);
 
-        // add table1, bucket2
+        // addColumn table1, bucket2
         TableBucket t1b2 = new TableBucket(tableId1, 2);
         committerOperator.processElement(
                 createTableBucketWriteResultStreamRecord(
@@ -142,13 +140,9 @@ class TieringCommitOperatorTest extends FlinkTestBase {
         expectedLogEndOffsets.put(t1b0, 11L);
         expectedLogEndOffsets.put(t1b1, 12L);
         expectedLogEndOffsets.put(t1b2, 13L);
-        Map<TableBucket, Long> expectedMaxTimestamps = new HashMap<>();
-        expectedMaxTimestamps.put(t1b0, 21L);
-        expectedMaxTimestamps.put(t1b1, 22L);
-        expectedMaxTimestamps.put(t1b2, 23L);
-        verifyLakeSnapshot(tablePath1, tableId1, 1, expectedLogEndOffsets, expectedMaxTimestamps);
+        verifyLakeSnapshot(tablePath1, tableId1, 1, expectedLogEndOffsets);
 
-        // add table2, bucket2
+        // addColumn table2, bucket2
         TableBucket t2b2 = new TableBucket(tableId2, 2);
         committerOperator.processElement(
                 createTableBucketWriteResultStreamRecord(
@@ -157,15 +151,10 @@ class TieringCommitOperatorTest extends FlinkTestBase {
         expectedLogEndOffsets.put(t2b0, 21L);
         expectedLogEndOffsets.put(t2b1, 22L);
         expectedLogEndOffsets.put(t2b2, 23L);
-        expectedMaxTimestamps = new HashMap<>();
-        expectedMaxTimestamps.put(t2b0, 31L);
-        expectedMaxTimestamps.put(t2b1, 32L);
-        expectedMaxTimestamps.put(t2b2, 33L);
-        verifyLakeSnapshot(tablePath2, tableId2, 1, expectedLogEndOffsets, expectedMaxTimestamps);
+        verifyLakeSnapshot(tablePath2, tableId2, 2, expectedLogEndOffsets);
 
         // let's process one round of TableBucketWriteResult again
         expectedLogEndOffsets = new HashMap<>();
-        expectedMaxTimestamps = new HashMap<>();
         for (int bucket = 0; bucket < 3; bucket++) {
             TableBucket tableBucket = new TableBucket(tableId1, bucket);
             long offset = bucket * bucket;
@@ -179,9 +168,8 @@ class TieringCommitOperatorTest extends FlinkTestBase {
                             timestamp,
                             numberOfWriteResults));
             expectedLogEndOffsets.put(tableBucket, offset);
-            expectedMaxTimestamps.put(tableBucket, timestamp);
         }
-        verifyLakeSnapshot(tablePath1, tableId1, 1, expectedLogEndOffsets, expectedMaxTimestamps);
+        verifyLakeSnapshot(tablePath1, tableId1, 3, expectedLogEndOffsets);
     }
 
     @Test
@@ -191,7 +179,6 @@ class TieringCommitOperatorTest extends FlinkTestBase {
         Map<String, Long> partitionIdByNames =
                 FLUSS_CLUSTER_EXTENSION.waitUntilPartitionAllReady(tablePath);
         Map<TableBucket, Long> expectedLogEndOffsets = new HashMap<>();
-        Map<TableBucket, Long> expectedMaxTimestamps = new HashMap<>();
         int numberOfWriteResults = 3 * partitionIdByNames.size();
         long offset = 0;
         long timestamp = System.currentTimeMillis();
@@ -211,11 +198,9 @@ class TieringCommitOperatorTest extends FlinkTestBase {
                                 currentTimestamp,
                                 numberOfWriteResults));
                 expectedLogEndOffsets.put(tableBucket, currentOffset);
-                expectedMaxTimestamps.put(tableBucket, currentTimestamp);
             }
             if (bucket == 2) {
-                verifyLakeSnapshot(
-                        tablePath, tableId, 1, expectedLogEndOffsets, expectedMaxTimestamps);
+                verifyLakeSnapshot(tablePath, tableId, 1, expectedLogEndOffsets);
             } else {
                 verifyNoLakeSnapshot(tablePath);
             }
@@ -263,28 +248,33 @@ class TieringCommitOperatorTest extends FlinkTestBase {
         Map<TableBucket, Long> expectedLogEndOffsets = new HashMap<>();
         expectedLogEndOffsets.put(new TableBucket(tableId, 1), 1L);
         expectedLogEndOffsets.put(new TableBucket(tableId, 2), 2L);
-        Map<TableBucket, Long> expectedMaxTimestamps = new HashMap<>();
-        expectedMaxTimestamps.put(new TableBucket(tableId, 1), 1L);
-        expectedMaxTimestamps.put(new TableBucket(tableId, 2), 2L);
-        verifyLakeSnapshot(tablePath1, tableId, 1, expectedLogEndOffsets, expectedMaxTimestamps);
+        verifyLakeSnapshot(tablePath1, tableId, 1, expectedLogEndOffsets);
     }
 
     @Test
     void testTableCommitWhenFlussMissingLakeSnapshot() throws Exception {
-        CommittedLakeSnapshot mockCommittedSnapshot =
-                mockCommittedLakeSnapshot(Collections.singletonList(null), 2);
+        TablePath tablePath = TablePath.of("fluss", "test_commit_when_fluss_missing_lake_snapshot");
+        long tableId = createTable(tablePath, DEFAULT_PK_TABLE_DESCRIPTOR);
+        int numberOfWriteResults = 3;
+
+        Map<TableBucket, Long> expectedLogEndOffsets = new HashMap<>();
+        for (int bucket = 0; bucket < 3; bucket++) {
+            TableBucket tableBucket = new TableBucket(tableId, bucket);
+            expectedLogEndOffsets.put(tableBucket, 3L);
+        }
+
+        CommittedLakeSnapshot mockMissingCommittedLakeSnapshot =
+                mockCommittedLakeSnapshot(tableId, tablePath, 0, expectedLogEndOffsets);
         TestingLakeTieringFactory.TestingLakeCommitter testingLakeCommitter =
-                new TestingLakeTieringFactory.TestingLakeCommitter(mockCommittedSnapshot);
+                new TestingLakeTieringFactory.TestingLakeCommitter(
+                        mockMissingCommittedLakeSnapshot);
         committerOperator =
                 new TieringCommitOperator<>(
                         parameters,
                         FLUSS_CLUSTER_EXTENSION.getClientConfig(),
+                        new org.apache.fluss.config.Configuration(),
                         new TestingLakeTieringFactory(testingLakeCommitter));
         committerOperator.open();
-
-        TablePath tablePath = TablePath.of("fluss", "test_commit_when_fluss_missing_lake_snapshot");
-        long tableId = createTable(tablePath, DEFAULT_PK_TABLE_DESCRIPTOR);
-        int numberOfWriteResults = 3;
 
         for (int bucket = 0; bucket < 3; bucket++) {
             TableBucket tableBucket = new TableBucket(tableId, bucket);
@@ -296,21 +286,18 @@ class TieringCommitOperatorTest extends FlinkTestBase {
         verifyLakeSnapshot(
                 tablePath,
                 tableId,
-                2,
-                getExpectedLogEndOffsets(tableId, mockCommittedSnapshot),
-                getExpectedMaxTimestamps(tableId, mockCommittedSnapshot),
-                mockCommittedSnapshot.getQualifiedPartitionNameById(),
+                0,
+                expectedLogEndOffsets,
                 String.format(
                         "The current Fluss's lake snapshot %s is less than lake actual snapshot %d committed by Fluss for table: {tablePath=%s, tableId=%d},"
                                 + " missing snapshot: %s.",
                         null,
-                        mockCommittedSnapshot.getLakeSnapshotId(),
+                        mockMissingCommittedLakeSnapshot.getLakeSnapshotId(),
                         tablePath,
                         tableId,
-                        mockCommittedSnapshot));
+                        mockMissingCommittedLakeSnapshot));
 
-        Map<TableBucket, Long> expectedLogEndOffsets = new HashMap<>();
-        Map<TableBucket, Long> expectedMaxTimestamps = new HashMap<>();
+        expectedLogEndOffsets = new HashMap<>();
         for (int bucket = 0; bucket < 3; bucket++) {
             TableBucket tableBucket = new TableBucket(tableId, bucket);
             long offset = bucket * bucket;
@@ -319,10 +306,9 @@ class TieringCommitOperatorTest extends FlinkTestBase {
                     createTableBucketWriteResultStreamRecord(
                             tablePath, tableBucket, 3, offset, timestamp, numberOfWriteResults));
             expectedLogEndOffsets.put(tableBucket, offset);
-            expectedMaxTimestamps.put(tableBucket, timestamp);
         }
 
-        verifyLakeSnapshot(tablePath, tableId, 3, expectedLogEndOffsets, expectedMaxTimestamps);
+        verifyLakeSnapshot(tablePath, tableId, 1, expectedLogEndOffsets);
     }
 
     @Test
@@ -335,14 +321,26 @@ class TieringCommitOperatorTest extends FlinkTestBase {
         Map<String, Long> partitionIdByNames =
                 FLUSS_CLUSTER_EXTENSION.waitUntilPartitionAllReady(tablePath);
 
-        CommittedLakeSnapshot mockCommittedSnapshot =
-                mockCommittedLakeSnapshot(Collections.singletonList(null), 3);
+        Map<TableBucket, Long> expectedLogEndOffsets = new HashMap<>();
+        for (int bucket = 0; bucket < 3; bucket++) {
+            for (String partitionName : partitionIdByNames.keySet()) {
+                long partitionId = partitionIdByNames.get(partitionName);
+                TableBucket tableBucket = new TableBucket(tableId, partitionId, bucket);
+                expectedLogEndOffsets.put(tableBucket, 3L);
+            }
+        }
+
+        CommittedLakeSnapshot mockMissingCommittedLakeSnapshot =
+                mockCommittedLakeSnapshot(tableId, tablePath, 0, expectedLogEndOffsets);
+
         TestingLakeTieringFactory.TestingLakeCommitter testingLakeCommitter =
-                new TestingLakeTieringFactory.TestingLakeCommitter(mockCommittedSnapshot);
+                new TestingLakeTieringFactory.TestingLakeCommitter(
+                        mockMissingCommittedLakeSnapshot);
         committerOperator =
                 new TieringCommitOperator<>(
                         parameters,
                         FLUSS_CLUSTER_EXTENSION.getClientConfig(),
+                        new org.apache.fluss.config.Configuration(),
                         new TestingLakeTieringFactory(testingLakeCommitter));
         committerOperator.open();
 
@@ -367,71 +365,15 @@ class TieringCommitOperatorTest extends FlinkTestBase {
         verifyLakeSnapshot(
                 tablePath,
                 tableId,
-                3,
-                getExpectedLogEndOffsets(tableId, mockCommittedSnapshot),
-                getExpectedMaxTimestamps(tableId, mockCommittedSnapshot),
-                mockCommittedSnapshot.getQualifiedPartitionNameById(),
+                0,
+                expectedLogEndOffsets,
                 String.format(
                         "The current Fluss's lake snapshot %s is less than lake actual snapshot %d committed by Fluss for table: {tablePath=%s, tableId=%d}, missing snapshot: %s.",
                         null,
-                        mockCommittedSnapshot.getLakeSnapshotId(),
+                        mockMissingCommittedLakeSnapshot.getLakeSnapshotId(),
                         tablePath,
                         tableId,
-                        mockCommittedSnapshot));
-    }
-
-    private CommittedLakeSnapshot mockCommittedLakeSnapshot(List<Long> partitions, int snapshotId) {
-        CommittedLakeSnapshot mockCommittedSnapshot = new CommittedLakeSnapshot(snapshotId);
-        for (Long partition : partitions) {
-            for (int bucket = 0; bucket < DEFAULT_BUCKET_NUM; bucket++) {
-                if (partition == null) {
-                    mockCommittedSnapshot.addBucket(bucket, bucket + 1);
-                } else {
-                    mockCommittedSnapshot.addPartitionBucket(
-                            partition,
-                            ResolvedPartitionSpec.fromPartitionValue(
-                                            "partition_key", "partition-" + partition)
-                                    .getPartitionQualifiedName(),
-                            bucket,
-                            bucket + 1);
-                }
-            }
-        }
-        return mockCommittedSnapshot;
-    }
-
-    private Map<TableBucket, Long> getExpectedLogEndOffsets(
-            long tableId, CommittedLakeSnapshot committedLakeSnapshot) {
-        Map<TableBucket, Long> expectedLogEndOffsets = new HashMap<>();
-        for (Map.Entry<Tuple2<Long, Integer>, Long> entry :
-                committedLakeSnapshot.getLogEndOffsets().entrySet()) {
-            Tuple2<Long, Integer> partitionBucket = entry.getKey();
-            if (partitionBucket.f0 == null) {
-                expectedLogEndOffsets.put(
-                        new TableBucket(tableId, partitionBucket.f1), entry.getValue());
-            } else {
-                expectedLogEndOffsets.put(
-                        new TableBucket(tableId, partitionBucket.f0, partitionBucket.f1),
-                        entry.getValue());
-            }
-        }
-        return expectedLogEndOffsets;
-    }
-
-    private Map<TableBucket, Long> getExpectedMaxTimestamps(
-            long tableId, CommittedLakeSnapshot committedLakeSnapshot) {
-        Map<TableBucket, Long> expectedMaxTimestamps = new HashMap<>();
-        for (Map.Entry<Tuple2<Long, Integer>, Long> entry :
-                committedLakeSnapshot.getLogEndOffsets().entrySet()) {
-            Tuple2<Long, Integer> partitionBucket = entry.getKey();
-            if (partitionBucket.f0 == null) {
-                expectedMaxTimestamps.put(new TableBucket(tableId, partitionBucket.f1), -1L);
-            } else {
-                expectedMaxTimestamps.put(
-                        new TableBucket(tableId, partitionBucket.f0, partitionBucket.f1), -1L);
-            }
-        }
-        return expectedMaxTimestamps;
+                        mockMissingCommittedLakeSnapshot));
     }
 
     private StreamRecord<TableBucketWriteResult<TestingWriteResult>>
@@ -483,15 +425,11 @@ class TieringCommitOperatorTest extends FlinkTestBase {
             TablePath tablePath,
             long tableId,
             long expectedSnapshotId,
-            Map<TableBucket, Long> expectedLogEndOffsets,
-            Map<TableBucket, Long> expectedMaxTimestamp)
+            Map<TableBucket, Long> expectedLogEndOffsets)
             throws Exception {
         LakeSnapshot lakeSnapshot = admin.getLatestLakeSnapshot(tablePath).get();
         assertThat(lakeSnapshot.getSnapshotId()).isEqualTo(expectedSnapshotId);
         assertThat(lakeSnapshot.getTableBucketsOffset()).isEqualTo(expectedLogEndOffsets);
-
-        // TODO: replace with LakeSnapshot when support max timestamp
-        verifyLakeSnapshotMaxTimestamp(tableId, expectedMaxTimestamp);
 
         // check the tableId has been sent to mark finished
         List<OperatorEvent> operatorEvents = mockOperatorEventGateway.getEventsSent();
@@ -507,35 +445,79 @@ class TieringCommitOperatorTest extends FlinkTestBase {
             long tableId,
             long expectedSnapshotId,
             Map<TableBucket, Long> expectedLogEndOffsets,
-            Map<TableBucket, Long> expectedMaxTimestamp,
-            Map<Long, String> expectedPartitionIdByName,
             String failedReason)
             throws Exception {
         LakeSnapshot lakeSnapshot = admin.getLatestLakeSnapshot(tablePath).get();
         assertThat(lakeSnapshot.getSnapshotId()).isEqualTo(expectedSnapshotId);
         assertThat(lakeSnapshot.getTableBucketsOffset()).isEqualTo(expectedLogEndOffsets);
-        assertThat(lakeSnapshot.getPartitionNameById()).isEqualTo(expectedPartitionIdByName);
-
-        // TODO: replace with LakeSnapshot when support max timestamp
-        verifyLakeSnapshotMaxTimestamp(tableId, expectedMaxTimestamp);
 
         // check the tableId has been sent to mark failed
         List<OperatorEvent> operatorEvents = mockOperatorEventGateway.getEventsSent();
         SourceEventWrapper sourceEventWrapper =
                 (SourceEventWrapper) operatorEvents.get(operatorEvents.size() - 1);
-        FailedTieringEvent finishTieringEvent =
+        FailedTieringEvent failedTieringEvent =
                 (FailedTieringEvent) sourceEventWrapper.getSourceEvent();
-        assertThat(finishTieringEvent.getTableId()).isEqualTo(tableId);
-        assertThat(finishTieringEvent.failReason()).contains(failedReason);
+        assertThat(failedTieringEvent.getTableId()).isEqualTo(tableId);
+        assertThat(failedTieringEvent.failReason()).contains(failedReason);
     }
 
-    private void verifyLakeSnapshotMaxTimestamp(
-            long tableId, Map<TableBucket, Long> expectedMaxTimestamp) throws Exception {
-        ZooKeeperClient zkClient = FLUSS_CLUSTER_EXTENSION.getZooKeeperClient();
-        Optional<LakeTableSnapshot> lakeTableSnapshotOpt = zkClient.getLakeTableSnapshot(tableId);
-        assertThat(lakeTableSnapshotOpt).isNotEmpty();
-        LakeTableSnapshot lakeTableSnapshot = lakeTableSnapshotOpt.get();
-        assertThat(lakeTableSnapshot.getBucketMaxTimestamp()).isEqualTo(expectedMaxTimestamp);
+    @Test
+    void testCommitFailsWhenTableRecreated() throws Exception {
+        TablePath tablePath = TablePath.of("fluss", "test_commit_fails_when_table_recreated");
+        long originalTableId = createTable(tablePath, DEFAULT_PK_TABLE_DESCRIPTOR);
+        int numberOfWriteResults = 3;
+
+        // Send write results for the first bucket
+        TableBucket tableBucket = new TableBucket(originalTableId, 0);
+        committerOperator.processElement(
+                createTableBucketWriteResultStreamRecord(
+                        tablePath, tableBucket, 1, 1, 1L, numberOfWriteResults));
+
+        // Drop and recreate the table with the same path
+        admin.dropTable(tablePath, true).get();
+        long newTableId = createTable(tablePath, DEFAULT_PK_TABLE_DESCRIPTOR);
+
+        // Verify that the table id has changed
+        assertThat(newTableId).isNotEqualTo(originalTableId);
+
+        // Try to commit the remaining write results - should fail because table was recreated
+        for (int bucket = 1; bucket < numberOfWriteResults; bucket++) {
+            tableBucket = new TableBucket(originalTableId, bucket);
+            committerOperator.processElement(
+                    createTableBucketWriteResultStreamRecord(
+                            tablePath,
+                            tableBucket,
+                            bucket,
+                            bucket,
+                            (long) bucket,
+                            numberOfWriteResults));
+        }
+
+        // Verify that a FailedTieringEvent was sent with the expected error message
+        List<OperatorEvent> operatorEvents = mockOperatorEventGateway.getEventsSent();
+        SourceEventWrapper sourceEventWrapper =
+                (SourceEventWrapper) operatorEvents.get(operatorEvents.size() - 1);
+        FailedTieringEvent failedTieringEvent =
+                (FailedTieringEvent) sourceEventWrapper.getSourceEvent();
+        assertThat(failedTieringEvent.getTableId()).isEqualTo(originalTableId);
+        assertThat(failedTieringEvent.failReason())
+                .contains("different from the table id")
+                .contains("dropped and recreated during tiering");
+    }
+
+    private CommittedLakeSnapshot mockCommittedLakeSnapshot(
+            long tableId, TablePath tablePath, int snapshotId, Map<TableBucket, Long> logEndOffsets)
+            throws Exception {
+        try (FlussTableLakeSnapshotCommitter lakeSnapshotCommitter =
+                new FlussTableLakeSnapshotCommitter(FLUSS_CLUSTER_EXTENSION.getClientConfig())) {
+            lakeSnapshotCommitter.open();
+            String lakeSnapshotFile =
+                    lakeSnapshotCommitter.prepareLakeSnapshot(tableId, tablePath, logEndOffsets);
+            return new CommittedLakeSnapshot(
+                    snapshotId,
+                    Collections.singletonMap(
+                            FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY, lakeSnapshotFile));
+        }
     }
 
     private static class MockOperatorEventDispatcher implements OperatorEventDispatcher {

@@ -45,18 +45,18 @@ class ProjectionTest {
         assertThat(rowType)
                 .isEqualTo(
                         DataTypes.ROW(
-                                DataTypes.FIELD("f0", DataTypes.INT()),
-                                DataTypes.FIELD("f2", DataTypes.STRING()),
-                                DataTypes.FIELD("f3", DataTypes.DOUBLE())));
+                                DataTypes.FIELD("f0", DataTypes.INT(), 0),
+                                DataTypes.FIELD("f2", DataTypes.STRING(), 2),
+                                DataTypes.FIELD("f3", DataTypes.DOUBLE(), 3)));
 
         assertThat(projection.isReorderingNeeded()).isTrue();
         assertThat(projection.getReorderingIndexes()).isEqualTo(new int[] {1, 0, 2});
         assertThat(rowType.project(projection.getReorderingIndexes()))
                 .isEqualTo(
                         DataTypes.ROW(
-                                DataTypes.FIELD("f2", DataTypes.STRING()),
-                                DataTypes.FIELD("f0", DataTypes.INT()),
-                                DataTypes.FIELD("f3", DataTypes.DOUBLE())));
+                                DataTypes.FIELD("f2", DataTypes.STRING(), 2),
+                                DataTypes.FIELD("f0", DataTypes.INT(), 0),
+                                DataTypes.FIELD("f3", DataTypes.DOUBLE(), 3)));
 
         GenericRow row = GenericRow.of(0, 1L, BinaryString.fromString("2"), 3.0d);
         ProjectedRow p1 = ProjectedRow.from(projection.getProjectionInOrder());

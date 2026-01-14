@@ -20,14 +20,26 @@ package org.apache.fluss.client.lookup;
 import org.apache.fluss.annotation.PublicEvolving;
 import org.apache.fluss.row.InternalRow;
 
+import javax.annotation.concurrent.NotThreadSafe;
+
 import java.util.concurrent.CompletableFuture;
 
 /**
- * The lookup-er is used to lookup row of a primary key table by primary key or prefix key.
+ * A lookuper performs key-based lookups against a primary key table, using either the full primary
+ * key or a prefix of the primary key (when configured via {@code Lookup#lookupBy}).
+ *
+ * <p>Usage examples:
+ *
+ * <pre>{@code
+ * // Row-based key (InternalRow)
+ * Lookuper lookuper = table.newLookup().createLookuper();
+ * LookupResult res = lookuper.lookup(keyRow).get();
+ * }</pre>
  *
  * @since 0.6
  */
 @PublicEvolving
+@NotThreadSafe
 public interface Lookuper {
 
     /**
@@ -37,7 +49,7 @@ public interface Lookuper {
      * {@code table.newLookup().createLookuper()}), or be the prefix key if the lookuper is a Prefix
      * Key Lookuper (created by {@code table.newLookup().lookupBy(prefixKeys).createLookuper()}).
      *
-     * @param lookupKey the lookup key.
+     * @param lookupKey the lookup key
      * @return the result of lookup.
      */
     CompletableFuture<LookupResult> lookup(InternalRow lookupKey);

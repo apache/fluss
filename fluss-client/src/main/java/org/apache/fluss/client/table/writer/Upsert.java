@@ -18,7 +18,6 @@
 package org.apache.fluss.client.table.writer;
 
 import org.apache.fluss.annotation.PublicEvolving;
-import org.apache.fluss.row.InternalRow;
 
 import javax.annotation.Nullable;
 
@@ -37,16 +36,14 @@ public interface Upsert {
     /**
      * Apply partial update columns and returns a new Upsert instance.
      *
-     * <p>For {@link UpsertWriter#upsert(InternalRow)} operation, only the specified columns will be
-     * updated and other columns will remain unchanged if the row exists or set to null if the row
-     * doesn't exist.
+     * <p>For upsert operations, only the specified columns will be updated and other columns will
+     * remain unchanged if the row exists or set to null if the row doesn't exist.
      *
-     * <p>For {@link UpsertWriter#delete(InternalRow)} operation, the entire row will not be
-     * removed, but only the specified columns except primary key will be set to null. The entire
-     * row will be removed when all columns except primary key are null after a {@link
-     * UpsertWriter#delete(InternalRow)} operation.
+     * <p>For delete operations, the entire row will not be removed immediately, but only the
+     * specified columns except primary key will be set to null. The entire row will be removed when
+     * all columns except primary key are null after a delete operation.
      *
-     * <p>Note: The specified columns must be a contains all columns of primary key, and all columns
+     * <p>Note: The specified columns must contain all columns of primary key, and all columns
      * except primary key should be nullable.
      *
      * @param targetColumns the column indexes to partial update
@@ -60,8 +57,11 @@ public interface Upsert {
     Upsert partialUpdate(String... targetColumnNames);
 
     /**
-     * Create a new {@link UpsertWriter} with the optional {@link #partialUpdate(String...)}
-     * information to upsert and delete data to a Primary Key Table.
+     * Create a new {@link UpsertWriter} using {@code InternalRow} with the optional {@link
+     * #partialUpdate(String...)} information to upsert and delete data to a Primary Key Table.
      */
     UpsertWriter createWriter();
+
+    /** Create a new typed {@link UpsertWriter} to write POJOs directly. */
+    <T> TypedUpsertWriter<T> createTypedWriter(Class<T> pojoClass);
 }

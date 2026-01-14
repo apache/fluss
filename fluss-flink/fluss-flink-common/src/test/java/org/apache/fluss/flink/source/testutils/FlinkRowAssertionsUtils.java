@@ -25,6 +25,8 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.stream.Collectors;
@@ -33,6 +35,15 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /** Utility class providing assertion methods for Flink test results. */
 public class FlinkRowAssertionsUtils {
+
+    // Use a daemon thread pool for hasNext checks to avoid blocking test shutdown
+    private static final ExecutorService EXECUTOR =
+            Executors.newCachedThreadPool(
+                    r -> {
+                        Thread t = new Thread(r, "FlinkRowAssertionsUtils-hasNext-checker");
+                        t.setDaemon(true);
+                        return t;
+                    });
 
     private FlinkRowAssertionsUtils() {}
 
@@ -109,11 +120,23 @@ public class FlinkRowAssertionsUtils {
         long deadlineTimeMs = startTimeMs + maxWaitTime.toMillis();
         try {
             for (int i = 0; i < expectedCount; i++) {
-                // Wait for next record with timeout
-                if (!waitForNextWithTimeout(
-                        iterator, Math.max(deadlineTimeMs - System.currentTimeMillis(), 1_000))) {
+                long remainingTimeMs = deadlineTimeMs - System.currentTimeMillis();
+                if (remainingTimeMs <= 0) {
+                    // Deadline exceeded, throw timeout error immediately
                     throw timeoutError(
-                            System.currentTimeMillis() - startTimeMs, expectedCount, actual.size());
+                            System.currentTimeMillis() - startTimeMs,
+                            expectedCount,
+                            actual.size(),
+                            actual);
+                }
+                // Wait for next record with timeout
+                if (!waitForNextWithTimeout(iterator, remainingTimeMs)) {
+
+                    throw timeoutError(
+                            System.currentTimeMillis() - startTimeMs,
+                            expectedCount,
+                            actual.size(),
+                            actual);
                 }
                 if (iterator.hasNext()) {
                     actual.add(iterator.next().toString());
@@ -152,21 +175,26 @@ public class FlinkRowAssertionsUtils {
     }
 
     private static AssertionError timeoutError(
-            long elapsedTime, int expectedCount, int actualCount) {
+            long elapsedTime, int expectedCount, int actualCount, List<String> actualRecords) {
         return new AssertionError(
                 String.format(
                         "Timeout after waiting %d ms for Flink job results. "
                                 + "Expected %d records but only received %d. "
-                                + "This might indicate a job hang or insufficient data generation.",
-                        elapsedTime, expectedCount, actualCount));
+                                + "This might indicate a job hang or insufficient data generation.%n"
+                                + "Actual records received: %s",
+                        elapsedTime, expectedCount, actualCount, actualRecords));
     }
 
     private static boolean waitForNextWithTimeout(
             CloseableIterator<Row> iterator, long maxWaitTime) {
-        CompletableFuture<Boolean> future = CompletableFuture.supplyAsync(iterator::hasNext);
+        CompletableFuture<Boolean> future =
+                CompletableFuture.supplyAsync(iterator::hasNext, EXECUTOR);
         try {
             return future.get(maxWaitTime, TimeUnit.MILLISECONDS);
         } catch (TimeoutException e) {
+            // Timeout occurred - cancel the future and return false
+            // Note: The thread may still be blocked in hasNext(), but as a daemon thread,
+            // it won't prevent JVM shutdown
             future.cancel(true);
             return false;
         } catch (Exception e) {

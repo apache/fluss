@@ -102,21 +102,15 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
 
             // mock finished tiered this round, check second round
             context.getSplitsAssignmentSequence().clear();
-            final Map<Integer, Long> bucketOffsetOfEarliest = new HashMap<>();
             final Map<Integer, Long> bucketOffsetOfInitialWrite = new HashMap<>();
             for (int tableBucket = 0; tableBucket < DEFAULT_BUCKET_NUM; tableBucket++) {
-                bucketOffsetOfEarliest.put(tableBucket, EARLIEST_OFFSET);
                 bucketOffsetOfInitialWrite.put(tableBucket, 0L);
             }
             // commit and notify this table tiering task finished
             coordinatorGateway
                     .commitLakeTableSnapshot(
                             genCommitLakeTableSnapshotRequest(
-                                    tableId,
-                                    null,
-                                    0,
-                                    bucketOffsetOfEarliest,
-                                    bucketOffsetOfInitialWrite))
+                                    tableId, null, 0, bucketOffsetOfInitialWrite))
                     .get();
 
             enumerator.handleSourceEvent(1, new FinishedTieringEvent(tableId));
@@ -211,11 +205,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
             coordinatorGateway
                     .commitLakeTableSnapshot(
                             genCommitLakeTableSnapshotRequest(
-                                    tableId,
-                                    null,
-                                    1,
-                                    initialBucketOffsets,
-                                    bucketOffsetOfInitialWrite))
+                                    tableId, null, 1, bucketOffsetOfInitialWrite))
                     .get();
 
             enumerator.handleSourceEvent(1, new FinishedTieringEvent(tableId));
@@ -312,11 +302,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
             coordinatorGateway
                     .commitLakeTableSnapshot(
                             genCommitLakeTableSnapshotRequest(
-                                    tableId,
-                                    null,
-                                    0,
-                                    bucketOffsetOfEarliest,
-                                    bucketOffsetOfInitialWrite))
+                                    tableId, null, 0, bucketOffsetOfInitialWrite))
                     .get();
             enumerator.handleSourceEvent(1, new FinishedTieringEvent(tableId));
 
@@ -393,6 +379,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
 
             // mock finished tiered this round, check second round
             context.getSplitsAssignmentSequence().clear();
+            long snapshotId = 1;
             final Map<Long, Map<Integer, Long>> bucketOffsetOfInitialWrite = new HashMap<>();
             for (Map.Entry<String, Long> partitionNameById : partitionNameByIds.entrySet()) {
                 Map<Integer, Long> partitionBucketOffsetOfEarliest = new HashMap<>();
@@ -409,8 +396,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
                                 genCommitLakeTableSnapshotRequest(
                                         tableId,
                                         partitionNameById.getValue(),
-                                        1,
-                                        partitionBucketOffsetOfEarliest,
+                                        snapshotId++,
                                         bucketOffsetOfInitialWrite.get(
                                                 partitionNameById.getValue())))
                         .get();
@@ -421,8 +407,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
             Map<Long, Map<Integer, Long>> bucketOffsetOfSecondWrite =
                     upsertRowForPartitionedTable(
                             tablePath, DEFAULT_PK_TABLE_DESCRIPTOR, partitionNameByIds, 10, 20);
-            long snapshotId = 0;
-            waitUntilPartitionTableSnapshot(tableId, partitionNameByIds, snapshotId);
+            waitUntilPartitionTableSnapshot(tableId, partitionNameByIds, 0);
 
             // request tiering table splits
             for (int subtaskId = 0; subtaskId < numSubtasks; subtaskId++) {
@@ -518,6 +503,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
             // mock finished tiered this round, check second round
             context.getSplitsAssignmentSequence().clear();
             final Map<Long, Map<Integer, Long>> bucketOffsetOfInitialWrite = new HashMap<>();
+            long snapshot = 1;
             for (Map.Entry<String, Long> partitionNameById : partitionNameByIds.entrySet()) {
                 long partitionId = partitionNameById.getValue();
                 Map<Integer, Long> partitionInitialBucketOffsets = new HashMap<>();
@@ -537,8 +523,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
                                 genCommitLakeTableSnapshotRequest(
                                         tableId,
                                         partitionId,
-                                        1,
-                                        partitionInitialBucketOffsets,
+                                        snapshot++,
                                         bucketOffsetOfInitialWrite.get(partitionId)))
                         .get();
             }
@@ -692,23 +677,21 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
             long tableId,
             @Nullable Long partitionId,
             long snapshotId,
-            Map<Integer, Long> bucketLogStartOffsets,
             Map<Integer, Long> bucketLogEndOffsets) {
         CommitLakeTableSnapshotRequest commitLakeTableSnapshotRequest =
                 new CommitLakeTableSnapshotRequest();
         PbLakeTableSnapshotInfo reqForTable = commitLakeTableSnapshotRequest.addTablesReq();
         reqForTable.setTableId(tableId);
         reqForTable.setSnapshotId(snapshotId);
-        for (Map.Entry<Integer, Long> bucketLogStartOffset : bucketLogStartOffsets.entrySet()) {
-            int bucketId = bucketLogStartOffset.getKey();
+        for (Map.Entry<Integer, Long> bucketLogEndOffset : bucketLogEndOffsets.entrySet()) {
+            int bucketId = bucketLogEndOffset.getKey();
             TableBucket tb = new TableBucket(tableId, partitionId, bucketId);
             PbLakeTableOffsetForBucket lakeTableOffsetForBucket = reqForTable.addBucketsReq();
             if (tb.getPartitionId() != null) {
                 lakeTableOffsetForBucket.setPartitionId(tb.getPartitionId());
             }
             lakeTableOffsetForBucket.setBucketId(tb.getBucket());
-            lakeTableOffsetForBucket.setLogStartOffset(bucketLogStartOffset.getValue());
-            lakeTableOffsetForBucket.setLogEndOffset(bucketLogEndOffsets.get(bucketId));
+            lakeTableOffsetForBucket.setLogEndOffset(bucketLogEndOffset.getValue());
         }
         return commitLakeTableSnapshotRequest;
     }

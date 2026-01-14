@@ -24,6 +24,7 @@ import org.apache.fluss.exception.ApiException;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.InvalidMetadataException;
 import org.apache.fluss.exception.LeaderNotAvailableException;
+import org.apache.fluss.exception.RetriableException;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePartition;
@@ -74,10 +75,17 @@ class LookupSender implements Runnable {
 
     private final Semaphore maxInFlightReuqestsSemaphore;
 
-    LookupSender(MetadataUpdater metadataUpdater, LookupQueue lookupQueue, int maxFlightRequests) {
+    private final int maxRetries;
+
+    LookupSender(
+            MetadataUpdater metadataUpdater,
+            LookupQueue lookupQueue,
+            int maxFlightRequests,
+            int maxRetries) {
         this.metadataUpdater = metadataUpdater;
         this.lookupQueue = lookupQueue;
         this.maxInFlightReuqestsSemaphore = new Semaphore(maxFlightRequests);
+        this.maxRetries = maxRetries;
         this.running = true;
     }
 
@@ -118,13 +126,22 @@ class LookupSender implements Runnable {
         sendLookups(lookups);
     }
 
-    private void sendLookups(List<AbstractLookupQuery<?>> lookups) {
+    private void sendLookups(List<AbstractLookupQuery<?>> lookups) throws Exception {
         if (lookups.isEmpty()) {
             return;
         }
         // group by <leader, lookup type> to lookup batches
         Map<Tuple2<Integer, LookupType>, List<AbstractLookupQuery<?>>> lookupBatches =
                 groupByLeaderAndType(lookups);
+
+        // if no lookup batches, sleep a bit to avoid busy loop. This case will happen when there is
+        // no leader for all the lookup request in queue.
+        if (lookupBatches.isEmpty() && !lookupQueue.hasUnDrained()) {
+            // TODO: may use wait/notify mechanism to avoid active sleep, and use a dynamic sleep
+            // time based on the request waited time.
+            Thread.sleep(100);
+        }
+
         // now, send the batches
         lookupBatches.forEach(
                 (destAndType, batch) -> sendLookups(destAndType.f0, destAndType.f1, batch));
@@ -140,11 +157,14 @@ class LookupSender implements Runnable {
             // lookup the leader node
             TableBucket tb = lookup.tableBucket();
             try {
-                // TODO this can be a re-triable operation. We should retry here instead of
-                // throwing exception.
-                leader = metadataUpdater.leaderFor(tb);
+                // TODO Metadata requests are being sent too frequently here. consider first
+                // collecting the tables that need to be updated and then sending them together in
+                // one request.
+                leader = metadataUpdater.leaderFor(lookup.tablePath(), tb);
             } catch (Exception e) {
-                lookup.future().completeExceptionally(e);
+                // if leader is not found, re-enqueue the lookup to send again.
+                LOG.warn("Failed to lookup the leader for {} when lookup", tb, e);
+                reEnqueueLookup(lookup);
                 continue;
             }
             lookupBatchesByLeader
@@ -157,24 +177,16 @@ class LookupSender implements Runnable {
     @VisibleForTesting
     void sendLookups(
             int destination, LookupType lookupType, List<AbstractLookupQuery<?>> lookupBatches) {
-        TabletServerGateway gateway = metadataUpdater.newTabletServerClientForNode(destination);
-        if (gateway == null) {
-            // TODO handle this exception, like retry.
-            throw new LeaderNotAvailableException(
-                    "Server " + destination + " is not found in metadata cache.");
-        }
-
         if (lookupType == LookupType.LOOKUP) {
-            sendLookupRequest(destination, gateway, lookupBatches);
+            sendLookupRequest(destination, lookupBatches);
         } else if (lookupType == LookupType.PREFIX_LOOKUP) {
-            sendPrefixLookupRequest(destination, gateway, lookupBatches);
+            sendPrefixLookupRequest(destination, lookupBatches);
         } else {
             throw new IllegalArgumentException("Unsupported lookup type: " + lookupType);
         }
     }
 
-    private void sendLookupRequest(
-            int destination, TabletServerGateway gateway, List<AbstractLookupQuery<?>> lookups) {
+    private void sendLookupRequest(int destination, List<AbstractLookupQuery<?>> lookups) {
         // table id -> (bucket -> lookups)
         Map<Long, Map<TableBucket, LookupBatch>> lookupByTableId = new HashMap<>();
         for (AbstractLookupQuery<?> abstractLookupQuery : lookups) {
@@ -185,6 +197,20 @@ class LookupSender implements Runnable {
                     .computeIfAbsent(tableId, k -> new HashMap<>())
                     .computeIfAbsent(tb, k -> new LookupBatch(tb))
                     .addLookup(lookup);
+        }
+
+        TabletServerGateway gateway = metadataUpdater.newTabletServerClientForNode(destination);
+        if (gateway == null) {
+            lookupByTableId.forEach(
+                    (tableId, lookupsByBucket) ->
+                            handleLookupRequestException(
+                                    new LeaderNotAvailableException(
+                                            "Server "
+                                                    + destination
+                                                    + " is not found in metadata cache."),
+                                    destination,
+                                    lookupsByBucket));
+            return;
         }
 
         lookupByTableId.forEach(
@@ -198,9 +224,7 @@ class LookupSender implements Runnable {
     }
 
     private void sendPrefixLookupRequest(
-            int destination,
-            TabletServerGateway gateway,
-            List<AbstractLookupQuery<?>> prefixLookups) {
+            int destination, List<AbstractLookupQuery<?>> prefixLookups) {
         // table id -> (bucket -> lookups)
         Map<Long, Map<TableBucket, PrefixLookupBatch>> lookupByTableId = new HashMap<>();
         for (AbstractLookupQuery<?> abstractLookupQuery : prefixLookups) {
@@ -211,6 +235,20 @@ class LookupSender implements Runnable {
                     .computeIfAbsent(tableId, k -> new HashMap<>())
                     .computeIfAbsent(tb, k -> new PrefixLookupBatch(tb))
                     .addLookup(prefixLookup);
+        }
+
+        TabletServerGateway gateway = metadataUpdater.newTabletServerClientForNode(destination);
+        if (gateway == null) {
+            lookupByTableId.forEach(
+                    (tableId, lookupsByBucket) ->
+                            handlePrefixLookupException(
+                                    new LeaderNotAvailableException(
+                                            "Server "
+                                                    + destination
+                                                    + " is not found in metadata cache."),
+                                    destination,
+                                    lookupsByBucket));
+            return;
         }
 
         lookupByTableId.forEach(
@@ -307,10 +345,8 @@ class LookupSender implements Runnable {
                             pbLookupRespForBucket.getBucketId());
             LookupBatch lookupBatch = lookupsByBucket.get(tableBucket);
             if (pbLookupRespForBucket.hasErrorCode()) {
-                // TODO for re-triable error, we should retry here instead of throwing exception.
                 ApiError error = ApiError.fromErrorMessage(pbLookupRespForBucket);
-                handleLookupExceptionForBucket(tableBucket, destination, error, "lookup");
-                lookupBatch.completeExceptionally(error.exception());
+                handleLookupError(tableBucket, destination, error, lookupBatch.lookups(), "lookup");
             } else {
                 List<byte[]> byteValues =
                         pbLookupRespForBucket.getValuesList().stream()
@@ -345,10 +381,13 @@ class LookupSender implements Runnable {
 
             PrefixLookupBatch prefixLookupBatch = prefixLookupsByBucket.get(tableBucket);
             if (pbRespForBucket.hasErrorCode()) {
-                // TODO for re-triable error, we should retry here instead of throwing exception.
                 ApiError error = ApiError.fromErrorMessage(pbRespForBucket);
-                handleLookupExceptionForBucket(tableBucket, destination, error, "prefixLookup");
-                prefixLookupBatch.completeExceptionally(error.exception());
+                handleLookupError(
+                        tableBucket,
+                        destination,
+                        error,
+                        prefixLookupBatch.lookups(),
+                        "prefix lookup");
             } else {
                 List<List<byte[]>> result = new ArrayList<>(pbRespForBucket.getValueListsCount());
                 for (int i = 0; i < pbRespForBucket.getValueListsCount(); i++) {
@@ -368,20 +407,93 @@ class LookupSender implements Runnable {
             Throwable t, int destination, Map<TableBucket, LookupBatch> lookupsByBucket) {
         ApiError error = ApiError.fromThrowable(t);
         for (LookupBatch lookupBatch : lookupsByBucket.values()) {
-            // TODO for re-triable error, we should retry here instead of throwing exception.
-            handleLookupExceptionForBucket(lookupBatch.tableBucket(), destination, error, "lookup");
-            lookupBatch.completeExceptionally(error.exception());
+            handleLookupError(
+                    lookupBatch.tableBucket(), destination, error, lookupBatch.lookups(), "lookup");
         }
     }
 
     private void handlePrefixLookupException(
             Throwable t, int destination, Map<TableBucket, PrefixLookupBatch> lookupsByBucket) {
         ApiError error = ApiError.fromThrowable(t);
-        // TODO If error, we need to retry send the request instead of throw exception.
         for (PrefixLookupBatch lookupBatch : lookupsByBucket.values()) {
-            handleLookupExceptionForBucket(
-                    lookupBatch.tableBucket(), destination, error, "prefixLookup");
-            lookupBatch.completeExceptionally(error.exception());
+            handleLookupError(
+                    lookupBatch.tableBucket(),
+                    destination,
+                    error,
+                    lookupBatch.lookups(),
+                    "prefix lookup");
+        }
+    }
+
+    private void reEnqueueLookup(AbstractLookupQuery<?> lookup) {
+        lookupQueue.reEnqueue(lookup);
+    }
+
+    private boolean canRetry(AbstractLookupQuery<?> lookup, Exception exception) {
+        return lookup.retries() < maxRetries
+                && !lookup.future().isDone()
+                && exception instanceof RetriableException;
+    }
+
+    /**
+     * Handle lookup error with retry logic. For each lookup in the list, check if it can be
+     * retried. If yes, re-enqueue it; otherwise, complete it exceptionally.
+     *
+     * @param tableBucket the table bucket
+     * @param error the error from server response
+     * @param lookups the list of lookups to handle
+     * @param lookupType the type of lookup ("" for regular lookup, "prefix " for prefix lookup)
+     */
+    private void handleLookupError(
+            TableBucket tableBucket,
+            int destination,
+            ApiError error,
+            List<? extends AbstractLookupQuery<?>> lookups,
+            String lookupType) {
+        ApiException exception = error.error().exception();
+        LOG.error(
+                "Failed to {} from node {} for bucket {}",
+                lookupType,
+                destination,
+                tableBucket,
+                exception);
+        if (exception instanceof InvalidMetadataException) {
+            LOG.warn(
+                    "Invalid metadata error in {} request. Going to request metadata update.",
+                    lookupType,
+                    exception);
+            long tableId = tableBucket.getTableId();
+            TableOrPartitions tableOrPartitions;
+            if (tableBucket.getPartitionId() == null) {
+                tableOrPartitions = new TableOrPartitions(Collections.singleton(tableId), null);
+            } else {
+                tableOrPartitions =
+                        new TableOrPartitions(
+                                null,
+                                Collections.singleton(
+                                        new TablePartition(tableId, tableBucket.getPartitionId())));
+            }
+            invalidTableOrPartitions(tableOrPartitions);
+        }
+
+        for (AbstractLookupQuery<?> lookup : lookups) {
+            if (canRetry(lookup, error.exception())) {
+                LOG.warn(
+                        "Get error {} response on table bucket {}, retrying ({} attempts left). Error: {}",
+                        lookupType,
+                        tableBucket,
+                        maxRetries - lookup.retries(),
+                        error.formatErrMsg());
+                lookup.incrementRetries();
+                reEnqueueLookup(lookup);
+            } else {
+                LOG.warn(
+                        "Get error {} response on table bucket {}, fail. Error: {}",
+                        lookupType,
+                        tableBucket,
+                        error.formatErrMsg());
+                lookup.future().completeExceptionally(error.exception());
+            }
         }
     }
 
@@ -395,31 +507,6 @@ class LookupSender implements Runnable {
         // breaking from the sender loop. Otherwise, we may miss some callbacks when shutting down.
         lookupQueue.close();
         running = false;
-    }
-
-    private void handleLookupExceptionForBucket(
-            TableBucket tb, int destination, ApiError error, String lookupType) {
-        ApiException exception = error.error().exception();
-        LOG.error(
-                "Failed to {} from node {} for bucket {}", lookupType, destination, tb, exception);
-        if (exception instanceof InvalidMetadataException) {
-            LOG.warn(
-                    "Invalid metadata error in {} request. Going to request metadata update.",
-                    lookupType,
-                    exception);
-            long tableId = tb.getTableId();
-            TableOrPartitions tableOrPartitions;
-            if (tb.getPartitionId() == null) {
-                tableOrPartitions = new TableOrPartitions(Collections.singleton(tableId), null);
-            } else {
-                tableOrPartitions =
-                        new TableOrPartitions(
-                                null,
-                                Collections.singleton(
-                                        new TablePartition(tableId, tb.getPartitionId())));
-            }
-            invalidTableOrPartitions(tableOrPartitions);
-        }
     }
 
     /** A helper class to hold table ids or table partitions. */

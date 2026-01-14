@@ -69,7 +69,15 @@ public class ProcedureManager {
     private enum ProcedureEnum {
         ADD_ACL("sys.add_acl", AddAclProcedure.class),
         DROP_ACL("sys.drop_acl", DropAclProcedure.class),
-        List_ACL("sys.list_acl", ListAclProcedure.class);
+        List_ACL("sys.list_acl", ListAclProcedure.class),
+        SET_CLUSTER_CONFIGS("sys.set_cluster_configs", SetClusterConfigsProcedure.class),
+        GET_CLUSTER_CONFIGS("sys.get_cluster_configs", GetClusterConfigsProcedure.class),
+        RESET_CLUSTER_CONFIGS("sys.reset_cluster_configs", ResetClusterConfigsProcedure.class),
+        ADD_SERVER_TAG("sys.add_server_tag", AddServerTagProcedure.class),
+        REMOVE_SERVER_TAG("sys.remove_server_tag", RemoveServerTagProcedure.class),
+        REBALANCE("sys.rebalance", RebalanceProcedure.class),
+        CANCEL_REBALANCE("sys.cancel_rebalance", CancelRebalanceProcedure.class),
+        LIST_REBALANCE_PROGRESS("sys.list_rebalance", ListRebalanceProcessProcedure.class);
 
         private final String path;
         private final Class<? extends ProcedureBase> procedureClass;

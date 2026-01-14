@@ -22,9 +22,17 @@ import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.row.BinarySegmentUtils;
 import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.Decimal;
+import org.apache.fluss.row.InternalArray;
+import org.apache.fluss.row.InternalMap;
+import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
+import org.apache.fluss.row.array.IndexedArray;
+import org.apache.fluss.row.map.IndexedMap;
+import org.apache.fluss.types.ArrayType;
 import org.apache.fluss.types.DataType;
+import org.apache.fluss.types.MapType;
+import org.apache.fluss.types.RowType;
 
 import java.io.Serializable;
 import java.util.Arrays;
@@ -199,6 +207,35 @@ public class IndexedRowReader {
         return Arrays.copyOfRange(bytes, 0, newLen);
     }
 
+    public InternalArray readArray(DataType elementType) {
+        int length = readVarLengthFromVarLengthList();
+        MemorySegment[] segments = new MemorySegment[] {segment};
+        InternalArray array =
+                BinarySegmentUtils.readBinaryArray(
+                        segments, position, length, new IndexedArray(elementType));
+        position += length;
+        return array;
+    }
+
+    public InternalMap readMap(DataType keyType, DataType valueType) {
+        int length = readVarLengthFromVarLengthList();
+        MemorySegment[] segments = new MemorySegment[] {segment};
+        InternalMap map =
+                BinarySegmentUtils.readBinaryMap(
+                        segments, position, length, new IndexedMap(keyType, valueType));
+        position += length;
+        return map;
+    }
+
+    public InternalRow readRow(DataType[] nestedFieldTypes) {
+        int length = readVarLengthFromVarLengthList();
+        MemorySegment[] segments = new MemorySegment[] {segment};
+        InternalRow row =
+                BinarySegmentUtils.readIndexedRow(segments, position, length, nestedFieldTypes);
+        position += length;
+        return row;
+    }
+
     /**
      * Creates an accessor for reading elements.
      *
@@ -257,6 +294,21 @@ public class IndexedRowReader {
             case TIMESTAMP_WITH_LOCAL_TIME_ZONE:
                 final int timestampLtzPrecision = getPrecision(fieldType);
                 fieldReader = (reader, pos) -> reader.readTimestampLtz(timestampLtzPrecision);
+                break;
+            case ARRAY:
+                DataType elementType = ((ArrayType) fieldType).getElementType();
+                fieldReader = (reader, pos) -> reader.readArray(elementType);
+                break;
+            case MAP:
+                MapType mapType = (MapType) fieldType;
+                fieldReader =
+                        (reader, pos) ->
+                                reader.readMap(mapType.getKeyType(), mapType.getValueType());
+                break;
+            case ROW:
+                DataType[] nestedFieldTypes =
+                        ((RowType) fieldType).getFieldTypes().toArray(new DataType[0]);
+                fieldReader = (reader, pos) -> reader.readRow(nestedFieldTypes);
                 break;
             default:
                 throw new IllegalArgumentException("Unsupported type for IndexedRow: " + fieldType);

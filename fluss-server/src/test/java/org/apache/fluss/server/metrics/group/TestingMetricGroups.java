@@ -19,6 +19,11 @@ package org.apache.fluss.server.metrics.group;
 
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.metrics.registry.NOPMetricRegistry;
+import org.apache.fluss.server.metrics.UserMetrics;
+import org.apache.fluss.testutils.common.ScheduledTask;
+import org.apache.fluss.utils.concurrent.Scheduler;
+
+import java.util.concurrent.ScheduledFuture;
 
 /** Utilities for various metric groups for testing. */
 public class TestingMetricGroups {
@@ -38,4 +43,30 @@ public class TestingMetricGroups {
 
     public static final BucketMetricGroup BUCKET_METRICS =
             new BucketMetricGroup(NOPMetricRegistry.INSTANCE, null, 0, TABLE_METRICS);
+
+    public static final UserMetrics USER_METRICS =
+            new UserMetrics(
+                    new TestingScheduler(), NOPMetricRegistry.INSTANCE, TABLET_SERVER_METRICS);
+
+    // ------------------------------------------------------------------------------------------
+
+    private static class TestingScheduler implements Scheduler {
+        @Override
+        public void startup() {
+            // no-op
+        }
+
+        @Override
+        public void shutdown() throws InterruptedException {
+            // no-op
+        }
+
+        @Override
+        public ScheduledFuture<?> schedule(
+                String name, Runnable task, long delayMs, long periodMs) {
+            // Directly run the task for testing purpose.
+            task.run();
+            return new ScheduledTask<>(() -> null, delayMs, periodMs);
+        }
+    }
 }

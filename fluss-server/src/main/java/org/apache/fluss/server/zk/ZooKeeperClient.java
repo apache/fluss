@@ -18,6 +18,7 @@
 package org.apache.fluss.server.zk;
 
 import org.apache.fluss.annotation.Internal;
+import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.metadata.PhysicalTablePath;
@@ -40,11 +41,12 @@ import org.apache.fluss.server.zk.ZkAsyncResponse.ZkGetDataResponse;
 import org.apache.fluss.server.zk.data.BucketSnapshot;
 import org.apache.fluss.server.zk.data.CoordinatorAddress;
 import org.apache.fluss.server.zk.data.DatabaseRegistration;
-import org.apache.fluss.server.zk.data.LakeTableSnapshot;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
+import org.apache.fluss.server.zk.data.RebalanceTask;
 import org.apache.fluss.server.zk.data.RemoteLogManifestHandle;
 import org.apache.fluss.server.zk.data.ResourceAcl;
+import org.apache.fluss.server.zk.data.ServerTags;
 import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.server.zk.data.TabletServerRegistration;
@@ -64,16 +66,20 @@ import org.apache.fluss.server.zk.data.ZkData.PartitionIdZNode;
 import org.apache.fluss.server.zk.data.ZkData.PartitionSequenceIdZNode;
 import org.apache.fluss.server.zk.data.ZkData.PartitionZNode;
 import org.apache.fluss.server.zk.data.ZkData.PartitionsZNode;
+import org.apache.fluss.server.zk.data.ZkData.RebalanceZNode;
 import org.apache.fluss.server.zk.data.ZkData.ResourceAclNode;
 import org.apache.fluss.server.zk.data.ZkData.SchemaZNode;
 import org.apache.fluss.server.zk.data.ZkData.SchemasZNode;
 import org.apache.fluss.server.zk.data.ZkData.ServerIdZNode;
 import org.apache.fluss.server.zk.data.ZkData.ServerIdsZNode;
+import org.apache.fluss.server.zk.data.ZkData.ServerTagsZNode;
 import org.apache.fluss.server.zk.data.ZkData.TableIdZNode;
 import org.apache.fluss.server.zk.data.ZkData.TableSequenceIdZNode;
 import org.apache.fluss.server.zk.data.ZkData.TableZNode;
 import org.apache.fluss.server.zk.data.ZkData.TablesZNode;
 import org.apache.fluss.server.zk.data.ZkData.WriterIdZNode;
+import org.apache.fluss.server.zk.data.lake.LakeTable;
+import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
 import org.apache.fluss.shaded.curator5.org.apache.curator.framework.CuratorFramework;
 import org.apache.fluss.shaded.curator5.org.apache.curator.framework.api.BackgroundCallback;
 import org.apache.fluss.shaded.curator5.org.apache.curator.framework.api.CuratorEvent;
@@ -133,6 +139,7 @@ public class ZooKeeperClient implements AutoCloseable {
     private final ZkSequenceIDCounter writerIdCounter;
 
     private final Semaphore inFlightRequests;
+    private final Configuration configuration;
 
     public ZooKeeperClient(
             CuratorFrameworkWithUnhandledErrorListener curatorFrameworkWrapper,
@@ -147,6 +154,7 @@ public class ZooKeeperClient implements AutoCloseable {
         int maxInFlightRequests =
                 configuration.getInt(ConfigOptions.ZOOKEEPER_MAX_INFLIGHT_REQUESTS);
         this.inFlightRequests = new Semaphore(maxInFlightRequests);
+        this.configuration = configuration;
     }
 
     public Optional<byte[]> getOrEmpty(String path) throws Exception {
@@ -289,7 +297,17 @@ public class ZooKeeperClient implements AutoCloseable {
             throws Exception {
         String path = TableIdZNode.path(tableId);
         zkClient.setData().forPath(path, TableIdZNode.encode(tableAssignment));
-        LOG.info("Updated table assignment {} for table id {}.", tableAssignment, tableId);
+        LOG.debug("Updated table assignment {} for table id {}.", tableAssignment, tableId);
+    }
+
+    public void updatePartitionAssignment(long partitionId, PartitionAssignment partitionAssignment)
+            throws Exception {
+        String path = PartitionIdZNode.path(partitionId);
+        zkClient.setData().forPath(path, PartitionIdZNode.encode(partitionAssignment));
+        LOG.debug(
+                "Updated partition assignment {} for partition id {}.",
+                partitionAssignment,
+                partitionId);
     }
 
     public void deleteTableAssignment(long tableId) throws Exception {
@@ -536,18 +554,46 @@ public class ZooKeeperClient implements AutoCloseable {
                 "tables registration");
     }
 
-    /** Get the v1 schema for given tables in ZK. */
-    public Map<TablePath, SchemaInfo> getV1Schemas(Collection<TablePath> tablePaths)
+    /** Get the latest schema for given tables in ZK. */
+    public Map<TablePath, SchemaInfo> getLatestSchemas(Collection<TablePath> tablePaths)
             throws Exception {
-        Map<String, TablePath> path2TablePathMap =
-                tablePaths.stream()
-                        .collect(toMap(p -> SchemaZNode.path(p, DEFAULT_SCHEMA_ID), path -> path));
+        Map<String, TablePath> schemaChildren2TablePathMap =
+                tablePaths.stream().collect(toMap(SchemasZNode::path, path -> path));
+        List<ZkGetChildrenResponse> childrenResponses =
+                getChildrenInBackground(schemaChildren2TablePathMap.keySet());
+        // get the schema ids for each table
+        Map<TablePath, List<String>> schemaIdsForTables =
+                processGetChildrenResponses(
+                        childrenResponses,
+                        response -> schemaChildren2TablePathMap.get(response.getPath()),
+                        "schema children for tables");
+
+        // get the schema info for each latest schema id
+        Map<TablePath, Integer> latestSchemaIdMap = new HashMap<>();
+        Map<String, TablePath> path2TablePathMap = new HashMap<>();
+        schemaIdsForTables.forEach(
+                (tp, schemaIds) -> {
+                    int latestSchemaId =
+                            schemaIds.stream().map(Integer::parseInt).reduce(Math::max).orElse(0);
+                    latestSchemaIdMap.put(tp, latestSchemaId);
+                    path2TablePathMap.put(SchemaZNode.path(tp, latestSchemaId), tp);
+                });
+
         List<ZkGetDataResponse> responses = getDataInBackground(path2TablePathMap.keySet());
-        return processGetDataResponses(
-                responses,
-                resp -> path2TablePathMap.get(resp.getPath()),
-                b -> new SchemaInfo(SchemaZNode.decode(b), DEFAULT_SCHEMA_ID),
-                "schema");
+        Map<TablePath, Schema> schemasForTables =
+                processGetDataResponses(
+                        responses,
+                        resp -> path2TablePathMap.get(resp.getPath()),
+                        SchemaZNode::decode,
+                        "schema");
+
+        Map<TablePath, SchemaInfo> result = new HashMap<>();
+        schemasForTables.forEach(
+                (tp, schema) -> {
+                    int schemaId = latestSchemaIdMap.get(tp);
+                    result.put(tp, new SchemaInfo(schema, schemaId));
+                });
+        return result;
     }
 
     /** Update the table in ZK. */
@@ -809,17 +855,19 @@ public class ZooKeeperClient implements AutoCloseable {
     // --------------------------------------------------------------------------------------------
 
     /** Register schema to ZK metadata and return the schema id. */
-    public int registerSchema(TablePath tablePath, Schema schema) throws Exception {
-        int currentSchemaId = getCurrentSchemaId(tablePath);
+    public int registerFirstSchema(TablePath tablePath, Schema schema) throws Exception {
+        return registerSchema(tablePath, schema, DEFAULT_SCHEMA_ID);
+    }
+
+    public int registerSchema(TablePath tablePath, Schema schema, int schemaId) throws Exception {
         // increase schema id.
-        currentSchemaId++;
-        String path = SchemaZNode.path(tablePath, currentSchemaId);
+        String path = SchemaZNode.path(tablePath, schemaId);
         zkClient.create()
                 .creatingParentsIfNeeded()
                 .withMode(CreateMode.PERSISTENT)
                 .forPath(path, SchemaZNode.encode(schema));
-        LOG.info("Registered new schema version {} for table {}.", currentSchemaId, tablePath);
-        return currentSchemaId;
+        LOG.info("Registered new schema version {} for table {}.", schemaId, tablePath);
+        return schemaId;
     }
 
     /** Get the specific schema by schema id in ZK metadata. */
@@ -993,55 +1041,45 @@ public class ZooKeeperClient implements AutoCloseable {
         return getOrEmpty(path).map(BucketRemoteLogsZNode::decode);
     }
 
-    public void upsertLakeTableSnapshot(long tableId, LakeTableSnapshot lakeTableSnapshot)
+    /** Upsert the {@link LakeTable} to Zk Node. */
+    public void upsertLakeTable(long tableId, LakeTable lakeTable, boolean isUpdate)
             throws Exception {
-        String path = LakeTableZNode.path(tableId);
-        Optional<LakeTableSnapshot> optLakeTableSnapshot = getLakeTableSnapshot(tableId);
-        if (optLakeTableSnapshot.isPresent()) {
-            // we need to merge current lake table snapshot with previous
-            // since the current lake table snapshot request won't carry all
-            // the bucket for the table. It will only carry the bucket that is written
-            // after the previous commit
-            LakeTableSnapshot previous = optLakeTableSnapshot.get();
-
-            // merge log startup offset, current will override the previous
-            Map<TableBucket, Long> bucketLogStartOffset =
-                    new HashMap<>(previous.getBucketLogStartOffset());
-            bucketLogStartOffset.putAll(lakeTableSnapshot.getBucketLogStartOffset());
-
-            // merge log end offsets, current will override the previous
-            Map<TableBucket, Long> bucketLogEndOffset =
-                    new HashMap<>(previous.getBucketLogEndOffset());
-            bucketLogEndOffset.putAll(lakeTableSnapshot.getBucketLogEndOffset());
-
-            // merge max timestamp, current will override the previous
-            Map<TableBucket, Long> bucketMaxTimestamp =
-                    new HashMap<>(previous.getBucketMaxTimestamp());
-            bucketMaxTimestamp.putAll(lakeTableSnapshot.getBucketMaxTimestamp());
-
-            Map<Long, String> partitionNameById =
-                    new HashMap<>(previous.getPartitionNameIdByPartitionId());
-            partitionNameById.putAll(lakeTableSnapshot.getPartitionNameIdByPartitionId());
-
-            lakeTableSnapshot =
-                    new LakeTableSnapshot(
-                            lakeTableSnapshot.getSnapshotId(),
-                            lakeTableSnapshot.getTableId(),
-                            bucketLogStartOffset,
-                            bucketLogEndOffset,
-                            bucketMaxTimestamp,
-                            partitionNameById);
-            zkClient.setData().forPath(path, LakeTableZNode.encode(lakeTableSnapshot));
+        byte[] zkData = LakeTableZNode.encode(lakeTable);
+        String zkPath = LakeTableZNode.path(tableId);
+        if (isUpdate) {
+            zkClient.setData().forPath(zkPath, zkData);
         } else {
-            zkClient.create()
-                    .creatingParentsIfNeeded()
-                    .forPath(path, LakeTableZNode.encode(lakeTableSnapshot));
+            zkClient.create().creatingParentsIfNeeded().forPath(zkPath, zkData);
         }
     }
 
+    /**
+     * Gets the {@link LakeTable} for the given table ID.
+     *
+     * @param tableId the table ID
+     * @return an Optional containing the LakeTable if it exists, empty otherwise
+     * @throws Exception if the operation fails
+     */
+    public Optional<LakeTable> getLakeTable(long tableId) throws Exception {
+        String zkPath = LakeTableZNode.path(tableId);
+        return getOrEmpty(zkPath).map(LakeTableZNode::decode);
+    }
+
+    /**
+     * Gets the {@link LakeTableSnapshot} for the given table ID.
+     *
+     * @param tableId the table ID
+     * @return an Optional containing the LakeTableSnapshot if the table exists, empty otherwise
+     * @throws Exception if the operation fails
+     */
     public Optional<LakeTableSnapshot> getLakeTableSnapshot(long tableId) throws Exception {
-        String path = LakeTableZNode.path(tableId);
-        return getOrEmpty(path).map(LakeTableZNode::decode);
+        Optional<LakeTable> optLakeTable = getLakeTable(tableId);
+        if (optLakeTable.isPresent()) {
+            // always get the latest snapshot
+            return Optional.of(optLakeTable.get().getOrReadLatestTableSnapshot());
+        } else {
+            return Optional.empty();
+        }
     }
 
     /**
@@ -1130,7 +1168,7 @@ public class ZooKeeperClient implements AutoCloseable {
                 .forPath(
                         AclChangeNotificationNode.pathPrefix(),
                         AclChangeNotificationNode.encode(resource));
-        LOG.info("add acl change notification for resource {}  ", resource);
+        LOG.info("addColumn acl change notification for resource {}  ", resource);
     }
 
     public Map<String, String> fetchEntityConfig() throws Exception {
@@ -1163,6 +1201,56 @@ public class ZooKeeperClient implements AutoCloseable {
                 .forPath(
                         ZkData.ConfigEntityChangeNotificationSequenceZNode.pathPrefix(),
                         ZkData.ConfigEntityChangeNotificationSequenceZNode.encode());
+    }
+
+    // --------------------------------------------------------------------------------------------
+    // Maintenance
+    // --------------------------------------------------------------------------------------------
+
+    public void registerServerTags(ServerTags newServerTags) throws Exception {
+        String path = ServerTagsZNode.path();
+        zkClient.create()
+                .creatingParentsIfNeeded()
+                .withMode(CreateMode.PERSISTENT)
+                .forPath(path, ServerTagsZNode.encode(newServerTags));
+    }
+
+    public void updateServerTags(ServerTags newServerTags) throws Exception {
+        String path = ServerTagsZNode.path();
+        zkClient.setData().forPath(path, ServerTagsZNode.encode(newServerTags));
+    }
+
+    public Optional<ServerTags> getServerTags() throws Exception {
+        String path = ServerTagsZNode.path();
+        return getOrEmpty(path).map(ServerTagsZNode::decode);
+    }
+
+    public void deleteServerTags() throws Exception {
+        deletePath(ServerTagsZNode.path());
+    }
+
+    public void registerRebalanceTask(RebalanceTask rebalanceTask) throws Exception {
+        String path = RebalanceZNode.path();
+        Stat stat = zkClient.checkExists().forPath(path);
+        if (stat == null) {
+            zkClient.create()
+                    .creatingParentsIfNeeded()
+                    .withMode(CreateMode.PERSISTENT)
+                    .forPath(path, RebalanceZNode.encode(rebalanceTask));
+        } else {
+            zkClient.setData().forPath(path, RebalanceZNode.encode(rebalanceTask));
+        }
+    }
+
+    public Optional<RebalanceTask> getRebalanceTask() throws Exception {
+        String path = RebalanceZNode.path();
+        return getOrEmpty(path).map(RebalanceZNode::decode);
+    }
+
+    /** Deletes the rebalance task from ZooKeeper. Only for testing propose now */
+    @VisibleForTesting
+    public void deleteRebalanceTask() throws Exception {
+        deletePath(RebalanceZNode.path());
     }
 
     // --------------------------------------------------------------------------------------------

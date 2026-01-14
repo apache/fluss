@@ -19,6 +19,7 @@ package org.apache.fluss.flink.sink;
 
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.flink.adapter.SinkAdapter;
 import org.apache.fluss.flink.sink.serializer.FlussSerializationSchema;
 import org.apache.fluss.flink.sink.writer.AppendSinkWriter;
 import org.apache.fluss.flink.sink.writer.FlinkSinkWriter;
@@ -27,9 +28,8 @@ import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.TablePath;
 
 import org.apache.flink.api.common.operators.MailboxExecutor;
-import org.apache.flink.api.connector.sink2.Sink;
 import org.apache.flink.api.connector.sink2.SinkWriter;
-import org.apache.flink.api.connector.sink2.WriterInitContext;
+import org.apache.flink.metrics.groups.SinkWriterMetricGroup;
 import org.apache.flink.runtime.metrics.groups.InternalSinkWriterMetricGroup;
 import org.apache.flink.streaming.api.connector.sink2.SupportsPreWriteTopology;
 import org.apache.flink.streaming.api.datastream.DataStream;
@@ -37,7 +37,6 @@ import org.apache.flink.table.types.logical.RowType;
 
 import javax.annotation.Nullable;
 
-import java.io.IOException;
 import java.io.Serializable;
 import java.util.List;
 
@@ -45,7 +44,7 @@ import static org.apache.fluss.flink.sink.FlinkStreamPartitioner.partition;
 import static org.apache.fluss.flink.utils.FlinkConversions.toFlussRowType;
 
 /** Flink sink for Fluss. */
-class FlinkSink<InputT> implements Sink<InputT>, SupportsPreWriteTopology<InputT> {
+class FlinkSink<InputT> extends SinkAdapter<InputT> implements SupportsPreWriteTopology<InputT> {
 
     private static final long serialVersionUID = 1L;
 
@@ -55,20 +54,11 @@ class FlinkSink<InputT> implements Sink<InputT>, SupportsPreWriteTopology<InputT
         this.builder = builder;
     }
 
-    @Deprecated
     @Override
-    public SinkWriter<InputT> createWriter(InitContext context) throws IOException {
-        FlinkSinkWriter<InputT> flinkSinkWriter =
-                builder.createWriter(context.getMailboxExecutor());
-        flinkSinkWriter.initialize(InternalSinkWriterMetricGroup.wrap(context.metricGroup()));
-        return flinkSinkWriter;
-    }
-
-    @Override
-    public SinkWriter<InputT> createWriter(WriterInitContext context) throws IOException {
-        FlinkSinkWriter<InputT> flinkSinkWriter =
-                builder.createWriter(context.getMailboxExecutor());
-        flinkSinkWriter.initialize(InternalSinkWriterMetricGroup.wrap(context.metricGroup()));
+    protected SinkWriter<InputT> createWriter(
+            MailboxExecutor mailboxExecutor, SinkWriterMetricGroup metricGroup) {
+        FlinkSinkWriter<InputT> flinkSinkWriter = builder.createWriter(mailboxExecutor);
+        flinkSinkWriter.initialize(InternalSinkWriterMetricGroup.wrap(metricGroup));
         return flinkSinkWriter;
     }
 

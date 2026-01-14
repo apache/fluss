@@ -23,6 +23,7 @@ import org.apache.fluss.types.BinaryType;
 import org.apache.fluss.types.BooleanType;
 import org.apache.fluss.types.BytesType;
 import org.apache.fluss.types.CharType;
+import org.apache.fluss.types.DataField;
 import org.apache.fluss.types.DataTypeVisitor;
 import org.apache.fluss.types.DateType;
 import org.apache.fluss.types.DecimalType;
@@ -41,11 +42,38 @@ import org.apache.fluss.types.TinyIntType;
 import org.apache.iceberg.types.Type;
 import org.apache.iceberg.types.Types;
 
+import java.util.ArrayList;
+import java.util.List;
+
 /** Convert from Fluss's data type to Iceberg's data type. */
 public class FlussDataTypeToIcebergDataType implements DataTypeVisitor<Type> {
 
     public static final FlussDataTypeToIcebergDataType INSTANCE =
             new FlussDataTypeToIcebergDataType();
+
+    private final RowType root;
+    private int nextId;
+
+    FlussDataTypeToIcebergDataType() {
+        this.root = null;
+        this.nextId = 0;
+    }
+
+    FlussDataTypeToIcebergDataType(int startId) {
+        this.root = null;
+        this.nextId = startId;
+    }
+
+    FlussDataTypeToIcebergDataType(RowType root) {
+        this.root = root;
+        this.nextId = root.getFieldCount();
+    }
+
+    private int getNextId() {
+        int next = nextId;
+        nextId += 1;
+        return next;
+    }
 
     @Override
     public Type visit(CharType charType) {
@@ -129,7 +157,12 @@ public class FlussDataTypeToIcebergDataType implements DataTypeVisitor<Type> {
 
     @Override
     public Type visit(ArrayType arrayType) {
-        throw new UnsupportedOperationException("Unsupported array type");
+        Type elementType = arrayType.getElementType().accept(this);
+        if (arrayType.getElementType().isNullable()) {
+            return Types.ListType.ofOptional(getNextId(), elementType);
+        } else {
+            return Types.ListType.ofRequired(getNextId(), elementType);
+        }
     }
 
     @Override
@@ -139,6 +172,28 @@ public class FlussDataTypeToIcebergDataType implements DataTypeVisitor<Type> {
 
     @Override
     public Type visit(RowType rowType) {
-        throw new UnsupportedOperationException("Unsupported row type");
+        List<Types.NestedField> fields = new ArrayList<>();
+
+        for (DataField field : rowType.getFields()) {
+            Type fieldType = field.getType().accept(this);
+
+            if (field.getType().isNullable()) {
+                fields.add(
+                        Types.NestedField.optional(
+                                getNextId(),
+                                field.getName(),
+                                fieldType,
+                                field.getDescription().orElse(null)));
+            } else {
+                fields.add(
+                        Types.NestedField.required(
+                                getNextId(),
+                                field.getName(),
+                                fieldType,
+                                field.getDescription().orElse(null)));
+            }
+        }
+
+        return Types.StructType.of(fields);
     }
 }

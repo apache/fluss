@@ -17,6 +17,7 @@
 
 package org.apache.fluss.server.coordinator;
 
+import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.fs.FileSystem;
@@ -41,6 +42,8 @@ public class RemoteStorageCleaner {
 
     private final FsPath remoteLogDir;
 
+    private final String remoteDataDir;
+
     private final FileSystem remoteFileSystem;
 
     private final ExecutorService ioExecutor;
@@ -48,6 +51,7 @@ public class RemoteStorageCleaner {
     public RemoteStorageCleaner(Configuration configuration, ExecutorService ioExecutor) {
         this.remoteKvDir = FlussPaths.remoteKvDir(configuration);
         this.remoteLogDir = FlussPaths.remoteLogDir(configuration);
+        this.remoteDataDir = configuration.getString(ConfigOptions.REMOTE_DATA_DIR);
         this.ioExecutor = ioExecutor;
         try {
             this.remoteFileSystem = remoteKvDir.getFileSystem();
@@ -62,6 +66,13 @@ public class RemoteStorageCleaner {
             asyncDeleteDir(FlussPaths.remoteTableDir(remoteKvDir, tablePath, tableId));
         }
         asyncDeleteDir(FlussPaths.remoteTableDir(remoteLogDir, tablePath, tableId));
+
+        // Always delete lake snapshot metadata directory, regardless of isLakeEnabled flag.
+        // This is because if a table was enabled datalake but turned off later, and then the table
+        // was deleted, we may leave the lake snapshot metadata files behind if we only delete when
+        // isLakeEnabled is true. By always deleting, we ensure cleanup of any existing metadata
+        // files.
+        asyncDeleteDir(FlussPaths.remoteLakeTableSnapshotDir(remoteDataDir, tablePath, tableId));
     }
 
     public void asyncDeletePartitionRemoteDir(

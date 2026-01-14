@@ -17,6 +17,8 @@
 
 package org.apache.fluss.flink.utils;
 
+import org.apache.fluss.flink.row.FlinkAsFlussArray;
+import org.apache.fluss.flink.row.FlinkAsFlussMap;
 import org.apache.fluss.flink.row.FlinkAsFlussRow;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.row.BinaryString;
@@ -29,7 +31,9 @@ import org.apache.fluss.row.encode.RowEncoder;
 import org.apache.fluss.row.indexed.IndexedRow;
 import org.apache.fluss.types.DataType;
 
+import org.apache.flink.table.data.ArrayData;
 import org.apache.flink.table.data.DecimalData;
+import org.apache.flink.table.data.MapData;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.data.StringData;
 import org.apache.flink.table.data.TimestampData;
@@ -175,6 +179,13 @@ public class FlinkRowToFlussRowConverter implements AutoCloseable {
                     return TimestampLtz.fromEpochMillis(
                             timestampData.getMillisecond(), timestampData.getNanoOfMillisecond());
                 };
+            case ARRAY:
+                return flinkField -> new FlinkAsFlussArray((ArrayData) flinkField);
+            case MAP:
+            case MULTISET:
+                return flinkField -> new FlinkAsFlussMap((MapData) flinkField);
+            case ROW:
+                return flinkField -> new FlinkAsFlussRow((RowData) flinkField);
             default:
                 throw new UnsupportedOperationException(
                         "Fluss Unsupported data type: " + flinkDataType);

@@ -24,6 +24,7 @@ import org.apache.fluss.client.metadata.KvSnapshots;
 import org.apache.fluss.client.table.Table;
 import org.apache.fluss.client.table.writer.UpsertWriter;
 import org.apache.fluss.cluster.ServerNode;
+import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.config.AutoPartitionTimeUnit;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
@@ -42,12 +43,16 @@ import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.PartitionAlreadyExistsException;
 import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.exception.SchemaNotExistException;
+import org.apache.fluss.exception.ServerNotExistException;
+import org.apache.fluss.exception.ServerTagAlreadyExistException;
+import org.apache.fluss.exception.ServerTagNotExistException;
 import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.exception.TableNotPartitionedException;
 import org.apache.fluss.exception.TooManyBucketsException;
 import org.apache.fluss.exception.TooManyPartitionsException;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.fs.FsPathAndFileName;
+import org.apache.fluss.metadata.AggFunctions;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.DatabaseInfo;
 import org.apache.fluss.metadata.DeleteBehavior;
@@ -64,6 +69,9 @@ import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
 import org.apache.fluss.server.kv.snapshot.KvSnapshotHandle;
+import org.apache.fluss.server.zk.ZooKeeperClient;
+import org.apache.fluss.server.zk.data.ServerTags;
+import org.apache.fluss.types.DataTypeChecks;
 import org.apache.fluss.types.DataTypes;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -80,6 +88,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.concurrent.ExecutionException;
 import java.util.stream.Collectors;
@@ -129,7 +138,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
     void testMultiClient() throws Exception {
         Admin admin1 = conn.getAdmin();
         Admin admin2 = conn.getAdmin();
-        assertThat(admin1).isNotSameAs(admin2);
+        assertThat(admin1).isEqualTo(admin2);
 
         TableInfo t1 = admin1.getTableInfo(DEFAULT_TABLE_PATH).get();
         TableInfo t2 = admin2.getTableInfo(DEFAULT_TABLE_PATH).get();
@@ -228,7 +237,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
     }
 
     @Test
-    void testAlterTable() throws Exception {
+    void testAlterTableConfig() throws Exception {
         // create table
         TablePath tablePath = TablePath.of("test_db", "alter_table_1");
         admin.createTable(tablePath, DEFAULT_TABLE_DESCRIPTOR, false).get();
@@ -300,6 +309,133 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                         tableChanges,
                         true)
                 .get();
+    }
+
+    @Test
+    void testAlterTableColumn() throws Exception {
+        // create table
+        TablePath tablePath = TablePath.of("test_db", "alter_table_1");
+        admin.createTable(tablePath, DEFAULT_TABLE_DESCRIPTOR, false).get();
+
+        assertThatThrownBy(
+                        () ->
+                                admin.alterTable(
+                                                tablePath,
+                                                Collections.singletonList(
+                                                        TableChange.dropColumn("id")),
+                                                false)
+                                        .get())
+                .hasMessageContaining("Not support drop column now.");
+        assertThatThrownBy(
+                        () ->
+                                admin.alterTable(
+                                                tablePath,
+                                                Collections.singletonList(
+                                                        TableChange.renameColumn("id", "id2")),
+                                                false)
+                                        .get())
+                .hasMessageContaining("Not support rename column now.");
+        assertThatThrownBy(
+                        () ->
+                                admin.alterTable(
+                                                tablePath,
+                                                Collections.singletonList(
+                                                        TableChange.modifyColumn(
+                                                                "id",
+                                                                DataTypes.INT(),
+                                                                "person id",
+                                                                null)),
+                                                false)
+                                        .get())
+                .hasMessageContaining("Not support modify column now.");
+
+        assertThatThrownBy(
+                        () ->
+                                admin.alterTable(
+                                                tablePath,
+                                                Collections.singletonList(
+                                                        TableChange.addColumn(
+                                                                "c1",
+                                                                DataTypes.STRING().copy(false),
+                                                                null,
+                                                                TableChange.ColumnPosition.last())),
+                                                false)
+                                        .get())
+                .hasMessageContaining("Column c1 must be nullable");
+
+        assertThatThrownBy(
+                        () ->
+                                admin.alterTable(
+                                                tablePath,
+                                                Collections.singletonList(
+                                                        TableChange.addColumn(
+                                                                "c1",
+                                                                DataTypes.STRING().copy(false),
+                                                                null,
+                                                                TableChange.ColumnPosition
+                                                                        .first())),
+                                                false)
+                                        .get())
+                .hasMessageContaining("Unsupported ColumnPositionType: FIRST");
+
+        assertThatThrownBy(
+                        () ->
+                                admin.alterTable(
+                                                tablePath,
+                                                Collections.singletonList(
+                                                        TableChange.addColumn(
+                                                                "c1",
+                                                                DataTypes.STRING().copy(false),
+                                                                null,
+                                                                TableChange.ColumnPosition.after(
+                                                                        "name"))),
+                                                false)
+                                        .get())
+                .hasMessageContaining("Unsupported ColumnPositionType: AFTER(name)");
+
+        admin.alterTable(
+                        tablePath,
+                        Arrays.asList(
+                                TableChange.addColumn(
+                                        "nested_row",
+                                        DataTypes.ROW(DataTypes.STRING(), DataTypes.INT()),
+                                        "new nested column",
+                                        TableChange.ColumnPosition.last()),
+                                TableChange.addColumn(
+                                        "c1",
+                                        DataTypes.STRING(),
+                                        "new column c1",
+                                        TableChange.ColumnPosition.last())),
+                        false)
+                .get();
+
+        Schema expectedSchema =
+                Schema.newBuilder()
+                        .primaryKey("id")
+                        .fromColumns(
+                                Arrays.asList(
+                                        new Schema.Column("id", DataTypes.INT(), "person id", 0),
+                                        new Schema.Column(
+                                                "name", DataTypes.STRING(), "person name", 1),
+                                        new Schema.Column("age", DataTypes.INT(), "person age", 2),
+                                        new Schema.Column(
+                                                "nested_row",
+                                                DataTypes.ROW(
+                                                        DataTypes.FIELD(
+                                                                "f0", DataTypes.STRING(), 4),
+                                                        DataTypes.FIELD("f1", DataTypes.INT(), 5)),
+                                                "new nested column",
+                                                3),
+                                        new Schema.Column(
+                                                "c1", DataTypes.STRING(), "new column c1", 6)))
+                        .build();
+        SchemaInfo schemaInfo = admin.getTableSchema(tablePath).get();
+        assertThat(schemaInfo).isEqualTo(new SchemaInfo(expectedSchema, 2));
+        // test field_id of rowType
+        assertThat(
+                        DataTypeChecks.equalsWithFieldId(
+                                schemaInfo.getSchema().getRowType(), expectedSchema.getRowType()))
+                .isTrue();
     }
 
     @Test
@@ -387,6 +523,47 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         // Get the table and verify delete behavior is changed to IGNORE
         TableInfo tableInfo2 = admin.getTableInfo(tablePath2).join();
         assertThat(tableInfo2.getTableConfig().getDeleteBehavior()).hasValue(DeleteBehavior.IGNORE);
+
+        // Test 2.5: AGGREGATION merge engine - should set delete behavior to IGNORE
+        TablePath tablePathAggregate = TablePath.of("fluss", "test_ignore_delete_for_aggregate");
+        Schema aggregateSchema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("count", DataTypes.BIGINT(), AggFunctions.SUM())
+                        .primaryKey("id")
+                        .build();
+        Map<String, String> propertiesAggregate = new HashMap<>();
+        propertiesAggregate.put(ConfigOptions.TABLE_MERGE_ENGINE.key(), "aggregation");
+        TableDescriptor tableDescriptorAggregate =
+                TableDescriptor.builder()
+                        .schema(aggregateSchema)
+                        .comment("aggregate merge engine table")
+                        .properties(propertiesAggregate)
+                        .build();
+        admin.createTable(tablePathAggregate, tableDescriptorAggregate, false).join();
+        // Get the table and verify delete behavior is changed to IGNORE
+        TableInfo tableInfoAggregate = admin.getTableInfo(tablePathAggregate).join();
+        assertThat(tableInfoAggregate.getTableConfig().getDeleteBehavior())
+                .hasValue(DeleteBehavior.IGNORE);
+
+        // Test 2.6: AGGREGATION merge engine with delete behavior explicitly set to ALLOW - should
+        // be allowed
+        TablePath tablePathAggregateAllow =
+                TablePath.of("fluss", "test_allow_delete_for_aggregate");
+        Map<String, String> propertiesAggregateAllow = new HashMap<>();
+        propertiesAggregateAllow.put(ConfigOptions.TABLE_MERGE_ENGINE.key(), "aggregation");
+        propertiesAggregateAllow.put(ConfigOptions.TABLE_DELETE_BEHAVIOR.key(), "ALLOW");
+        TableDescriptor tableDescriptorAggregateAllow =
+                TableDescriptor.builder()
+                        .schema(aggregateSchema)
+                        .comment("aggregate merge engine table with allow delete")
+                        .properties(propertiesAggregateAllow)
+                        .build();
+        admin.createTable(tablePathAggregateAllow, tableDescriptorAggregateAllow, false).join();
+        // Get the table and verify delete behavior is set to ALLOW
+        TableInfo tableInfoAggregateAllow = admin.getTableInfo(tablePathAggregateAllow).join();
+        assertThat(tableInfoAggregateAllow.getTableConfig().getDeleteBehavior())
+                .hasValue(DeleteBehavior.ALLOW);
 
         // Test 3: FIRST_ROW merge engine with delete behavior explicitly set to ALLOW
         TablePath tablePath3 = TablePath.of("fluss", "test_allow_delete_for_first_row");
@@ -542,7 +719,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                 .cause()
                 .isInstanceOf(InvalidConfigException.class)
                 .hasMessageContaining(
-                        "Currently, Primary Key Table only supports ARROW log format if kv format is COMPACTED.");
+                        "Currently, Primary Key Table supports ARROW or COMPACTED log format when kv format is COMPACTED.");
     }
 
     @Test
@@ -1318,5 +1495,76 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                                 + "because they are reserved system columns in Fluss. "
                                 + "Please use other names for these columns. "
                                 + "The reserved system columns are: __offset, __timestamp, __bucket");
+    }
+
+    @Test
+    public void testAddAndRemoveServerTags() throws Exception {
+        ZooKeeperClient zkClient = FLUSS_CLUSTER_EXTENSION.getZooKeeperClient();
+        // 1.add server tag to a none exists server.
+        assertThatThrownBy(
+                        () ->
+                                admin.addServerTag(
+                                                Collections.singletonList(100),
+                                                ServerTag.PERMANENT_OFFLINE)
+                                        .get())
+                .cause()
+                .isInstanceOf(ServerNotExistException.class)
+                .hasMessageContaining("Server 100 not exists when trying to add server tag.");
+
+        // 2.add server tag for server 0,1.
+        admin.addServerTag(Arrays.asList(0, 1), ServerTag.PERMANENT_OFFLINE).get();
+        assertThat(zkClient.getServerTags()).isPresent();
+        assertThat(zkClient.getServerTags().get().getServerTags())
+                .containsEntry(0, ServerTag.PERMANENT_OFFLINE)
+                .containsEntry(1, ServerTag.PERMANENT_OFFLINE);
+
+        // 3.add different server tag for server 0,2. error will be thrown and tag for 2 will not be
+        // added.
+        assertThatThrownBy(
+                        () ->
+                                admin.addServerTag(Arrays.asList(0, 2), ServerTag.TEMPORARY_OFFLINE)
+                                        .get())
+                .cause()
+                .isInstanceOf(ServerTagAlreadyExistException.class)
+                .hasMessageContaining(
+                        "Server tag PERMANENT_OFFLINE already exists for server 0. However "
+                                + "you want to set it to TEMPORARY_OFFLINE, please remove the server tag first.");
+        Optional<ServerTags> serverTagsOpt = zkClient.getServerTags();
+        assertThat(serverTagsOpt).isPresent();
+        Map<Integer, ServerTag> serverTags = serverTagsOpt.get().getServerTags();
+        assertThat(serverTags.size()).isEqualTo(2);
+        assertThat(serverTags)
+                .containsEntry(0, ServerTag.PERMANENT_OFFLINE)
+                .containsEntry(1, ServerTag.PERMANENT_OFFLINE);
+
+        // 4.remove server tag for server 100
+        assertThatThrownBy(
+                        () ->
+                                admin.removeServerTag(
+                                                Collections.singletonList(100),
+                                                ServerTag.PERMANENT_OFFLINE)
+                                        .get())
+                .cause()
+                .isInstanceOf(ServerNotExistException.class)
+                .hasMessageContaining("Server 100 not exists when trying to removing server tag.");
+
+        // 5.remove server tag for server 0,1.
+        admin.removeServerTag(Arrays.asList(0, 1), ServerTag.PERMANENT_OFFLINE).get();
+        assertThat(zkClient.getServerTags()).isNotPresent();
+
+        // 6.remove server tag for server 2. error will be thrown and tag for 2 will not be removed
+        // as the removed server tag is not equals with the exists one.
+        admin.addServerTag(Collections.singletonList(2), ServerTag.TEMPORARY_OFFLINE).get();
+        assertThatThrownBy(
+                        () ->
+                                admin.removeServerTag(
+                                                Collections.singletonList(2),
+                                                ServerTag.PERMANENT_OFFLINE)
+                                        .get())
+                .cause()
+                .isInstanceOf(ServerTagNotExistException.class)
+                .hasMessageContaining(
+                        "Server tag PERMANENT_OFFLINE not exists for server 2, the current "
+                                + "server tag of this server is TEMPORARY_OFFLINE.");
     }
 }

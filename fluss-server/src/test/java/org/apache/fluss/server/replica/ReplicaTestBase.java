@@ -141,6 +141,7 @@ public class ReplicaTestBase {
     protected TestingCompletedKvSnapshotCommitter snapshotReporter;
     protected TestCoordinatorGateway testCoordinatorGateway;
     private FlussScheduler scheduler;
+    private ExecutorService ioExecutor;
 
     // remote log related
     protected TestingRemoteLogStorage remoteLogStorage;
@@ -167,7 +168,7 @@ public class ReplicaTestBase {
         conf.setString(ConfigOptions.DATA_DIR, tempDir.getAbsolutePath());
         conf.setString(ConfigOptions.COORDINATOR_HOST, "localhost");
         conf.set(ConfigOptions.REMOTE_DATA_DIR, tempDir.getAbsolutePath() + "/remote_data_dir");
-        conf.set(ConfigOptions.REMOTE_LOG_DATA_TRANSFER_THREAD_NUM, 1);
+        conf.set(ConfigOptions.SERVER_IO_POOL_SIZE, 2);
         // set snapshot interval to 1 seconds for test purpose
         conf.set(ConfigOptions.KV_SNAPSHOT_INTERVAL, Duration.ofSeconds(1));
 
@@ -179,6 +180,7 @@ public class ReplicaTestBase {
 
         scheduler = new FlussScheduler(2);
         scheduler.startup();
+        ioExecutor = Executors.newSingleThreadExecutor();
 
         manualClock = new ManualClock(System.currentTimeMillis());
         logManager =
@@ -254,16 +256,16 @@ public class ReplicaTestBase {
         zkClient.registerTable(
                 DATA1_TABLE_PATH,
                 TableRegistration.newTable(DATA1_TABLE_ID, data1NonPkTableDescriptor));
-        zkClient.registerSchema(DATA1_TABLE_PATH, DATA1_SCHEMA);
+        zkClient.registerFirstSchema(DATA1_TABLE_PATH, DATA1_SCHEMA);
         zkClient.registerTable(
                 DATA1_TABLE_PATH_PK,
                 TableRegistration.newTable(DATA1_TABLE_ID_PK, DATA1_TABLE_DESCRIPTOR_PK));
-        zkClient.registerSchema(DATA1_TABLE_PATH_PK, DATA1_SCHEMA_PK);
+        zkClient.registerFirstSchema(DATA1_TABLE_PATH_PK, DATA1_SCHEMA_PK);
 
         zkClient.registerTable(
                 DATA2_TABLE_PATH,
                 TableRegistration.newTable(DATA2_TABLE_ID, DATA2_TABLE_DESCRIPTOR));
-        zkClient.registerSchema(DATA2_TABLE_PATH, DATA2_SCHEMA);
+        zkClient.registerFirstSchema(DATA2_TABLE_PATH, DATA2_SCHEMA);
     }
 
     protected long registerTableInZkClient(
@@ -282,7 +284,7 @@ public class ReplicaTestBase {
             zkClient.deleteTable(tablePath);
         }
         zkClient.registerTable(tablePath, TableRegistration.newTable(tableId, tableDescriptor));
-        zkClient.registerSchema(tablePath, schema);
+        zkClient.registerFirstSchema(tablePath, schema);
         return tableId;
     }
 
@@ -301,8 +303,10 @@ public class ReplicaTestBase {
                 snapshotReporter,
                 NOPErrorHandler.INSTANCE,
                 TestingMetricGroups.TABLET_SERVER_METRICS,
+                TestingMetricGroups.USER_METRICS,
                 remoteLogManager,
-                manualClock);
+                manualClock,
+                ioExecutor);
     }
 
     @AfterEach
@@ -335,6 +339,10 @@ public class ReplicaTestBase {
 
         if (scheduler != null) {
             scheduler.shutdown();
+        }
+
+        if (ioExecutor != null) {
+            ioExecutor.shutdown();
         }
 
         // clear zk environment.
@@ -477,7 +485,7 @@ public class ReplicaTestBase {
     }
 
     private void initRemoteLogEnv() throws Exception {
-        remoteLogStorage = new TestingRemoteLogStorage(conf);
+        remoteLogStorage = new TestingRemoteLogStorage(conf, ioExecutor);
         remoteLogTaskScheduler = new ManuallyTriggeredScheduledExecutorService();
         remoteLogManager =
                 new RemoteLogManager(

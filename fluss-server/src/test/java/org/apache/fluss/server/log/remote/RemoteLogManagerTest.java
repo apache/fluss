@@ -322,6 +322,7 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
         replicaManager.fetchLogRecords(
                 new FetchParams(-1, Integer.MAX_VALUE),
                 Collections.singletonMap(tb, new FetchReqInfo(tb.getTableId(), 0L, 1024 * 1024)),
+                null,
                 future::complete);
         Map<TableBucket, FetchLogResultForBucket> result = future.get();
         assertThat(result.size()).isEqualTo(1);
@@ -341,6 +342,7 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
         replicaManager.fetchLogRecords(
                 new FetchParams(-1, Integer.MAX_VALUE),
                 Collections.singletonMap(tb, new FetchReqInfo(tb.getTableId(), 47, 1024 * 1024)),
+                null,
                 future::complete);
         result = future.get();
         assertThat(result.size()).isEqualTo(1);
@@ -379,6 +381,7 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
         replicaManager.fetchLogRecords(
                 new FetchParams(-1, Integer.MAX_VALUE),
                 Collections.singletonMap(tb, new FetchReqInfo(tb.getTableId(), 0L, 1024 * 1024)),
+                null,
                 future::complete);
         Map<TableBucket, FetchLogResultForBucket> result = future.get();
         assertThat(result.size()).isEqualTo(1);
@@ -398,6 +401,7 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
         replicaManager.fetchLogRecords(
                 new FetchParams(-1, Integer.MAX_VALUE),
                 Collections.singletonMap(tb, new FetchReqInfo(tb.getTableId(), 35, 1024 * 1024)),
+                null,
                 future::complete);
         result = future.get();
         assertThat(result.size()).isEqualTo(1);
@@ -449,6 +453,7 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
         replicaManager.fetchLogRecords(
                 new FetchParams(-1, Integer.MAX_VALUE),
                 Collections.singletonMap(tb, new FetchReqInfo(tb.getTableId(), 20L, 1024 * 1024)),
+                null,
                 future::complete);
         Map<TableBucket, FetchLogResultForBucket> result = future.get();
         assertThat(result.get(tb).fetchFromRemote()).isFalse();
@@ -459,6 +464,7 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
         replicaManager.fetchLogRecords(
                 new FetchParams(-1, Integer.MAX_VALUE),
                 Collections.singletonMap(tb, new FetchReqInfo(tb.getTableId(), 0, 1024 * 1024)),
+                null,
                 future::complete);
         result = future.get();
         assertThat(result.get(tb).fetchFromRemote()).isTrue();

@@ -24,7 +24,6 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.iceberg.BaseCombinedScanTask;
 import org.apache.iceberg.CombinedScanTask;
 import org.apache.iceberg.ContentScanTask;
-import org.apache.iceberg.DataFile;
 import org.apache.iceberg.FileScanTask;
 import org.apache.iceberg.Snapshot;
 import org.apache.iceberg.Table;
@@ -35,6 +34,7 @@ import org.apache.iceberg.io.CloseableIterable;
 import org.apache.iceberg.io.TaskWriter;
 import org.apache.iceberg.io.WriteResult;
 import org.apache.iceberg.util.BinPacking;
+import org.apache.iceberg.util.DataFileSet;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -153,8 +153,8 @@ public class IcebergRewriteDataFiles {
                 return null;
             }
             LOG.info("Start to rewrite files {}.", tasksToRewrite);
-            List<DataFile> deletedDataFiles = new ArrayList<>();
-            List<DataFile> addedDataFiles = new ArrayList<>();
+            DataFileSet deletedDataFiles = DataFileSet.create();
+            DataFileSet addedDataFiles = DataFileSet.create();
             for (CombinedScanTask combinedScanTask : tasksToRewrite) {
                 addedDataFiles.addAll(rewriteFileGroup(combinedScanTask));
                 deletedDataFiles.addAll(
@@ -172,7 +172,7 @@ public class IcebergRewriteDataFiles {
         }
     }
 
-    private List<DataFile> rewriteFileGroup(CombinedScanTask combinedScanTask) throws IOException {
+    private DataFileSet rewriteFileGroup(CombinedScanTask combinedScanTask) throws IOException {
         try (CloseableIterable<Record> records = readDataFile(combinedScanTask);
                 TaskWriter<Record> taskWriter =
                         TaskWriterFactory.createTaskWriter(table, partition, bucket.getBucket())) {
@@ -184,7 +184,7 @@ public class IcebergRewriteDataFiles {
                     rewriteResult.deleteFiles().length == 0,
                     "the delete files should be empty, but got "
                             + Arrays.toString(rewriteResult.deleteFiles()));
-            return Arrays.asList(rewriteResult.dataFiles());
+            return DataFileSet.of(Arrays.asList(rewriteResult.dataFiles()));
         }
     }
 

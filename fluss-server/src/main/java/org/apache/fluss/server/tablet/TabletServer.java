@@ -46,6 +46,7 @@ import org.apache.fluss.server.log.LogManager;
 import org.apache.fluss.server.log.remote.RemoteLogManager;
 import org.apache.fluss.server.metadata.TabletServerMetadataCache;
 import org.apache.fluss.server.metrics.ServerMetricUtils;
+import org.apache.fluss.server.metrics.UserMetrics;
 import org.apache.fluss.server.metrics.group.TabletServerMetricGroup;
 import org.apache.fluss.server.replica.ReplicaManager;
 import org.apache.fluss.server.zk.ZooKeeperClient;
@@ -53,8 +54,10 @@ import org.apache.fluss.server.zk.ZooKeeperUtils;
 import org.apache.fluss.server.zk.data.TabletServerRegistration;
 import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException;
 import org.apache.fluss.utils.ExceptionUtils;
+import org.apache.fluss.utils.ExecutorUtils;
 import org.apache.fluss.utils.clock.Clock;
 import org.apache.fluss.utils.clock.SystemClock;
+import org.apache.fluss.utils.concurrent.ExecutorThreadFactory;
 import org.apache.fluss.utils.concurrent.FlussScheduler;
 import org.apache.fluss.utils.concurrent.FutureUtils;
 import org.apache.fluss.utils.concurrent.Scheduler;
@@ -70,6 +73,9 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.apache.fluss.config.ConfigOptions.BACKGROUND_THREADS;
@@ -123,6 +129,9 @@ public class TabletServer extends ServerBase {
     private MetricRegistry metricRegistry;
 
     @GuardedBy("lock")
+    private UserMetrics userMetrics;
+
+    @GuardedBy("lock")
     private TabletServerMetricGroup tabletServerMetricGroup;
 
     @GuardedBy("lock")
@@ -159,6 +168,9 @@ public class TabletServer extends ServerBase {
     @GuardedBy("lock")
     private CoordinatorGateway coordinatorGateway;
 
+    @GuardedBy("lock")
+    private ExecutorService ioExecutor;
+
     public TabletServer(Configuration conf) {
         this(conf, SystemClock.getInstance());
     }
@@ -186,6 +198,9 @@ public class TabletServer extends ServerBase {
 
             List<Endpoint> endpoints = Endpoint.loadBindEndpoints(conf, ServerType.TABLET_SERVER);
 
+            this.scheduler = new FlussScheduler(conf.get(BACKGROUND_THREADS));
+            scheduler.startup();
+
             // for metrics
             this.metricRegistry = MetricRegistry.create(conf, pluginManager);
             this.tabletServerMetricGroup =
@@ -195,6 +210,7 @@ public class TabletServer extends ServerBase {
                             rack,
                             endpoints.get(0).getHost(),
                             serverId);
+            this.userMetrics = new UserMetrics(scheduler, metricRegistry, tabletServerMetricGroup);
 
             this.zkClient = ZooKeeperUtils.startZookeeperClient(conf, this);
 
@@ -204,12 +220,8 @@ public class TabletServer extends ServerBase {
                     new MetadataManager(zkClient, conf, lakeCatalogDynamicLoader);
             this.dynamicConfigManager = new DynamicConfigManager(zkClient, conf, false);
             dynamicConfigManager.register(lakeCatalogDynamicLoader);
-            dynamicConfigManager.startup();
 
             this.metadataCache = new TabletServerMetadataCache(metadataManager);
-
-            this.scheduler = new FlussScheduler(conf.get(BACKGROUND_THREADS));
-            scheduler.startup();
 
             this.logManager =
                     LogManager.create(conf, zkClient, scheduler, clock, tabletServerMetricGroup);
@@ -217,6 +229,11 @@ public class TabletServer extends ServerBase {
 
             this.kvManager = KvManager.create(conf, zkClient, logManager, tabletServerMetricGroup);
             kvManager.startup();
+
+            // Register kvManager to dynamicConfigManager for dynamic reconfiguration
+            dynamicConfigManager.register(kvManager);
+            // Start dynamicConfigManager after all reconfigurable components are registered
+            dynamicConfigManager.startup();
 
             this.authorizer = AuthorizerLoader.createAuthorizer(conf, zkClient, pluginManager);
             if (authorizer != null) {
@@ -234,6 +251,11 @@ public class TabletServer extends ServerBase {
                             rpcClient,
                             CoordinatorGateway.class);
 
+            this.ioExecutor =
+                    Executors.newFixedThreadPool(
+                            conf.get(ConfigOptions.SERVER_IO_POOL_SIZE),
+                            new ExecutorThreadFactory("tablet-server-io"));
+
             this.replicaManager =
                     new ReplicaManager(
                             conf,
@@ -249,7 +271,9 @@ public class TabletServer extends ServerBase {
                                     rpcClient, metadataCache, interListenerName),
                             this,
                             tabletServerMetricGroup,
-                            clock);
+                            userMetrics,
+                            clock,
+                            ioExecutor);
             replicaManager.startup();
 
             this.tabletService =
@@ -261,7 +285,8 @@ public class TabletServer extends ServerBase {
                             metadataCache,
                             metadataManager,
                             authorizer,
-                            dynamicConfigManager);
+                            dynamicConfigManager,
+                            ioExecutor);
 
             RequestsMetrics requestsMetrics =
                     RequestsMetrics.createTabletServerRequestMetrics(tabletServerMetricGroup);
@@ -284,7 +309,7 @@ public class TabletServer extends ServerBase {
     @Override
     protected CompletableFuture<Result> closeAsync(Result result) {
         if (isShutDown.compareAndSet(false, true)) {
-
+            LOG.info("Shutting down Tablet server ({}).", result);
             controlledShutDown();
 
             CompletableFuture<Void> serviceShutdownFuture = stopServices();
@@ -382,10 +407,6 @@ public class TabletServer extends ServerBase {
             }
 
             try {
-                if (zkClient != null) {
-                    zkClient.close();
-                }
-
                 // TODO currently, rpc client don't have timeout logic. After implementing the
                 // timeout logic, we need to move the closure of rpc client to after the closure of
                 // replica manager.
@@ -395,6 +416,10 @@ public class TabletServer extends ServerBase {
 
                 if (clientMetricGroup != null) {
                     clientMetricGroup.close();
+                }
+
+                if (userMetrics != null) {
+                    userMetrics.close();
                 }
 
                 // We must shut down the scheduler early because otherwise, the scheduler could
@@ -431,6 +456,14 @@ public class TabletServer extends ServerBase {
                     lakeCatalogDynamicLoader.close();
                 }
 
+                if (zkClient != null) {
+                    zkClient.close();
+                }
+
+                if (ioExecutor != null) {
+                    // shutdown io executor
+                    ExecutorUtils.gracefulShutdown(5, TimeUnit.SECONDS, ioExecutor);
+                }
             } catch (Throwable t) {
                 exception = ExceptionUtils.firstOrSuppressed(t, exception);
             }

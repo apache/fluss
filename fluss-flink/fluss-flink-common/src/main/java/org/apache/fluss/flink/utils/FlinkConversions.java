@@ -21,6 +21,7 @@ import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.config.ConfigOption;
 import org.apache.fluss.config.MemorySize;
 import org.apache.fluss.config.Password;
+import org.apache.fluss.flink.adapter.CatalogTableAdapter;
 import org.apache.fluss.flink.catalog.FlinkCatalogFactory;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.Schema;
@@ -58,12 +59,15 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.stream.Collectors;
 
 import static org.apache.flink.table.factories.FactoryUtil.CONNECTOR;
 import static org.apache.flink.table.utils.EncodingUtils.decodeBase64ToBytes;
 import static org.apache.flink.table.utils.EncodingUtils.encodeBytesToBase64;
 import static org.apache.flink.util.Preconditions.checkNotNull;
+import static org.apache.flink.util.Preconditions.checkState;
+import static org.apache.fluss.config.ConfigOptions.TABLE_AUTO_INCREMENT_FIELDS;
 import static org.apache.fluss.config.FlussConfigUtils.isTableStorageConfig;
 import static org.apache.fluss.flink.FlinkConnectorOptions.BUCKET_KEY;
 import static org.apache.fluss.flink.FlinkConnectorOptions.BUCKET_NUMBER;
@@ -194,20 +198,38 @@ public class FlinkConversions {
         }
 
         // first build schema with physical columns
-        Schema schema =
-                schemBuilder
-                        .fromColumns(
-                                resolvedSchema.getColumns().stream()
-                                        .filter(Column::isPhysical)
-                                        .map(
-                                                column ->
-                                                        new Schema.Column(
-                                                                column.getName(),
-                                                                FlinkConversions.toFlussType(
-                                                                        column.getDataType()),
-                                                                column.getComment().orElse(null)))
-                                        .collect(Collectors.toList()))
-                        .build();
+        resolvedSchema.getColumns().stream()
+                .filter(Column::isPhysical)
+                .forEachOrdered(
+                        column -> {
+                            schemBuilder
+                                    .column(
+                                            column.getName(),
+                                            FlinkConversions.toFlussType(column.getDataType()))
+                                    .withComment(column.getComment().orElse(null));
+                        });
+
+        // convert some flink options to fluss table configs.
+        Map<String, String> storageProperties =
+                convertFlinkOptionsToFlussTableProperties(flinkTableConf);
+
+        if (storageProperties.containsKey(TABLE_AUTO_INCREMENT_FIELDS.key())) {
+            for (String autoIncrementColumn :
+                    storageProperties.get(TABLE_AUTO_INCREMENT_FIELDS.key()).split(",")) {
+                schemBuilder.enableAutoIncrement(autoIncrementColumn);
+            }
+        }
+
+        // serialize computed column and watermark spec to custom properties
+        Map<String, String> customProperties =
+                extractCustomProperties(flinkTableConf, storageProperties);
+        CatalogPropertiesUtils.serializeComputedColumns(
+                customProperties, resolvedSchema.getColumns());
+        CatalogPropertiesUtils.serializeWatermarkSpecs(
+                customProperties, catalogBaseTable.getResolvedSchema().getWatermarkSpecs());
+
+        Schema schema = schemBuilder.build();
+
         resolvedSchema.getColumns().stream()
                 .filter(col -> col instanceof Column.MetadataColumn)
                 .findAny()
@@ -223,14 +245,8 @@ public class FlinkConversions {
                         ? ((ResolvedCatalogTable) catalogBaseTable).getPartitionKeys()
                         : ((ResolvedCatalogMaterializedTable) catalogBaseTable).getPartitionKeys();
 
-        Map<String, String> customProperties = flinkTableConf.toMap();
-        CatalogPropertiesUtils.serializeComputedColumns(
-                customProperties, resolvedSchema.getColumns());
-        CatalogPropertiesUtils.serializeWatermarkSpecs(
-                customProperties, catalogBaseTable.getResolvedSchema().getWatermarkSpecs());
-
         // Set materialized table flags to fluss table custom properties
-        if (CatalogBaseTable.TableKind.MATERIALIZED_TABLE == tableKind) {
+        if (CatalogTableAdapter.isMaterializedTable(tableKind)) {
             CatalogMaterializedTable.RefreshMode refreshMode =
                     ((ResolvedCatalogMaterializedTable) catalogBaseTable).getRefreshMode();
             if (refreshMode == CatalogMaterializedTable.RefreshMode.FULL) {
@@ -242,9 +258,6 @@ public class FlinkConversions {
         }
 
         String comment = catalogBaseTable.getComment();
-
-        // convert some flink options to fluss table configs.
-        Map<String, String> properties = convertFlinkOptionsToFlussTableProperties(flinkTableConf);
 
         // then set distributed by information
         List<String> bucketKey;
@@ -273,7 +286,7 @@ public class FlinkConversions {
                 .partitionedBy(partitionKeys)
                 .distributedBy(bucketNum, bucketKey)
                 .comment(comment)
-                .properties(properties)
+                .properties(storageProperties)
                 .customProperties(customProperties)
                 .build();
     }
@@ -394,6 +407,44 @@ public class FlinkConversions {
             return Collections.singletonList(
                     convertSetOption(
                             (org.apache.flink.table.catalog.TableChange.SetOption) tableChange));
+        } else if (tableChange instanceof org.apache.flink.table.catalog.TableChange.AddColumn) {
+            org.apache.flink.table.catalog.TableChange.AddColumn addColumn =
+                    (org.apache.flink.table.catalog.TableChange.AddColumn) tableChange;
+            Column column = addColumn.getColumn();
+            return Collections.singletonList(
+                    TableChange.addColumn(
+                            column.getName(),
+                            toFlussType(column.getDataType()),
+                            column.getComment().orElse(null),
+                            toFlussColumnPosition(addColumn.getPosition())));
+        } else if (tableChange instanceof org.apache.flink.table.catalog.TableChange.DropColumn) {
+            return Collections.singletonList(
+                    TableChange.dropColumn(
+                            ((org.apache.flink.table.catalog.TableChange.DropColumn) tableChange)
+                                    .getColumnName()));
+        } else if (tableChange
+                instanceof org.apache.flink.table.catalog.TableChange.ModifyColumnName) {
+            org.apache.flink.table.catalog.TableChange.ModifyColumnName renameColumn =
+                    (org.apache.flink.table.catalog.TableChange.ModifyColumnName) tableChange;
+            return Collections.singletonList(
+                    TableChange.renameColumn(
+                            renameColumn.getOldColumn().getName(),
+                            renameColumn.getNewColumnName()));
+        } else if (tableChange instanceof org.apache.flink.table.catalog.TableChange.ModifyColumn) {
+            org.apache.flink.table.catalog.TableChange.ModifyColumn modifyColumn =
+                    (org.apache.flink.table.catalog.TableChange.ModifyColumn) tableChange;
+            checkState(
+                    Objects.equals(
+                            modifyColumn.getNewColumn().getName(),
+                            modifyColumn.getOldColumn().getName()),
+                    "Can only modify columns with the same name.");
+            Column newColumn = modifyColumn.getNewColumn();
+            return Collections.singletonList(
+                    TableChange.modifyColumn(
+                            newColumn.getName(),
+                            toFlussType(newColumn.getDataType()),
+                            newColumn.getComment().orElse(null),
+                            toFlussColumnPosition(modifyColumn.getNewPosition())));
         } else if (tableChange instanceof org.apache.flink.table.catalog.TableChange.ResetOption) {
             return Collections.singletonList(
                     convertResetOption(
@@ -405,6 +456,21 @@ public class FlinkConversions {
         } else {
             throw new UnsupportedOperationException(
                     String.format("Unsupported flink table change: %s.", tableChange));
+        }
+    }
+
+    private static TableChange.ColumnPosition toFlussColumnPosition(
+            org.apache.flink.table.catalog.TableChange.ColumnPosition columnPosition) {
+        if (columnPosition == null) {
+            return TableChange.ColumnPosition.last();
+        } else if (columnPosition instanceof org.apache.flink.table.catalog.TableChange.First) {
+            return TableChange.ColumnPosition.first();
+        } else if (columnPosition instanceof org.apache.flink.table.catalog.TableChange.After) {
+            return TableChange.ColumnPosition.after(
+                    ((org.apache.flink.table.catalog.TableChange.After) columnPosition).column());
+        } else {
+            throw new UnsupportedOperationException(
+                    String.format("Unsupported column position: %s.", columnPosition));
         }
     }
 
@@ -580,5 +646,12 @@ public class FlinkConversions {
                 .refreshHandlerDescription(refreshHandlerDesc)
                 .serializedRefreshHandler(refreshHandlerBytes);
         return builder.build();
+    }
+
+    private static Map<String, String> extractCustomProperties(
+            Configuration allProperties, Map<String, String> flussTableProperties) {
+        Map<String, String> customProperties = new HashMap<>(allProperties.toMap());
+        customProperties.keySet().removeAll(flussTableProperties.keySet());
+        return customProperties;
     }
 }

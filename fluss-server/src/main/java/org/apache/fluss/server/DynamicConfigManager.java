@@ -21,6 +21,7 @@ import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.cluster.AlterConfig;
 import org.apache.fluss.config.cluster.ConfigEntry;
+import org.apache.fluss.config.cluster.ConfigValidator;
 import org.apache.fluss.config.cluster.ServerReconfigurable;
 import org.apache.fluss.exception.ConfigException;
 import org.apache.fluss.server.authorizer.ZkNodeChangeNotificationWatcher;
@@ -74,6 +75,19 @@ public class DynamicConfigManager {
     /** Register a ServerReconfigurable which listens to configuration changes. */
     public void register(ServerReconfigurable serverReconfigurable) {
         dynamicServerConfig.register(serverReconfigurable);
+    }
+
+    /**
+     * Register a ConfigValidator for stateless validation.
+     *
+     * <p>Typically used by CoordinatorServer to validate configs for components it doesn't run
+     * (e.g., KvManager). Validators are stateless and only perform validation without requiring
+     * component instances.
+     *
+     * @param validator the config validator to register
+     */
+    public void registerValidator(ConfigValidator validator) {
+        dynamicServerConfig.registerValidator(validator);
     }
 
     public void close() {

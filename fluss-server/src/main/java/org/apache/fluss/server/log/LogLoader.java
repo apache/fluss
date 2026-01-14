@@ -23,6 +23,7 @@ import org.apache.fluss.exception.InvalidOffsetException;
 import org.apache.fluss.exception.LogSegmentOffsetOverflowException;
 import org.apache.fluss.exception.LogStorageException;
 import org.apache.fluss.metadata.LogFormat;
+import org.apache.fluss.server.exception.CorruptIndexException;
 import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.types.Tuple2;
 
@@ -124,37 +125,6 @@ final class LogLoader {
     }
 
     /**
-     * Just recovers the given segment, without adding it to the provided segments.
-     *
-     * @param segment Segment to recover
-     * @return The number of bytes truncated from the segment
-     * @throws LogSegmentOffsetOverflowException if the segment contains messages that cause index
-     *     offset overflow
-     */
-    private int recoverSegment(LogSegment segment) throws IOException {
-        WriterStateManager writerStateManager =
-                new WriterStateManager(
-                        logSegments.getTableBucket(),
-                        logTabletDir,
-                        this.writerStateManager.writerExpirationMs());
-        // TODO, Here, we use 0 as the logStartOffset passed into rebuildWriterState. The reason is
-        // that the current implementation of logStartOffset in Fluss is not yet fully refined, and
-        // there may be cases where logStartOffset is not updated. As a result, logStartOffset is
-        // not yet reliable. Once the issue with correctly updating logStartOffset is resolved in
-        // issue https://github.com/apache/fluss/issues/744, we can use logStartOffset here.
-        // Additionally, using 0 versus using logStartOffset does not affect correctness—they both
-        // can restore the complete WriterState. The only difference is that using logStartOffset
-        // can potentially skip over more segments.
-        LogTablet.rebuildWriterState(
-                writerStateManager, logSegments, 0, segment.getBaseOffset(), false);
-        int bytesTruncated = segment.recover();
-        // once we have recovered the segment's data, take a snapshot to ensure that we won't
-        // need to reload the same segment again while recovering another segment.
-        writerStateManager.takeSnapshot();
-        return bytesTruncated;
-    }
-
-    /**
      * Recover the log segments (if there was an unclean shutdown). Ensures there is at least one
      * active segment, and returns the updated recovery point and next offset after recovery.
      *
@@ -183,11 +153,20 @@ final class LogLoader {
                         numUnflushed,
                         logSegments.getTableBucket());
 
-                int truncatedBytes = -1;
                 try {
-                    truncatedBytes = recoverSegment(segment);
-                } catch (Exception e) {
-                    if (e instanceof InvalidOffsetException) {
+                    segment.sanityCheck();
+                } catch (NoSuchFileException | CorruptIndexException e) {
+                    LOG.warn(
+                            "Found invalid index file corresponding log file {} for bucket {}, "
+                                    + "recovering segment and rebuilding index files...",
+                            segment.getFileLogRecords().file().getAbsoluteFile(),
+                            logSegments.getTableBucket(),
+                            e);
+
+                    int truncatedBytes = -1;
+                    try {
+                        truncatedBytes = recoverSegment(segment);
+                    } catch (InvalidOffsetException invalidOffsetException) {
                         long startOffset = segment.getBaseOffset();
                         LOG.warn(
                                 "Found invalid offset during recovery for bucket {}. Deleting the corrupt segment "
@@ -195,28 +174,25 @@ final class LogLoader {
                                 logSegments.getTableBucket(),
                                 startOffset);
                         truncatedBytes = segment.truncateTo(startOffset);
-                    } else {
-                        throw e;
+                    }
+
+                    if (truncatedBytes > 0) {
+                        // we had an invalid message, delete all remaining log
+                        LOG.warn(
+                                "Corruption found in segment {} for bucket {}, truncating to offset {}",
+                                segment.getBaseOffset(),
+                                logSegments.getTableBucket(),
+                                segment.readNextOffset());
+                        removeAndDeleteSegments(unflushedIter);
+                        truncated = true;
                     }
                 }
-
-                if (truncatedBytes > 0) {
-                    // we had an invalid message, delete all remaining log
-                    LOG.warn(
-                            "Corruption found in segment {} for bucket {}, truncating to offset {}",
-                            segment.getBaseOffset(),
-                            logSegments.getTableBucket(),
-                            segment.readNextOffset());
-                    removeAndDeleteSegments(unflushedIter);
-                    truncated = true;
-                } else {
-                    numFlushed += 1;
-                }
+                numFlushed += 1;
             }
         }
 
+        // TODO truncate log to recover maybe unflush segments.
         if (logSegments.isEmpty()) {
-            // TODO: use logStartOffset if issue https://github.com/apache/fluss/issues/744 ready
             logSegments.add(LogSegment.open(logTabletDir, 0L, conf, logFormat));
         }
         long logEndOffset = logSegments.lastSegment().get().readNextOffset();
@@ -266,6 +242,37 @@ final class LogLoader {
         }
     }
 
+    /**
+     * Just recovers the given segment, without adding it to the provided segments.
+     *
+     * @param segment Segment to recover
+     * @return The number of bytes truncated from the segment
+     * @throws LogSegmentOffsetOverflowException if the segment contains messages that cause index
+     *     offset overflow
+     */
+    private int recoverSegment(LogSegment segment) throws IOException {
+        WriterStateManager writerStateManager =
+                new WriterStateManager(
+                        logSegments.getTableBucket(),
+                        logTabletDir,
+                        this.writerStateManager.writerExpirationMs());
+        // TODO, Here, we use 0 as the logStartOffset passed into rebuildWriterState. The reason is
+        // that the current implementation of logStartOffset in Fluss is not yet fully refined, and
+        // there may be cases where logStartOffset is not updated. As a result, logStartOffset is
+        // not yet reliable. Once the issue with correctly updating logStartOffset is resolved in
+        // issue https://github.com/apache/fluss/issues/744, we can use logStartOffset here.
+        // Additionally, using 0 versus using logStartOffset does not affect correctness—they both
+        // can restore the complete WriterState. The only difference is that using logStartOffset
+        // can potentially skip over more segments.
+        LogTablet.rebuildWriterState(
+                writerStateManager, logSegments, 0, segment.getBaseOffset(), false);
+        int bytesTruncated = segment.recover();
+        // once we have recovered the segment's data, take a snapshot to ensure that we won't
+        // need to reload the same segment again while recovering another segment.
+        writerStateManager.takeSnapshot();
+        return bytesTruncated;
+    }
+
     /** Loads segments from disk into the provided segments. */
     private void loadSegmentFiles() throws IOException {
         File[] sortedFiles = logTabletDir.listFiles();
@@ -285,28 +292,8 @@ final class LogLoader {
                         }
                     } else if (LocalLog.isLogFile(file)) {
                         long baseOffset = FlussPaths.offsetFromFile(file);
-                        boolean timeIndexFileNewlyCreated =
-                                !FlussPaths.timeIndexFile(logTabletDir, baseOffset).exists();
                         LogSegment segment =
                                 LogSegment.open(logTabletDir, baseOffset, conf, true, 0, logFormat);
-
-                        try {
-                            segment.sanityCheck(timeIndexFileNewlyCreated);
-                        } catch (IOException e) {
-                            if (e instanceof NoSuchFileException) {
-                                if (isCleanShutdown
-                                        || segment.getBaseOffset() < recoveryPointCheckpoint) {
-                                    LOG.error(
-                                            "Could not find offset index file corresponding to log file {} "
-                                                    + "for bucket {}, recovering segment and rebuilding index files...",
-                                            logSegments.getTableBucket(),
-                                            segment.getFileLogRecords().file().getAbsoluteFile());
-                                }
-                                recoverSegment(segment);
-                            } else {
-                                throw e;
-                            }
-                        }
                         logSegments.add(segment);
                     }
                 }

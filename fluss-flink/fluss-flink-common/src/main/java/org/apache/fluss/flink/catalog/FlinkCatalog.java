@@ -23,6 +23,7 @@ import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.InvalidTableException;
+import org.apache.fluss.flink.adapter.CatalogTableAdapter;
 import org.apache.fluss.flink.lake.LakeFlinkCatalog;
 import org.apache.fluss.flink.procedure.ProcedureManager;
 import org.apache.fluss.flink.utils.CatalogExceptionUtils;
@@ -38,6 +39,7 @@ import org.apache.fluss.utils.ExceptionUtils;
 import org.apache.fluss.utils.IOUtils;
 
 import org.apache.flink.annotation.VisibleForTesting;
+import org.apache.flink.table.api.Schema;
 import org.apache.flink.table.catalog.AbstractCatalog;
 import org.apache.flink.table.catalog.CatalogBaseTable;
 import org.apache.flink.table.catalog.CatalogDatabase;
@@ -80,11 +82,14 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
 import static org.apache.flink.util.Preconditions.checkArgument;
 import static org.apache.fluss.config.ConfigOptions.BOOTSTRAP_SERVERS;
 import static org.apache.fluss.flink.FlinkConnectorOptions.ALTER_DISALLOW_OPTIONS;
+import static org.apache.fluss.flink.adapter.SchemaAdapter.supportIndex;
+import static org.apache.fluss.flink.adapter.SchemaAdapter.withIndex;
 import static org.apache.fluss.flink.utils.CatalogExceptionUtils.isPartitionAlreadyExists;
 import static org.apache.fluss.flink.utils.CatalogExceptionUtils.isPartitionInvalid;
 import static org.apache.fluss.flink.utils.CatalogExceptionUtils.isPartitionNotExist;
@@ -115,6 +120,8 @@ public class FlinkCatalog extends AbstractCatalog {
     protected final String bootstrapServers;
     protected final Map<String, String> securityConfigs;
     protected final LakeFlinkCatalog lakeFlinkCatalog;
+    protected volatile Map<String, String> lakeCatalogProperties;
+    protected final Supplier<Map<String, String>> lakeCatalogPropertiesSupplier;
     protected Connection connection;
     protected Admin admin;
 
@@ -123,14 +130,35 @@ public class FlinkCatalog extends AbstractCatalog {
             String defaultDatabase,
             String bootstrapServers,
             ClassLoader classLoader,
-            Map<String, String> securityConfigs) {
+            Map<String, String> securityConfigs,
+            Supplier<Map<String, String>> lakeCatalogPropertiesSupplier) {
+        this(
+                name,
+                defaultDatabase,
+                bootstrapServers,
+                classLoader,
+                securityConfigs,
+                lakeCatalogPropertiesSupplier,
+                new LakeFlinkCatalog(name, classLoader));
+    }
+
+    @VisibleForTesting
+    public FlinkCatalog(
+            String name,
+            String defaultDatabase,
+            String bootstrapServers,
+            ClassLoader classLoader,
+            Map<String, String> securityConfigs,
+            Supplier<Map<String, String>> lakeCatalogPropertiesSupplier,
+            LakeFlinkCatalog lakeFlinkCatalog) {
         super(name, defaultDatabase);
         this.catalogName = name;
         this.defaultDatabase = defaultDatabase;
         this.bootstrapServers = bootstrapServers;
         this.classLoader = classLoader;
         this.securityConfigs = securityConfigs;
-        this.lakeFlinkCatalog = new LakeFlinkCatalog(catalogName, classLoader);
+        this.lakeCatalogPropertiesSupplier = lakeCatalogPropertiesSupplier;
+        this.lakeFlinkCatalog = lakeFlinkCatalog;
     }
 
     @Override
@@ -158,6 +186,7 @@ public class FlinkCatalog extends AbstractCatalog {
     public void close() throws CatalogException {
         IOUtils.closeQuietly(admin, "fluss-admin");
         IOUtils.closeQuietly(connection, "fluss-connection");
+        IOUtils.closeQuietly(lakeFlinkCatalog, "fluss-lake-catalog");
     }
 
     @Override
@@ -294,8 +323,12 @@ public class FlinkCatalog extends AbstractCatalog {
                                             objectPath.getDatabaseName(),
                                             tableName.split("\\" + LAKE_TABLE_SPLITTER)[0])));
                 }
+
                 return getLakeTable(
-                        objectPath.getDatabaseName(), tableName, tableInfo.getProperties());
+                        objectPath.getDatabaseName(),
+                        tableName,
+                        tableInfo.getProperties(),
+                        getLakeCatalogProperties());
             } else {
                 tableInfo = admin.getTableInfo(tablePath).get();
             }
@@ -306,8 +339,20 @@ public class FlinkCatalog extends AbstractCatalog {
             Map<String, String> newOptions = new HashMap<>(catalogBaseTable.getOptions());
             newOptions.put(BOOTSTRAP_SERVERS.key(), bootstrapServers);
             newOptions.putAll(securityConfigs);
+            // add lake properties
+            if (tableInfo.getTableConfig().isDataLakeEnabled()) {
+                for (Map.Entry<String, String> lakePropertyEntry :
+                        getLakeCatalogProperties().entrySet()) {
+                    String key = "table.datalake." + lakePropertyEntry.getKey();
+                    newOptions.put(key, lakePropertyEntry.getValue());
+                }
+            }
             if (CatalogBaseTable.TableKind.TABLE == catalogBaseTable.getTableKind()) {
-                return ((CatalogTable) catalogBaseTable).copy(newOptions);
+                CatalogTable table = ((CatalogTable) catalogBaseTable).copy(newOptions);
+                if (supportIndex()) {
+                    table = wrapWithIndexes(table, tableInfo);
+                }
+                return table;
             } else if (CatalogBaseTable.TableKind.MATERIALIZED_TABLE
                     == catalogBaseTable.getTableKind()) {
                 return ((CatalogMaterializedTable) catalogBaseTable).copy(newOptions);
@@ -329,7 +374,10 @@ public class FlinkCatalog extends AbstractCatalog {
     }
 
     protected CatalogBaseTable getLakeTable(
-            String databaseName, String tableName, Configuration properties)
+            String databaseName,
+            String tableName,
+            Configuration properties,
+            Map<String, String> lakeCatalogProperties)
             throws TableNotExistException, CatalogException {
         String[] tableComponents = tableName.split("\\" + LAKE_TABLE_SPLITTER);
         if (tableComponents.length == 1) {
@@ -341,7 +389,7 @@ public class FlinkCatalog extends AbstractCatalog {
             tableName = String.join("", tableComponents);
         }
         return lakeFlinkCatalog
-                .getLakeCatalog(properties)
+                .getLakeCatalog(properties, lakeCatalogProperties)
                 .getTable(new ObjectPath(databaseName, tableName));
     }
 
@@ -753,5 +801,65 @@ public class FlinkCatalog extends AbstractCatalog {
     @VisibleForTesting
     public Map<String, String> getSecurityConfigs() {
         return securityConfigs;
+    }
+
+    @VisibleForTesting
+    public Map<String, String> getLakeCatalogProperties() {
+        if (lakeCatalogProperties == null) {
+            synchronized (this) {
+                if (lakeCatalogProperties == null) {
+                    lakeCatalogProperties = lakeCatalogPropertiesSupplier.get();
+                }
+            }
+        }
+        return lakeCatalogProperties;
+    }
+
+    private CatalogTable wrapWithIndexes(CatalogTable table, TableInfo tableInfo) {
+
+        Optional<Schema.UnresolvedPrimaryKey> pkOp = table.getUnresolvedSchema().getPrimaryKey();
+        // If there is no pk, return directly.
+        if (!pkOp.isPresent()) {
+            return table;
+        }
+
+        List<List<String>> indexes = new ArrayList<>();
+        // Pk is always an index.
+        indexes.add(pkOp.get().getColumnNames());
+
+        // Judge whether we can do prefix lookup.
+        List<String> bucketKeys = tableInfo.getBucketKeys();
+        // For partition table, the physical primary key is the primary key that excludes the
+        // partition key
+        List<String> physicalPrimaryKeys = tableInfo.getPhysicalPrimaryKeys();
+        List<String> indexKeys = new ArrayList<>();
+        if (isPrefixList(physicalPrimaryKeys, bucketKeys)) {
+            indexKeys.addAll(bucketKeys);
+            if (tableInfo.isPartitioned()) {
+                indexKeys.addAll(tableInfo.getPartitionKeys());
+            }
+        }
+
+        if (!indexKeys.isEmpty()) {
+            indexes.add(indexKeys);
+        }
+        return CatalogTableAdapter.toCatalogTable(
+                withIndex(table.getUnresolvedSchema(), indexes),
+                table.getComment(),
+                table.getPartitionKeys(),
+                table.getOptions());
+    }
+
+    private static boolean isPrefixList(List<String> fullList, List<String> prefixList) {
+        if (fullList.size() <= prefixList.size()) {
+            return false;
+        }
+
+        for (int i = 0; i < prefixList.size(); i++) {
+            if (!fullList.get(i).equals(prefixList.get(i))) {
+                return false;
+            }
+        }
+        return true;
     }
 }

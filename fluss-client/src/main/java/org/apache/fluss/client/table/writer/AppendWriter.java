@@ -31,10 +31,10 @@ import java.util.concurrent.CompletableFuture;
 public interface AppendWriter extends TableWriter {
 
     /**
-     * Append row into a Log Table.
+     * Append a record into a Log Table.
      *
-     * @param row the row to append.
+     * @param record the record to append.
      * @return A {@link CompletableFuture} that always returns append result when complete normally.
      */
-    CompletableFuture<AppendResult> append(InternalRow row);
+    CompletableFuture<AppendResult> append(InternalRow record);
 }

@@ -39,7 +39,7 @@ import java.util.Map;
 public class TestingLakeTieringFactory
         implements LakeTieringFactory<TestingWriteResult, TestingCommittable> {
 
-    @Nullable private final TestingLakeCommitter testingLakeCommitter;
+    @Nullable private TestingLakeCommitter testingLakeCommitter;
 
     public TestingLakeTieringFactory(@Nullable TestingLakeCommitter testingLakeCommitter) {
         this.testingLakeCommitter = testingLakeCommitter;
@@ -63,7 +63,10 @@ public class TestingLakeTieringFactory
     @Override
     public LakeCommitter<TestingWriteResult, TestingCommittable> createLakeCommitter(
             CommitterInitContext committerInitContext) throws IOException {
-        return testingLakeCommitter == null ? new TestingLakeCommitter() : testingLakeCommitter;
+        if (testingLakeCommitter == null) {
+            this.testingLakeCommitter = new TestingLakeCommitter();
+        }
+        return testingLakeCommitter;
     }
 
     @Override
@@ -96,16 +99,14 @@ public class TestingLakeTieringFactory
 
         private long currentSnapshot;
 
-        @Nullable private final CommittedLakeSnapshot mockCommittedSnapshot;
+        @Nullable private final CommittedLakeSnapshot mockMissingCommittedLakeSnapshot;
 
         public TestingLakeCommitter() {
             this(null);
         }
 
-        public TestingLakeCommitter(@Nullable CommittedLakeSnapshot mockCommittedSnapshot) {
-            this.mockCommittedSnapshot = mockCommittedSnapshot;
-            this.currentSnapshot =
-                    mockCommittedSnapshot == null ? 0 : mockCommittedSnapshot.getLakeSnapshotId();
+        public TestingLakeCommitter(CommittedLakeSnapshot mockMissingCommittedLakeSnapshot) {
+            this.mockMissingCommittedLakeSnapshot = mockMissingCommittedLakeSnapshot;
         }
 
         @Override
@@ -132,11 +133,10 @@ public class TestingLakeTieringFactory
         @Override
         public @Nullable CommittedLakeSnapshot getMissingLakeSnapshot(
                 @Nullable Long knownSnapshotId) throws IOException {
-            if (knownSnapshotId == null) {
-                return mockCommittedSnapshot;
-            } else {
-                return null;
+            if (mockMissingCommittedLakeSnapshot != null && knownSnapshotId == null) {
+                return mockMissingCommittedLakeSnapshot;
             }
+            return null;
         }
 
         @Override

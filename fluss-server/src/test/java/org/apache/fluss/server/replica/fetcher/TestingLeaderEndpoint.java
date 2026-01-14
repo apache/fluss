@@ -92,6 +92,7 @@ public class TestingLeaderEndpoint implements LeaderEndpoint {
                 new FetchParams(
                         fetchLogRequest.getFollowerServerId(), fetchLogRequest.getMaxBytes()),
                 fetchLogData,
+                null,
                 result ->
                         response.complete(
                                 new FetchData(new FetchLogResponse(), processResult(result))));

@@ -30,6 +30,8 @@ import org.apache.fluss.rpc.messages.ControlledShutdownRequest;
 import org.apache.fluss.rpc.messages.ControlledShutdownResponse;
 import org.apache.fluss.rpc.messages.LakeTieringHeartbeatRequest;
 import org.apache.fluss.rpc.messages.LakeTieringHeartbeatResponse;
+import org.apache.fluss.rpc.messages.PrepareLakeTableSnapshotRequest;
+import org.apache.fluss.rpc.messages.PrepareLakeTableSnapshotResponse;
 import org.apache.fluss.rpc.protocol.ApiKeys;
 import org.apache.fluss.rpc.protocol.RPC;
 
@@ -65,6 +67,32 @@ public interface CoordinatorGateway extends RpcGateway, AdminGateway {
     @RPC(api = ApiKeys.COMMIT_REMOTE_LOG_MANIFEST)
     CompletableFuture<CommitRemoteLogManifestResponse> commitRemoteLogManifest(
             CommitRemoteLogManifestRequest request);
+
+    /**
+     * Prepares lake table snapshots by merging them with existing snapshots and storing them to the
+     * remote file system.
+     *
+     * <p>This method is called during the two-phase commit process for lake table snapshots. It
+     * performs the following operations for each table in the request:
+     *
+     * <ul>
+     *   <li>Merges the new snapshot with the previous latest snapshot (if exists) to ensure
+     *       completeness
+     *   <li>Stores the merged snapshot to the remote file system. The stored file contains the log
+     *       end offset information for each bucket in the table
+     *   <li>Returns the file path where the snapshot is stored
+     *   <li>Call {@link #commitLakeTableSnapshot(CommitLakeTableSnapshotRequest)} with the offset
+     *       file path to finalize the snapshot commit to ZooKeeper in the second phase.
+     * </ul>
+     *
+     * @param request the request containing lake table snapshot information for one or more tables
+     * @return a future that completes with a response containing the file paths where snapshots
+     *     (containing bucket log end offset information) are stored, or error information for
+     *     tables that failed to process
+     */
+    @RPC(api = ApiKeys.PREPARE_LAKE_TABLE_SNAPSHOT)
+    CompletableFuture<PrepareLakeTableSnapshotResponse> prepareLakeTableSnapshot(
+            PrepareLakeTableSnapshotRequest request);
 
     /**
      * Commit lakehouse table snapshot to Fluss.

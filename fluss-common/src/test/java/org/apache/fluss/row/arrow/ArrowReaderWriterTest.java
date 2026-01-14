@@ -21,8 +21,9 @@ import org.apache.fluss.memory.AbstractPagedOutputView;
 import org.apache.fluss.memory.ManagedPagedOutputView;
 import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.memory.TestingMemorySegmentPool;
-import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.Decimal;
+import org.apache.fluss.row.GenericArray;
+import org.apache.fluss.row.GenericMap;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.TimestampLtz;
@@ -48,6 +49,7 @@ import static org.apache.fluss.record.LogRecordBatch.CURRENT_LOG_MAGIC_VALUE;
 import static org.apache.fluss.record.LogRecordBatchFormat.arrowChangeTypeOffset;
 import static org.apache.fluss.record.TestData.DATA1;
 import static org.apache.fluss.record.TestData.DATA1_ROW_TYPE;
+import static org.apache.fluss.row.BinaryString.fromString;
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.apache.fluss.testutils.InternalRowAssert.assertThatRow;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -55,6 +57,12 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Tests for {@link ArrowReader} and {@link ArrowWriter}. */
 class ArrowReaderWriterTest {
+
+    private static final DataType NESTED_DATA_TYPE =
+            DataTypes.ROW(
+                    DataTypes.FIELD("ri", DataTypes.INT()),
+                    DataTypes.FIELD("rs", DataTypes.STRING()),
+                    DataTypes.FIELD("rb", DataTypes.BIGINT()));
 
     private static final List<DataType> ALL_TYPES =
             Arrays.asList(
@@ -79,7 +87,15 @@ class ArrowReaderWriterTest {
                     DataTypes.TIMESTAMP_LTZ(0),
                     DataTypes.TIMESTAMP_LTZ(3),
                     DataTypes.TIMESTAMP_LTZ(6),
-                    DataTypes.TIMESTAMP_LTZ(9));
+                    DataTypes.TIMESTAMP_LTZ(9),
+                    DataTypes.ARRAY(DataTypes.INT()),
+                    DataTypes.ARRAY(DataTypes.FLOAT().copy(false)), // vector embedding type
+                    DataTypes.ARRAY(DataTypes.ARRAY(DataTypes.STRING())), // nested array
+                    DataTypes.MAP(DataTypes.INT(), DataTypes.STRING()),
+                    DataTypes.ROW(
+                            DataTypes.FIELD("i", DataTypes.INT()),
+                            DataTypes.FIELD("r", NESTED_DATA_TYPE),
+                            DataTypes.FIELD("s", DataTypes.STRING())));
 
     private static final List<InternalRow> TEST_DATA =
             Arrays.asList(
@@ -92,8 +108,8 @@ class ArrowReaderWriterTest {
                             5.0f,
                             6.0,
                             Decimal.fromUnscaledLong(1234, 10, 3),
-                            BinaryString.fromString("abc"),
-                            BinaryString.fromString("Hello World!"),
+                            fromString("abc"),
+                            fromString("Hello World!"),
                             new byte[] {1, 2, 3, 4, 5},
                             new byte[] {1, 2, 3, 4, 5, 6, 7, 8, 9, 10},
                             3600000,
@@ -105,7 +121,23 @@ class ArrowReaderWriterTest {
                             TimestampLtz.fromEpochMillis(3600000),
                             TimestampLtz.fromEpochMillis(3600123),
                             TimestampLtz.fromEpochMillis(3600123, 456000),
-                            TimestampLtz.fromEpochMillis(3600123, 456789)),
+                            TimestampLtz.fromEpochMillis(3600123, 456789),
+                            GenericArray.of(1, 2, 3, 4, 5, -11, 222, 444, 102234),
+                            GenericArray.of(0.1f, 1.1f, 2.2f, 3.3f, 4.4f, -0.5f, 6.6f),
+                            GenericArray.of(
+                                    GenericArray.of(fromString("a"), fromString("b")),
+                                    GenericArray.of(fromString("c"), fromString("d"))),
+                            GenericMap.of(
+                                    1,
+                                    fromString("one"),
+                                    2,
+                                    fromString("two"),
+                                    3,
+                                    fromString("three")),
+                            GenericRow.of(
+                                    12,
+                                    GenericRow.of(34, fromString("56"), 78L),
+                                    fromString("910"))),
                     GenericRow.of(
                             false,
                             (byte) 1,
@@ -115,7 +147,7 @@ class ArrowReaderWriterTest {
                             5.0f,
                             6.0,
                             Decimal.fromUnscaledLong(1234, 10, 3),
-                            BinaryString.fromString("abc"),
+                            fromString("abc"),
                             null,
                             new byte[] {1, 2, 3, 4, 5},
                             new byte[] {1, 2, 3, 4, 5, 6, 7, 8, 9, 10},
@@ -128,7 +160,25 @@ class ArrowReaderWriterTest {
                             null,
                             TimestampLtz.fromEpochMillis(3600120),
                             TimestampLtz.fromEpochMillis(3600120, 120000),
-                            TimestampLtz.fromEpochMillis(3600120, 123450)));
+                            TimestampLtz.fromEpochMillis(3600120, 123450),
+                            GenericArray.of(1, 2, 3, null, Integer.MAX_VALUE, Integer.MIN_VALUE),
+                            GenericArray.of(
+                                    0.0f,
+                                    -0.1f,
+                                    1.1f,
+                                    2.2f,
+                                    3.3f,
+                                    Float.MAX_VALUE,
+                                    Float.MIN_VALUE),
+                            GenericArray.of(
+                                    GenericArray.of(fromString("a"), null, fromString("c")),
+                                    null,
+                                    GenericArray.of(fromString("hello"), fromString("world"))),
+                            GenericMap.of(10, fromString("ten"), 20, fromString("twenty")),
+                            GenericRow.of(
+                                    12,
+                                    GenericRow.of(34, fromString("56"), 78L),
+                                    fromString("910"))));
 
     @Test
     void testReaderWriter() throws IOException {
@@ -151,7 +201,8 @@ class ArrowReaderWriterTest {
             int size =
                     writer.serializeToOutputView(
                             pagedOutputView, arrowChangeTypeOffset(CURRENT_LOG_MAGIC_VALUE));
-            MemorySegment segment = MemorySegment.allocateHeapMemory(writer.estimatedSizeInBytes());
+            int heapMemorySize = Math.max(size, writer.estimatedSizeInBytes());
+            MemorySegment segment = MemorySegment.allocateHeapMemory(heapMemorySize);
 
             assertThat(pagedOutputView.getWrittenSegments().size()).isEqualTo(1);
             MemorySegment firstSegment = pagedOutputView.getCurrentSegment();
@@ -160,8 +211,8 @@ class ArrowReaderWriterTest {
             ArrowReader reader =
                     ArrowUtils.createArrowReader(segment, 0, size, root, allocator, rowType);
             int rowCount = reader.getRowCount();
-            ColumnarRow row = reader.read(0);
             for (int i = 0; i < rowCount; i++) {
+                ColumnarRow row = reader.read(i);
                 row.setRowId(i);
                 assertThatRow(row).withSchema(rowType).isEqualTo(TEST_DATA.get(i));
 
@@ -199,7 +250,6 @@ class ArrowReaderWriterTest {
                 assertThat(row.getTimestampLtz(20, 6)).isEqualTo(rowData.getTimestampLtz(20, 6));
                 assertThat(row.getTimestampLtz(21, 9)).isEqualTo(rowData.getTimestampLtz(21, 9));
             }
-            reader.close();
         }
     }
 
@@ -219,6 +269,142 @@ class ArrowReaderWriterTest {
                     .isInstanceOf(IllegalStateException.class)
                     .hasMessage(
                             "The arrow batch size is full and it shouldn't accept writing new rows, it's a bug.");
+        }
+    }
+
+    /**
+     * Tests that array columns work correctly when the total number of array elements exceeds
+     * INITIAL_CAPACITY (1024) while the row count stays below it. This reproduces a bug where
+     * ArrowArrayWriter used the parent's handleSafe flag (based on row count) for element writes,
+     * causing IndexOutOfBoundsException when element indices exceeded the vector's initial
+     * capacity.
+     */
+    @Test
+    void testArrayWriterWithManyElements() throws IOException {
+        // Schema with array column
+        RowType rowType =
+                DataTypes.ROW(
+                        DataTypes.FIELD("id", DataTypes.INT()),
+                        DataTypes.FIELD("arr", DataTypes.ARRAY(DataTypes.INT())));
+
+        try (BufferAllocator allocator = new RootAllocator(Long.MAX_VALUE);
+                VectorSchemaRoot root =
+                        VectorSchemaRoot.create(ArrowUtils.toArrowSchema(rowType), allocator);
+                ArrowWriterPool provider = new ArrowWriterPool(allocator);
+                ArrowWriter writer =
+                        provider.getOrCreateWriter(
+                                1L, 1, Integer.MAX_VALUE, rowType, NO_COMPRESSION)) {
+
+            // Write 200 rows, each with a 10-element array.
+            // Total elements = 2000, exceeding INITIAL_CAPACITY (1024).
+            // But row count (200) < 1024, so handleSafe would be false without the fix.
+            int numRows = 200;
+            int arraySize = 10;
+            for (int i = 0; i < numRows; i++) {
+                Integer[] elements = new Integer[arraySize];
+                for (int j = 0; j < arraySize; j++) {
+                    elements[j] = i * arraySize + j;
+                }
+                writer.writeRow(GenericRow.of(i, GenericArray.of(elements)));
+            }
+
+            // Verify serialization works without IndexOutOfBoundsException
+            AbstractPagedOutputView pagedOutputView =
+                    new ManagedPagedOutputView(new TestingMemorySegmentPool(64 * 1024));
+            int size =
+                    writer.serializeToOutputView(
+                            pagedOutputView, arrowChangeTypeOffset(CURRENT_LOG_MAGIC_VALUE));
+            assertThat(size).isGreaterThan(0);
+
+            // Verify the data can be read back correctly
+            int heapMemorySize = Math.max(size, writer.estimatedSizeInBytes());
+            MemorySegment segment = MemorySegment.allocateHeapMemory(heapMemorySize);
+            MemorySegment firstSegment = pagedOutputView.getCurrentSegment();
+            firstSegment.copyTo(arrowChangeTypeOffset(CURRENT_LOG_MAGIC_VALUE), segment, 0, size);
+
+            ArrowReader reader =
+                    ArrowUtils.createArrowReader(segment, 0, size, root, allocator, rowType);
+            assertThat(reader.getRowCount()).isEqualTo(numRows);
+
+            for (int i = 0; i < numRows; i++) {
+                ColumnarRow row = reader.read(i);
+                row.setRowId(i);
+                assertThat(row.getInt(0)).isEqualTo(i);
+                assertThat(row.getArray(1).size()).isEqualTo(arraySize);
+                for (int j = 0; j < arraySize; j++) {
+                    assertThat(row.getArray(1).getInt(j)).isEqualTo(i * arraySize + j);
+                }
+            }
+        }
+    }
+
+    /**
+     * Tests that map columns work correctly when the total number of map entries exceeds
+     * INITIAL_CAPACITY (1024) while the row count stays below it. This reproduces a bug where
+     * ArrowMapWriter used the parent's handleSafe flag (based on row count) for entry writes,
+     * causing IndexOutOfBoundsException when entry indices exceeded the vector's initial capacity.
+     */
+    @Test
+    void testMapWriterWithManyEntries() throws IOException {
+        // Schema with map column
+        RowType rowType =
+                DataTypes.ROW(
+                        DataTypes.FIELD("id", DataTypes.INT()),
+                        DataTypes.FIELD("map", DataTypes.MAP(DataTypes.INT(), DataTypes.INT())));
+
+        try (BufferAllocator allocator = new RootAllocator(Long.MAX_VALUE);
+                VectorSchemaRoot root =
+                        VectorSchemaRoot.create(ArrowUtils.toArrowSchema(rowType), allocator);
+                ArrowWriterPool provider = new ArrowWriterPool(allocator);
+                ArrowWriter writer =
+                        provider.getOrCreateWriter(
+                                1L, 1, Integer.MAX_VALUE, rowType, NO_COMPRESSION)) {
+
+            // Write 150 rows, each with a 10-entry map.
+            // Total entries = 1500, exceeding INITIAL_CAPACITY (1024).
+            // But row count (150) < 1024, so handleSafe would be false without the fix.
+            int numRows = 200;
+            int mapSize = 10;
+            for (int i = 0; i < numRows; i++) {
+                Object[] mapEntries = new Object[mapSize * 2];
+                for (int j = 0; j < mapSize; j++) {
+                    int key = i * mapSize + j;
+                    mapEntries[j * 2] = key;
+                    mapEntries[j * 2 + 1] = key * 2;
+                }
+                GenericMap map = GenericMap.of(mapEntries);
+                writer.writeRow(GenericRow.of(i, map));
+            }
+
+            // Verify serialization works without IndexOutOfBoundsException
+            AbstractPagedOutputView pagedOutputView =
+                    new ManagedPagedOutputView(new TestingMemorySegmentPool(64 * 1024));
+            int size =
+                    writer.serializeToOutputView(
+                            pagedOutputView, arrowChangeTypeOffset(CURRENT_LOG_MAGIC_VALUE));
+            assertThat(size).isGreaterThan(0);
+
+            // Verify the data can be read back correctly
+            int heapMemorySize = Math.max(size, writer.estimatedSizeInBytes());
+            MemorySegment segment = MemorySegment.allocateHeapMemory(heapMemorySize);
+            MemorySegment firstSegment = pagedOutputView.getCurrentSegment();
+            firstSegment.copyTo(arrowChangeTypeOffset(CURRENT_LOG_MAGIC_VALUE), segment, 0, size);
+
+            ArrowReader reader =
+                    ArrowUtils.createArrowReader(segment, 0, size, root, allocator, rowType);
+            assertThat(reader.getRowCount()).isEqualTo(numRows);
+
+            for (int i = 0; i < numRows; i++) {
+                ColumnarRow row = reader.read(i);
+                row.setRowId(i);
+                assertThat(row.getInt(0)).isEqualTo(i);
+                assertThat(row.getMap(1).size()).isEqualTo(mapSize);
+                for (int j = 0; j < mapSize; j++) {
+                    int key = i * mapSize + j;
+                    assertThat(row.getMap(1).keyArray().getInt(j)).isEqualTo(key);
+                    assertThat(row.getMap(1).valueArray().getInt(j)).isEqualTo(key * 2);
+                }
+            }
         }
     }
 }

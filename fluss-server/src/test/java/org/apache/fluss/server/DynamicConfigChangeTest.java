@@ -46,6 +46,7 @@ import static org.apache.fluss.config.ConfigOptions.DATALAKE_FORMAT;
 import static org.apache.fluss.metadata.DataLakeFormat.PAIMON;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link DynamicConfigManager}. */
@@ -173,7 +174,7 @@ public class DynamicConfigChangeTest {
                                                             "unknown",
                                                             AlterConfigOpType.SET))))
                     .hasMessageContaining(
-                            "Could not parse value 'unknown' for key 'datalake.format'");
+                            "Cannot parse 'unknown' as DataLakeFormat for config 'datalake.format'");
 
             assertThat(lakeCatalogDynamicLoader.getLakeCatalogContainer().getDataLakeFormat())
                     .isNull();
@@ -252,6 +253,96 @@ public class DynamicConfigChangeTest {
             dynamicConfigManager.register(lakeCatalogDynamicLoader);
             // Startup dynamic manager even is not matched now.
             dynamicConfigManager.startup();
+            assertThat(lakeCatalogDynamicLoader.getLakeCatalogContainer().getDataLakeFormat())
+                    .isEqualTo(PAIMON);
+        }
+    }
+
+    @Test
+    void testPreventInvalidConfig() throws Exception {
+        // Test that generic type validation prevents invalid config values
+        Configuration configuration = new Configuration();
+        configuration.setString(ConfigOptions.KV_SHARED_RATE_LIMITER_BYTES_PER_SEC.key(), "100MB");
+
+        DynamicConfigManager dynamicConfigManager =
+                new DynamicConfigManager(zookeeperClient, configuration, true);
+        dynamicConfigManager.startup();
+
+        // Try to set rate limiter to an invalid value - should be rejected by generic type
+        // validation
+        assertThatThrownBy(
+                        () ->
+                                dynamicConfigManager.alterConfigs(
+                                        Collections.singletonList(
+                                                new AlterConfig(
+                                                        ConfigOptions
+                                                                .KV_SHARED_RATE_LIMITER_BYTES_PER_SEC
+                                                                .key(),
+                                                        "invalid_value",
+                                                        AlterConfigOpType.SET))))
+                .isInstanceOf(ConfigException.class)
+                .hasMessageContaining(
+                        "Cannot parse 'invalid_value' as MemorySize for config 'kv.rocksdb.shared-rate-limiter.bytes-per-sec'");
+    }
+
+    @Test
+    void testConfigValidatorAllowsValidChange() throws Exception {
+        // Test that generic type validation allows valid config values
+        Configuration configuration = new Configuration();
+        configuration.setString(ConfigOptions.KV_SHARED_RATE_LIMITER_BYTES_PER_SEC.key(), "100MB");
+
+        DynamicConfigManager dynamicConfigManager =
+                new DynamicConfigManager(zookeeperClient, configuration, true);
+        dynamicConfigManager.startup();
+
+        // Adjust rate limiter value - should succeed
+        assertThatCode(
+                        () ->
+                                dynamicConfigManager.alterConfigs(
+                                        Collections.singletonList(
+                                                new AlterConfig(
+                                                        ConfigOptions
+                                                                .KV_SHARED_RATE_LIMITER_BYTES_PER_SEC
+                                                                .key(),
+                                                        "200MB",
+                                                        AlterConfigOpType.SET))))
+                .doesNotThrowAnyException();
+
+        // Verify config was persisted to ZK
+        Map<String, String> zkConfig = zookeeperClient.fetchEntityConfig();
+        assertThat(zkConfig.get(ConfigOptions.KV_SHARED_RATE_LIMITER_BYTES_PER_SEC.key()))
+                .isEqualTo("200MB");
+    }
+
+    @Test
+    void testConfigValidatorWithMultipleValidators() throws Exception {
+        Configuration configuration = new Configuration();
+        configuration.setString(ConfigOptions.KV_SHARED_RATE_LIMITER_BYTES_PER_SEC.key(), "100MB");
+
+        try (LakeCatalogDynamicLoader lakeCatalogDynamicLoader =
+                new LakeCatalogDynamicLoader(configuration, null, true)) {
+            DynamicConfigManager dynamicConfigManager =
+                    new DynamicConfigManager(zookeeperClient, configuration, true);
+
+            // Register reconfigurables - generic type validation works automatically
+            dynamicConfigManager.register(lakeCatalogDynamicLoader);
+            dynamicConfigManager.startup();
+
+            // Change multiple configs - generic validation applies to all
+            dynamicConfigManager.alterConfigs(
+                    Arrays.asList(
+                            new AlterConfig(
+                                    ConfigOptions.KV_SHARED_RATE_LIMITER_BYTES_PER_SEC.key(),
+                                    "200MB",
+                                    AlterConfigOpType.SET),
+                            new AlterConfig(
+                                    DATALAKE_FORMAT.key(), "paimon", AlterConfigOpType.SET)));
+
+            // Verify both configs were applied
+            Map<String, String> zkConfig = zookeeperClient.fetchEntityConfig();
+            assertThat(zkConfig.get(ConfigOptions.KV_SHARED_RATE_LIMITER_BYTES_PER_SEC.key()))
+                    .isEqualTo("200MB");
+            assertThat(zkConfig.get(DATALAKE_FORMAT.key())).isEqualTo("paimon");
             assertThat(lakeCatalogDynamicLoader.getLakeCatalogContainer().getDataLakeFormat())
                     .isEqualTo(PAIMON);
         }

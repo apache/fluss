@@ -67,6 +67,7 @@ public class AdjustIsrTest extends ReplicaTestBase {
                 20000,
                 1,
                 Collections.singletonMap(tb, genMemoryLogRecordsByObject(DATA1)),
+                null,
                 future::complete);
         assertThat(future.get()).containsOnly(new ProduceLogResultForBucket(tb, 0, 10L));
 
@@ -77,6 +78,7 @@ public class AdjustIsrTest extends ReplicaTestBase {
                         2, (int) conf.get(ConfigOptions.LOG_REPLICA_FETCH_MAX_BYTES).getBytes()),
                 Collections.singletonMap(
                         tb, new FetchReqInfo(tb.getTableId(), 10L, Integer.MAX_VALUE)),
+                null,
                 result -> {});
         retry(
                 Duration.ofSeconds(20),
@@ -92,6 +94,7 @@ public class AdjustIsrTest extends ReplicaTestBase {
                         3, (int) conf.get(ConfigOptions.LOG_REPLICA_FETCH_MAX_BYTES).getBytes()),
                 Collections.singletonMap(
                         tb, new FetchReqInfo(tb.getTableId(), 10L, Integer.MAX_VALUE)),
+                null,
                 result -> {});
         retry(
                 Duration.ofSeconds(20),

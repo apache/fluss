@@ -91,7 +91,7 @@ public class ZkNodeChangeNotificationWatcher {
             return;
         }
         running = false;
-        LOG.info("Stopping TableChangeWatcher");
+        LOG.info("Stopping ZkNodeChangeNotificationWatcher");
         curatorCache.close();
     }
 

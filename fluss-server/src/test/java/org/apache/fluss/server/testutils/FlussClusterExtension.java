@@ -47,6 +47,7 @@ import org.apache.fluss.server.authorizer.DefaultAuthorizer;
 import org.apache.fluss.server.coordinator.CoordinatorServer;
 import org.apache.fluss.server.coordinator.LakeCatalogDynamicLoader;
 import org.apache.fluss.server.coordinator.MetadataManager;
+import org.apache.fluss.server.coordinator.rebalance.RebalanceManager;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshotHandle;
@@ -459,6 +460,10 @@ public final class FlussClusterExtension
 
     public ZooKeeperClient getZooKeeperClient() {
         return zooKeeperClient;
+    }
+
+    public RebalanceManager getRebalanceManager() {
+        return coordinatorServer.getRebalanceManager();
     }
 
     public RpcClient getRpcClient() {

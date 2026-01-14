@@ -27,7 +27,9 @@ import java.util.List;
 import java.util.Objects;
 
 /**
- * The result of {@link Lookuper#lookup(InternalRow)}.
+ * The result of a lookup operation performed by a {@link Lookuper}. It carries zero, one, or many
+ * {@link org.apache.fluss.row.InternalRow} values depending on whether the underlying lookup is a
+ * primary-key lookup (at most one) or a prefix-key lookup (zero or more).
  *
  * @since 0.1
  */

@@ -19,17 +19,21 @@ package org.apache.fluss.client.write;
 
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.metadata.PhysicalTablePath;
+import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.record.CompactedLogRecord;
 import org.apache.fluss.record.DefaultKvRecord;
-import org.apache.fluss.record.DefaultKvRecordBatch;
 import org.apache.fluss.record.IndexedLogRecord;
 import org.apache.fluss.row.BinaryRow;
 import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.row.compacted.CompactedRow;
 import org.apache.fluss.row.indexed.IndexedRow;
 
 import javax.annotation.Nullable;
 
+import static org.apache.fluss.record.DefaultKvRecordBatch.RECORD_BATCH_HEADER_SIZE;
 import static org.apache.fluss.record.LogRecordBatch.CURRENT_LOG_MAGIC_VALUE;
 import static org.apache.fluss.record.LogRecordBatchFormat.recordBatchHeaderSize;
+import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /**
@@ -41,53 +45,63 @@ public final class WriteRecord {
 
     /** Create a write record for upsert operation and partial-upsert operation. */
     public static WriteRecord forUpsert(
+            TableInfo tableInfo,
             PhysicalTablePath tablePath,
             BinaryRow row,
             byte[] key,
             byte[] bucketKey,
+            WriteFormat writeFormat,
             @Nullable int[] targetColumns) {
         checkNotNull(row, "row must not be null");
         checkNotNull(key, "key must not be null");
-        checkNotNull(bucketKey, "key must not be null");
-        int estimatedSizeInBytes =
-                DefaultKvRecord.sizeOf(key, row) + DefaultKvRecordBatch.RECORD_BATCH_HEADER_SIZE;
+        checkNotNull(bucketKey, "bucketKey must not be null");
+        checkArgument(writeFormat.isKv(), "writeFormat must be a KV format");
+        int estimatedSizeInBytes = DefaultKvRecord.sizeOf(key, row) + RECORD_BATCH_HEADER_SIZE;
         return new WriteRecord(
+                tableInfo,
                 tablePath,
                 key,
                 bucketKey,
                 row,
-                WriteFormat.KV,
+                writeFormat,
                 targetColumns,
                 estimatedSizeInBytes);
     }
 
     /** Create a write record for delete operation and partial-delete update. */
     public static WriteRecord forDelete(
+            TableInfo tableInfo,
             PhysicalTablePath tablePath,
             byte[] key,
             byte[] bucketKey,
+            WriteFormat writeFormat,
             @Nullable int[] targetColumns) {
         checkNotNull(key, "key must not be null");
         checkNotNull(bucketKey, "key must not be null");
-        int estimatedSizeInBytes =
-                DefaultKvRecord.sizeOf(key, null) + DefaultKvRecordBatch.RECORD_BATCH_HEADER_SIZE;
+        checkArgument(writeFormat.isKv(), "writeFormat must be a KV format");
+        int estimatedSizeInBytes = DefaultKvRecord.sizeOf(key, null) + RECORD_BATCH_HEADER_SIZE;
         return new WriteRecord(
+                tableInfo,
                 tablePath,
                 key,
                 bucketKey,
                 null,
-                WriteFormat.KV,
+                writeFormat,
                 targetColumns,
                 estimatedSizeInBytes);
     }
 
     /** Create a write record for append operation for indexed format. */
     public static WriteRecord forIndexedAppend(
-            PhysicalTablePath tablePath, IndexedRow row, @Nullable byte[] bucketKey) {
+            TableInfo tableInfo,
+            PhysicalTablePath tablePath,
+            IndexedRow row,
+            @Nullable byte[] bucketKey) {
         checkNotNull(row);
         int estimatedSizeInBytes =
                 IndexedLogRecord.sizeOf(row) + recordBatchHeaderSize(CURRENT_LOG_MAGIC_VALUE);
         return new WriteRecord(
+                tableInfo,
                 tablePath,
                 null,
                 bucketKey,
@@ -99,13 +113,43 @@ public final class WriteRecord {
 
     /** Creates a write record for append operation for Arrow format. */
     public static WriteRecord forArrowAppend(
-            PhysicalTablePath tablePath, InternalRow row, @Nullable byte[] bucketKey) {
+            TableInfo tableInfo,
+            PhysicalTablePath tablePath,
+            InternalRow row,
+            @Nullable byte[] bucketKey) {
         checkNotNull(row);
         // the write row maybe GenericRow, can't estimate the size.
         // it is not necessary to estimate size for Arrow format.
         int estimatedSizeInBytes = -1;
         return new WriteRecord(
-                tablePath, null, bucketKey, row, WriteFormat.ARROW_LOG, null, estimatedSizeInBytes);
+                tableInfo,
+                tablePath,
+                null,
+                bucketKey,
+                row,
+                WriteFormat.ARROW_LOG,
+                null,
+                estimatedSizeInBytes);
+    }
+
+    /** Creates a write record for append operation for Compacted format. */
+    public static WriteRecord forCompactedAppend(
+            TableInfo tableInfo,
+            PhysicalTablePath tablePath,
+            CompactedRow row,
+            @Nullable byte[] bucketKey) {
+        checkNotNull(row);
+        int estimatedSizeInBytes =
+                CompactedLogRecord.sizeOf(row) + recordBatchHeaderSize(CURRENT_LOG_MAGIC_VALUE);
+        return new WriteRecord(
+                tableInfo,
+                tablePath,
+                null,
+                bucketKey,
+                row,
+                WriteFormat.COMPACTED_LOG,
+                null,
+                estimatedSizeInBytes);
     }
 
     // ------------------------------------------------------------------------------------------
@@ -120,8 +164,10 @@ public final class WriteRecord {
     // will be null if it's not for partial update
     private final @Nullable int[] targetColumns;
     private final int estimatedSizeInBytes;
+    private final TableInfo tableInfo;
 
     private WriteRecord(
+            TableInfo tableInfo,
             PhysicalTablePath physicalTablePath,
             @Nullable byte[] key,
             @Nullable byte[] bucketKey,
@@ -129,6 +175,7 @@ public final class WriteRecord {
             WriteFormat writeFormat,
             @Nullable int[] targetColumns,
             int estimatedSizeInBytes) {
+        this.tableInfo = tableInfo;
         this.physicalTablePath = physicalTablePath;
         this.key = key;
         this.bucketKey = bucketKey;
@@ -140,6 +187,10 @@ public final class WriteRecord {
 
     public PhysicalTablePath getPhysicalTablePath() {
         return physicalTablePath;
+    }
+
+    public TableInfo getTableInfo() {
+        return tableInfo;
     }
 
     public @Nullable byte[] getKey() {
@@ -178,5 +229,9 @@ public final class WriteRecord {
                             writeFormat));
         }
         return estimatedSizeInBytes;
+    }
+
+    public int getSchemaId() {
+        return tableInfo.getSchemaId();
     }
 }

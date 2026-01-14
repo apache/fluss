@@ -18,6 +18,7 @@
 package org.apache.fluss.client.lookup;
 
 import org.apache.fluss.annotation.Internal;
+import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 
@@ -26,6 +27,8 @@ import javax.annotation.concurrent.ThreadSafe;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -38,13 +41,18 @@ class LookupQueue {
 
     private volatile boolean closed;
     // buffering both the Lookup and PrefixLookup.
+    // TODO This queue could be refactored into a memory-managed queue similar to
+    // RecordAccumulator, which would significantly improve the efficiency of lookup batching. Trace
+    // by https://github.com/apache/fluss/issues/2124
     private final ArrayBlockingQueue<AbstractLookupQuery<?>> lookupQueue;
+    private final BlockingQueue<AbstractLookupQuery<?>> reEnqueuedLookupQueue;
     private final int maxBatchSize;
     private final long batchTimeoutNanos;
 
     LookupQueue(Configuration conf) {
         this.lookupQueue =
                 new ArrayBlockingQueue<>(conf.get(ConfigOptions.CLIENT_LOOKUP_QUEUE_SIZE));
+        this.reEnqueuedLookupQueue = new LinkedBlockingQueue<>();
         this.maxBatchSize = conf.get(ConfigOptions.CLIENT_LOOKUP_MAX_BATCH_SIZE);
         this.batchTimeoutNanos = conf.get(ConfigOptions.CLIENT_LOOKUP_BATCH_TIMEOUT).toNanos();
         this.closed = false;
@@ -63,8 +71,21 @@ class LookupQueue {
         }
     }
 
+    void reEnqueue(AbstractLookupQuery<?> lookup) {
+        if (closed) {
+            throw new IllegalStateException(
+                    "Can not re-enqueue lookup operation since the LookupQueue is closed.");
+        }
+
+        try {
+            reEnqueuedLookupQueue.put(lookup);
+        } catch (InterruptedException e) {
+            lookup.future().completeExceptionally(e);
+        }
+    }
+
     boolean hasUnDrained() {
-        return !lookupQueue.isEmpty();
+        return !lookupQueue.isEmpty() || !reEnqueuedLookupQueue.isEmpty();
     }
 
     /** Drain a batch of {@link LookupQuery}s from the lookup queue. */
@@ -76,6 +97,16 @@ class LookupQueue {
             long waitNanos = batchTimeoutNanos - (System.nanoTime() - startNanos);
             if (waitNanos <= 0) {
                 break;
+            }
+
+            while (!reEnqueuedLookupQueue.isEmpty() && count < maxBatchSize) {
+                AbstractLookupQuery<?> lookup =
+                        reEnqueuedLookupQueue.poll(waitNanos, TimeUnit.NANOSECONDS);
+                if (lookup == null) {
+                    break;
+                }
+                lookupOperations.add(lookup);
+                count++;
             }
 
             AbstractLookupQuery<?> lookup = lookupQueue.poll(waitNanos, TimeUnit.NANOSECONDS);
@@ -97,10 +128,21 @@ class LookupQueue {
     List<AbstractLookupQuery<?>> drainAll() {
         List<AbstractLookupQuery<?>> lookupOperations = new ArrayList<>(lookupQueue.size());
         lookupQueue.drainTo(lookupOperations);
+        reEnqueuedLookupQueue.drainTo(lookupOperations);
         return lookupOperations;
     }
 
     public void close() {
         closed = true;
+    }
+
+    @VisibleForTesting
+    ArrayBlockingQueue<AbstractLookupQuery<?>> getLookupQueue() {
+        return lookupQueue;
+    }
+
+    @VisibleForTesting
+    BlockingQueue<AbstractLookupQuery<?>> getReEnqueuedLookupQueue() {
+        return reEnqueuedLookupQueue;
     }
 }

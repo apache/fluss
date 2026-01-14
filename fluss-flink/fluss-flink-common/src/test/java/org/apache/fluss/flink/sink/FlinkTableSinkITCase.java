@@ -66,6 +66,7 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import static org.apache.fluss.flink.FlinkConnectorOptions.BOOTSTRAP_SERVERS;
+import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.assertQueryResultExactOrder;
 import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.assertResultsIgnoreOrder;
 import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.collectRowsWithTimeout;
 import static org.apache.fluss.flink.utils.FlinkTestBase.waitUntilPartitions;
@@ -162,6 +163,51 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
                         "+I[1, 3501, Tim]", "+I[2, 3502, Fabian]",
                         "+I[3, 3503, coco]", "+I[4, 3504, jerry]",
                         "+I[5, 3505, piggy]", "+I[6, 3506, stave]");
+        assertResultsIgnoreOrder(rowIter, expectedRows, true);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testAppendLogDuringAddColumn(boolean compressed) throws Exception {
+        String compressedProperties =
+                compressed
+                        ? ",'table.log.format' = 'arrow', 'table.log.arrow.compression.type' = 'zstd'"
+                        : "";
+        tEnv.executeSql(
+                "create table sink_test (a int not null, b bigint, c string) with "
+                        + "('bucket.num' = '3'"
+                        + compressedProperties
+                        + ")");
+        tEnv.executeSql(
+                        "INSERT INTO sink_test "
+                                + "VALUES (1, 3501, 'Tim'), "
+                                + "(2, 3502, 'Fabian'), "
+                                + "(3, 3503, 'coco') ")
+                .await();
+
+        CloseableIterator<Row> rowIter = tEnv.executeSql("select * from sink_test").collect();
+        // add new column
+        tEnv.executeSql("alter table sink_test add add_column int").await();
+        tEnv.executeSql(
+                        "INSERT INTO sink_test "
+                                + "VALUES (4, 3504, 'jerry', 4), "
+                                + "(5, 3505, 'piggy', 5), "
+                                + "(6, 3506, 'stave', 6)")
+                .await();
+        List<String> expectedRows =
+                Arrays.asList(
+                        "+I[1, 3501, Tim]", "+I[2, 3502, Fabian]",
+                        "+I[3, 3503, coco]", "+I[4, 3504, jerry]",
+                        "+I[5, 3505, piggy]", "+I[6, 3506, stave]");
+        assertResultsIgnoreOrder(rowIter, expectedRows, true);
+
+        // read with new schema.
+        rowIter = tEnv.executeSql("select * from sink_test").collect();
+        expectedRows =
+                Arrays.asList(
+                        "+I[1, 3501, Tim, null]", "+I[2, 3502, Fabian, null]",
+                        "+I[3, 3503, coco, null]", "+I[4, 3504, jerry, 4]",
+                        "+I[5, 3505, piggy, 5]", "+I[6, 3506, stave, 6]");
         assertResultsIgnoreOrder(rowIter, expectedRows, true);
     }
 
@@ -357,6 +403,44 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
     }
 
     @Test
+    void testPutDuringAddColumn() throws Exception {
+        tEnv.executeSql(
+                "create table sink_test (a int not null primary key not enforced, b bigint, c string)");
+        tEnv.executeSql(
+                        "INSERT INTO sink_test "
+                                + "VALUES (1, 3501, 'Tim'), "
+                                + "(2, 3502, 'Fabian'), "
+                                + "(3, 3503, 'coco') ")
+                .await();
+
+        CloseableIterator<Row> rowIter = tEnv.executeSql("select * from sink_test").collect();
+        // add new column
+        tEnv.executeSql("alter table sink_test add add_column int").await();
+        tEnv.executeSql(
+                        "INSERT INTO sink_test "
+                                + "VALUES (4, 3504, 'jerry', 4), "
+                                + "(5, 3505, 'piggy', 5), "
+                                + "(6, 3506, 'stave', 6)")
+                .await();
+        List<String> expectedRows =
+                Arrays.asList(
+                        "+I[1, 3501, Tim]", "+I[2, 3502, Fabian]",
+                        "+I[3, 3503, coco]", "+I[4, 3504, jerry]",
+                        "+I[5, 3505, piggy]", "+I[6, 3506, stave]");
+        // read with old schema
+        assertResultsIgnoreOrder(rowIter, expectedRows, true);
+
+        // read with new schema.
+        rowIter = tEnv.executeSql("select * from sink_test").collect();
+        expectedRows =
+                Arrays.asList(
+                        "+I[1, 3501, Tim, null]", "+I[2, 3502, Fabian, null]",
+                        "+I[3, 3503, coco, null]", "+I[4, 3504, jerry, 4]",
+                        "+I[5, 3505, piggy, 5]", "+I[6, 3506, stave, 6]");
+        assertResultsIgnoreOrder(rowIter, expectedRows, true);
+    }
+
+    @Test
     void testPartialUpsert() throws Exception {
         tEnv.executeSql(
                 "create table sink_test (a int not null primary key not enforced, b bigint, c string) with('bucket.num' = '3')");
@@ -405,6 +489,57 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
         tEnv.executeSql("INSERT INTO sink_test(a, c) SELECT f0, f2 FROM changeLog").await();
         expectedRows = Arrays.asList("-U[1, null, c1]", "+U[1, null, c11]", "-D[1, null, c11]");
         assertResultsIgnoreOrder(rowIter, expectedRows, true);
+    }
+
+    @Test
+    void testPartialUpsertDuringAddColumn() throws Exception {
+        tEnv.executeSql(
+                "create table sink_test (a int not null primary key not enforced, b bigint, c string) with('bucket.num' = '3')");
+
+        // partial insert
+        tEnv.executeSql("INSERT INTO sink_test(a, b) VALUES (1, 111), (2, 222)").await();
+        tEnv.executeSql("INSERT INTO sink_test(c, a) VALUES ('c1', 1), ('c2', 2)").await();
+
+        CloseableIterator<Row> rowIter = tEnv.executeSql("select * from sink_test").collect();
+        // add new column
+        tEnv.executeSql("alter table sink_test add add_column string").await();
+        tEnv.executeSql(
+                        "INSERT INTO sink_test(add_column, a ) VALUES ('new_value', 1), ('new_value', 2)")
+                .await();
+
+        // read with old schema
+        List<String> expectedRows =
+                Arrays.asList(
+                        "+I[1, 111, null]",
+                        "+I[2, 222, null]",
+                        "-U[1, 111, null]",
+                        "+U[1, 111, c1]",
+                        "-U[2, 222, null]",
+                        "+U[2, 222, c2]",
+                        "-U[1, 111, c1]",
+                        "+U[1, 111, c1]",
+                        "-U[2, 222, c2]",
+                        "+U[2, 222, c2]");
+        assertResultsIgnoreOrder(rowIter, expectedRows, true);
+
+        // read with new schema
+        CloseableIterator<Row> newSchemaRowIter =
+                tEnv.executeSql(
+                                "select * from sink_test /*+ OPTIONS('scan.startup.mode' = 'earliest') */ ")
+                        .collect();
+        expectedRows =
+                Arrays.asList(
+                        "+I[1, 111, null, null]",
+                        "+I[2, 222, null, null]",
+                        "-U[1, 111, null, null]",
+                        "+U[1, 111, c1, null]",
+                        "-U[2, 222, null, null]",
+                        "+U[2, 222, c2, null]",
+                        "-U[1, 111, c1, null]",
+                        "+U[1, 111, c1, new_value]",
+                        "-U[2, 222, c2, null]",
+                        "+U[2, 222, c2, new_value]");
+        assertResultsIgnoreOrder(newSchemaRowIter, expectedRows, true);
     }
 
     @Test
@@ -676,6 +811,20 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
                         "-U[4, 3504, Seattle]",
                         "+U[4, 3504, New York]");
         assertResultsIgnoreOrder(changelogIter, expectedRows, true);
+
+        // test schema evolution.
+        tBatchEnv
+                .executeSql(String.format("alter table %s add new_added_column int", tableName))
+                .await();
+        tBatchEnv
+                .executeSql("UPDATE " + tableName + " SET new_added_column = 2 WHERE a = 4")
+                .await();
+        CloseableIterator<Row> row5 =
+                tBatchEnv
+                        .executeSql(String.format("select * from %s WHERE a = 4", tableName))
+                        .collect();
+        expected = Collections.singletonList("+I[4, 3504, New York, 2]");
+        assertResultsIgnoreOrder(row5, expected, true);
     }
 
     @Test
@@ -999,32 +1148,35 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
     @Test
     void testVersionMergeEngineWithTypeTimestamp() throws Exception {
         tEnv.executeSql(
-                "create table merge_engine_with_version (a int not null primary key not enforced,"
-                        + " b string, ts TIMESTAMP(3)) with('table.merge-engine' = 'versioned',"
-                        + "'table.merge-engine.versioned.ver-column' = 'ts')");
-
+                        "create table merge_engine_with_version (a int not null primary key not enforced,"
+                                + " b string, ts TIMESTAMP(3)) with('table.merge-engine' = 'versioned',"
+                                + "'table.merge-engine.versioned.ver-column' = 'ts')")
+                .await();
         // insert once
         tEnv.executeSql(
                         "INSERT INTO merge_engine_with_version (a, b, ts) VALUES "
                                 + "(1, 'v1', TIMESTAMP '2024-12-27 12:00:00.123'), "
                                 + "(2, 'v2', TIMESTAMP '2024-12-27 12:00:00.123'), "
-                                + "(1, 'v11', TIMESTAMP '2024-12-27 11:59:59.123'), "
-                                + "(3, 'v3', TIMESTAMP '2024-12-27 12:00:00.123'),"
-                                + "(3, 'v33', TIMESTAMP '2024-12-27 12:00:00.123');")
+                                + "(3, 'v3', TIMESTAMP '2024-12-27 12:00:00.123');")
                 .await();
-
         CloseableIterator<Row> rowIter =
                 tEnv.executeSql("select * from merge_engine_with_version").collect();
-
-        // id=1 not update, but id=3 updated
         List<String> expectedRows =
                 Arrays.asList(
                         "+I[1, v1, 2024-12-27T12:00:00.123]",
                         "+I[2, v2, 2024-12-27T12:00:00.123]",
-                        "+I[3, v3, 2024-12-27T12:00:00.123]",
+                        "+I[3, v3, 2024-12-27T12:00:00.123]");
+        assertResultsIgnoreOrder(rowIter, expectedRows, false);
+
+        // insert again. id=1 not update, but id=3 updated
+        tEnv.executeSql(
+                "INSERT INTO merge_engine_with_version (a, b, ts) VALUES "
+                        + "(1, 'v11', TIMESTAMP '2024-12-27 11:59:59.123'), "
+                        + "(3, 'v33', TIMESTAMP '2024-12-27 12:00:00.123');");
+        expectedRows =
+                Arrays.asList(
                         "-U[3, v3, 2024-12-27T12:00:00.123]",
                         "+U[3, v33, 2024-12-27T12:00:00.123]");
-
         assertResultsIgnoreOrder(rowIter, expectedRows, true);
     }
 
@@ -1033,30 +1185,36 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
 
         tEnv.getConfig().set("table.local-time-zone", "UTC");
         tEnv.executeSql(
-                "create table merge_engine_with_version (a int not null primary key not enforced,"
-                        + " b string, ts TIMESTAMP(9) WITH LOCAL TIME ZONE ) with("
-                        + "'table.merge-engine' = 'versioned',"
-                        + "'table.merge-engine.versioned.ver-column' = 'ts')");
+                        "create table merge_engine_with_version (a int not null primary key not enforced,"
+                                + " b string, ts TIMESTAMP(9) WITH LOCAL TIME ZONE ) with("
+                                + "'table.merge-engine' = 'versioned',"
+                                + "'table.merge-engine.versioned.ver-column' = 'ts')")
+                .await();
 
         // insert once
         tEnv.executeSql(
                         "INSERT INTO merge_engine_with_version (a, b, ts) VALUES "
                                 + "(1, 'v1', CAST(TIMESTAMP '2024-12-27 12:00:00.123456789' AS TIMESTAMP(9) WITH LOCAL TIME ZONE)), "
                                 + "(2, 'v2', CAST(TIMESTAMP '2024-12-27 12:00:00.123456789' AS TIMESTAMP(9) WITH LOCAL TIME ZONE)), "
-                                + "(1, 'v11', CAST(TIMESTAMP '2024-12-27 12:00:00.123456788' AS TIMESTAMP(9) WITH LOCAL TIME ZONE)), "
-                                + "(3, 'v3', CAST(TIMESTAMP '2024-12-27 12:00:00.123456789' AS TIMESTAMP(9) WITH LOCAL TIME ZONE)), "
-                                + "(3, 'v33', CAST(TIMESTAMP '2024-12-27 12:00:00.123456789' AS TIMESTAMP(9) WITH LOCAL TIME ZONE));")
+                                + "(3, 'v3', CAST(TIMESTAMP '2024-12-27 12:00:00.123456789' AS TIMESTAMP(9) WITH LOCAL TIME ZONE));")
                 .await();
-
         CloseableIterator<Row> rowIter =
                 tEnv.executeSql("select * from merge_engine_with_version").collect();
-
-        // id=1 not update, but id=3 updated
         List<String> expectedRows =
                 Arrays.asList(
                         "+I[1, v1, 2024-12-27T12:00:00.123456789Z]",
                         "+I[2, v2, 2024-12-27T12:00:00.123456789Z]",
-                        "+I[3, v3, 2024-12-27T12:00:00.123456789Z]",
+                        "+I[3, v3, 2024-12-27T12:00:00.123456789Z]");
+        assertResultsIgnoreOrder(rowIter, expectedRows, false);
+
+        // insert again. id=1 not update, but id=3 updated
+        tEnv.executeSql(
+                        "INSERT INTO merge_engine_with_version (a, b, ts) VALUES "
+                                + "(1, 'v11', CAST(TIMESTAMP '2024-12-27 12:00:00.123456788' AS TIMESTAMP(9) WITH LOCAL TIME ZONE)), "
+                                + "(3, 'v33', CAST(TIMESTAMP '2024-12-27 12:00:00.123456789' AS TIMESTAMP(9) WITH LOCAL TIME ZONE));")
+                .await();
+        expectedRows =
+                Arrays.asList(
                         "-U[3, v3, 2024-12-27T12:00:00.123456789Z]",
                         "+U[3, v33, 2024-12-27T12:00:00.123456789Z]");
 
@@ -1222,5 +1380,77 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
             }
             assertResultsIgnoreOrder(rowIter, expectedRows, true);
         }
+    }
+
+    @Test
+    void testWalModeWithDefaultMergeEngineAndAggregation() throws Exception {
+        // use single parallelism to make result ordering stable
+        tEnv.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 1);
+
+        String tableName = "wal_mode_pk_table";
+        // Create a table with WAL mode and default merge engine
+        tEnv.executeSql(
+                String.format(
+                        "create table %s ("
+                                + " id int not null,"
+                                + " category string,"
+                                + " amount bigint,"
+                                + " primary key (id) not enforced"
+                                + ") with ('table.changelog.image' = 'wal')",
+                        tableName));
+
+        // Insert initial data
+        tEnv.executeSql(
+                        String.format(
+                                "INSERT INTO %s VALUES "
+                                        + "(1, 'A', 100), "
+                                        + "(2, 'B', 200), "
+                                        + "(3, 'A', 150), "
+                                        + "(4, 'B', 250)",
+                                tableName))
+                .await();
+
+        // Use batch mode to update and delete records
+        tBatchEnv.executeSql("UPDATE " + tableName + " SET amount = 120 WHERE id = 1").await();
+        tBatchEnv.executeSql("UPDATE " + tableName + " SET amount = 180 WHERE id = 3").await();
+        tBatchEnv.executeSql("DELETE FROM " + tableName + " WHERE id = 4").await();
+
+        // Do aggregation on the table and verify ChangelogNormalize node is generated
+        String aggQuery =
+                String.format(
+                        "SELECT category, SUM(amount) as total_amount FROM %s /*+ OPTIONS('scan.startup.mode' = 'earliest') */ GROUP BY category",
+                        tableName);
+
+        // Explain the aggregation query to check for ChangelogNormalize
+        String aggPlan = tEnv.explainSql(aggQuery);
+        // ChangelogNormalize should be present to normalize the changelog for aggregation
+        // In Flink, when the source produces changelog with primary key semantics (I, UA, D),
+        // a ChangelogNormalize operator is inserted before aggregation
+        assertThat(aggPlan).contains("ChangelogNormalize");
+
+        // Expected aggregation results:
+        // Category A: 120 (id=1) + 180 (id=3) = 300
+        // Category B: 200 (id=2) = 200 (id=4 was deleted)
+        List<String> expectedAggResults =
+                Arrays.asList(
+                        "+I[A, 100]",
+                        "+I[B, 200]",
+                        "-U[A, 100]",
+                        "+U[A, 250]",
+                        "-U[B, 200]",
+                        "+U[B, 450]",
+                        "-U[A, 250]",
+                        "+U[A, 150]",
+                        "-U[A, 150]",
+                        "+U[A, 270]",
+                        "-U[A, 270]",
+                        "+U[A, 120]",
+                        "-U[A, 120]",
+                        "+U[A, 300]",
+                        "-U[B, 450]",
+                        "+U[B, 200]");
+
+        // Collect results with timeout
+        assertQueryResultExactOrder(tEnv, aggQuery, expectedAggResults);
     }
 }

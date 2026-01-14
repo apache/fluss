@@ -22,6 +22,8 @@ import org.junit.jupiter.api.Test;
 import java.util.Arrays;
 import java.util.List;
 
+import static org.apache.fluss.types.DataTypeChecks.getFieldCount;
+import static org.apache.fluss.types.DataTypeChecks.getFieldTypes;
 import static org.apache.fluss.types.DataTypeChecks.getLength;
 import static org.apache.fluss.types.DataTypeChecks.getPrecision;
 import static org.apache.fluss.types.DataTypeChecks.getScale;
@@ -123,5 +125,50 @@ public class DataTypeChecksTest {
                     .isInstanceOf(IllegalArgumentException.class)
                     .hasMessageContaining("Invalid use of extractor ScaleExtractor");
         }
+    }
+
+    @Test
+    void testDataTypeVisitorForFieldCountExtract() {
+        RowType rowType =
+                (RowType)
+                        DataTypes.ROW(
+                                DataTypes.FIELD("a", DataTypes.INT()),
+                                DataTypes.FIELD("b", DataTypes.STRING()),
+                                DataTypes.FIELD("c", DataTypes.BOOLEAN()));
+        assertThat(getFieldCount(rowType)).isEqualTo(3);
+
+        assertThat(getFieldCount(DataTypes.INT())).isEqualTo(1);
+        assertThat(getFieldCount(DataTypes.STRING())).isEqualTo(1);
+        assertThat(getFieldCount(DataTypes.BOOLEAN())).isEqualTo(1);
+        assertThat(getFieldCount(DataTypes.BIGINT())).isEqualTo(1);
+        assertThat(getFieldCount(DataTypes.ARRAY(DataTypes.INT()))).isEqualTo(1);
+        assertThat(getFieldCount(DataTypes.MAP(DataTypes.INT(), DataTypes.STRING()))).isEqualTo(1);
+    }
+
+    @Test
+    void testDataTypeVisitorForFieldTypesExtract() {
+        RowType rowType =
+                (RowType)
+                        DataTypes.ROW(
+                                DataTypes.FIELD("a", DataTypes.INT()),
+                                DataTypes.FIELD("b", DataTypes.STRING()),
+                                DataTypes.FIELD("c", DataTypes.BOOLEAN()));
+        List<DataType> fieldTypes = getFieldTypes(rowType);
+        assertThat(fieldTypes).hasSize(3);
+        assertThat(fieldTypes.get(0)).isEqualTo(DataTypes.INT());
+        assertThat(fieldTypes.get(1)).isEqualTo(DataTypes.STRING());
+        assertThat(fieldTypes.get(2)).isEqualTo(DataTypes.BOOLEAN());
+
+        assertThatThrownBy(() -> getFieldTypes(DataTypes.INT()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Invalid use of extractor FieldTypesExtractor");
+
+        assertThatThrownBy(() -> getFieldTypes(DataTypes.STRING()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Invalid use of extractor FieldTypesExtractor");
+
+        assertThatThrownBy(() -> getFieldTypes(DataTypes.ARRAY(DataTypes.INT())))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Invalid use of extractor FieldTypesExtractor");
     }
 }

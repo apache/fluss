@@ -21,16 +21,22 @@ import org.apache.fluss.record.GenericRecord;
 import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.Decimal;
+import org.apache.fluss.row.GenericArray;
+import org.apache.fluss.row.GenericMap;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
 
+import org.apache.paimon.data.InternalArray;
+import org.apache.paimon.data.InternalMap;
 import org.apache.paimon.data.Timestamp;
 import org.apache.paimon.types.RowKind;
 import org.apache.paimon.types.RowType;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
+import java.util.HashMap;
+import java.util.Map;
 
 import static org.apache.fluss.record.ChangeType.APPEND_ONLY;
 import static org.apache.fluss.record.ChangeType.DELETE;
@@ -38,6 +44,7 @@ import static org.apache.fluss.record.ChangeType.INSERT;
 import static org.apache.fluss.record.ChangeType.UPDATE_AFTER;
 import static org.apache.fluss.record.ChangeType.UPDATE_BEFORE;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link FlussRecordAsPaimonRow}. */
 class FlussRecordAsPaimonRowTest {
@@ -162,5 +169,906 @@ class FlussRecordAsPaimonRowTest {
         logRecord = new GenericRecord(logOffset, timeStamp, DELETE, genericRow);
         flussRecordAsPaimonRow.setFlussRecord(logRecord);
         assertThat(flussRecordAsPaimonRow.getRowKind()).isEqualTo(RowKind.DELETE);
+    }
+
+    @Test
+    void testArrayTypeWithIntElements() {
+        int tableBucket = 0;
+        RowType tableRowType =
+                RowType.of(
+                        new org.apache.paimon.types.IntType(),
+                        new org.apache.paimon.types.ArrayType(
+                                new org.apache.paimon.types.IntType()),
+                        // system columns: __bucket, __offset, __timestamp
+                        new org.apache.paimon.types.IntType(),
+                        new org.apache.paimon.types.BigIntType(),
+                        new org.apache.paimon.types.LocalZonedTimestampType(3));
+
+        FlussRecordAsPaimonRow flussRecordAsPaimonRow =
+                new FlussRecordAsPaimonRow(tableBucket, tableRowType);
+        long logOffset = 10;
+        long timeStamp = System.currentTimeMillis();
+        GenericRow genericRow = new GenericRow(2);
+        genericRow.setField(0, 42);
+        genericRow.setField(1, new GenericArray(new int[] {1, 2, 3, 4, 5}));
+
+        LogRecord logRecord = new GenericRecord(logOffset, timeStamp, APPEND_ONLY, genericRow);
+        flussRecordAsPaimonRow.setFlussRecord(logRecord);
+
+        assertThat(flussRecordAsPaimonRow.getInt(0)).isEqualTo(42);
+        InternalArray array = flussRecordAsPaimonRow.getArray(1);
+        assertThat(array).isNotNull();
+        assertThat(array.size()).isEqualTo(5);
+        assertThat(array.getInt(0)).isEqualTo(1);
+        assertThat(array.getInt(1)).isEqualTo(2);
+        assertThat(array.getInt(2)).isEqualTo(3);
+        assertThat(array.getInt(3)).isEqualTo(4);
+        assertThat(array.getInt(4)).isEqualTo(5);
+
+        // Verify system columns are still accessible
+        assertThat(flussRecordAsPaimonRow.getInt(2)).isEqualTo(tableBucket);
+        assertThat(flussRecordAsPaimonRow.getLong(3)).isEqualTo(logOffset);
+        assertThat(flussRecordAsPaimonRow.getLong(4)).isEqualTo(timeStamp);
+    }
+
+    @Test
+    void testArrayTypeWithStringElements() {
+        int tableBucket = 1;
+        RowType tableRowType =
+                RowType.of(
+                        new org.apache.paimon.types.ArrayType(
+                                new org.apache.paimon.types.VarCharType()),
+                        // system columns: __bucket, __offset, __timestamp
+                        new org.apache.paimon.types.IntType(),
+                        new org.apache.paimon.types.BigIntType(),
+                        new org.apache.paimon.types.LocalZonedTimestampType(3));
+
+        FlussRecordAsPaimonRow flussRecordAsPaimonRow =
+                new FlussRecordAsPaimonRow(tableBucket, tableRowType);
+        long logOffset = 5;
+        long timeStamp = System.currentTimeMillis();
+        GenericRow genericRow = new GenericRow(1);
+        genericRow.setField(
+                0,
+                new GenericArray(
+                        new Object[] {
+                            BinaryString.fromString("hello"), BinaryString.fromString("world")
+                        }));
+
+        LogRecord logRecord = new GenericRecord(logOffset, timeStamp, INSERT, genericRow);
+        flussRecordAsPaimonRow.setFlussRecord(logRecord);
+
+        InternalArray array = flussRecordAsPaimonRow.getArray(0);
+        assertThat(array).isNotNull();
+        assertThat(array.size()).isEqualTo(2);
+        assertThat(array.getString(0).toString()).isEqualTo("hello");
+        assertThat(array.getString(1).toString()).isEqualTo("world");
+    }
+
+    @Test
+    void testNestedArrayType() {
+        int tableBucket = 0;
+        RowType tableRowType =
+                RowType.of(
+                        new org.apache.paimon.types.ArrayType(
+                                new org.apache.paimon.types.ArrayType(
+                                        new org.apache.paimon.types.IntType())),
+                        // system columns: __bucket, __offset, __timestamp
+                        new org.apache.paimon.types.IntType(),
+                        new org.apache.paimon.types.BigIntType(),
+                        new org.apache.paimon.types.LocalZonedTimestampType(3));
+
+        FlussRecordAsPaimonRow flussRecordAsPaimonRow =
+                new FlussRecordAsPaimonRow(tableBucket, tableRowType);
+        long logOffset = 0;
+        long timeStamp = System.currentTimeMillis();
+        GenericRow genericRow = new GenericRow(1);
+        genericRow.setField(
+                0,
+                new GenericArray(
+                        new Object[] {
+                            new GenericArray(new int[] {1, 2}),
+                            new GenericArray(new int[] {3, 4, 5})
+                        }));
+
+        LogRecord logRecord = new GenericRecord(logOffset, timeStamp, APPEND_ONLY, genericRow);
+        flussRecordAsPaimonRow.setFlussRecord(logRecord);
+
+        InternalArray outerArray = flussRecordAsPaimonRow.getArray(0);
+        assertThat(outerArray).isNotNull();
+        assertThat(outerArray.size()).isEqualTo(2);
+
+        InternalArray innerArray1 = outerArray.getArray(0);
+        assertThat(innerArray1.size()).isEqualTo(2);
+        assertThat(innerArray1.getInt(0)).isEqualTo(1);
+        assertThat(innerArray1.getInt(1)).isEqualTo(2);
+
+        InternalArray innerArray2 = outerArray.getArray(1);
+        assertThat(innerArray2.size()).isEqualTo(3);
+        assertThat(innerArray2.getInt(0)).isEqualTo(3);
+    }
+
+    @Test
+    void testArrayWithAllPrimitiveTypes() {
+        int tableBucket = 0;
+        RowType tableRowType =
+                RowType.of(
+                        new org.apache.paimon.types.ArrayType(
+                                new org.apache.paimon.types.BooleanType()),
+                        new org.apache.paimon.types.ArrayType(
+                                new org.apache.paimon.types.TinyIntType()),
+                        new org.apache.paimon.types.ArrayType(
+                                new org.apache.paimon.types.SmallIntType()),
+                        new org.apache.paimon.types.ArrayType(
+                                new org.apache.paimon.types.IntType()),
+                        new org.apache.paimon.types.ArrayType(
+                                new org.apache.paimon.types.BigIntType()),
+                        new org.apache.paimon.types.ArrayType(
+                                new org.apache.paimon.types.FloatType()),
+                        new org.apache.paimon.types.ArrayType(
+                                new org.apache.paimon.types.DoubleType()),
+                        // system columns: __bucket, __offset, __timestamp
+                        new org.apache.paimon.types.IntType(),
+                        new org.apache.paimon.types.BigIntType(),
+                        new org.apache.paimon.types.LocalZonedTimestampType(3));
+
+        FlussRecordAsPaimonRow flussRecordAsPaimonRow =
+                new FlussRecordAsPaimonRow(tableBucket, tableRowType);
+        long logOffset = 0;
+        long timeStamp = System.currentTimeMillis();
+        GenericRow genericRow = new GenericRow(7);
+        genericRow.setField(0, new GenericArray(new boolean[] {true, false, true}));
+        genericRow.setField(1, new GenericArray(new byte[] {1, 2, 3}));
+        genericRow.setField(2, new GenericArray(new short[] {100, 200, 300}));
+        genericRow.setField(3, new GenericArray(new int[] {1000, 2000, 3000}));
+        genericRow.setField(4, new GenericArray(new long[] {10000L, 20000L, 30000L}));
+        genericRow.setField(5, new GenericArray(new float[] {1.1f, 2.2f, 3.3f}));
+        genericRow.setField(6, new GenericArray(new double[] {1.11, 2.22, 3.33}));
+
+        LogRecord logRecord = new GenericRecord(logOffset, timeStamp, APPEND_ONLY, genericRow);
+        flussRecordAsPaimonRow.setFlussRecord(logRecord);
+
+        // Test boolean array
+        InternalArray boolArray = flussRecordAsPaimonRow.getArray(0);
+        assertThat(boolArray.size()).isEqualTo(3);
+        assertThat(boolArray.getBoolean(0)).isTrue();
+        assertThat(boolArray.getBoolean(1)).isFalse();
+        assertThat(boolArray.getBoolean(2)).isTrue();
+        assertThat(boolArray.toBooleanArray()).isEqualTo(new boolean[] {true, false, true});
+
+        // Test byte array
+        InternalArray byteArray = flussRecordAsPaimonRow.getArray(1);
+        assertThat(byteArray.size()).isEqualTo(3);
+        assertThat(byteArray.getByte(0)).isEqualTo((byte) 1);
+        assertThat(byteArray.getByte(1)).isEqualTo((byte) 2);
+        assertThat(byteArray.toByteArray()).isEqualTo(new byte[] {1, 2, 3});
+
+        // Test short array
+        InternalArray shortArray = flussRecordAsPaimonRow.getArray(2);
+        assertThat(shortArray.size()).isEqualTo(3);
+        assertThat(shortArray.getShort(0)).isEqualTo((short) 100);
+        assertThat(shortArray.toShortArray()).isEqualTo(new short[] {100, 200, 300});
+
+        // Test int array
+        InternalArray intArray = flussRecordAsPaimonRow.getArray(3);
+        assertThat(intArray.toIntArray()).isEqualTo(new int[] {1000, 2000, 3000});
+
+        // Test long array
+        InternalArray longArray = flussRecordAsPaimonRow.getArray(4);
+        assertThat(longArray.getLong(0)).isEqualTo(10000L);
+        assertThat(longArray.toLongArray()).isEqualTo(new long[] {10000L, 20000L, 30000L});
+
+        // Test float array
+        InternalArray floatArray = flussRecordAsPaimonRow.getArray(5);
+        assertThat(floatArray.getFloat(0)).isEqualTo(1.1f);
+        assertThat(floatArray.toFloatArray()).isEqualTo(new float[] {1.1f, 2.2f, 3.3f});
+
+        // Test double array
+        InternalArray doubleArray = flussRecordAsPaimonRow.getArray(6);
+        assertThat(doubleArray.getDouble(0)).isEqualTo(1.11);
+        assertThat(doubleArray.toDoubleArray()).isEqualTo(new double[] {1.11, 2.22, 3.33});
+
+        // Verify system columns
+        assertThat(flussRecordAsPaimonRow.getInt(7)).isEqualTo(tableBucket);
+        assertThat(flussRecordAsPaimonRow.getLong(8)).isEqualTo(logOffset);
+    }
+
+    @Test
+    void testArrayWithDecimalElements() {
+        int tableBucket = 0;
+        RowType tableRowType =
+                RowType.of(
+                        new org.apache.paimon.types.ArrayType(
+                                new org.apache.paimon.types.DecimalType(10, 2)),
+                        // system columns
+                        new org.apache.paimon.types.IntType(),
+                        new org.apache.paimon.types.BigIntType(),
+                        new org.apache.paimon.types.LocalZonedTimestampType(3));
+
+        FlussRecordAsPaimonRow flussRecordAsPaimonRow =
+                new FlussRecordAsPaimonRow(tableBucket, tableRowType);
+        long logOffset = 0;
+        long timeStamp = System.currentTimeMillis();
+        GenericRow genericRow = new GenericRow(1);
+        genericRow.setField(
+                0,
+                new GenericArray(
+                        new Object[] {
+                            Decimal.fromBigDecimal(new BigDecimal("123.45"), 10, 2),
+                            Decimal.fromBigDecimal(new BigDecimal("678.90"), 10, 2)
+                        }));
+
+        LogRecord logRecord = new GenericRecord(logOffset, timeStamp, APPEND_ONLY, genericRow);
+        flussRecordAsPaimonRow.setFlussRecord(logRecord);
+
+        InternalArray array = flussRecordAsPaimonRow.getArray(0);
+        assertThat(array.size()).isEqualTo(2);
+        assertThat(array.getDecimal(0, 10, 2).toBigDecimal()).isEqualTo(new BigDecimal("123.45"));
+        assertThat(array.getDecimal(1, 10, 2).toBigDecimal()).isEqualTo(new BigDecimal("678.90"));
+    }
+
+    @Test
+    void testArrayWithTimestampElements() {
+        int tableBucket = 0;
+        RowType tableRowType =
+                RowType.of(
+                        new org.apache.paimon.types.ArrayType(
+                                new org.apache.paimon.types.TimestampType(3)),
+                        // system columns
+                        new org.apache.paimon.types.IntType(),
+                        new org.apache.paimon.types.BigIntType(),
+                        new org.apache.paimon.types.LocalZonedTimestampType(3));
+
+        FlussRecordAsPaimonRow flussRecordAsPaimonRow =
+                new FlussRecordAsPaimonRow(tableBucket, tableRowType);
+        long logOffset = 0;
+        long timeStamp = System.currentTimeMillis();
+        GenericRow genericRow = new GenericRow(1);
+        genericRow.setField(
+                0,
+                new GenericArray(
+                        new Object[] {
+                            TimestampNtz.fromMillis(1698235273182L),
+                            TimestampNtz.fromMillis(1698235274000L)
+                        }));
+
+        LogRecord logRecord = new GenericRecord(logOffset, timeStamp, APPEND_ONLY, genericRow);
+        flussRecordAsPaimonRow.setFlussRecord(logRecord);
+
+        InternalArray array = flussRecordAsPaimonRow.getArray(0);
+        assertThat(array.size()).isEqualTo(2);
+        assertThat(array.getTimestamp(0, 3).getMillisecond()).isEqualTo(1698235273182L);
+        assertThat(array.getTimestamp(1, 3).getMillisecond()).isEqualTo(1698235274000L);
+    }
+
+    @Test
+    void testArrayWithBinaryElements() {
+        int tableBucket = 0;
+        RowType tableRowType =
+                RowType.of(
+                        new org.apache.paimon.types.ArrayType(
+                                new org.apache.paimon.types.VarBinaryType()),
+                        // system columns
+                        new org.apache.paimon.types.IntType(),
+                        new org.apache.paimon.types.BigIntType(),
+                        new org.apache.paimon.types.LocalZonedTimestampType(3));
+
+        FlussRecordAsPaimonRow flussRecordAsPaimonRow =
+                new FlussRecordAsPaimonRow(tableBucket, tableRowType);
+        long logOffset = 0;
+        long timeStamp = System.currentTimeMillis();
+        GenericRow genericRow = new GenericRow(1);
+        genericRow.setField(
+                0, new GenericArray(new Object[] {new byte[] {1, 2, 3}, new byte[] {4, 5, 6, 7}}));
+
+        LogRecord logRecord = new GenericRecord(logOffset, timeStamp, APPEND_ONLY, genericRow);
+        flussRecordAsPaimonRow.setFlussRecord(logRecord);
+
+        InternalArray array = flussRecordAsPaimonRow.getArray(0);
+        assertThat(array.size()).isEqualTo(2);
+        assertThat(array.getBinary(0)).isEqualTo(new byte[] {1, 2, 3});
+        assertThat(array.getBinary(1)).isEqualTo(new byte[] {4, 5, 6, 7});
+    }
+
+    @Test
+    void testNullArray() {
+        int tableBucket = 0;
+        RowType tableRowType =
+                RowType.of(
+                        new org.apache.paimon.types.ArrayType(new org.apache.paimon.types.IntType())
+                                .nullable(),
+                        // system columns
+                        new org.apache.paimon.types.IntType(),
+                        new org.apache.paimon.types.BigIntType(),
+                        new org.apache.paimon.types.LocalZonedTimestampType(3));
+
+        FlussRecordAsPaimonRow flussRecordAsPaimonRow =
+                new FlussRecordAsPaimonRow(tableBucket, tableRowType);
+        long logOffset = 0;
+        long timeStamp = System.currentTimeMillis();
+        GenericRow genericRow = new GenericRow(1);
+        genericRow.setField(0, null);
+
+        LogRecord logRecord = new GenericRecord(logOffset, timeStamp, APPEND_ONLY, genericRow);
+        flussRecordAsPaimonRow.setFlussRecord(logRecord);
+
+        assertThat(flussRecordAsPaimonRow.isNullAt(0)).isTrue();
+    }
+
+    @Test
+    void testArrayWithNullableElements() {
+        int tableBucket = 0;
+        RowType tableRowType =
+                RowType.of(
+                        new org.apache.paimon.types.ArrayType(
+                                new org.apache.paimon.types.IntType().nullable()),
+                        // system columns
+                        new org.apache.paimon.types.IntType(),
+                        new org.apache.paimon.types.BigIntType(),
+                        new org.apache.paimon.types.LocalZonedTimestampType(3));
+
+        FlussRecordAsPaimonRow flussRecordAsPaimonRow =
+                new FlussRecordAsPaimonRow(tableBucket, tableRowType);
+        long logOffset = 0;
+        long timeStamp = System.currentTimeMillis();
+        GenericRow genericRow = new GenericRow(1);
+        genericRow.setField(0, new GenericArray(new Object[] {1, null, 3}));
+
+        LogRecord logRecord = new GenericRecord(logOffset, timeStamp, APPEND_ONLY, genericRow);
+        flussRecordAsPaimonRow.setFlussRecord(logRecord);
+
+        InternalArray array = flussRecordAsPaimonRow.getArray(0);
+        assertThat(array.size()).isEqualTo(3);
+        assertThat(array.getInt(0)).isEqualTo(1);
+        assertThat(array.isNullAt(1)).isTrue();
+        assertThat(array.getInt(2)).isEqualTo(3);
+    }
+
+    @Test
+    void testEmptyArray() {
+        int tableBucket = 0;
+        RowType tableRowType =
+                RowType.of(
+                        new org.apache.paimon.types.ArrayType(
+                                new org.apache.paimon.types.IntType()),
+                        // system columns
+                        new org.apache.paimon.types.IntType(),
+                        new org.apache.paimon.types.BigIntType(),
+                        new org.apache.paimon.types.LocalZonedTimestampType(3));
+
+        FlussRecordAsPaimonRow flussRecordAsPaimonRow =
+                new FlussRecordAsPaimonRow(tableBucket, tableRowType);
+        long logOffset = 0;
+        long timeStamp = System.currentTimeMillis();
+        GenericRow genericRow = new GenericRow(1);
+        genericRow.setField(0, new GenericArray(new int[] {}));
+
+        LogRecord logRecord = new GenericRecord(logOffset, timeStamp, APPEND_ONLY, genericRow);
+        flussRecordAsPaimonRow.setFlussRecord(logRecord);
+
+        InternalArray array = flussRecordAsPaimonRow.getArray(0);
+        assertThat(array).isNotNull();
+        assertThat(array.size()).isEqualTo(0);
+    }
+
+    @Test
+    void testPaimonSchemaWiderThanFlussRecord() {
+        int tableBucket = 0;
+        RowType tableRowType =
+                RowType.of(
+                        new org.apache.paimon.types.BooleanType(),
+                        new org.apache.paimon.types.VarCharType(),
+                        // append three system columns: __bucket, __offset,__timestamp
+                        new org.apache.paimon.types.IntType(),
+                        new org.apache.paimon.types.BigIntType(),
+                        new org.apache.paimon.types.LocalZonedTimestampType(3));
+
+        FlussRecordAsPaimonRow flussRecordAsPaimonRow =
+                new FlussRecordAsPaimonRow(tableBucket, tableRowType);
+
+        long logOffset = 7L;
+        long timeStamp = System.currentTimeMillis();
+        GenericRow genericRow = new GenericRow(1);
+        genericRow.setField(0, true);
+        LogRecord logRecord = new GenericRecord(logOffset, timeStamp, APPEND_ONLY, genericRow);
+        flussRecordAsPaimonRow.setFlussRecord(logRecord);
+
+        assertThat(flussRecordAsPaimonRow.getFieldCount()).isEqualTo(5);
+
+        assertThat(flussRecordAsPaimonRow.getBoolean(0)).isTrue();
+        assertThat(flussRecordAsPaimonRow.isNullAt(1)).isTrue();
+        assertThat(flussRecordAsPaimonRow.getInt(2)).isEqualTo(tableBucket);
+        assertThat(flussRecordAsPaimonRow.getLong(3)).isEqualTo(logOffset);
+        assertThat(flussRecordAsPaimonRow.getTimestamp(4, 3))
+                .isEqualTo(Timestamp.fromEpochMillis(timeStamp));
+    }
+
+    @Test
+    void testFlussRecordWiderThanPaimonSchema() {
+        int tableBucket = 0;
+        RowType tableRowType =
+                RowType.of(
+                        new org.apache.paimon.types.BooleanType(),
+                        // append three system columns: __bucket, __offset,__timestamp
+                        new org.apache.paimon.types.IntType(),
+                        new org.apache.paimon.types.BigIntType(),
+                        new org.apache.paimon.types.LocalZonedTimestampType(3));
+
+        FlussRecordAsPaimonRow flussRecordAsPaimonRow =
+                new FlussRecordAsPaimonRow(tableBucket, tableRowType);
+
+        long logOffset = 7L;
+        long timeStamp = System.currentTimeMillis();
+        GenericRow genericRow = new GenericRow(2);
+        genericRow.setField(0, true);
+        genericRow.setField(1, BinaryString.fromString("extra"));
+        LogRecord logRecord = new GenericRecord(logOffset, timeStamp, APPEND_ONLY, genericRow);
+
+        // Should throw exception instead of silently truncating data
+        assertThatThrownBy(() -> flussRecordAsPaimonRow.setFlussRecord(logRecord))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining(
+                        "Fluss record has 2 fields but Paimon schema only has 1 business fields");
+    }
+
+    @Test
+    void testNestedRowType() {
+        int tableBucket = 0;
+
+        // Build nested row types
+        org.apache.paimon.types.RowType simpleNestedRowType =
+                org.apache.paimon.types.RowType.builder()
+                        .field("nested_int", new org.apache.paimon.types.IntType())
+                        .field("nested_string", new org.apache.paimon.types.VarCharType())
+                        .build();
+
+        org.apache.paimon.types.RowType allTypesNestedRowType =
+                org.apache.paimon.types.RowType.builder()
+                        .field("bool_field", new org.apache.paimon.types.BooleanType())
+                        .field("byte_field", new org.apache.paimon.types.TinyIntType())
+                        .field("short_field", new org.apache.paimon.types.SmallIntType())
+                        .field("int_field", new org.apache.paimon.types.IntType())
+                        .field("long_field", new org.apache.paimon.types.BigIntType())
+                        .field("float_field", new org.apache.paimon.types.FloatType())
+                        .field("double_field", new org.apache.paimon.types.DoubleType())
+                        .field("string_field", new org.apache.paimon.types.VarCharType())
+                        .build();
+
+        org.apache.paimon.types.RowType decimalTimestampRowType =
+                org.apache.paimon.types.RowType.builder()
+                        .field("decimal_field", new org.apache.paimon.types.DecimalType(10, 2))
+                        .field("timestamp_field", new org.apache.paimon.types.TimestampType(3))
+                        .build();
+
+        org.apache.paimon.types.RowType innerRowType =
+                org.apache.paimon.types.RowType.builder()
+                        .field("inner_value", new org.apache.paimon.types.IntType())
+                        .build();
+
+        org.apache.paimon.types.RowType middleRowType =
+                org.apache.paimon.types.RowType.builder()
+                        .field("middle_int", new org.apache.paimon.types.IntType())
+                        .field("inner_row", innerRowType)
+                        .build();
+
+        org.apache.paimon.types.RowType rowWithArrayType =
+                org.apache.paimon.types.RowType.builder()
+                        .field("id", new org.apache.paimon.types.IntType())
+                        .field(
+                                "values",
+                                new org.apache.paimon.types.ArrayType(
+                                        new org.apache.paimon.types.IntType()))
+                        .build();
+
+        org.apache.paimon.types.RowType arrayElementRowType =
+                org.apache.paimon.types.RowType.builder()
+                        .field("id", new org.apache.paimon.types.IntType())
+                        .field("name", new org.apache.paimon.types.VarCharType())
+                        .build();
+
+        org.apache.paimon.types.RowType nullableFieldsRowType =
+                org.apache.paimon.types.RowType.builder()
+                        .field("id", new org.apache.paimon.types.IntType())
+                        .field(
+                                "nullable_field",
+                                new org.apache.paimon.types.VarCharType().nullable())
+                        .build();
+
+        RowType tableRowType =
+                RowType.of(
+                        simpleNestedRowType,
+                        allTypesNestedRowType,
+                        decimalTimestampRowType,
+                        middleRowType,
+                        rowWithArrayType,
+                        new org.apache.paimon.types.ArrayType(arrayElementRowType),
+                        simpleNestedRowType.nullable(),
+                        nullableFieldsRowType,
+                        // system columns
+                        new org.apache.paimon.types.IntType(),
+                        new org.apache.paimon.types.BigIntType(),
+                        new org.apache.paimon.types.LocalZonedTimestampType(3));
+
+        FlussRecordAsPaimonRow flussRecordAsPaimonRow =
+                new FlussRecordAsPaimonRow(tableBucket, tableRowType);
+        long logOffset = 0;
+        long timeStamp = System.currentTimeMillis();
+        GenericRow genericRow = new GenericRow(8);
+
+        // Simple nested row
+        GenericRow simpleNestedRow = new GenericRow(2);
+        simpleNestedRow.setField(0, 100);
+        simpleNestedRow.setField(1, BinaryString.fromString("nested_value"));
+        genericRow.setField(0, simpleNestedRow);
+
+        // Nested row with all primitive types
+        GenericRow allTypesNestedRow = new GenericRow(8);
+        allTypesNestedRow.setField(0, true);
+        allTypesNestedRow.setField(1, (byte) 127);
+        allTypesNestedRow.setField(2, (short) 32000);
+        allTypesNestedRow.setField(3, 2147483647);
+        allTypesNestedRow.setField(4, 9223372036854775807L);
+        allTypesNestedRow.setField(5, 3.14f);
+        allTypesNestedRow.setField(6, 2.718281828);
+        allTypesNestedRow.setField(7, BinaryString.fromString("test_string"));
+        genericRow.setField(1, allTypesNestedRow);
+
+        // Nested row with decimal and timestamp
+        GenericRow decimalTimestampRow = new GenericRow(2);
+        decimalTimestampRow.setField(0, Decimal.fromBigDecimal(new BigDecimal("123.45"), 10, 2));
+        decimalTimestampRow.setField(1, TimestampNtz.fromMillis(1698235273182L));
+        genericRow.setField(2, decimalTimestampRow);
+
+        // Deeply nested row
+        GenericRow innerRow = new GenericRow(1);
+        innerRow.setField(0, 999);
+        GenericRow middleRow = new GenericRow(2);
+        middleRow.setField(0, 500);
+        middleRow.setField(1, innerRow);
+        genericRow.setField(3, middleRow);
+
+        // Nested row with array field
+        GenericRow nestedRowWithArray = new GenericRow(2);
+        nestedRowWithArray.setField(0, 123);
+        nestedRowWithArray.setField(1, new GenericArray(new int[] {10, 20, 30}));
+        genericRow.setField(4, nestedRowWithArray);
+
+        // Array of nested rows
+        GenericRow arrayRow1 = new GenericRow(2);
+        arrayRow1.setField(0, 1);
+        arrayRow1.setField(1, BinaryString.fromString("Alice"));
+        GenericRow arrayRow2 = new GenericRow(2);
+        arrayRow2.setField(0, 2);
+        arrayRow2.setField(1, BinaryString.fromString("Bob"));
+        genericRow.setField(5, new GenericArray(new Object[] {arrayRow1, arrayRow2}));
+
+        // Null nested row
+        genericRow.setField(6, null);
+
+        // Nested row with nullable fields
+        GenericRow nullableFieldsRow = new GenericRow(2);
+        nullableFieldsRow.setField(0, 42);
+        nullableFieldsRow.setField(1, null);
+        genericRow.setField(7, nullableFieldsRow);
+
+        LogRecord logRecord = new GenericRecord(logOffset, timeStamp, APPEND_ONLY, genericRow);
+        flussRecordAsPaimonRow.setFlussRecord(logRecord);
+
+        // Test simple nested row
+        org.apache.paimon.data.InternalRow paimonSimpleRow = flussRecordAsPaimonRow.getRow(0, 2);
+        assertThat(paimonSimpleRow).isNotNull();
+        assertThat(paimonSimpleRow.getInt(0)).isEqualTo(100);
+        assertThat(paimonSimpleRow.getString(1).toString()).isEqualTo("nested_value");
+
+        // Test nested row with all primitive types
+        org.apache.paimon.data.InternalRow paimonAllTypesRow = flussRecordAsPaimonRow.getRow(1, 8);
+        assertThat(paimonAllTypesRow).isNotNull();
+        assertThat(paimonAllTypesRow.getBoolean(0)).isTrue();
+        assertThat(paimonAllTypesRow.getByte(1)).isEqualTo((byte) 127);
+        assertThat(paimonAllTypesRow.getShort(2)).isEqualTo((short) 32000);
+        assertThat(paimonAllTypesRow.getInt(3)).isEqualTo(2147483647);
+        assertThat(paimonAllTypesRow.getLong(4)).isEqualTo(9223372036854775807L);
+        assertThat(paimonAllTypesRow.getFloat(5)).isEqualTo(3.14f);
+        assertThat(paimonAllTypesRow.getDouble(6)).isEqualTo(2.718281828);
+        assertThat(paimonAllTypesRow.getString(7).toString()).isEqualTo("test_string");
+
+        // Test nested row with decimal and timestamp
+        org.apache.paimon.data.InternalRow paimonDecimalTimestampRow =
+                flussRecordAsPaimonRow.getRow(2, 2);
+        assertThat(paimonDecimalTimestampRow).isNotNull();
+        assertThat(paimonDecimalTimestampRow.getDecimal(0, 10, 2).toBigDecimal())
+                .isEqualTo(new BigDecimal("123.45"));
+        assertThat(paimonDecimalTimestampRow.getTimestamp(1, 3).getMillisecond())
+                .isEqualTo(1698235273182L);
+
+        // Test deeply nested row
+        org.apache.paimon.data.InternalRow paimonMiddleRow = flussRecordAsPaimonRow.getRow(3, 2);
+        assertThat(paimonMiddleRow).isNotNull();
+        assertThat(paimonMiddleRow.getInt(0)).isEqualTo(500);
+        org.apache.paimon.data.InternalRow paimonInnerRow = paimonMiddleRow.getRow(1, 1);
+        assertThat(paimonInnerRow).isNotNull();
+        assertThat(paimonInnerRow.getInt(0)).isEqualTo(999);
+
+        // Test nested row with array field
+        org.apache.paimon.data.InternalRow paimonRowWithArray = flussRecordAsPaimonRow.getRow(4, 2);
+        assertThat(paimonRowWithArray).isNotNull();
+        assertThat(paimonRowWithArray.getInt(0)).isEqualTo(123);
+        org.apache.paimon.data.InternalArray arrayInRow = paimonRowWithArray.getArray(1);
+        assertThat(arrayInRow).isNotNull();
+        assertThat(arrayInRow.size()).isEqualTo(3);
+        assertThat(arrayInRow.getInt(0)).isEqualTo(10);
+        assertThat(arrayInRow.getInt(1)).isEqualTo(20);
+        assertThat(arrayInRow.getInt(2)).isEqualTo(30);
+
+        // Test array of nested rows
+        org.apache.paimon.data.InternalArray arrayOfRows = flussRecordAsPaimonRow.getArray(5);
+        assertThat(arrayOfRows).isNotNull();
+        assertThat(arrayOfRows.size()).isEqualTo(2);
+        org.apache.paimon.data.InternalRow paimonRow1 = arrayOfRows.getRow(0, 2);
+        assertThat(paimonRow1.getInt(0)).isEqualTo(1);
+        assertThat(paimonRow1.getString(1).toString()).isEqualTo("Alice");
+        org.apache.paimon.data.InternalRow paimonRow2 = arrayOfRows.getRow(1, 2);
+        assertThat(paimonRow2.getInt(0)).isEqualTo(2);
+        assertThat(paimonRow2.getString(1).toString()).isEqualTo("Bob");
+
+        // Test null nested row
+        assertThat(flussRecordAsPaimonRow.isNullAt(6)).isTrue();
+
+        // Test nested row with nullable fields
+        org.apache.paimon.data.InternalRow paimonNullableFieldsRow =
+                flussRecordAsPaimonRow.getRow(7, 2);
+        assertThat(paimonNullableFieldsRow).isNotNull();
+        assertThat(paimonNullableFieldsRow.getInt(0)).isEqualTo(42);
+        assertThat(paimonNullableFieldsRow.isNullAt(1)).isTrue();
+
+        // Verify system columns
+        assertThat(flussRecordAsPaimonRow.getInt(8)).isEqualTo(tableBucket);
+        assertThat(flussRecordAsPaimonRow.getLong(9)).isEqualTo(logOffset);
+        assertThat(flussRecordAsPaimonRow.getLong(10)).isEqualTo(timeStamp);
+    }
+
+    @Test
+    void testMapWithAllTypes() {
+        // Test map with integer key and integer value
+        Map<Object, Object> intMapData = new HashMap<>();
+        intMapData.put(1, 100);
+        intMapData.put(2, 200);
+        intMapData.put(3, 300);
+        testMapType(
+                new org.apache.paimon.types.IntType(),
+                new org.apache.paimon.types.IntType(),
+                intMapData,
+                map -> {
+                    assertThat(map.size()).isEqualTo(3);
+                    InternalArray keys = map.keyArray();
+                    InternalArray values = map.valueArray();
+                    assertThat(keys.size()).isEqualTo(3);
+                    assertThat(values.size()).isEqualTo(3);
+                    assertThat(keys.toIntArray()).containsExactlyInAnyOrder(1, 2, 3);
+                    assertThat(values.toIntArray()).containsExactlyInAnyOrder(100, 200, 300);
+                });
+
+        // Test map with string key and integer value
+        Map<Object, Object> stringMapData = new HashMap<>();
+        stringMapData.put(BinaryString.fromString("key1"), 100);
+        stringMapData.put(BinaryString.fromString("key2"), 200);
+        testMapType(
+                new org.apache.paimon.types.VarCharType(),
+                new org.apache.paimon.types.IntType(),
+                stringMapData,
+                map -> {
+                    assertThat(map.size()).isEqualTo(2);
+                    InternalArray keys = map.keyArray();
+                    InternalArray values = map.valueArray();
+                    assertThat(keys.size()).isEqualTo(2);
+                    assertThat(values.size()).isEqualTo(2);
+                    assertThat(keys.getString(0).toString()).isIn("key1", "key2");
+                    assertThat(keys.getString(1).toString()).isIn("key1", "key2");
+                    assertThat(values.toIntArray()).containsExactlyInAnyOrder(100, 200);
+                });
+
+        // Test map with long key and double value
+        Map<Object, Object> longDoubleMapData = new HashMap<>();
+        longDoubleMapData.put(1L, 1.1);
+        longDoubleMapData.put(2L, 2.2);
+        testMapType(
+                new org.apache.paimon.types.BigIntType(),
+                new org.apache.paimon.types.DoubleType(),
+                longDoubleMapData,
+                map -> {
+                    assertThat(map.size()).isEqualTo(2);
+                    InternalArray keys = map.keyArray();
+                    InternalArray values = map.valueArray();
+                    assertThat(keys.toLongArray()).containsExactlyInAnyOrder(1L, 2L);
+                    assertThat(values.toDoubleArray()).containsExactlyInAnyOrder(1.1, 2.2);
+                });
+
+        // Test map with decimal values
+        Map<Object, Object> decimalMapData = new HashMap<>();
+        decimalMapData.put(1, Decimal.fromBigDecimal(new BigDecimal("123.45"), 10, 2));
+        decimalMapData.put(2, Decimal.fromBigDecimal(new BigDecimal("678.90"), 10, 2));
+        testMapType(
+                new org.apache.paimon.types.IntType(),
+                new org.apache.paimon.types.DecimalType(10, 2),
+                decimalMapData,
+                map -> {
+                    assertThat(map.size()).isEqualTo(2);
+                    InternalArray keys = map.keyArray();
+                    InternalArray values = map.valueArray();
+                    assertThat(keys.size()).isEqualTo(2);
+                    assertThat(values.size()).isEqualTo(2);
+                    assertThat(keys.toIntArray()).containsExactlyInAnyOrder(1, 2);
+                    assertThat(values.getDecimal(0, 10, 2).toBigDecimal())
+                            .isIn(new BigDecimal("123.45"), new BigDecimal("678.90"));
+                    assertThat(values.getDecimal(1, 10, 2).toBigDecimal())
+                            .isIn(new BigDecimal("123.45"), new BigDecimal("678.90"));
+                });
+
+        // Test nested map type
+        int tableBucket = 0;
+        RowType nestedMapRowType =
+                RowType.of(
+                        new org.apache.paimon.types.MapType(
+                                new org.apache.paimon.types.IntType(),
+                                new org.apache.paimon.types.MapType(
+                                        new org.apache.paimon.types.VarCharType(),
+                                        new org.apache.paimon.types.IntType())),
+                        new org.apache.paimon.types.IntType(),
+                        new org.apache.paimon.types.BigIntType(),
+                        new org.apache.paimon.types.LocalZonedTimestampType(3));
+
+        FlussRecordAsPaimonRow flussRecordAsPaimonRow =
+                new FlussRecordAsPaimonRow(tableBucket, nestedMapRowType);
+        long logOffset = 0;
+        long timeStamp = System.currentTimeMillis();
+        GenericRow nestedMapGenericRow = new GenericRow(1);
+
+        Map<Object, Object> innerMap1 = new HashMap<>();
+        innerMap1.put(BinaryString.fromString("a"), 1);
+        innerMap1.put(BinaryString.fromString("b"), 2);
+
+        Map<Object, Object> innerMap2 = new HashMap<>();
+        innerMap2.put(BinaryString.fromString("c"), 3);
+        innerMap2.put(BinaryString.fromString("d"), 4);
+
+        Map<Object, Object> outerMap = new HashMap<>();
+        outerMap.put(1, new GenericMap(innerMap1));
+        outerMap.put(2, new GenericMap(innerMap2));
+
+        nestedMapGenericRow.setField(0, new GenericMap(outerMap));
+
+        LogRecord nestedMapLogRecord =
+                new GenericRecord(logOffset, timeStamp, APPEND_ONLY, nestedMapGenericRow);
+        flussRecordAsPaimonRow.setFlussRecord(nestedMapLogRecord);
+
+        InternalMap outerMapResult = flussRecordAsPaimonRow.getMap(0);
+        assertThat(outerMapResult).isNotNull();
+        assertThat(outerMapResult.size()).isEqualTo(2);
+
+        InternalArray values = outerMapResult.valueArray();
+        InternalMap innerMap1Result = values.getMap(0);
+        assertThat(innerMap1Result).isNotNull();
+        assertThat(innerMap1Result.size()).isEqualTo(2);
+
+        InternalMap innerMap2Result = values.getMap(1);
+        assertThat(innerMap2Result).isNotNull();
+        assertThat(innerMap2Result.size()).isEqualTo(2);
+    }
+
+    private void testMapType(
+            org.apache.paimon.types.DataType keyType,
+            org.apache.paimon.types.DataType valueType,
+            Map<Object, Object> mapData,
+            java.util.function.Consumer<InternalMap> assertions) {
+        int tableBucket = 0;
+        long logOffset = 0;
+        long timeStamp = System.currentTimeMillis();
+
+        RowType rowType =
+                RowType.of(
+                        new org.apache.paimon.types.MapType(keyType, valueType),
+                        new org.apache.paimon.types.IntType(),
+                        new org.apache.paimon.types.BigIntType(),
+                        new org.apache.paimon.types.LocalZonedTimestampType(3));
+
+        FlussRecordAsPaimonRow flussRow = new FlussRecordAsPaimonRow(tableBucket, rowType);
+        GenericRow genericRow = new GenericRow(1);
+        genericRow.setField(0, new GenericMap(mapData));
+        LogRecord logRecord = new GenericRecord(logOffset, timeStamp, APPEND_ONLY, genericRow);
+        flussRow.setFlussRecord(logRecord);
+
+        InternalMap map = flussRow.getMap(0);
+        assertThat(map).isNotNull();
+        assertions.accept(map);
+    }
+
+    @Test
+    void testNullMap() {
+        int tableBucket = 0;
+        RowType tableRowType =
+                RowType.of(
+                        new org.apache.paimon.types.MapType(
+                                        new org.apache.paimon.types.IntType(),
+                                        new org.apache.paimon.types.IntType())
+                                .nullable(),
+                        // system columns
+                        new org.apache.paimon.types.IntType(),
+                        new org.apache.paimon.types.BigIntType(),
+                        new org.apache.paimon.types.LocalZonedTimestampType(3));
+
+        FlussRecordAsPaimonRow flussRecordAsPaimonRow =
+                new FlussRecordAsPaimonRow(tableBucket, tableRowType);
+        long logOffset = 0;
+        long timeStamp = System.currentTimeMillis();
+        GenericRow genericRow = new GenericRow(1);
+        genericRow.setField(0, null);
+
+        LogRecord logRecord = new GenericRecord(logOffset, timeStamp, APPEND_ONLY, genericRow);
+        flussRecordAsPaimonRow.setFlussRecord(logRecord);
+
+        assertThat(flussRecordAsPaimonRow.isNullAt(0)).isTrue();
+    }
+
+    @Test
+    void testMapWithNullableValues() {
+        int tableBucket = 0;
+        RowType tableRowType =
+                RowType.of(
+                        new org.apache.paimon.types.MapType(
+                                new org.apache.paimon.types.IntType(),
+                                new org.apache.paimon.types.IntType().nullable()),
+                        // system columns
+                        new org.apache.paimon.types.IntType(),
+                        new org.apache.paimon.types.BigIntType(),
+                        new org.apache.paimon.types.LocalZonedTimestampType(3));
+
+        FlussRecordAsPaimonRow flussRecordAsPaimonRow =
+                new FlussRecordAsPaimonRow(tableBucket, tableRowType);
+        long logOffset = 0;
+        long timeStamp = System.currentTimeMillis();
+        GenericRow genericRow = new GenericRow(1);
+        Map<Object, Object> mapData = new HashMap<>();
+        mapData.put(1, 100);
+        mapData.put(2, null);
+        mapData.put(3, 300);
+        genericRow.setField(0, new GenericMap(mapData));
+
+        LogRecord logRecord = new GenericRecord(logOffset, timeStamp, APPEND_ONLY, genericRow);
+        flussRecordAsPaimonRow.setFlussRecord(logRecord);
+
+        InternalMap map = flussRecordAsPaimonRow.getMap(0);
+        assertThat(map).isNotNull();
+        assertThat(map.size()).isEqualTo(3);
+
+        InternalArray values = map.valueArray();
+        assertThat(values.size()).isEqualTo(3);
+    }
+
+    @Test
+    void testEmptyMap() {
+        int tableBucket = 0;
+        RowType tableRowType =
+                RowType.of(
+                        new org.apache.paimon.types.MapType(
+                                new org.apache.paimon.types.IntType(),
+                                new org.apache.paimon.types.IntType()),
+                        // system columns
+                        new org.apache.paimon.types.IntType(),
+                        new org.apache.paimon.types.BigIntType(),
+                        new org.apache.paimon.types.LocalZonedTimestampType(3));
+
+        FlussRecordAsPaimonRow flussRecordAsPaimonRow =
+                new FlussRecordAsPaimonRow(tableBucket, tableRowType);
+        long logOffset = 0;
+        long timeStamp = System.currentTimeMillis();
+        GenericRow genericRow = new GenericRow(1);
+        genericRow.setField(0, new GenericMap(new HashMap<>()));
+
+        LogRecord logRecord = new GenericRecord(logOffset, timeStamp, APPEND_ONLY, genericRow);
+        flussRecordAsPaimonRow.setFlussRecord(logRecord);
+
+        InternalMap map = flussRecordAsPaimonRow.getMap(0);
+        assertThat(map).isNotNull();
+        assertThat(map.size()).isEqualTo(0);
     }
 }

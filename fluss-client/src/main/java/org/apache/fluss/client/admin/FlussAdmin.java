@@ -17,6 +17,7 @@
 
 package org.apache.fluss.client.admin;
 
+import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.client.metadata.KvSnapshotMetadata;
 import org.apache.fluss.client.metadata.KvSnapshots;
 import org.apache.fluss.client.metadata.LakeSnapshot;
@@ -24,6 +25,9 @@ import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.client.utils.ClientRpcMessageUtils;
 import org.apache.fluss.cluster.Cluster;
 import org.apache.fluss.cluster.ServerNode;
+import org.apache.fluss.cluster.rebalance.GoalType;
+import org.apache.fluss.cluster.rebalance.RebalanceProgress;
+import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.config.cluster.AlterConfig;
 import org.apache.fluss.config.cluster.ConfigEntry;
 import org.apache.fluss.exception.LeaderNotAvailableException;
@@ -44,8 +48,10 @@ import org.apache.fluss.rpc.RpcClient;
 import org.apache.fluss.rpc.gateway.AdminGateway;
 import org.apache.fluss.rpc.gateway.AdminReadOnlyGateway;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
+import org.apache.fluss.rpc.messages.AddServerTagRequest;
 import org.apache.fluss.rpc.messages.AlterClusterConfigsRequest;
 import org.apache.fluss.rpc.messages.AlterTableRequest;
+import org.apache.fluss.rpc.messages.CancelRebalanceRequest;
 import org.apache.fluss.rpc.messages.CreateAclsRequest;
 import org.apache.fluss.rpc.messages.CreateDatabaseRequest;
 import org.apache.fluss.rpc.messages.CreateTableRequest;
@@ -66,12 +72,16 @@ import org.apache.fluss.rpc.messages.ListDatabasesRequest;
 import org.apache.fluss.rpc.messages.ListDatabasesResponse;
 import org.apache.fluss.rpc.messages.ListOffsetsRequest;
 import org.apache.fluss.rpc.messages.ListPartitionInfosRequest;
+import org.apache.fluss.rpc.messages.ListRebalanceProgressRequest;
 import org.apache.fluss.rpc.messages.ListTablesRequest;
 import org.apache.fluss.rpc.messages.ListTablesResponse;
 import org.apache.fluss.rpc.messages.PbAlterConfig;
 import org.apache.fluss.rpc.messages.PbListOffsetsRespForBucket;
 import org.apache.fluss.rpc.messages.PbPartitionSpec;
 import org.apache.fluss.rpc.messages.PbTablePath;
+import org.apache.fluss.rpc.messages.RebalanceRequest;
+import org.apache.fluss.rpc.messages.RebalanceResponse;
+import org.apache.fluss.rpc.messages.RemoveServerTagRequest;
 import org.apache.fluss.rpc.messages.TableExistsRequest;
 import org.apache.fluss.rpc.messages.TableExistsResponse;
 import org.apache.fluss.rpc.protocol.ApiError;
@@ -87,9 +97,10 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
-import java.util.stream.Collectors;
 
+import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeAlterTableRequest;
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeCreatePartitionRequest;
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeDropPartitionRequest;
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeListOffsetsRequest;
@@ -248,18 +259,8 @@ public class FlussAdmin implements Admin {
     public CompletableFuture<Void> alterTable(
             TablePath tablePath, List<TableChange> tableChanges, boolean ignoreIfNotExists) {
         tablePath.validate();
-        AlterTableRequest request = new AlterTableRequest();
-
-        List<PbAlterConfig> pbFlussTableChanges =
-                tableChanges.stream()
-                        .map(ClientRpcMessageUtils::toPbAlterConfigs)
-                        .collect(Collectors.toList());
-
-        request.addAllConfigChanges(pbFlussTableChanges)
-                .setIgnoreIfNotExists(ignoreIfNotExists)
-                .setTablePath()
-                .setDatabaseName(tablePath.getDatabaseName())
-                .setTableName(tablePath.getTableName());
+        AlterTableRequest request =
+                makeAlterTableRequest(tablePath, tableChanges, ignoreIfNotExists);
         return gateway.alterTable(request).thenApply(r -> null);
     }
 
@@ -420,7 +421,8 @@ public class FlussAdmin implements Admin {
             OffsetSpec offsetSpec) {
         Long partitionId = null;
         metadataUpdater.updateTableOrPartitionMetadata(physicalTablePath.getTablePath(), null);
-        long tableId = metadataUpdater.getTableId(physicalTablePath.getTablePath());
+        TableInfo tableInfo = getTableInfo(physicalTablePath.getTablePath()).join();
+
         // if partition name is not null, we need to check and update partition metadata
         if (physicalTablePath.getPartitionName() != null) {
             metadataUpdater.updatePhysicalTableMetadata(Collections.singleton(physicalTablePath));
@@ -428,7 +430,12 @@ public class FlussAdmin implements Admin {
         }
         Map<Integer, ListOffsetsRequest> requestMap =
                 prepareListOffsetsRequests(
-                        metadataUpdater, tableId, partitionId, buckets, offsetSpec);
+                        metadataUpdater,
+                        tableInfo.getTableId(),
+                        partitionId,
+                        buckets,
+                        offsetSpec,
+                        tableInfo.getTablePath());
         Map<Integer, CompletableFuture<Long>> bucketToOffsetMap = MapUtils.newConcurrentHashMap();
         for (int bucket : buckets) {
             bucketToOffsetMap.put(bucket, new CompletableFuture<>());
@@ -536,6 +543,52 @@ public class FlussAdmin implements Admin {
     }
 
     @Override
+    public CompletableFuture<Void> addServerTag(List<Integer> tabletServers, ServerTag serverTag) {
+        AddServerTagRequest request = new AddServerTagRequest().setServerTag(serverTag.value);
+        tabletServers.forEach(request::addServerId);
+        return gateway.addServerTag(request).thenApply(r -> null);
+    }
+
+    @Override
+    public CompletableFuture<Void> removeServerTag(
+            List<Integer> tabletServers, ServerTag serverTag) {
+        RemoveServerTagRequest request = new RemoveServerTagRequest().setServerTag(serverTag.value);
+        tabletServers.forEach(request::addServerId);
+        return gateway.removeServerTag(request).thenApply(r -> null);
+    }
+
+    @Override
+    public CompletableFuture<String> rebalance(List<GoalType> priorityGoals) {
+        RebalanceRequest request = new RebalanceRequest();
+        priorityGoals.forEach(goal -> request.addGoal(goal.value));
+        return gateway.rebalance(request).thenApply(RebalanceResponse::getRebalanceId);
+    }
+
+    @Override
+    public CompletableFuture<Optional<RebalanceProgress>> listRebalanceProgress(
+            @Nullable String rebalanceId) {
+        ListRebalanceProgressRequest request = new ListRebalanceProgressRequest();
+
+        if (rebalanceId != null) {
+            request.setRebalanceId(rebalanceId);
+        }
+
+        return gateway.listRebalanceProgress(request)
+                .thenApply(ClientRpcMessageUtils::toRebalanceProgress);
+    }
+
+    @Override
+    public CompletableFuture<Void> cancelRebalance(@Nullable String rebalanceId) {
+        CancelRebalanceRequest request = new CancelRebalanceRequest();
+
+        if (rebalanceId != null) {
+            request.setRebalanceId(rebalanceId);
+        }
+
+        return gateway.cancelRebalance(request).thenApply(r -> null);
+    }
+
+    @Override
     public void close() {
         // nothing to do yet
     }
@@ -545,10 +598,13 @@ public class FlussAdmin implements Admin {
             long tableId,
             @Nullable Long partitionId,
             Collection<Integer> buckets,
-            OffsetSpec offsetSpec) {
+            OffsetSpec offsetSpec,
+            TablePath tablePath) {
         Map<Integer, List<Integer>> nodeForBucketList = new HashMap<>();
         for (Integer bucketId : buckets) {
-            int leader = metadataUpdater.leaderFor(new TableBucket(tableId, partitionId, bucketId));
+            int leader =
+                    metadataUpdater.leaderFor(
+                            tablePath, new TableBucket(tableId, partitionId, bucketId));
             nodeForBucketList.computeIfAbsent(leader, k -> new ArrayList<>()).add(bucketId);
         }
 
@@ -593,5 +649,15 @@ public class FlussAdmin implements Admin {
                                         });
                     }
                 });
+    }
+
+    @VisibleForTesting
+    public AdminGateway getAdminGateway() {
+        return gateway;
+    }
+
+    @VisibleForTesting
+    public AdminReadOnlyGateway getAdminReadOnlyGateway() {
+        return readOnlyGateway;
     }
 }

@@ -20,16 +20,20 @@ package org.apache.fluss.lake.iceberg;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.InvalidTableException;
+import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.lake.lakestorage.TestingLakeCatalogContext;
 import org.apache.fluss.metadata.Schema;
+import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.types.DataTypes;
 
 import org.apache.iceberg.PartitionField;
+import org.apache.iceberg.RowLevelOperationMode;
 import org.apache.iceberg.SortDirection;
 import org.apache.iceberg.SortField;
 import org.apache.iceberg.Table;
+import org.apache.iceberg.catalog.Catalog;
 import org.apache.iceberg.catalog.TableIdentifier;
 import org.apache.iceberg.types.Types;
 import org.assertj.core.api.Assertions;
@@ -454,5 +458,170 @@ class IcebergLakeCatalogTest {
                 .isInstanceOf(InvalidTableException.class)
                 .hasMessage(
                         "Partition key only support string type for iceberg currently. Column `c1` is not string type.");
+    }
+
+    @Test
+    void alterTableProperties() {
+        String database = "test_alter_table_db";
+        String tableName = "test_alter_table";
+
+        Schema flussSchema = Schema.newBuilder().column("id", DataTypes.BIGINT()).build();
+
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(flussSchema)
+                        .distributedBy(3)
+                        .property("iceberg.commit.retry.num-retries", "5")
+                        .property("table.datalake.freshness", "30s")
+                        .build();
+
+        TablePath tablePath = TablePath.of(database, tableName);
+        TestingLakeCatalogContext context = new TestingLakeCatalogContext();
+        flussIcebergCatalog.createTable(tablePath, tableDescriptor, context);
+
+        Catalog catalog = flussIcebergCatalog.getIcebergCatalog();
+        assertThat(catalog.loadTable(TableIdentifier.of(database, tableName)).properties())
+                .containsEntry("commit.retry.num-retries", "5")
+                .containsEntry("fluss.table.datalake.freshness", "30s")
+                .doesNotContainKeys("iceberg.commit.retry.num-retries", "table.datalake.freshness");
+
+        // set new iceberg property
+        flussIcebergCatalog.alterTable(
+                tablePath,
+                List.of(TableChange.set("iceberg.commit.retry.min-wait-ms", "1000")),
+                context);
+        assertThat(catalog.loadTable(TableIdentifier.of(database, tableName)).properties())
+                .containsEntry("commit.retry.min-wait-ms", "1000")
+                .containsEntry("commit.retry.num-retries", "5")
+                .containsEntry("fluss.table.datalake.freshness", "30s")
+                .doesNotContainKeys(
+                        "iceberg.commit.retry.min-wait-ms",
+                        "iceberg.commit.retry.num-retries",
+                        "table.datalake.freshness");
+
+        // update existing properties
+        flussIcebergCatalog.alterTable(
+                tablePath,
+                List.of(
+                        TableChange.set("iceberg.commit.retry.num-retries", "10"),
+                        TableChange.set("table.datalake.freshness", "23s")),
+                context);
+        assertThat(catalog.loadTable(TableIdentifier.of(database, tableName)).properties())
+                .containsEntry("commit.retry.min-wait-ms", "1000")
+                .containsEntry("commit.retry.num-retries", "10")
+                .containsEntry("fluss.table.datalake.freshness", "23s")
+                .doesNotContainKeys(
+                        "iceberg.commit.retry.min-wait-ms",
+                        "iceberg.commit.retry.num-retries",
+                        "table.datalake.freshness");
+
+        // remove existing properties
+        flussIcebergCatalog.alterTable(
+                tablePath,
+                List.of(
+                        TableChange.reset("iceberg.commit.retry.min-wait-ms"),
+                        TableChange.reset("table.datalake.freshness")),
+                context);
+        assertThat(catalog.loadTable(TableIdentifier.of(database, tableName)).properties())
+                .containsEntry("commit.retry.num-retries", "10")
+                .doesNotContainKeys(
+                        "commit.retry.min-wait-ms",
+                        "iceberg.commit.retry.min-wait-ms",
+                        "table.datalake.freshness",
+                        "fluss.table.datalake.freshness");
+
+        // remove non-existing property
+        flussIcebergCatalog.alterTable(
+                tablePath, List.of(TableChange.reset("iceberg.non-existing.property")), context);
+        assertThat(catalog.loadTable(TableIdentifier.of(database, tableName)).properties())
+                .containsEntry("commit.retry.num-retries", "10")
+                .doesNotContainKeys(
+                        "non-existing.property",
+                        "iceberg.non-existing.property",
+                        "commit.retry.min-wait-ms",
+                        "iceberg.commit.retry.min-wait-ms",
+                        "table.datalake.freshness",
+                        "fluss.table.datalake.freshness");
+    }
+
+    @Test
+    void alterTablePropertiesWithNonExistingTable() {
+        TestingLakeCatalogContext context = new TestingLakeCatalogContext();
+        // db & table don't exist
+        assertThatThrownBy(
+                        () ->
+                                flussIcebergCatalog.alterTable(
+                                        TablePath.of("non_existing_db", "non_existing_table"),
+                                        List.of(
+                                                TableChange.set(
+                                                        "iceberg.commit.retry.min-wait-ms",
+                                                        "1000")),
+                                        context))
+                .isInstanceOf(TableNotExistException.class)
+                .hasMessage("Table non_existing_db.non_existing_table does not exist.");
+
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(Schema.newBuilder().column("id", DataTypes.BIGINT()).build())
+                        .distributedBy(3)
+                        .property("iceberg.commit.retry.num-retries", "5")
+                        .property("table.datalake.freshness", "30s")
+                        .build();
+
+        String database = "test_db";
+        TablePath tablePath = TablePath.of(database, "test_table");
+        flussIcebergCatalog.createTable(tablePath, tableDescriptor, context);
+
+        // database exists but table doesn't exist
+        assertThatThrownBy(
+                        () ->
+                                flussIcebergCatalog.alterTable(
+                                        TablePath.of(database, "non_existing_table"),
+                                        List.of(
+                                                TableChange.set(
+                                                        "iceberg.commit.retry.min-wait-ms",
+                                                        "1000")),
+                                        context))
+                .isInstanceOf(TableNotExistException.class)
+                .hasMessage("Table test_db.non_existing_table does not exist.");
+    }
+
+    @Test
+    void alterReservedTableProperties() {
+        String database = "test_alter_table_with_reserved_properties_db";
+        String tableName = "test_alter_table_with_reserved_properties";
+
+        Schema flussSchema = Schema.newBuilder().column("id", DataTypes.BIGINT()).build();
+
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder().schema(flussSchema).distributedBy(3).build();
+
+        TablePath tablePath = TablePath.of(database, tableName);
+        TestingLakeCatalogContext context = new TestingLakeCatalogContext();
+        flussIcebergCatalog.createTable(tablePath, tableDescriptor, context);
+
+        for (String property : IcebergLakeCatalog.RESERVED_PROPERTIES) {
+            assertThatThrownBy(
+                            () ->
+                                    flussIcebergCatalog.alterTable(
+                                            tablePath,
+                                            List.of(
+                                                    TableChange.set(
+                                                            property,
+                                                            RowLevelOperationMode.COPY_ON_WRITE
+                                                                    .modeName())),
+                                            context))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessage("Cannot set table property '%s'", property);
+
+            assertThatThrownBy(
+                            () ->
+                                    flussIcebergCatalog.alterTable(
+                                            tablePath,
+                                            List.of(TableChange.reset(property)),
+                                            context))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessage("Cannot reset table property '%s'", property);
+        }
     }
 }

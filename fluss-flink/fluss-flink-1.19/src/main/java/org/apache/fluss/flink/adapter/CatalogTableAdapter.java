@@ -18,6 +18,7 @@
 package org.apache.fluss.flink.adapter;
 
 import org.apache.flink.table.api.Schema;
+import org.apache.flink.table.catalog.CatalogBaseTable;
 import org.apache.flink.table.catalog.CatalogTable;
 
 import javax.annotation.Nullable;
@@ -26,8 +27,8 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * A adapter for {@link CatalogTable} constructor. TODO: remove this class when no longer support
- * flink 1.18 and 1.19.
+ * A adapter for {@link CatalogTable} constructor, and adapter MATERIALIZED_TABLE for {@link
+ * CatalogBaseTable.TableKind} TODO: remove this class when no longer support flink 1.18 and 1.19.
  */
 public class CatalogTableAdapter {
     public static CatalogTable toCatalogTable(
@@ -36,5 +37,10 @@ public class CatalogTableAdapter {
             List<String> partitionKeys,
             Map<String, String> options) {
         return CatalogTable.of(schema, comment, partitionKeys, options);
+    }
+
+    public static boolean isMaterializedTable(CatalogBaseTable.TableKind tableKind) {
+        // flink 1.19 not support MaterializedTable
+        return false;
     }
 }

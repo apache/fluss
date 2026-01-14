@@ -20,6 +20,7 @@ package org.apache.fluss.lake.lance.tiering;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.lake.committer.CommittedLakeSnapshot;
+import org.apache.fluss.lake.committer.CommitterInitContext;
 import org.apache.fluss.lake.committer.LakeCommitter;
 import org.apache.fluss.lake.lance.LanceConfig;
 import org.apache.fluss.lake.lance.utils.LanceArrowUtils;
@@ -57,14 +58,13 @@ import javax.annotation.Nullable;
 import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Stream;
 
-import static org.apache.fluss.flink.tiering.committer.TieringCommitOperator.toBucketOffsetsProperty;
+import static org.apache.fluss.lake.committer.LakeCommitter.FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** The UT for tiering to Lance via {@link LanceLakeTieringFactory}. */
@@ -115,7 +115,7 @@ class LanceTieringTest {
                 lanceLakeTieringFactory.getCommittableSerializer();
 
         try (LakeCommitter<LanceWriteResult, LanceCommittable> lakeCommitter =
-                createLakeCommitter(tablePath)) {
+                createLakeCommitter(tablePath, tableInfo)) {
             // should no any missing snapshot
             assertThat(lakeCommitter.getMissingLakeSnapshot(2L)).isNull();
         }
@@ -131,8 +131,6 @@ class LanceTieringTest {
                             }
                         }
                         : Collections.singletonMap(null, null);
-        List<String> partitionKeys = isPartitioned ? Arrays.asList("c3") : null;
-        Map<TableBucket, Long> tableBucketOffsets = new HashMap<>();
         // first, write data
         for (int bucket = 0; bucket < bucketNum; bucket++) {
             for (Map.Entry<Long, String> entry : partitionIdAndName.entrySet()) {
@@ -145,7 +143,6 @@ class LanceTieringTest {
                     List<LogRecord> writtenRecords = writeAndExpectRecords.f0;
                     List<LogRecord> expectRecords = writeAndExpectRecords.f1;
                     recordsByBucket.put(partitionBucket, expectRecords);
-                    tableBucketOffsets.put(new TableBucket(0, entry.getKey(), bucket), 10L);
                     for (LogRecord logRecord : writtenRecords) {
                         lakeWriter.write(logRecord);
                     }
@@ -161,18 +158,16 @@ class LanceTieringTest {
 
         // second, commit data
         try (LakeCommitter<LanceWriteResult, LanceCommittable> lakeCommitter =
-                createLakeCommitter(tablePath)) {
+                createLakeCommitter(tablePath, tableInfo)) {
             // serialize/deserialize committable
             LanceCommittable lanceCommittable = lakeCommitter.toCommittable(lanceWriteResults);
             byte[] serialized = committableSerializer.serialize(lanceCommittable);
             lanceCommittable =
                     committableSerializer.deserialize(
                             committableSerializer.getVersion(), serialized);
-            long snapshot =
-                    lakeCommitter.commit(
-                            lanceCommittable,
-                            toBucketOffsetsProperty(
-                                    tableBucketOffsets, partitionIdAndName, partitionKeys));
+            Map<String, String> snapshotProperties =
+                    Collections.singletonMap(FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY, "offsets");
+            long snapshot = lakeCommitter.commit(lanceCommittable, snapshotProperties);
             // lance dataset version starts from 1
             assertThat(snapshot).isEqualTo(2);
         }
@@ -200,17 +195,10 @@ class LanceTieringTest {
 
         // then, let's verify getMissingLakeSnapshot works
         try (LakeCommitter<LanceWriteResult, LanceCommittable> lakeCommitter =
-                createLakeCommitter(tablePath)) {
+                createLakeCommitter(tablePath, tableInfo)) {
             // use snapshot id 1 as the known snapshot id
             CommittedLakeSnapshot committedLakeSnapshot = lakeCommitter.getMissingLakeSnapshot(1L);
             assertThat(committedLakeSnapshot).isNotNull();
-            Map<Tuple2<Long, Integer>, Long> offsets = committedLakeSnapshot.getLogEndOffsets();
-            for (int bucket = 0; bucket < 3; bucket++) {
-                for (Long partitionId : partitionIdAndName.keySet()) {
-                    // we only write 10 records, so expected log offset should be 10
-                    assertThat(offsets.get(Tuple2.of(partitionId, bucket))).isEqualTo(10);
-                }
-            }
             assertThat(committedLakeSnapshot.getLakeSnapshotId()).isEqualTo(2L);
 
             // use null as the known snapshot id
@@ -246,8 +234,24 @@ class LanceTieringTest {
     }
 
     private LakeCommitter<LanceWriteResult, LanceCommittable> createLakeCommitter(
-            TablePath tablePath) throws IOException {
-        return lanceLakeTieringFactory.createLakeCommitter(() -> tablePath);
+            TablePath tablePath, TableInfo tableInfo) throws IOException {
+        return lanceLakeTieringFactory.createLakeCommitter(
+                new CommitterInitContext() {
+                    @Override
+                    public TablePath tablePath() {
+                        return tablePath;
+                    }
+
+                    @Override
+                    public TableInfo tableInfo() {
+                        return tableInfo;
+                    }
+
+                    @Override
+                    public Configuration lakeTieringConfig() {
+                        return new Configuration();
+                    }
+                });
     }
 
     private LakeWriter<LanceWriteResult> createLakeWriter(
@@ -305,7 +309,7 @@ class LanceTieringTest {
         return Tuple2.of(logRecords, logRecords);
     }
 
-    private Schema createTable(LanceConfig config) throws Exception {
+    private Schema createTable(LanceConfig config) {
         List<Schema.Column> columns = new ArrayList<>();
         columns.add(new Schema.Column("c1", DataTypes.INT()));
         columns.add(new Schema.Column("c2", DataTypes.STRING()));

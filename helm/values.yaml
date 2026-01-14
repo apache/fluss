@@ -66,3 +66,11 @@ resources: {}
   #   limits:
   #     cpu: 100m
   #     memory: 128Mi
+
+serviceAccount:
+  create: false
+  # If not set and create is true, a name is generated using the fullname template
+  name: ""
+  # Additional annotations to apply to the ServiceAccount.
+  # These can be useful, for example, to support integrations like workload identity.
+  annotations: {}

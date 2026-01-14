@@ -30,14 +30,19 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.utils.IOUtils;
 
 import org.apache.iceberg.PartitionSpec;
+import org.apache.iceberg.RowLevelOperationMode;
 import org.apache.iceberg.Schema;
 import org.apache.iceberg.SortOrder;
+import org.apache.iceberg.Table;
+import org.apache.iceberg.TableProperties;
+import org.apache.iceberg.UpdateProperties;
 import org.apache.iceberg.catalog.Catalog;
 import org.apache.iceberg.catalog.Namespace;
 import org.apache.iceberg.catalog.SupportsNamespaces;
 import org.apache.iceberg.catalog.TableIdentifier;
 import org.apache.iceberg.exceptions.AlreadyExistsException;
 import org.apache.iceberg.exceptions.NoSuchNamespaceException;
+import org.apache.iceberg.exceptions.NoSuchTableException;
 import org.apache.iceberg.types.Type;
 import org.apache.iceberg.types.Types;
 
@@ -52,10 +57,17 @@ import java.util.Set;
 import static org.apache.fluss.metadata.TableDescriptor.BUCKET_COLUMN_NAME;
 import static org.apache.fluss.metadata.TableDescriptor.OFFSET_COLUMN_NAME;
 import static org.apache.fluss.metadata.TableDescriptor.TIMESTAMP_COLUMN_NAME;
+import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.iceberg.types.Type.TypeID.STRING;
 
 /** An Iceberg implementation of {@link LakeCatalog}. */
 public class IcebergLakeCatalog implements LakeCatalog {
+    @VisibleForTesting
+    static final Set<String> RESERVED_PROPERTIES =
+            Set.of(
+                    TableProperties.MERGE_MODE,
+                    TableProperties.UPDATE_MODE,
+                    TableProperties.DELETE_MODE);
 
     public static final LinkedHashMap<String, Type> SYSTEM_COLUMNS = new LinkedHashMap<>();
 
@@ -119,8 +131,35 @@ public class IcebergLakeCatalog implements LakeCatalog {
     @Override
     public void alterTable(TablePath tablePath, List<TableChange> tableChanges, Context context)
             throws TableNotExistException {
-        throw new UnsupportedOperationException(
-                "Alter table is not supported for Iceberg at the moment");
+        try {
+            Table table = icebergCatalog.loadTable(toIcebergTableIdentifier(tablePath));
+            UpdateProperties updateProperties = table.updateProperties();
+            for (TableChange tableChange : tableChanges) {
+                if (tableChange instanceof TableChange.SetOption) {
+                    TableChange.SetOption option = (TableChange.SetOption) tableChange;
+                    checkArgument(
+                            !RESERVED_PROPERTIES.contains(option.getKey()),
+                            "Cannot set table property '%s'",
+                            option.getKey());
+                    updateProperties.set(
+                            convertFlussPropertyKeyToIceberg(option.getKey()), option.getValue());
+                } else if (tableChange instanceof TableChange.ResetOption) {
+                    TableChange.ResetOption option = (TableChange.ResetOption) tableChange;
+                    checkArgument(
+                            !RESERVED_PROPERTIES.contains(option.getKey()),
+                            "Cannot reset table property '%s'",
+                            option.getKey());
+                    updateProperties.remove(convertFlussPropertyKeyToIceberg(option.getKey()));
+                } else {
+                    throw new UnsupportedOperationException(
+                            "Unsupported table change: " + tableChange.getClass());
+                }
+            }
+
+            updateProperties.commit();
+        } catch (NoSuchTableException e) {
+            throw new TableNotExistException("Table " + tablePath + " does not exist.");
+        }
     }
 
     private TableIdentifier toIcebergTableIdentifier(TablePath tablePath) {
@@ -139,6 +178,11 @@ public class IcebergLakeCatalog implements LakeCatalog {
         List<Types.NestedField> fields = new ArrayList<>();
         int fieldId = 0;
 
+        int totalTopLevelFields =
+                tableDescriptor.getSchema().getColumns().size() + SYSTEM_COLUMNS.size();
+        FlussDataTypeToIcebergDataType converter =
+                new FlussDataTypeToIcebergDataType(totalTopLevelFields);
+
         // general columns
         for (org.apache.fluss.metadata.Schema.Column column :
                 tableDescriptor.getSchema().getColumns()) {
@@ -153,16 +197,14 @@ public class IcebergLakeCatalog implements LakeCatalog {
                         Types.NestedField.optional(
                                 fieldId++,
                                 colName,
-                                column.getDataType()
-                                        .accept(FlussDataTypeToIcebergDataType.INSTANCE),
+                                column.getDataType().accept(converter),
                                 column.getComment().orElse(null));
             } else {
                 field =
                         Types.NestedField.required(
                                 fieldId++,
                                 colName,
-                                column.getDataType()
-                                        .accept(FlussDataTypeToIcebergDataType.INSTANCE),
+                                column.getDataType().accept(converter),
                                 column.getComment().orElse(null));
             }
             fields.add(field);
@@ -249,6 +291,14 @@ public class IcebergLakeCatalog implements LakeCatalog {
         }
     }
 
+    private static String convertFlussPropertyKeyToIceberg(String key) {
+        if (key.startsWith(ICEBERG_CONF_PREFIX)) {
+            return key.substring(ICEBERG_CONF_PREFIX.length());
+        } else {
+            return FLUSS_CONF_PREFIX + key;
+        }
+    }
+
     private void createDatabase(String databaseName) {
         Namespace namespace = Namespace.of(databaseName);
         if (icebergCatalog instanceof SupportsNamespaces) {
@@ -275,9 +325,12 @@ public class IcebergLakeCatalog implements LakeCatalog {
 
         if (isPkTable) {
             // MOR table properties for streaming workloads
-            icebergProperties.put("write.delete.mode", "merge-on-read");
-            icebergProperties.put("write.update.mode", "merge-on-read");
-            icebergProperties.put("write.merge.mode", "merge-on-read");
+            icebergProperties.put(
+                    TableProperties.DELETE_MODE, RowLevelOperationMode.MERGE_ON_READ.modeName());
+            icebergProperties.put(
+                    TableProperties.UPDATE_MODE, RowLevelOperationMode.MERGE_ON_READ.modeName());
+            icebergProperties.put(
+                    TableProperties.MERGE_MODE, RowLevelOperationMode.MERGE_ON_READ.modeName());
         }
 
         tableDescriptor

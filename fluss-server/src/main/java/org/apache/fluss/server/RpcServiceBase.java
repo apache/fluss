@@ -93,7 +93,7 @@ import org.apache.fluss.server.tablet.TabletService;
 import org.apache.fluss.server.utils.ServerRpcMessageUtils;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.BucketSnapshot;
-import org.apache.fluss.server.zk.data.LakeTableSnapshot;
+import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -108,6 +108,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toAclFilter;
@@ -144,13 +145,16 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
     private long tokenLastUpdateTimeMs = 0;
     private ObtainedSecurityToken securityToken = null;
 
+    private final ExecutorService ioExecutor;
+
     public RpcServiceBase(
             FileSystem remoteFileSystem,
             ServerType provider,
             ZooKeeperClient zkClient,
             MetadataManager metadataManager,
             @Nullable Authorizer authorizer,
-            DynamicConfigManager dynamicConfigManager) {
+            DynamicConfigManager dynamicConfigManager,
+            ExecutorService ioExecutor) {
         this.remoteFileSystem = remoteFileSystem;
         this.provider = provider;
         this.apiManager = new ApiManager(provider);
@@ -158,11 +162,26 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
         this.metadataManager = metadataManager;
         this.authorizer = authorizer;
         this.dynamicConfigManager = dynamicConfigManager;
+        this.ioExecutor = ioExecutor;
     }
 
     @Override
     public ServerType providerType() {
         return provider;
+    }
+
+    public abstract void authorizeTable(OperationType operationType, long tableId);
+
+    public void authorizeDatabase(OperationType operationType, String databaseName) {
+        if (authorizer != null) {
+            authorizer.authorize(currentSession(), operationType, Resource.database(databaseName));
+        }
+    }
+
+    public void authorizeTable(OperationType operationType, TablePath tablePath) {
+        if (authorizer != null) {
+            authorizer.authorize(currentSession(), operationType, Resource.table(tablePath));
+        }
     }
 
     @Override
@@ -205,15 +224,11 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
     @Override
     public CompletableFuture<GetDatabaseInfoResponse> getDatabaseInfo(
             GetDatabaseInfoRequest request) {
-        if (authorizer != null) {
-            authorizer.authorize(
-                    currentSession(),
-                    OperationType.DESCRIBE,
-                    Resource.database(request.getDatabaseName()));
-        }
+        String databaseName = request.getDatabaseName();
+        authorizeDatabase(OperationType.DESCRIBE, databaseName);
 
         GetDatabaseInfoResponse response = new GetDatabaseInfoResponse();
-        DatabaseInfo databaseInfo = metadataManager.getDatabase(request.getDatabaseName());
+        DatabaseInfo databaseInfo = metadataManager.getDatabase(databaseName);
         response.setDatabaseJson(databaseInfo.getDatabaseDescriptor().toJsonBytes())
                 .setCreatedTime(databaseInfo.getCreatedTime())
                 .setModifiedTime(databaseInfo.getModifiedTime());
@@ -222,6 +237,7 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
 
     @Override
     public CompletableFuture<DatabaseExistsResponse> databaseExists(DatabaseExistsRequest request) {
+        // By design: database exists not need to check database authorization.
         DatabaseExistsResponse response = new DatabaseExistsResponse();
         boolean exists = metadataManager.databaseExists(request.getDatabaseName());
         response.setExists(exists);
@@ -253,12 +269,7 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
     @Override
     public CompletableFuture<GetTableInfoResponse> getTableInfo(GetTableInfoRequest request) {
         TablePath tablePath = toTablePath(request.getTablePath());
-        if (authorizer != null) {
-            authorizer.authorize(
-                    currentSession(),
-                    OperationType.DESCRIBE,
-                    Resource.table(tablePath.getDatabaseName(), tablePath.getTableName()));
-        }
+        authorizeTable(OperationType.DESCRIBE, tablePath);
 
         GetTableInfoResponse response = new GetTableInfoResponse();
         TableInfo tableInfo = metadataManager.getTable(tablePath);
@@ -273,6 +284,8 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
     @Override
     public CompletableFuture<GetTableSchemaResponse> getTableSchema(GetTableSchemaRequest request) {
         TablePath tablePath = toTablePath(request.getTablePath());
+        authorizeTable(OperationType.DESCRIBE, tablePath);
+
         final SchemaInfo schemaInfo;
         if (request.hasSchemaId()) {
             schemaInfo = metadataManager.getSchemaById(tablePath, request.getSchemaId());
@@ -287,6 +300,7 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
 
     @Override
     public CompletableFuture<TableExistsResponse> tableExists(TableExistsRequest request) {
+        // By design: table exists not need to check table authorization.
         TableExistsResponse response = new TableExistsResponse();
         boolean exists = metadataManager.tableExists(toTablePath(request.getTablePath()));
         response.setExists(exists);
@@ -297,6 +311,8 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
     public CompletableFuture<GetLatestKvSnapshotsResponse> getLatestKvSnapshots(
             GetLatestKvSnapshotsRequest request) {
         TablePath tablePath = toTablePath(request.getTablePath());
+        authorizeTable(OperationType.DESCRIBE, tablePath);
+
         // get table info
         TableInfo tableInfo = metadataManager.getTable(tablePath);
 
@@ -358,9 +374,12 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
     @Override
     public CompletableFuture<GetKvSnapshotMetadataResponse> getKvSnapshotMetadata(
             GetKvSnapshotMetadataRequest request) {
+        long tableId = request.getTableId();
+        authorizeTable(OperationType.DESCRIBE, tableId);
+
         TableBucket tableBucket =
                 new TableBucket(
-                        request.getTableId(),
+                        tableId,
                         request.hasPartitionId() ? request.getPartitionId() : null,
                         request.getBucketId());
         long snapshotId = request.getSnapshotId();
@@ -407,6 +426,8 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
     public CompletableFuture<ListPartitionInfosResponse> listPartitionInfos(
             ListPartitionInfosRequest request) {
         TablePath tablePath = toTablePath(request.getTablePath());
+        authorizeTable(OperationType.DESCRIBE, tablePath);
+
         Map<String, Long> partitionNameAndIds;
         if (request.hasPartialPartitionSpec()) {
             ResolvedPartitionSpec partitionSpecFromRequest =
@@ -425,33 +446,40 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
     @Override
     public CompletableFuture<GetLatestLakeSnapshotResponse> getLatestLakeSnapshot(
             GetLatestLakeSnapshotRequest request) {
-        // get table info
         TablePath tablePath = toTablePath(request.getTablePath());
+        authorizeTable(OperationType.DESCRIBE, tablePath);
+
+        // get table info
         TableInfo tableInfo = metadataManager.getTable(tablePath);
         // get table id
         long tableId = tableInfo.getTableId();
-
-        Optional<LakeTableSnapshot> optLakeTableSnapshot;
-        try {
-            optLakeTableSnapshot = zkClient.getLakeTableSnapshot(tableId);
-        } catch (Exception e) {
-            throw new FlussRuntimeException(
-                    String.format(
-                            "Failed to get lake table snapshot for table: %s, table id: %d",
-                            tablePath, tableId),
-                    e);
-        }
-
-        if (!optLakeTableSnapshot.isPresent()) {
-            throw new LakeTableSnapshotNotExistException(
-                    String.format(
-                            "Lake table snapshot not exist for table: %s, table id: %d",
-                            tablePath, tableId));
-        }
-
-        LakeTableSnapshot lakeTableSnapshot = optLakeTableSnapshot.get();
-        return CompletableFuture.completedFuture(
-                makeGetLatestLakeSnapshotResponse(tableId, lakeTableSnapshot));
+        CompletableFuture<GetLatestLakeSnapshotResponse> resultFuture = new CompletableFuture<>();
+        ioExecutor.execute(
+                () -> {
+                    Optional<LakeTableSnapshot> optLakeTableSnapshot;
+                    try {
+                        optLakeTableSnapshot = zkClient.getLakeTableSnapshot(tableId);
+                        if (!optLakeTableSnapshot.isPresent()) {
+                            resultFuture.completeExceptionally(
+                                    new LakeTableSnapshotNotExistException(
+                                            String.format(
+                                                    "Lake table snapshot not exist for table: %s, table id: %d",
+                                                    tablePath, tableId)));
+                        } else {
+                            LakeTableSnapshot lakeTableSnapshot = optLakeTableSnapshot.get();
+                            resultFuture.complete(
+                                    makeGetLatestLakeSnapshotResponse(tableId, lakeTableSnapshot));
+                        }
+                    } catch (Exception e) {
+                        resultFuture.completeExceptionally(
+                                new FlussRuntimeException(
+                                        String.format(
+                                                "Failed to get lake table snapshot for table: %s, table id: %d",
+                                                tablePath, tableId),
+                                        e));
+                    }
+                });
+        return resultFuture;
     }
 
     @Override

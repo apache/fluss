@@ -35,7 +35,7 @@ datalake.paimon.metastore: filesystem
 datalake.paimon.warehouse: /tmp/paimon
 ```
 
-Fluss processes Paimon configurations by removing the `datalake.paimon.` prefix and then use the remaining configuration (without the prefix `datalake.paimon.`) to create the Paimon catalog. Checkout the [Paimon documentation](https://paimon.apache.org/docs/1.1/maintenance/configurations/) for more details on the available configurations.
+Fluss processes Paimon configurations by removing the `datalake.paimon.` prefix and then use the remaining configuration (without the prefix `datalake.paimon.`) to create the Paimon catalog. Checkout the [Paimon documentation](https://paimon.apache.org/docs/1.3/maintenance/configurations/) for more details on the available configurations.
 
 For example, if you want to configure to use Hive catalog, you can configure like following:
 ```yaml
@@ -65,7 +65,7 @@ Then, you must start the datalake tiering service to tier Fluss's data to the la
   you should download the corresponding [Fluss filesystem jar](/downloads#filesystem-jars) and also put it into `${FLINK_HOME}/lib`
 - Put [fluss-lake-paimon jar](https://repo1.maven.org/maven2/org/apache/fluss/fluss-lake-paimon/$FLUSS_VERSION$/fluss-lake-paimon-$FLUSS_VERSION$.jar) into `${FLINK_HOME}/lib`
 - [Download](https://flink.apache.org/downloads/) pre-bundled Hadoop jar `flink-shaded-hadoop-2-uber-*.jar` and put into `${FLINK_HOME}/lib`
-- Put Paimon's [filesystem jar](https://paimon.apache.org/docs/1.1/project/download/) into `${FLINK_HOME}/lib`, if you use s3 to store paimon data, please put `paimon-s3` jar into `${FLINK_HOME}/lib`
+- Put Paimon's [filesystem jar](https://paimon.apache.org/docs/1.3/project/download/) into `${FLINK_HOME}/lib`, if you use s3 to store paimon data, please put `paimon-s3` jar into `${FLINK_HOME}/lib`
 - The other jars that Paimon may require, for example, if you use HiveCatalog, you will need to put hive related jars
 
 
@@ -103,3 +103,11 @@ Another option `table.datalake.freshness`, allows per-table configuration of dat
 It defines the maximum amount of time that the datalake table's content should lag behind updates to the Fluss table. 
 Based on this target freshness, the Fluss tiering service automatically moves data from the Fluss table and updates to the datalake table, so that the data in the datalake table is kept up to date within this target.
 The default is `3min`, if the data does not need to be as fresh, you can specify a longer target freshness time to reduce costs.
+
+# Datalake Tiering Service Options
+
+The following table lists the options that can be used to configure the datalake tiering service.
+
+| Option                                  | Type     | Default | Description                                                                                                                                                        |
+|-----------------------------------------|----------|---------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| lake.tiering.auto-expire-snapshot       | Boolean  | false   | If true, snapshot expiration will be triggered automatically when tiering service commits to the datalake, even if `table.datalake.auto-expire-snapshot` is false. |

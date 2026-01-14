@@ -42,35 +42,94 @@ import java.util.stream.Collectors;
 
 /** Testing class for metadata updater. */
 public class TestingMetadataUpdater extends MetadataUpdater {
-    private static final ServerNode COORDINATOR =
+    public static final ServerNode COORDINATOR =
             new ServerNode(0, "localhost", 90, ServerType.COORDINATOR);
-    private static final ServerNode NODE1 =
+    public static final ServerNode NODE1 =
             new ServerNode(1, "localhost", 90, ServerType.TABLET_SERVER, "rack1");
-    private static final ServerNode NODE2 =
+    public static final ServerNode NODE2 =
             new ServerNode(2, "localhost", 91, ServerType.TABLET_SERVER, "rack2");
-    private static final ServerNode NODE3 =
+    public static final ServerNode NODE3 =
             new ServerNode(3, "localhost", 92, ServerType.TABLET_SERVER, "rack3");
 
     private final TestCoordinatorGateway coordinatorGateway;
     private final Map<Integer, TestTabletServerGateway> tabletServerGatewayMap;
 
     public TestingMetadataUpdater(Map<TablePath, TableInfo> tableInfos) {
-        this(COORDINATOR, Arrays.asList(NODE1, NODE2, NODE3), tableInfos);
+        this(
+                COORDINATOR,
+                Arrays.asList(NODE1, NODE2, NODE3),
+                tableInfos,
+                null,
+                new Configuration());
     }
 
-    private TestingMetadataUpdater(
+    public TestingMetadataUpdater(
             ServerNode coordinatorServer,
             List<ServerNode> tabletServers,
-            Map<TablePath, TableInfo> tableInfos) {
+            Map<TablePath, TableInfo> tableInfos,
+            Map<Integer, TestTabletServerGateway> customGateways,
+            Configuration conf) {
         super(
-                RpcClient.create(
-                        new Configuration(), TestingClientMetricGroup.newInstance(), false),
+                RpcClient.create(conf, TestingClientMetricGroup.newInstance(), false),
+                conf,
                 Cluster.empty());
         initializeCluster(coordinatorServer, tabletServers, tableInfos);
         coordinatorGateway = new TestCoordinatorGateway();
-        tabletServerGatewayMap = new HashMap<>();
-        for (ServerNode tabletServer : tabletServers) {
-            tabletServerGatewayMap.put(tabletServer.id(), new TestTabletServerGateway(false));
+        if (customGateways != null) {
+            tabletServerGatewayMap = customGateways;
+        } else {
+            tabletServerGatewayMap = new HashMap<>();
+            for (ServerNode tabletServer : tabletServers) {
+                tabletServerGatewayMap.put(
+                        tabletServer.id(),
+                        new TestTabletServerGateway(false, Collections.emptySet()));
+            }
+        }
+    }
+
+    /**
+     * Create a builder for constructing TestingMetadataUpdater with custom gateways.
+     *
+     * @param tableInfos the table information map
+     * @return a builder instance
+     */
+    public static Builder builder(Map<TablePath, TableInfo> tableInfos) {
+        return new Builder(tableInfos);
+    }
+
+    /** Builder for TestingMetadataUpdater to support custom gateway configuration. */
+    public static class Builder {
+        private final Map<TablePath, TableInfo> tableInfos;
+        private final Map<Integer, TestTabletServerGateway> customGateways = new HashMap<>();
+
+        private Builder(Map<TablePath, TableInfo> tableInfos) {
+            this.tableInfos = tableInfos;
+        }
+
+        /**
+         * Set a custom gateway for a specific tablet server node.
+         *
+         * @param serverId the server id (1, 2, or 3 for default nodes)
+         * @param gateway the custom gateway
+         * @return this builder
+         */
+        public Builder withTabletServerGateway(int serverId, TestTabletServerGateway gateway) {
+            customGateways.put(serverId, gateway);
+            return this;
+        }
+
+        /**
+         * Build the TestingMetadataUpdater instance.
+         *
+         * @return the configured TestingMetadataUpdater
+         */
+        public TestingMetadataUpdater build() {
+            return new TestingMetadataUpdater(
+                    COORDINATOR,
+                    Arrays.asList(NODE1, NODE2, NODE3),
+                    tableInfos,
+                    customGateways.isEmpty() ? null : customGateways,
+                    new Configuration());
         }
     }
 
@@ -78,15 +137,11 @@ public class TestingMetadataUpdater extends MetadataUpdater {
         this.cluster = cluster;
     }
 
-    public void setResponseLogicId(int serverId, int responseLogicId) {
-        tabletServerGatewayMap.get(serverId).setResponseLogicId(responseLogicId);
-    }
-
     @Override
     public void checkAndUpdateTableMetadata(Set<TablePath> tablePaths) {
         Set<TablePath> needUpdateTablePaths =
                 tablePaths.stream()
-                        .filter(tablePath -> !cluster.getTable(tablePath).isPresent())
+                        .filter(tablePath -> !cluster.getTableId(tablePath).isPresent())
                         .collect(Collectors.toSet());
         if (!needUpdateTablePaths.isEmpty()) {
             throw new IllegalStateException(
@@ -130,7 +185,6 @@ public class TestingMetadataUpdater extends MetadataUpdater {
 
         Map<PhysicalTablePath, List<BucketLocation>> tablePathToBucketLocations = new HashMap<>();
         Map<TablePath, Long> tableIdByPath = new HashMap<>();
-        Map<TablePath, TableInfo> tableInfoByPath = new HashMap<>();
         tableInfos.forEach(
                 (tablePath, tableInfo) -> {
                     long tableId = tableInfo.getTableId();
@@ -157,7 +211,6 @@ public class TestingMetadataUpdater extends MetadataUpdater {
                                             tabletServers.get(2).id(),
                                             replicas)));
                     tableIdByPath.put(tablePath, tableId);
-                    tableInfoByPath.put(tablePath, tableInfo);
                 });
         cluster =
                 new Cluster(
@@ -165,7 +218,6 @@ public class TestingMetadataUpdater extends MetadataUpdater {
                         coordinatorServer,
                         tablePathToBucketLocations,
                         tableIdByPath,
-                        Collections.emptyMap(),
-                        tableInfoByPath);
+                        Collections.emptyMap());
     }
 }

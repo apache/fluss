@@ -24,31 +24,37 @@ import java.util.List;
 
 /**
  * Used to configure and create a {@link Lookuper} to lookup rows of a primary key table. The built
- * Lookuper can be a primary key lookuper that lookups by the primary key, or a prefix key lookup
- * that lookups by the prefix key of the primary key.
+ * lookuper can lookup by the full primary key, or by a prefix of the primary key when configured
+ * via {@link #lookupBy}.
  *
  * <p>{@link Lookup} objects are immutable and can be shared between threads. Refinement methods,
- * like {@link #lookupBy}, create new Lookup instances.
+ * like {@link #lookupBy}, create new {@code Lookup} instances.
  *
- * <p>Example1: Create a Primary Key Lookuper. Given a table with primary key column [k STRING].
+ * <p>Examples
+ *
+ * <p>Example 1: Primary Key Lookuper using an InternalRow key. Given a table with primary key
+ * column [k STRING]:
  *
  * <pre>{@code
  * Lookuper lookuper = table.newLookup().createLookuper();
  * CompletableFuture<LookupResult> resultFuture = lookuper.lookup(GenericRow.of("key1"));
- * resultFuture.get().getRows().forEach(row -> {
- *    System.out.println(row);
- * });
+ * resultFuture.get().getRowList().forEach(System.out::println);
  * }</pre>
  *
- * <p>Example2: Create a Prefix Key Lookuper. Given a table with primary key column [a INT, b
- * STRING, c BIGINT] and bucket key [a, b].
+ * <p>Example 2: Prefix Key Lookuper using an InternalRow key. Given a table with primary key
+ * columns [a INT, b STRING, c BIGINT] and bucket key [a, b]:
  *
  * <pre>{@code
  * Lookuper lookuper = table.newLookup().lookupBy("a", "b").createLookuper();
  * CompletableFuture<LookupResult> resultFuture = lookuper.lookup(GenericRow.of(1, "b1"));
- * resultFuture.get().getRows().forEach(row -> {
- *   System.out.println(row);
- * });
+ * resultFuture.get().getRowList().forEach(System.out::println);
+ * }</pre>
+ *
+ * <p>Example 3: Using a POJO key (conversion handled internally):
+ *
+ * <pre>{@code
+ * TypedLookuper<MyKeyPojo> lookuper = table.newLookup().createTypedLookuper(MyKeyPojo.class);
+ * LookupResult result = lookuper.lookup(new MyKeyPojo(...)).get();
  * }</pre>
  *
  * @since 0.6
@@ -96,4 +102,13 @@ public interface Lookup {
      * @return the lookuper
      */
     Lookuper createLookuper();
+
+    /**
+     * Creates a {@link TypedLookuper} instance to lookup rows of a primary key table using POJOs.
+     *
+     * @param pojoClass the class of the POJO
+     * @param <T> the type of the POJO
+     * @return the typed lookuper
+     */
+    <T> TypedLookuper<T> createTypedLookuper(Class<T> pojoClass);
 }
