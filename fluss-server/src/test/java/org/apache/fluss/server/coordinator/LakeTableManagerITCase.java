@@ -29,12 +29,14 @@ import org.apache.fluss.rpc.gateway.AdminGateway;
 import org.apache.fluss.rpc.gateway.AdminReadOnlyGateway;
 import org.apache.fluss.rpc.messages.GetTableInfoResponse;
 import org.apache.fluss.rpc.messages.PbAlterConfig;
+import org.apache.fluss.server.entity.LakeTieringTableInfo;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.types.DataTypes;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
@@ -47,6 +49,7 @@ import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newCreateTab
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newDropDatabaseRequest;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newDropTableRequest;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newGetTableInfoRequest;
+import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -119,31 +122,33 @@ class LakeTableManagerITCase {
     }
 
     @Test
-    void testAlterTableDatalakeFreshness() throws Exception {
+    void testAlterAndResetTableDatalakeProperties() throws Exception {
         AdminReadOnlyGateway gateway = getAdminOnlyGateway(true);
         AdminGateway adminGateway = getAdminGateway();
 
-        String db1 = "test_alter_freshness_db";
+        String db1 = "test_alter_reset_datalake_db";
         String tb1 = "tb1";
         TablePath tablePath = TablePath.of(db1, tb1);
         // first create a database
         adminGateway.createDatabase(newCreateDatabaseRequest(db1, false)).get();
 
-        // create a table with datalake enabled and initial freshness
+        // Step 1: create a table with datalake enabled and initial freshness (5min)
         Map<String, String> initialProperties = new HashMap<>();
         initialProperties.put(ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "true");
         initialProperties.put(ConfigOptions.TABLE_DATALAKE_FRESHNESS.key(), "5min");
         TableDescriptor tableDescriptor = newPkTable().withProperties(initialProperties);
         adminGateway.createTable(newCreateTableRequest(tablePath, tableDescriptor, false)).get();
 
-        // get the table and check initial freshness
+        // Step 2: verify initial properties
         GetTableInfoResponse response =
                 gateway.getTableInfo(newGetTableInfoRequest(tablePath)).get();
         TableDescriptor gottenTable = TableDescriptor.fromJsonBytes(response.getTableJson());
+        assertThat(gottenTable.getProperties().get(ConfigOptions.TABLE_DATALAKE_ENABLED.key()))
+                .isEqualTo("true");
         assertThat(gottenTable.getProperties().get(ConfigOptions.TABLE_DATALAKE_FRESHNESS.key()))
                 .isEqualTo("5min");
 
-        // alter table to change datalake freshness
+        // Step 3: alter table to change datalake freshness (SET operation)
         Map<String, String> setProperties = new HashMap<>();
         setProperties.put(ConfigOptions.TABLE_DATALAKE_FRESHNESS.key(), "3min");
 
@@ -156,51 +161,23 @@ class LakeTableManagerITCase {
                                 false))
                 .get();
 
-        // get the table and check updated freshness
-        GetTableInfoResponse responseAfterAlter =
+        // Step 4: verify freshness was updated to 3min
+        GetTableInfoResponse responseAfterSet =
                 gateway.getTableInfo(newGetTableInfoRequest(tablePath)).get();
-        TableDescriptor gottenTableAfterAlter =
-                TableDescriptor.fromJsonBytes(responseAfterAlter.getTableJson());
-
-        String freshnessAfterAlter =
-                gottenTableAfterAlter
-                        .getProperties()
-                        .get(ConfigOptions.TABLE_DATALAKE_FRESHNESS.key());
-        assertThat(freshnessAfterAlter).isEqualTo("3min");
-
-        // cleanup
-        adminGateway.dropTable(newDropTableRequest(db1, tb1, false)).get();
-        adminGateway.dropDatabase(newDropDatabaseRequest(db1, false, true)).get();
-    }
-
-    @Test
-    void testResetTableDatalakeProperties() throws Exception {
-        AdminReadOnlyGateway gateway = getAdminOnlyGateway(true);
-        AdminGateway adminGateway = getAdminGateway();
-
-        String db1 = "test_reset_datalake_db";
-        String tb1 = "tb1";
-        TablePath tablePath = TablePath.of(db1, tb1);
-        // first create a database
-        adminGateway.createDatabase(newCreateDatabaseRequest(db1, false)).get();
-
-        // create a table with datalake enabled and custom freshness
-        Map<String, String> initialProperties = new HashMap<>();
-        initialProperties.put(ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "true");
-        initialProperties.put(ConfigOptions.TABLE_DATALAKE_FRESHNESS.key(), "3min");
-        TableDescriptor tableDescriptor = newPkTable().withProperties(initialProperties);
-        adminGateway.createTable(newCreateTableRequest(tablePath, tableDescriptor, false)).get();
-
-        // get the table and check initial state
-        GetTableInfoResponse response =
-                gateway.getTableInfo(newGetTableInfoRequest(tablePath)).get();
-        TableDescriptor gottenTable = TableDescriptor.fromJsonBytes(response.getTableJson());
-        assertThat(gottenTable.getProperties().get(ConfigOptions.TABLE_DATALAKE_ENABLED.key()))
-                .isEqualTo("true");
-        assertThat(gottenTable.getProperties().get(ConfigOptions.TABLE_DATALAKE_FRESHNESS.key()))
+        TableDescriptor gottenTableAfterSet =
+                TableDescriptor.fromJsonBytes(responseAfterSet.getTableJson());
+        assertThat(
+                        gottenTableAfterSet
+                                .getProperties()
+                                .get(ConfigOptions.TABLE_DATALAKE_FRESHNESS.key()))
                 .isEqualTo("3min");
+        assertThat(
+                        gottenTableAfterSet
+                                .getProperties()
+                                .get(ConfigOptions.TABLE_DATALAKE_ENABLED.key()))
+                .isEqualTo("true");
 
-        // reset datalake freshness property
+        // Step 5: reset datalake freshness property (RESET operation)
         List<String> resetProperties = new ArrayList<>();
         resetProperties.add(ConfigOptions.TABLE_DATALAKE_FRESHNESS.key());
 
@@ -213,26 +190,23 @@ class LakeTableManagerITCase {
                                 false))
                 .get();
 
-        // get the table and check freshness is removed
+        // Step 6: verify freshness was removed but datalake.enabled remains
         GetTableInfoResponse responseAfterReset =
                 gateway.getTableInfo(newGetTableInfoRequest(tablePath)).get();
         TableDescriptor gottenTableAfterReset =
                 TableDescriptor.fromJsonBytes(responseAfterReset.getTableJson());
-
-        // freshness should be removed from properties
         assertThat(
                         gottenTableAfterReset
                                 .getProperties()
                                 .containsKey(ConfigOptions.TABLE_DATALAKE_FRESHNESS.key()))
                 .isFalse();
-        // but datalake.enabled should still be there
         assertThat(
                         gottenTableAfterReset
                                 .getProperties()
                                 .get(ConfigOptions.TABLE_DATALAKE_ENABLED.key()))
                 .isEqualTo("true");
 
-        // reset datalake enabled property
+        // Step 7: reset datalake enabled property
         List<String> resetProperties2 = new ArrayList<>();
         resetProperties2.add(ConfigOptions.TABLE_DATALAKE_ENABLED.key());
 
@@ -245,18 +219,84 @@ class LakeTableManagerITCase {
                                 false))
                 .get();
 
-        // get the table and check datalake enabled is removed
+        // Step 8: verify datalake.enabled was also removed
         GetTableInfoResponse responseAfterReset2 =
                 gateway.getTableInfo(newGetTableInfoRequest(tablePath)).get();
         TableDescriptor gottenTableAfterReset2 =
                 TableDescriptor.fromJsonBytes(responseAfterReset2.getTableJson());
-
-        // datalake.enabled should be removed from properties
         assertThat(
                         gottenTableAfterReset2
                                 .getProperties()
                                 .containsKey(ConfigOptions.TABLE_DATALAKE_ENABLED.key()))
                 .isFalse();
+
+        // cleanup
+        adminGateway.dropTable(newDropTableRequest(db1, tb1, false)).get();
+        adminGateway.dropDatabase(newDropDatabaseRequest(db1, false, true)).get();
+    }
+
+    @Test
+    void testAlterTableDatalakeFreshnessAffectsTiering() throws Exception {
+        AdminGateway adminGateway = getAdminGateway();
+
+        String db1 = "test_tiering_freshness_db";
+        String tb1 = "tb1";
+        TablePath tablePath = TablePath.of(db1, tb1);
+        adminGateway.createDatabase(newCreateDatabaseRequest(db1, false)).get();
+
+        // Step 1: Create a table with a large datalake freshness (10 minutes)
+        Map<String, String> initialProperties = new HashMap<>();
+        initialProperties.put(ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "true");
+        initialProperties.put(ConfigOptions.TABLE_DATALAKE_FRESHNESS.key(), "10min");
+        TableDescriptor tableDescriptor = newPkTable().withProperties(initialProperties);
+        adminGateway.createTable(newCreateTableRequest(tablePath, tableDescriptor, false)).get();
+
+        // Get the table id for later verification
+        GetTableInfoResponse response =
+                adminGateway.getTableInfo(newGetTableInfoRequest(tablePath)).get();
+        long tableId = response.getTableId();
+
+        LakeTableTieringManager tieringManager =
+                FLUSS_CLUSTER_EXTENSION
+                        .getCoordinatorServer()
+                        .getCoordinatorService()
+                        .getLakeTableTieringManager();
+
+        // Wait a bit for the table to be registered in tiering manager
+        Thread.sleep(1000);
+
+        // Step 2: Try to request the table for tiering within 3 seconds, should NOT get it
+        retry(
+                Duration.ofSeconds(3),
+                () -> {
+                    LakeTieringTableInfo table = tieringManager.requestTable();
+                    assertThat(table == null || table.tableId() != tableId)
+                            .as("Should not get table for tiering with large freshness (10min)")
+                            .isTrue();
+                });
+
+        // Step 3: Change freshness to a very small value (100ms)
+        Map<String, String> setProperties = new HashMap<>();
+        setProperties.put(ConfigOptions.TABLE_DATALAKE_FRESHNESS.key(), "100ms");
+
+        adminGateway
+                .alterTable(
+                        newAlterTableRequest(
+                                tablePath,
+                                alterTableProperties(setProperties, new ArrayList<>()),
+                                Collections.emptyList(),
+                                false))
+                .get();
+
+        // Step 4: Now retry requesting the table, should get it within 3 seconds
+        retry(
+                Duration.ofSeconds(3),
+                () -> {
+                    LakeTieringTableInfo table = tieringManager.requestTable();
+                    assertThat(table).isNotNull();
+                    assertThat(table.tableId()).isEqualTo(tableId);
+                    assertThat(table.tablePath()).isEqualTo(tablePath);
+                });
 
         // cleanup
         adminGateway.dropTable(newDropTableRequest(db1, tb1, false)).get();

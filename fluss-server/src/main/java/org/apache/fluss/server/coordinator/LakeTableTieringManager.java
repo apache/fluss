@@ -224,6 +224,48 @@ public class LakeTableTieringManager implements AutoCloseable {
                 });
     }
 
+    /**
+     * Update the lake freshness for a table. This method should be called when the table's datalake
+     * freshness property is changed via ALTER TABLE.
+     *
+     * @param tableId the table id
+     * @param newFreshnessMs the new freshness interval in milliseconds
+     */
+    public void updateTableLakeFreshness(long tableId, long newFreshnessMs) {
+        inLock(
+                lock,
+                () -> {
+                    Long currentFreshness = tableLakeFreshness.get(tableId);
+                    if (currentFreshness == null) {
+                        // the table is not a lake table or has been dropped, skip update
+                        LOG.warn(
+                                "Cannot update lake freshness for table {} as it's not tracked by lake tiering manager.",
+                                tableId);
+                        return;
+                    }
+
+                    if (currentFreshness.equals(newFreshnessMs)) {
+                        // no change, skip update
+                        return;
+                    }
+
+                    tableLakeFreshness.put(tableId, newFreshnessMs);
+                    LOG.info(
+                            "Updated lake freshness for table {} from {} ms to {} ms.",
+                            tableId,
+                            currentFreshness,
+                            newFreshnessMs);
+
+                    // If the table is in Scheduled state, we need to reschedule it with the new
+                    // freshness
+                    TieringState currentState = tieringStates.get(tableId);
+                    if (currentState == TieringState.Scheduled) {
+                        // Reschedule the table tiering with the new freshness interval
+                        scheduleTableTiering(tableId);
+                    }
+                });
+    }
+
     @VisibleForTesting
     protected void checkTieringServiceTimeout() {
         inLock(
