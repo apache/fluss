@@ -43,10 +43,11 @@ import static org.apache.fluss.utils.concurrent.LockUtils.inLock;
  * <p>Provides utilities for managing tables, writing records, committing stages, and retrieving
  * results in a test environment.
  */
-public class ValuesLake {
-    private static final Logger LOG = LoggerFactory.getLogger(ValuesLake.class);
+public class TestingValuesLake {
+    private static final Logger LOG = LoggerFactory.getLogger(TestingValuesLake.class);
 
-    private static final Map<String, ValuesTable> globalTables = MapUtils.newConcurrentHashMap();
+    private static final Map<String, TestingValuesTable> globalTables =
+            MapUtils.newConcurrentHashMap();
     private static final Map<String, TableFailureController> FAILURE_CONTROLLERS =
             MapUtils.newConcurrentHashMap();
 
@@ -55,14 +56,14 @@ public class ValuesLake {
     }
 
     public static List<InternalRow> getResults(String tableId) {
-        ValuesTable table = globalTables.get(tableId);
+        TestingValuesTable table = globalTables.get(tableId);
         checkNotNull(table, tableId + " does not exist");
         return table.getResult();
     }
 
     public static void writeRecord(String tableId, String stageId, LogRecord record)
             throws IOException {
-        ValuesTable table = globalTables.get(tableId);
+        TestingValuesTable table = globalTables.get(tableId);
         checkNotNull(table, tableId + " does not exist");
         TableFailureController controller = FAILURE_CONTROLLERS.get(tableId);
         if (controller != null) {
@@ -75,7 +76,7 @@ public class ValuesLake {
     public static long commit(
             String tableId, List<String> stageIds, Map<String, String> snapshotProperties)
             throws IOException {
-        ValuesTable table = globalTables.get(tableId);
+        TestingValuesTable table = globalTables.get(tableId);
         checkNotNull(table, "commit stage %s failed, table %s does not exist", stageIds, tableId);
         table.commit(stageIds, snapshotProperties);
         LOG.info("Commit table {} stage {}", tableId, stageIds);
@@ -83,27 +84,27 @@ public class ValuesLake {
     }
 
     public static void abort(String tableId, List<String> stageIds) {
-        ValuesTable table = globalTables.get(tableId);
+        TestingValuesTable table = globalTables.get(tableId);
         checkNotNull(
                 table, "abort stage record %s failed, table %s does not exist", stageIds, tableId);
         table.abort(stageIds);
         LOG.info("Abort table {} stage {}", tableId, stageIds);
     }
 
-    public static ValuesTable getTable(String tableId) {
+    public static TestingValuesTable getTable(String tableId) {
         return globalTables.get(tableId);
     }
 
     public static void createTable(String tableId) {
         if (!globalTables.containsKey(tableId)) {
-            globalTables.put(tableId, new ValuesTable());
-            ValuesTable table = globalTables.get(tableId);
+            globalTables.put(tableId, new TestingValuesTable());
+            TestingValuesTable table = globalTables.get(tableId);
             checkNotNull(table, "create table %s failed", tableId);
         }
     }
 
     /** maintain the columns, primaryKeys and records of a specific table in memory. */
-    public static class ValuesTable {
+    public static class TestingValuesTable {
 
         private final Lock lock = new ReentrantLock();
 
@@ -112,9 +113,7 @@ public class ValuesLake {
 
         private long snapshotId = -1L;
 
-        private final Map<Long, Map<String, String>> snapshotProperties = new HashMap<>();
-
-        public ValuesTable() {
+        public TestingValuesTable() {
             this.records = new ArrayList<>();
             this.stageRecords = new HashMap<>();
         }
@@ -143,7 +142,6 @@ public class ValuesLake {
                             this.stageRecords.remove(stageId);
                         }
                         this.snapshotId++;
-                        this.snapshotProperties.put(this.snapshotId, snapshotProperties);
                     });
         }
 
@@ -159,14 +157,6 @@ public class ValuesLake {
 
         public long getSnapshotId() {
             return snapshotId;
-        }
-
-        public Map<String, String> getSnapshotProperties(long snapshotId) {
-            return snapshotProperties.get(snapshotId);
-        }
-
-        public Map<String, String> currentSnapshotProperties() {
-            return getSnapshotProperties(snapshotId);
         }
     }
 

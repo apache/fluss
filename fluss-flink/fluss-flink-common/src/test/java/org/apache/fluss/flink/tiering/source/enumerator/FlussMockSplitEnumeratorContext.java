@@ -70,13 +70,10 @@ class FlussMockSplitEnumeratorContext<SplitT extends SourceSplit>
                 registeredReaders.entrySet()) {
             final int subtaskIndex = entry.getKey();
             final Map<Integer, ReaderInfo> attemptReaders = entry.getValue();
-            int earliestAttempt = Integer.MAX_VALUE;
-            for (int attemptNumber : attemptReaders.keySet()) {
-                if (attemptNumber < earliestAttempt) {
-                    earliestAttempt = attemptNumber;
-                }
+            if (!attemptReaders.isEmpty()) {
+                int earliestAttempt = Collections.min(attemptReaders.keySet());
+                readers.put(subtaskIndex, attemptReaders.get(earliestAttempt));
             }
-            readers.put(subtaskIndex, attemptReaders.get(earliestAttempt));
         }
         return Collections.unmodifiableMap(readers);
     }

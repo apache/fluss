@@ -19,7 +19,7 @@
 package org.apache.fluss.lake.values.tiering;
 
 import org.apache.fluss.lake.serializer.SimpleVersionedSerializer;
-import org.apache.fluss.lake.values.ValuesLake;
+import org.apache.fluss.lake.values.TestingValuesLake;
 import org.apache.fluss.lake.writer.LakeWriter;
 import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.utils.InstantiationUtils;
@@ -29,35 +29,36 @@ import java.io.Serializable;
 import java.util.UUID;
 
 /** Implementation of {@link LakeWriter} for values lake. */
-public class ValuesLakeWriter implements LakeWriter<ValuesLakeWriter.ValuesWriteResult> {
+public class TestingValuesLakeWriter
+        implements LakeWriter<TestingValuesLakeWriter.TestingValuesWriteResult> {
     private final String tableId;
-    private final String stageId;
+    private final String writerId;
 
-    public ValuesLakeWriter(String tableId) {
+    public TestingValuesLakeWriter(String tableId) {
         this.tableId = tableId;
-        this.stageId = UUID.randomUUID().toString();
+        this.writerId = UUID.randomUUID().toString();
     }
 
     @Override
     public void write(LogRecord record) throws IOException {
-        ValuesLake.writeRecord(tableId, stageId, record);
+        TestingValuesLake.writeRecord(tableId, writerId, record);
     }
 
     @Override
-    public ValuesWriteResult complete() throws IOException {
-        return new ValuesWriteResult(stageId);
+    public TestingValuesWriteResult complete() throws IOException {
+        return new TestingValuesWriteResult(writerId);
     }
 
     @Override
     public void close() throws IOException {}
 
-    /** Write result of {@link ValuesLake}. */
-    public static class ValuesWriteResult implements Serializable {
+    /** Write result of {@link TestingValuesLake}. */
+    public static class TestingValuesWriteResult implements Serializable {
         private static final long serialVersionUID = 1L;
 
         private final String stageId;
 
-        public ValuesWriteResult(String stageId) {
+        public TestingValuesWriteResult(String stageId) {
             this.stageId = stageId;
         }
 
@@ -66,9 +67,9 @@ public class ValuesLakeWriter implements LakeWriter<ValuesLakeWriter.ValuesWrite
         }
     }
 
-    /** A serializer for {@link ValuesWriteResult}. */
-    public static class ValuesWriteResultSerializer
-            implements SimpleVersionedSerializer<ValuesWriteResult> {
+    /** A serializer for {@link TestingValuesWriteResult}. */
+    public static class TestingValuesWriteResultSerializer
+            implements SimpleVersionedSerializer<TestingValuesWriteResult> {
 
         private static final int CURRENT_VERSION = 1;
 
@@ -78,13 +79,14 @@ public class ValuesLakeWriter implements LakeWriter<ValuesLakeWriter.ValuesWrite
         }
 
         @Override
-        public byte[] serialize(ValuesWriteResult valuesWriteResult) throws IOException {
+        public byte[] serialize(TestingValuesWriteResult valuesWriteResult) throws IOException {
             return InstantiationUtils.serializeObject(valuesWriteResult);
         }
 
         @Override
-        public ValuesWriteResult deserialize(int version, byte[] serialized) throws IOException {
-            ValuesWriteResult valuesWriteResult;
+        public TestingValuesWriteResult deserialize(int version, byte[] serialized)
+                throws IOException {
+            TestingValuesWriteResult valuesWriteResult;
             try {
                 valuesWriteResult =
                         InstantiationUtils.deserializeObject(

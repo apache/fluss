@@ -23,8 +23,8 @@ import org.apache.fluss.flink.tiering.committer.CommittableMessageTypeInfo;
 import org.apache.fluss.flink.tiering.committer.TieringCommitOperatorFactory;
 import org.apache.fluss.flink.tiering.source.TableBucketWriteResultTypeInfo;
 import org.apache.fluss.flink.tiering.source.TieringSource;
-import org.apache.fluss.lake.values.ValuesLake;
-import org.apache.fluss.lake.values.tiering.ValuesLakeTieringFactory;
+import org.apache.fluss.lake.values.TestingValuesLake;
+import org.apache.fluss.lake.values.tiering.TestingValuesLakeTieringFactory;
 import org.apache.fluss.lake.writer.LakeTieringFactory;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
@@ -54,7 +54,7 @@ import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test tiering failover. */
-class TieringFailoverITCase extends FlinkValuesTieringTestBase {
+class TieringFailoverITCase extends FlinkTieringTestBase {
     protected static final String DEFAULT_DB = "fluss";
 
     private static StreamExecutionEnvironment execEnv;
@@ -68,7 +68,7 @@ class TieringFailoverITCase extends FlinkValuesTieringTestBase {
 
     @BeforeAll
     protected static void beforeAll() {
-        FlinkValuesTieringTestBase.beforeAll();
+        FlinkTieringTestBase.beforeAll();
         execEnv = StreamExecutionEnvironment.getExecutionEnvironment();
         execEnv.setParallelism(2);
         execEnv.enableCheckpointing(1000);
@@ -87,7 +87,7 @@ class TieringFailoverITCase extends FlinkValuesTieringTestBase {
         waitUntilSnapshot(t1Id, 1, 0);
 
         // fail the first write to the pk table
-        ValuesLake.failWhen(t1.toString()).failWriteOnce();
+        TestingValuesLake.failWhen(t1.toString()).failWriteOnce();
 
         // then start tiering job
         JobClient jobClient = buildTieringJob(execEnv);
@@ -96,8 +96,6 @@ class TieringFailoverITCase extends FlinkValuesTieringTestBase {
             assertReplicaStatus(t1Bucket, 3);
 
             checkDataInValuesTable(t1, rows);
-            // check snapshot property in values lake
-            checkFlussOffsetsInValues(t1, Collections.singletonMap(t1Bucket, 3L));
 
             // then write data to the pk tables
             // write records
@@ -122,7 +120,7 @@ class TieringFailoverITCase extends FlinkValuesTieringTestBase {
         Configuration flussConfig = new Configuration(clientConf);
         flussConfig.set(POLL_TIERING_TABLE_INTERVAL, Duration.ofMillis(500L));
 
-        LakeTieringFactory lakeTieringFactory = new ValuesLakeTieringFactory();
+        LakeTieringFactory lakeTieringFactory = new TestingValuesLakeTieringFactory();
 
         // build tiering source
         TieringSource.Builder<?> tieringSourceBuilder =

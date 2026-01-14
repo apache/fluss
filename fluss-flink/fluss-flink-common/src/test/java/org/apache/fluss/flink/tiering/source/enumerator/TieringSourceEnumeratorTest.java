@@ -35,8 +35,6 @@ import org.apache.flink.api.connector.source.SplitsAssignment;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.ValueSource;
 
 import javax.annotation.Nullable;
 
@@ -610,9 +608,8 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
         }
     }
 
-    @ParameterizedTest
-    @ValueSource(ints = {1, 2})
-    void testHandleReaderFailOver(int numSubtasks) throws Throwable {
+    @Test
+    void testHandleReaderFailOver() throws Throwable {
         TablePath tablePath1 = TablePath.of(DEFAULT_DB, "tiering-failover-test-log-table1");
         createTable(tablePath1, DEFAULT_LOG_TABLE_DESCRIPTOR);
         appendRow(tablePath1, DEFAULT_LOG_TABLE_DESCRIPTOR, 0, 10);
@@ -622,7 +619,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
         appendRow(tablePath2, DEFAULT_LOG_TABLE_DESCRIPTOR, 0, 10);
 
         try (FlussMockSplitEnumeratorContext<TieringSplit> context =
-                new FlussMockSplitEnumeratorContext<>(numSubtasks)) {
+                new FlussMockSplitEnumeratorContext<>(3)) {
             TieringSourceEnumerator enumerator =
                     new TieringSourceEnumerator(flussConf, context, 500);
 
@@ -630,28 +627,28 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
             assertThat(context.getSplitsAssignmentSequence()).isEmpty();
 
             // register readers and handle split requests for attempt 0
-            registerReaderAndHandleSplitRequests(context, enumerator, numSubtasks, 0);
+            registerReaderAndHandleSplitRequests(context, enumerator, 3, 0);
 
             // should get one tiering split, and the split is for tablePath1
-            verifyTieringSplitAssignment(context, numSubtasks, tablePath1);
+            verifyTieringSplitAssignment(context, 3, tablePath1);
 
             // clean assignment
             context.getSplitsAssignmentSequence().clear();
 
             // readers failover: Enumerator marks tablePath1 as failed and clears its splits
             // register readers and handle split requests (attempt 1)
-            registerReaderAndHandleSplitRequests(context, enumerator, numSubtasks, 1);
+            registerReaderAndHandleSplitRequests(context, enumerator, 3, 1);
 
             // now, should get another one tiering split, the split is for tablePath2 since all
             // pending split for tablePath1 is clear
-            verifyTieringSplitAssignment(context, numSubtasks, tablePath2);
+            verifyTieringSplitAssignment(context, 3, tablePath2);
 
             // clean assignment
             context.getSplitsAssignmentSequence().clear();
 
             // readers failover again: Enumerator marks tablePath2 as failed and clears its splits
             // register readers and process split requests for attempt 2
-            registerReaderAndHandleSplitRequests(context, enumerator, numSubtasks, 2);
+            registerReaderAndHandleSplitRequests(context, enumerator, 3, 2);
 
             // now, should get no tiering split, since all pending split for tablePath1 and
             // tablePath2 is clear

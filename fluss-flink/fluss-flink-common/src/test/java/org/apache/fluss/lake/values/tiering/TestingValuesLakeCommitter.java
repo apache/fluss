@@ -21,7 +21,7 @@ package org.apache.fluss.lake.values.tiering;
 import org.apache.fluss.lake.committer.CommittedLakeSnapshot;
 import org.apache.fluss.lake.committer.LakeCommitter;
 import org.apache.fluss.lake.serializer.SimpleVersionedSerializer;
-import org.apache.fluss.lake.values.ValuesLake;
+import org.apache.fluss.lake.values.TestingValuesLake;
 import org.apache.fluss.utils.InstantiationUtils;
 
 import javax.annotation.Nullable;
@@ -34,63 +34,53 @@ import java.util.Map;
 import java.util.stream.Collectors;
 
 /** Implementation of {@link LakeCommitter} for values lake. */
-public class ValuesLakeCommitter
+public class TestingValuesLakeCommitter
         implements LakeCommitter<
-                ValuesLakeWriter.ValuesWriteResult, ValuesLakeCommitter.ValuesCommittable> {
+                TestingValuesLakeWriter.TestingValuesWriteResult,
+                TestingValuesLakeCommitter.TestingValuesCommittable> {
     private final String tableId;
 
-    public ValuesLakeCommitter(String tableId) {
+    public TestingValuesLakeCommitter(String tableId) {
         this.tableId = tableId;
     }
 
     @Override
-    public ValuesCommittable toCommittable(
-            List<ValuesLakeWriter.ValuesWriteResult> valuesWriteResults) throws IOException {
-        return new ValuesCommittable(
+    public TestingValuesCommittable toCommittable(
+            List<TestingValuesLakeWriter.TestingValuesWriteResult> valuesWriteResults)
+            throws IOException {
+        return new TestingValuesCommittable(
                 valuesWriteResults.stream()
-                        .map(ValuesLakeWriter.ValuesWriteResult::getStageId)
+                        .map(TestingValuesLakeWriter.TestingValuesWriteResult::getStageId)
                         .collect(Collectors.toList()));
     }
 
     @Override
-    public long commit(ValuesCommittable committable, Map<String, String> snapshotProperties)
+    public long commit(TestingValuesCommittable committable, Map<String, String> snapshotProperties)
             throws IOException {
-        return ValuesLake.commit(tableId, committable.getStageIds(), snapshotProperties);
+        return TestingValuesLake.commit(tableId, committable.getStageIds(), snapshotProperties);
     }
 
     @Override
-    public void abort(ValuesCommittable committable) throws IOException {
-        ValuesLake.abort(tableId, committable.getStageIds());
+    public void abort(TestingValuesCommittable committable) throws IOException {
+        TestingValuesLake.abort(tableId, committable.getStageIds());
     }
 
     @Override
     public CommittedLakeSnapshot getMissingLakeSnapshot(@Nullable Long latestLakeSnapshotIdOfFluss)
             throws IOException {
-        ValuesLake.ValuesTable table = ValuesLake.getTable(tableId);
-        long latestSnapshotId = table.getSnapshotId();
-        if (latestSnapshotId < 0) {
-            return null;
-        }
-        if (latestLakeSnapshotIdOfFluss != null
-                && latestSnapshotId == latestLakeSnapshotIdOfFluss) {
-            if (latestSnapshotId <= latestLakeSnapshotIdOfFluss) {
-                return null;
-            }
-        }
-        return new CommittedLakeSnapshot(
-                latestSnapshotId, table.getSnapshotProperties(latestSnapshotId));
+        return null;
     }
 
     @Override
     public void close() throws Exception {}
 
-    /** Committable of {@link ValuesLake}. */
-    public static class ValuesCommittable implements Serializable {
+    /** Committable of {@link TestingValuesLake}. */
+    public static class TestingValuesCommittable implements Serializable {
         private static final long serialVersionUID = 1L;
 
         private final List<String> stageIdList = new ArrayList<>();
 
-        public ValuesCommittable(List<String> stageIds) {
+        public TestingValuesCommittable(List<String> stageIds) {
             this.stageIdList.addAll(stageIds);
         }
 
@@ -99,9 +89,9 @@ public class ValuesLakeCommitter
         }
     }
 
-    /** A serializer for {@link ValuesCommittable}. */
+    /** A serializer for {@link TestingValuesCommittable}. */
     public static class ValuesCommittableSerializer
-            implements SimpleVersionedSerializer<ValuesCommittable> {
+            implements SimpleVersionedSerializer<TestingValuesCommittable> {
         private static final int CURRENT_VERSION = 1;
 
         @Override
@@ -110,13 +100,14 @@ public class ValuesLakeCommitter
         }
 
         @Override
-        public byte[] serialize(ValuesCommittable committable) throws IOException {
+        public byte[] serialize(TestingValuesCommittable committable) throws IOException {
             return InstantiationUtils.serializeObject(committable);
         }
 
         @Override
-        public ValuesCommittable deserialize(int version, byte[] serialized) throws IOException {
-            ValuesCommittable valuesCommittable;
+        public TestingValuesCommittable deserialize(int version, byte[] serialized)
+                throws IOException {
+            TestingValuesCommittable valuesCommittable;
             try {
                 valuesCommittable =
                         InstantiationUtils.deserializeObject(

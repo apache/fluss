@@ -28,30 +28,33 @@ import org.apache.fluss.lake.writer.WriterInitContext;
 import java.io.IOException;
 
 /** Implementation of {@link LakeTieringFactory} for values lake. */
-public class ValuesLakeTieringFactory
+public class TestingValuesLakeTieringFactory
         implements LakeTieringFactory<
-                ValuesLakeWriter.ValuesWriteResult, ValuesLakeCommitter.ValuesCommittable> {
+                TestingValuesLakeWriter.TestingValuesWriteResult,
+                TestingValuesLakeCommitter.TestingValuesCommittable> {
     @Override
-    public LakeWriter<ValuesLakeWriter.ValuesWriteResult> createLakeWriter(
+    public LakeWriter<TestingValuesLakeWriter.TestingValuesWriteResult> createLakeWriter(
             WriterInitContext writerInitContext) throws IOException {
-        return new ValuesLakeWriter(writerInitContext.tablePath().toString());
+        return new TestingValuesLakeWriter(writerInitContext.tablePath().toString());
     }
 
     @Override
-    public SimpleVersionedSerializer<ValuesLakeWriter.ValuesWriteResult>
+    public SimpleVersionedSerializer<TestingValuesLakeWriter.TestingValuesWriteResult>
             getWriteResultSerializer() {
-        return new ValuesLakeWriter.ValuesWriteResultSerializer();
+        return new TestingValuesLakeWriter.TestingValuesWriteResultSerializer();
     }
 
     @Override
-    public LakeCommitter<ValuesLakeWriter.ValuesWriteResult, ValuesLakeCommitter.ValuesCommittable>
+    public LakeCommitter<
+                    TestingValuesLakeWriter.TestingValuesWriteResult,
+                    TestingValuesLakeCommitter.TestingValuesCommittable>
             createLakeCommitter(CommitterInitContext committerInitContext) throws IOException {
-        return new ValuesLakeCommitter(committerInitContext.tablePath().toString());
+        return new TestingValuesLakeCommitter(committerInitContext.tablePath().toString());
     }
 
     @Override
-    public SimpleVersionedSerializer<ValuesLakeCommitter.ValuesCommittable>
+    public SimpleVersionedSerializer<TestingValuesLakeCommitter.TestingValuesCommittable>
             getCommittableSerializer() {
-        return new ValuesLakeCommitter.ValuesCommittableSerializer();
+        return new TestingValuesLakeCommitter.ValuesCommittableSerializer();
     }
 }

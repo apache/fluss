@@ -21,20 +21,20 @@ package org.apache.fluss.lake.values;
 import org.apache.fluss.lake.lakestorage.LakeCatalog;
 import org.apache.fluss.lake.lakestorage.LakeStorage;
 import org.apache.fluss.lake.source.LakeSource;
-import org.apache.fluss.lake.values.tiering.ValuesLakeTieringFactory;
+import org.apache.fluss.lake.values.tiering.TestingValuesLakeTieringFactory;
 import org.apache.fluss.lake.writer.LakeTieringFactory;
 import org.apache.fluss.metadata.TablePath;
 
 /** Implementation of {@link LakeStorage} for values lake. */
-public class ValuesLakeStorage implements LakeStorage {
+public class TestingValuesLakeStorage implements LakeStorage {
     @Override
     public LakeTieringFactory<?, ?> createLakeTieringFactory() {
-        return new ValuesLakeTieringFactory();
+        return new TestingValuesLakeTieringFactory();
     }
 
     @Override
     public LakeCatalog createLakeCatalog() {
-        return new ValuesLakeCatalog();
+        return new TestingValuesLakeCatalog();
     }
 
     @Override

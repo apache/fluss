@@ -28,11 +28,11 @@ import org.apache.fluss.metadata.TablePath;
 import java.util.List;
 
 /** Implementation of {@link LakeCatalog} for values lake. */
-public class ValuesLakeCatalog implements LakeCatalog {
+public class TestingValuesLakeCatalog implements LakeCatalog {
     @Override
     public void createTable(TablePath tablePath, TableDescriptor tableDescriptor, Context context)
             throws TableAlreadyExistException {
-        ValuesLake.createTable(tablePath.toString());
+        TestingValuesLake.createTable(tablePath.toString());
     }
 
     @Override
