@@ -909,6 +909,37 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
             assertThat(actualRows)
                     .containsExactlyInAnyOrder(
                             "+I[1, v1, null]", "+I[2, v2_updated, 20]", "+I[3, v3, 30]");
+
+            // 9. Add Column "c4" (Schema V3)
+            // Verify union read reconciles tiered data (V1) with a fluss log
+            // containing multiple schema versions (V2 and V3).
+            jobClient.cancel().get();
+            addColumnChanges =
+                    Collections.singletonList(
+                            TableChange.addColumn(
+                                    "c4",
+                                    DataTypes.INT(),
+                                    "another new column",
+                                    TableChange.ColumnPosition.last()));
+            admin.alterTable(tablePath, addColumnChanges, false).get();
+
+            // 10. Write data for Schema V3 (Update Key 2 and Key 3)
+            newRows =
+                    Arrays.asList(row(2, "v2_updated_again", 20, 30), row(3, "v3_update", 30, 40));
+            writeRows(tablePath, newRows, false);
+
+            // 11. Final Query Verify (Paimon V1 + Log V2 + Log V3)
+            // - Key 1: from Paimon snapshot (oldest schema, c3/c4 should be null)
+            // - Key 2: from Fluss log (latest update, newest schema)
+            // - Key 3: from Fluss log (latest update, newest schema)
+            iterator = batchTEnv.executeSql("SELECT * FROM " + tablePath.getTableName()).collect();
+            actualRows = collectRowsWithTimeout(iterator, 3, true);
+
+            assertThat(actualRows)
+                    .containsExactlyInAnyOrder(
+                            "+I[1, v1, null, null]",
+                            "+I[2, v2_updated_again, 20, 30]",
+                            "+I[3, v3_update, 30, 40]");
         } finally {
             jobClient.cancel().get();
         }
