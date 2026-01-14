@@ -199,6 +199,12 @@ The following table lists the configurable parameters of the Fluss chart and the
 | `configurationOverrides.data.dir` | Local data directory | `/tmp/fluss/data` |
 | `configurationOverrides.internal.listener.name` | Internal listener name | `INTERNAL` |
 
+### Tablet Server Parameters
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `tablet.numberOfReplicas` | Number of TabletServer replicas to deploy | `3` |
+
 ### Persistence Parameters
 
 | Parameter | Description | Default |
