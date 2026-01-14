@@ -155,13 +155,13 @@ public class RemoteLogTablet {
      * lake yet.
      *
      * @param currentTimeMs the current time in milliseconds
-     * @param isDataLakeEnable whether data lake is enabled
+     * @param isDataLakeEnabled whether data lake is enabled
      * @param lakeLogEndOffset the log end offset that has been synced to lake, -1 if no lake sync
      *     has occurred
      * @return list of expired segments that can be safely deleted
      */
     public List<RemoteLogSegment> expiredRemoteLogSegments(
-            long currentTimeMs, boolean isDataLakeEnable, long lakeLogEndOffset) {
+            long currentTimeMs, boolean isDataLakeEnabled, long lakeLogEndOffset) {
         if (!logExpireEnable()) {
             return Collections.emptyList();
         }
@@ -175,7 +175,7 @@ public class RemoteLogTablet {
                         if (currentTimeMs - ts > ttlMs) {
                             for (UUID uuid : entry.getValue()) {
                                 RemoteLogSegment segment = idToRemoteLogSegment.get(uuid);
-                                if (isDataLakeEnable) {
+                                if (isDataLakeEnabled) {
                                     // only include segments that have been tiered to lake.
                                     if (segment.remoteLogEndOffset() <= lakeLogEndOffset) {
                                         expiredSegments.add(segment);
