@@ -30,6 +30,8 @@ import org.apache.fluss.exception.ApiException;
 import org.apache.fluss.exception.InvalidMetadataException;
 import org.apache.fluss.exception.LeaderNotAvailableException;
 import org.apache.fluss.exception.PartitionNotExistException;
+import org.apache.fluss.exception.TableNotExistException;
+import org.apache.fluss.exception.UnknownTableOrBucketException;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.SchemaGetter;
@@ -86,6 +88,7 @@ public class LogFetcher implements Closeable {
     private static final Logger LOG = LoggerFactory.getLogger(LogFetcher.class);
 
     private final TablePath tablePath;
+    private final long tableId;
     private final boolean isPartitioned;
     private final LogRecordReadContext readContext;
     // TODO this context can be merge with readContext. Introduce it only because log remote read
@@ -122,6 +125,7 @@ public class LogFetcher implements Closeable {
             RemoteFileDownloader remoteFileDownloader,
             SchemaGetter schemaGetter) {
         this.tablePath = tableInfo.getTablePath();
+        this.tableId = tableInfo.getTableId();
         this.isPartitioned = tableInfo.isPartitioned();
         this.readContext =
                 LogRecordReadContext.createReadContext(tableInfo, false, projection, schemaGetter);
@@ -227,6 +231,15 @@ public class LogFetcher implements Closeable {
             } else if (needUpdate) {
                 metadataUpdater.updateTableOrPartitionMetadata(tablePath, null);
             }
+
+            // Check if the table still exists and matches the tableId
+            Optional<Long> currentTableId = metadataUpdater.getCluster().getTableId(tablePath);
+            if (!currentTableId.isPresent()) {
+                throw new TableNotExistException("Table " + tablePath + " does not exist.");
+            }
+            if (currentTableId.get() != tableId) {
+                throw new TableNotExistException("Table " + tablePath + " has been recreated.");
+            }
         } catch (Exception e) {
             if (e instanceof PartitionNotExistException) {
                 // ignore this exception, this is probably happen because the partition is deleted.
@@ -234,9 +247,22 @@ public class LogFetcher implements Closeable {
                 // from fetch list when receive exception.
                 LOG.warn("Receive PartitionNotExistException when update metadata, ignore it", e);
             } else {
+                if (isTableNotExistException(e)) {
+                    throw new TableNotExistException("Table " + tablePath + " does not exist.", e);
+                }
                 throw e;
             }
         }
+    }
+
+    private boolean isTableNotExistException(Throwable t) {
+        while (t != null) {
+            if (t instanceof TableNotExistException || t instanceof UnknownTableOrBucketException) {
+                return true;
+            }
+            t = t.getCause();
+        }
+        return false;
     }
 
     @VisibleForTesting

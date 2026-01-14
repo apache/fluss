@@ -130,10 +130,33 @@ public class MetadataUtils {
                                 // the origin cluster.
                                 newTablePathToTableId =
                                         new HashMap<>(originCluster.getTableIdByPath());
+                                if (tablePaths != null) {
+                                    tablePaths.forEach(newTablePathToTableId::remove);
+                                }
+
                                 newBucketLocations =
                                         new HashMap<>(originCluster.getBucketLocationsByPath());
+                                if (tablePaths != null) {
+                                    newBucketLocations
+                                            .keySet()
+                                            .removeIf(
+                                                    ptp -> tablePaths.contains(ptp.getTablePath()));
+                                }
+                                if (tablePartitions != null) {
+                                    tablePartitions.forEach(newBucketLocations::remove);
+                                }
+
                                 newPartitionIdByPath =
                                         new HashMap<>(originCluster.getPartitionIdByPath());
+                                if (tablePaths != null) {
+                                    newPartitionIdByPath
+                                            .keySet()
+                                            .removeIf(
+                                                    ptp -> tablePaths.contains(ptp.getTablePath()));
+                                }
+                                if (tablePartitions != null) {
+                                    tablePartitions.forEach(newPartitionIdByPath::remove);
+                                }
 
                                 newTablePathToTableId.putAll(newTableMetadata.tablePathToTableId);
                                 newBucketLocations.putAll(newTableMetadata.bucketLocations);
