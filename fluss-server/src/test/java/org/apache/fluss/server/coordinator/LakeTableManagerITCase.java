@@ -266,7 +266,7 @@ class LakeTableManagerITCase {
         Thread.sleep(1000);
 
         // Step 2: Try to request the table for tiering within 3 seconds, should NOT get it
-        retry(
+        assertThat(tieringManager.requestTable()).isNull();
                 Duration.ofSeconds(3),
                 () -> {
                     LakeTieringTableInfo table = tieringManager.requestTable();
