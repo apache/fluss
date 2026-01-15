@@ -148,7 +148,7 @@ class TieringSourceReaderTest extends FlinkTestBase {
                             assertThat(result.logEndOffset()).isEqualTo(1);
                         });
 
-                // test add split with force ignore
+                // test add split with skipCurrentRound
                 split =
                         new TieringLogSplit(
                                 tablePath,
@@ -156,7 +156,7 @@ class TieringSourceReaderTest extends FlinkTestBase {
                                 null,
                                 EARLIEST_OFFSET,
                                 100L);
-                split.forceIgnore();
+                split.skipCurrentRound();
                 reader.addSplits(Collections.singletonList(split));
                 // should skip tiering for this split
                 retry(

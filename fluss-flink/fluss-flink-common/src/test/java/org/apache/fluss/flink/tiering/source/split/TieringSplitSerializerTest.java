@@ -69,8 +69,8 @@ class TieringSplitSerializerTest {
 
         String expectedSplitString =
                 isPartitionedTable
-                        ? "TieringSnapshotSplit{tablePath=test_db.test_partitioned_table, tableBucket=TableBucket{tableId=1, partitionId=100, bucket=2}, partitionName='1024', numberOfSplits=30, forceIgnore=false, snapshotId=0, logOffsetOfSnapshot=200}"
-                        : "TieringSnapshotSplit{tablePath=test_db.test_table, tableBucket=TableBucket{tableId=1, bucket=2}, partitionName='null', numberOfSplits=30, forceIgnore=false, snapshotId=0, logOffsetOfSnapshot=200}";
+                        ? "TieringSnapshotSplit{tablePath=test_db.test_partitioned_table, tableBucket=TableBucket{tableId=1, partitionId=100, bucket=2}, partitionName='1024', numberOfSplits=30, skipCurrentRound=false, snapshotId=0, logOffsetOfSnapshot=200}"
+                        : "TieringSnapshotSplit{tablePath=test_db.test_table, tableBucket=TableBucket{tableId=1, bucket=2}, partitionName='null', numberOfSplits=30, skipCurrentRound=false, snapshotId=0, logOffsetOfSnapshot=200}";
         assertThat(new TieringSnapshotSplit(path, bucket, partitionName, 0L, 200L, 30).toString())
                 .isEqualTo(expectedSplitString);
     }
@@ -103,48 +103,48 @@ class TieringSplitSerializerTest {
 
         String expectedSplitString =
                 isPartitionedTable
-                        ? "TieringLogSplit{tablePath=test_db.test_partitioned_table, tableBucket=TableBucket{tableId=1, partitionId=100, bucket=2}, partitionName='1024', numberOfSplits=2, forceIgnore=false, startingOffset=100, stoppingOffset=200}"
-                        : "TieringLogSplit{tablePath=test_db.test_table, tableBucket=TableBucket{tableId=1, bucket=2}, partitionName='null', numberOfSplits=2, forceIgnore=false, startingOffset=100, stoppingOffset=200}";
+                        ? "TieringLogSplit{tablePath=test_db.test_partitioned_table, tableBucket=TableBucket{tableId=1, partitionId=100, bucket=2}, partitionName='1024', numberOfSplits=2, skipCurrentRound=false, startingOffset=100, stoppingOffset=200}"
+                        : "TieringLogSplit{tablePath=test_db.test_table, tableBucket=TableBucket{tableId=1, bucket=2}, partitionName='null', numberOfSplits=2, skipCurrentRound=false, startingOffset=100, stoppingOffset=200}";
         assertThat(new TieringLogSplit(path, bucket, partitionName, 100, 200, 2).toString())
                 .isEqualTo(expectedSplitString);
     }
 
     @Test
-    void testForceIgnoreSerde() throws Exception {
-        // Test TieringSnapshotSplit with forceIgnore set at creation
-        TieringSnapshotSplit snapshotSplitWithForceIgnore =
+    void testSkipCurrentRoundSerde() throws Exception {
+        // Test TieringSnapshotSplit with skipCurrentRound set at creation
+        TieringSnapshotSplit snapshotSplitWithSkipCurrentRound =
                 new TieringSnapshotSplit(tablePath, tableBucket, null, 0L, 200L, 10, true);
-        byte[] serialized = serializer.serialize(snapshotSplitWithForceIgnore);
+        byte[] serialized = serializer.serialize(snapshotSplitWithSkipCurrentRound);
         TieringSnapshotSplit deserializedSnapshotSplit =
                 (TieringSnapshotSplit) serializer.deserialize(serializer.getVersion(), serialized);
-        assertThat(deserializedSnapshotSplit).isEqualTo(snapshotSplitWithForceIgnore);
+        assertThat(deserializedSnapshotSplit).isEqualTo(snapshotSplitWithSkipCurrentRound);
 
-        // Test TieringLogSplit with forceIgnore set at creation
-        TieringLogSplit logSplitWithForceIgnore =
-                new TieringLogSplit(tablePath, tableBucket, null, 100, 200, true, 40);
-        serialized = serializer.serialize(logSplitWithForceIgnore);
+        // Test TieringLogSplit with skipCurrentRound set at creation
+        TieringLogSplit logSplitWithSkipCurrentRound =
+                new TieringLogSplit(tablePath, tableBucket, null, 100, 200, 40, true);
+        serialized = serializer.serialize(logSplitWithSkipCurrentRound);
         TieringLogSplit deserializedLogSplit =
                 (TieringLogSplit) serializer.deserialize(serializer.getVersion(), serialized);
-        assertThat(deserializedLogSplit).isEqualTo(logSplitWithForceIgnore);
+        assertThat(deserializedLogSplit).isEqualTo(logSplitWithSkipCurrentRound);
 
-        // Test TieringSnapshotSplit with forceIgnore set after creation
+        // Test TieringSnapshotSplit with skipCurrentRound set after creation
         TieringSnapshotSplit snapshotSplit =
                 new TieringSnapshotSplit(tablePath, tableBucket, null, 0L, 200L, 10, false);
-        assertThat(snapshotSplit.isForceIgnore()).isFalse();
-        snapshotSplit.forceIgnore();
-        assertThat(snapshotSplit.isForceIgnore()).isTrue();
+        assertThat(snapshotSplit.shouldSkipCurrentRound()).isFalse();
+        snapshotSplit.skipCurrentRound();
+        assertThat(snapshotSplit.shouldSkipCurrentRound()).isTrue();
 
         serialized = serializer.serialize(snapshotSplit);
         deserializedSnapshotSplit =
                 (TieringSnapshotSplit) serializer.deserialize(serializer.getVersion(), serialized);
         assertThat(deserializedSnapshotSplit).isEqualTo(snapshotSplit);
 
-        // Test TieringLogSplit with forceIgnore set after creation
+        // Test TieringLogSplit with skipCurrentRound set after creation
         TieringLogSplit logSplit =
-                new TieringLogSplit(tablePath, tableBucket, null, 100, 200, false, 40);
-        assertThat(logSplit.isForceIgnore()).isFalse();
-        logSplit.forceIgnore();
-        assertThat(logSplit.isForceIgnore()).isTrue();
+                new TieringLogSplit(tablePath, tableBucket, null, 100, 200, 40, false);
+        assertThat(logSplit.shouldSkipCurrentRound()).isFalse();
+        logSplit.skipCurrentRound();
+        assertThat(logSplit.shouldSkipCurrentRound()).isTrue();
 
         serialized = serializer.serialize(logSplit);
         deserializedLogSplit =

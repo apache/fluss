@@ -149,8 +149,8 @@ public class TieringSourceEnumerator
         this.pollTieringTableIntervalMs = pollTieringTableIntervalMs;
         this.tieringTableDurationMaxMs = tieringTableDurationMaxMs;
         this.tieringTableDurationDetectIntervalMs = tieringTableDurationDetectIntervalMs;
-        this.pendingSplits = new ArrayList<>();
-        this.readersAwaitingSplit = new TreeSet<>();
+        this.pendingSplits = Collections.synchronizedList(new ArrayList<>());
+        this.readersAwaitingSplit = Collections.synchronizedSet(new TreeSet<>());
         this.tieringTableEpochs = MapUtils.newConcurrentHashMap();
         this.finishedTableEpochs = MapUtils.newConcurrentHashMap();
         this.failedTableEpochs = MapUtils.newConcurrentHashMap();
@@ -350,10 +350,9 @@ public class TieringSourceEnumerator
         for (Long reachMaxDurationTable : tieringReachMaxDurationTables) {
             for (TieringSplit tieringSplit : pendingSplits) {
                 if (tieringSplit.getTableBucket().getTableId() == reachMaxDurationTable) {
-                    // force ignore this tiering split since the tiering for this table is timeout,
-                    // we have to force to set to ignore the tiering split so that the
-                    // tiering source reader can ignore them directly
-                    tieringSplit.forceIgnore();
+                    // mark this tiering split to skip the current round since the tiering for
+                    // this table has timed out, so the tiering source reader can skip them directly
+                    tieringSplit.skipCurrentRound();
                 } else {
                     // we can break directly, if found any one split's table id is not equal to the
                     // timeout
@@ -362,7 +361,7 @@ public class TieringSourceEnumerator
                 }
             }
 
-            LOG.debug("Found the table {} reach max tiering duration.", reachMaxDurationTable);
+            LOG.info("Found the table {} reach max tiering duration.", reachMaxDurationTable);
 
             // broadcast the tiering reach max duration event to all readers,
             // we broadcast all for simplicity
@@ -386,25 +385,21 @@ public class TieringSourceEnumerator
     }
 
     private void assignSplits() {
-        // we don't assign splits during failovering
+        // we don't assign splits during failover
         if (isFailOvering) {
             return;
         }
-        /* This method may be called from both addSplitsBack and handleSplitRequest, make it thread safe. */
-        // todo: do we need to add lock?
-        synchronized (readersAwaitingSplit) {
-            if (!readersAwaitingSplit.isEmpty()) {
-                final Integer[] readers = readersAwaitingSplit.toArray(new Integer[0]);
-                for (Integer nextAwaitingReader : readers) {
-                    if (!context.registeredReaders().containsKey(nextAwaitingReader)) {
-                        readersAwaitingSplit.remove(nextAwaitingReader);
-                        continue;
-                    }
-                    if (!pendingSplits.isEmpty()) {
-                        TieringSplit tieringSplit = pendingSplits.remove(0);
-                        context.assignSplit(tieringSplit, nextAwaitingReader);
-                        readersAwaitingSplit.remove(nextAwaitingReader);
-                    }
+        if (!readersAwaitingSplit.isEmpty()) {
+            final Integer[] readers = readersAwaitingSplit.toArray(new Integer[0]);
+            for (Integer nextAwaitingReader : readers) {
+                if (!context.registeredReaders().containsKey(nextAwaitingReader)) {
+                    readersAwaitingSplit.remove(nextAwaitingReader);
+                    continue;
+                }
+                if (!pendingSplits.isEmpty()) {
+                    TieringSplit tieringSplit = pendingSplits.remove(0);
+                    context.assignSplit(tieringSplit, nextAwaitingReader);
+                    readersAwaitingSplit.remove(nextAwaitingReader);
                 }
             }
         }
