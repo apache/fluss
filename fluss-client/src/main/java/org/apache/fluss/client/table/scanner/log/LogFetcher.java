@@ -231,7 +231,7 @@ public class LogFetcher implements Closeable {
             }
 
             if (!tableBuckets.isEmpty()) {
-                checkTableId(tableBuckets.get(0).getTableId());
+                checkTableId(tableBuckets);
             }
         } catch (Exception e) {
             // If exception occurs, we suspect table might be gone or recreated.
@@ -239,7 +239,7 @@ public class LogFetcher implements Closeable {
             try {
                 metadataUpdater.updateTableOrPartitionMetadata(tablePath, null);
                 if (!tableBuckets.isEmpty()) {
-                    checkTableId(tableBuckets.get(0).getTableId());
+                    checkTableId(tableBuckets);
                 }
             } catch (Exception ex) {
                 // If checkTableId threw exception, rethrow it.
@@ -268,14 +268,47 @@ public class LogFetcher implements Closeable {
         }
     }
 
-    private void checkTableId(long tableId) {
+    private void checkTableId(List<TableBucket> tableBuckets) {
+        long tableId = tableBuckets.get(0).getTableId();
         // Check if the table still exists and matches the tableId
         Optional<Long> currentTableId = metadataUpdater.getCluster().getTableId(tablePath);
         if (!currentTableId.isPresent()) {
             throw new TableNotExistException("Table " + tablePath + " does not exist.");
         }
-        if (currentTableId.get() != tableId) {
-            throw new TableNotExistException("Table " + tablePath + " has been recreated.");
+        long metadataTableId = currentTableId.get();
+        if (metadataTableId != tableId) {
+            // If table is recreated, we try to auto-heal for non-partitioned table.
+            // For partitioned table, we can't easily map old partition ID to new partition ID,
+            // so we throw exception.
+            if (!isPartitioned) {
+                LOG.warn(
+                        "Table {} was recreated. Updating table ID from {} to {} and resuming fetch.",
+                        tablePath,
+                        tableId,
+                        metadataTableId);
+                Map<TableBucket, Long> newBuckets = new HashMap<>();
+                List<TableBucket> oldBuckets = new ArrayList<>();
+
+                for (TableBucket oldBucket : tableBuckets) {
+                    if (oldBucket.getTableId() == tableId) {
+                        Long offset = logScannerStatus.getBucketOffset(oldBucket);
+                        if (offset != null) {
+                            TableBucket newBucket =
+                                    new TableBucket(
+                                            metadataTableId,
+                                            oldBucket.getPartitionId(),
+                                            oldBucket.getBucket());
+                            newBuckets.put(newBucket, offset);
+                            oldBuckets.add(oldBucket);
+                        }
+                    }
+                }
+
+                logScannerStatus.unassignScanBuckets(oldBuckets);
+                logScannerStatus.assignScanBuckets(newBuckets);
+            } else {
+                throw new TableNotExistException("Table " + tablePath + " has been recreated.");
+            }
         }
     }
 
