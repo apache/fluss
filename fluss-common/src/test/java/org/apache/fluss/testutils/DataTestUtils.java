@@ -726,20 +726,25 @@ public class DataTestUtils {
             RowType rowType,
             LogRecord logRecord,
             Tuple2<ChangeType, Object[]> expectedFieldAndRowKind) {
-        DataType[] dataTypes = rowType.getChildren().toArray(new DataType[0]);
-        InternalRow.FieldGetter[] fieldGetter = new InternalRow.FieldGetter[dataTypes.length];
-        for (int i = 0; i < dataTypes.length; i++) {
-            fieldGetter[i] = InternalRow.createFieldGetter(dataTypes[i], i);
-        }
         assertThat(logRecord.getChangeType()).isEqualTo(expectedFieldAndRowKind.f0);
-        assertRowValueEquals(
-                fieldGetter, dataTypes, logRecord.getRow(), expectedFieldAndRowKind.f1);
+        assertLogRecordsEqualsWithRowKind(rowType, logRecord.getRow(), expectedFieldAndRowKind.f1);
     }
 
     public static void assertLogRecordsEquals(
             RowType rowType, LogRecords logRecords, List<Object[]> expectedValue) {
         assertLogRecordsEquals(
                 DEFAULT_SCHEMA_ID, rowType, logRecords, expectedValue, TEST_SCHEMA_GETTER);
+    }
+
+    private static void assertLogRecordsEqualsWithRowKind(
+            RowType rowType, InternalRow row, Object[] expectVal) {
+        DataType[] dataTypes = rowType.getChildren().toArray(new DataType[0]);
+        InternalRow.FieldGetter[] fieldGetter = new InternalRow.FieldGetter[dataTypes.length];
+        for (int i = 0; i < dataTypes.length; i++) {
+            fieldGetter[i] = InternalRow.createFieldGetter(dataTypes[i], i);
+        }
+
+        assertRowValueEquals(fieldGetter, dataTypes, row, expectVal);
     }
 
     public static void assertLogRecordsEquals(
@@ -821,6 +826,9 @@ public class DataTestUtils {
             if (field != null) {
                 if (dataTypes[i].getTypeRoot() == DataTypeRoot.STRING) {
                     assertThat(field).isEqualTo(BinaryString.fromString((String) expectVal[i]));
+                } else if (dataTypes[i].getTypeRoot() == DataTypeRoot.ROW) {
+                    assertRowValueEquals(
+                            (RowType) dataTypes[i], (InternalRow) field, (Object[]) expectVal[i]);
                 } else {
                     assertThat(field).isEqualTo(expectVal[i]);
                 }

@@ -101,6 +101,7 @@ public final class FetchParams {
             SchemaGetter schemaGetter,
             ArrowCompressionInfo compressionInfo,
             @Nullable int[] projectedFields,
+            boolean isSelectedByIds,
             ProjectionPushdownCache projectionCache) {
         this.fetchOffset = fetchOffset;
         this.maxFetchBytes = maxFetchBytes;
@@ -111,7 +112,7 @@ public final class FetchParams {
             }
 
             fileLogProjection.setCurrentProjection(
-                    tableId, schemaGetter, compressionInfo, projectedFields);
+                    tableId, schemaGetter, compressionInfo, projectedFields, isSelectedByIds);
         } else {
             projectionEnabled = false;
         }

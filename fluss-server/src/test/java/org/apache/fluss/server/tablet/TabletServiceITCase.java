@@ -29,6 +29,7 @@ import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.DefaultKvRecordBatch;
 import org.apache.fluss.record.DefaultValueRecordBatch;
+import org.apache.fluss.record.FileLogProjection;
 import org.apache.fluss.record.TestingSchemaGetter;
 import org.apache.fluss.row.encode.CompactedKeyEncoder;
 import org.apache.fluss.row.encode.ValueEncoder;
@@ -65,6 +66,8 @@ import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import javax.annotation.Nullable;
@@ -80,6 +83,7 @@ import java.util.Random;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.stream.Stream;
 
 import static org.apache.fluss.record.LogRecordBatchFormat.LOG_MAGIC_VALUE_V0;
 import static org.apache.fluss.record.LogRecordBatchFormat.LOG_MAGIC_VALUE_V1;
@@ -217,8 +221,8 @@ public class TabletServiceITCase {
     }
 
     @ParameterizedTest
-    @ValueSource(bytes = {LOG_MAGIC_VALUE_V0, LOG_MAGIC_VALUE_V1})
-    void testFetchLog(byte recordBatchMagic) throws Exception {
+    @MethodSource("projectedFieldsArgs")
+    void testFetchLog(byte recordBatchMagic, boolean isProjectByIds) throws Exception {
         long tableId =
                 createTable(FLUSS_CLUSTER_EXTENSION, DATA1_TABLE_PATH, DATA1_TABLE_DESCRIPTOR);
         TableBucket tb = new TableBucket(tableId, 0);
@@ -245,7 +249,9 @@ public class TabletServiceITCase {
 
         // fetch from this bucket from offset 0, return data1.
         assertFetchLogResponse(
-                leaderGateWay.fetchLog(newFetchLogRequest(-1, tableId, 0, 0L)).get(),
+                leaderGateWay
+                        .fetchLog(newFetchLogRequest(-1, tableId, 0, 0L, null, isProjectByIds))
+                        .get(),
                 tableId,
                 0,
                 10L,
@@ -253,7 +259,9 @@ public class TabletServiceITCase {
 
         // fetch from this bucket from offset 3, return data1.
         assertFetchLogResponse(
-                leaderGateWay.fetchLog(newFetchLogRequest(-1, tableId, 0, 3L)).get(),
+                leaderGateWay
+                        .fetchLog(newFetchLogRequest(-1, tableId, 0, 3L, null, isProjectByIds))
+                        .get(),
                 tableId,
                 0,
                 10L,
@@ -275,7 +283,9 @@ public class TabletServiceITCase {
 
         // fetch this bucket from offset 10, return data2.
         assertFetchLogResponse(
-                leaderGateWay.fetchLog(newFetchLogRequest(-1, tableId, 0, 10L)).get(),
+                leaderGateWay
+                        .fetchLog(newFetchLogRequest(-1, tableId, 0, 10L, null, isProjectByIds))
+                        .get(),
                 tableId,
                 0,
                 20L,
@@ -283,7 +293,9 @@ public class TabletServiceITCase {
 
         // fetch this bucket from offset 100, return error code.
         assertFetchLogResponse(
-                leaderGateWay.fetchLog(newFetchLogRequest(-1, tableId, 0, 100L)).get(),
+                leaderGateWay
+                        .fetchLog(newFetchLogRequest(-1, tableId, 0, 100L, null, isProjectByIds))
+                        .get(),
                 tableId,
                 0,
                 Errors.LOG_OFFSET_OUT_OF_RANGE_EXCEPTION.code(),
@@ -298,7 +310,9 @@ public class TabletServiceITCase {
         }
         assertFetchLogResponse(
                 leaderGateWay
-                        .fetchLog(newFetchLogRequest(-1, tableId, 0, 10L, new int[] {0}))
+                        .fetchLog(
+                                newFetchLogRequest(
+                                        -1, tableId, 0, 10L, new int[] {0}, isProjectByIds))
                         .get(),
                 DATA1_ROW_TYPE.project(new int[] {0}),
                 schemaGetter,
@@ -314,7 +328,9 @@ public class TabletServiceITCase {
         }
         assertFetchLogResponse(
                 leaderGateWay
-                        .fetchLog(newFetchLogRequest(-1, tableId, 0, 15L, new int[] {1}))
+                        .fetchLog(
+                                newFetchLogRequest(
+                                        -1, tableId, 0, 15L, new int[] {1}, isProjectByIds))
                         .get(),
                 DATA1_ROW_TYPE.project(new int[] {1}),
                 schemaGetter,
@@ -325,7 +341,9 @@ public class TabletServiceITCase {
 
         assertFetchLogResponse(
                 leaderGateWay
-                        .fetchLog(newFetchLogRequest(-1, tableId, 0, 10L, new int[] {2, 3}))
+                        .fetchLog(
+                                newFetchLogRequest(
+                                        -1, tableId, 0, 10L, new int[] {2, 3}, isProjectByIds))
                         .get(),
                 tableId,
                 0,
@@ -365,7 +383,7 @@ public class TabletServiceITCase {
                 leaderGateWay
                         .fetchLog(
                                 newFetchLogRequest(
-                                        -1, tableId, 0, 0L, null, 1, Integer.MAX_VALUE, 100))
+                                        -1, tableId, 0, 0L, null, false, 1, Integer.MAX_VALUE, 100))
                         .get();
         assertThat(fetchLogResponse.getTablesRespsCount()).isEqualTo(1);
         fetchLogRespForTable = fetchLogResponse.getTablesRespsList().get(0);
@@ -385,6 +403,7 @@ public class TabletServiceITCase {
                                 0,
                                 0L,
                                 null,
+                                false,
                                 1,
                                 Integer.MAX_VALUE,
                                 (int) Duration.ofMinutes(5).toMillis()));
@@ -411,6 +430,7 @@ public class TabletServiceITCase {
                                         0,
                                         0L,
                                         null,
+                                        false,
                                         1,
                                         Integer.MAX_VALUE,
                                         (int) Duration.ofMinutes(5).toMillis()))
@@ -419,6 +439,113 @@ public class TabletServiceITCase {
                 0,
                 10L,
                 DATA1);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testFetchLogWithNestedRowProjectionPushdown(boolean isProjectedByIds) throws Exception {
+        final Schema schema =
+                Schema.newBuilder()
+                        .column("a", DataTypes.INT())
+                        .column("b", DataTypes.STRING())
+                        .column(
+                                "c",
+                                DataTypes.ROW(
+                                        DataTypes.INT(),
+                                        DataTypes.ROW(DataTypes.INT(), DataTypes.STRING())))
+                        .column("d", DataTypes.INT())
+                        .column("e", DataTypes.STRING())
+                        .build();
+        RowType rowType = schema.getRowType();
+        List<Object[]> data =
+                Arrays.asList(
+                        new Object[] {
+                            1, "a", new Object[] {11, new Object[] {111, "aa"}}, 1111, "aaa"
+                        },
+                        new Object[] {
+                            2, "b", new Object[] {22, new Object[] {222, "bb"}}, 2222, "bbb"
+                        },
+                        new Object[] {
+                            3, "c", new Object[] {33, new Object[] {333, "cc"}}, 3333, "ccc"
+                        },
+                        new Object[] {
+                            4, "d", new Object[] {44, new Object[] {444, "dd"}}, 4444, "ddd"
+                        },
+                        new Object[] {
+                            5, "e", new Object[] {55, new Object[] {555, "ee"}}, 5555, "eee"
+                        });
+
+        int[] projectedFields = new int[] {0, 3, 4};
+        List<Object[]> expected =
+                Arrays.asList(
+                        new Object[] {
+                            1,
+                            isProjectedByIds ? 11 : 1111,
+                            isProjectedByIds ? new Object[] {111, "aa"} : "aaa"
+                        },
+                        new Object[] {
+                            2,
+                            isProjectedByIds ? 22 : 2222,
+                            isProjectedByIds ? new Object[] {222, "bb"} : "bbb"
+                        },
+                        new Object[] {
+                            3,
+                            isProjectedByIds ? 33 : 3333,
+                            isProjectedByIds ? new Object[] {333, "cc"} : "ccc"
+                        },
+                        new Object[] {
+                            4,
+                            isProjectedByIds ? 44 : 4444,
+                            isProjectedByIds ? new Object[] {444, "dd"} : "ddd"
+                        },
+                        new Object[] {
+                            5,
+                            isProjectedByIds ? 55 : 5555,
+                            isProjectedByIds ? new Object[] {555, "ee"} : "eee"
+                        });
+
+        long tableId =
+                createTable(
+                        FLUSS_CLUSTER_EXTENSION,
+                        DATA1_TABLE_PATH,
+                        TableDescriptor.builder().schema(schema).distributedBy(3).build());
+        TableBucket tb = new TableBucket(tableId, 0);
+        SchemaGetter schemaGetter = new TestingSchemaGetter(1, schema);
+
+        FLUSS_CLUSTER_EXTENSION.waitUntilAllReplicaReady(tb);
+
+        int leader = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(tb);
+        TabletServerGateway leaderGateWay =
+                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leader);
+
+        // produce one batch to this bucket.
+        assertProduceLogResponse(
+                leaderGateWay
+                        .produceLog(
+                                newProduceLogRequest(
+                                        tableId,
+                                        0,
+                                        1,
+                                        genMemoryLogRecordsByObject(rowType, 1, (byte) 1, data)))
+                        .get(),
+                0,
+                0L);
+
+        assertFetchLogResponse(
+                leaderGateWay
+                        .fetchLog(
+                                newFetchLogRequest(
+                                        -1, tableId, 0, 0L, projectedFields, isProjectedByIds))
+                        .get(),
+                isProjectedByIds
+                        ? FileLogProjection.projectByIds(
+                                rowType, schema.getHighestFieldId(), projectedFields)
+                        : rowType.project(projectedFields),
+                schemaGetter,
+                tableId,
+                0,
+                5L,
+                expected);
     }
 
     @Test
@@ -972,5 +1099,13 @@ public class TabletServiceITCase {
                                 physicalTablePath, tableBucket, leaderAndIsr.isr(), leaderAndIsr));
         return ServerRpcMessageUtils.makeNotifyLeaderAndIsrRequest(
                 0, Collections.singletonList(reqForBucket));
+    }
+
+    static Stream<Arguments> projectedFieldsArgs() {
+        return Stream.of(
+                Arguments.of(LOG_MAGIC_VALUE_V0, true),
+                Arguments.arguments(LOG_MAGIC_VALUE_V0, false),
+                Arguments.of(LOG_MAGIC_VALUE_V1, true),
+                Arguments.arguments(LOG_MAGIC_VALUE_V1, false));
     }
 }

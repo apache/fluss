@@ -822,6 +822,13 @@ public class ServerRpcMessageUtils {
                 projectionFields = null;
             }
 
+            final boolean isSelectedByIds;
+            if (fetchLogReqForTable.hasProjectByIds()) {
+                isSelectedByIds = fetchLogReqForTable.isProjectByIds();
+            } else {
+                isSelectedByIds = false;
+            }
+
             List<PbFetchLogReqForBucket> bucketsReqsList = fetchLogReqForTable.getBucketsReqsList();
             for (PbFetchLogReqForBucket fetchLogReqForBucket : bucketsReqsList) {
                 int bucketId = fetchLogReqForBucket.getBucketId();
@@ -836,7 +843,8 @@ public class ServerRpcMessageUtils {
                                 tableId,
                                 fetchLogReqForBucket.getFetchOffset(),
                                 fetchLogReqForBucket.getMaxFetchBytes(),
-                                projectionFields));
+                                projectionFields,
+                                isSelectedByIds));
             }
         }
 
