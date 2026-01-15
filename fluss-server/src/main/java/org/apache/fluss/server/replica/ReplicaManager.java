@@ -153,7 +153,6 @@ public class ReplicaManager {
     private final Map<TableBucket, HostedReplica> allReplicas = MapUtils.newConcurrentHashMap();
 
     private final TabletServerMetadataCache metadataCache;
-    private final ExecutorService ioExecutor;
     private final ProjectionPushdownCache projectionsCache = new ProjectionPushdownCache();
     private final Lock replicaStateChangeLock = new ReentrantLock();
 
@@ -292,7 +291,6 @@ public class ReplicaManager {
         this.serverMetricGroup = serverMetricGroup;
         this.userMetrics = userMetrics;
         this.clock = clock;
-        this.ioExecutor = ioExecutor;
         registerMetrics();
     }
 
@@ -1113,6 +1111,7 @@ public class ReplicaManager {
                         replica.getSchemaGetter(),
                         replica.getArrowCompressionInfo(),
                         fetchReqInfo.getProjectFields(),
+                        fetchReqInfo.isProjectByIds(),
                         projectionsCache);
                 LogReadInfo readInfo = replica.fetchRecords(fetchParams);
 
