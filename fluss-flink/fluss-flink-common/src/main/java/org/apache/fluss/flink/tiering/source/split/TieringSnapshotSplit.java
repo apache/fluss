@@ -62,8 +62,8 @@ public class TieringSnapshotSplit extends TieringSplit {
             long snapshotId,
             long logOffsetOfSnapshot,
             int numberOfSplits,
-            boolean forceIgnore) {
-        super(tablePath, tableBucket, partitionName, forceIgnore, numberOfSplits);
+            boolean skipCurrentRound) {
+        super(tablePath, tableBucket, partitionName, numberOfSplits, skipCurrentRound);
         this.snapshotId = snapshotId;
         this.logOffsetOfSnapshot = logOffsetOfSnapshot;
     }
@@ -93,8 +93,8 @@ public class TieringSnapshotSplit extends TieringSplit {
                 + '\''
                 + ", numberOfSplits="
                 + numberOfSplits
-                + ", forceIgnore="
-                + forceIgnore
+                + ", skipCurrentRound="
+                + skipCurrentRound
                 + ", snapshotId="
                 + snapshotId
                 + ", logOffsetOfSnapshot="
@@ -111,7 +111,7 @@ public class TieringSnapshotSplit extends TieringSplit {
                 snapshotId,
                 logOffsetOfSnapshot,
                 numberOfSplits,
-                forceIgnore);
+                skipCurrentRound);
     }
 
     @Override

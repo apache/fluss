@@ -20,7 +20,6 @@ package org.apache.fluss.flink.tiering.source.enumerator;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.tiering.event.FailedTieringEvent;
 import org.apache.fluss.flink.tiering.event.FinishedTieringEvent;
-import org.apache.fluss.flink.tiering.event.TieringFailOverEvent;
 import org.apache.fluss.flink.tiering.event.TieringReachMaxDurationEvent;
 import org.apache.fluss.flink.tiering.source.TieringTestBase;
 import org.apache.fluss.flink.tiering.source.split.TieringLogSplit;
@@ -34,9 +33,9 @@ import org.apache.fluss.rpc.messages.PbLakeTableOffsetForBucket;
 import org.apache.fluss.rpc.messages.PbLakeTableSnapshotInfo;
 import org.apache.fluss.utils.clock.ManualClock;
 
-import org.apache.flink.api.connector.source.ReaderInfo;
 import org.apache.flink.api.connector.source.SourceEvent;
 import org.apache.flink.api.connector.source.SplitsAssignment;
+import org.apache.flink.api.connector.source.mocks.MockSplitEnumeratorContext;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -276,10 +275,8 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
 
             // mock finished tiered this round, check second round
             context.getSplitsAssignmentSequence().clear();
-            final Map<Integer, Long> bucketOffsetOfEarliest = new HashMap<>();
             final Map<Integer, Long> bucketOffsetOfInitialWrite = new HashMap<>();
             for (int tableBucket = 0; tableBucket < DEFAULT_BUCKET_NUM; tableBucket++) {
-                bucketOffsetOfEarliest.put(tableBucket, EARLIEST_OFFSET);
                 bucketOffsetOfInitialWrite.put(
                         tableBucket, bucketOffsetOfFirstWrite.getOrDefault(tableBucket, 0L));
             }
@@ -483,10 +480,8 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
             long snapshot = 1;
             for (Map.Entry<String, Long> partitionNameById : partitionNameByIds.entrySet()) {
                 long partitionId = partitionNameById.getValue();
-                Map<Integer, Long> partitionInitialBucketOffsets = new HashMap<>();
                 Map<Integer, Long> partitionBucketOffsetOfInitialWrite = new HashMap<>();
                 for (int tableBucket = 0; tableBucket < DEFAULT_BUCKET_NUM; tableBucket++) {
-                    partitionInitialBucketOffsets.put(tableBucket, EARLIEST_OFFSET);
                     partitionBucketOffsetOfInitialWrite.put(
                             tableBucket,
                             bucketOffsetOfFirstWrite
@@ -561,7 +556,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
         try (FlussMockSplitEnumeratorContext<TieringSplit> context =
                 new FlussMockSplitEnumeratorContext<>(numSubtasks)) {
             TieringSourceEnumerator enumerator =
-                    new TieringSourceEnumerator(flussConf, context, 500);
+                    createDefaultTieringSourceEnumerator(flussConf, context);
 
             enumerator.start();
             assertThat(context.getSplitsAssignmentSequence()).isEmpty();
@@ -757,8 +752,8 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
 
         ManualClock manualClock = new ManualClock();
 
-        try (MockSplitEnumeratorContext<TieringSplit> context =
-                        new MockSplitEnumeratorContext<>(numSubtasks);
+        try (FlussMockSplitEnumeratorContext<TieringSplit> context =
+                        new FlussMockSplitEnumeratorContext<>(numSubtasks);
                 TieringSourceEnumerator enumerator =
                         createTieringSourceEnumeratorWithManualClock(
                                 flussConf,
@@ -770,7 +765,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
 
             // Register all readers
             for (int subtaskId = 0; subtaskId < numSubtasks; subtaskId++) {
-                registerReader(context, enumerator, subtaskId, "localhost-" + subtaskId);
+                context.registerSourceReader(subtaskId, subtaskId, "localhost-" + subtaskId);
             }
 
             appendRow(tablePath, DEFAULT_LOG_TABLE_DESCRIPTOR, 0, 10);
@@ -805,14 +800,14 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
             // request a split again
             enumerator.handleSplitRequest(0, "localhost-0");
 
-            // the split should be marked as forceIgnore
+            // the split should be marked as skipCurrentRound
             waitUntilTieringTableSplitAssignmentReady(context, 1, 100L);
 
             List<TieringSplit> assignedSplits = new ArrayList<>();
             context.getSplitsAssignmentSequence()
                     .forEach(a -> a.assignment().values().forEach(assignedSplits::addAll));
             assertThat(assignedSplits).hasSize(1);
-            assertThat(assignedSplits.get(0).isForceIgnore()).isTrue();
+            assertThat(assignedSplits.get(0).shouldSkipCurrentRound()).isTrue();
         }
     }
 }

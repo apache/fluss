@@ -17,6 +17,8 @@
 
 package org.apache.fluss.flink.tiering.source.split;
 
+import org.apache.fluss.flink.tiering.source.TieringSource;
+import org.apache.fluss.flink.tiering.source.enumerator.TieringSourceEnumerator;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
 
@@ -26,7 +28,13 @@ import org.apache.flink.core.memory.DataOutputSerializer;
 
 import java.io.IOException;
 
-/** A serializer for the {@link TieringSplit}. */
+/**
+ * A serializer for the {@link TieringSplit}.
+ *
+ * <p>This serializer is only used to serialize and deserialize splits sent from {@link
+ * TieringSourceEnumerator} to {@link TieringSource} for network transmission. Therefore, it does
+ * not need to consider compatibility.
+ */
 public class TieringSplitSerializer implements SimpleVersionedSerializer<TieringSplit> {
 
     public static final TieringSplitSerializer INSTANCE = new TieringSplitSerializer();
@@ -74,11 +82,10 @@ public class TieringSplitSerializer implements SimpleVersionedSerializer<Tiering
             out.writeBoolean(false);
         }
 
-        // write force ignore
-        out.writeBoolean(split.isForceIgnore());
-
         // write number of splits
         out.writeInt(split.getNumberOfSplits());
+        // write skipCurrentRound
+        out.writeBoolean(split.shouldSkipCurrentRound());
         if (split.isTieringSnapshotSplit()) {
             // Snapshot split
             TieringSnapshotSplit tieringSnapshotSplit = split.asTieringSnapshotSplit();
@@ -129,10 +136,9 @@ public class TieringSplitSerializer implements SimpleVersionedSerializer<Tiering
         }
         TableBucket tableBucket = new TableBucket(tableId, partitionId, bucketId);
 
-        boolean forceIgnore = in.readBoolean();
-
         // deserialize number of splits
         int numberOfSplits = in.readInt();
+        boolean skipCurrentRound = in.readBoolean();
 
         if (splitKind == TIERING_SNAPSHOT_SPLIT_FLAG) {
             // deserialize snapshot id
@@ -146,7 +152,7 @@ public class TieringSplitSerializer implements SimpleVersionedSerializer<Tiering
                     snapshotId,
                     logOffsetOfSnapshot,
                     numberOfSplits,
-                    forceIgnore);
+                    skipCurrentRound);
         } else {
             // deserialize starting offset
             long startingOffset = in.readLong();
@@ -158,8 +164,8 @@ public class TieringSplitSerializer implements SimpleVersionedSerializer<Tiering
                     partitionName,
                     startingOffset,
                     stoppingOffset,
-                    forceIgnore,
-                    numberOfSplits);
+                    numberOfSplits,
+                    skipCurrentRound);
         }
     }
 }

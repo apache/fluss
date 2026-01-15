@@ -180,11 +180,11 @@ public class TieringSplitReader<WriteResult>
         }
         for (TieringSplit split : splitsChange.splits()) {
             LOG.info("add split {}", split.splitId());
-            if (split.isForceIgnore()) {
+            if (split.shouldSkipCurrentRound()) {
                 // if the split is forced to ignore,
                 // mark it as empty
                 LOG.info(
-                        "ignore split {} since the split is set to force to ignore",
+                        "ignore split {} since the split is set to skip the current round of tiering.",
                         split.splitId());
                 currentEmptySplits.add(split);
                 continue;
@@ -551,6 +551,7 @@ public class TieringSplitReader<WriteResult>
     public void handleTableReachTieringMaxDuration(long tableId) {
         if ((currentTableId != null && currentTableId.equals(tableId))
                 || pendingTieringSplits.containsKey(tableId)) {
+            LOG.info("Table {} reach tiering max duration, will force to complete.", tableId);
             reachTieringMaxDurationTables.add(tableId);
         }
     }
