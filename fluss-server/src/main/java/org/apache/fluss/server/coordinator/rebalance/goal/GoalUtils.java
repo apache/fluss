@@ -20,6 +20,7 @@ package org.apache.fluss.server.coordinator.rebalance.goal;
 import org.apache.fluss.cluster.rebalance.GoalType;
 import org.apache.fluss.server.coordinator.rebalance.ActionType;
 import org.apache.fluss.server.coordinator.rebalance.model.ClusterModel;
+import org.apache.fluss.server.coordinator.rebalance.model.ClusterModelStats;
 import org.apache.fluss.server.coordinator.rebalance.model.ReplicaModel;
 import org.apache.fluss.server.coordinator.rebalance.model.ServerModel;
 
@@ -36,6 +37,10 @@ public class GoalUtils {
                 return new ReplicaDistributionGoal();
             case LEADER_DISTRIBUTION:
                 return new LeaderReplicaDistributionGoal();
+            case RACK_AWARE:
+                return new RackAwareGoal();
+            case RACK_AWARE_DISTRIBUTION:
+                return new RackAwareDistributionGoal();
             default:
                 throw new IllegalArgumentException("Unsupported goal type " + goalType);
         }
@@ -75,5 +80,20 @@ public class GoalUtils {
         return cluster.aliveServers().stream()
                 .map(ServerModel::id)
                 .collect(Collectors.toCollection(HashSet::new));
+    }
+
+    /** A convenience {@link Goal.ClusterModelStatsComparator} for typical hard goals. */
+    public static class HardGoalStatsComparator implements Goal.ClusterModelStatsComparator {
+        @Override
+        public int compare(ClusterModelStats stats1, ClusterModelStats stats2) {
+            // Stats are irrelevant to a hard goal. The optimization would already fail if the goal
+            // requirements are not met.
+            return 0;
+        }
+
+        @Override
+        public String explainLastComparison() {
+            return null;
+        }
     }
 }

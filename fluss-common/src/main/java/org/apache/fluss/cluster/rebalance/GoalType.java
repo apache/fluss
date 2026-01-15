@@ -38,7 +38,22 @@ public enum GoalType {
      * Goal to generate leadership movement and leader replica movement tasks to ensure that the
      * number of leader replicas on each tabletServer is near balanced.
      */
-    LEADER_DISTRIBUTION(1);
+    LEADER_DISTRIBUTION(1),
+
+    /**
+     * Goal to generate replica movement tasks to ensure that the number of replicas on each
+     * tabletServer is near balanced and the replicas are distributed across racks.
+     */
+    RACK_AWARE(2),
+
+    /**
+     * Goal to generate replica movement tasks to ensure that the number of replicas on each
+     * tabletServer is near balanced and the replicas are distributed across racks. This is a
+     * relaxed version of RACK_AWARE goal. Contrary to RACK_AWARE goal, as long as replicas of each
+     * bucket can achieve a perfectly even distribution across the racks, this goal lets placement
+     * of multiple replicas of a bucket into a single rack.
+     */
+    RACK_AWARE_DISTRIBUTION(3);
 
     public final int value;
 
@@ -51,6 +66,10 @@ public enum GoalType {
             return REPLICA_DISTRIBUTION;
         } else if (value == LEADER_DISTRIBUTION.value) {
             return LEADER_DISTRIBUTION;
+        } else if (value == RACK_AWARE.value) {
+            return RACK_AWARE;
+        } else if (value == RACK_AWARE_DISTRIBUTION.value) {
+            return RACK_AWARE_DISTRIBUTION;
         } else {
             throw new IllegalArgumentException(
                     String.format(
