@@ -19,6 +19,7 @@ package org.apache.fluss.flink.sink;
 
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.sink.serializer.RowDataSerializationSchema;
+import org.apache.fluss.flink.sink.shuffle.DistributionMode;
 import org.apache.fluss.flink.sink.writer.FlinkSinkWriter;
 import org.apache.fluss.flink.utils.PushdownUtils;
 import org.apache.fluss.flink.utils.PushdownUtils.FieldEqual;
@@ -30,12 +31,15 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.GenericRow;
 
 import org.apache.flink.annotation.VisibleForTesting;
+import org.apache.flink.streaming.api.datastream.DataStream;
+import org.apache.flink.streaming.api.datastream.DataStreamSink;
 import org.apache.flink.table.api.ValidationException;
 import org.apache.flink.table.catalog.Column;
 import org.apache.flink.table.connector.ChangelogMode;
+import org.apache.flink.table.connector.ProviderContext;
 import org.apache.flink.table.connector.RowLevelModificationScanContext;
+import org.apache.flink.table.connector.sink.DataStreamSinkProvider;
 import org.apache.flink.table.connector.sink.DynamicTableSink;
-import org.apache.flink.table.connector.sink.SinkV2Provider;
 import org.apache.flink.table.connector.sink.abilities.SupportsDeletePushDown;
 import org.apache.flink.table.connector.sink.abilities.SupportsPartitioning;
 import org.apache.flink.table.connector.sink.abilities.SupportsRowLevelDelete;
@@ -79,7 +83,7 @@ public class FlinkTableSink
     private final DeleteBehavior tableDeleteBehavior;
     private final int numBucket;
     private final List<String> bucketKeys;
-    private final boolean shuffleByBucketId;
+    private final DistributionMode distributionMode;
     private final @Nullable DataLakeFormat lakeFormat;
 
     private boolean appliedUpdates = false;
@@ -98,7 +102,7 @@ public class FlinkTableSink
             DeleteBehavior tableDeleteBehavior,
             int numBucket,
             List<String> bucketKeys,
-            boolean shuffleByBucketId) {
+            DistributionMode distributionMode) {
         this.tablePath = tablePath;
         this.flussConfig = flussConfig;
         this.tableRowType = tableRowType;
@@ -110,7 +114,7 @@ public class FlinkTableSink
         this.tableDeleteBehavior = tableDeleteBehavior;
         this.numBucket = numBucket;
         this.bucketKeys = bucketKeys;
-        this.shuffleByBucketId = shuffleByBucketId;
+        this.distributionMode = distributionMode;
         this.lakeFormat = lakeFormat;
     }
 
@@ -188,7 +192,15 @@ public class FlinkTableSink
         }
 
         FlinkSink<RowData> flinkSink = getFlinkSink(targetColumnIndexes);
-        return SinkV2Provider.of(flinkSink);
+        // Use DataStreamSinkProvider rather than SinkV2Provider because later won't set default uid
+        // for transforms added by addPreWriteTopology.
+        return new DataStreamSinkProvider() {
+            @Override
+            public DataStreamSink<?> consumeDataStream(
+                    ProviderContext providerContext, DataStream<RowData> dataStream) {
+                return flinkSink.addPreWriteTopology(dataStream);
+            }
+        };
     }
 
     private FlinkSink<RowData> getFlinkSink(int[] targetColumnIndexes) {
@@ -203,7 +215,7 @@ public class FlinkTableSink
                                 bucketKeys,
                                 partitionKeys,
                                 lakeFormat,
-                                shuffleByBucketId,
+                                distributionMode,
                                 new RowDataSerializationSchema(false, sinkIgnoreDelete))
                         : new FlinkSink.AppendSinkWriterBuilder<>(
                                 tablePath,
@@ -213,7 +225,7 @@ public class FlinkTableSink
                                 bucketKeys,
                                 partitionKeys,
                                 lakeFormat,
-                                shuffleByBucketId,
+                                distributionMode,
                                 new RowDataSerializationSchema(true, sinkIgnoreDelete));
 
         return new FlinkSink<>(flinkSinkWriterBuilder);
@@ -243,7 +255,7 @@ public class FlinkTableSink
                         tableDeleteBehavior,
                         numBucket,
                         bucketKeys,
-                        shuffleByBucketId);
+                        distributionMode);
         sink.appliedUpdates = appliedUpdates;
         sink.deleteRow = deleteRow;
         return sink;

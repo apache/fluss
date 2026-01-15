@@ -144,7 +144,7 @@ public class FlussSinkITCase extends FlinkTestBase {
                         .setSerializationSchema(serializationSchema)
                         .build();
 
-        stream.sinkTo(flussSink).name("Fluss Sink");
+        flussSink.addPreWriteTopology(stream).name("Fluss Sink");
 
         env.executeAsync("Test RowData Fluss Sink");
 
@@ -272,7 +272,7 @@ public class FlussSinkITCase extends FlinkTestBase {
                         .setSerializationSchema(new TestOrderSerializationSchema())
                         .build();
 
-        stream.sinkTo(flussSink).name("Fluss Sink");
+        flussSink.addPreWriteTopology(stream).name("Fluss Sink");
         env.executeAsync("Test Order Fluss Sink");
 
         Table table = conn.getTable(new TablePath(DEFAULT_DB, pkTableName));

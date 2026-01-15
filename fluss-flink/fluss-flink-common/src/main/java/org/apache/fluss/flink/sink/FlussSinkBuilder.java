@@ -24,6 +24,7 @@ import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.sink.serializer.FlussSerializationSchema;
+import org.apache.fluss.flink.sink.shuffle.DistributionMode;
 import org.apache.fluss.flink.sink.writer.FlinkSinkWriter;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.TableInfo;
@@ -73,7 +74,7 @@ public class FlussSinkBuilder<InputT> {
     private String tableName;
     private final Map<String, String> configOptions = new HashMap<>();
     private FlussSerializationSchema<InputT> serializationSchema;
-    private boolean shuffleByBucketId = true;
+    private DistributionMode distributionMode = DistributionMode.AUTO;
     // Optional list of columns for partial update. When set, upsert will only update these columns.
     // The primary key columns must be fully specified in this list.
     private List<String> partialUpdateColumns;
@@ -96,9 +97,18 @@ public class FlussSinkBuilder<InputT> {
         return this;
     }
 
-    /** Set shuffle by bucket id. */
+    /**
+     * Set shuffle by bucket id. Deprecated use {@link
+     * FlussSinkBuilder#setDistributionMode(DistributionMode) } instead.
+     */
+    @Deprecated
     public FlussSinkBuilder<InputT> setShuffleByBucketId(boolean shuffleByBucketId) {
-        this.shuffleByBucketId = shuffleByBucketId;
+        this.distributionMode = shuffleByBucketId ? DistributionMode.BUCKET : DistributionMode.NONE;
+        return this;
+    }
+
+    public FlussSinkBuilder<InputT> setDistributionMode(DistributionMode distributionMode) {
+        this.distributionMode = distributionMode;
         return this;
     }
 
@@ -190,7 +200,7 @@ public class FlussSinkBuilder<InputT> {
                             bucketKeys,
                             partitionKeys,
                             lakeFormat,
-                            shuffleByBucketId,
+                            distributionMode,
                             serializationSchema);
         } else {
             LOG.info("Initializing Fluss append sink writer ...");
@@ -203,7 +213,7 @@ public class FlussSinkBuilder<InputT> {
                             bucketKeys,
                             partitionKeys,
                             lakeFormat,
-                            shuffleByBucketId,
+                            distributionMode,
                             serializationSchema);
         }
 

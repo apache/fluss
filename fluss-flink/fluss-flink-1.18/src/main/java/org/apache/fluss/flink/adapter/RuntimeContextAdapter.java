@@ -30,10 +30,10 @@ import org.apache.flink.streaming.api.operators.StreamingRuntimeContext;
 public class RuntimeContextAdapter {
 
     public static int getAttemptNumber(RuntimeContext runtimeContext) {
-        return runtimeContext.getTaskInfo().getAttemptNumber();
+        return runtimeContext.getAttemptNumber();
     }
 
     public static int getIndexOfThisSubtask(StreamingRuntimeContext runtimeContext) {
-        return runtimeContext.getTaskInfo().getIndexOfThisSubtask();
+        return runtimeContext.getIndexOfThisSubtask();
     }
 }

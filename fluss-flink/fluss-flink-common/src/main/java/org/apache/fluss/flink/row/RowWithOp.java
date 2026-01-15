@@ -42,6 +42,8 @@ public class RowWithOp {
     /** The type of operation associated with this row (e.g., APPEND, UPSERT, DELETE). */
     private final OperationType opType;
 
+    private final Long estimatedSizeInBytes;
+
     /**
      * Constructs a {@code RowWithOp} with the specified internal row and operation type.
      *
@@ -49,9 +51,21 @@ public class RowWithOp {
      * @param opType the operation type (must not be null)
      * @throws NullPointerException if {@code row} or {@code opType} is null
      */
-    public RowWithOp(InternalRow row, @Nullable OperationType opType) {
+    public RowWithOp(InternalRow row, OperationType opType) {
+        this(row, opType, null);
+    }
+
+    /**
+     * Constructs a {@code RowWithOp} with the specified internal row and operation type.
+     *
+     * @param row the internal row data (must not be null)
+     * @param opType the operation type (must not be null)
+     * @throws NullPointerException if {@code row} or {@code opType} is null
+     */
+    public RowWithOp(InternalRow row, OperationType opType, @Nullable Long estimatedSizeInBytes) {
         this.row = checkNotNull(row, "row cannot be null");
         this.opType = checkNotNull(opType, "opType cannot be null");
+        this.estimatedSizeInBytes = estimatedSizeInBytes;
     }
 
     /**
@@ -70,6 +84,10 @@ public class RowWithOp {
      */
     public OperationType getOperationType() {
         return opType;
+    }
+
+    public @Nullable Long getEstimatedSizeInBytes() {
+        return estimatedSizeInBytes;
     }
 
     /**
