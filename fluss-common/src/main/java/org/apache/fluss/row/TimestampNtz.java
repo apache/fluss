@@ -129,6 +129,12 @@ public class TimestampNtz implements Comparable<TimestampNtz>, Serializable {
         return new TimestampNtz(millisecond, nanoOfMillisecond);
     }
 
+    /** Converts this {@link TimestampNtz} object to micros. */
+    public long toEpochMicros() {
+        long micros = Math.multiplyExact(millisecond, MICROS_PER_MILLIS);
+        return micros + nanoOfMillisecond / NANOS_PER_MICROS;
+    }
+
     /** Converts this {@link TimestampNtz} object to a {@link LocalDateTime}. */
     public LocalDateTime toLocalDateTime() {
         int date = (int) (millisecond / MILLIS_PER_DAY);
