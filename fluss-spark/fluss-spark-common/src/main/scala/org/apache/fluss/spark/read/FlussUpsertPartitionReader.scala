@@ -48,6 +48,9 @@ class FlussUpsertPartitionReader(
   private var logScanner: LogScanner = _
   private var logRecords: util.Iterator[ScanRecord] = _
 
+  // initialize scanners
+  initialize()
+
   override def next(): Boolean = {
     if (closed) {
       return false
