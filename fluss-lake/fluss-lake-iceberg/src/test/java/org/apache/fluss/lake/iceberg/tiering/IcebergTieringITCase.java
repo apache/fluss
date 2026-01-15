@@ -270,11 +270,11 @@ class IcebergTieringITCase extends FlinkIcebergTieringTestBase {
 
     private void checkDataInIcebergPrimaryKeyTable(
             TablePath tablePath, List<InternalRow> expectedRows) throws Exception {
-        Iterator<Record> acturalIterator = getIcebergRecords(tablePath).iterator();
+        Iterator<Record> actualIterator = getIcebergRecords(tablePath).iterator();
         Iterator<InternalRow> iterator = expectedRows.iterator();
-        while (iterator.hasNext() && acturalIterator.hasNext()) {
+        while (iterator.hasNext() && actualIterator.hasNext()) {
             InternalRow row = iterator.next();
-            Record record = acturalIterator.next();
+            Record record = actualIterator.next();
             assertThat(record.get(0)).isEqualTo(row.getBoolean(0));
             assertThat(record.get(1)).isEqualTo((int) row.getByte(1));
             assertThat(record.get(2)).isEqualTo((int) row.getShort(2));
@@ -307,7 +307,7 @@ class IcebergTieringITCase extends FlinkIcebergTieringTestBase {
             assertThat(record.get(17)).isEqualTo(row.getChar(17, 3).toString());
             assertThat(record.get(18)).isEqualTo(ByteBuffer.wrap(row.getBytes(18)));
         }
-        assertThat(acturalIterator.hasNext()).isFalse();
+        assertThat(actualIterator.hasNext()).isFalse();
         assertThat(iterator.hasNext()).isFalse();
     }
 

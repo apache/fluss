@@ -23,10 +23,8 @@ import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.client.metadata.LakeSnapshot;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.LakeTableSnapshotNotExistException;
-import org.apache.fluss.flink.adapter.RuntimeContextAdapter;
 import org.apache.fluss.flink.tiering.event.FailedTieringEvent;
 import org.apache.fluss.flink.tiering.event.FinishedTieringEvent;
-import org.apache.fluss.flink.tiering.event.TieringFailOverEvent;
 import org.apache.fluss.flink.tiering.source.TableBucketWriteResult;
 import org.apache.fluss.flink.tiering.source.TieringSource;
 import org.apache.fluss.lake.committer.CommittedLakeSnapshot;
@@ -40,13 +38,10 @@ import org.apache.fluss.utils.ExceptionUtils;
 
 import org.apache.flink.runtime.operators.coordination.OperatorEventGateway;
 import org.apache.flink.runtime.source.event.SourceEventWrapper;
-import org.apache.flink.streaming.api.graph.StreamConfig;
 import org.apache.flink.streaming.api.operators.AbstractStreamOperator;
 import org.apache.flink.streaming.api.operators.OneInputStreamOperator;
-import org.apache.flink.streaming.api.operators.Output;
 import org.apache.flink.streaming.api.operators.StreamOperatorParameters;
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
-import org.apache.flink.streaming.runtime.tasks.StreamTask;
 
 import javax.annotation.Nullable;
 
@@ -108,29 +103,14 @@ public class TieringCommitOperator<WriteResult, Committable>
         this.collectedTableBucketWriteResults = new HashMap<>();
         this.flussConfig = flussConf;
         this.lakeTieringConfig = lakeTieringConfig;
-        this.operatorEventGateway =
-                parameters
-                        .getOperatorEventDispatcher()
-                        .getOperatorEventGateway(TieringSource.TIERING_SOURCE_OPERATOR_UID);
         this.setup(
                 parameters.getContainingTask(),
                 parameters.getStreamConfig(),
                 parameters.getOutput());
-    }
-
-    @Override
-    public void setup(
-            StreamTask<?, ?> containingTask,
-            StreamConfig config,
-            Output<StreamRecord<CommittableMessage<Committable>>> output) {
-        super.setup(containingTask, config, output);
-        int attemptNumber = RuntimeContextAdapter.getAttemptNumber(getRuntimeContext());
-        if (attemptNumber > 0) {
-            LOG.info("Send TieringFailoverEvent, current attempt number: {}", attemptNumber);
-            // attempt number is greater than zero, the job must failover
-            operatorEventGateway.sendEventToCoordinator(
-                    new SourceEventWrapper(new TieringFailOverEvent()));
-        }
+        this.operatorEventGateway =
+                parameters
+                        .getOperatorEventDispatcher()
+                        .getOperatorEventGateway(TieringSource.TIERING_SOURCE_OPERATOR_UID);
     }
 
     @Override

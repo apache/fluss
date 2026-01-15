@@ -26,7 +26,6 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.metrics.FlinkMetricRegistry;
 import org.apache.fluss.flink.tiering.event.FailedTieringEvent;
 import org.apache.fluss.flink.tiering.event.FinishedTieringEvent;
-import org.apache.fluss.flink.tiering.event.TieringFailOverEvent;
 import org.apache.fluss.flink.tiering.source.split.TieringSplit;
 import org.apache.fluss.flink.tiering.source.split.TieringSplitGenerator;
 import org.apache.fluss.flink.tiering.source.state.TieringSourceEnumeratorState;
@@ -41,6 +40,7 @@ import org.apache.fluss.rpc.messages.PbLakeTieringTableInfo;
 import org.apache.fluss.rpc.metrics.ClientMetricGroup;
 import org.apache.fluss.utils.MapUtils;
 
+import org.apache.flink.api.connector.source.ReaderInfo;
 import org.apache.flink.api.connector.source.SourceEvent;
 import org.apache.flink.api.connector.source.SplitEnumerator;
 import org.apache.flink.api.connector.source.SplitEnumeratorContext;
@@ -60,6 +60,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.flink.tiering.source.enumerator.TieringSourceEnumerator.HeartBeatHelper.basicHeartBeat;
@@ -104,6 +105,8 @@ public class TieringSourceEnumerator
     private Admin flussAdmin;
     private TieringSplitGenerator splitGenerator;
     private int flussCoordinatorEpoch;
+
+    private volatile boolean isFailOvering = false;
 
     private volatile boolean closed = false;
 
@@ -179,9 +182,51 @@ public class TieringSourceEnumerator
     @Override
     public void addReader(int subtaskId) {
         LOG.info("Adding reader: {} to Tiering Source enumerator.", subtaskId);
-        if (context.registeredReaders().containsKey(subtaskId)) {
+        Map<Integer, ReaderInfo> readerByAttempt =
+                context.registeredReadersOfAttempts().get(subtaskId);
+        if (readerByAttempt != null && !readerByAttempt.isEmpty()) {
             readersAwaitingSplit.add(subtaskId);
+            int maxAttempt = max(readerByAttempt.keySet());
+            if (maxAttempt >= 1) {
+                if (isFailOvering) {
+                    LOG.warn(
+                            "Subtask {} (max attempt {}) registered during ongoing failover.",
+                            subtaskId,
+                            maxAttempt);
+                } else {
+                    LOG.warn(
+                            "Detected failover: subtask {} has max attempt {} > 0. Triggering global failover handling.",
+                            subtaskId,
+                            maxAttempt);
+                    // should be failover
+                    isFailOvering = true;
+                    handleSourceReaderFailOver();
+                }
+
+                // if registered readers equal to current parallelism, check whether all registered
+                // readers have same max attempt
+                if (context.registeredReadersOfAttempts().size() == context.currentParallelism()) {
+                    // Check if all readers have the same max attempt number
+                    Set<Integer> maxAttempts =
+                            context.registeredReadersOfAttempts().values().stream()
+                                    .map(_readerByAttempt -> max(_readerByAttempt.keySet()))
+                                    .collect(Collectors.toSet());
+                    int globalMaxAttempt = max(maxAttempts);
+                    if (maxAttempts.size() == 1 && globalMaxAttempt >= 1) {
+                        LOG.info(
+                                "Failover completed. All {} subtasks reached the same attempt number {}. Current registered readers are {}",
+                                context.currentParallelism(),
+                                globalMaxAttempt,
+                                context.registeredReadersOfAttempts());
+                        isFailOvering = false;
+                    }
+                }
+            }
         }
+    }
+
+    private int max(Set<Integer> integers) {
+        return integers.stream().max(Integer::compareTo).orElse(-1);
     }
 
     @Override
@@ -218,18 +263,23 @@ public class TieringSourceEnumerator
             }
         }
 
-        if (sourceEvent instanceof TieringFailOverEvent) {
-            LOG.info(
-                    "Receiving tiering failover event, mark current tiering table epoch {} as failed.",
-                    tieringTableEpochs);
-            // we need to make all as failed
-            failedTableEpochs.putAll(new HashMap<>(tieringTableEpochs));
-            tieringTableEpochs.clear();
-            // also clean all pending splits since we mark all as failed
-            pendingSplits.clear();
-        }
-
         if (!finishedTableEpochs.isEmpty() || !failedTableEpochs.isEmpty()) {
+            // call one round of heartbeat to notify table has been finished or failed
+            this.context.callAsync(
+                    this::requestTieringTableSplitsViaHeartBeat, this::generateAndAssignSplits);
+        }
+    }
+
+    private void handleSourceReaderFailOver() {
+        LOG.info(
+                "Handling source reader fail over, mark current tiering table epoch {} as failed.",
+                tieringTableEpochs);
+        // we need to make all as failed
+        failedTableEpochs.putAll(new HashMap<>(tieringTableEpochs));
+        tieringTableEpochs.clear();
+        // also clean all pending splits since we mark all as failed
+        pendingSplits.clear();
+        if (!failedTableEpochs.isEmpty()) {
             // call one round of heartbeat to notify table has been finished or failed
             this.context.callAsync(
                     this::requestTieringTableSplitsViaHeartBeat, this::generateAndAssignSplits);
@@ -248,6 +298,10 @@ public class TieringSourceEnumerator
     }
 
     private void assignSplits() {
+        // we don't assign splits during failovering
+        if (isFailOvering) {
+            return;
+        }
         /* This method may be called from both addSplitsBack and handleSplitRequest, make it thread safe. */
         synchronized (readersAwaitingSplit) {
             if (!readersAwaitingSplit.isEmpty()) {
@@ -476,7 +530,7 @@ public class TieringSourceEnumerator
         static LakeTieringHeartbeatResponse waitHeartbeatResponse(
                 CompletableFuture<LakeTieringHeartbeatResponse> responseCompletableFuture) {
             try {
-                return responseCompletableFuture.get();
+                return responseCompletableFuture.get(3, TimeUnit.MINUTES);
             } catch (Exception e) {
                 LOG.error("Failed to wait heartbeat response due to ", e);
                 throw new FlinkRuntimeException("Failed to wait heartbeat response due to ", e);
