@@ -35,12 +35,15 @@ import org.apache.fluss.server.coordinator.event.CreateTableEvent;
 import org.apache.fluss.server.coordinator.event.DropPartitionEvent;
 import org.apache.fluss.server.coordinator.event.DropTableEvent;
 import org.apache.fluss.server.coordinator.event.SchemaChangeEvent;
+import org.apache.fluss.server.coordinator.event.TableRegistrationChangeEvent;
 import org.apache.fluss.server.coordinator.event.TestingEventManager;
+import org.apache.fluss.server.entity.TablePropertyChanges;
 import org.apache.fluss.server.zk.NOPErrorHandler;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperExtension;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
 import org.apache.fluss.server.zk.data.TableAssignment;
+import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.testutils.common.AllCallbackWrapper;
 import org.apache.fluss.types.DataTypes;
 
@@ -309,7 +312,6 @@ class TableChangeWatcherTest {
                                     null,
                                     TableChange.ColumnPosition.last())),
                     false,
-                    null,
                     null);
             Schema newSchema =
                     Schema.newBuilder()
@@ -328,5 +330,65 @@ class TableChangeWatcherTest {
                 () ->
                         assertThat(eventManager.getEvents())
                                 .containsExactlyInAnyOrderElementsOf(allEvents));
+    }
+
+    @Test
+    void testTableRegistrationChange() {
+        // create a table
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "table_registration_change");
+        TableAssignment tableAssignment =
+                generateAssignment(
+                        3,
+                        3,
+                        new TabletServerInfo[] {
+                            new TabletServerInfo(0, "rack0"),
+                            new TabletServerInfo(1, "rack1"),
+                            new TabletServerInfo(2, "rack2")
+                        });
+        long tableId = metadataManager.createTable(tablePath, TEST_TABLE, tableAssignment, false);
+        SchemaInfo schemaInfo = metadataManager.getLatestSchema(tablePath);
+        long currentMillis = System.currentTimeMillis();
+
+        List<CoordinatorEvent> expectedEvents = new ArrayList<>();
+        expectedEvents.add(
+                new CreateTableEvent(
+                        TableInfo.of(
+                                tablePath,
+                                tableId,
+                                schemaInfo.getSchemaId(),
+                                TEST_TABLE,
+                                currentMillis,
+                                currentMillis),
+                        tableAssignment));
+        expectedEvents.add(new SchemaChangeEvent(tablePath, schemaInfo));
+
+        retry(
+                Duration.ofMinutes(1),
+                () ->
+                        assertThat(eventManager.getEvents())
+                                .containsExactlyInAnyOrderElementsOf(expectedEvents));
+
+        // alter table properties (custom property)
+        TablePropertyChanges.Builder builder = TablePropertyChanges.builder();
+        builder.setCustomProperty("custom.key", "custom.value");
+        TablePropertyChanges tablePropertyChanges = builder.build();
+        metadataManager.alterTableProperties(
+                tablePath, Collections.emptyList(), tablePropertyChanges, false, null);
+
+        // get the updated table registration
+        TableRegistration updatedTableRegistration =
+                metadataManager.getTableRegistration(tablePath);
+
+        // verify TableRegistrationChangeEvent is generated
+        expectedEvents.add(new TableRegistrationChangeEvent(tablePath, updatedTableRegistration));
+
+        metadataManager.dropTable(tablePath, false);
+        expectedEvents.add(new DropTableEvent(tableId, false, false));
+
+        retry(
+                Duration.ofMinutes(1),
+                () ->
+                        assertThat(eventManager.getEvents())
+                                .containsExactlyInAnyOrderElementsOf(expectedEvents));
     }
 }

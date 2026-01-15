@@ -327,7 +327,6 @@ public class MetadataManager {
             TablePath tablePath,
             List<TableChange> schemaChanges,
             boolean ignoreIfNotExists,
-            @Nullable LakeCatalog lakeCatalog,
             LakeCatalog.Context lakeCatalogContext)
             throws TableNotExistException, TableNotPartitionedException {
         try {
@@ -339,8 +338,7 @@ public class MetadataManager {
                 Schema newSchema = SchemaUpdate.applySchemaChanges(table, schemaChanges);
 
                 // Lake First: sync to Lake before updating Fluss schema
-                syncSchemaChangesToLake(
-                        tablePath, table, schemaChanges, lakeCatalog, lakeCatalogContext);
+                syncSchemaChangesToLake(tablePath, table, schemaChanges, lakeCatalogContext);
 
                 // Update Fluss schema (ZK) after Lake sync succeeds
                 if (!newSchema.equals(table.getSchema())) {
@@ -370,12 +368,13 @@ public class MetadataManager {
             TablePath tablePath,
             TableInfo tableInfo,
             List<TableChange> schemaChanges,
-            @Nullable LakeCatalog lakeCatalog,
             LakeCatalog.Context lakeCatalogContext) {
         if (!isDataLakeEnabled(tableInfo.toTableDescriptor())) {
             return;
         }
 
+        LakeCatalog lakeCatalog =
+                lakeCatalogDynamicLoader.getLakeCatalogContainer().getLakeCatalog();
         if (lakeCatalog == null) {
             throw new InvalidAlterTableException(
                     "Cannot alter schema for datalake enabled table "
@@ -399,8 +398,6 @@ public class MetadataManager {
             List<TableChange> tableChanges,
             TablePropertyChanges tablePropertyChanges,
             boolean ignoreIfNotExists,
-            @Nullable LakeCatalog lakeCatalog,
-            LakeTableTieringManager lakeTableTieringManager,
             LakeCatalog.Context lakeCatalogContext) {
         try {
             // it throws TableNotExistException if the table or database not exists
@@ -431,22 +428,12 @@ public class MetadataManager {
                         tableDescriptor,
                         newDescriptor,
                         tableChanges,
-                        lakeCatalog,
                         lakeCatalogContext);
                 // update the table to zk
                 TableRegistration updatedTableRegistration =
                         tableReg.newProperties(
                                 newDescriptor.getProperties(), newDescriptor.getCustomProperties());
                 zookeeperClient.updateTable(tablePath, updatedTableRegistration);
-
-                // post alter table properties, e.g. add the table to lake table tiering manager if
-                // it's to enable datalake for the table
-                postAlterTableProperties(
-                        tablePath,
-                        schemaInfo,
-                        tableDescriptor,
-                        updatedTableRegistration,
-                        lakeTableTieringManager);
             } else {
                 LOG.info(
                         "No properties changed when alter table {}, skip update table.", tablePath);
@@ -471,8 +458,10 @@ public class MetadataManager {
             TableDescriptor tableDescriptor,
             TableDescriptor newDescriptor,
             List<TableChange> tableChanges,
-            LakeCatalog lakeCatalog,
             LakeCatalog.Context lakeCatalogContext) {
+        LakeCatalog lakeCatalog =
+                lakeCatalogDynamicLoader.getLakeCatalogContainer().getLakeCatalog();
+
         if (isDataLakeEnabled(newDescriptor)) {
             if (lakeCatalog == null) {
                 throw new InvalidAlterTableException(

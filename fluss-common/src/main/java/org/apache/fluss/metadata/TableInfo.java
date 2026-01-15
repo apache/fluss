@@ -340,23 +340,6 @@ public final class TableInfo {
                 modifiedTime);
     }
 
-    /** Replace a TableInfo with a new SchemaInfo. */
-    public TableInfo withNewSchema(SchemaInfo schemaInfo) {
-        return new TableInfo(
-                tablePath,
-                tableId,
-                schemaInfo.getSchemaId(),
-                schemaInfo.getSchema(),
-                bucketKeys,
-                partitionKeys,
-                numBuckets,
-                properties,
-                customProperties,
-                comment,
-                createdTime,
-                modifiedTime);
-    }
-
     @Override
     public boolean equals(Object o) {
         if (o == null || getClass() != o.getClass()) {

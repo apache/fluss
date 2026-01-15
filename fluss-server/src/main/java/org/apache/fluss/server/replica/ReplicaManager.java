@@ -84,6 +84,7 @@ import org.apache.fluss.server.log.LogTablet;
 import org.apache.fluss.server.log.checkpoint.OffsetCheckpointFile;
 import org.apache.fluss.server.log.remote.RemoteLogManager;
 import org.apache.fluss.server.metadata.ClusterMetadata;
+import org.apache.fluss.server.metadata.TableMetadata;
 import org.apache.fluss.server.metadata.TabletServerMetadataCache;
 import org.apache.fluss.server.metrics.UserMetrics;
 import org.apache.fluss.server.metrics.group.BucketMetricGroup;
@@ -459,7 +460,26 @@ public class ReplicaManager {
                     // check or apply coordinator epoch.
                     validateAndApplyCoordinatorEpoch(coordinatorEpoch, "updateMetadataCache");
                     metadataCache.updateClusterMetadata(clusterMetadata);
+                    updateReplicaTableConfig(clusterMetadata);
                 });
+    }
+
+    private void updateReplicaTableConfig(ClusterMetadata clusterMetadata) {
+        for (TableMetadata tableMetadata : clusterMetadata.getTableMetadataList()) {
+            TableInfo tableInfo = tableMetadata.getTableInfo();
+            long tableId = tableInfo.getTableId();
+            boolean dataLakeEnabled = tableInfo.getTableConfig().isDataLakeEnabled();
+
+            for (Map.Entry<TableBucket, HostedReplica> entry : allReplicas.entrySet()) {
+                HostedReplica hostedReplica = entry.getValue();
+                if (hostedReplica instanceof OnlineReplica) {
+                    Replica replica = ((OnlineReplica) hostedReplica).getReplica();
+                    if (replica.getTableBucket().getTableId() == tableId) {
+                        replica.updateIsDataLakeEnabled(dataLakeEnabled);
+                    }
+                }
+            }
+        }
     }
 
     /**
