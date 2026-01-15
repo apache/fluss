@@ -85,6 +85,7 @@ import org.apache.fluss.server.coordinator.event.NotifyLeaderAndIsrResponseRecei
 import org.apache.fluss.server.coordinator.event.RebalanceEvent;
 import org.apache.fluss.server.coordinator.event.RemoveServerTagEvent;
 import org.apache.fluss.server.coordinator.event.SchemaChangeEvent;
+import org.apache.fluss.server.coordinator.event.TableRegistrationChangeEvent;
 import org.apache.fluss.server.coordinator.event.watcher.TableChangeWatcher;
 import org.apache.fluss.server.coordinator.event.watcher.TabletServerChangeWatcher;
 import org.apache.fluss.server.coordinator.rebalance.RebalanceManager;
@@ -560,6 +561,8 @@ public class CoordinatorEventProcessor implements EventProcessor {
         } else if (event instanceof SchemaChangeEvent) {
             SchemaChangeEvent schemaChangeEvent = (SchemaChangeEvent) event;
             processSchemaChange(schemaChangeEvent);
+        } else if (event instanceof TableRegistrationChangeEvent) {
+            processTableRegistrationChange((TableRegistrationChangeEvent) event);
         } else if (event instanceof NotifyLeaderAndIsrResponseReceivedEvent) {
             processNotifyLeaderAndIsrResponseReceivedEvent(
                     (NotifyLeaderAndIsrResponseReceivedEvent) event);
@@ -718,6 +721,47 @@ public class CoordinatorEventProcessor implements EventProcessor {
                 tableId,
                 null,
                 null);
+    }
+
+    private void processTableRegistrationChange(TableRegistrationChangeEvent event) {
+        TablePath tablePath = event.getTablePath();
+        Long tableId = coordinatorContext.getTableIdByPath(tablePath);
+
+        // Skip if the table is not yet registered in coordinator context.
+        // Should not happen in normal cases.
+        if (tableId == null) {
+            return;
+        }
+
+        TableInfo oldTableInfo = coordinatorContext.getTableInfoById(tableId);
+
+        TableInfo newTableInfo =
+                event.getTableRegistration().toTableInfo(tablePath, oldTableInfo.getSchemaInfo());
+        coordinatorContext.putTableInfo(newTableInfo);
+        postAlterTableProperties(oldTableInfo, newTableInfo);
+
+        // Notify tablet servers about the metadata change
+        updateTabletServerMetadataCache(
+                new HashSet<>(coordinatorContext.getLiveTabletServers().values()),
+                tableId,
+                null,
+                null);
+    }
+
+    private void postAlterTableProperties(TableInfo oldTableInfo, TableInfo newTableInfo) {
+        boolean toEnableDataLake =
+                !oldTableInfo.getTableConfig().isDataLakeEnabled()
+                        && newTableInfo.getTableConfig().isDataLakeEnabled();
+        boolean toDisableDataLake =
+                oldTableInfo.getTableConfig().isDataLakeEnabled()
+                        && !newTableInfo.getTableConfig().isDataLakeEnabled();
+
+        if (toEnableDataLake) {
+            // if the table is lake table, we need to add it to lake table tiering manager
+            lakeTableTieringManager.addNewLakeTable(newTableInfo);
+        } else if (toDisableDataLake) {
+            lakeTableTieringManager.removeLakeTable(newTableInfo.getTableId());
+        }
     }
 
     private void processCreatePartition(CreatePartitionEvent createPartitionEvent) {

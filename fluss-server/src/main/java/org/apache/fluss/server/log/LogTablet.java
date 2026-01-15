@@ -529,8 +529,6 @@ public final class LogTablet {
     public void updateLakeTableSnapshotId(long snapshotId) {
         if (snapshotId > this.lakeTableSnapshotId) {
             this.lakeTableSnapshotId = snapshotId;
-            // it means the data lake is enabled if we have got the snapshot id
-            this.isDataLakeEnabled = true;
         }
     }
 

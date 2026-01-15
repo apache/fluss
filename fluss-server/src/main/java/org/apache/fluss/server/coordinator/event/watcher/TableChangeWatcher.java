@@ -30,6 +30,7 @@ import org.apache.fluss.server.coordinator.event.DropPartitionEvent;
 import org.apache.fluss.server.coordinator.event.DropTableEvent;
 import org.apache.fluss.server.coordinator.event.EventManager;
 import org.apache.fluss.server.coordinator.event.SchemaChangeEvent;
+import org.apache.fluss.server.coordinator.event.TableRegistrationChangeEvent;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
 import org.apache.fluss.server.zk.data.TableAssignment;
@@ -127,7 +128,16 @@ public class TableChangeWatcher {
                             if (tablePath == null) {
                                 break;
                             }
-                            processCreateTable(tablePath, newData);
+                            // Distinguish between table creation and properties change.
+                            // If oldData exists and contains valid table registration data,
+                            // it's a properties change; otherwise, it's a table creation.
+                            if (oldData != null
+                                    && oldData.getData() != null
+                                    && oldData.getData().length > 0) {
+                                processTableRegistrationChange(tablePath, newData);
+                            } else {
+                                processCreateTable(tablePath, newData);
+                            }
                         }
                         break;
                     }
@@ -240,6 +250,11 @@ public class TableChangeWatcher {
             eventManager.put(
                     new CreatePartitionEvent(
                             tablePath, tableId, partitionId, partitionName, partitionAssignment));
+        }
+
+        private void processTableRegistrationChange(TablePath tablePath, ChildData newData) {
+            TableRegistration newTable = TableZNode.decode(newData.getData());
+            eventManager.put(new TableRegistrationChangeEvent(tablePath, newTable));
         }
     }
 
