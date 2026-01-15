@@ -62,6 +62,17 @@ public class BucketModel {
         return bucketServers;
     }
 
+    public List<ServerModel> followerServers() {
+        List<ServerModel> followerServers = new ArrayList<>();
+        replicas.forEach(
+                replica -> {
+                    if (!replica.isLeader()) {
+                        followerServers.add(replica.server());
+                    }
+                });
+        return followerServers;
+    }
+
     public boolean canAssignReplicaToServer(ServerModel candidateServer) {
         return !ineligibleServers.contains(candidateServer);
     }

@@ -53,9 +53,14 @@ public class ClusterModel {
     private final SortedSet<ServerModel> servers;
     private final Map<TableBucket, BucketModel> bucketsByTableBucket;
 
+    // An integer to keep track of the maximum replication factor that a bucket was ever created
+    // with.
+    private int maxReplicationFactor;
+
     public ClusterModel(SortedSet<ServerModel> servers) {
         this.servers = servers;
         this.bucketsByTableBucket = new HashMap<>();
+        this.maxReplicationFactor = 1;
 
         this.aliveServers = new HashSet<>();
         this.offlineServers = new TreeSet<>();
@@ -76,6 +81,13 @@ public class ClusterModel {
         }
     }
 
+    /**
+     * @return The maximum replication factor of a bucket that was added to the cluster before.
+     */
+    public int maxReplicationFactor() {
+        return maxReplicationFactor;
+    }
+
     public SortedSet<ServerModel> offlineServers() {
         return offlineServers;
     }
@@ -86,6 +98,15 @@ public class ClusterModel {
 
     public Set<ServerModel> aliveServers() {
         return Collections.unmodifiableSet(aliveServers);
+    }
+
+    /**
+     * @return Racks that contain a server without offline tag.
+     */
+    public Set<RackModel> racksContainServerWithoutOfflineTag() {
+        return racksById.values().stream()
+                .filter(RackModel::rackContainsServerWithoutOfflineTag)
+                .collect(Collectors.toSet());
     }
 
     public @Nullable BucketModel bucket(TableBucket tableBucket) {
@@ -108,6 +129,20 @@ public class ClusterModel {
 
     public int numReplicas() {
         return bucketsByTableBucket.values().stream().mapToInt(p -> p.replicas().size()).sum();
+    }
+
+    /**
+     * @return All the leader replicas in the cluster.
+     */
+    public Set<ReplicaModel> leaderReplicas() {
+        Set<ReplicaModel> leaderReplicas = new HashSet<>();
+        for (BucketModel bucket : bucketsByTableBucket.values()) {
+            ReplicaModel leader = bucket.leader();
+            if (leader != null) {
+                leaderReplicas.add(leader);
+            }
+        }
+        return leaderReplicas;
     }
 
     public int numLeaderReplicas() {
@@ -193,6 +228,8 @@ public class ClusterModel {
         } else {
             bucket.addFollower(replica, index);
         }
+
+        maxReplicationFactor = Math.max(maxReplicationFactor, bucket.replicas().size());
     }
 
     /**
