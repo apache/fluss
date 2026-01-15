@@ -331,8 +331,7 @@ public class FlinkTableSource
                     enableLakeSource = false;
                 } else {
                     if (enableLakeSource) {
-                        enableLakeSource =
-                                pushTimeStampFilterToLakeSource(lakeSource, flussRowType);
+                        enableLakeSource = pushTimeStampFilterToLakeSource(lakeSource);
                     }
                 }
                 break;
@@ -385,12 +384,11 @@ public class FlinkTableSource
         }
     }
 
-    private boolean pushTimeStampFilterToLakeSource(
-            LakeSource<?> lakeSource, RowType flussRowType) {
+    private boolean pushTimeStampFilterToLakeSource(LakeSource<?> lakeSource) {
         // will push timestamp to lake
         // we will have three additional system columns, __bucket, __offset, __timestamp
         // in lake, get the  __timestamp index in lake table
-        final int timestampFieldIndex = flussRowType.getFieldCount() + 2;
+        final int timestampFieldIndex = tableOutputType.getFieldCount() + 2;
         Predicate timestampFilter =
                 new LeafPredicate(
                         GreaterOrEqual.INSTANCE,
