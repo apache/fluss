@@ -427,7 +427,7 @@ CALL [catalog_name.]sys.list_rebalance(
 - Rebalance progress: The completion percentage (e.g., `75.5%`)
 - Rebalance detail progress for bucket: Detailed progress information for each bucket being moved
 
-If no rebalance is found, returns: `"No rebalance progress found."`
+If no rebalance is found, returns empty line.
 
 **Example:**
 

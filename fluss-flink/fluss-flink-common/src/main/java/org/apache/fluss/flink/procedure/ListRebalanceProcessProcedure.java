@@ -65,7 +65,7 @@ public class ListRebalanceProcessProcedure extends ProcedureBase {
         Optional<RebalanceProgress> progressOpt = admin.listRebalanceProgress(rebalanceId).get();
 
         if (!progressOpt.isPresent()) {
-            return new String[] {"No rebalance progress found."};
+            return new String[0];
         }
 
         return progressToString(progressOpt.get());
