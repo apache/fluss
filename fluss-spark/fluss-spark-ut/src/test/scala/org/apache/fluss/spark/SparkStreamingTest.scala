@@ -25,55 +25,21 @@ import java.io.File
 class SparkStreamingTest extends FlussSparkTestBase with StreamTest {
   import testImplicits._
 
-  private def runTestWithStreamAppend(
+  /**
+   * Will run streaming write twice with same checkpoint dir and verify each write results
+   * separately.
+   */
+  private def runTestWithStream(
       tableIdentifier: String,
-      checkFunc: (String, Seq[(String, Long, String)]) => Unit): Unit = {
+      input1: Seq[(Long, String)],
+      input2: Seq[(Long, String)],
+      expect1: Seq[(String, Long, String)],
+      expect2: Seq[(String, Long, String)]): Unit = {
     withTempDir {
       checkpointDir =>
-        val input1 = Seq((1L, "a"), (2L, "b"), (3L, "c"))
-        verifyStream(
-          tableIdentifier,
-          checkpointDir,
-          Seq.empty,
-          input1,
-          input1.map(r => ("+A", r._1, r._2)),
-          checkFunc)
+        verifyStream(tableIdentifier, checkpointDir, Seq.empty, input1, expect1)
 
-        val input2 = Seq((4L, "d"), (5L, "e"), (6L, "f"))
-        verifyStream(
-          tableIdentifier,
-          checkpointDir,
-          Seq(input1),
-          input2,
-          (input1 ++ input2).map(r => ("+A", r._1, r._2)),
-          checkFunc)
-    }
-  }
-
-  private def runTestWithStreamUpsert(
-      tableIdentifier: String,
-      checkFunc: (String, Seq[(String, Long, String)]) => Unit): Unit = {
-    withTempDir {
-      checkpointDir =>
-        val input1 = Seq((1L, "a"), (2L, "b"), (3L, "c"))
-        verifyStream(
-          tableIdentifier,
-          checkpointDir,
-          Seq.empty,
-          input1,
-          input1.map(r => ("+I", r._1, r._2)),
-          checkFunc)
-
-        val input2 = Seq((1L, "d"), (5L, "e"), (6L, "f"))
-        val expect = Seq(
-          ("+I", 1L, "a"),
-          ("+I", 2L, "b"),
-          ("+I", 3L, "c"),
-          ("-U", 1L, "a"),
-          ("+U", 1L, "d"),
-          ("+I", 5L, "e"),
-          ("+I", 6L, "f"))
-        verifyStream(tableIdentifier, checkpointDir, Seq(input1), input2, expect, checkFunc)
+        verifyStream(tableIdentifier, checkpointDir, Seq(input1), input2, expect2)
     }
   }
 
@@ -82,18 +48,7 @@ class SparkStreamingTest extends FlussSparkTestBase with StreamTest {
       checkpointDir: File,
       prevInputs: Seq[Seq[(Long, String)]],
       newInputs: Seq[(Long, String)],
-      expectedOutputs: Seq[(String, Long, String)],
-      checkFunc: (String, Seq[(String, Long, String)]) => Unit): Unit = {
-    runStreamQuery(tableIdentifier, checkpointDir, prevInputs, newInputs)
-    // TODO verified from spark read
-    checkFunc(tableIdentifier, expectedOutputs)
-  }
-
-  private def runStreamQuery(
-      tableIdentifier: String,
-      checkpointDir: File,
-      prevInputs: Seq[Seq[(Long, String)]],
-      newInputs: Seq[(Long, String)]): Unit = {
+      expectedOutputs: Seq[(String, Long, String)]): Unit = {
     val inputData = MemoryStream[(Long, String)]
     val inputDF = inputData.toDF().toDF("id", "data")
 
@@ -107,6 +62,27 @@ class SparkStreamingTest extends FlussSparkTestBase with StreamTest {
 
     query.processAllAvailable()
     query.stop()
+
+    // TODO verified from spark read
+    val table = loadFlussTable(createTablePath(tableIdentifier))
+    val rowsWithType = getRowsWithChangeType(table)
+    assert(rowsWithType.length == expectedOutputs.length)
+
+    val row = rowsWithType.head._2
+    assert(row.getFieldCount == 2)
+
+    val result = rowsWithType.zip(expectedOutputs).forall {
+      case (flussRowWithType, expect) =>
+        flussRowWithType._1.equals(expect._1) && flussRowWithType._2.getLong(
+          0) == expect._2 && flussRowWithType._2.getString(1).toString == expect._3
+    }
+    if (!result) {
+      fail(s"""
+              |checking $table data failed
+              |expect data:${expectedOutputs.mkString("\n", "\n", "\n")}
+              |fluss data:${rowsWithType.mkString("\n", "\n", "\n")}
+              |""".stripMargin)
+    }
   }
 
   test("write: write to log table") {
@@ -120,29 +96,11 @@ class SparkStreamingTest extends FlussSparkTestBase with StreamTest {
       val rows = getRowsWithChangeType(table).map(_._2)
       assert(rows.isEmpty)
 
-      val checkFunc = (name: String, expectInput: Seq[(String, Long, String)]) => {
-        val table = loadFlussTable(tablePath)
-        val rowsWithType = getRowsWithChangeType(table)
-        assert(rowsWithType.length == expectInput.length)
-
-        val row = rowsWithType.head._2
-        assert(row.getFieldCount == 2)
-
-        val result = rowsWithType.zip(expectInput).forall {
-          case (flussRowWithType, expect) =>
-            flussRowWithType._1.equals(expect._1) && flussRowWithType._2.getLong(
-              0) == expect._2 && flussRowWithType._2.getString(1).toString == expect._3
-        }
-        if (!result) {
-          fail(s"""
-                  |checking $name data failed
-                  |expect data:${expectInput.mkString("\n", "\n", "\n")}
-                  |fluss data:${rows.mkString("\n", "\n", "\n")}
-                  |""".stripMargin)
-        }
-      }
-
-      runTestWithStreamAppend("t", checkFunc)
+      val input1 = Seq((1L, "a"), (2L, "b"), (3L, "c"))
+      val input2 = Seq((4L, "d"), (5L, "e"), (6L, "f"))
+      val expect1 = input1.map(r => ("+A", r._1, r._2))
+      val expect2 = (input1 ++ input2).map(r => ("+A", r._1, r._2))
+      runTestWithStream("t", input1, input2, expect1, expect2)
     }
   }
 
@@ -160,29 +118,18 @@ class SparkStreamingTest extends FlussSparkTestBase with StreamTest {
       val rows = getRowsWithChangeType(table).map(_._2)
       assert(rows.isEmpty)
 
-      val checkFunc = (name: String, expectInput: Seq[(String, Long, String)]) => {
-        val table = loadFlussTable(tablePath)
-        val rowsWithType = getRowsWithChangeType(table)
-        assert(rowsWithType.length == expectInput.length)
-
-        val row = rowsWithType.head._2
-        assert(row.getFieldCount == 2)
-
-        val result = rowsWithType.zip(expectInput).forall {
-          case (flussRowWithType, expect) =>
-            flussRowWithType._1.equals(expect._1) && flussRowWithType._2.getLong(
-              0) == expect._2 && flussRowWithType._2.getString(1).toString == expect._3
-        }
-        if (!result) {
-          fail(s"""
-                  |checking $name data failed
-                  |expect data:${expectInput.mkString("\n", "\n", "\n")}
-                  |fluss data:${rowsWithType.mkString("\n", "\n", "\n")}
-                  |""".stripMargin)
-        }
-      }
-
-      runTestWithStreamUpsert("t", checkFunc)
+      val input1 = Seq((1L, "a"), (2L, "b"), (3L, "c"))
+      val input2 = Seq((1L, "d"), (5L, "e"), (6L, "f"))
+      val expect1 = input1.map(r => ("+I", r._1, r._2))
+      val expect2 = Seq(
+        ("+I", 1L, "a"),
+        ("+I", 2L, "b"),
+        ("+I", 3L, "c"),
+        ("-U", 1L, "a"),
+        ("+U", 1L, "d"),
+        ("+I", 5L, "e"),
+        ("+I", 6L, "f"))
+      runTestWithStream("t", input1, input2, expect1, expect2)
     }
   }
 }
