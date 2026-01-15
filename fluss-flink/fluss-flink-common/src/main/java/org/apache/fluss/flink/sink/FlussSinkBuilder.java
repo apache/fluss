@@ -116,7 +116,8 @@ public class FlussSinkBuilder<InputT> {
      * varargs overload.
      */
     public FlussSinkBuilder<InputT> setPartialUpdateColumns(String... columns) {
-        return setPartialUpdateColumns(columns == null ? null : Arrays.asList(columns));
+        this.partialUpdateColumns = Arrays.asList(columns);
+        return this;
     }
 
     /** Set a configuration option. */
