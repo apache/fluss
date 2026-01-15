@@ -15,27 +15,12 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.flink.sink;
+package org.apache.fluss.flink.sink.shuffle;
 
-import org.apache.flink.test.util.AbstractTestBase;
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
-
-/** IT case for {@link FlinkTableSink} in Flink 1.18. */
-public class Flink118TableSinkITCase extends FlinkTableSinkITCase {
-    @BeforeEach
-    @Override
-    void before() throws Exception {
-        // invoke here because the AbstractTestBase in 1.18 is junit 4.
-        AbstractTestBase.MINI_CLUSTER_RESOURCE.before();
-        super.before();
-    }
-
-    @AfterEach
-    @Override
-    void after() throws Exception {
-        super.after();
-        // invoke here because the AbstractTestBase in 1.18 is junit 4.
-        AbstractTestBase.MINI_CLUSTER_RESOURCE.after();
-    }
+/** Distribution mode for sink shuffling. */
+public enum DistributionMode {
+    NONE,
+    AUTO,
+    BUCKET,
+    PARTITION_DYNAMIC
 }

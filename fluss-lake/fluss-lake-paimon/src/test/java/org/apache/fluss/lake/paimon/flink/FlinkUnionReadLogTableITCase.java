@@ -247,6 +247,8 @@ class FlinkUnionReadLogTableITCase extends FlinkUnionReadTestBase {
         // cancel jobs
         insertResult.getJobClient().get().cancel().get();
         jobClient.cancel().get();
+        dropTable(resultTable);
+        dropTable(table1);
     }
 
     @Test

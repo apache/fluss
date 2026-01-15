@@ -18,6 +18,7 @@
 package org.apache.fluss.flink;
 
 import org.apache.fluss.config.FlussConfigUtils;
+import org.apache.fluss.flink.sink.shuffle.DistributionMode;
 import org.apache.fluss.flink.utils.FlinkConversions;
 
 import org.apache.flink.configuration.ConfigOption;
@@ -126,6 +127,7 @@ public class FlinkConnectorOptions {
                     .defaultValue(false)
                     .withDescription("Whether to ignore retract（-U/-D) record.");
 
+    @Deprecated
     public static final ConfigOption<Boolean> SINK_BUCKET_SHUFFLE =
             ConfigOptions.key("sink.bucket-shuffle")
                     .booleanType()
@@ -136,7 +138,32 @@ public class FlinkConnectorOptions {
                                     + "processing and reduce resource consumption. For Log Table, bucket shuffle will "
                                     + "only take effect when the '"
                                     + BUCKET_KEY.key()
-                                    + "' is defined. For Primary Key table, it is enabled by default.");
+                                    + "' is defined. For Primary Key table, it is enabled by default. "
+                                    + "This option is deprecated. Please use sink.distribution-mode instead, which provides more flexible distribution strategies.");
+
+    public static final ConfigOption<DistributionMode> SINK_DISTRIBUTION_MODE =
+            ConfigOptions.key("sink.distribution-mode")
+                    .enumType(DistributionMode.class)
+                    .defaultValue(DistributionMode.AUTO)
+                    .withDescription(
+                            "Defines the distribution mode for writing data to the sink. Available options are:\n"
+                                    + "- AUTO: Automatically chooses the best mode based on the table type. "
+                                    + "Uses BUCKET mode for Primary Key Tables and Log table with bucket key to maximize throughput, "
+                                    + "and NONE for Log Tables without bucket key.\n"
+                                    + "- NONE: Uses Flink's default shuffle strategy, which is typically FORWARD when the sink parallelism matches the upstream parallelism, or REBALANCE when parallelisms differ.\n"
+                                    + "- BUCKET: Shuffle data by bucket ID before writing to sink. "
+                                    + "This groups data with the same bucket ID to be processed by the same task, "
+                                    + "which improves client processing efficiency and reduces resource consumption. "
+                                    + "This mode is particularly recommended for Primary Key tables as it can significantly "
+                                    + "improve throughput. For Log Tables, bucket shuffle only takes effect when the '"
+                                    + BUCKET_KEY.key()
+                                    + "' is defined. Note: When sink parallelism exceeds the number of buckets, "
+                                    + "some sink tasks may remain idle without receiving data.\n"
+                                    + "- PARTITION_DYNAMIC: Dynamically adjusts shuffle strategy based on partition key traffic patterns. "
+                                    + "This mode monitors data distribution and adjusts the shuffle behavior to balance the load. "
+                                    + "It is only supported for partitioned Log Tables, not for Primary Key tables now. "
+                                    + "Use this mode when data is highly skewed across partitions or when there are many partitions. "
+                                    + "Note: This mode has overhead costs including data statistics collection and additional shuffle operations.");
 
     // --------------------------------------------------------------------------------------------
     // table storage specific options

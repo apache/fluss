@@ -42,6 +42,7 @@ import org.apache.flink.runtime.testutils.MiniClusterResourceConfiguration;
 import org.apache.flink.table.api.EnvironmentSettings;
 import org.apache.flink.table.api.TableEnvironment;
 import org.apache.flink.table.api.TableResult;
+import org.apache.flink.table.api.config.ExecutionConfigOptions;
 import org.apache.flink.test.util.MiniClusterWithClientResource;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
@@ -165,6 +166,7 @@ abstract class FlinkMetricsITCase {
         createTable(tablePath, tableDescriptor);
 
         // test write
+        tEnv.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 1);
         TableResult tableResult =
                 tEnv.executeSql("insert into test values (1, 'name1'), (2, 'name2'), (3, 'name3')");
         JobClient client = tableResult.getJobClient().get();

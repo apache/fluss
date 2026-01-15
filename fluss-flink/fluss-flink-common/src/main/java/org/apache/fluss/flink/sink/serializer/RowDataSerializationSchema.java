@@ -23,12 +23,23 @@ import org.apache.fluss.flink.row.RowWithOp;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.PaddingRow;
 import org.apache.fluss.row.ProjectedRow;
+import org.apache.fluss.types.BinaryType;
+import org.apache.fluss.types.CharType;
+import org.apache.fluss.types.DataField;
+import org.apache.fluss.types.DataTypeRoot;
+import org.apache.fluss.types.DecimalType;
+import org.apache.fluss.types.RowType;
+import org.apache.fluss.utils.types.Tuple2;
 
 import org.apache.flink.table.data.RowData;
+import org.apache.flink.table.data.StringData;
+import org.apache.flink.table.data.binary.BinaryFormat;
+import org.apache.flink.table.data.binary.BinaryStringData;
 import org.apache.flink.types.RowKind;
 
 import javax.annotation.Nullable;
 
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -95,6 +106,10 @@ public class RowDataSerializationSchema implements FlussSerializationSchema<RowD
      */
     @Nullable private transient ProjectedRow outputProjection;
 
+    private transient RowType rowType;
+    private transient long fixedSizeInBytes;
+    private transient List<Integer> variableSizeFields;
+
     /**
      * Constructs a new {@code RowSerializationSchema}.
      *
@@ -128,6 +143,10 @@ public class RowDataSerializationSchema implements FlussSerializationSchema<RowD
             }
             outputProjection = ProjectedRow.from(indexMapping);
         }
+        this.rowType = context.getRowSchema();
+        Tuple2<Long, List<Integer>> calculateFixedSize = calculateFixedSize(rowType);
+        this.fixedSizeInBytes = calculateFixedSize.f0;
+        this.variableSizeFields = calculateFixedSize.f1;
     }
 
     /**
@@ -155,8 +174,81 @@ public class RowDataSerializationSchema implements FlussSerializationSchema<RowD
             row = outputProjection.replaceRow(row);
         }
         OperationType opType = toOperationType(value.getRowKind());
+        long estimatedSizeInBytes = calculateSize(value);
+        return new RowWithOp(row, opType, estimatedSizeInBytes);
+    }
 
-        return new RowWithOp(row, opType);
+    private long calculateSize(RowData value) {
+        if (value instanceof BinaryFormat) {
+            return ((BinaryFormat) value).getSizeInBytes();
+        }
+
+        long size = fixedSizeInBytes;
+        for (int i : variableSizeFields) {
+            DataField field = rowType.getFields().get(i);
+            DataTypeRoot typeRoot = field.getType().getTypeRoot();
+            if (value.getArity() <= i || value.isNullAt(i)) {
+                continue;
+            }
+            switch (typeRoot) {
+                case STRING:
+                    StringData stringData = value.getString(i);
+                    if (stringData instanceof BinaryStringData) {
+                        size += ((BinaryStringData) stringData).getSizeInBytes();
+                    } else {
+                        size += stringData.toBytes().length;
+                    }
+                    break;
+                case BYTES:
+                    size += value.getBinary(i).length;
+                    break;
+            }
+        }
+        return size;
+    }
+
+    private Tuple2<Long, List<Integer>> calculateFixedSize(RowType rowType) {
+        long size = 0;
+        List<Integer> variableSizeFields = new ArrayList<>();
+        for (int i = 0; i < rowType.getFieldCount(); i++) {
+            DataField field = rowType.getFields().get(i);
+            DataTypeRoot typeRoot = field.getType().getTypeRoot();
+            switch (typeRoot) {
+                case CHAR:
+                    size += ((CharType) (field.getType())).getLength();
+                    break;
+                case BINARY:
+                    size += ((BinaryType) (field.getType())).getLength();
+                    break;
+                case DECIMAL:
+                    size += ((DecimalType) (field.getType())).getPrecision();
+                    break;
+                case BOOLEAN:
+                case TINYINT:
+                    size += 1;
+                    break;
+                case SMALLINT:
+                    size += 2;
+                    break;
+                case INTEGER:
+                case FLOAT:
+                case DATE:
+                case TIME_WITHOUT_TIME_ZONE:
+                    size += 4;
+                    break;
+                case BIGINT:
+                case DOUBLE:
+                case TIMESTAMP_WITHOUT_TIME_ZONE:
+                case TIMESTAMP_WITH_LOCAL_TIME_ZONE:
+                    size += 8;
+                    break;
+                case STRING:
+                case BYTES:
+                    variableSizeFields.add(i);
+                    break;
+            }
+        }
+        return Tuple2.of(size, variableSizeFields);
     }
 
     /**
