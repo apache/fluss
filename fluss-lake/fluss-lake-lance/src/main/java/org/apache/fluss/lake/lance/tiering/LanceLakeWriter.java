@@ -24,7 +24,6 @@ import org.apache.fluss.lake.lance.utils.LanceDatasetAdapter;
 import org.apache.fluss.lake.writer.LakeWriter;
 import org.apache.fluss.lake.writer.WriterInitContext;
 import org.apache.fluss.record.LogRecord;
-import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.types.RowType;
 
 import com.lancedb.lance.Fragment;
@@ -51,8 +50,8 @@ public class LanceLakeWriter implements LakeWriter<LanceWriteResult> {
     private final String datasetUri;
     private final WriteParams writeParams;
 
-    private final List<InternalRow> buffer;
-    private List<FragmentMetadata> allFragments;
+    private final ShadedArrowBatchWriter arrowWriter;
+    private final List<FragmentMetadata> allFragments;
 
     public LanceLakeWriter(Configuration options, WriterInitContext writerInitContext)
             throws IOException {
@@ -70,7 +69,7 @@ public class LanceLakeWriter implements LakeWriter<LanceWriteResult> {
         this.nonShadedAllocator = new RootAllocator();
         this.shadedAllocator =
                 new org.apache.fluss.shaded.arrow.org.apache.arrow.memory.RootAllocator();
-        this.buffer = new ArrayList<>(batchSize);
+        this.arrowWriter = new ShadedArrowBatchWriter(shadedAllocator, rowType);
         this.allFragments = new ArrayList<>();
 
         Optional<Schema> schema = LanceDatasetAdapter.getSchema(config);
@@ -82,45 +81,36 @@ public class LanceLakeWriter implements LakeWriter<LanceWriteResult> {
 
     @Override
     public void write(LogRecord record) throws IOException {
-        buffer.add(record.getRow());
+        arrowWriter.writeRow(record.getRow());
 
-        // Flush when buffer reaches batch size
-        if (buffer.size() >= batchSize) {
-            flush();
+        if (arrowWriter.getRecordsCount() >= batchSize) {
+            List<FragmentMetadata> fragments = flush();
+            allFragments.addAll(fragments);
         }
     }
 
-    private void flush() throws IOException {
-        if (buffer.isEmpty()) {
-            return;
+    private List<FragmentMetadata> flush() throws IOException {
+        if (arrowWriter.getRecordsCount() == 0) {
+            return new ArrayList<>();
         }
 
-        ShadedArrowBatchWriter shadedWriter = null;
         VectorSchemaRoot nonShadedRoot = null;
 
         try {
-            shadedWriter = new ShadedArrowBatchWriter(shadedAllocator, rowType);
-
-            for (InternalRow row : buffer) {
-                shadedWriter.writeRow(row);
-            }
-            shadedWriter.finish();
+            arrowWriter.finish();
 
             nonShadedRoot =
                     ArrowDataConverter.convertToNonShaded(
-                            shadedWriter.getShadedRoot(), nonShadedAllocator, nonShadedSchema);
+                            arrowWriter.getShadedRoot(), nonShadedAllocator, nonShadedSchema);
 
             List<FragmentMetadata> fragments =
                     Fragment.create(datasetUri, nonShadedAllocator, nonShadedRoot, writeParams);
 
-            allFragments.addAll(fragments);
-            buffer.clear();
+            arrowWriter.reset();
+            return fragments;
         } catch (Exception e) {
             throw new IOException("Failed to write Lance fragment", e);
         } finally {
-            if (shadedWriter != null) {
-                shadedWriter.close();
-            }
             if (nonShadedRoot != null) {
                 nonShadedRoot.close();
             }
@@ -129,14 +119,16 @@ public class LanceLakeWriter implements LakeWriter<LanceWriteResult> {
 
     @Override
     public LanceWriteResult complete() throws IOException {
-        // Flush any remaining data
-        flush();
+        List<FragmentMetadata> fragments = flush();
+        allFragments.addAll(fragments);
         return new LanceWriteResult(allFragments);
     }
 
     @Override
     public void close() throws IOException {
-        buffer.clear();
+        if (arrowWriter != null) {
+            arrowWriter.close();
+        }
         if (shadedAllocator != null) {
             shadedAllocator.close();
         }
