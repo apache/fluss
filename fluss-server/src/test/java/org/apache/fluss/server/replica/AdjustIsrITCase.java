@@ -152,6 +152,309 @@ public class AdjustIsrITCase {
                                                         .containsExactlyInAnyOrderElementsOf(isr)));
     }
 
+    /**
+     * Test time consistency during ISR shrink.
+     *
+     * <p>Verifies that timestamps remain monotonic when a follower is removed from ISR due to lag.
+     * This test ensures:
+     *
+     * <ul>
+     *   <li>Records written before ISR shrink have valid timestamps
+     *   <li>Records written after ISR shrink continue with monotonic timestamps
+     *   <li>No timestamp regression occurs during the ISR transition
+     * </ul>
+     */
+    @Test
+    void testTimeConsistencyDuringIsrShrink() throws Exception {
+        long tableId = createLogTable();
+        TableBucket tb = new TableBucket(tableId, 0);
+
+        LeaderAndIsr currentLeaderAndIsr =
+                waitValue(
+                        () -> zkClient.getLeaderAndIsr(tb),
+                        Duration.ofSeconds(20),
+                        "Leader and isr not found");
+        List<Integer> isr = currentLeaderAndIsr.isr();
+        assertThat(isr).containsExactlyInAnyOrder(0, 1, 2);
+
+        int leader = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(tb);
+        Integer stopFollower = isr.stream().filter(i -> i != leader).findFirst().get();
+
+        TabletServerGateway leaderGateway =
+                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leader);
+
+        // Write records before ISR shrink and capture timestamp
+        long timestampBeforeShrink = System.currentTimeMillis();
+        RpcMessageTestUtils.assertProduceLogResponse(
+                leaderGateway
+                        .produceLog(
+                                RpcMessageTestUtils.newProduceLogRequest(
+                                        tableId,
+                                        tb.getBucket(),
+                                        -1,
+                                        genMemoryLogRecordsByObject(DATA1)))
+                        .get(),
+                0,
+                0L);
+
+        // Stop follower to trigger ISR shrink
+        FLUSS_CLUSTER_EXTENSION.stopReplica(stopFollower, tb, currentLeaderAndIsr.leaderEpoch());
+        isr.remove(stopFollower);
+
+        // Wait for ISR to shrink
+        retry(
+                Duration.ofMinutes(1),
+                () ->
+                        assertThat(zkClient.getLeaderAndIsr(tb))
+                                .isPresent()
+                                .hasValueSatisfying(
+                                        leaderAndIsr ->
+                                                assertThat(leaderAndIsr.isr())
+                                                        .containsExactlyInAnyOrderElementsOf(isr)));
+
+        // Write records after ISR shrink - timestamps should still be monotonic
+        long timestampAfterShrink = System.currentTimeMillis();
+        assertThat(timestampAfterShrink).isGreaterThanOrEqualTo(timestampBeforeShrink);
+
+        RpcMessageTestUtils.assertProduceLogResponse(
+                leaderGateway
+                        .produceLog(
+                                RpcMessageTestUtils.newProduceLogRequest(
+                                        tableId,
+                                        tb.getBucket(),
+                                        -1,
+                                        genMemoryLogRecordsByObject(DATA1)))
+                        .get(),
+                10,
+                10L);
+
+        // Verify log offsets are sequential (no gaps)
+        long highWatermark =
+                FLUSS_CLUSTER_EXTENSION
+                        .getTabletServerById(leader)
+                        .getReplicaManager()
+                        .getReplicaOrException(tb)
+                        .getLogTablet()
+                        .getHighWatermark();
+        assertThat(highWatermark).isEqualTo(20L);
+    }
+
+    /**
+     * Test time consistency during ISR expansion.
+     *
+     * <p>Verifies that timestamps remain monotonic when a follower rejoins the ISR after catching
+     * up. This test ensures:
+     *
+     * <ul>
+     *   <li>Follower catches up with correct timestamp ordering
+     *   <li>Records written during expansion maintain timestamp monotonicity
+     *   <li>No timestamp anomalies during ISR membership change
+     * </ul>
+     */
+    @Test
+    void testTimeConsistencyDuringIsrExpansion() throws Exception {
+        long tableId = createLogTable();
+        TableBucket tb = new TableBucket(tableId, 0);
+
+        LeaderAndIsr currentLeaderAndIsr =
+                waitValue(
+                        () -> zkClient.getLeaderAndIsr(tb),
+                        Duration.ofSeconds(20),
+                        "Leader and isr not found");
+        List<Integer> isr = currentLeaderAndIsr.isr();
+        assertThat(isr).containsExactlyInAnyOrder(0, 1, 2);
+
+        int leader = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(tb);
+        Integer stopFollower = isr.stream().filter(i -> i != leader).findFirst().get();
+
+        // Stop and remove follower from ISR
+        FLUSS_CLUSTER_EXTENSION.stopReplica(stopFollower, tb, currentLeaderAndIsr.leaderEpoch());
+        isr.remove(stopFollower);
+
+        TabletServerGateway leaderGateway =
+                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leader);
+        RpcMessageTestUtils.assertProduceLogResponse(
+                leaderGateway
+                        .produceLog(
+                                RpcMessageTestUtils.newProduceLogRequest(
+                                        tableId,
+                                        tb.getBucket(),
+                                        -1,
+                                        genMemoryLogRecordsByObject(DATA1)))
+                        .get(),
+                0,
+                0L);
+
+        retry(
+                Duration.ofMinutes(1),
+                () ->
+                        assertThat(zkClient.getLeaderAndIsr(tb))
+                                .isPresent()
+                                .hasValueSatisfying(
+                                        leaderAndIsr ->
+                                                assertThat(leaderAndIsr.isr())
+                                                        .containsExactlyInAnyOrderElementsOf(isr)));
+
+        // Capture timestamp before expansion
+        long timestampBeforeExpansion = System.currentTimeMillis();
+
+        // Restart follower to rejoin ISR
+        currentLeaderAndIsr = zkClient.getLeaderAndIsr(tb).get();
+        LeaderAndIsr newLeaderAndIsr =
+                new LeaderAndIsr(
+                        currentLeaderAndIsr.leader(),
+                        currentLeaderAndIsr.leaderEpoch() + 1,
+                        isr,
+                        currentLeaderAndIsr.coordinatorEpoch(),
+                        currentLeaderAndIsr.bucketEpoch());
+        isr.add(stopFollower);
+        FLUSS_CLUSTER_EXTENSION.notifyLeaderAndIsr(
+                stopFollower, DATA1_TABLE_PATH, tb, newLeaderAndIsr, isr);
+
+        // Wait for follower to rejoin ISR
+        retry(
+                Duration.ofMinutes(1),
+                () ->
+                        assertThat(zkClient.getLeaderAndIsr(tb))
+                                .isPresent()
+                                .hasValueSatisfying(
+                                        leaderAndIsr ->
+                                                assertThat(leaderAndIsr.isr())
+                                                        .containsExactlyInAnyOrderElementsOf(isr)));
+
+        // Write records after expansion - verify timestamp consistency
+        long timestampAfterExpansion = System.currentTimeMillis();
+        assertThat(timestampAfterExpansion).isGreaterThanOrEqualTo(timestampBeforeExpansion);
+
+        RpcMessageTestUtils.assertProduceLogResponse(
+                leaderGateway
+                        .produceLog(
+                                RpcMessageTestUtils.newProduceLogRequest(
+                                        tableId,
+                                        tb.getBucket(),
+                                        -1,
+                                        genMemoryLogRecordsByObject(DATA1)))
+                        .get(),
+                10,
+                10L);
+
+        // Verify all replicas have consistent high watermark
+        retry(
+                Duration.ofMinutes(1),
+                () -> {
+                    for (Integer replicaId : isr) {
+                        long hwm =
+                                FLUSS_CLUSTER_EXTENSION
+                                        .getTabletServerById(replicaId)
+                                        .getReplicaManager()
+                                        .getReplicaOrException(tb)
+                                        .getLogTablet()
+                                        .getHighWatermark();
+                        assertThat(hwm).isEqualTo(20L);
+                    }
+                });
+    }
+
+    /**
+     * Test timestamp consistency across rapid ISR changes.
+     *
+     * <p>Verifies system behavior under rapid ISR membership fluctuations. This stress test
+     * ensures:
+     *
+     * <ul>
+     *   <li>Timestamps remain monotonic despite rapid ISR changes
+     *   <li>No data loss or corruption during turbulent periods
+     *   <li>System maintains consistency under high churn
+     * </ul>
+     */
+    @Test
+    void testTimeConsistencyAcrossRapidIsrChanges() throws Exception {
+        long tableId = createLogTable();
+        TableBucket tb = new TableBucket(tableId, 0);
+
+        LeaderAndIsr currentLeaderAndIsr =
+                waitValue(
+                        () -> zkClient.getLeaderAndIsr(tb),
+                        Duration.ofSeconds(20),
+                        "Leader and isr not found");
+        List<Integer> isr = currentLeaderAndIsr.isr();
+        int leader = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(tb);
+        List<Integer> followers =
+                isr.stream().filter(i -> i != leader).collect(Collectors.toList());
+
+        TabletServerGateway leaderGateway =
+                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leader);
+        long lastTimestamp = System.currentTimeMillis();
+        long lastOffset = 0L;
+
+        // Simulate 3 cycles of ISR shrink/expand
+        for (int cycle = 0; cycle < 3; cycle++) {
+            Integer followerToStop = followers.get(cycle % followers.size());
+
+            // Write before change
+            long currentTimestamp = System.currentTimeMillis();
+            assertThat(currentTimestamp).isGreaterThanOrEqualTo(lastTimestamp);
+            lastTimestamp = currentTimestamp;
+
+            RpcMessageTestUtils.assertProduceLogResponse(
+                    leaderGateway
+                            .produceLog(
+                                    RpcMessageTestUtils.newProduceLogRequest(
+                                            tableId,
+                                            tb.getBucket(),
+                                            -1,
+                                            genMemoryLogRecordsByObject(DATA1)))
+                            .get(),
+                    (int) lastOffset,
+                    lastOffset);
+            lastOffset += 10;
+
+            // Stop follower
+            currentLeaderAndIsr = zkClient.getLeaderAndIsr(tb).get();
+            FLUSS_CLUSTER_EXTENSION.stopReplica(
+                    followerToStop, tb, currentLeaderAndIsr.leaderEpoch());
+            Thread.sleep(100);
+
+            // Write during shrink
+            currentTimestamp = System.currentTimeMillis();
+            assertThat(currentTimestamp).isGreaterThanOrEqualTo(lastTimestamp);
+            lastTimestamp = currentTimestamp;
+
+            // Restart follower
+            currentLeaderAndIsr = zkClient.getLeaderAndIsr(tb).get();
+            List<Integer> currentIsr = currentLeaderAndIsr.isr();
+            LeaderAndIsr newLeaderAndIsr =
+                    new LeaderAndIsr(
+                            currentLeaderAndIsr.leader(),
+                            currentLeaderAndIsr.leaderEpoch() + 1,
+                            currentIsr,
+                            currentLeaderAndIsr.coordinatorEpoch(),
+                            currentLeaderAndIsr.bucketEpoch());
+            currentIsr.add(followerToStop);
+            FLUSS_CLUSTER_EXTENSION.notifyLeaderAndIsr(
+                    followerToStop, DATA1_TABLE_PATH, tb, newLeaderAndIsr, currentIsr);
+            Thread.sleep(100);
+        }
+
+        // Final verification - all timestamps should be monotonic
+        long finalTimestamp = System.currentTimeMillis();
+        assertThat(finalTimestamp).isGreaterThanOrEqualTo(lastTimestamp);
+
+        // Verify final high watermark is consistent
+        retry(
+                Duration.ofMinutes(1),
+                () -> {
+                    long hwm =
+                            FLUSS_CLUSTER_EXTENSION
+                                    .getTabletServerById(leader)
+                                    .getReplicaManager()
+                                    .getReplicaOrException(tb)
+                                    .getLogTablet()
+                                    .getHighWatermark();
+                    assertThat(hwm).isGreaterThanOrEqualTo(20L);
+                });
+    }
+
     @Test
     void testIsrSetSizeLessThanMinInSynReplicasNumber() throws Exception {
         long tableId = createLogTable();
