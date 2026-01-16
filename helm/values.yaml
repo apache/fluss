@@ -27,11 +27,6 @@ image:
   pullPolicy: IfNotPresent
   pullSecrets: []
 
-appConfig:
-  internalPort: 9123
-  externalPort: 9124
-
-
 # Fluss server configuration options
 configurationOverrides:
   default.bucket.number: 3
@@ -55,6 +50,23 @@ coordinator:
     enabled: false
     size: 1Gi
     storageClass:
+
+# Fluss listener configurations
+listeners:
+  internal:
+    name: INTERNAL
+    port: 9123
+  client:
+    name: CLIENT
+    port: 9124
+  ## Activated only when @param externalAccess.enabled is true
+  external:
+    name: EXTERNAL
+    port: 9125
+
+# Fluss cluster external access
+externalAccess:
+  enabled: false
 
 resources: {}
   # We usually recommend not to specify default resources and to leave this as a conscious
