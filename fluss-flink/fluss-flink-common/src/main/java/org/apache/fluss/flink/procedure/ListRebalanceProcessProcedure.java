@@ -19,21 +19,18 @@ package org.apache.fluss.flink.procedure;
 
 import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.cluster.rebalance.RebalanceProgress;
-import org.apache.fluss.cluster.rebalance.RebalanceResultForBucket;
-import org.apache.fluss.cluster.rebalance.RebalanceStatus;
-import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.cluster.rebalance.RebalanceProgressJsonSerializer;
+import org.apache.fluss.utils.json.JsonSerdeUtils;
 
 import org.apache.flink.table.annotation.ArgumentHint;
 import org.apache.flink.table.annotation.DataTypeHint;
 import org.apache.flink.table.annotation.ProcedureHint;
 import org.apache.flink.table.procedure.ProcedureContext;
+import org.apache.flink.types.Row;
 
 import javax.annotation.Nullable;
 
-import java.text.NumberFormat;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
+import java.nio.charset.StandardCharsets;
 import java.util.Optional;
 
 /**
@@ -60,41 +57,26 @@ public class ListRebalanceProcessProcedure extends ProcedureBase {
                         name = "rebalanceId",
                         type = @DataTypeHint("STRING"),
                         isOptional = true)
-            })
-    public String[] call(ProcedureContext context, @Nullable String rebalanceId) throws Exception {
+            },
+            output =
+                    @DataTypeHint(
+                            "ROW<rebalance_id STRING, rebalance_status STRING, rebalance_progress STRING, rebalance_plan STRING>"))
+    public Row[] call(ProcedureContext context, @Nullable String rebalanceId) throws Exception {
         Optional<RebalanceProgress> progressOpt = admin.listRebalanceProgress(rebalanceId).get();
 
         if (!progressOpt.isPresent()) {
-            return new String[0];
+            return new Row[0];
         }
-
-        return progressToString(progressOpt.get());
-    }
-
-    private static String[] progressToString(RebalanceProgress progress) {
-        RebalanceStatus status = progress.status();
-        double rebalanceProgress = progress.progress();
-        Map<TableBucket, RebalanceResultForBucket> bucketMap = progress.progressForBucketMap();
-
-        // TODO format the result into a row type, and the detail progress for bucket show in json
-        // format. Trace by: https://github.com/apache/fluss/issues/2325
-        List<String> result = new ArrayList<>();
-        result.add("Rebalance id: " + progress.rebalanceId());
-        result.add("Reblance total status: " + status);
-        result.add("Rebalance progress: " + formatAsPercentage(rebalanceProgress));
-        result.add("Rebalance detail progress for bucket:");
-        for (RebalanceResultForBucket resultForBucket : bucketMap.values()) {
-            result.add(resultForBucket.toString());
-        }
-        return result.toArray(new String[0]);
-    }
-
-    public static String formatAsPercentage(double value) {
-        if (value < 0) {
-            return "NONE";
-        }
-        NumberFormat pctFormat = NumberFormat.getPercentInstance();
-        pctFormat.setMaximumFractionDigits(2);
-        return pctFormat.format(value);
+        RebalanceProgress progress = progressOpt.get();
+        return new Row[] {
+            Row.of(
+                    progress.rebalanceId(),
+                    progress.status(),
+                    progress.formatAsPercentage(),
+                    new String(
+                            JsonSerdeUtils.writeValueAsBytes(
+                                    progress, RebalanceProgressJsonSerializer.INSTANCE),
+                            StandardCharsets.UTF_8))
+        };
     }
 }

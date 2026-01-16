@@ -19,6 +19,7 @@ package org.apache.fluss.cluster.rebalance;
 
 import org.apache.fluss.metadata.TableBucket;
 
+import java.text.NumberFormat;
 import java.util.Map;
 
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
@@ -71,5 +72,14 @@ public class RebalanceProgress {
 
     public Map<TableBucket, RebalanceResultForBucket> progressForBucketMap() {
         return progressForBucketMap;
+    }
+
+    public String formatAsPercentage() {
+        if (progress < 0) {
+            return "NONE";
+        }
+        NumberFormat pctFormat = NumberFormat.getPercentInstance();
+        pctFormat.setMaximumFractionDigits(2);
+        return pctFormat.format(progress);
     }
 }

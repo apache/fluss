@@ -21,6 +21,7 @@ import org.apache.fluss.client.Connection;
 import org.apache.fluss.client.ConnectionFactory;
 import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.cluster.rebalance.RebalanceProgress;
+import org.apache.fluss.cluster.rebalance.RebalanceStatus;
 import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
@@ -767,17 +768,13 @@ public abstract class FlinkProcedureITCase {
                                                     "Call %s.sys.list_rebalance('%s')",
                                                     CATALOG_NAME, progress.rebalanceId()))
                                     .collect()) {
-                        List<String> listProgressResult =
-                                CollectionUtil.iteratorToList(rows).stream()
-                                        .map(Row::toString)
-                                        .collect(Collectors.toList());
-                        assertThat(listProgressResult.get(0)).startsWith("+I[Rebalance id:");
-                        assertThat(listProgressResult.get(1))
-                                .isEqualTo("+I[Reblance total status: COMPLETED]");
-                        assertThat(listProgressResult.get(2))
-                                .isEqualTo("+I[Rebalance progress: 100%]");
-                        assertThat(listProgressResult.get(3))
-                                .isEqualTo("+I[Rebalance detail progress for bucket:]");
+                        List<Row> listProgressResult = CollectionUtil.iteratorToList(rows);
+                        Row row = listProgressResult.get(0);
+                        assertThat(row.getArity()).isEqualTo(4);
+                        assertThat(row.getField(0)).isEqualTo(progress.rebalanceId());
+                        assertThat(row.getField(1)).isEqualTo(RebalanceStatus.COMPLETED);
+                        assertThat((String) row.getField(2)).endsWith("%");
+                        assertThat((String) row.getField(3)).startsWith("{\"rebalance_id\":");
                     }
                 });
     }
