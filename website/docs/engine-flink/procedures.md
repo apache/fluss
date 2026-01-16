@@ -365,13 +365,13 @@ Trigger a rebalance operation to redistribute buckets across TabletServers in th
 
 ```sql
 CALL [catalog_name.]sys.rebalance(
-  priorityGoals => 'STRING'
+  priorityGoals => 'key1' [, 'key2', ...]
 )
 ```
 
 **Parameters:**
 
-- `priorityGoals` (required): The rebalance goals to achieve, specified as goal types. Can be a single goal (e.g., `'REPLICA_DISTRIBUTION'`) or multiple goals separated by commas (e.g., `'REPLICA_DISTRIBUTION,LEADER_DISTRIBUTION'`). Valid goal types are:
+- `priorityGoals` (required): The rebalance goals to achieve, specified as goal types. Can be a single goal (e.g., `'REPLICA_DISTRIBUTION'`) or multiple goals separated by commas (e.g., `'REPLICA_DISTRIBUTION', 'LEADER_DISTRIBUTION'`). Valid goal types are:
     - `'REPLICA_DISTRIBUTION'`: Generates replica movement tasks to ensure the number of replicas on each TabletServer is near balanced.
     - `'LEADER_DISTRIBUTION'`: Generates leadership movement and leader replica movement tasks to ensure the number of leader replicas on each TabletServer is near balanced.
 
@@ -393,7 +393,7 @@ USE fluss_catalog;
 CALL sys.rebalance('REPLICA_DISTRIBUTION');
 
 -- Trigger rebalance with multiple goals in priority order
-CALL sys.rebalance('REPLICA_DISTRIBUTION,LEADER_DISTRIBUTION');
+CALL sys.rebalance('REPLICA_DISTRIBUTION', 'LEADER_DISTRIBUTION');
 ```
 
 ### list_rebalance
