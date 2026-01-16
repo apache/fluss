@@ -51,6 +51,23 @@ persistence:
 tablet:
   count: 3
 
+# Fluss listener configurations
+listeners:
+  internal:
+    name: INTERNAL
+    port: 9123
+  client:
+    name: CLIENT
+    port: 9124
+  ## Activated only when @param externalAccess.enabled is true
+  external:
+    name: EXTERNAL
+    port: 9125
+
+# Fluss cluster external access
+  externalAccess:
+    enabled: false
+
 resources: {}
   # We usually recommend not to specify default resources and to leave this as a conscious
   # choice for the user. This also increases chances charts run on environments with little

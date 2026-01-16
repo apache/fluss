@@ -184,8 +184,9 @@ The following table lists the configurable parameters of the Fluss chart and the
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
-| `appConfig.internalPort` | Internal communication port | `9123` |
-| `appConfig.externalPort` | External client port | `9124` |
+| `listeners.internal.port` | Internal communication port | `9123` |
+| `listeners.client.port` | Client port (intra-cluster) | `9124` |
+| `listeners.external.port` | External access port | `9125` |
 
 ### Fluss Configuration Overrides
 
@@ -237,19 +238,20 @@ configurationOverrides:
 
 The chart automatically configures listeners for internal cluster communication and external client access:
 
-- **Internal Port (9123)**: Used for inter-service communication within the cluster
-- **External Port (9124)**: Used for client connections
+- **Internal Port (9123)**: Used for internal communication within the cluster
+- **Client Port (9124)**: Used for client connections
+- **External Port (9125)**: Used for external access if enabled
 
 Custom listener configuration:
 
 ```yaml
-appConfig:
-  internalPort: 9123
-  externalPort: 9124
-
-configurationOverrides:
-  bind.listeners: "INTERNAL://0.0.0.0:9123,CLIENT://0.0.0.0:9124"
-  advertised.listeners: "CLIENT://my-cluster.example.com:9124"
+listeners:
+  internal:
+    port: 9123
+  client:
+    port: 9124
+  external:
+    port: 9125
 ```
 
 ### Storage Configuration
