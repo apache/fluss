@@ -64,7 +64,7 @@ class PaimonLakeCatalogTest {
         Table table = flussPaimonCatalog.getPaimonCatalog().getTable(identifier);
 
         // value should be null for key
-        assertThat(table.options().get("key")).isEqualTo(null);
+        assertThat(table.options().get("fluss.key")).isEqualTo(null);
 
         // set the value for key
         flussPaimonCatalog.alterTable(
@@ -85,6 +85,15 @@ class PaimonLakeCatalogTest {
         table = flussPaimonCatalog.getPaimonCatalog().getTable(identifier);
         // we have reset the value for key
         assertThat(table.options().get("fluss.key")).isEqualTo(null);
+
+        // test for bucket.num
+        assertThat(table.options().get("fluss.bucket.num")).isEqualTo(null);
+        flussPaimonCatalog.alterTable(
+                tablePath,
+                Collections.singletonList(TableChange.bucketNum(3)),
+                new TestingLakeCatalogContext());
+        table = flussPaimonCatalog.getPaimonCatalog().getTable(identifier);
+        assertThat(table.options().get("fluss.bucket.num")).isEqualTo("3");
     }
 
     @Test

@@ -351,9 +351,14 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
         }
     }
 
-    @Test
-    void testRestore() throws Throwable {
-        long tableId = createTable(DEFAULT_TABLE_PATH, DEFAULT_PK_TABLE_DESCRIPTOR);
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testRestoreForNonPartitionedTable(boolean isPrimaryKeyTable) throws Throwable {
+        TableDescriptor tableDescriptor =
+                isPrimaryKeyTable
+                        ? DEFAULT_AUTO_PARTITIONED_PK_TABLE_DESCRIPTOR
+                        : DEFAULT_AUTO_PARTITIONED_LOG_TABLE_DESCRIPTOR;
+        long tableId = createTable(DEFAULT_TABLE_PATH, tableDescriptor);
         int numSubtasks = 3;
         // test get snapshot split & log split and the assignment
         try (MockSplitEnumeratorContext<SourceSplitBase> context =
@@ -368,7 +373,7 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
                     new FlinkSourceEnumerator(
                             DEFAULT_TABLE_PATH,
                             flussConf,
-                            false,
+                            isPrimaryKeyTable,
                             false,
                             context,
                             assignedBuckets,
@@ -396,6 +401,96 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
             expectedAssignment.put(2, Collections.singletonList(genLogSplit(tableId, 2)));
             Map<Integer, List<SourceSplitBase>> actualAssignment = getReadersAssignments(context);
             assertThat(actualAssignment).isEqualTo(expectedAssignment);
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testRestoreForPartitionedTable(boolean isPrimaryKeyTable) throws Throwable {
+        int numSubtasks = 3;
+        TableDescriptor tableDescriptor =
+                isPrimaryKeyTable
+                        ? DEFAULT_AUTO_PARTITIONED_PK_TABLE_DESCRIPTOR
+                        : DEFAULT_AUTO_PARTITIONED_LOG_TABLE_DESCRIPTOR;
+        long tableId = createTable(DEFAULT_TABLE_PATH, tableDescriptor);
+        ZooKeeperClient zooKeeperClient = FLUSS_CLUSTER_EXTENSION.getZooKeeperClient();
+
+        // Wait until partitions are created
+        Map<Long, String> partitionNameByIds =
+                waitUntilPartitions(zooKeeperClient, DEFAULT_TABLE_PATH);
+        assertThat(partitionNameByIds.size()).isGreaterThanOrEqualTo(2);
+
+        // Get first two partitions for testing
+        List<Map.Entry<Long, String>> partitionEntries =
+                new ArrayList<>(partitionNameByIds.entrySet());
+        Long partition1Id = partitionEntries.get(0).getKey();
+        String partition1Name = partitionEntries.get(0).getValue();
+        Long partition2Id = partitionEntries.get(1).getKey();
+        String partition2Name = partitionEntries.get(1).getValue();
+
+        // Mock that partition1's all buckets and partition2's bucket0 have been assigned
+        Set<TableBucket> assignedBuckets = new HashSet<>();
+        // All buckets of partition1 are assigned
+        for (int bucketId = 0; bucketId < DEFAULT_BUCKET_NUM; bucketId++) {
+            assignedBuckets.add(new TableBucket(tableId, partition1Id, bucketId));
+        }
+        // Only bucket0 of partition2 is assigned
+        assignedBuckets.add(new TableBucket(tableId, partition2Id, 0));
+
+        // Mock assigned partitions (partition1 and partition2 are both assigned)
+        Map<Long, String> assignedPartitions = new HashMap<>();
+        assignedPartitions.put(partition1Id, partition1Name);
+        assignedPartitions.put(partition2Id, partition2Name);
+
+        try (MockSplitEnumeratorContext<SourceSplitBase> context =
+                        new MockSplitEnumeratorContext<>(numSubtasks);
+                MockWorkExecutor workerExecutor = new MockWorkExecutor(context);
+                // Mock restore with assigned buckets and partitions
+                FlinkSourceEnumerator enumerator =
+                        new FlinkSourceEnumerator(
+                                DEFAULT_TABLE_PATH,
+                                flussConf,
+                                isPrimaryKeyTable,
+                                true,
+                                context,
+                                assignedBuckets,
+                                assignedPartitions,
+                                Collections.emptyList(),
+                                OffsetsInitializer.earliest(),
+                                DEFAULT_SCAN_PARTITION_DISCOVERY_INTERVAL_MS,
+                                streaming,
+                                null,
+                                null,
+                                workerExecutor)) {
+
+            enumerator.start();
+            assertThat(context.getSplitsAssignmentSequence()).isEmpty();
+
+            // invoke partition discovery callable again and there should be pending assignments.
+            runPeriodicPartitionDiscovery(workerExecutor);
+
+            // Register all readers
+            for (int i = 0; i < numSubtasks; i++) {
+                registerReader(context, enumerator, i);
+            }
+
+            // Check assignment: should contain partition2's bucket1 and bucket2
+            // (partition1's all buckets are already assigned, partition2's bucket0 is assigned)
+            Map<Integer, List<SourceSplitBase>> expectedAssignment = new HashMap<>();
+            LogSplit split1 = genLogSplit(tableId, partition2Id, 1, partition2Name);
+            LogSplit split2 = genLogSplit(tableId, partition2Id, 2, partition2Name);
+            int task1 = enumerator.getSplitOwner(split1);
+            int task2 = enumerator.getSplitOwner(split2);
+            expectedAssignment.computeIfAbsent(task1, k -> new ArrayList<>()).add(split1);
+            expectedAssignment.computeIfAbsent(task2, k -> new ArrayList<>()).add(split2);
+
+            Map<Integer, List<SourceSplitBase>> actualAssignment = getReadersAssignments(context);
+            checkAssignmentIgnoreOrder(actualAssignment, expectedAssignment);
+
+            // Verify that assigned partitions are correctly tracked
+            assertThat(enumerator.getAssignedPartitions())
+                    .containsEntry(partition1Id, partition1Name)
+                    .containsEntry(partition2Id, partition2Name);
         }
     }
 
@@ -459,7 +554,7 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
             Map<Long, String> newPartitionNameIds =
                     createPartitions(zooKeeperClient, DEFAULT_TABLE_PATH, newPartitions);
 
-            /// invoke partition discovery callable again and there should assignments.
+            // invoke partition discovery callable again and there should assignments.
             runPeriodicPartitionDiscovery(workExecutor);
 
             expectedAssignment = expectAssignments(enumerator, tableId, newPartitionNameIds);
@@ -882,13 +977,19 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
         // Fetch potential topic descriptions
         workExecutor.runPeriodicCallable(PARTITION_DISCOVERY_CALLABLE_INDEX);
         // Initialize offsets for discovered partitions
-        if (!workExecutor.getOneTimeCallables().isEmpty()) {
+        while (!workExecutor.getOneTimeCallables().isEmpty()) {
             workExecutor.runNextOneTimeCallable();
         }
     }
 
     private LogSplit genLogSplit(long tableId, int bucketId) {
-        return new LogSplit(new TableBucket(tableId, bucketId), null, -2L);
+        return new LogSplit(new TableBucket(tableId, bucketId), null, EARLIEST_OFFSET);
+    }
+
+    private LogSplit genLogSplit(
+            long tableId, Long partitionId, int bucketId, String partitionName) {
+        return new LogSplit(
+                new TableBucket(tableId, partitionId, bucketId), partitionName, EARLIEST_OFFSET);
     }
 
     private Map<Integer, List<SourceSplitBase>> getReadersAssignments(

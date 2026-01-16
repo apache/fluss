@@ -34,6 +34,7 @@ import org.apache.fluss.metadata.MergeEngineType;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.server.entity.TablePropertyChanges;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypeRoot;
 import org.apache.fluss.types.RowType;
@@ -114,36 +115,58 @@ public class TableDescriptorValidation {
     }
 
     public static void validateAlterTableProperties(
-            TableInfo currentTable, Set<String> tableKeysToChange, Set<String> customKeysToChange) {
-        TableConfig currentConfig = currentTable.getTableConfig();
-        tableKeysToChange.forEach(
-                k -> {
-                    if (isTableStorageConfig(k) && !isAlterableTableOption(k)) {
-                        throw new InvalidAlterTableException(
-                                "The option '" + k + "' is not supported to alter yet.");
-                    }
+            TableInfo currentTable, TablePropertyChanges tablePropertyChanges) {
+        // valid table bucket
+        if (tablePropertyChanges.getBucketNum() != null) {
+            if (currentTable.getNumBuckets() >= tablePropertyChanges.getBucketNum()) {
+                throw new InvalidAlterTableException(
+                        "Bucket number can only be increased, current bucket number is "
+                                + currentTable.getNumBuckets()
+                                + ", new bucket number is "
+                                + tablePropertyChanges.getBucketNum());
+            }
 
-                    if (!currentConfig.getDataLakeFormat().isPresent()
-                            && ConfigOptions.TABLE_DATALAKE_ENABLED.key().equals(k)) {
-                        throw new InvalidAlterTableException(
-                                String.format(
-                                        "The option '%s' cannot be altered for tables that were"
-                                                + " created before the Fluss cluster enabled datalake.",
-                                        ConfigOptions.TABLE_DATALAKE_ENABLED.key()));
-                    }
-                });
+            // only support one of alter table bucket or alter table properties for atomic change.
+            if (!tablePropertyChanges.tableKeysToChange().isEmpty()
+                    || !tablePropertyChanges.customKeysToChange().isEmpty()) {
+                throw new InvalidAlterTableException(
+                        "Cannot alter table properties and bucket number at the same time.");
+            }
+        }
+
+        TableConfig currentConfig = currentTable.getTableConfig();
+        tablePropertyChanges
+                .tableKeysToChange()
+                .forEach(
+                        k -> {
+                            if (isTableStorageConfig(k) && !isAlterableTableOption(k)) {
+                                throw new InvalidAlterTableException(
+                                        "The option '" + k + "' is not supported to alter yet.");
+                            }
+
+                            if (!currentConfig.getDataLakeFormat().isPresent()
+                                    && ConfigOptions.TABLE_DATALAKE_ENABLED.key().equals(k)) {
+                                throw new InvalidAlterTableException(
+                                        String.format(
+                                                "The option '%s' cannot be altered for tables that were"
+                                                        + " created before the Fluss cluster enabled datalake.",
+                                                ConfigOptions.TABLE_DATALAKE_ENABLED.key()));
+                            }
+                        });
 
         if (currentConfig.isDataLakeEnabled() && currentConfig.getDataLakeFormat().isPresent()) {
             String format = currentConfig.getDataLakeFormat().get().toString();
-            customKeysToChange.forEach(
-                    k -> {
-                        if (k.startsWith(format + ".")) {
-                            throw new InvalidConfigException(
-                                    String.format(
-                                            "Property '%s' is not supported to alter which is for datalake table.",
-                                            k));
-                        }
-                    });
+            tablePropertyChanges
+                    .customKeysToChange()
+                    .forEach(
+                            k -> {
+                                if (k.startsWith(format + ".")) {
+                                    throw new InvalidConfigException(
+                                            String.format(
+                                                    "Property '%s' is not supported to alter which is for datalake table.",
+                                                    k));
+                                }
+                            });
         }
     }
 

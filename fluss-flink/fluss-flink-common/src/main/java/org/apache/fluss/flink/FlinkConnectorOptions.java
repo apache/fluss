@@ -144,7 +144,7 @@ public class FlinkConnectorOptions {
     // --------------------------------------------------------------------------------------------
 
     public static final List<String> ALTER_DISALLOW_OPTIONS =
-            Arrays.asList(BUCKET_NUMBER.key(), BUCKET_KEY.key(), BOOTSTRAP_SERVERS.key());
+            Arrays.asList(BUCKET_KEY.key(), BOOTSTRAP_SERVERS.key());
 
     // -------------------------------------------------------------------------------------------
     // Only used internally to support materialized table

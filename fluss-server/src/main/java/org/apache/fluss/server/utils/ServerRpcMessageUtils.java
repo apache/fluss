@@ -199,6 +199,7 @@ import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
+import static org.apache.fluss.config.FlussConfigUtils.BUCKET_NUM;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toByteBuffer;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toPbAclInfo;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
@@ -268,6 +269,9 @@ public class ServerRpcMessageUtils {
         AlterConfigOpType opType = AlterConfigOpType.from(pbAlterConfig.getOpType());
         switch (opType) {
             case SET: // SET_OPTION
+                if (BUCKET_NUM.equals(pbAlterConfig.getConfigKey())) {
+                    return TableChange.bucketNum(Integer.parseInt(pbAlterConfig.getConfigValue()));
+                }
                 return TableChange.set(
                         pbAlterConfig.getConfigKey(), pbAlterConfig.getConfigValue());
             case DELETE: // RESET_OPTION
