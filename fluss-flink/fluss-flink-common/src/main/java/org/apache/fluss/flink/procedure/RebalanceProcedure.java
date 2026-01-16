@@ -40,7 +40,7 @@ import java.util.List;
  * -- Trigger rebalance with REPLICA_DISTRIBUTION goal
  * CALL sys.rebalance('REPLICA_DISTRIBUTION');
  * -- Trigger rebalance with REPLICA_DISTRIBUTION and LEADER_DISTRIBUTION goals
- * CALL sys.rebalance('REPLICA_DISTRIBUTION,LEADER_DISTRIBUTION');
+ * CALL sys.rebalance('REPLICA_DISTRIBUTION', 'LEADER_DISTRIBUTION');
  * </pre>
  */
 public class RebalanceProcedure extends ProcedureBase {
@@ -50,29 +50,28 @@ public class RebalanceProcedure extends ProcedureBase {
      * a String type, and different goals are split by ','.
      */
     @ProcedureHint(
-            argument = {@ArgumentHint(name = "priorityGoals", type = @DataTypeHint("STRING"))})
-    public String[] call(ProcedureContext context, String priorityGoals) throws Exception {
+            argument = {@ArgumentHint(name = "priorityGoals", type = @DataTypeHint("STRING"))},
+            isVarArgs = true)
+    public String[] call(ProcedureContext context, String... priorityGoals) throws Exception {
         List<GoalType> goalTypes = validateAndGetPriorityGoals(priorityGoals);
         String rebalanceId = admin.rebalance(goalTypes).get();
         return new String[] {rebalanceId};
     }
 
-    private static List<GoalType> validateAndGetPriorityGoals(String priorityGoals) {
-        if (priorityGoals == null || priorityGoals.trim().isEmpty()) {
+    private static List<GoalType> validateAndGetPriorityGoals(String... priorityGoals) {
+        if (priorityGoals == null || priorityGoals.length == 0) {
             throw new IllegalArgumentException(
                     "priority goals cannot be null or empty. You can specify one goal as 'REPLICA_DISTRIBUTION' or "
-                            + "specify multi goals as 'REPLICA_DISTRIBUTION,LEADER_DISTRIBUTION' (split by ',')");
+                            + "specify multi goals as 'REPLICA_DISTRIBUTION','LEADER_DISTRIBUTION' (split by ',')");
         }
 
-        priorityGoals = priorityGoals.trim();
-        String[] splitGoals = priorityGoals.split(",");
-        if (splitGoals.length == 0) {
-            throw new IllegalArgumentException(
-                    "priority goals cannot be empty. You can specify one goal as 'REPLICA_DISTRIBUTION' "
-                            + "or specify multi goals as 'REPLICA_DISTRIBUTION,LEADER_DISTRIBUTION' (split by ',')");
-        }
         List<GoalType> goalTypes = new ArrayList<>();
-        for (String goal : splitGoals) {
+        for (String goal : priorityGoals) {
+            if (null == goal || goal.trim().isEmpty()) {
+                throw new IllegalArgumentException(
+                        "priority goals cannot be null or empty. You can specify one goal as 'REPLICA_DISTRIBUTION' or "
+                                + "specify multi goals as 'REPLICA_DISTRIBUTION','LEADER_DISTRIBUTION' (split by ',')");
+            }
             goalTypes.add(GoalType.valueOf(goal.toUpperCase()));
         }
         return goalTypes;

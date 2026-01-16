@@ -663,8 +663,8 @@ public abstract class FlinkProcedureITCase {
         String rebalance =
                 String.format(
                         upperCase
-                                ? "Call %s.sys.rebalance('REPLICA_DISTRIBUTION,LEADER_DISTRIBUTION')"
-                                : "Call %s.sys.rebalance('replica_distribution,leader_distribution')",
+                                ? "Call %s.sys.rebalance('REPLICA_DISTRIBUTION', 'LEADER_DISTRIBUTION')"
+                                : "Call %s.sys.rebalance('replica_distribution', 'leader_distribution')",
                         CATALOG_NAME);
         try (CloseableIterator<Row> rows = tEnv.executeSql(rebalance).collect()) {
             List<String> actual =
@@ -743,7 +743,7 @@ public abstract class FlinkProcedureITCase {
 
         String rebalance =
                 String.format(
-                        "Call %s.sys.rebalance('REPLICA_DISTRIBUTION,LEADER_DISTRIBUTION')",
+                        "Call %s.sys.rebalance('REPLICA_DISTRIBUTION', 'LEADER_DISTRIBUTION')",
                         CATALOG_NAME);
         List<String> plan;
         try (CloseableIterator<Row> rows = tEnv.executeSql(rebalance).collect()) {
