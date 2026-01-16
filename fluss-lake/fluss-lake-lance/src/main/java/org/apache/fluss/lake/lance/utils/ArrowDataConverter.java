@@ -23,8 +23,6 @@ import org.apache.arrow.vector.FieldVector;
 import org.apache.arrow.vector.VectorSchemaRoot;
 import org.apache.arrow.vector.types.pojo.Schema;
 
-import java.lang.reflect.Field;
-import java.lang.reflect.Method;
 import java.nio.ByteBuffer;
 import java.util.List;
 
@@ -70,71 +68,25 @@ public class ArrowDataConverter {
     private static void copyVectorData(
             org.apache.fluss.shaded.arrow.org.apache.arrow.vector.FieldVector shadedVector,
             FieldVector nonShadedVector) {
-        try {
-            List<org.apache.fluss.shaded.arrow.org.apache.arrow.memory.ArrowBuf> shadedBuffers =
-                    getFieldBuffers(shadedVector);
+        List<org.apache.fluss.shaded.arrow.org.apache.arrow.memory.ArrowBuf> shadedBuffers =
+                shadedVector.getFieldBuffers();
 
-            int valueCount = getValueCount(shadedVector);
-            nonShadedVector.setValueCount(valueCount);
+        int valueCount = shadedVector.getValueCount();
+        nonShadedVector.setValueCount(valueCount);
 
-            List<ArrowBuf> nonShadedBuffers = nonShadedVector.getFieldBuffers();
+        List<ArrowBuf> nonShadedBuffers = nonShadedVector.getFieldBuffers();
 
-            for (int i = 0; i < Math.min(shadedBuffers.size(), nonShadedBuffers.size()); i++) {
-                org.apache.fluss.shaded.arrow.org.apache.arrow.memory.ArrowBuf shadedBuf =
-                        shadedBuffers.get(i);
-                ArrowBuf nonShadedBuf = nonShadedBuffers.get(i);
+        for (int i = 0; i < Math.min(shadedBuffers.size(), nonShadedBuffers.size()); i++) {
+            org.apache.fluss.shaded.arrow.org.apache.arrow.memory.ArrowBuf shadedBuf =
+                    shadedBuffers.get(i);
+            ArrowBuf nonShadedBuf = nonShadedBuffers.get(i);
 
-                long size = Math.min(shadedBuf.capacity(), nonShadedBuf.capacity());
-                if (size > 0) {
-                    ByteBuffer srcBuffer = getByteBuffer(shadedBuf);
-                    if (srcBuffer != null) {
-                        srcBuffer.position(0);
-                        srcBuffer.limit((int) Math.min(size, Integer.MAX_VALUE));
-                        nonShadedBuf.setBytes(0, srcBuffer);
-                    }
-                }
-            }
-        } catch (Exception e) {
-            throw new RuntimeException("Failed to copy vector data via off-heap memory", e);
-        }
-    }
-
-    @SuppressWarnings("unchecked")
-    private static List<org.apache.fluss.shaded.arrow.org.apache.arrow.memory.ArrowBuf>
-            getFieldBuffers(
-                    org.apache.fluss.shaded.arrow.org.apache.arrow.vector.FieldVector vector) {
-        try {
-            Method method = vector.getClass().getMethod("getFieldBuffers");
-            return (List<org.apache.fluss.shaded.arrow.org.apache.arrow.memory.ArrowBuf>)
-                    method.invoke(vector);
-        } catch (Exception e) {
-            throw new RuntimeException("Failed to get field buffers from shaded vector", e);
-        }
-    }
-
-    private static int getValueCount(
-            org.apache.fluss.shaded.arrow.org.apache.arrow.vector.FieldVector vector) {
-        try {
-            Method method = vector.getClass().getMethod("getValueCount");
-            return (int) method.invoke(vector);
-        } catch (Exception e) {
-            throw new RuntimeException("Failed to get value count from shaded vector", e);
-        }
-    }
-
-    private static ByteBuffer getByteBuffer(
-            org.apache.fluss.shaded.arrow.org.apache.arrow.memory.ArrowBuf buf) {
-        try {
-            Method method = buf.getClass().getMethod("nioBuffer", long.class, int.class);
-            return (ByteBuffer) method.invoke(buf, 0L, (int) buf.capacity());
-        } catch (Exception e) {
-            try {
-                Field field = buf.getClass().getDeclaredField("memoryAddress");
-                field.setAccessible(true);
-                long address = (long) field.get(buf);
-                return null;
-            } catch (Exception ex) {
-                throw new RuntimeException("Failed to get ByteBuffer from ArrowBuf", ex);
+            long size = Math.min(shadedBuf.capacity(), nonShadedBuf.capacity());
+            if (size > 0) {
+                ByteBuffer srcBuffer = shadedBuf.nioBuffer(0, (int) size);
+                srcBuffer.position(0);
+                srcBuffer.limit((int) Math.min(size, Integer.MAX_VALUE));
+                nonShadedBuf.setBytes(0, srcBuffer);
             }
         }
     }
