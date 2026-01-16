@@ -1,0 +1,283 @@
+#
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+
+suite: sasl-disabled-secret
+templates:
+  - templates/secret-jaas-config.yaml
+tests:
+  - it: does not render sasl secret when sasl is disabled
+    set:
+      listeners.internal.protocol: PLAINTEXT
+      listeners.client.protocol: PLAINTEXT
+    asserts:
+      - hasDocuments:
+          count: 0
+---
+
+suite: sasl-disabled-statefulset
+templates:
+  - templates/sts-coordinator.yaml
+tests:
+  - it: does not render sasl settings in pod spec when sasl is disabled
+    set:
+      listeners.internal.protocol: PLAINTEXT
+      listeners.client.protocol: PLAINTEXT
+    asserts:
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'security\.sasl\.enabled\.mechanisms:'
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'client\.security\.protocol: SASL'
+      - notContains:
+          path: spec.template.spec.volumes
+          content:
+            name: sasl-config
+---
+
+suite: internal-sasl-generated-users
+templates:
+  - templates/secret-jaas-config.yaml
+tests:
+  - it: generates internal user and fluss client section when internal users are absent
+    set:
+      listeners.internal.protocol: SASL
+      listeners.client.protocol: PLAINTEXT
+      listeners.internal.security.users: []
+    asserts:
+      - hasDocuments:
+          count: 1
+      - matchRegex:
+          path: stringData["jaas.conf"]
+          pattern: 'internal\.FlussServer\s*\{'
+      - matchRegex:
+          path: stringData["jaas.conf"]
+          pattern: 'user_internal-[a-z0-9]{12}="[A-Za-z0-9]{32}"'
+      - matchRegex:
+          path: stringData["internal-generated-username"]
+          pattern: '^internal-[a-z0-9]{12}$'
+      - matchRegex:
+          path: stringData["internal-generated-password"]
+          pattern: '^[A-Za-z0-9]{32}$'
+      - matchRegex:
+          path: stringData["jaas.conf"]
+          pattern: 'FlussClient\s*\{'
+      - notMatchRegex:
+          path: stringData["jaas.conf"]
+          pattern: 'client\.FlussServer\s*\{'
+---
+
+suite: client-sasl-empty-users-fails
+templates:
+  - templates/secret-jaas-config.yaml
+tests:
+  - it: fails when client sasl users are empty
+    set:
+      listeners.internal.protocol: PLAINTEXT
+      listeners.client.protocol: SASL
+      listeners.client.security.users: []
+    asserts:
+      - failedTemplate:
+          errorMessage: listeners.client.security.users must contain at least one user when listeners.client.protocol is SASL
+---
+
+suite: client-sasl-secret
+templates:
+  - templates/secret-jaas-config.yaml
+tests:
+  - it: renders client listener users and skips fluss client section when internal listener is plaintext
+    set:
+      listeners.internal.protocol: PLAINTEXT
+      listeners.client.protocol: SASL
+      listeners.client.security.users:
+        - username: app
+          password: app-password
+        - username: reader
+          password: reader-password
+    asserts:
+      - hasDocuments:
+          count: 1
+      - matchRegex:
+          path: stringData["jaas.conf"]
+          pattern: 'client\.FlussServer\s*\{'
+      - matchRegex:
+          path: stringData["jaas.conf"]
+          pattern: 'user_app="app-password"'
+      - matchRegex:
+          path: stringData["jaas.conf"]
+          pattern: 'user_reader="reader-password"'
+      - notMatchRegex:
+          path: stringData["jaas.conf"]
+          pattern: 'FlussClient\s*\{'
+---
+
+suite: sasl-missing-security-block
+templates:
+  - templates/secret-jaas-config.yaml
+tests:
+  - it: renders with generated internal user when internal security block is null
+    set:
+      listeners.internal.protocol: SASL
+      listeners.client.protocol: PLAINTEXT
+      listeners.internal.security: null
+    asserts:
+      - hasDocuments:
+          count: 1
+      - matchRegex:
+          path: stringData["jaas.conf"]
+          pattern: 'internal\.FlussServer\s*\{'
+      - matchRegex:
+          path: stringData["internal-generated-username"]
+          pattern: '^internal-[a-z0-9]{12}$'
+---
+
+suite: both-listeners-sasl
+templates:
+  - templates/secret-jaas-config.yaml
+  - templates/sts-coordinator.yaml
+  - templates/sts-tablet.yaml
+tests:
+  - it: renders separate jaas entries for internal and client listeners
+    template: templates/secret-jaas-config.yaml
+    set:
+      listeners.internal.protocol: SASL
+      listeners.client.protocol: SASL
+      listeners.internal.security.users:
+        - username: internal-user
+          password: internal-password
+      listeners.client.security.users:
+        - username: external-user
+          password: external-password
+    asserts:
+      - matchRegex:
+          path: stringData["jaas.conf"]
+          pattern: 'internal\.FlussServer\s*\{'
+      - matchRegex:
+          path: stringData["jaas.conf"]
+          pattern: 'user_internal-user="internal-password"'
+      - matchRegex:
+          path: stringData["jaas.conf"]
+          pattern: 'client\.FlussServer\s*\{'
+      - matchRegex:
+          path: stringData["jaas.conf"]
+          pattern: 'user_external-user="external-password"'
+      - matchRegex:
+          path: stringData["jaas.conf"]
+          pattern: 'FlussClient\s*\{'
+  - it: wires jaas and internal sasl client settings into coordinator
+    template: templates/sts-coordinator.yaml
+    set:
+      listeners.internal.protocol: SASL
+      listeners.client.protocol: SASL
+      listeners.internal.security.users:
+        - username: internal-user
+          password: internal-password
+      listeners.client.security.users:
+        - username: external-user
+          password: external-password
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: sasl-config
+            secret:
+              secretName: RELEASE-NAME-fluss-sasl-jaas-config
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'security\.sasl\.enabled\.mechanisms: PLAIN'
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'client\.security\.protocol: SASL'
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'client\.security\.sasl\.mechanism: PLAIN'
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'FLUSS_ENV_JAVA_OPTS="-Djava\.security\.auth\.login\.config=/etc/fluss/conf/jaas\.conf \$\{FLUSS_ENV_JAVA_OPTS\}"'
+  - it: wires jaas and internal sasl client settings into tablet
+    template: templates/sts-tablet.yaml
+    set:
+      listeners.internal.protocol: SASL
+      listeners.client.protocol: SASL
+      listeners.internal.security.users:
+        - username: internal-user
+          password: internal-password
+      listeners.client.security.users:
+        - username: external-user
+          password: external-password
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: sasl-config
+            secret:
+              secretName: RELEASE-NAME-fluss-sasl-jaas-config
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'security\.sasl\.enabled\.mechanisms: PLAIN'
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'client\.security\.protocol: SASL'
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'client\.security\.sasl\.mechanism: PLAIN'
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'FLUSS_ENV_JAVA_OPTS="-Djava\.security\.auth\.login\.config=/etc/fluss/conf/jaas\.conf \$\{FLUSS_ENV_JAVA_OPTS\}"'
+---
+
+suite: non-plain-mechanism-fails
+templates:
+  - templates/secret-jaas-config.yaml
+tests:
+  - it: fails when internal mechanism is not plain
+    set:
+      listeners.internal.protocol: SASL
+      listeners.client.protocol: PLAINTEXT
+      listeners.internal.security.mechanism: SCRAM
+      listeners.internal.security.users:
+        - username: internal-user
+          password: internal-password
+    asserts:
+      - failedTemplate:
+          errorMessage: listeners.internal.security.mechanism must be PLAIN when listeners.internal.protocol is SASL, got SCRAM
+  - it: fails when client mechanism is not plain
+    set:
+      listeners.internal.protocol: PLAINTEXT
+      listeners.client.protocol: SASL
+      listeners.client.security.mechanism: SCRAM
+      listeners.client.security.users:
+        - username: external-user
+          password: external-password
+    asserts:
+      - failedTemplate:
+          errorMessage: listeners.client.security.mechanism must be PLAIN when listeners.client.protocol is SASL, got SCRAM
+---
+
+suite: server-yaml-write-path
+templates:
+  - templates/sts-tablet.yaml
+tests:
+  - it: writes server yaml using expected destination path
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: cp /opt/conf/server\.yaml \$FLUSS_HOME/conf
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: '>> \$FLUSS_HOME/conf/server\.yaml'
