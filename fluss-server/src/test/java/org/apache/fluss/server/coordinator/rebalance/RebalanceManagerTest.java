@@ -18,6 +18,7 @@
 package org.apache.fluss.server.coordinator.rebalance;
 
 import org.apache.fluss.cluster.rebalance.RebalanceStatus;
+import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.server.coordinator.AutoPartitionManager;
 import org.apache.fluss.server.coordinator.CoordinatorContext;
@@ -26,6 +27,7 @@ import org.apache.fluss.server.coordinator.LakeCatalogDynamicLoader;
 import org.apache.fluss.server.coordinator.LakeTableTieringManager;
 import org.apache.fluss.server.coordinator.MetadataManager;
 import org.apache.fluss.server.coordinator.TestCoordinatorChannelManager;
+import org.apache.fluss.server.coordinator.remote.RemoteDirDynamicLoader;
 import org.apache.fluss.server.metadata.CoordinatorMetadataCache;
 import org.apache.fluss.server.metrics.group.TestingMetricGroups;
 import org.apache.fluss.server.zk.NOPErrorHandler;
@@ -76,8 +78,14 @@ public class RebalanceManagerTest {
     void beforeEach() {
         serverMetadataCache = new CoordinatorMetadataCache();
         testCoordinatorChannelManager = new TestCoordinatorChannelManager();
+        Configuration conf = new Configuration();
+        conf.set(ConfigOptions.REMOTE_DATA_DIR, "/remote-data-dir");
         autoPartitionManager =
-                new AutoPartitionManager(serverMetadataCache, metadataManager, new Configuration());
+                new AutoPartitionManager(
+                        serverMetadataCache,
+                        metadataManager,
+                        new RemoteDirDynamicLoader(conf),
+                        conf);
         lakeTableTieringManager = new LakeTableTieringManager();
         CoordinatorEventProcessor eventProcessor = buildCoordinatorEventProcessor();
         rebalanceManager = new RebalanceManager(eventProcessor, zookeeperClient);

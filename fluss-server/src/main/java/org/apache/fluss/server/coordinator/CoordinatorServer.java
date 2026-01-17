@@ -22,7 +22,6 @@ import org.apache.fluss.cluster.Endpoint;
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
-import org.apache.fluss.exception.IllegalConfigurationException;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metrics.registry.MetricRegistry;
 import org.apache.fluss.rpc.RpcClient;
@@ -34,6 +33,7 @@ import org.apache.fluss.server.ServerBase;
 import org.apache.fluss.server.authorizer.Authorizer;
 import org.apache.fluss.server.authorizer.AuthorizerLoader;
 import org.apache.fluss.server.coordinator.rebalance.RebalanceManager;
+import org.apache.fluss.server.coordinator.remote.RemoteDirDynamicLoader;
 import org.apache.fluss.server.metadata.CoordinatorMetadataCache;
 import org.apache.fluss.server.metadata.ServerMetadataCache;
 import org.apache.fluss.server.metrics.ServerMetricUtils;
@@ -62,6 +62,8 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+
+import static org.apache.fluss.config.FlussConfigUtils.validateCoordinatorConfigs;
 
 /**
  * Coordinator server implementation. The coordinator server is responsible to:
@@ -141,9 +143,12 @@ public class CoordinatorServer extends ServerBase {
     @GuardedBy("lock")
     private LakeCatalogDynamicLoader lakeCatalogDynamicLoader;
 
+    @GuardedBy("lock")
+    private RemoteDirDynamicLoader remoteDirDynamicLoader;
+
     public CoordinatorServer(Configuration conf) {
         super(conf);
-        validateConfigs(conf);
+        validateCoordinatorConfigs(conf);
         this.terminationFuture = new CompletableFuture<>();
     }
 
@@ -173,10 +178,13 @@ public class CoordinatorServer extends ServerBase {
             this.zkClient = ZooKeeperUtils.startZookeeperClient(conf, this);
 
             this.lakeCatalogDynamicLoader = new LakeCatalogDynamicLoader(conf, pluginManager, true);
+            this.remoteDirDynamicLoader = new RemoteDirDynamicLoader(conf);
+
             this.dynamicConfigManager = new DynamicConfigManager(zkClient, conf, true);
 
             // Register server reconfigurable components
             dynamicConfigManager.register(lakeCatalogDynamicLoader);
+            dynamicConfigManager.register(remoteDirDynamicLoader);
 
             dynamicConfigManager.startup();
 
@@ -207,6 +215,7 @@ public class CoordinatorServer extends ServerBase {
                             authorizer,
                             lakeCatalogDynamicLoader,
                             lakeTableTieringManager,
+                            remoteDirDynamicLoader,
                             dynamicConfigManager,
                             ioExecutor);
 
@@ -231,7 +240,8 @@ public class CoordinatorServer extends ServerBase {
             this.coordinatorChannelManager = new CoordinatorChannelManager(rpcClient);
 
             this.autoPartitionManager =
-                    new AutoPartitionManager(metadataCache, metadataManager, conf);
+                    new AutoPartitionManager(
+                            metadataCache, metadataManager, remoteDirDynamicLoader, conf);
             autoPartitionManager.start();
 
             // start coordinator event processor after we register coordinator leader to zk
@@ -444,6 +454,10 @@ public class CoordinatorServer extends ServerBase {
                 if (lakeCatalogDynamicLoader != null) {
                     lakeCatalogDynamicLoader.close();
                 }
+
+                if (remoteDirDynamicLoader != null) {
+                    remoteDirDynamicLoader.close();
+                }
             } catch (Throwable t) {
                 exception = ExceptionUtils.firstOrSuppressed(t, exception);
             }
@@ -512,32 +526,5 @@ public class CoordinatorServer extends ServerBase {
     @VisibleForTesting
     public RebalanceManager getRebalanceManager() {
         return coordinatorEventProcessor.getRebalanceManager();
-    }
-
-    private static void validateConfigs(Configuration conf) {
-        if (conf.get(ConfigOptions.DEFAULT_REPLICATION_FACTOR) < 1) {
-            throw new IllegalConfigurationException(
-                    String.format(
-                            "Invalid configuration for %s, it must be greater than or equal 1.",
-                            ConfigOptions.DEFAULT_REPLICATION_FACTOR.key()));
-        }
-        if (conf.get(ConfigOptions.KV_MAX_RETAINED_SNAPSHOTS) < 1) {
-            throw new IllegalConfigurationException(
-                    String.format(
-                            "Invalid configuration for %s, it must be greater than or equal 1.",
-                            ConfigOptions.KV_MAX_RETAINED_SNAPSHOTS.key()));
-        }
-
-        if (conf.get(ConfigOptions.SERVER_IO_POOL_SIZE) < 1) {
-            throw new IllegalConfigurationException(
-                    String.format(
-                            "Invalid configuration for %s, it must be greater than or equal 1.",
-                            ConfigOptions.SERVER_IO_POOL_SIZE.key()));
-        }
-
-        if (conf.get(ConfigOptions.REMOTE_DATA_DIR) == null) {
-            throw new IllegalConfigurationException(
-                    String.format("Configuration %s must be set.", ConfigOptions.REMOTE_DATA_DIR));
-        }
     }
 }
