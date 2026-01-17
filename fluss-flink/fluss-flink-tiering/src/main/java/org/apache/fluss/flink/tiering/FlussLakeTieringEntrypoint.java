@@ -17,84 +17,10 @@
 
 package org.apache.fluss.flink.tiering;
 
-import org.apache.fluss.config.ConfigOptions;
-import org.apache.fluss.config.Configuration;
-import org.apache.fluss.flink.adapter.MultipleParameterToolAdapter;
-
-import org.apache.flink.configuration.JobManagerOptions;
-import org.apache.flink.core.execution.JobClient;
-import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
-
-import java.util.Map;
-
-import static org.apache.flink.runtime.executiongraph.failover.FailoverStrategyFactoryLoader.FULL_RESTART_STRATEGY_NAME;
-import static org.apache.fluss.flink.tiering.source.TieringSourceOptions.DATA_LAKE_CONFIG_PREFIX;
-import static org.apache.fluss.utils.PropertiesUtils.extractAndRemovePrefix;
-import static org.apache.fluss.utils.PropertiesUtils.extractPrefix;
-
 /** The entrypoint for Flink to tier fluss data to lake format like paimon. */
 public class FlussLakeTieringEntrypoint {
 
-    private static final String FLUSS_CONF_PREFIX = "fluss.";
-    private static final String LAKE_TIERING_CONFIG_PREFIX = "lake.tiering.";
-
     public static void main(String[] args) throws Exception {
-
-        // parse params
-        final MultipleParameterToolAdapter params = MultipleParameterToolAdapter.fromArgs(args);
-        Map<String, String> paramsMap = params.toMap();
-
-        // extract fluss config
-        Map<String, String> flussConfigMap = extractAndRemovePrefix(paramsMap, FLUSS_CONF_PREFIX);
-        // we need to get bootstrap.servers
-        String bootstrapServers = flussConfigMap.get(ConfigOptions.BOOTSTRAP_SERVERS.key());
-        if (bootstrapServers == null) {
-            throw new IllegalArgumentException(
-                    String.format(
-                            "The bootstrap server to fluss is not configured, please configure %s",
-                            FLUSS_CONF_PREFIX + ConfigOptions.BOOTSTRAP_SERVERS.key()));
-        }
-        flussConfigMap.put(ConfigOptions.BOOTSTRAP_SERVERS.key(), bootstrapServers);
-
-        String dataLake = paramsMap.get(ConfigOptions.DATALAKE_FORMAT.key());
-        if (dataLake == null) {
-            throw new IllegalArgumentException(
-                    ConfigOptions.DATALAKE_FORMAT.key() + " is not configured");
-        }
-
-        // extract lake config
-        Map<String, String> lakeConfigMap =
-                extractAndRemovePrefix(
-                        paramsMap, String.format("%s%s.", DATA_LAKE_CONFIG_PREFIX, dataLake));
-
-        // extract tiering service config
-        Map<String, String> lakeTieringConfigMap =
-                extractPrefix(paramsMap, LAKE_TIERING_CONFIG_PREFIX);
-
-        // now, we must use full restart strategy if any task is failed,
-        // since committer is stateless, if tiering committer is failover, committer
-        // will lost the collected committable, and will never collect all committable to do commit
-        // todo: support region failover
-        org.apache.flink.configuration.Configuration flinkConfig =
-                new org.apache.flink.configuration.Configuration();
-        flinkConfig.set(JobManagerOptions.EXECUTION_FAILOVER_STRATEGY, FULL_RESTART_STRATEGY_NAME);
-
-        // build tiering source
-        final StreamExecutionEnvironment execEnv =
-                StreamExecutionEnvironment.getExecutionEnvironment(flinkConfig);
-
-        // build lake tiering job
-        JobClient jobClient =
-                LakeTieringJobBuilder.newBuilder(
-                                execEnv,
-                                Configuration.fromMap(flussConfigMap),
-                                Configuration.fromMap(lakeConfigMap),
-                                Configuration.fromMap(lakeTieringConfigMap),
-                                dataLake)
-                        .build();
-
-        System.out.printf(
-                "Starting data tiering service from Fluss to %s, jobId is %s.....%n",
-                dataLake, jobClient.getJobID());
+        new FlussLakeTiering(args).run();
     }
 }
