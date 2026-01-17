@@ -38,9 +38,12 @@ import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.api.connector.sink2.SinkWriter;
 import org.apache.flink.metrics.groups.SinkWriterMetricGroup;
 import org.apache.flink.runtime.metrics.groups.InternalSinkWriterMetricGroup;
+import org.apache.flink.streaming.api.connector.sink2.SupportsPreWriteTopology;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.datastream.DataStreamSink;
 import org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator;
+import org.apache.flink.table.connector.sink.DataStreamSinkProvider;
+import org.apache.flink.table.connector.sink.SinkV2Provider;
 import org.apache.flink.table.types.logical.RowType;
 
 import javax.annotation.Nullable;
@@ -56,7 +59,7 @@ class FlinkSink<InputT> extends SinkAdapter<InputT> {
 
     private static final long serialVersionUID = 1L;
 
-    private final SinkWriterBuilder<? extends FlinkSinkWriter, InputT> builder;
+    protected final SinkWriterBuilder<? extends FlinkSinkWriter, InputT> builder;
     private final TablePath tablePath;
 
     FlinkSink(SinkWriterBuilder<? extends FlinkSinkWriter, InputT> builder, TablePath tablePath) {
@@ -72,6 +75,17 @@ class FlinkSink<InputT> extends SinkAdapter<InputT> {
         return flinkSinkWriter;
     }
 
+    /**
+     * {@link FlinkSink} serves as the SQL connector. Since we uses {@link DataStreamSinkProvider}
+     * (rather than {@link SinkV2Provider}), it does not automatically recognize or invoke the
+     * {@link SupportsPreWriteTopology} interface. Therefore, the pre-write topology must be added
+     * manually here.
+     *
+     * <p>In contrast, {@link FlussSink} is used directly as a DataStream connector, Flink’s runtime
+     * explicitly checks for the {@link SupportsPreWriteTopology} interface and automatically
+     * incorporates the pre-write topology if present. To support this path, the {@link
+     * SupportsPreWriteTopology} implementation resides in {@link FlussSink}.
+     */
     public DataStreamSink<InputT> apply(DataStream<InputT> input) {
         return builder.addPreWriteTopology(input)
                 .sinkTo(this)
