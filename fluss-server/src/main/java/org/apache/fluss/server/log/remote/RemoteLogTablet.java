@@ -147,8 +147,20 @@ public class RemoteLogTablet {
         return inReadLock(lock, () -> currentManifest.getRemoteLogSegmentList());
     }
 
-    /** Returns the expired segments based on the given time. */
-    public List<RemoteLogSegment> expiredRemoteLogSegments(long currentTimeMs) {
+    /**
+     * Returns the expired segments based on the given time and lake log end offset.
+     *
+     * <p>Only segments that have been tiered to lake (i.e., remoteLogEndOffset <= lakeLogEndOffset)
+     * can be safely deleted. This ensures that we don't delete segments that haven't been tiered to
+     * lake yet.
+     *
+     * @param currentTimeMs the current time in milliseconds
+     * @param lakeLogEndOffset the log end offset that has been synced to lake, null if data lake is
+     *     disabled
+     * @return list of expired segments that can be safely deleted
+     */
+    public List<RemoteLogSegment> expiredRemoteLogSegments(
+            long currentTimeMs, Long lakeLogEndOffset) {
         if (!logExpireEnable()) {
             return Collections.emptyList();
         }
@@ -161,7 +173,16 @@ public class RemoteLogTablet {
                         long ts = entry.getKey();
                         if (currentTimeMs - ts > ttlMs) {
                             for (UUID uuid : entry.getValue()) {
-                                expiredSegments.add(idToRemoteLogSegment.get(uuid));
+                                RemoteLogSegment segment = idToRemoteLogSegment.get(uuid);
+                                if (lakeLogEndOffset != null) {
+                                    // if datalake is enabled, only include segments that have been
+                                    // tiered to lake.
+                                    if (segment.remoteLogEndOffset() <= lakeLogEndOffset) {
+                                        expiredSegments.add(segment);
+                                    }
+                                } else {
+                                    expiredSegments.add(segment);
+                                }
                             }
                         } else {
                             // no further expired segments since the segments

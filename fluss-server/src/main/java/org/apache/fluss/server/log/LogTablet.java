@@ -120,6 +120,8 @@ public final class LogTablet {
     // tracking the log size in remote storage
     private volatile long remoteLogSize = 0;
 
+    // tracking if the data lake enabled
+    private volatile boolean isDataLakeEnabled = false;
     // tracking the log start/end offset in lakehouse storage
     private volatile long lakeTableSnapshotId = -1;
     // note: currently, for primary key table, the log start offset nerve be updated
@@ -237,6 +239,10 @@ public final class LogTablet {
 
     public LogOffsetMetadata getLocalEndOffsetMetadata() {
         return localLog.getLocalLogEndOffsetMetadata();
+    }
+
+    public boolean isDataLakeEnabled() {
+        return isDataLakeEnabled;
     }
 
     public long getLakeTableSnapshotId() {
@@ -516,9 +522,15 @@ public final class LogTablet {
         }
     }
 
+    public void updateIsDataLakeEnabled(boolean isDataLakeEnabled) {
+        this.isDataLakeEnabled = isDataLakeEnabled;
+    }
+
     public void updateLakeTableSnapshotId(long snapshotId) {
         if (snapshotId > this.lakeTableSnapshotId) {
             this.lakeTableSnapshotId = snapshotId;
+            // it means the data lake is enabled if we have got the snapshot id
+            this.isDataLakeEnabled = true;
         }
     }
 

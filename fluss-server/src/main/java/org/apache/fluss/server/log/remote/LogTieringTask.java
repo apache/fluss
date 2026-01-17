@@ -128,8 +128,11 @@ public class LogTieringTask implements Runnable {
             // clean up.
             List<EnrichedLogSegment> candidateToCopySegments =
                     candidateToCopyLogSegments(logTablet);
+            // Only delete segments that have been tiered to lake to ensure data safety
             List<RemoteLogSegment> expiredRemoteLogSegments =
-                    remoteLog.expiredRemoteLogSegments(clock.milliseconds());
+                    remoteLog.expiredRemoteLogSegments(
+                            clock.milliseconds(),
+                            logTablet.isDataLakeEnabled() ? logTablet.getLakeLogEndOffset() : null);
 
             // 1. For these candidateToCopySegments, we will first copy segment files to
             // remote before commit the remote log manifest.
