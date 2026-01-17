@@ -47,6 +47,7 @@ public class LanceCommittableSerializer implements SimpleVersionedSerializer<Lan
     }
 
     @Override
+    @SuppressWarnings("unchecked")
     public LanceCommittable deserialize(int version, byte[] serialized) throws IOException {
         if (version != CURRENT_VERSION) {
             throw new UnsupportedOperationException(
@@ -58,7 +59,6 @@ public class LanceCommittableSerializer implements SimpleVersionedSerializer<Lan
         }
         try (ByteArrayInputStream bais = new ByteArrayInputStream(serialized);
                 ObjectInputStream ois = new ObjectInputStream(bais)) {
-            //noinspection unchecked
             return new LanceCommittable((List<FragmentMetadata>) ois.readObject());
         } catch (ClassNotFoundException e) {
             throw new IOException("Couldn't deserialize LanceCommittable", e);

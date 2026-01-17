@@ -19,26 +19,39 @@ package org.apache.fluss.lake.lance.tiering;
 
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.lake.lance.LanceConfig;
+import org.apache.fluss.lake.lance.utils.ArrowDataConverter;
 import org.apache.fluss.lake.lance.utils.LanceDatasetAdapter;
 import org.apache.fluss.lake.writer.LakeWriter;
 import org.apache.fluss.lake.writer.WriterInitContext;
 import org.apache.fluss.record.LogRecord;
+import org.apache.fluss.types.RowType;
 
+import com.lancedb.lance.Fragment;
 import com.lancedb.lance.FragmentMetadata;
 import com.lancedb.lance.WriteParams;
+import org.apache.arrow.memory.BufferAllocator;
+import org.apache.arrow.memory.RootAllocator;
+import org.apache.arrow.vector.VectorSchemaRoot;
 import org.apache.arrow.vector.types.pojo.Schema;
 
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
-import java.util.concurrent.Callable;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.FutureTask;
 
-/** Implementation of {@link LakeWriter} for Lance. */
+/** Implementation of {@link LakeWriter} for Lance using batch processing. */
 public class LanceLakeWriter implements LakeWriter<LanceWriteResult> {
-    private final LanceArrowWriter arrowWriter;
-    private final FutureTask<List<FragmentMetadata>> fragmentCreationTask;
+    private final BufferAllocator nonShadedAllocator;
+    private final org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator
+            shadedAllocator;
+    private final Schema nonShadedSchema;
+    private final RowType rowType;
+    private final int batchSize;
+    private final String datasetUri;
+    private final WriteParams writeParams;
+
+    private final ShadedArrowBatchWriter arrowWriter;
+    private final List<FragmentMetadata> allFragments;
 
     public LanceLakeWriter(Configuration options, WriterInitContext writerInitContext)
             throws IOException {
@@ -48,47 +61,79 @@ public class LanceLakeWriter implements LakeWriter<LanceWriteResult> {
                         writerInitContext.tableInfo().getCustomProperties().toMap(),
                         writerInitContext.tablePath().getDatabaseName(),
                         writerInitContext.tablePath().getTableName());
-        int batchSize = LanceConfig.getBatchSize(config);
+
+        this.batchSize = LanceConfig.getBatchSize(config);
+        this.datasetUri = config.getDatasetUri();
+        this.writeParams = LanceConfig.genWriteParamsFromConfig(config);
+        this.rowType = writerInitContext.tableInfo().getRowType();
+        this.nonShadedAllocator = new RootAllocator();
+        this.shadedAllocator =
+                new org.apache.fluss.shaded.arrow.org.apache.arrow.memory.RootAllocator();
+        this.arrowWriter = new ShadedArrowBatchWriter(shadedAllocator, rowType);
+        this.allFragments = new ArrayList<>();
+
         Optional<Schema> schema = LanceDatasetAdapter.getSchema(config);
         if (!schema.isPresent()) {
-            throw new IOException("Fail to get dataset " + config.getDatasetUri() + " in Lance.");
+            throw new IOException("Fail to get dataset " + datasetUri + " in Lance.");
         }
-
-        this.arrowWriter =
-                LanceDatasetAdapter.getArrowWriter(
-                        schema.get(), batchSize, writerInitContext.tableInfo().getRowType());
-
-        WriteParams params = LanceConfig.genWriteParamsFromConfig(config);
-        Callable<List<FragmentMetadata>> fragmentCreator =
-                () ->
-                        LanceDatasetAdapter.createFragment(
-                                config.getDatasetUri(), arrowWriter, params);
-        fragmentCreationTask = new FutureTask<>(fragmentCreator);
-        Thread fragmentCreationThread = new Thread(fragmentCreationTask);
-        fragmentCreationThread.start();
+        this.nonShadedSchema = schema.get();
     }
 
     @Override
     public void write(LogRecord record) throws IOException {
-        arrowWriter.write(record);
+        arrowWriter.writeRow(record.getRow());
+
+        if (arrowWriter.getRecordsCount() >= batchSize) {
+            List<FragmentMetadata> fragments = flush();
+            allFragments.addAll(fragments);
+        }
     }
 
-    @Override
-    public LanceWriteResult complete() throws IOException {
-        arrowWriter.setFinished();
+    private List<FragmentMetadata> flush() throws IOException {
+        if (arrowWriter.getRecordsCount() == 0) {
+            return new ArrayList<>();
+        }
+
+        VectorSchemaRoot nonShadedRoot = null;
+
         try {
-            List<FragmentMetadata> fragmentMetadata = fragmentCreationTask.get();
-            return new LanceWriteResult(fragmentMetadata);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new IOException("Interrupted while waiting for reader thread to finish", e);
-        } catch (ExecutionException e) {
-            throw new IOException("Exception in reader thread", e);
+            arrowWriter.finish();
+
+            nonShadedRoot =
+                    ArrowDataConverter.convertToNonShaded(
+                            arrowWriter.getShadedRoot(), nonShadedAllocator, nonShadedSchema);
+
+            List<FragmentMetadata> fragments =
+                    Fragment.create(datasetUri, nonShadedAllocator, nonShadedRoot, writeParams);
+
+            arrowWriter.reset();
+            return fragments;
+        } catch (Exception e) {
+            throw new IOException("Failed to write Lance fragment", e);
+        } finally {
+            if (nonShadedRoot != null) {
+                nonShadedRoot.close();
+            }
         }
     }
 
     @Override
+    public LanceWriteResult complete() throws IOException {
+        List<FragmentMetadata> fragments = flush();
+        allFragments.addAll(fragments);
+        return new LanceWriteResult(allFragments);
+    }
+
+    @Override
     public void close() throws IOException {
-        arrowWriter.close();
+        if (arrowWriter != null) {
+            arrowWriter.close();
+        }
+        if (shadedAllocator != null) {
+            shadedAllocator.close();
+        }
+        if (nonShadedAllocator != null) {
+            nonShadedAllocator.close();
+        }
     }
 }
