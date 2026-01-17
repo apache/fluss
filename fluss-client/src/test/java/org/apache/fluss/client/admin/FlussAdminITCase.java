@@ -1567,4 +1567,102 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                         "Server tag PERMANENT_OFFLINE not exists for server 2, the current "
                                 + "server tag of this server is TEMPORARY_OFFLINE.");
     }
+
+    @Test
+    public void testCreateTableWithInvalidAggFunctionDataType() throws Exception {
+        TablePath tablePath =
+                TablePath.of(
+                        DEFAULT_TABLE_PATH.getDatabaseName(),
+                        "test_invalid_data_type_for_aggfunction");
+        Map<String, String> propertiesAggregate = new HashMap<>();
+        propertiesAggregate.put(ConfigOptions.TABLE_MERGE_ENGINE.key(), "aggregation");
+
+        Schema schema1 =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("and_value", DataTypes.STRING(), AggFunctions.BOOL_AND())
+                        .primaryKey("id")
+                        .build();
+        TableDescriptor t1 =
+                TableDescriptor.builder()
+                        .schema(schema1)
+                        .comment("aggregate merge engine table")
+                        .properties(propertiesAggregate)
+                        .build();
+        assertThatThrownBy(() -> admin.createTable(tablePath, t1, false).get())
+                .cause()
+                .isInstanceOf(InvalidConfigException.class)
+                .hasMessageContaining(
+                        "Data type for bool_and column must be 'BooleanType' but was 'STRING'");
+
+        Schema schema2 =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("count", DataTypes.STRING(), AggFunctions.SUM())
+                        .primaryKey("id")
+                        .build();
+        TableDescriptor t2 =
+                TableDescriptor.builder()
+                        .schema(schema2)
+                        .comment("aggregate merge engine table")
+                        .properties(propertiesAggregate)
+                        .build();
+        assertThatThrownBy(() -> admin.createTable(tablePath, t2, false).get())
+                .cause()
+                .isInstanceOf(InvalidConfigException.class)
+                .hasMessageContaining("Data type for sum column must be part of [NUMERIC]");
+
+        Schema schema3 =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("max_value", DataTypes.BOOLEAN(), AggFunctions.MAX())
+                        .primaryKey("id")
+                        .build();
+        TableDescriptor t3 =
+                TableDescriptor.builder()
+                        .schema(schema3)
+                        .comment("aggregate merge engine table")
+                        .properties(propertiesAggregate)
+                        .build();
+        assertThatThrownBy(() -> admin.createTable(tablePath, t3, false).get())
+                .cause()
+                .isInstanceOf(InvalidConfigException.class)
+                .hasMessageContaining(
+                        "Data type for max column must be part of [CHARACTER_STRING, NUMERIC, DATETIME]");
+
+        Schema schema4 =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("list_agg_value", DataTypes.BOOLEAN(), AggFunctions.LISTAGG())
+                        .primaryKey("id")
+                        .build();
+        TableDescriptor t4 =
+                TableDescriptor.builder()
+                        .schema(schema4)
+                        .comment("aggregate merge engine table")
+                        .properties(propertiesAggregate)
+                        .build();
+        assertThatThrownBy(() -> admin.createTable(tablePath, t4, false).get())
+                .cause()
+                .isInstanceOf(InvalidConfigException.class)
+                .hasMessageContaining(
+                        "Data type for listagg column must be part of [CHARACTER_STRING]");
+
+        Schema schema5 =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column(
+                                "first",
+                                DataTypes.ARRAY(DataTypes.BIGINT()),
+                                AggFunctions.FIRST_VALUE())
+                        .primaryKey("id")
+                        .build();
+        TableDescriptor t5 =
+                TableDescriptor.builder()
+                        .schema(schema5)
+                        .comment("aggregate merge engine table")
+                        .properties(propertiesAggregate)
+                        .build();
+        admin.createTable(tablePath, t5, false).get();
+    }
 }
