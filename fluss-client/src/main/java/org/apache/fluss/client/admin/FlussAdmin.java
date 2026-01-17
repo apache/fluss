@@ -130,7 +130,7 @@ public class FlussAdmin implements Admin {
                         metadataUpdater::getCoordinatorServer, client, AdminGateway.class);
         this.readOnlyGateway =
                 GatewayClientProxy.createGatewayProxy(
-                        metadataUpdater::getRandomTabletServer, client, AdminGateway.class);
+                        metadataUpdater::getRandomTabletServer, client, AdminReadOnlyGateway.class);
         this.metadataUpdater = metadataUpdater;
     }
 
