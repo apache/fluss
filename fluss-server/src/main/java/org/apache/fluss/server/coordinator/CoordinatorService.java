@@ -378,8 +378,6 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                             + "table properties or table schema.");
         }
 
-        LakeCatalogDynamicLoader.LakeCatalogContainer lakeCatalogContainer =
-                lakeCatalogDynamicLoader.getLakeCatalogContainer();
         LakeCatalog.Context lakeCatalogContext =
                 new DefaultLakeCatalogContext(false, currentSession().getPrincipal());
 
@@ -388,7 +386,6 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                     tablePath,
                     alterSchemaChanges,
                     request.isIgnoreIfNotExists(),
-                    lakeCatalogContainer.getLakeCatalog(),
                     lakeCatalogContext);
         }
 
@@ -398,8 +395,6 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                     alterTableConfigChanges,
                     tablePropertyChanges,
                     request.isIgnoreIfNotExists(),
-                    lakeCatalogContainer.getLakeCatalog(),
-                    lakeTableTieringManager,
                     lakeCatalogContext);
         }
 

@@ -560,6 +560,32 @@ public final class Replica {
         logTablet.updateLeaderEndOffsetSnapshot();
     }
 
+    public void updateIsDataLakeEnabled(boolean isDataLakeEnabled) {
+        boolean old = logTablet.isDataLakeEnabled();
+        if (old == isDataLakeEnabled) {
+            return;
+        }
+
+        logTablet.updateIsDataLakeEnabled(isDataLakeEnabled);
+
+        if (isLeader()) {
+            if (isDataLakeEnabled) {
+                registerLakeTieringMetrics();
+            } else {
+                if (lakeTieringMetricGroup != null) {
+                    lakeTieringMetricGroup.close();
+                    lakeTieringMetricGroup = null;
+                }
+            }
+        }
+
+        LOG.info(
+                "Replica for {} isDataLakeEnabled changed from {} to {}",
+                tableBucket,
+                old,
+                isDataLakeEnabled);
+    }
+
     private void createKv() {
         try {
             // create a closeable registry for the closable related to kv

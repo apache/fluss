@@ -752,6 +752,28 @@ final class ReplicaTest extends ReplicaTestBase {
         verifyGetKeyValues(kvTablet, expectedKeyValues);
     }
 
+    @Test
+    void testUpdateIsDataLakeEnabled() throws Exception {
+        Replica logReplica =
+                makeLogReplica(DATA1_PHYSICAL_TABLE_PATH, new TableBucket(DATA1_TABLE_ID, 1));
+        makeLogReplicaAsLeader(logReplica);
+
+        // initial state should be false
+        assertThat(logReplica.getLogTablet().isDataLakeEnabled()).isFalse();
+
+        // update to true
+        logReplica.updateIsDataLakeEnabled(true);
+        assertThat(logReplica.getLogTablet().isDataLakeEnabled()).isTrue();
+
+        // update with same value should not change anything (no-op)
+        logReplica.updateIsDataLakeEnabled(true);
+        assertThat(logReplica.getLogTablet().isDataLakeEnabled()).isTrue();
+
+        // update to false
+        logReplica.updateIsDataLakeEnabled(false);
+        assertThat(logReplica.getLogTablet().isDataLakeEnabled()).isFalse();
+    }
+
     private void makeLogReplicaAsLeader(Replica replica) throws Exception {
         makeLeaderReplica(
                 replica,
