@@ -770,16 +770,6 @@ public class FlinkSourceEnumerator
                             TableBucket tableBucket = split.getTableBucket();
                             assignedTableBuckets.add(tableBucket);
 
-                            if (pendingHybridLakeFlussSplits != null) {
-                                // removed from the pendingHybridLakeFlussSplits
-                                // since this split already be assigned
-                                pendingHybridLakeFlussSplits.removeIf(
-                                        hybridLakeFlussSplit ->
-                                                hybridLakeFlussSplit
-                                                        .splitId()
-                                                        .equals(split.splitId()));
-                            }
-
                             if (isPartitioned) {
                                 long partitionId =
                                         checkNotNull(
@@ -792,6 +782,17 @@ public class FlinkSourceEnumerator
                                 assignedPartitions.put(partitionId, partitionName);
                             }
                         });
+
+                if (pendingHybridLakeFlussSplits != null) {
+                    Set<String> splitIdsToRemove =
+                            pendingAssignmentForReader.stream()
+                                    .map(SourceSplitBase::splitId)
+                                    .collect(Collectors.toSet());
+                    // removed from the pendingHybridLakeFlussSplits
+                    // since this split already be assigned
+                    pendingHybridLakeFlussSplits.removeIf(
+                            split -> splitIdsToRemove.contains(split.splitId()));
+                }
             }
         }
 
