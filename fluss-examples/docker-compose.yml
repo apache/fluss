@@ -1,0 +1,275 @@
+#
+# Licensed to the Apache Software Foundation (ASF) under one or more
+# contributor license agreements.  See the NOTICE file distributed with
+# this work for additional information regarding copyright ownership.
+# The ASF licenses this file to You under the Apache License, Version 2.0
+# (the "License"); you may not use this file except in compliance with
+# the License.  You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+
+# Zoopeeker service
+
+services:
+  zookeeper:
+    image: zookeeper:3.9.2
+    restart: always
+    hostname: zookeeper
+    container_name: zookeeper
+    networks:
+      - fluss-net
+
+  # Fluss services
+
+  coordinator-server:
+    image: fluss/fluss:0.7.0
+    hostname: coordinator-server
+    container_name: coordinator-server
+    command: coordinatorServer
+    depends_on:
+      - zookeeper
+      - minio-create-bucket
+    environment:
+      - |
+        FLUSS_PROPERTIES=
+        zookeeper.address: zookeeper:2181
+        bind.listeners: INTERNAL://coordinator-server:0, CLIENT://coordinator-server:9123
+        advertised.listeners: CLIENT://localhost:9123
+        internal.listener.name: INTERNAL
+        remote.data.dir: /tmp/fluss/
+    #        remote.data.dir: s3://warehouse/remote-data
+    #        s3.access-key: admin
+    #        s3.secret-key: minio123
+    #        s3.region: br-south-1
+    #        s3.endpoint: http://minio:9000
+    #        # Paimon configuration
+    #        datalake.format: paimon
+    #        # the catalog config about Paimon, assuming using Filesystem catalog
+    #        datalake.paimon.metastore: filesystem
+    #        datalake.paimon.warehouse: s3://warehouse/
+    ports:
+      - "9123:9123"
+    networks:
+      - fluss-net
+
+  tablet-server-0:
+    image: fluss/fluss:0.7.0
+    hostname: tablet-server-0
+    container_name: tablet-server-0
+    command: tabletServer
+    depends_on:
+      - coordinator-server
+    environment:
+      - |
+        FLUSS_PROPERTIES=
+        zookeeper.address: zookeeper:2181
+        bind.listeners: INTERNAL://tablet-server-0:0, CLIENT://tablet-server-0:9123
+        advertised.listeners: CLIENT://localhost:9124
+        internal.listener.name: INTERNAL
+        tablet-server.id: 0
+        kv.snapshot.interval: 10s
+        data.dir: /tmp/fluss/data/tablet-server-0
+        #        remote.data.dir: /tmp/fluss/
+        remote.data.dir: s3://warehouse/
+        s3.access-key: admin
+        s3.secret-key: minio123
+        s3.region: br-south-1
+        s3.endpoint: http://minio:9000
+        # Paimon configuration
+        datalake.format: paimon
+        # the catalog config about Paimon, assuming using Filesystem catalog
+        datalake.paimon.metastore: filesystem
+        datalake.paimon.warehouse: s3://warehouse/
+    ports:
+      - "9124:9123"
+    volumes:
+      - shared-tmpfs:/tmp/fluss
+    networks:
+      - fluss-net
+
+  tablet-server-1:
+    image: fluss/fluss:0.7.0
+    hostname: tablet-server-1
+    container_name: tablet-server-1
+    command: tabletServer
+    depends_on:
+      - coordinator-server
+    environment:
+      - |
+        FLUSS_PROPERTIES=
+        zookeeper.address: zookeeper:2181
+        bind.listeners: INTERNAL://tablet-server-1:0, CLIENT://tablet-server-1:9123
+        advertised.listeners: CLIENT://localhost:9125
+        internal.listener.name: INTERNAL
+        tablet-server.id: 1
+        kv.snapshot.interval: 10s
+        data.dir: /tmp/fluss/data/tablet-server-1
+        #        remote.data.dir: /tmp/fluss/
+        remote.data.dir: s3://warehouse/
+        s3.access-key: admin
+        s3.secret-key: minio123
+        s3.region: br-south-1
+        s3.endpoint: http://minio:9000
+        # Paimon configuration
+        datalake.format: paimon
+        # the catalog config about Paimon, assuming using Filesystem catalog
+        datalake.paimon.metastore: filesystem
+        datalake.paimon.warehouse: s3://warehouse/
+    ports:
+      - "9125:9123"
+    volumes:
+      - shared-tmpfs:/tmp/fluss
+    networks:
+      - fluss-net
+
+  tablet-server-2:
+    image: fluss/fluss:0.7.0
+    hostname: tablet-server-2
+    container_name: tablet-server-2
+    command: tabletServer
+    depends_on:
+      - coordinator-server
+    environment:
+      - |
+        FLUSS_PROPERTIES=
+        zookeeper.address: zookeeper:2181
+        bind.listeners: INTERNAL://tablet-server-2:0, CLIENT://tablet-server-2:9123
+        advertised.listeners: CLIENT://localhost:9126
+        internal.listener.name: INTERNAL
+        tablet-server.id: 2
+        kv.snapshot.interval: 10s
+        data.dir: /tmp/fluss/data/tablet-server-2
+        #        remote.data.dir: /tmp/fluss/
+        remote.data.dir: s3://warehouse/
+        s3.access-key: admin
+        s3.secret-key: minio123
+        s3.region: br-south-1
+        s3.endpoint: http://minio:9000
+        # Paimon configuration
+        datalake.format: paimon
+        # the catalog config about Paimon, assuming using Filesystem catalog
+        datalake.paimon.metastore: filesystem
+        datalake.paimon.warehouse: s3://warehouse/
+    ports:
+      - "9126:9123"
+    volumes:
+      - shared-tmpfs:/tmp/fluss
+    networks:
+      - fluss-net
+
+  #  fluss-tiering-service:
+  #    build: .
+  #    hostname: fluss-tiering-service
+  #    container_name: fluss-tiering-service
+  #    command: [ "flink","run","/op/flink/opt/fluss-flink-tiering-0.7.0.jar" ]
+  #    depends_on:
+  #      - coordinator-server
+  #      - minio
+  #    environment:
+  #      - |
+  #        FLINK_PROPERTIES=
+  #        fluss.bootstrap.servers=tablet-server-1:9123,tablet-server-2:9123,tablet-server-3:9123
+  #        s3.access-key: admin
+  #        s3.secret-key: minio123
+  #        s3.region: br-south-1
+  #        s3.endpoint: http://minio:9000
+  #        datalake.format: paimon
+  #        datalake.paimon.metastore: filesystem
+  #        datalake.paimon.warehouse: s3://warehouse/
+  #    ports:
+  #      - "9127:9123"
+  #    networks:
+  #      - fluss-net
+
+  jobmanager:
+    build: .
+    hostname: jobmanager
+    container_name: jobmanager
+    command: [ "jobmanager" ]
+    ports:
+      - "8081:8081"
+    environment:
+      - JOB_MANAGER_RPC_ADDRESS=jobmanager
+    networks:
+      - fluss-net
+    volumes:
+      - shared-tmpfs:/tmp/paimon
+
+  taskmanager:
+    build: .
+    hostname: taskmanager
+    container_name: taskmanager
+    command: [ "taskmanager" ]
+    ports:
+      - "6121:6121"
+      - "6122:6122"
+      - "8082:8082"
+    depends_on:
+      - jobmanager
+    environment:
+      - |
+        FLINK_PROPERTIES=
+        jobmanager.rpc.address: jobmanager
+        taskmanager.numberOfTaskSlots: 10
+        taskmanager.memory.process.size: 2048m
+        taskmanager.memory.framework.off-heap.size: 256m
+    networks:
+      - fluss-net
+    volumes:
+      - shared-tmpfs:/tmp/paimon
+
+  minio:
+    image: minio/minio:latest
+    container_name: minio
+    hostname: minio
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:9000/minio/health/live" ]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+      start_period: 30s
+    command: [ "server", "/tmp/minio", "--console-address", ":9001" ]
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: admin
+      MINIO_ROOT_PASSWORD: minio123
+    networks:
+      - fluss-net
+    volumes:
+      - shared-tmpfs:/tmp/minio
+
+  minio-create-bucket:
+    image: minio/mc:latest
+    container_name: minio-create-bucket
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      /usr/bin/mc config host add flminio http://minio:9000 admin minio123;
+      /usr/bin/mc mb --ignore-existing flminio/warehouse;
+      exit 0;
+      "
+    networks:
+      - fluss-net
+
+volumes:
+  shared-tmpfs:
+    driver: local
+    driver_opts:
+      type: "tmpfs"
+      device: "tmpfs"
+
+networks:
+  fluss-net:
+    name: fluss-net
+    external: true
