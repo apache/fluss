@@ -49,10 +49,17 @@ public enum AggFunctionType {
 
     // Boolean aggregation
     BOOL_AND,
-    BOOL_OR;
+    BOOL_OR,
+
+    // Collection aggregation
+    COLLECT,
+    MERGE_MAP;
 
     /** Parameter name for delimiter used in LISTAGG and STRING_AGG functions. */
     public static final String PARAM_DELIMITER = "delimiter";
+
+    /** Parameter name for distinct flag used in COLLECT function. */
+    public static final String PARAM_DISTINCT = "distinct";
 
     /**
      * Returns the set of supported parameter names for this aggregation function.
@@ -65,6 +72,9 @@ public enum AggFunctionType {
             case STRING_AGG:
                 // LISTAGG and STRING_AGG support optional "delimiter" parameter
                 return Collections.singleton(PARAM_DELIMITER);
+            case COLLECT:
+                // COLLECT supports optional "distinct" parameter
+                return Collections.singleton(PARAM_DISTINCT);
             default:
                 // All other functions do not accept parameters
                 return Collections.emptySet();
@@ -101,6 +111,18 @@ public enum AggFunctionType {
                         throw new IllegalArgumentException(
                                 String.format(
                                         "Parameter '%s' for aggregation function '%s' must be a non-empty string",
+                                        parameterName, this));
+                    }
+                }
+                break;
+            case COLLECT:
+                if (PARAM_DISTINCT.equals(parameterName)) {
+                    if (parameterValue == null
+                            || (!parameterValue.equalsIgnoreCase("true")
+                                    && !parameterValue.equalsIgnoreCase("false"))) {
+                        throw new IllegalArgumentException(
+                                String.format(
+                                        "Parameter '%s' for aggregation function '%s' must be 'true' or 'false'",
                                         parameterName, this));
                     }
                 }

@@ -25,7 +25,14 @@ import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.record.BinaryValue;
 import org.apache.fluss.record.TestingSchemaGetter;
 import org.apache.fluss.row.BinaryRow;
+import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.Decimal;
+import org.apache.fluss.row.GenericArray;
+import org.apache.fluss.row.GenericMap;
+import org.apache.fluss.row.InternalArray;
+import org.apache.fluss.row.InternalArrayUtils;
+import org.apache.fluss.row.InternalMap;
+import org.apache.fluss.row.InternalMapUtils;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
 import org.apache.fluss.server.kv.rowmerger.AggregateRowMerger;
@@ -44,6 +51,9 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.ZoneOffset;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.stream.Stream;
 
 import static org.apache.fluss.testutils.DataTestUtils.compactedRow;
@@ -622,6 +632,140 @@ class FieldAggregatorParameterizedTest {
         BinaryRow row2 = compactedRow(schema.getRowType(), new Object[] {1, false});
         BinaryValue merged = merger.merge(toBinaryValue(row1), toBinaryValue(row2));
         assertThat(merged.row.getBoolean(1)).isFalse();
+    }
+
+    // ===================================================================================
+    // Collection Aggregation Tests
+    // ===================================================================================
+
+    @Test
+    void testCollectAggregationNonDistinct() {
+        Schema schema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column(
+                                "values",
+                                DataTypes.ARRAY(DataTypes.INT()),
+                                AggFunctions.COLLECT(false))
+                        .primaryKey("id")
+                        .build();
+
+        TableConfig tableConfig = new TableConfig(new Configuration());
+        AggregateRowMerger merger = createMerger(schema, tableConfig);
+
+        BinaryRow row1 = compactedRow(schema.getRowType(), new Object[] {1, GenericArray.of(1, 2)});
+        BinaryRow row2 =
+                compactedRow(schema.getRowType(), new Object[] {1, GenericArray.of(2, null, 3)});
+
+        BinaryValue merged = merger.merge(toBinaryValue(row1), toBinaryValue(row2));
+        InternalArray resultArray = merged.row.getArray(1);
+        Object[] actual = InternalArrayUtils.toObjectArray(resultArray, DataTypes.INT());
+        assertThat(actual).containsExactly(1, 2, 2, null, 3);
+    }
+
+    @Test
+    void testCollectAggregationDistinct() {
+        Schema schema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column(
+                                "values",
+                                DataTypes.ARRAY(DataTypes.INT()),
+                                AggFunctions.COLLECT(true))
+                        .primaryKey("id")
+                        .build();
+
+        TableConfig tableConfig = new TableConfig(new Configuration());
+        AggregateRowMerger merger = createMerger(schema, tableConfig);
+
+        BinaryRow row1 =
+                compactedRow(schema.getRowType(), new Object[] {1, GenericArray.of(1, 2, null)});
+        BinaryRow row2 =
+                compactedRow(schema.getRowType(), new Object[] {1, GenericArray.of(2, 3, null)});
+
+        BinaryValue merged = merger.merge(toBinaryValue(row1), toBinaryValue(row2));
+        InternalArray resultArray = merged.row.getArray(1);
+        Object[] actual = InternalArrayUtils.toObjectArray(resultArray, DataTypes.INT());
+        assertThat(actual).containsExactlyInAnyOrder(1, 2, 3, null);
+    }
+
+    @Test
+    void testCollectAggregationDistinctBytes() {
+        Schema schema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column(
+                                "values",
+                                DataTypes.ARRAY(DataTypes.BYTES()),
+                                AggFunctions.COLLECT(true))
+                        .primaryKey("id")
+                        .build();
+
+        TableConfig tableConfig = new TableConfig(new Configuration());
+        AggregateRowMerger merger = createMerger(schema, tableConfig);
+
+        byte[] v1 = new byte[] {1, 2};
+        byte[] v2 = new byte[] {3};
+        byte[] v3 = new byte[] {1, 2};
+        byte[] v4 = new byte[] {4};
+
+        BinaryRow row1 =
+                compactedRow(schema.getRowType(), new Object[] {1, GenericArray.of(v1, v2)});
+        BinaryRow row2 =
+                compactedRow(schema.getRowType(), new Object[] {1, GenericArray.of(v3, null, v4)});
+
+        BinaryValue merged = merger.merge(toBinaryValue(row1), toBinaryValue(row2));
+        InternalArray resultArray = merged.row.getArray(1);
+        Object[] actual = InternalArrayUtils.toObjectArray(resultArray, DataTypes.BYTES());
+
+        // Null values are included in collect, distinct keeps a single null.
+        assertThat(actual).hasSize(4);
+        assertThat(Arrays.toString((byte[]) actual[0])).isEqualTo(Arrays.toString(v1));
+        assertThat(Arrays.toString((byte[]) actual[1])).isEqualTo(Arrays.toString(v2));
+        assertThat(actual[2]).isNull();
+        assertThat(Arrays.toString((byte[]) actual[3])).isEqualTo(Arrays.toString(v4));
+    }
+
+    @Test
+    void testMergeMapAggregation() {
+        Schema schema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column(
+                                "attributes",
+                                DataTypes.MAP(DataTypes.INT(), DataTypes.STRING()),
+                                AggFunctions.MERGE_MAP())
+                        .primaryKey("id")
+                        .build();
+
+        TableConfig tableConfig = new TableConfig(new Configuration());
+        AggregateRowMerger merger = createMerger(schema, tableConfig);
+
+        BinaryRow row1 =
+                compactedRow(
+                        schema.getRowType(),
+                        new Object[] {
+                            1,
+                            GenericMap.of(
+                                    1,
+                                    BinaryString.fromString("a"),
+                                    2,
+                                    BinaryString.fromString("b"))
+                        });
+        BinaryRow row2 =
+                compactedRow(
+                        schema.getRowType(),
+                        new Object[] {1, GenericMap.of(2, BinaryString.fromString("c"), 3, null)});
+
+        BinaryValue merged = merger.merge(toBinaryValue(row1), toBinaryValue(row2));
+        InternalMap resultMap = merged.row.getMap(1);
+        Map<Object, Object> actual =
+                InternalMapUtils.toJavaMap(resultMap, DataTypes.INT(), DataTypes.STRING());
+        Map<Object, Object> expected = new HashMap<>();
+        expected.put(1, "a");
+        expected.put(2, "c");
+        expected.put(3, null);
+        assertThat(actual).isEqualTo(expected);
     }
 
     // ===================================================================================
