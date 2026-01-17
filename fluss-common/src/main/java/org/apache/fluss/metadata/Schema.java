@@ -100,6 +100,23 @@ public final class Schema implements Serializable {
         return columns;
     }
 
+    /**
+     * Gets a column by its name.
+     *
+     * @param columnName the column name
+     * @return the column with the given name
+     * @throws IllegalArgumentException if the column does not exist
+     */
+    public Column getColumn(String columnName) {
+        for (Column column : columns) {
+            if (column.getName().equals(columnName)) {
+                return column;
+            }
+        }
+        throw new IllegalArgumentException(
+                String.format("Column %s does not exist in schema.", columnName));
+    }
+
     public Optional<PrimaryKey> getPrimaryKey() {
         return Optional.ofNullable(primaryKey);
     }
@@ -209,13 +226,16 @@ public final class Schema implements Serializable {
 
     @Override
     public String toString() {
-        final List<Object> components = new ArrayList<>(columns);
-        if (primaryKey != null) {
-            components.add(primaryKey);
-        }
-        return components.stream()
-                .map(Objects::toString)
-                .collect(Collectors.joining(",", "(", ")"));
+        return "Schema{"
+                + "columns="
+                + columns
+                + ", primaryKey="
+                + primaryKey
+                + ", autoIncrementColumnNames="
+                + autoIncrementColumnNames
+                + ", highestFieldId="
+                + highestFieldId
+                + '}';
     }
 
     @Override
@@ -228,12 +248,14 @@ public final class Schema implements Serializable {
         }
         Schema schema = (Schema) o;
         return Objects.equals(columns, schema.columns)
-                && Objects.equals(primaryKey, schema.primaryKey);
+                && Objects.equals(autoIncrementColumnNames, schema.autoIncrementColumnNames)
+                && Objects.equals(primaryKey, schema.primaryKey)
+                && highestFieldId == schema.highestFieldId;
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(columns, primaryKey);
+        return Objects.hash(columns, primaryKey, autoIncrementColumnNames, highestFieldId);
     }
 
     // --------------------------------------------------------------------------------------------

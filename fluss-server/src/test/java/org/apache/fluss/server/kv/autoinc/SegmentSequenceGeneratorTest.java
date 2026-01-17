@@ -18,21 +18,15 @@
 
 package org.apache.fluss.server.kv.autoinc;
 
-import org.apache.fluss.config.ConfigOptions;
-import org.apache.fluss.config.Configuration;
-import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.SequenceOverflowException;
 import org.apache.fluss.metadata.TablePath;
-import org.apache.fluss.server.SequenceIDCounter;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -47,16 +41,10 @@ class SegmentSequenceGeneratorTest {
     private static final long CACHE_SIZE = 100;
 
     private AtomicLong snapshotIdGenerator;
-    private Configuration configuration;
-    private TableConfig tableConfig;
 
     @BeforeEach
     void setUp() {
         snapshotIdGenerator = new AtomicLong(0);
-        Map<String, String> map = new HashMap<>();
-        map.put(ConfigOptions.TABLE_AUTO_INCREMENT_CACHE_SIZE.key(), String.valueOf(CACHE_SIZE));
-        configuration = Configuration.fromMap(map);
-        tableConfig = new TableConfig(configuration);
     }
 
     @Test
@@ -65,8 +53,8 @@ class SegmentSequenceGeneratorTest {
                 new BoundedSegmentSequenceGenerator(
                         TABLE_PATH,
                         COLUMN_NAME,
-                        new TestingSnapshotIDCounter(snapshotIdGenerator),
-                        new TableConfig(configuration),
+                        new TestingSequenceIDCounter(snapshotIdGenerator),
+                        CACHE_SIZE,
                         Long.MAX_VALUE);
         for (long i = 1; i <= CACHE_SIZE; i++) {
             assertThat(generator.nextVal()).isEqualTo(i);
@@ -90,8 +78,8 @@ class SegmentSequenceGeneratorTest {
                                         new BoundedSegmentSequenceGenerator(
                                                 new TablePath("test_db", "table1"),
                                                 COLUMN_NAME,
-                                                new TestingSnapshotIDCounter(snapshotIdGenerator),
-                                                tableConfig,
+                                                new TestingSequenceIDCounter(snapshotIdGenerator),
+                                                CACHE_SIZE,
                                                 Long.MAX_VALUE);
                                 for (int j = 0; j < 130; j++) {
                                     linkedDeque.add(generator.nextVal());
@@ -116,8 +104,8 @@ class SegmentSequenceGeneratorTest {
                 new BoundedSegmentSequenceGenerator(
                         new TablePath("test_db", "table1"),
                         COLUMN_NAME,
-                        new TestingSnapshotIDCounter(snapshotIdGenerator, 2),
-                        tableConfig,
+                        new TestingSequenceIDCounter(snapshotIdGenerator, 2),
+                        CACHE_SIZE,
                         Long.MAX_VALUE);
         for (int j = 1; j <= CACHE_SIZE; j++) {
             assertThat(generator.nextVal()).isEqualTo(j);
@@ -132,51 +120,28 @@ class SegmentSequenceGeneratorTest {
 
     @Test
     void testFetchIdOverFlow() {
+        int initialValue = Integer.MAX_VALUE - 10;
+        snapshotIdGenerator = new AtomicLong(initialValue);
         BoundedSegmentSequenceGenerator generator =
                 new BoundedSegmentSequenceGenerator(
                         new TablePath("test_db", "table1"),
                         COLUMN_NAME,
-                        new TestingSnapshotIDCounter(snapshotIdGenerator),
-                        tableConfig,
-                        CACHE_SIZE + 9);
-        for (int j = 1; j < CACHE_SIZE + 9; j++) {
-            assertThat(generator.nextVal()).isEqualTo(j);
+                        new TestingSequenceIDCounter(snapshotIdGenerator),
+                        CACHE_SIZE,
+                        Integer.MAX_VALUE);
+
+        int lastValue = 0;
+        for (int j = 1; j <= 10; j++) {
+            lastValue = (int) generator.nextVal();
+            assertThat(lastValue).isEqualTo(initialValue + j);
         }
+        assertThat(lastValue).isEqualTo(Integer.MAX_VALUE);
+
         assertThatThrownBy(generator::nextVal)
                 .isInstanceOf(SequenceOverflowException.class)
                 .hasMessage(
                         String.format(
                                 "Reached maximum value of sequence \"<%s>\" (%d).",
-                                COLUMN_NAME, CACHE_SIZE + 9));
-    }
-
-    private static class TestingSnapshotIDCounter implements SequenceIDCounter {
-
-        private final AtomicLong snapshotIdGenerator;
-        private int fetchTime;
-        private final int failedTrigger;
-
-        public TestingSnapshotIDCounter(AtomicLong snapshotIdGenerator) {
-            this(snapshotIdGenerator, Integer.MAX_VALUE);
-        }
-
-        public TestingSnapshotIDCounter(AtomicLong snapshotIdGenerator, int failedTrigger) {
-            this.snapshotIdGenerator = snapshotIdGenerator;
-            fetchTime = 0;
-            this.failedTrigger = failedTrigger;
-        }
-
-        @Override
-        public long getAndIncrement() {
-            return snapshotIdGenerator.getAndIncrement();
-        }
-
-        @Override
-        public long getAndAdd(Long delta) {
-            if (++fetchTime < failedTrigger) {
-                return snapshotIdGenerator.getAndAdd(delta);
-            }
-            throw new RuntimeException("Failed to get snapshot ID");
-        }
+                                COLUMN_NAME, Integer.MAX_VALUE));
     }
 }

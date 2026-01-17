@@ -18,7 +18,6 @@
 
 package org.apache.fluss.server.kv.autoinc;
 
-import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.SequenceOverflowException;
 import org.apache.fluss.metadata.TablePath;
@@ -41,40 +40,33 @@ public class BoundedSegmentSequenceGenerator implements SequenceGenerator {
     private final long cacheSize;
     private final long maxAllowedValue;
 
-    private AutoIncIdSegment segment;
+    private IdSegment segment;
 
     public BoundedSegmentSequenceGenerator(
             TablePath tablePath,
             String columnName,
             SequenceIDCounter sequenceIDCounter,
-            TableConfig tableConf,
+            long idCacheSize,
             long maxAllowedValue) {
-        this.cacheSize = tableConf.getAutoIncrementCacheSize();
+        this.cacheSize = idCacheSize;
         this.columnName = columnName;
         this.tablePath = tablePath;
         this.sequenceIDCounter = sequenceIDCounter;
-        this.segment = AutoIncIdSegment.EMPTY;
+        this.segment = IdSegment.EMPTY;
         this.maxAllowedValue = maxAllowedValue;
     }
 
     private void fetchSegment() {
         try {
             long start = sequenceIDCounter.getAndAdd(cacheSize);
-            if (start >= maxAllowedValue) {
-                throw new SequenceOverflowException(
-                        String.format(
-                                "Reached maximum value of sequence \"<%s>\" (%d).",
-                                columnName, maxAllowedValue));
-            }
-
-            long actualEnd = Math.min(start + cacheSize, maxAllowedValue - 1);
+            // the initial value of ZNode is 0, but we start ID from 1
+            segment = new IdSegment(start + 1, start + cacheSize);
             LOG.info(
-                    "Successfully fetch auto-increment values range ({}, {}], table_path={}, column_name={}.",
-                    start,
-                    actualEnd,
+                    "Successfully fetch auto-increment values range [{}, {}], table_path={}, column_name={}.",
+                    segment.current,
+                    segment.end,
                     tablePath,
                     columnName);
-            segment = new AutoIncIdSegment(start, actualEnd - start);
         } catch (SequenceOverflowException sequenceOverflowException) {
             throw sequenceOverflowException;
         } catch (Exception e) {
@@ -88,32 +80,36 @@ public class BoundedSegmentSequenceGenerator implements SequenceGenerator {
 
     @Override
     public long nextVal() {
-        if (segment.remaining() <= 0) {
+        if (!segment.hasNext()) {
             fetchSegment();
         }
-        return segment.tryNextVal();
+        long id = segment.nextVal();
+        if (id > maxAllowedValue) {
+            throw new SequenceOverflowException(
+                    String.format(
+                            "Reached maximum value of sequence \"<%s>\" (%d).",
+                            columnName, maxAllowedValue));
+        }
+        return id;
     }
 
-    private static class AutoIncIdSegment {
-        private static final AutoIncIdSegment EMPTY = new AutoIncIdSegment(0, 0);
-        private long current;
-        private final long end;
+    private static class IdSegment {
+        private static final IdSegment EMPTY = new IdSegment(0, -1);
+        final long end;
+        long current;
 
-        public AutoIncIdSegment(long start, long length) {
-            this.end = start + length;
-            this.current = start;
+        /** ID range from min (inclusive) to max (inclusive). */
+        public IdSegment(long min, long max) {
+            this.current = min;
+            this.end = max;
         }
 
-        public long remaining() {
-            return end - current;
+        public boolean hasNext() {
+            return current <= end;
         }
 
-        public long tryNextVal() {
-            long id = ++current;
-            if (id > end) {
-                throw new IllegalStateException("No more IDs available in current segment.");
-            }
-            return id;
+        public long nextVal() {
+            return current++;
         }
     }
 }

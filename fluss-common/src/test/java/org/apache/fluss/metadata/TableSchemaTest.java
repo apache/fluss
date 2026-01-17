@@ -369,7 +369,7 @@ class TableSchemaTest {
                         .build();
 
         Schema copied = Schema.newBuilder().fromSchema(original).build();
-        assertThat(copied.getAutoIncrementColumnNames()).isEqualTo(Arrays.asList("value"));
+        assertThat(copied).isEqualTo(original);
     }
 
     @Test
