@@ -18,26 +18,26 @@
 package org.apache.fluss.server.coordinator.event;
 
 import org.apache.fluss.rpc.messages.CommitLakeTableSnapshotResponse;
-import org.apache.fluss.server.entity.CommitLakeTableSnapshotData;
+import org.apache.fluss.server.entity.CommitLakeTableSnapshotsData;
 
 import java.util.concurrent.CompletableFuture;
 
 /** An event for receiving the request of commit lakehouse data to coordinator server. */
 public class CommitLakeTableSnapshotEvent implements CoordinatorEvent {
 
-    private final CommitLakeTableSnapshotData commitLakeTableSnapshotData;
+    private final CommitLakeTableSnapshotsData commitLakeTableSnapshotsData;
 
     private final CompletableFuture<CommitLakeTableSnapshotResponse> respCallback;
 
     public CommitLakeTableSnapshotEvent(
-            CommitLakeTableSnapshotData commitLakeTableSnapshotData,
+            CommitLakeTableSnapshotsData commitLakeTableSnapshotsData,
             CompletableFuture<CommitLakeTableSnapshotResponse> respCallback) {
-        this.commitLakeTableSnapshotData = commitLakeTableSnapshotData;
+        this.commitLakeTableSnapshotsData = commitLakeTableSnapshotsData;
         this.respCallback = respCallback;
     }
 
-    public CommitLakeTableSnapshotData getCommitLakeTableSnapshotData() {
-        return commitLakeTableSnapshotData;
+    public CommitLakeTableSnapshotsData getCommitLakeTableSnapshotData() {
+        return commitLakeTableSnapshotsData;
     }
 
     public CompletableFuture<CommitLakeTableSnapshotResponse> getRespCallback() {

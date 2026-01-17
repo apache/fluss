@@ -66,8 +66,8 @@ import org.apache.fluss.rpc.messages.FetchLogRequest;
 import org.apache.fluss.rpc.messages.FetchLogResponse;
 import org.apache.fluss.rpc.messages.GetFileSystemSecurityTokenResponse;
 import org.apache.fluss.rpc.messages.GetKvSnapshotMetadataResponse;
+import org.apache.fluss.rpc.messages.GetLakeSnapshotResponse;
 import org.apache.fluss.rpc.messages.GetLatestKvSnapshotsResponse;
-import org.apache.fluss.rpc.messages.GetLatestLakeSnapshotResponse;
 import org.apache.fluss.rpc.messages.InitWriterResponse;
 import org.apache.fluss.rpc.messages.LakeTieringHeartbeatResponse;
 import org.apache.fluss.rpc.messages.LimitScanResponse;
@@ -154,7 +154,7 @@ import org.apache.fluss.security.acl.AclBinding;
 import org.apache.fluss.server.authorizer.AclCreateResult;
 import org.apache.fluss.server.authorizer.AclDeleteResult;
 import org.apache.fluss.server.entity.AdjustIsrResultForBucket;
-import org.apache.fluss.server.entity.CommitLakeTableSnapshotData;
+import org.apache.fluss.server.entity.CommitLakeTableSnapshotsData;
 import org.apache.fluss.server.entity.CommitRemoteLogManifestData;
 import org.apache.fluss.server.entity.FetchReqInfo;
 import org.apache.fluss.server.entity.LakeBucketOffset;
@@ -1554,7 +1554,7 @@ public class ServerRpcMessageUtils {
         return pbPartitionSpec;
     }
 
-    public static CommitLakeTableSnapshotData getCommitLakeTableSnapshotData(
+    public static CommitLakeTableSnapshotsData getCommitLakeTableSnapshotData(
             CommitLakeTableSnapshotRequest request) {
         // handle rpc before 0.9
         Map<Long, LakeTableSnapshot> lakeTableInfoByTableId = new HashMap<>();
@@ -1588,12 +1588,25 @@ public class ServerRpcMessageUtils {
             tableBucketsMaxTimestamp.put(tableId, bucketLogMaxTimestamp);
         }
 
-        // handle rpc since 0.9
-        Map<Long, LakeTable.LakeSnapshotMetadata> lakeSnapshotMetadatas = new HashMap<>();
+        // Build using Builder pattern for cleaner code
+        CommitLakeTableSnapshotsData.Builder builder = CommitLakeTableSnapshotsData.builder();
+
+        // Add V1 format snapshots (legacy)
+        for (Map.Entry<Long, LakeTableSnapshot> entry : lakeTableInfoByTableId.entrySet()) {
+            long tableId = entry.getKey();
+            builder.addTableSnapshot(
+                    tableId,
+                    entry.getValue(),
+                    tableBucketsMaxTimestamp.get(tableId),
+                    null, // no metadata for V1
+                    null); // no earliestSnapshotIDToKeep for V1
+        }
+
+        // Add V2 format snapshots (current)
         for (PbLakeTableSnapshotMetadata pbLakeTableSnapshotMetadata :
                 request.getLakeTableSnapshotMetadatasList()) {
-            lakeSnapshotMetadatas.put(
-                    pbLakeTableSnapshotMetadata.getTableId(),
+            long tableId = pbLakeTableSnapshotMetadata.getTableId();
+            LakeTable.LakeSnapshotMetadata lakeSnapshotMetadata =
                     new LakeTable.LakeSnapshotMetadata(
                             pbLakeTableSnapshotMetadata.getSnapshotId(),
                             new FsPath(
@@ -1602,10 +1615,22 @@ public class ServerRpcMessageUtils {
                                     ? new FsPath(
                                             pbLakeTableSnapshotMetadata
                                                     .getReadableBucketOffsetsFilePath())
-                                    : null));
+                                    : null);
+            Long earliestSnapshotIDToKeep =
+                    pbLakeTableSnapshotMetadata.hasEarliestSnapshotIdToKeep()
+                            ? pbLakeTableSnapshotMetadata.getEarliestSnapshotIdToKeep()
+                            : null;
+
+            // If this table already exists in builder (from V1), update it; otherwise add new
+            builder.addTableSnapshot(
+                    tableId,
+                    lakeTableInfoByTableId.get(tableId), // may be null for V2-only
+                    tableBucketsMaxTimestamp.get(tableId), // may be null
+                    lakeSnapshotMetadata,
+                    earliestSnapshotIDToKeep);
         }
-        return new CommitLakeTableSnapshotData(
-                lakeTableInfoByTableId, tableBucketsMaxTimestamp, lakeSnapshotMetadatas);
+
+        return builder.build();
     }
 
     public static TableBucketOffsets toTableBucketOffsets(PbTableOffsets pbTableOffsets) {
@@ -1674,10 +1699,9 @@ public class ServerRpcMessageUtils {
                 notifyLakeTableOffsetRequest.getCoordinatorEpoch(), lakeBucketOffsetMap);
     }
 
-    public static GetLatestLakeSnapshotResponse makeGetLatestLakeSnapshotResponse(
+    public static GetLakeSnapshotResponse makeGetLakeSnapshotResponse(
             long tableId, LakeTableSnapshot lakeTableSnapshot) {
-        GetLatestLakeSnapshotResponse getLakeTableSnapshotResponse =
-                new GetLatestLakeSnapshotResponse();
+        GetLakeSnapshotResponse getLakeTableSnapshotResponse = new GetLakeSnapshotResponse();
 
         getLakeTableSnapshotResponse.setTableId(tableId);
         getLakeTableSnapshotResponse.setSnapshotId(lakeTableSnapshot.getSnapshotId());
