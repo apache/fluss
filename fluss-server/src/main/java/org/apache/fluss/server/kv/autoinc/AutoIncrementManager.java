@@ -23,10 +23,6 @@ import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.TablePath;
-import org.apache.fluss.server.zk.ZkSequenceIDCounter;
-import org.apache.fluss.server.zk.ZooKeeperClient;
-import org.apache.fluss.server.zk.data.ZkData;
-import org.apache.fluss.types.DataTypeRoot;
 
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
@@ -34,6 +30,7 @@ import com.github.benmanes.caffeine.cache.Caffeine;
 import javax.annotation.concurrent.NotThreadSafe;
 
 import java.time.Duration;
+import java.util.List;
 
 import static org.apache.fluss.utils.Preconditions.checkState;
 
@@ -55,7 +52,7 @@ public class AutoIncrementManager {
             SchemaGetter schemaGetter,
             TablePath tablePath,
             TableConfig tableConf,
-            ZooKeeperClient zkClient) {
+            SequenceGeneratorFactory seqGeneratorFactory) {
         this.autoIncrementUpdaterCache =
                 Caffeine.newBuilder()
                         .maximumSize(5)
@@ -64,30 +61,19 @@ public class AutoIncrementManager {
         this.schemaGetter = schemaGetter;
         int schemaId = schemaGetter.getLatestSchemaInfo().getSchemaId();
         Schema schema = schemaGetter.getSchema(schemaId);
-        int[] autoIncrementColumnIds = schema.getAutoIncrementColumnIds();
+        List<String> autoIncrementColumnNames = schema.getAutoIncrementColumnNames();
 
         checkState(
-                autoIncrementColumnIds.length <= 1,
+                autoIncrementColumnNames.size() <= 1,
                 "Only support one auto increment column for a table, but got %d.",
-                autoIncrementColumnIds.length);
+                autoIncrementColumnNames.size());
 
-        if (autoIncrementColumnIds.length == 1) {
-            autoIncrementColumnId = autoIncrementColumnIds[0];
-            boolean requiresIntOverflowCheck =
-                    schema.getRowType()
-                            .getField(schema.getColumnName(autoIncrementColumnId))
-                            .getType()
-                            .is(DataTypeRoot.INTEGER);
+        if (autoIncrementColumnNames.size() == 1) {
+            Schema.Column autoIncrementColumn = schema.getColumn(autoIncrementColumnNames.get(0));
+            autoIncrementColumnId = autoIncrementColumn.getColumnId();
             sequenceGenerator =
-                    new BoundedSegmentSequenceGenerator(
-                            tablePath,
-                            schema.getColumnName(autoIncrementColumnId),
-                            new ZkSequenceIDCounter(
-                                    zkClient.getCuratorClient(),
-                                    ZkData.AutoIncrementColumnZNode.path(
-                                            tablePath, autoIncrementColumnId)),
-                            tableConf,
-                            requiresIntOverflowCheck ? Integer.MAX_VALUE : Long.MAX_VALUE);
+                    seqGeneratorFactory.createSequenceGenerator(
+                            tablePath, autoIncrementColumn, tableConf.getAutoIncrementCacheSize());
         } else {
             autoIncrementColumnId = -1;
             sequenceGenerator = null;

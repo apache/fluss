@@ -142,7 +142,7 @@ public class TableConfig {
     }
 
     /** Gets the number of auto-increment IDs cached per segment. */
-    public Long getAutoIncrementCacheSize() {
+    public long getAutoIncrementCacheSize() {
         return config.get(ConfigOptions.TABLE_AUTO_INCREMENT_CACHE_SIZE);
     }
 }

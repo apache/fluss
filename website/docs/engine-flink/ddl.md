@@ -236,9 +236,13 @@ Currently, this feature has the following characteristics:
 - **Position**: New columns are always appended to the end of the existing column list.
 - **Nullability**: Only nullable columns can be added to an existing table to ensure compatibility with existing data.
 - **Type Support**: You can add columns of any data type, including complex types such as `ROW`, `MAP`, and `ARRAY`.
-- **Nested Fields**: Currently, adding fields within an existing nested `ROW` is not supported. Such operations are categorized as "updating column types" and will be supported in future versions.
 
-You can add a single column or multiple columns using the `ALTER TABLE statement.
+The following limitations currently apply but will be supported in the future:
+
+- **Nested Fields**: Adding fields within an existing nested `ROW` is not supported. Such operations are categorized as "updating column types" and will be supported in future versions.
+- **AUTO INCREMENT**: Adding `AUTO_INCREMENT` columns by using `ALTER TABLE` is not supported; such columns must be defined when the table is created.
+
+You can add a single column or multiple columns using the `ALTER TABLE` statement.
 
 ```sql title="Flink SQL"
 -- Add a single column at the end of the table

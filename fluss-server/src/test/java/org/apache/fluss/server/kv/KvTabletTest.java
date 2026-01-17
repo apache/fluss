@@ -36,6 +36,9 @@ import org.apache.fluss.record.FileLogProjection;
 import org.apache.fluss.record.KvRecord;
 import org.apache.fluss.record.KvRecordBatch;
 import org.apache.fluss.record.KvRecordTestUtils;
+import org.apache.fluss.record.LogRecord;
+import org.apache.fluss.record.LogRecordBatch;
+import org.apache.fluss.record.LogRecordReadContext;
 import org.apache.fluss.record.LogRecords;
 import org.apache.fluss.record.LogTestBase;
 import org.apache.fluss.record.MemoryLogRecords;
@@ -46,6 +49,7 @@ import org.apache.fluss.record.bytesview.MultiBytesView;
 import org.apache.fluss.row.BinaryRow;
 import org.apache.fluss.row.encode.ValueEncoder;
 import org.apache.fluss.server.kv.autoinc.AutoIncrementManager;
+import org.apache.fluss.server.kv.autoinc.TestingSequenceGeneratorFactory;
 import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer.Key;
 import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer.KvEntry;
 import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer.Value;
@@ -61,6 +65,7 @@ import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.RootAllocator;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.types.StringType;
+import org.apache.fluss.utils.CloseableIterator;
 import org.apache.fluss.utils.clock.SystemClock;
 import org.apache.fluss.utils.concurrent.FlussScheduler;
 
@@ -84,6 +89,8 @@ import java.util.Random;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 
 import static org.apache.fluss.compression.ArrowCompressionInfo.DEFAULT_COMPRESSION;
 import static org.apache.fluss.record.LogRecordBatch.CURRENT_LOG_MAGIC_VALUE;
@@ -122,7 +129,7 @@ class KvTabletTest {
 
     @BeforeEach
     void beforeEach() {
-        executor = Executors.newFixedThreadPool(2);
+        executor = Executors.newFixedThreadPool(3);
     }
 
     @AfterEach
@@ -187,7 +194,7 @@ class KvTabletTest {
                         schemaGetter,
                         tablePath.getTablePath(),
                         new TableConfig(new Configuration()),
-                        null);
+                        new TestingSequenceGeneratorFactory());
 
         return KvTablet.create(
                 tablePath,
@@ -598,6 +605,61 @@ class KvTabletTest {
                             + " or "
                             + expectLogLastOffset2);
         }
+    }
+
+    @Test
+    void testAutoIncrementWithMultiThread() throws Exception {
+        Schema schema =
+                Schema.newBuilder()
+                        .column("user_name", DataTypes.STRING())
+                        .column("uid", DataTypes.INT())
+                        .primaryKey("user_name")
+                        .enableAutoIncrement("uid")
+                        .build();
+        initLogTabletAndKvTablet(schema, new HashMap<>());
+        KvRecordTestUtils.KvRecordFactory recordFactory =
+                KvRecordTestUtils.KvRecordFactory.of(schema.getRowType());
+
+        // start threads to put records
+        List<Future<LogAppendInfo>> putFutures = new ArrayList<>();
+        for (int i = 1; i <= 30; ) {
+            String k1 = "k" + i++;
+            String k2 = "k" + i++;
+            String k3 = "k" + i++;
+            KvRecordBatch kvRecordBatch1 =
+                    kvRecordBatchFactory.ofRecords(
+                            Arrays.asList(
+                                    recordFactory.ofRecord(k1.getBytes(), new Object[] {k1, null}),
+                                    recordFactory.ofRecord(k2.getBytes(), new Object[] {k2, null}),
+                                    recordFactory.ofRecord(
+                                            k3.getBytes(), new Object[] {k3, null})));
+            // test concurrent putting to test thread-safety of AutoIncrementManager
+            putFutures.add(executor.submit(() -> kvTablet.putAsLeader(kvRecordBatch1, null)));
+        }
+
+        // wait for all putting finished
+        for (Future<LogAppendInfo> future : putFutures) {
+            future.get();
+        }
+
+        LogRecords actualLogRecords = readLogRecords(logTablet, 0L, null);
+        LogRecordReadContext context =
+                LogRecordReadContext.createArrowReadContext(
+                        schema.getRowType(), schemaId, schemaGetter);
+        List<Integer> actualUids = new ArrayList<>();
+        for (LogRecordBatch actualNext : actualLogRecords.batches()) {
+            CloseableIterator<LogRecord> iterator = actualNext.records(context);
+            while (iterator.hasNext()) {
+                LogRecord record = iterator.next();
+                assertThat(record.getChangeType()).isEqualTo(ChangeType.INSERT);
+                assertThat(record.getRow().isNullAt(1)).isFalse();
+                actualUids.add(record.getRow().getInt(1));
+            }
+        }
+        // create a List from 1 to 30
+        List<Integer> expectedUids =
+                IntStream.rangeClosed(1, 30).boxed().collect(Collectors.toList());
+        assertThat(actualUids).isEqualTo(expectedUids);
     }
 
     @Test

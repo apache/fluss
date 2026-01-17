@@ -18,7 +18,6 @@
 
 package org.apache.fluss.server.kv.autoinc;
 
-import org.apache.fluss.exception.SequenceOverflowException;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.record.BinaryValue;
@@ -28,8 +27,6 @@ import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypeRoot;
 
 import javax.annotation.concurrent.NotThreadSafe;
-
-import java.util.function.LongSupplier;
 
 /**
  * An {@link AutoIncrementUpdater} implementation that assigns auto-increment values to a specific
@@ -45,9 +42,9 @@ public class PerSchemaAutoIncrementUpdater implements AutoIncrementUpdater {
     private final RowEncoder rowEncoder;
     private final int fieldLength;
     private final int targetColumnIdx;
-    private final LongSupplier idSupplier;
+    private final SequenceGenerator sequenceGenerator;
     private final short schemaId;
-    private final String targetColumnName;
+    private final boolean requireInteger;
 
     public PerSchemaAutoIncrementUpdater(
             KvFormat kvFormat,
@@ -63,40 +60,31 @@ public class PerSchemaAutoIncrementUpdater implements AutoIncrementUpdater {
         for (int i = 0; i < fieldLength; i++) {
             flussFieldGetters[i] = InternalRow.createFieldGetter(fieldDataTypes[i], i);
         }
+        this.sequenceGenerator = sequenceGenerator;
         this.schemaId = schemaId;
         this.targetColumnIdx = schema.getColumnIds().indexOf(autoIncrementColumnId);
-        this.targetColumnName = schema.getColumnName(targetColumnIdx);
         if (targetColumnIdx == -1) {
             throw new IllegalStateException(
                     String.format(
                             "Auto-increment column ID %d not found in schema columns: %s",
                             autoIncrementColumnId, schema.getColumnIds()));
         }
-
-        if (fieldDataTypes[targetColumnIdx].is(DataTypeRoot.INTEGER)) {
-            this.idSupplier = () -> checkedNextInt(sequenceGenerator.nextVal());
-        } else {
-            this.idSupplier = sequenceGenerator::nextVal;
-        }
+        this.requireInteger = fieldDataTypes[targetColumnIdx].is(DataTypeRoot.INTEGER);
         this.rowEncoder = RowEncoder.create(kvFormat, fieldDataTypes);
         this.flussFieldGetters = flussFieldGetters;
-    }
-
-    private long checkedNextInt(long value) {
-        if (value > Integer.MAX_VALUE) {
-            throw new SequenceOverflowException(
-                    String.format(
-                            "Reached maximum value of sequence \"<%s>\" (2147483647).",
-                            targetColumnName));
-        }
-        return value;
     }
 
     public BinaryValue updateAutoIncrementColumns(BinaryValue rowValue) {
         rowEncoder.startNewRow();
         for (int i = 0; i < fieldLength; i++) {
             if (targetColumnIdx == i) {
-                rowEncoder.encodeField(i, idSupplier.getAsLong());
+                long seq = sequenceGenerator.nextVal();
+                // cast to integer if needed
+                if (requireInteger) {
+                    rowEncoder.encodeField(i, (int) seq);
+                } else {
+                    rowEncoder.encodeField(i, seq);
+                }
             } else {
                 // use the row value
                 rowEncoder.encodeField(i, flussFieldGetters[i].getFieldOrNull(rowValue.row));
