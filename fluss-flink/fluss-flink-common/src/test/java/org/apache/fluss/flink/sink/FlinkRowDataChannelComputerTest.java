@@ -40,7 +40,7 @@ class FlinkRowDataChannelComputerTest {
 
     @BeforeAll
     static void init() throws Exception {
-        serializationSchema.open(new SerializerInitContextImpl(DATA1_ROW_TYPE));
+        serializationSchema.open(new SerializerInitContextImpl(DATA1_ROW_TYPE, false));
     }
 
     @Test

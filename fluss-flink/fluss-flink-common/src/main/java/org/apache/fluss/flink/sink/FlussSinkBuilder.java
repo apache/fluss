@@ -107,6 +107,13 @@ public class FlussSinkBuilder<InputT> {
         return this;
     }
 
+    /**
+     * Set the distribution mode for the sink. The distribution mode controls how records are
+     * shuffled to the Fluss sink operator.
+     *
+     * @param distributionMode
+     * @return
+     */
     public FlussSinkBuilder<InputT> setDistributionMode(DistributionMode distributionMode) {
         this.distributionMode = distributionMode;
         return this;
@@ -217,7 +224,7 @@ public class FlussSinkBuilder<InputT> {
                             serializationSchema);
         }
 
-        return new FlussSink<>(writerBuilder);
+        return new FlussSink<>(writerBuilder, tablePath);
     }
 
     private void validateConfiguration() {

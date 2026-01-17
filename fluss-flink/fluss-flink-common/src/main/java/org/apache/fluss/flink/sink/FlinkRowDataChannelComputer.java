@@ -95,7 +95,7 @@ public class FlinkRowDataChannelComputer<InputT> implements ChannelComputer<Inpu
         try {
             // no need to read real database, thus assume to deserialize the fluss row as same as
             // flink table type.
-            this.serializationSchema.open(new SerializerInitContextImpl(flussRowType));
+            this.serializationSchema.open(new SerializerInitContextImpl(flussRowType, false));
         } catch (Exception e) {
             throw new FlussRuntimeException(e);
         }
@@ -126,7 +126,7 @@ public class FlinkRowDataChannelComputer<InputT> implements ChannelComputer<Inpu
 
     @Override
     public String toString() {
-        return "BUCKET_SHUFFLE";
+        return "BUCKET";
     }
 
     @VisibleForTesting

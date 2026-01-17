@@ -57,9 +57,11 @@ class FlinkSink<InputT> extends SinkAdapter<InputT> {
     private static final long serialVersionUID = 1L;
 
     private final SinkWriterBuilder<? extends FlinkSinkWriter, InputT> builder;
+    private final TablePath tablePath;
 
-    FlinkSink(SinkWriterBuilder<? extends FlinkSinkWriter, InputT> builder) {
+    FlinkSink(SinkWriterBuilder<? extends FlinkSinkWriter, InputT> builder, TablePath tablePath) {
         this.builder = builder;
+        this.tablePath = tablePath;
     }
 
     @Override
@@ -70,8 +72,11 @@ class FlinkSink<InputT> extends SinkAdapter<InputT> {
         return flinkSinkWriter;
     }
 
-    public DataStreamSink<InputT> addPreWriteTopology(DataStream<InputT> input) {
-        return builder.addPreWriteTopology(input).sinkTo(this);
+    public DataStreamSink<InputT> apply(DataStream<InputT> input) {
+        return builder.addPreWriteTopology(input)
+                .sinkTo(this)
+                .name("Sink(" + tablePath + ")")
+                .setParallelism(input.getParallelism());
     }
 
     @Internal
@@ -94,7 +99,7 @@ class FlinkSink<InputT> extends SinkAdapter<InputT> {
         private final List<String> bucketKeys;
         private final List<String> partitionKeys;
         private final @Nullable DataLakeFormat lakeFormat;
-        private final DistributionMode shuffleMode;
+        private final DistributionMode distributionMode;
         private final FlussSerializationSchema<InputT> flussSerializationSchema;
 
         public AppendSinkWriterBuilder(
@@ -105,7 +110,7 @@ class FlinkSink<InputT> extends SinkAdapter<InputT> {
                 List<String> bucketKeys,
                 List<String> partitionKeys,
                 @Nullable DataLakeFormat lakeFormat,
-                DistributionMode shuffleMode,
+                DistributionMode distributionMode,
                 FlussSerializationSchema<InputT> flussSerializationSchema) {
             this.tablePath = tablePath;
             this.flussConfig = flussConfig;
@@ -114,7 +119,7 @@ class FlinkSink<InputT> extends SinkAdapter<InputT> {
             this.bucketKeys = bucketKeys;
             this.partitionKeys = partitionKeys;
             this.lakeFormat = lakeFormat;
-            this.shuffleMode = shuffleMode;
+            this.distributionMode = distributionMode;
             this.flussSerializationSchema = flussSerializationSchema;
         }
 
@@ -130,7 +135,7 @@ class FlinkSink<InputT> extends SinkAdapter<InputT> {
 
         @Override
         public DataStream<InputT> addPreWriteTopology(DataStream<InputT> input) {
-            switch (shuffleMode) {
+            switch (distributionMode) {
                 case NONE:
                     return input;
                 case AUTO:
@@ -145,14 +150,14 @@ class FlinkSink<InputT> extends SinkAdapter<InputT> {
                 case PARTITION_DYNAMIC:
                     if (partitionKeys.isEmpty()) {
                         throw new UnsupportedOperationException(
-                                "PARTITION_DYNAMIC is only supported for partition tables");
+                                "PARTITION_DYNAMIC is only supported for partitioned tables");
                     }
 
                     TypeInformation<StatisticsOrRecord<InputT>> statisticsOrRecordTypeInformation =
                             new StatisticsOrRecordTypeInformation<>(input.getType());
                     SingleOutputStreamOperator<StatisticsOrRecord<InputT>> shuffleStream =
                             input.transform(
-                                            "Dynamic shuffle data statistics",
+                                            "Collect Statistics",
                                             statisticsOrRecordTypeInformation,
                                             new DataStatisticsOperatorFactory<>(
                                                     toFlussRowType(tableRowType),
@@ -179,16 +184,15 @@ class FlinkSink<InputT> extends SinkAdapter<InputT> {
                                                     out.collect(statisticsOrRecord.record());
                                                 }
                                             })
-                            // To promote operator chaining with the downstream writer operator,
-                            // setting slot sharing group and the parallelism as default, {@link
-                            // SinkTransformationTranslator} will set the parallelism same as sink
-                            // transformation.
-                            .slotSharingGroup("shuffle-partition-custom-group")
+                            .name("Strip Statistics")
+                            .setParallelism(input.getParallelism())
+                            // we remove the slot sharing group here make all operators can be
+                            // co-located in the same TaskManager slot
                             .returns(input.getType());
 
                 default:
                     throw new UnsupportedOperationException(
-                            "Unsupported distribution mode: " + shuffleMode);
+                            "Unsupported distribution mode: " + distributionMode);
             }
         }
 

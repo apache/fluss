@@ -30,15 +30,19 @@ public class SerializerInitContextImpl implements FlussSerializationSchema.Initi
 
     private final RowType flussRowSchema;
     private final org.apache.flink.table.types.logical.RowType flinkRowType;
+    private final boolean isStatisticEnabled;
 
-    public SerializerInitContextImpl(RowType rowSchema) {
-        this(rowSchema, toFlinkRowType(rowSchema));
+    public SerializerInitContextImpl(RowType rowSchema, boolean isStatisticEnabled) {
+        this(rowSchema, toFlinkRowType(rowSchema), isStatisticEnabled);
     }
 
     public SerializerInitContextImpl(
-            RowType rowSchema, org.apache.flink.table.types.logical.RowType flinkRowType) {
+            RowType rowSchema,
+            org.apache.flink.table.types.logical.RowType flinkRowType,
+            boolean isStatisticEnabled) {
         this.flussRowSchema = checkNotNull(rowSchema, "flussRowSchema");
         this.flinkRowType = checkNotNull(flinkRowType, "flinkRowType");
+        this.isStatisticEnabled = isStatisticEnabled;
     }
 
     @Override
@@ -49,5 +53,10 @@ public class SerializerInitContextImpl implements FlussSerializationSchema.Initi
     @Override
     public org.apache.flink.table.types.logical.RowType getInputRowSchema() {
         return flinkRowType;
+    }
+
+    @Override
+    public boolean isStatisticEnabled() {
+        return isStatisticEnabled;
     }
 }

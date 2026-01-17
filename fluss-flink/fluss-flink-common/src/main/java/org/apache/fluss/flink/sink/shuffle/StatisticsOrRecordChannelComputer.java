@@ -99,7 +99,7 @@ public class StatisticsOrRecordChannelComputer<InputT>
         this.bucketKeyEncoder = KeyEncoder.of(flussRowType, bucketKeys, lakeFormat);
         this.partitionGetter = new PartitionGetter(flussRowType, partitionKeys);
         try {
-            this.serializationSchema.open(new SerializerInitContextImpl(flussRowType));
+            this.serializationSchema.open(new SerializerInitContextImpl(flussRowType, false));
         } catch (Exception e) {
             throw new FlussRuntimeException(e);
         }

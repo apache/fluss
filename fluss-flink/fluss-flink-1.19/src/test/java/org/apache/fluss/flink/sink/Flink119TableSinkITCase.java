@@ -17,26 +17,5 @@
 
 package org.apache.fluss.flink.sink;
 
-import org.apache.flink.test.util.AbstractTestBase;
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
-
 /** IT case for {@link FlinkTableSink} in Flink 1.19. */
-public class Flink119TableSinkITCase extends FlinkTableSinkITCase {
-
-    @BeforeEach
-    @Override
-    void before() throws Exception {
-        // invoke here because the AbstractTestBase in 1.19 is junit 4.
-        AbstractTestBase.MINI_CLUSTER_RESOURCE.before();
-        super.before();
-    }
-
-    @AfterEach
-    @Override
-    void after() throws Exception {
-        super.after();
-        // invoke here because the AbstractTestBase in 1.19 is junit 4.
-        AbstractTestBase.MINI_CLUSTER_RESOURCE.after();
-    }
-}
+public class Flink119TableSinkITCase extends FlinkTableSinkITCase {}

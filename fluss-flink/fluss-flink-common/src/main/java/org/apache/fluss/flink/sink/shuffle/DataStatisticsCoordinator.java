@@ -247,12 +247,20 @@ class DataStatisticsCoordinator implements OperatorCoordinator {
                 StatisticsEvent.createStatisticsEvent(
                         checkpointId, statistics, statisticsSerializer);
         for (int i = 0; i < context.currentParallelism(); ++i) {
-            try {
-                subtaskGateways.getSubtaskGateway(i).sendEvent(statisticsEvent).get();
-            } catch (Exception exception) {
-                // Ignore future return value for potential error (e.g. subtask down).
-                LOG.warn("Failed to send global statistics to subtask {}", i, exception);
-            }
+            // Ignore future return value for potential error (e.g. subtask down).
+            // Upon restart, subtasks send request to coordinator to refresh statistics
+            // if there is any difference
+            final int subtaskIndex = i;
+            subtaskGateways
+                    .getSubtaskGateway(subtaskIndex)
+                    .sendEvent(statisticsEvent)
+                    .whenComplete(
+                            (ack, error) -> {
+                                LOG.warn(
+                                        "Failed to send global statistics to subtask {}",
+                                        subtaskIndex,
+                                        error);
+                            });
         }
     }
 
