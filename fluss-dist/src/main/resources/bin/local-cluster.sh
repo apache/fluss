@@ -32,6 +32,23 @@ bin=`cd "$bin"; pwd`
 
 . "$bin"/config.sh
 
+# Function to get bind.listeners for tablet server with random ports (0)
+get_bind_listeners_with_random_ports() {
+    local config_file="${FLUSS_CONF_DIR}/server.yaml"
+    # Extract the value of bind.listeners
+    local listeners=$(grep "^bind.listeners:" "$config_file" | sed 's/^bind.listeners:[[:space:]]*//')
+
+    if [[ -z "$listeners" ]]; then
+        echo "FLUSS://localhost:0"
+    else
+        # Replace ports with 0 for all listeners, handling potential spaces around commas.
+        # 1. Replace ports followed by optional spaces and a comma (intermediate listeners)
+        # 2. Replace the port at the end of the line, followed by optional spaces (last listener)
+        # Example: "A://h1:9092 , B://h2:9093" -> "A://h1:0, B://h2:0"
+        echo "$listeners" | sed -e 's/:[0-9]*[[:space:]]*,/:0,/g' -e 's/:[0-9]*[[:space:]]*$/:0/'
+    fi
+}
+
 case $STARTSTOP in
     (start)
         echo "Starting cluster."
@@ -44,7 +61,9 @@ case $STARTSTOP in
 
         # Start single Tablet Server on this machine.
         # Set bind.listeners as config option to avoid port binding conflict with coordinator server
-        "${FLUSS_BIN_DIR}"/tablet-server.sh start -Dbind.listeners=FLUSS://localhost:0
+        # We read bind.listeners from server.yaml and replace the port with 0 to use a random port
+        BIND_LISTENERS=$(get_bind_listeners_with_random_ports)
+        "${FLUSS_BIN_DIR}"/tablet-server.sh start -Dbind.listeners="$BIND_LISTENERS"
     ;;
 
     (stop)
@@ -63,4 +82,3 @@ case $STARTSTOP in
     ;;
 
 esac
-
