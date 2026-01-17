@@ -721,6 +721,13 @@ public final class FlussClusterExtension
                 "Fail to wait " + replica + " ready");
     }
 
+    public void waitAllReplicasReady(long tableId, int expectBucketCount) {
+        // retry until all replica ready.
+        for (int i = 0; i < expectBucketCount; i++) {
+            waitUntilAllReplicaReady(new TableBucket(tableId, i));
+        }
+    }
+
     public void stopReplica(int tabletServerId, TableBucket tableBucket, int leaderEpoch)
             throws Exception {
         TabletServerGateway followerGateway = newTabletServerClientForNode(tabletServerId);

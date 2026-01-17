@@ -26,6 +26,10 @@ import java.util.Objects;
 /** {@link TableChange} represents the modification of the Fluss Table. */
 public interface TableChange {
 
+    static BucketNumOption bucketNum(int bucketNum) {
+        return new BucketNumOption(bucketNum);
+    }
+
     /**
      * A table change to add the column with specified position.
      *
@@ -63,8 +67,9 @@ public interface TableChange {
      *    ALTER TABLE &lt;table_name&gt; MODIFY &lt;column_definition&gt; COMMENT '&lt;column_comment&gt;' &lt;column_position&gt;
      * </pre>
      *
-     * @param oldColumn the definition of the old column.
-     * @param newColumn the definition of the new column.
+     * @param columnName the name of the column.
+     * @param dataType the data type of the column.
+     * @param comment the comment of the column.
      * @param columnPosition the new position of the column.
      * @return a TableChange represents the modification.
      */
@@ -85,8 +90,8 @@ public interface TableChange {
      *    ALTER TABLE &lt;table_name&gt; RENAME &lt;old_column_name&gt; TO &lt;new_column_name&gt;
      * </pre>
      *
-     * @param oldColumn the definition of the old column.
-     * @param newName the name of the new column.
+     * @param oldColumnName the name of the old column.
+     * @param newColumnName the name of the new column.
      * @return a TableChange represents the modification.
      */
     static RenameColumn renameColumn(String oldColumnName, String newColumnName) {
@@ -115,6 +120,46 @@ public interface TableChange {
 
     static ResetOption reset(String key) {
         return new ResetOption(key);
+    }
+
+    /**
+     * A table change to change the bucket num.
+     *
+     * <p>It is equal to the following statement:
+     *
+     * <pre>
+     *    ALTER TABLE &lt;table_name&gt; SET 'bucket.num' = '&lt;bucketNum&gt;';
+     * </pre>
+     */
+    class BucketNumOption implements TableChange {
+        private final int bucketNum;
+
+        public BucketNumOption(int bucketNum) {
+            this.bucketNum = bucketNum;
+        }
+
+        public int getBucketNum() {
+            return bucketNum;
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (o == null || getClass() != o.getClass()) {
+                return false;
+            }
+            BucketNumOption that = (BucketNumOption) o;
+            return bucketNum == that.bucketNum;
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hashCode(bucketNum);
+        }
+
+        @Override
+        public String toString() {
+            return "BucketNumOption{" + "bucketNum=" + bucketNum + '}';
+        }
     }
 
     /**

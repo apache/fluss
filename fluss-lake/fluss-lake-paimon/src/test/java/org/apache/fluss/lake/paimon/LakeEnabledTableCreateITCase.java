@@ -971,6 +971,79 @@ class LakeEnabledTableCreateITCase {
                 .isTrue();
     }
 
+    @Test
+    void testAlterLakeEnableTableBucket() throws Exception {
+        Map<String, String> customProperties = new HashMap<>();
+        customProperties.put("bucket.num", "3");
+
+        // create table
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("c1", DataTypes.INT())
+                                        .column("c2", DataTypes.STRING())
+                                        .build())
+                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
+                        .customProperties(customProperties)
+                        .distributedBy(BUCKET_NUM)
+                        .build();
+        TablePath tablePath = TablePath.of(DATABASE, "alter_table_bucket");
+        admin.createTable(tablePath, tableDescriptor, false).get();
+        Table paimonTable =
+                paimonCatalog.getTable(Identifier.create(DATABASE, tablePath.getTableName()));
+        verifyPaimonTable(
+                paimonTable,
+                tableDescriptor,
+                RowType.of(
+                        new DataType[] {
+                            org.apache.paimon.types.DataTypes.INT(),
+                            org.apache.paimon.types.DataTypes.STRING(),
+                            // for __bucket, __offset, __timestamp
+                            org.apache.paimon.types.DataTypes.INT(),
+                            org.apache.paimon.types.DataTypes.BIGINT(),
+                            org.apache.paimon.types.DataTypes.TIMESTAMP_LTZ_MILLIS()
+                        },
+                        new String[] {
+                            "c1",
+                            "c2",
+                            BUCKET_COLUMN_NAME,
+                            OFFSET_COLUMN_NAME,
+                            TIMESTAMP_COLUMN_NAME
+                        }),
+                null,
+                BUCKET_NUM);
+
+        // test alter table bucket
+        List<TableChange> tableChanges = Collections.singletonList(TableChange.bucketNum(10));
+        admin.alterTable(tablePath, tableChanges, false).get();
+        paimonTable = paimonCatalog.getTable(Identifier.create(DATABASE, tablePath.getTableName()));
+        customProperties.put("bucket.num", "10");
+        tableDescriptor =
+                tableDescriptor.withProperties(tableDescriptor.getProperties(), customProperties);
+        verifyPaimonTable(
+                paimonTable,
+                tableDescriptor,
+                RowType.of(
+                        new DataType[] {
+                            org.apache.paimon.types.DataTypes.INT(),
+                            org.apache.paimon.types.DataTypes.STRING(),
+                            // for __bucket, __offset, __timestamp
+                            org.apache.paimon.types.DataTypes.INT(),
+                            org.apache.paimon.types.DataTypes.BIGINT(),
+                            org.apache.paimon.types.DataTypes.TIMESTAMP_LTZ_MILLIS()
+                        },
+                        new String[] {
+                            "c1",
+                            "c2",
+                            BUCKET_COLUMN_NAME,
+                            OFFSET_COLUMN_NAME,
+                            TIMESTAMP_COLUMN_NAME
+                        }),
+                null,
+                BUCKET_NUM);
+    }
+
     private void verifyPaimonTable(
             Table paimonTable,
             TableDescriptor flussTable,
