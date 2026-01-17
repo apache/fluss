@@ -27,6 +27,7 @@ import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.InvalidAlterTableException;
 import org.apache.fluss.exception.InvalidConfigException;
 import org.apache.fluss.exception.InvalidTableException;
+import org.apache.fluss.flink.adapter.SchemaAdapter;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
@@ -48,6 +49,7 @@ import org.apache.flink.util.CloseableIterator;
 import org.apache.flink.util.CollectionUtil;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -69,6 +71,7 @@ import static org.apache.fluss.config.ConfigOptions.DEFAULT_LISTENER_NAME;
 import static org.apache.fluss.flink.FlinkConnectorOptions.BOOTSTRAP_SERVERS;
 import static org.apache.fluss.flink.FlinkConnectorOptions.BUCKET_KEY;
 import static org.apache.fluss.flink.FlinkConnectorOptions.BUCKET_NUMBER;
+import static org.apache.fluss.flink.adapter.SchemaAdapter.supportIndex;
 import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.assertResultsIgnoreOrder;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -883,6 +886,146 @@ abstract class FlinkCatalogITCase {
                 catalog.getTable(new ObjectPath(DEFAULT_DB, "test_get_lake_table"));
         assertThat(catalogTable.getOptions())
                 .containsEntry("table.datalake.paimon.jdbc.password", "pass");
+    }
+
+    @Test
+    void testGetTableWithIndex() throws Exception {
+        Assumptions.assumeTrue(supportIndex());
+        String tableName = "table_with_pk_only";
+        tEnv.executeSql(
+                String.format(
+                        "create table %s ( "
+                                + " a int, "
+                                + " b varchar, "
+                                + " c bigint, "
+                                + " primary key (a, b) NOT ENFORCED"
+                                + ") with ( "
+                                + " 'connector' = 'fluss' "
+                                + ")",
+                        tableName));
+        CatalogTable table = (CatalogTable) catalog.getTable(new ObjectPath(DEFAULT_DB, tableName));
+        Schema expectedSchema =
+                SchemaAdapter.withIndex(
+                        Schema.newBuilder()
+                                .column("a", DataTypes.INT().notNull())
+                                .column("b", DataTypes.STRING().notNull())
+                                .column("c", DataTypes.BIGINT())
+                                .primaryKey("a", "b")
+                                .build(),
+                        Collections.singletonList(Arrays.asList("a", "b")));
+        assertThat(table.getUnresolvedSchema()).isEqualTo(expectedSchema);
+
+        tableName = "table_with_prefix_bucket_key";
+        tEnv.executeSql(
+                String.format(
+                        "create table %s ( "
+                                + " a int, "
+                                + " b varchar, "
+                                + " c bigint, "
+                                + " primary key (a, b) NOT ENFORCED"
+                                + ") with ( "
+                                + " 'connector' = 'fluss', "
+                                + " 'bucket.key' = 'a'"
+                                + ")",
+                        tableName));
+
+        table = (CatalogTable) catalog.getTable(new ObjectPath(DEFAULT_DB, tableName));
+        expectedSchema =
+                SchemaAdapter.withIndex(
+                        Schema.newBuilder()
+                                .column("a", DataTypes.INT().notNull())
+                                .column("b", DataTypes.STRING().notNull())
+                                .column("c", DataTypes.BIGINT())
+                                .primaryKey("a", "b")
+                                .build(),
+                        Arrays.asList(Arrays.asList("a", "b"), Arrays.asList("a")));
+        assertThat(table.getUnresolvedSchema()).isEqualTo(expectedSchema);
+
+        tableName = "table_with_bucket_key_is_not_prefix_pk";
+        tEnv.executeSql(
+                String.format(
+                        "create table %s ( "
+                                + " a int, "
+                                + " b varchar, "
+                                + " c bigint, "
+                                + " primary key (a, b) NOT ENFORCED"
+                                + ") with ( "
+                                + " 'connector' = 'fluss', "
+                                + " 'bucket.key' = 'b'"
+                                + ")",
+                        tableName));
+
+        table = (CatalogTable) catalog.getTable(new ObjectPath(DEFAULT_DB, tableName));
+        expectedSchema =
+                SchemaAdapter.withIndex(
+                        Schema.newBuilder()
+                                .column("a", DataTypes.INT().notNull())
+                                .column("b", DataTypes.STRING().notNull())
+                                .column("c", DataTypes.BIGINT())
+                                .primaryKey("a", "b")
+                                .build(),
+                        Collections.singletonList(Arrays.asList("a", "b")));
+        assertThat(table.getUnresolvedSchema()).isEqualTo(expectedSchema);
+
+        tableName = "table_with_partition_1";
+        tEnv.executeSql(
+                String.format(
+                        "create table %s ( "
+                                + " a int, "
+                                + " b varchar, "
+                                + " c bigint, "
+                                + " dt varchar, "
+                                + " primary key (a, b, dt) NOT ENFORCED "
+                                + ") "
+                                + " partitioned by (dt) "
+                                + " with ( "
+                                + " 'connector' = 'fluss', "
+                                + " 'bucket.key' = 'a'"
+                                + ")",
+                        tableName));
+
+        table = (CatalogTable) catalog.getTable(new ObjectPath(DEFAULT_DB, tableName));
+        expectedSchema =
+                SchemaAdapter.withIndex(
+                        Schema.newBuilder()
+                                .column("a", DataTypes.INT().notNull())
+                                .column("b", DataTypes.STRING().notNull())
+                                .column("c", DataTypes.BIGINT())
+                                .column("dt", DataTypes.STRING().notNull())
+                                .primaryKey("a", "b", "dt")
+                                .build(),
+                        Arrays.asList(Arrays.asList("a", "b", "dt"), Arrays.asList("a", "dt")));
+        assertThat(table.getUnresolvedSchema()).isEqualTo(expectedSchema);
+
+        tableName = "table_with_partition_2";
+        tEnv.executeSql(
+                String.format(
+                        "create table %s ( "
+                                + " a int, "
+                                + " b varchar, "
+                                + " c bigint, "
+                                + " dt varchar, "
+                                + " primary key (dt, a, b) NOT ENFORCED "
+                                + ") "
+                                + " partitioned by (dt) "
+                                + " with ( "
+                                + " 'connector' = 'fluss', "
+                                + " 'bucket.key' = 'a'"
+                                + ")",
+                        tableName));
+
+        table = (CatalogTable) catalog.getTable(new ObjectPath(DEFAULT_DB, tableName));
+        expectedSchema =
+                SchemaAdapter.withIndex(
+                        Schema.newBuilder()
+                                .column("a", DataTypes.INT().notNull())
+                                .column("b", DataTypes.STRING().notNull())
+                                .column("c", DataTypes.BIGINT())
+                                .column("dt", DataTypes.STRING().notNull())
+                                .primaryKey("dt", "a", "b")
+                                .build(),
+                        Arrays.asList(Arrays.asList("dt", "a", "b"), Arrays.asList("a", "dt")));
+        assertThat(table.getUnresolvedSchema()).isEqualTo(expectedSchema);
     }
 
     /**
