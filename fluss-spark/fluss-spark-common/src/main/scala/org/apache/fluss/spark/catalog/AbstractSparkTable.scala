@@ -17,7 +17,9 @@
 
 package org.apache.fluss.spark.catalog
 
-import org.apache.fluss.metadata.TableInfo
+import org.apache.fluss.client.admin.Admin
+import org.apache.fluss.config.{Configuration => FlussConfiguration}
+import org.apache.fluss.metadata.{TableInfo, TablePath}
 import org.apache.fluss.spark.SparkConversions
 
 import org.apache.spark.sql.CatalogV2UtilShim
@@ -29,8 +31,7 @@ import java.util
 
 import scala.collection.JavaConverters._
 
-abstract class AbstractSparkTable(tableInfo: TableInfo) extends Table {
-
+abstract class AbstractSparkTable(val admin: Admin, val tableInfo: TableInfo) extends Table {
   protected lazy val _schema: StructType =
     SparkConversions.toSparkDataType(tableInfo.getSchema.getRowType)
 

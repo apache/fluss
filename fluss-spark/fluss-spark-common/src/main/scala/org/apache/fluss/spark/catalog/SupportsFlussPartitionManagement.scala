@@ -17,22 +17,33 @@
 
 package org.apache.fluss.spark.catalog
 
+import org.apache.fluss.metadata.PartitionSpec
+
 import org.apache.spark.sql.catalyst.InternalRow
+import org.apache.spark.sql.catalyst.expressions.{GenericInternalRow, SpecificInternalRow}
+import org.apache.spark.sql.catalyst.types._
 import org.apache.spark.sql.connector.catalog.SupportsPartitionManagement
 import org.apache.spark.sql.types.StructType
+import org.apache.spark.unsafe.types.UTF8String
 
 import java.util
 
+import scala.collection.JavaConverters._
+
 trait SupportsFlussPartitionManagement extends AbstractSparkTable with SupportsPartitionManagement {
+  import SupportsFlussPartitionManagement._
 
   override def partitionSchema(): StructType = _partitionSchema
 
   override def createPartition(ident: InternalRow, properties: util.Map[String, String]): Unit = {
-    throw new UnsupportedOperationException("Creating partition is not supported")
+    val partitionSpec = toPartitionSpec(ident, partitionSchema())
+    admin.createPartition(tableInfo.getTablePath, partitionSpec, false).get()
   }
 
   override def dropPartition(ident: InternalRow): Boolean = {
-    throw new UnsupportedOperationException("Dropping partition is not supported")
+    val partitionSpec = toPartitionSpec(ident, partitionSchema())
+    admin.dropPartition(tableInfo.getTablePath, partitionSpec, false).get()
+    true
   }
 
   override def replacePartitionMetadata(
@@ -48,6 +59,67 @@ trait SupportsFlussPartitionManagement extends AbstractSparkTable with SupportsP
   override def listPartitionIdentifiers(
       names: Array[String],
       ident: InternalRow): Array[InternalRow] = {
-    throw new UnsupportedOperationException("Listing partition is not supported")
+    assert(
+      names.length == ident.numFields,
+      s"Number of partition names (${names.length}) must be equal to " +
+        s"the number of partition values (${ident.numFields})."
+    )
+    val schema = partitionSchema()
+    assert(
+      names.forall(fieldName => schema.fieldNames.contains(fieldName)),
+      s"Some partition names ${names.mkString("[", ", ", "]")} don't belong to " +
+        s"the partition schema '${schema.sql}'."
+    )
+
+    val flussPartitionRows = admin
+      .listPartitionInfos(tableInfo.getTablePath)
+      .get()
+      .asScala
+      .map(p => toInternalRow(p.getPartitionSpec, schema))
+
+    val indexes = names.map(schema.fieldIndex)
+    val dataTypes = names.map(schema(_).dataType)
+    val currentRow = new GenericInternalRow(new Array[Any](names.length))
+    flussPartitionRows.filter {
+      partRow =>
+        for (i <- names.indices) {
+          currentRow.values(i) = partRow.get(indexes(i), dataTypes(i))
+        }
+        currentRow == ident
+    }.toArray
+  }
+}
+
+object SupportsFlussPartitionManagement {
+  private def toInternalRow(
+      partitionSpec: PartitionSpec,
+      partitionSchema: StructType): InternalRow = {
+    val row = new SpecificInternalRow(partitionSchema)
+    for ((field, i) <- partitionSchema.fields.zipWithIndex) {
+      val partValue = partitionSpec.getSpecMap.get(field.name)
+      val value = field.dataType match {
+        case dt =>
+          // TODO Support more types when needed.
+          PhysicalDataType(field.dataType) match {
+            case PhysicalBooleanType => partValue.toBoolean
+            case PhysicalIntegerType => partValue.toInt
+            case PhysicalDoubleType => partValue.toDouble
+            case PhysicalFloatType => partValue.toFloat
+            case PhysicalLongType => partValue.toLong
+            case PhysicalShortType => partValue.toShort
+            case PhysicalStringType => UTF8String.fromString(partValue)
+          }
+      }
+      row.update(i, value)
+    }
+    row
+  }
+
+  private def toPartitionSpec(row: InternalRow, partitionSchema: StructType): PartitionSpec = {
+    val map = partitionSchema.fields.zipWithIndex.map {
+      case (field, idx) =>
+        (field.name, row.get(idx, field.dataType).toString)
+    }.toMap
+    new PartitionSpec(map.asJava)
   }
 }
