@@ -106,9 +106,11 @@ public class RowDataSerializationSchema implements FlussSerializationSchema<RowD
      */
     @Nullable private transient ProjectedRow outputProjection;
 
-    private transient RowType rowType;
-    private transient long fixedSizeInBytes;
-    private transient List<Integer> variableSizeFields;
+    /**
+     * Estimator for calculating the size of RowData instances. Maybe null if there is no need to
+     * calculate size.
+     */
+    @Nullable private transient RowDataSizeEstimator sizeEstimator;
 
     /**
      * Constructs a new {@code RowSerializationSchema}.
@@ -143,10 +145,9 @@ public class RowDataSerializationSchema implements FlussSerializationSchema<RowD
             }
             outputProjection = ProjectedRow.from(indexMapping);
         }
-        this.rowType = context.getRowSchema();
-        Tuple2<Long, List<Integer>> calculateFixedSize = calculateFixedSize(rowType);
-        this.fixedSizeInBytes = calculateFixedSize.f0;
-        this.variableSizeFields = calculateFixedSize.f1;
+        if (context.isStatisticEnabled()) {
+            this.sizeEstimator = new RowDataSizeEstimator(context.getRowSchema());
+        }
     }
 
     /**
@@ -174,81 +175,11 @@ public class RowDataSerializationSchema implements FlussSerializationSchema<RowD
             row = outputProjection.replaceRow(row);
         }
         OperationType opType = toOperationType(value.getRowKind());
-        long estimatedSizeInBytes = calculateSize(value);
+        Long estimatedSizeInBytes = null;
+        if (sizeEstimator != null) {
+            estimatedSizeInBytes = sizeEstimator.estimateSize(value);
+        }
         return new RowWithOp(row, opType, estimatedSizeInBytes);
-    }
-
-    private long calculateSize(RowData value) {
-        if (value instanceof BinaryFormat) {
-            return ((BinaryFormat) value).getSizeInBytes();
-        }
-
-        long size = fixedSizeInBytes;
-        for (int i : variableSizeFields) {
-            DataField field = rowType.getFields().get(i);
-            DataTypeRoot typeRoot = field.getType().getTypeRoot();
-            if (value.getArity() <= i || value.isNullAt(i)) {
-                continue;
-            }
-            switch (typeRoot) {
-                case STRING:
-                    StringData stringData = value.getString(i);
-                    if (stringData instanceof BinaryStringData) {
-                        size += ((BinaryStringData) stringData).getSizeInBytes();
-                    } else {
-                        size += stringData.toBytes().length;
-                    }
-                    break;
-                case BYTES:
-                    size += value.getBinary(i).length;
-                    break;
-            }
-        }
-        return size;
-    }
-
-    private Tuple2<Long, List<Integer>> calculateFixedSize(RowType rowType) {
-        long size = 0;
-        List<Integer> variableSizeFields = new ArrayList<>();
-        for (int i = 0; i < rowType.getFieldCount(); i++) {
-            DataField field = rowType.getFields().get(i);
-            DataTypeRoot typeRoot = field.getType().getTypeRoot();
-            switch (typeRoot) {
-                case CHAR:
-                    size += ((CharType) (field.getType())).getLength();
-                    break;
-                case BINARY:
-                    size += ((BinaryType) (field.getType())).getLength();
-                    break;
-                case DECIMAL:
-                    size += ((DecimalType) (field.getType())).getPrecision();
-                    break;
-                case BOOLEAN:
-                case TINYINT:
-                    size += 1;
-                    break;
-                case SMALLINT:
-                    size += 2;
-                    break;
-                case INTEGER:
-                case FLOAT:
-                case DATE:
-                case TIME_WITHOUT_TIME_ZONE:
-                    size += 4;
-                    break;
-                case BIGINT:
-                case DOUBLE:
-                case TIMESTAMP_WITHOUT_TIME_ZONE:
-                case TIMESTAMP_WITH_LOCAL_TIME_ZONE:
-                    size += 8;
-                    break;
-                case STRING:
-                case BYTES:
-                    variableSizeFields.add(i);
-                    break;
-            }
-        }
-        return Tuple2.of(size, variableSizeFields);
     }
 
     /**
@@ -279,6 +210,101 @@ public class RowDataSerializationSchema implements FlussSerializationSchema<RowD
                 default:
                     throw new UnsupportedOperationException("Unsupported row kind: " + rowKind);
             }
+        }
+    }
+
+    /** Estimator for the size of RowData instances based on their schema and row. */
+    private static class RowDataSizeEstimator {
+        private final RowType rowType;
+        private final long fixedSizeInBytes;
+        private final int[] variableSizeFields;
+
+        RowDataSizeEstimator(RowType rowType) {
+            this.rowType = rowType;
+            Tuple2<Long, int[]> result = calculateFixedSizeAndVariableColumnIndex(rowType);
+            this.fixedSizeInBytes = result.f0;
+            this.variableSizeFields = result.f1;
+        }
+
+        long estimateSize(RowData value) {
+            if (value instanceof BinaryFormat) {
+                return ((BinaryFormat) value).getSizeInBytes();
+            }
+
+            long size = fixedSizeInBytes;
+            for (int i : variableSizeFields) {
+                DataField field = rowType.getFields().get(i);
+                DataTypeRoot typeRoot = field.getType().getTypeRoot();
+                // handle schema evolution where field may not exist, and null values
+                if (value.getArity() <= i || value.isNullAt(i)) {
+                    continue;
+                }
+                switch (typeRoot) {
+                    case STRING:
+                        StringData stringData = value.getString(i);
+                        if (stringData instanceof BinaryStringData) {
+                            size += ((BinaryStringData) stringData).getSizeInBytes();
+                        } else {
+                            size += stringData.toBytes().length;
+                        }
+                        break;
+                    case BYTES:
+                        size += value.getBinary(i).length;
+                        break;
+                }
+            }
+            return size;
+        }
+
+        private static Tuple2<Long, int[]> calculateFixedSizeAndVariableColumnIndex(
+                RowType rowType) {
+            long fixedSizeInBytes = 0;
+            List<Integer> variableSizeFields = new ArrayList<>();
+            for (int i = 0; i < rowType.getFieldCount(); i++) {
+                DataField field = rowType.getFields().get(i);
+                DataTypeRoot typeRoot = field.getType().getTypeRoot();
+                switch (typeRoot) {
+                    case CHAR:
+                        fixedSizeInBytes += ((CharType) (field.getType())).getLength();
+                        break;
+                    case BINARY:
+                        fixedSizeInBytes += ((BinaryType) (field.getType())).getLength();
+                        break;
+                    case DECIMAL:
+                        fixedSizeInBytes += ((DecimalType) (field.getType())).getPrecision();
+                        break;
+                    case BOOLEAN:
+                    case TINYINT:
+                        fixedSizeInBytes += 1;
+                        break;
+                    case SMALLINT:
+                        fixedSizeInBytes += 2;
+                        break;
+                    case INTEGER:
+                    case FLOAT:
+                    case DATE:
+                    case TIME_WITHOUT_TIME_ZONE:
+                        fixedSizeInBytes += 4;
+                        break;
+                    case BIGINT:
+                    case DOUBLE:
+                    case TIMESTAMP_WITHOUT_TIME_ZONE:
+                    case TIMESTAMP_WITH_LOCAL_TIME_ZONE:
+                        fixedSizeInBytes += 8;
+                        break;
+                    case STRING:
+                    case BYTES:
+                        variableSizeFields.add(i);
+                        break;
+                }
+            }
+
+            int[] variableColumnIndexes = new int[variableSizeFields.size()];
+            for (int i = 0; i < variableSizeFields.size(); i++) {
+                variableColumnIndexes[i] = variableSizeFields.get(i);
+            }
+
+            return Tuple2.of(fixedSizeInBytes, variableColumnIndexes);
         }
     }
 }

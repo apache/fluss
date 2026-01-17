@@ -198,7 +198,7 @@ public class FlinkTableSink
             @Override
             public DataStreamSink<?> consumeDataStream(
                     ProviderContext providerContext, DataStream<RowData> dataStream) {
-                return flinkSink.addPreWriteTopology(dataStream);
+                return flinkSink.apply(dataStream);
             }
         };
     }
@@ -228,7 +228,7 @@ public class FlinkTableSink
                                 distributionMode,
                                 new RowDataSerializationSchema(true, sinkIgnoreDelete));
 
-        return new FlinkSink<>(flinkSinkWriterBuilder);
+        return new FlinkSink<>(flinkSinkWriterBuilder, tablePath);
     }
 
     private List<String> columns(int[] columnIndexes) {

@@ -75,5 +75,8 @@ public interface FlussSerializationSchema<T> extends Serializable {
          * @return The schema of the input Flink row.
          */
         org.apache.flink.table.types.logical.RowType getInputRowSchema();
+
+        /** Indicates whether the statistics collection is enabled. */
+        boolean isStatisticEnabled();
     }
 }

@@ -102,9 +102,7 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
         // open a catalog so that we can get table from the catalog
         String bootstrapServers = FLUSS_CLUSTER_EXTENSION.getBootstrapServers();
         // create table environment
-        org.apache.flink.configuration.Configuration config =
-                new org.apache.flink.configuration.Configuration();
-        env = StreamExecutionEnvironment.getExecutionEnvironment(config);
+        env = StreamExecutionEnvironment.getExecutionEnvironment();
         env.setRuntimeMode(RuntimeExecutionMode.STREAMING);
 
         tEnv = StreamTableEnvironment.create(env);
@@ -240,15 +238,17 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
         if (distributionMode == DistributionMode.PARTITION_DYNAMIC) {
             assertThatThrownBy(() -> tEnv.executeSql(insertSql))
                     .hasMessageContaining(
-                            "PARTITION_DYNAMIC is only supported for partition tables");
+                            "PARTITION_DYNAMIC is only supported for partitioned tables");
             return;
         }
         String insertPlan = tEnv.explainSql(insertSql, ExplainDetail.JSON_EXECUTION_PLAN);
         if (distributionMode == DistributionMode.BUCKET) {
-            assertThat(insertPlan).contains("\"ship_strategy\" : \"BUCKET_SHUFFLE\"");
+            assertThat(insertPlan).contains("\"ship_strategy\" : \"BUCKET\"");
         } else {
             assertThat(insertPlan).contains("\"ship_strategy\" : \"FORWARD\"");
         }
+        // there shouldn't have REBALANCE shuffle strategy, this asserts operator parallelism
+        assertThat(insertPlan).doesNotContain("\"ship_strategy\" : \"REBALANCE\"");
         tEnv.executeSql(insertSql).await();
 
         CloseableIterator<Row> rowIter = tEnv.executeSql("select * from sink_test").collect();
@@ -272,8 +272,8 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
         List<String> actual = collectRowsWithTimeout(rowIter, expectedRows.size());
         assertThat(actual).containsExactlyInAnyOrderElementsOf(expectedRows);
 
+        // check data with the same bucket key should be read in sequence.
         if (distributionMode == DistributionMode.BUCKET) {
-            // check data with the same bucket key should be read in sequence.
             for (List<String> expected : expectedGroups) {
                 if (expected.size() <= 1) {
                     continue;
@@ -290,7 +290,6 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
 
     @Test
     void testAppendLogWithRoundRobin() throws Exception {
-        tEnv.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 1);
         tEnv.executeSql(
                 "create table sink_test (a int not null, b bigint, c string) with "
                         + "('bucket.num' = '3', 'client.writer.bucket.no-key-assigner' = 'round_robin')");
@@ -387,18 +386,23 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
                         + "(10, 3510, 'coco'), "
                         + "(11, 3511, 'stave'), "
                         + "(12, 3512, 'Tim')";
-        if (distributionMode == DistributionMode.PARTITION_DYNAMIC) {
-            assertThat(tEnv.explainSql(insertSql, ExplainDetail.JSON_EXECUTION_PLAN))
-                    .contains(String.format("\"ship_strategy\" : \"%s\"", distributionMode.name()));
-        } else if (distributionMode == DistributionMode.BUCKET) {
+
+        if (distributionMode == DistributionMode.BUCKET) {
             assertThatThrownBy(() -> tEnv.explainSql(insertSql, ExplainDetail.JSON_EXECUTION_PLAN))
                     .hasMessageContaining(
                             "BUCKET mode is only supported for log tables with bucket keys");
             return;
-        } else {
-            assertThat(tEnv.explainSql(insertSql, ExplainDetail.JSON_EXECUTION_PLAN))
-                    .contains("\"ship_strategy\" : \"FORWARD\"");
         }
+
+        String insertPlan = tEnv.explainSql(insertSql, ExplainDetail.JSON_EXECUTION_PLAN);
+        if (distributionMode == DistributionMode.PARTITION_DYNAMIC) {
+            assertThat(insertPlan)
+                    .contains(String.format("\"ship_strategy\" : \"%s\"", distributionMode.name()));
+        } else {
+            assertThat(insertPlan).contains("\"ship_strategy\" : \"FORWARD\"");
+        }
+        assertThat(insertPlan).doesNotContain("\"ship_strategy\" : \"REBALANCE\"");
+
         tEnv.executeSql(insertSql).await();
 
         CloseableIterator<Row> rowIter = tEnv.executeSql("select * from sink_test").collect();
@@ -449,11 +453,12 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
 
         String insertPlan = tEnv.explainSql(insertSql, ExplainDetail.JSON_EXECUTION_PLAN);
         if (distributionMode == DistributionMode.BUCKET) {
-            assertThat(insertPlan).contains("\"ship_strategy\" : \"BUCKET_SHUFFLE\"");
+            assertThat(insertPlan).contains("\"ship_strategy\" : \"BUCKET\"");
         } else if (distributionMode == DistributionMode.AUTO
                 || distributionMode == DistributionMode.NONE) {
             assertThat(insertPlan).contains("\"ship_strategy\" : \"FORWARD\"");
         }
+        assertThat(insertPlan).doesNotContain("\"ship_strategy\" : \"REBALANCE\"");
 
         tEnv.executeSql(insertSql).await();
 
@@ -625,7 +630,6 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
 
     @Test
     void testFirstRowMergeEngine() throws Exception {
-        tEnv.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 1);
         tEnv.executeSql(
                 "create table first_row_source (a int not null primary key not enforced,"
                         + " b string) with('table.merge-engine' = 'first_row')");

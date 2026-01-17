@@ -17,6 +17,7 @@
 
 package org.apache.fluss.flink.row;
 
+import org.apache.fluss.flink.sink.shuffle.DistributionMode;
 import org.apache.fluss.row.InternalRow;
 
 import javax.annotation.Nullable;
@@ -60,6 +61,9 @@ public class RowWithOp {
      *
      * @param row the internal row data (must not be null)
      * @param opType the operation type (must not be null)
+     * @param estimatedSizeInBytes the estimated size in bytes of the row, this is used to collect
+     *     statistics for partitions and dynamically adjust the shuffle routes for better
+     *     performance when {@link DistributionMode#PARTITION_DYNAMIC} is enabled.
      * @throws NullPointerException if {@code row} or {@code opType} is null
      */
     public RowWithOp(InternalRow row, OperationType opType, @Nullable Long estimatedSizeInBytes) {
@@ -86,6 +90,10 @@ public class RowWithOp {
         return opType;
     }
 
+    /**
+     * Returns the estimated size in bytes of the row. Can be null if it is not calculated when the
+     * {@link RowWithOp} was created.
+     */
     public @Nullable Long getEstimatedSizeInBytes() {
         return estimatedSizeInBytes;
     }

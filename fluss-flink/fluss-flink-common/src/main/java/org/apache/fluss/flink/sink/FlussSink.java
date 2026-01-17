@@ -19,6 +19,7 @@ package org.apache.fluss.flink.sink;
 
 import org.apache.fluss.annotation.PublicEvolving;
 import org.apache.fluss.flink.sink.writer.FlinkSinkWriter;
+import org.apache.fluss.metadata.TablePath;
 
 /**
  * FlussSink is a specialized Flink sink for writing data to Fluss.
@@ -39,8 +40,10 @@ public class FlussSink<InputT> extends FlinkSink<InputT> {
      *
      * @param builder the builder used to create the sink writer
      */
-    FlussSink(SinkWriterBuilder<? extends FlinkSinkWriter<InputT>, InputT> builder) {
-        super(builder);
+    FlussSink(
+            SinkWriterBuilder<? extends FlinkSinkWriter<InputT>, InputT> builder,
+            TablePath tablePath) {
+        super(builder, tablePath);
     }
 
     /**

@@ -95,7 +95,8 @@ public class DataStatisticsOperator<InputT>
         this.partitionGetter = new PartitionGetter(rowType, partitionKeys);
         this.statisticsSerializer = new DataStatisticsSerializer();
         try {
-            this.flussSerializationSchema.open(new SerializerInitContextImpl(rowType));
+            // enable statistics collection for the serialization schema
+            this.flussSerializationSchema.open(new SerializerInitContextImpl(rowType, true));
         } catch (Exception e) {
             throw new FlussRuntimeException(e);
         }

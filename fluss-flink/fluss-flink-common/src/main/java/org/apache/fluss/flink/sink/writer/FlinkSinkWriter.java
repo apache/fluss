@@ -117,7 +117,8 @@ public abstract class FlinkSinkWriter<InputT> implements SinkWriter<InputT> {
 
         try {
             this.serializationSchema.open(
-                    new SerializerInitContextImpl(table.getTableInfo().getRowType(), tableRowType));
+                    new SerializerInitContextImpl(
+                            table.getTableInfo().getRowType(), tableRowType, false));
         } catch (Exception e) {
             throw new FlussRuntimeException(e);
         }
