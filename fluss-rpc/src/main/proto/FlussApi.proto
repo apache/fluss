@@ -364,6 +364,29 @@ message GetKvSnapshotMetadataResponse {
   repeated PbRemotePathAndLocalFile snapshot_files = 2;
 }
 
+message AcquireKvSnapshotLeaseRequest {
+  required string lease_id = 1;
+  required int64 lease_duration = 2;
+  repeated PbKvSnapshotLeaseForTable table_lease_req = 3;
+}
+
+message AcquireKvSnapshotLeaseResponse {
+  repeated PbKvSnapshotLeaseForTable tables_lease_res = 3;
+}
+
+message ReleaseKvSnapshotLeaseRequest {
+  required string lease_id = 1;
+  repeated PbTable release_tables = 2;
+}
+
+message ReleaseKvSnapshotLeaseResponse {}
+
+message DropKvSnapshotLeaseRequest {
+  required string lease_id = 1;
+}
+
+message DropKvSnapshotLeaseResponse {}
+
 message GetLatestLakeSnapshotRequest {
   required PbTablePath table_path = 1;
 }
@@ -783,6 +806,16 @@ message PbTableBucket {
   required int32 bucket_id = 3;
 }
 
+message PbTable {
+  required int64 table_id = 1;
+  repeated PbBucket buckets = 2;
+}
+
+message PbBucket {
+  optional int64 partition_id = 1;
+  required int32 bucket_id = 2;
+}
+
 message PbAdjustIsrReqForTable {
   required int64 table_id = 1;
   repeated PbAdjustIsrReqForBucket buckets_req = 2;
@@ -1062,4 +1095,15 @@ message PbBucketOffset {
   optional int64 partition_id = 1;
   required int32 bucket_id = 2;
   optional int64 log_end_offset = 4;
+}
+
+message PbKvSnapshotLeaseForTable {
+  required int64 table_id = 1;
+  repeated PbKvSnapshotLeaseForBucket buckets_req = 2;
+}
+
+message PbKvSnapshotLeaseForBucket {
+  optional int64 partition_id = 1;
+  required int32 bucket_id = 2;
+  required int64 snapshot_id = 3;
 }

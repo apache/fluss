@@ -24,6 +24,7 @@ import org.apache.fluss.flink.lake.LakeFlinkCatalog;
 import org.apache.fluss.flink.lake.LakeTableFactory;
 import org.apache.fluss.flink.sink.FlinkTableSink;
 import org.apache.fluss.flink.source.FlinkTableSource;
+import org.apache.fluss.flink.source.reader.LeaseContext;
 import org.apache.fluss.flink.utils.FlinkConnectorOptionsUtils;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.TablePath;
@@ -136,6 +137,15 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
                         .get(FlinkConnectorOptions.SCAN_PARTITION_DISCOVERY_INTERVAL)
                         .toMillis();
 
+        LeaseContext leaseContext =
+                primaryKeyIndexes.length > 0
+                        ? new LeaseContext(
+                                tableOptions.get(FlinkConnectorOptions.SCAN_KV_SNAPSHOT_LEASE_ID),
+                                tableOptions
+                                        .get(FlinkConnectorOptions.SCAN_KV_SNAPSHOT_LEASE_DURATION)
+                                        .toMillis())
+                        : new LeaseContext(null, null);
+
         return new FlinkTableSource(
                 toFlussTablePath(context.getObjectIdentifier()),
                 toFlussClientConfig(
@@ -151,7 +161,8 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
                 partitionDiscoveryIntervalMs,
                 tableOptions.get(toFlinkOption(ConfigOptions.TABLE_DATALAKE_ENABLED)),
                 tableOptions.get(toFlinkOption(ConfigOptions.TABLE_MERGE_ENGINE)),
-                context.getCatalogTable().getOptions());
+                context.getCatalogTable().getOptions(),
+                leaseContext);
     }
 
     @Override
@@ -212,6 +223,8 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
                                 FlinkConnectorOptions.SCAN_STARTUP_MODE,
                                 FlinkConnectorOptions.SCAN_STARTUP_TIMESTAMP,
                                 FlinkConnectorOptions.SCAN_PARTITION_DISCOVERY_INTERVAL,
+                                FlinkConnectorOptions.SCAN_KV_SNAPSHOT_LEASE_ID,
+                                FlinkConnectorOptions.SCAN_KV_SNAPSHOT_LEASE_DURATION,
                                 FlinkConnectorOptions.LOOKUP_ASYNC,
                                 FlinkConnectorOptions.SINK_IGNORE_DELETE,
                                 FlinkConnectorOptions.SINK_BUCKET_SHUFFLE,
