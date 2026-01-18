@@ -35,7 +35,7 @@ public class TestingValuesLakeTieringFactory
     @Override
     public LakeWriter<TestingValuesLakeWriter.TestingValuesWriteResult> createLakeWriter(
             WriterInitContext writerInitContext) throws IOException {
-        return new TestingValuesLakeWriter(writerInitContext.tablePath().toString());
+        return new TestingValuesLakeWriter(writerInitContext.tableInfo());
     }
 
     @Override

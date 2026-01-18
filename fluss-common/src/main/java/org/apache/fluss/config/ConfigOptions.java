@@ -1851,6 +1851,23 @@ public class ConfigOptions {
                                     + ConfigOptions.TABLE_DATALAKE_AUTO_EXPIRE_SNAPSHOT
                                     + " is false.");
 
+    public static final ConfigOption<Duration> LAKE_TIERING_TABLE_DURATION_MAX =
+            key("lake.tiering.table.duration.max")
+                    .durationType()
+                    .defaultValue(Duration.ofMinutes(30))
+                    .withDescription(
+                            "The maximum duration for tiering a single table. If tiering a table exceeds this duration, "
+                                    + "it will be force completed: the tiering will be finalized and committed to the data lake "
+                                    + "(e.g., Paimon) immediately, even if they haven't reached their desired stopping offsets.");
+
+    public static final ConfigOption<Duration> LAKE_TIERING_TABLE_DURATION_DETECT_INTERVAL =
+            key("lake.tiering.table.duration.detect-interval")
+                    .durationType()
+                    .defaultValue(Duration.ofSeconds(30))
+                    .withDescription(
+                            "The interval to check if a table tiering operation has reached the maximum duration. "
+                                    + "The enumerator will periodically check tiering tables and force complete those that exceed the maximum duration.");
+
     // ------------------------------------------------------------------------
     //  ConfigOptions for fluss kafka
     // ------------------------------------------------------------------------
