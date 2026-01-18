@@ -65,8 +65,22 @@ listeners:
     port: 9125
 
 # Fluss cluster external access
-  externalAccess:
-    enabled: false
+externalAccess:
+  enabled: false
+  ## Image used for the init container
+  initContainer:
+    image:
+      registry: docker.io
+      repository: bitnami/kubectl
+      tag: latest
+      pullPolicy: IfNotPresent
+  service:
+    ## Service type (only LoadBalancer is supported for now)
+    type: LoadBalancer
+    ## Allowed source IP address ranges for external access
+    allowedSourceRanges:
+    ## Load balancer annotations
+    annotations:
 
 resources: {}
   # We usually recommend not to specify default resources and to leave this as a conscious
@@ -95,3 +109,7 @@ serviceAccount:
   # Additional annotations to apply to the ServiceAccount.
   # These can be useful, for example, to support integrations like workload identity.
   annotations: {}
+
+rbac:
+  create: false
+

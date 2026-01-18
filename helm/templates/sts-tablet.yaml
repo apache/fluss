@@ -35,8 +35,39 @@ spec:
         {{- include "fluss.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: tablet
     spec:
-      {{- if .Values.serviceAccount.create }}
-      serviceAccountName: {{ .Values.serviceAccount.name | default (include "fluss.fullname" .) }}
+      serviceAccountName: {{ include "fluss.serviceAccountName" . }}
+      {{- if .Values.externalAccess.enabled }}
+      initContainers:
+        - name: auto-discovery
+          image: "{{ .Values.externalAccess.initContainer.image.registry }}/{{ .Values.externalAccess.initContainer.image.repository }}:{{ .Values.externalAccess.initContainer.image.tag }}"
+          imagePullPolicy: {{ .Values.externalAccess.initContainer.image.pullPolicy }}
+          command:
+            - "/bin/bash"
+            - "-c"
+            - |
+              SVC_NAME="tablet-server-${POD_NAME##*-}-external"
+              echo "Waiting for service $SVC_NAME external IP..."
+              EXTERNAL_HOST=""
+              while [ -z "$EXTERNAL_HOST" ]; do
+                EXTERNAL_HOST=$(kubectl get svc $SVC_NAME -n $POD_NAMESPACE -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+                if [ -z "$EXTERNAL_HOST" ]; then
+                  sleep 5
+                fi
+              done
+              echo "Found external hostname: $EXTERNAL_HOST"
+              echo "$EXTERNAL_HOST" > /shared/external.host
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          volumeMounts:
+            - name: shared
+              mountPath: /shared
       {{- end }}
       containers:
         - name: {{ .Chart.Name }}-tablet
@@ -74,6 +105,14 @@ spec:
               BIND_LISTENERS="INTERNAL://${POD_IP}:{{ .Values.listeners.internal.port }}, CLIENT://${POD_IP}:{{ .Values.listeners.client.port }}" && \
               ADVERTISED_LISTENERS="CLIENT://${POD_NAME}.tablet-server-hs.${POD_NAMESPACE}.svc.cluster.local:{{ .Values.listeners.client.port }}" && \
 
+              {{- if .Values.externalAccess.enabled }}
+              if [ -f /shared/external.host ]; then
+                EXTERNAL_HOST=$(cat /shared/external.host) && \
+                ADVERTISED_LISTENERS="${ADVERTISED_LISTENERS}, EXTERNAL://${EXTERNAL_HOST}:{{ .Values.listeners.external.port }}" && \
+                BIND_LISTENERS="${BIND_LISTENERS}, EXTERNAL://${POD_IP}:{{ .Values.listeners.external.port }}"
+              fi && \
+              {{- end }}
+
               echo "" >> $FLUSS_HOME/conf/server.yaml && \
               echo "tablet-server.id: ${FLUSS_SERVER_ID}" >> $FLUSS_HOME/conf/server.yaml && \
               echo "bind.listeners: ${BIND_LISTENERS}" >> $FLUSS_HOME/conf/server.yaml && \
@@ -101,12 +140,20 @@ spec:
               mountPath: /opt/conf
             - name: data
               mountPath: /tmp/fluss/data
+            {{- if .Values.externalAccess.enabled }}
+            - name: shared
+              mountPath: /shared
+            {{- end }}
       volumes:
         - name: fluss-conf
           configMap:
             name: fluss-conf-file
         {{- if not .Values.persistence.enabled }}
         - name: data
+          emptyDir: {}
+        {{- end }}
+        {{- if .Values.externalAccess.enabled }}
+        - name: shared
           emptyDir: {}
         {{- end }}
   {{- if .Values.persistence.enabled }}

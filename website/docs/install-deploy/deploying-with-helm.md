@@ -200,6 +200,17 @@ The following table lists the configurable parameters of the Fluss chart and the
 | `configurationOverrides.data.dir` | Local data directory | `/tmp/fluss/data` |
 | `configurationOverrides.internal.listener.name` | Internal listener name | `INTERNAL` |
 
+### External Access Parameters
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `externalAccess.enabled` | Enable external access | `false` |
+| `externalAccess.service.type` | Service type (only `LoadBalancer` supported) | `LoadBalancer` |
+| `externalAccess.service.allowedSourceRanges` | Allowed source IP ranges | `nil` |
+| `externalAccess.service.annotations` | Service annotations | `{}` |
+| `externalAccess.initContainer.image.repository` | Init container image repository | `bitnami/kubectl` |
+| `externalAccess.initContainer.image.tag` | Init container image tag | `1.30.0` |
+
 ### Persistence Parameters
 
 | Parameter | Description | Default |
@@ -242,7 +253,7 @@ The chart automatically configures listeners for internal cluster communication 
 - **Client Port (9124)**: Used for client connections
 - **External Port (9125)**: Used for external access if enabled
 
-Custom listener configuration:
+Custom listener and external access configuration:
 
 ```yaml
 listeners:
@@ -252,6 +263,13 @@ listeners:
     port: 9124
   external:
     port: 9125
+
+externalAccess:
+  enabled: true
+  service:
+    type: LoadBalancer
+    annotations:
+      service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
 ```
 
 ### Storage Configuration
