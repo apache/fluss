@@ -732,7 +732,7 @@ class KvTabletTest {
         if (doProjection) {
             logProjection = new FileLogProjection(projectionCache);
             logProjection.setCurrentProjection(
-                    0L, schemaGetter, DEFAULT_COMPRESSION, new int[] {0});
+                    0L, schemaGetter, DEFAULT_COMPRESSION, new int[] {0}, true);
         }
 
         RowType readLogRowType = doProjection ? rowType.project(new int[] {0}) : rowType;
@@ -828,7 +828,7 @@ class KvTabletTest {
         if (doProjection) {
             logProjection = new FileLogProjection(projectionCache);
             logProjection.setCurrentProjection(
-                    0L, schemaGetter, DEFAULT_COMPRESSION, new int[] {0});
+                    0L, schemaGetter, DEFAULT_COMPRESSION, new int[] {0}, true);
         }
 
         // schema evolution case 1 :insert with data with schema 2
@@ -916,7 +916,7 @@ class KvTabletTest {
         if (doProjection) {
             logProjection = new FileLogProjection(projectionCache);
             logProjection.setCurrentProjection(
-                    0L, schemaGetter, DEFAULT_COMPRESSION, new int[] {0});
+                    0L, schemaGetter, DEFAULT_COMPRESSION, new int[] {0}, true);
         }
         RowType readLogRowType = doProjection ? rowType.project(new int[] {0}) : rowType;
 
@@ -1036,7 +1036,7 @@ class KvTabletTest {
         if (doProjection) {
             logProjection = new FileLogProjection(projectionCache);
             logProjection.setCurrentProjection(
-                    0L, schemaGetter, DEFAULT_COMPRESSION, new int[] {0});
+                    0L, schemaGetter, DEFAULT_COMPRESSION, new int[] {0}, true);
         }
 
         // schema evolution case 1 :insert with data with new schema

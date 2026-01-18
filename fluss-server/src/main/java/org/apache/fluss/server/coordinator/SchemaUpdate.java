@@ -63,9 +63,7 @@ public class SchemaUpdate {
 
     public Schema getSchema() {
         Schema.Builder builder =
-                Schema.newBuilder()
-                        .fromColumns(columns)
-                        .highestFieldId((short) highestFieldId.get());
+                Schema.newBuilder().fromColumns(columns).highestFieldId(highestFieldId.get());
         if (!primaryKeys.isEmpty()) {
             builder.primaryKey(primaryKeys);
         }

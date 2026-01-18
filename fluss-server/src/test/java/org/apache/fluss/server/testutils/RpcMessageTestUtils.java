@@ -215,11 +215,23 @@ public class RpcMessageTestUtils {
     public static FetchLogRequest newFetchLogRequest(
             int followerId, long tableId, int bucketId, long fetchOffset, int[] selectedFields) {
         return newFetchLogRequest(
+                followerId, tableId, bucketId, fetchOffset, selectedFields, false);
+    }
+
+    public static FetchLogRequest newFetchLogRequest(
+            int followerId,
+            long tableId,
+            int bucketId,
+            long fetchOffset,
+            int[] selectedFields,
+            boolean isProjectByIds) {
+        return newFetchLogRequest(
                 followerId,
                 tableId,
                 bucketId,
                 fetchOffset,
                 selectedFields,
+                isProjectByIds,
                 -1,
                 Integer.MAX_VALUE,
                 -1);
@@ -231,6 +243,7 @@ public class RpcMessageTestUtils {
             int bucketId,
             long fetchOffset,
             int[] selectedFields,
+            boolean isProjectByIds,
             int minFetchBytes,
             int maxFetchBytes,
             int maxWaitMs) {
@@ -241,6 +254,7 @@ public class RpcMessageTestUtils {
         }
 
         PbFetchLogReqForTable fetchLogReqForTable = new PbFetchLogReqForTable().setTableId(tableId);
+        fetchLogReqForTable.setProjectByIds(isProjectByIds);
         if (selectedFields != null) {
             fetchLogReqForTable
                     .setProjectionPushdownEnabled(true)
@@ -248,6 +262,7 @@ public class RpcMessageTestUtils {
         } else {
             fetchLogReqForTable.setProjectionPushdownEnabled(false);
         }
+
         // TODO make the max fetch bytes configurable.
         PbFetchLogReqForBucket fetchLogReqForBucket =
                 new PbFetchLogReqForBucket()
