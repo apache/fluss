@@ -266,13 +266,10 @@ class LakeTableManagerITCase {
         Thread.sleep(1000);
 
         // Step 2: Try to request the table for tiering within 3 seconds, should NOT get it
-        assertThat(tieringManager.requestTable()).isNull();
+        retry(
                 Duration.ofSeconds(3),
                 () -> {
-                    LakeTieringTableInfo table = tieringManager.requestTable();
-                    assertThat(table == null || table.tableId() != tableId)
-                            .as("Should not get table for tiering with large freshness (10min)")
-                            .isTrue();
+                    assertThat(tieringManager.requestTable()).isNull();
                 });
 
         // Step 3: Change freshness to a very small value (100ms)

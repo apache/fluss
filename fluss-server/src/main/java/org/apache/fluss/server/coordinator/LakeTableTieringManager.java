@@ -130,6 +130,9 @@ public class LakeTableTieringManager implements AutoCloseable {
     // from table_id -> last heartbeat time by the tiering service
     private final Map<Long, Long> liveTieringTableIds;
 
+    // table_id -> delayed tiering task
+    private final Map<Long, DelayedTiering> delayedTieringByTableId;
+
     private final Lock lock = new ReentrantLock();
 
     public LakeTableTieringManager() {
@@ -159,6 +162,7 @@ public class LakeTableTieringManager implements AutoCloseable {
                 this::checkTieringServiceTimeout, 0, 15, TimeUnit.SECONDS);
         this.tableTierEpoch = new HashMap<>();
         this.tableLastTieredTime = new HashMap<>();
+        this.delayedTieringByTableId = new HashMap<>();
     }
 
     public void initWithLakeTables(List<Tuple2<TableInfo, Long>> tableInfoWithTieredTime) {
@@ -205,10 +209,17 @@ public class LakeTableTieringManager implements AutoCloseable {
             // the table has been dropped, return directly
             return;
         }
+        // Before reschedule, remove the existing DelayedTiering if present
+        DelayedTiering existingDelayedTiering = delayedTieringByTableId.remove(tableId);
+        if (existingDelayedTiering != null) {
+            existingDelayedTiering.cancel();
+        }
         long delayMs = freshnessInterval - (clock.milliseconds() - lastTieredTime);
         // if the delayMs is < 0, the DelayedTiering will be triggered at once without
         // adding into timing wheel.
-        lakeTieringScheduleTimer.add(new DelayedTiering(tableId, delayMs));
+        DelayedTiering delayedTiering = new DelayedTiering(tableId, delayMs);
+        delayedTieringByTableId.put(tableId, delayedTiering);
+        lakeTieringScheduleTimer.add(delayedTiering);
     }
 
     public void removeLakeTable(long tableId) {
@@ -221,6 +232,11 @@ public class LakeTableTieringManager implements AutoCloseable {
                     tieringStates.remove(tableId);
                     liveTieringTableIds.remove(tableId);
                     tableTierEpoch.remove(tableId);
+                    // Remove and cancel the delayed tiering task if present
+                    DelayedTiering delayedTiering = delayedTieringByTableId.remove(tableId);
+                    if (delayedTiering != null) {
+                        delayedTiering.cancel();
+                    }
                 });
     }
 
@@ -500,9 +516,12 @@ public class LakeTableTieringManager implements AutoCloseable {
         public void run() {
             inLock(
                     lock,
-                    () ->
-                            // to pending state
-                            doHandleStateChange(tableId, TieringState.Pending));
+                    () -> {
+                        // to pending state
+                        doHandleStateChange(tableId, TieringState.Pending);
+                        // Remove from map after execution
+                        delayedTieringByTableId.remove(tableId);
+                    });
         }
     }
 
