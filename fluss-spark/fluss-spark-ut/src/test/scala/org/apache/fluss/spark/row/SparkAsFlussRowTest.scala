@@ -21,7 +21,7 @@ import org.apache.fluss.spark.FlussSparkTestBase
 import org.apache.fluss.spark.util.TestUtils.SCHEMA
 
 import org.apache.spark.sql.catalyst.InternalRow
-import org.apache.spark.sql.catalyst.util.GenericArrayData
+import org.apache.spark.sql.catalyst.util.{ArrayBasedMapData, GenericArrayData}
 import org.apache.spark.sql.types.Decimal
 import org.apache.spark.unsafe.types.UTF8String
 import org.assertj.core.api.Assertions.assertThat
@@ -48,13 +48,16 @@ class SparkAsFlussRowTest extends FlussSparkTestBase {
         UTF8String.fromString("test"),
         Timestamp.valueOf("2025-12-31 10:00:00").getTime * 1000,
         new GenericArrayData(Array(11.11f, 22.22f)),
+        ArrayBasedMapData.apply(
+          Array(UTF8String.fromString("k1"), UTF8String.fromString("k2")).asInstanceOf[Array[Any]],
+          Array(111, 222)),
         InternalRow.apply(123L, UTF8String.fromString("apache fluss"))
       ))
     row = new SparkAsFlussRow(SCHEMA).replace(data)
   }
 
   test("Fluss SparkAsFlussRow") {
-    assertThat(row.fieldCount).isEqualTo(13)
+    assertThat(row.fieldCount).isEqualTo(14)
 
     assertThat(row.getBoolean(0)).isEqualTo(true)
     assertThat(row.getByte(1)).isEqualTo(1.toByte)
@@ -73,8 +76,14 @@ class SparkAsFlussRowTest extends FlussSparkTestBase {
     // test array type
     assertThat(row.getArray(11).toFloatArray).containsExactly(Array(11.11f, 22.22f): _*)
 
+    // test map type
+    assertThat(row.getMap(12).size()).isEqualTo(2)
+    assertThat(row.getMap(12).keyArray().getString(0).toString).isEqualTo("k1")
+    assertThat(row.getMap(12).keyArray().getString(1).toString).isEqualTo("k2")
+    assertThat(row.getMap(12).valueArray().toIntArray).containsExactly(Array(111, 222): _*)
+
     // test row type
-    val nestedRow = row.getRow(12, 2)
+    val nestedRow = row.getRow(13, 2)
     assertThat(nestedRow.getFieldCount).isEqualTo(2)
     assertThat(nestedRow.getLong(0)).isEqualTo(123L)
     assertThat(nestedRow.getString(1).toString).isEqualTo("apache fluss")

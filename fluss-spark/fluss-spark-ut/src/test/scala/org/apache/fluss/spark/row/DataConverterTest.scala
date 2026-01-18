@@ -17,13 +17,15 @@
 
 package org.apache.fluss.spark.row
 
-import org.apache.fluss.row.{BinaryString, Decimal => FlussDecimal, GenericArray, GenericRow, TimestampLtz, TimestampNtz}
-import org.apache.fluss.types.{ArrayType, CharType, DataTypes, DecimalType, LocalZonedTimestampType, RowType, TimestampType}
+import org.apache.fluss.row.{BinaryString, Decimal => FlussDecimal, GenericArray, GenericMap, GenericRow, TimestampLtz, TimestampNtz}
+import org.apache.fluss.types.{ArrayType, CharType, DataTypes, DecimalType, LocalZonedTimestampType, MapType, RowType, TimestampType}
 
 import org.apache.spark.sql.types.{Decimal => SparkDecimal}
 import org.apache.spark.unsafe.types.UTF8String
 import org.assertj.core.api.Assertions.assertThat
 import org.scalatest.funsuite.AnyFunSuite
+
+import scala.collection.JavaConverters._
 
 class DataConverterTest extends AnyFunSuite {
 
@@ -274,6 +276,25 @@ class DataConverterTest extends AnyFunSuite {
     assertThat(result.asInstanceOf[Long]).isEqualTo(2000000000L) // microseconds
   }
 
+  test("toSparkMap: Map type") {
+    val flussMap = new GenericMap(
+      Map(
+        BinaryString.fromString("a") -> Integer.valueOf(1),
+        BinaryString.fromString("b") -> Integer.valueOf(2)).asJava)
+    val mapType = new MapType(DataTypes.STRING, DataTypes.INT)
+    val sparkMap = DataConverter.toSparkMap(flussMap, mapType)
+    assertThat(sparkMap.numElements()).isEqualTo(2)
+
+    val keyArray = sparkMap.keyArray()
+    assertThat(keyArray.numElements()).isEqualTo(2)
+    assertThat(keyArray.getUTF8String(0).toString).isEqualTo("a")
+    assertThat(keyArray.getUTF8String(1).toString).isEqualTo("b")
+    val valueArray = sparkMap.valueArray()
+    assertThat(valueArray.numElements()).isEqualTo(2)
+    assertThat(valueArray.getInt(0)).isEqualTo(1)
+    assertThat(valueArray.getInt(1)).isEqualTo(2)
+  }
+
   test("toSparkObject: ROW type") {
     val rowType = RowType
       .builder()
@@ -287,11 +308,5 @@ class DataConverterTest extends AnyFunSuite {
 
     assertThat(result).isNotNull()
     assertThat(result.asInstanceOf[FlussAsSparkRow].getInt(0)).isEqualTo(42)
-  }
-
-  test("toSparkMap: unsupported") {
-    assertThrows[UnsupportedOperationException] {
-      DataConverter.toSparkMap(null, null)
-    }
   }
 }
