@@ -43,7 +43,7 @@ abstract class AbstractSparkTable(val admin: Admin, val tableInfo: TableInfo) ex
   override def schema(): StructType = _schema
 
   override def capabilities(): util.Set[TableCapability] = {
-    Set(TableCapability.BATCH_WRITE).asJava
+    Set(TableCapability.BATCH_WRITE, TableCapability.STREAMING_WRITE).asJava
   }
 
   override def partitioning(): Array[Transform] = {

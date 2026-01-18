@@ -90,14 +90,9 @@ class FlussSparkTestBase extends QueryTest with SharedSparkSession {
     }
     val scanRecords = logScanner.poll(Duration.ofSeconds(1))
     scanRecords
-      .buckets()
+      .iterator()
       .asScala
-      .flatMap(
-        tableBucket =>
-          scanRecords
-            .records(tableBucket)
-            .asScala
-            .map(r => (r.getChangeType.shortString, r.getRow)))
+      .map(record => (record.getChangeType.shortString(), record.getRow))
       .toArray
   }
 }
