@@ -59,6 +59,15 @@ trait WithFlussAdmin extends AutoCloseable {
     _admin
   }
 
+  /**
+   * Gets the Fluss Admin client. This is a public accessor for procedures and other external
+   * components that need admin access.
+   *
+   * @return
+   *   the Admin instance
+   */
+  def getAdmin: Admin = admin
+
   override def close(): Unit = {
     IOUtils.closeQuietly(_admin, "fluss-admin")
     IOUtils.closeQuietly(_connection, "fluss-connection");

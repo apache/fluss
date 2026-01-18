@@ -19,7 +19,9 @@ package org.apache.fluss.spark
 
 import org.apache.fluss.exception.{DatabaseNotExistException, TableAlreadyExistException, TableNotExistException}
 import org.apache.fluss.metadata.TablePath
-import org.apache.fluss.spark.catalog.{SupportsFlussNamespaces, WithFlussAdmin}
+import org.apache.fluss.spark.catalog.{SupportsFlussNamespaces, SupportsProcedures, WithFlussAdmin}
+import org.apache.fluss.spark.exception.NoSuchProcedureException
+import org.apache.fluss.spark.procedure.{Procedure, ProcedureBuilder}
 
 import org.apache.spark.sql.catalyst.analysis.{NoSuchNamespaceException, NoSuchTableException, TableAlreadyExistsException}
 import org.apache.spark.sql.connector.catalog.{Identifier, Table, TableCatalog, TableChange}
@@ -32,9 +34,14 @@ import java.util.concurrent.ExecutionException
 
 import scala.collection.JavaConverters._
 
-class SparkCatalog extends TableCatalog with SupportsFlussNamespaces with WithFlussAdmin {
+class SparkCatalog
+  extends TableCatalog
+  with SupportsFlussNamespaces
+  with WithFlussAdmin
+  with SupportsProcedures {
 
   private var catalogName: String = "fluss"
+  private val SYSTEM_NAMESPACE = "sys"
 
   override def listTables(namespace: Array[String]): Array[Identifier] = {
     doNamespaceOperator(namespace) {
@@ -115,6 +122,20 @@ class SparkCatalog extends TableCatalog with SupportsFlussNamespaces with WithFl
   }
 
   override def name(): String = catalogName
+
+  override def loadProcedure(identifier: Identifier): Procedure = {
+    if (isSystemNamespace(identifier.namespace)) {
+      val builder: ProcedureBuilder = SparkProcedures.newBuilder(identifier.name)
+      if (builder != null) {
+        return builder.withTableCatalog(this).build()
+      }
+    }
+    throw new NoSuchProcedureException(s"Procedure not found: $identifier")
+  }
+
+  private def isSystemNamespace(namespace: Array[String]): Boolean = {
+    namespace.length == 1 && namespace(0).equalsIgnoreCase(SYSTEM_NAMESPACE)
+  }
 
   private def toTablePath(ident: Identifier): TablePath = {
     assert(ident.namespace().length == 1, "Only single namespace is supported")

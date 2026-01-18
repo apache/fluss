@@ -210,7 +210,7 @@ public class RebalanceExample {
 
 ## Using Flink Stored Procedures
 
-For rebalancing operations, Fluss provides convenient Flink stored procedures that can be called directly from Flink SQL. See [Rebalance Procedures](/docs/engine-flink/procedures.md#rebalance-procedures) for detailed documentation on using the following procedures:
+For rebalancing operations, Fluss provides convenient Flink stored procedures that can be called directly from Flink SQL. See [Rebalance Procedures](../../../engine-flink/procedures#rebalance-procedures) for detailed documentation on using the following procedures:
 
 - **add_server_tag**: Tag servers before rebalancing
 - **remove_server_tag**: Remove tags after rebalancing

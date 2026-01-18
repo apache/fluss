@@ -53,6 +53,7 @@ class FlussSparkTestBase extends QueryTest with SharedSparkSession {
       .set(s"spark.sql.catalog.$DEFAULT_CATALOG", classOf[SparkCatalog].getName)
       .set(s"spark.sql.catalog.$DEFAULT_CATALOG.bootstrap.servers", flussServer.getBootstrapServers)
       .set("spark.sql.defaultCatalog", DEFAULT_CATALOG)
+      .set("spark.sql.extensions", classOf[FlussSparkSessionExtensions].getName)
   }
 
   override protected def beforeAll(): Unit = {

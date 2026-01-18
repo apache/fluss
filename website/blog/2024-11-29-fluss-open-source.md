@@ -40,7 +40,7 @@ Make sure to keep an eye on the project, give it a try and if you like it, donâ€
 
 ### Getting Started
 - Visit the [GitHub repository](https://github.com/apache/fluss).
-- Check out the [quickstart guide](/docs/quickstart/flink/).
+- Check out the [quickstart guide](/docs/next/quickstart/flink/).
 
 ### Additional Resources
 - Announcement Blog Post: [Introducing Fluss: Unified Streaming Storage For Next-Generation Data Analytics](https://www.ververica.com/blog/introducing-fluss)
