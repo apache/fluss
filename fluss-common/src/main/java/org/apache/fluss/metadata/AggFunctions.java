@@ -272,6 +272,32 @@ public final class AggFunctions {
     }
 
     // ===================================================================================
+    // Roaring Bitmap Aggregation Functions
+    // ===================================================================================
+
+    /**
+     * Creates a RBM32 aggregation function that merges serialized 32-bit roaring bitmaps.
+     *
+     * <p>Supported data types: BYTES
+     *
+     * @return a RBM32 aggregation function
+     */
+    public static AggFunction RBM32() {
+        return new AggFunction(AggFunctionType.RBM32, null);
+    }
+
+    /**
+     * Creates a RBM64 aggregation function that merges serialized 64-bit roaring bitmaps.
+     *
+     * <p>Supported data types: BYTES
+     *
+     * @return a RBM64 aggregation function
+     */
+    public static AggFunction RBM64() {
+        return new AggFunction(AggFunctionType.RBM64, null);
+    }
+
+    // ===================================================================================
     // Internal Factory Methods
     // ===================================================================================
 

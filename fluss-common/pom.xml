@@ -62,6 +62,12 @@
             <artifactId>fluss-shaded-arrow</artifactId>
         </dependency>
 
+        <dependency>
+            <groupId>org.roaringbitmap</groupId>
+            <artifactId>RoaringBitmap</artifactId>
+            <version>${roaringbitmap.version}</version>
+        </dependency>
+
         <!-- TODO: these two dependencies need to be shaded. -->
         <dependency>
             <groupId>at.yawk.lz4</groupId>

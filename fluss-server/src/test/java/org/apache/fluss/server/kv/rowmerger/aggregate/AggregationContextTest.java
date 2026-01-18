@@ -17,8 +17,6 @@
 
 package org.apache.fluss.server.kv.rowmerger.aggregate;
 
-import org.apache.fluss.config.Configuration;
-import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.metadata.AggFunctions;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.Schema;
@@ -32,6 +30,8 @@ import org.apache.fluss.server.kv.rowmerger.aggregate.functions.FieldListaggAgg;
 import org.apache.fluss.server.kv.rowmerger.aggregate.functions.FieldMaxAgg;
 import org.apache.fluss.server.kv.rowmerger.aggregate.functions.FieldMinAgg;
 import org.apache.fluss.server.kv.rowmerger.aggregate.functions.FieldProductAgg;
+import org.apache.fluss.server.kv.rowmerger.aggregate.functions.FieldRoaringBitmap32Agg;
+import org.apache.fluss.server.kv.rowmerger.aggregate.functions.FieldRoaringBitmap64Agg;
 import org.apache.fluss.server.kv.rowmerger.aggregate.functions.FieldSumAgg;
 import org.apache.fluss.types.DataTypes;
 
@@ -65,10 +65,11 @@ class AggregationContextTest {
                         .column("bool_or_col", DataTypes.BOOLEAN(), AggFunctions.BOOL_OR())
                         .column("listagg_col", DataTypes.STRING(), AggFunctions.LISTAGG())
                         .column("string_agg_col", DataTypes.STRING(), AggFunctions.STRING_AGG())
+                        .column("rbm32_col", DataTypes.BYTES(), AggFunctions.RBM32())
+                        .column("rbm64_col", DataTypes.BYTES(), AggFunctions.RBM64())
                         .primaryKey("id")
                         .build();
 
-        TableConfig tableConfig = new TableConfig(new Configuration());
         AggregationContext context = AggregationContext.create(schema, KvFormat.COMPACTED);
 
         // Primary key field should use FieldLastValueAgg (not aggregated)
@@ -86,5 +87,7 @@ class AggregationContextTest {
         assertThat(context.getAggregators()[11]).isInstanceOf(FieldListaggAgg.class);
         assertThat(context.getAggregators()[12])
                 .isInstanceOf(FieldListaggAgg.class); // string_agg is alias
+        assertThat(context.getAggregators()[13]).isInstanceOf(FieldRoaringBitmap32Agg.class);
+        assertThat(context.getAggregators()[14]).isInstanceOf(FieldRoaringBitmap64Agg.class);
     }
 }
