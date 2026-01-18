@@ -308,6 +308,17 @@ public class RocksDBResourceContainer implements AutoCloseable {
         handlesToClose.add(blockCache);
         blockBasedTableConfig.setBlockCache(blockCache);
 
+        // Configure index and filter blocks caching
+        blockBasedTableConfig.setCacheIndexAndFilterBlocks(
+                internalGetOption(ConfigOptions.KV_CACHE_INDEX_AND_FILTER_BLOCKS));
+        blockBasedTableConfig.setCacheIndexAndFilterBlocksWithHighPriority(
+                internalGetOption(
+                        ConfigOptions.KV_CACHE_INDEX_AND_FILTER_BLOCKS_WITH_HIGH_PRIORITY));
+        blockBasedTableConfig.setPinL0FilterAndIndexBlocksInCache(
+                internalGetOption(ConfigOptions.KV_PIN_L0_FILTER_AND_INDEX_BLOCKS_IN_CACHE));
+        blockBasedTableConfig.setPinTopLevelIndexAndFilter(
+                internalGetOption(ConfigOptions.KV_PIN_TOP_LEVEL_INDEX_AND_FILTER));
+
         if (internalGetOption(ConfigOptions.KV_USE_BLOOM_FILTER)) {
             final double bitsPerKey = internalGetOption(ConfigOptions.KV_BLOOM_FILTER_BITS_PER_KEY);
             final boolean blockBasedMode =

@@ -1739,6 +1739,45 @@ public class ConfigOptions {
                             "If true, RocksDB will use block-based filter instead of full filter, this only take effect when bloom filter is used. "
                                     + "The default value is `false`.");
 
+    public static final ConfigOption<Boolean> KV_CACHE_INDEX_AND_FILTER_BLOCKS =
+            key("kv.rocksdb.block.cache-index-and-filter-blocks")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription(
+                            "If true, index and filter blocks will be stored in block cache, "
+                                    + "together with all other data blocks. This helps to limit memory usage "
+                                    + "so that the total memory used by RocksDB is bounded by block cache size. "
+                                    + "The default value is `false`.");
+
+    public static final ConfigOption<Boolean> KV_CACHE_INDEX_AND_FILTER_BLOCKS_WITH_HIGH_PRIORITY =
+            key("kv.rocksdb.block.cache-index-and-filter-blocks-with-high-priority")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription(
+                            "If true and cache_index_and_filter_blocks is enabled, "
+                                    + "index and filter blocks will be stored with high priority in block cache, "
+                                    + "making them less likely to be evicted than data blocks. "
+                                    + "The default value is `false`.");
+
+    public static final ConfigOption<Boolean> KV_PIN_L0_FILTER_AND_INDEX_BLOCKS_IN_CACHE =
+            key("kv.rocksdb.block.pin-l0-filter-and-index-blocks-in-cache")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription(
+                            "If true and cache_index_and_filter_blocks is enabled, "
+                                    + "L0 index and filter blocks will be pinned in block cache and will not be evicted. "
+                                    + "This helps avoid performance degradation due to cache misses on L0 index/filter blocks. "
+                                    + "The default value is `false`.");
+
+    public static final ConfigOption<Boolean> KV_PIN_TOP_LEVEL_INDEX_AND_FILTER =
+            key("kv.rocksdb.block.pin-top-level-index-and-filter")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription(
+                            "If true, the top-level index of partitioned index/filter blocks will be pinned "
+                                    + "in block cache and will not be evicted. "
+                                    + "The default value is `false`.");
+
     // ------------------------------------------------------------------------
     //  ConfigOptions for Kv recovering
     // ------------------------------------------------------------------------

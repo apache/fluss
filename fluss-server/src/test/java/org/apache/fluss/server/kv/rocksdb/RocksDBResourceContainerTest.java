@@ -194,4 +194,43 @@ class RocksDBResourceContainerTest {
             assertThat(tableConfig.filterPolicy() instanceof BloomFilter).isTrue();
         }
     }
+
+    @Test
+    void testCacheIndexAndFilterBlocksConfig() throws Exception {
+        // Test with default values (all false, following RocksDB defaults)
+        Configuration defaultConfig = new Configuration();
+        try (RocksDBResourceContainer container =
+                new RocksDBResourceContainer(defaultConfig, null)) {
+            ColumnFamilyOptions columnOptions = container.getColumnOptions();
+            BlockBasedTableConfig tableConfig =
+                    (BlockBasedTableConfig) columnOptions.tableFormatConfig();
+
+            // All default values should be false (RocksDB defaults)
+            assertThat(tableConfig.cacheIndexAndFilterBlocks()).isFalse();
+            assertThat(tableConfig.cacheIndexAndFilterBlocksWithHighPriority()).isFalse();
+            assertThat(tableConfig.pinL0FilterAndIndexBlocksInCache()).isFalse();
+            assertThat(tableConfig.pinTopLevelIndexAndFilter()).isFalse();
+        }
+
+        // Test with custom values (all true)
+        Configuration customConfig = new Configuration();
+        customConfig.setString(ConfigOptions.KV_CACHE_INDEX_AND_FILTER_BLOCKS.key(), "true");
+        customConfig.setString(
+                ConfigOptions.KV_CACHE_INDEX_AND_FILTER_BLOCKS_WITH_HIGH_PRIORITY.key(), "true");
+        customConfig.setString(
+                ConfigOptions.KV_PIN_L0_FILTER_AND_INDEX_BLOCKS_IN_CACHE.key(), "true");
+        customConfig.setString(ConfigOptions.KV_PIN_TOP_LEVEL_INDEX_AND_FILTER.key(), "true");
+
+        try (RocksDBResourceContainer container =
+                new RocksDBResourceContainer(customConfig, null)) {
+            ColumnFamilyOptions columnOptions = container.getColumnOptions();
+            BlockBasedTableConfig tableConfig =
+                    (BlockBasedTableConfig) columnOptions.tableFormatConfig();
+
+            assertThat(tableConfig.cacheIndexAndFilterBlocks()).isTrue();
+            assertThat(tableConfig.cacheIndexAndFilterBlocksWithHighPriority()).isTrue();
+            assertThat(tableConfig.pinL0FilterAndIndexBlocksInCache()).isTrue();
+            assertThat(tableConfig.pinTopLevelIndexAndFilter()).isTrue();
+        }
+    }
 }
