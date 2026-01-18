@@ -213,18 +213,18 @@ class SparkLogTableReadTest extends FlussSparkTestBase {
 
   test("Spark Read: nested data types table") {
     withTable("t") {
-      // TODO: support map type
       sql(s"""
              |CREATE TABLE $DEFAULT_DATABASE.t (
              |id INT,
              |arr ARRAY<INT>,
+             |map MAP<STRING, INT>,
              |struct_col STRUCT<col1: INT, col2: STRING>
              |)""".stripMargin)
 
       sql(s"""
              |INSERT INTO $DEFAULT_DATABASE.t VALUES
-             |(1, ARRAY(1, 2, 3), STRUCT(100, 'nested_value')),
-             |(2, ARRAY(7, 8, 9), STRUCT(200, 'nested_value2'))
+             |(1, ARRAY(1, 2, 3), MAP("k1", 111, "k2", 222), STRUCT(100, 'nested_value')),
+             |(2, ARRAY(7, 8, 9), MAP("k1", 333, "k2", 444), STRUCT(200, 'nested_value2'))
              |""".stripMargin)
 
       checkAnswer(
@@ -232,10 +232,12 @@ class SparkLogTableReadTest extends FlussSparkTestBase {
         Row(
           1,
           Seq(1, 2, 3),
+          Map("k1" -> 111, "k2" -> 222),
           Row(100, "nested_value")
         ) :: Row(
           2,
           Seq(7, 8, 9),
+          Map("k1" -> 333, "k2" -> 444),
           Row(200, "nested_value2")
         ) :: Nil
       )
