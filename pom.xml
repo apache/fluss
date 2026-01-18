@@ -52,6 +52,7 @@
 
     <modules>
         <module>fluss-common</module>
+        <module>fluss-codegen</module>
         <module>fluss-metrics</module>
         <module>fluss-client</module>
         <module>fluss-rpc</module>
