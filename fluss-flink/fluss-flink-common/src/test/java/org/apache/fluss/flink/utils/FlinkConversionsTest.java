@@ -467,6 +467,55 @@ public class FlinkConversionsTest {
         checkEqualsIgnoreSchema(convertedFlinkMaterializedTable, expectedTable);
     }
 
+    @Test
+    void testAggregationFunctionRoundTrip() {
+        // Test Flink → Fluss → Flink conversion preserves aggregation functions.
+        ResolvedSchema schema =
+                new ResolvedSchema(
+                        Arrays.asList(
+                                Column.physical(
+                                        "id", org.apache.flink.table.api.DataTypes.INT().notNull()),
+                                Column.physical(
+                                        "sum_val", org.apache.flink.table.api.DataTypes.INT()),
+                                Column.physical(
+                                        "tags", org.apache.flink.table.api.DataTypes.STRING())),
+                        Collections.emptyList(),
+                        UniqueConstraint.primaryKey("PK_id", Collections.singletonList("id")));
+
+        Map<String, String> options = new HashMap<>();
+        options.put("table.merge-engine", "aggregation");
+        options.put("fields.sum_val.agg", "sum");
+        options.put("fields.tags.agg", "listagg");
+        options.put("fields.tags.listagg.delimiter", "|");
+
+        CatalogTable flinkTable =
+                CatalogTable.of(
+                        Schema.newBuilder().fromResolvedSchema(schema).build(),
+                        "round trip test",
+                        Collections.emptyList(),
+                        options);
+
+        // Flink → Fluss
+        TableDescriptor flussTable =
+                FlinkConversions.toFlussTable(new ResolvedCatalogTable(flinkTable, schema));
+
+        // Fluss → Flink
+        TablePath tablePath = TablePath.of("db", "table");
+        long currentMillis = System.currentTimeMillis();
+        TableInfo tableInfo =
+                TableInfo.of(
+                        tablePath,
+                        1L,
+                        1,
+                        flussTable.withBucketCount(1),
+                        currentMillis,
+                        currentMillis);
+        CatalogTable convertedFlinkTable = (CatalogTable) FlinkConversions.toFlinkTable(tableInfo);
+
+        // Verify aggregation functions are preserved
+        assertThat(convertedFlinkTable.getOptions()).containsAllEntriesOf(options);
+    }
+
     /** Test refresh handler for testing purpose. */
     public static class TestRefreshHandler implements RefreshHandler {
 
