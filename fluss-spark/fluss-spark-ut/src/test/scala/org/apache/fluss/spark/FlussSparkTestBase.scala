@@ -25,6 +25,7 @@ import org.apache.fluss.config.{ConfigOptions, Configuration}
 import org.apache.fluss.metadata.{TableDescriptor, TablePath}
 import org.apache.fluss.row.InternalRow
 import org.apache.fluss.server.testutils.FlussClusterExtension
+import org.apache.fluss.spark.extensions.FlussSparkSessionExtensions
 
 import org.apache.spark.SparkConf
 import org.apache.spark.sql.QueryTest
@@ -50,6 +51,7 @@ class FlussSparkTestBase extends QueryTest with SharedSparkSession {
       .set(s"spark.sql.catalog.$DEFAULT_CATALOG", classOf[SparkCatalog].getName)
       .set(s"spark.sql.catalog.$DEFAULT_CATALOG.bootstrap.servers", bootstrapServers)
       .set("spark.sql.defaultCatalog", DEFAULT_CATALOG)
+      .set("spark.sql.extensions", classOf[FlussSparkSessionExtensions].getName)
   }
 
   override protected def beforeAll(): Unit = {
