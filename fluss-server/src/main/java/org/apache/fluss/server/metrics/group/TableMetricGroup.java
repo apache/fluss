@@ -356,6 +356,38 @@ public class TableMetricGroup extends AbstractMetricGroup {
                         allRocksDBStatistics()
                                 .mapToLong(RocksDBStatistics::getCompactionBytesWritten)
                                 .sum());
+
+        // Fine-grained memory metrics - track memory usage by component type
+        gauge(
+                MetricNames.ROCKSDB_MEMTABLE_MEMORY_USAGE_TOTAL,
+                () ->
+                        allRocksDBStatistics()
+                                .mapToLong(RocksDBStatistics::getMemTableMemoryUsage)
+                                .sum());
+        gauge(
+                MetricNames.ROCKSDB_MEMTABLE_UNFLUSHED_MEMORY_USAGE_TOTAL,
+                () ->
+                        allRocksDBStatistics()
+                                .mapToLong(RocksDBStatistics::getMemTableUnFlushedMemoryUsage)
+                                .sum());
+        gauge(
+                MetricNames.ROCKSDB_TABLE_READERS_MEMORY_USAGE_TOTAL,
+                () ->
+                        allRocksDBStatistics()
+                                .mapToLong(RocksDBStatistics::getTableReadersMemoryUsage)
+                                .sum());
+        gauge(
+                MetricNames.ROCKSDB_BLOCK_CACHE_MEMORY_USAGE_TOTAL,
+                () ->
+                        allRocksDBStatistics()
+                                .mapToLong(RocksDBStatistics::getBlockCacheMemoryUsage)
+                                .sum());
+        gauge(
+                MetricNames.ROCKSDB_BLOCK_CACHE_PINNED_USAGE_TOTAL,
+                () ->
+                        allRocksDBStatistics()
+                                .mapToLong(RocksDBStatistics::getBlockCachePinnedUsage)
+                                .sum());
     }
 
     /** Metric group for specific kind of tablet of a table. */
