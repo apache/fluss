@@ -63,6 +63,7 @@ public final class AggFunction implements Serializable {
                 parameters == null || parameters.isEmpty()
                         ? Collections.emptyMap()
                         : Collections.unmodifiableMap(new HashMap<>(parameters));
+        validate();
     }
 
     /**
@@ -92,6 +93,28 @@ public final class AggFunction implements Serializable {
     @Nullable
     public String getParameter(String key) {
         return parameters.get(key);
+    }
+
+    /**
+     * Gets a boolean parameter value with strict true/false parsing.
+     *
+     * @param key the parameter key
+     * @param defaultValue the default value if parameter is not present
+     * @return the parsed boolean value or defaultValue if missing
+     * @throws IllegalArgumentException if the parameter value is not "true" or "false"
+     */
+    public boolean getBooleanParameter(String key, boolean defaultValue) {
+        String value = parameters.get(key);
+        if (value == null) {
+            return defaultValue;
+        }
+        if (value.equalsIgnoreCase("true") || value.equalsIgnoreCase("false")) {
+            return Boolean.parseBoolean(value);
+        }
+        throw new IllegalArgumentException(
+                String.format(
+                        "Parameter '%s' for aggregation function '%s' must be 'true' or 'false'",
+                        key, type));
     }
 
     /**

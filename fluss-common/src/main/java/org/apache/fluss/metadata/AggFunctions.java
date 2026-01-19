@@ -272,6 +272,56 @@ public final class AggFunctions {
     }
 
     // ===================================================================================
+    // Collection Aggregation Functions
+    // ===================================================================================
+
+    /**
+     * Creates a COLLECT aggregation function that collects multiple elements into an array.
+     *
+     * <p>Supported data types: ARRAY&lt;T&gt;
+     *
+     * <p>Null handling: Null values are included in the collection
+     *
+     * @return a COLLECT aggregation function
+     */
+    public static AggFunction COLLECT() {
+        return new AggFunction(AggFunctionType.COLLECT, null);
+    }
+
+    /**
+     * Creates a COLLECT aggregation function with distinct behavior.
+     *
+     * <p>Collects multiple elements into an array, optionally removing duplicates.
+     *
+     * <p>Supported data types: ARRAY&lt;T&gt;
+     *
+     * <p>Null handling: Null values are included in the collection
+     *
+     * @param distinct whether to remove duplicates
+     * @return a COLLECT aggregation function
+     */
+    public static AggFunction COLLECT(boolean distinct) {
+        Map<String, String> params = new HashMap<>();
+        params.put("distinct", String.valueOf(distinct));
+        return new AggFunction(AggFunctionType.COLLECT, params);
+    }
+
+    /**
+     * Creates a MERGE_MAP aggregation function that merges multiple maps.
+     *
+     * <p>Merges maps by combining their key-value pairs. For duplicate keys, the latest value wins.
+     *
+     * <p>Supported data types: MAP&lt;K, V&gt;
+     *
+     * <p>Null handling: Null keys are not allowed; null values are allowed
+     *
+     * @return a MERGE_MAP aggregation function
+     */
+    public static AggFunction MERGE_MAP() {
+        return new AggFunction(AggFunctionType.MERGE_MAP, null);
+    }
+
+    // ===================================================================================
     // Internal Factory Methods
     // ===================================================================================
 
