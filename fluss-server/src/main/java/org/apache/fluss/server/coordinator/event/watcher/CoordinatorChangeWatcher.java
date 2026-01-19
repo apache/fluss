@@ -17,54 +17,37 @@
 
 package org.apache.fluss.server.coordinator.event.watcher;
 
-import org.apache.fluss.exception.FlussRuntimeException;
-import org.apache.fluss.server.coordinator.event.DeadCoordinatorServerEvent;
+import org.apache.fluss.server.coordinator.event.DeadCoordinatorEvent;
 import org.apache.fluss.server.coordinator.event.EventManager;
-import org.apache.fluss.server.coordinator.event.NewCoordinatorServerEvent;
+import org.apache.fluss.server.coordinator.event.NewCoordinatorEvent;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.ZkData;
 import org.apache.fluss.shaded.curator5.org.apache.curator.framework.recipes.cache.ChildData;
-import org.apache.fluss.shaded.curator5.org.apache.curator.framework.recipes.cache.CuratorCache;
 import org.apache.fluss.shaded.curator5.org.apache.curator.framework.recipes.cache.CuratorCacheListener;
-import org.apache.fluss.shaded.curator5.org.apache.curator.utils.ZKPaths;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /** A watcher to watch the coordinator server changes(new/delete) in zookeeper. */
-public class CoordinatorServerChangeWatcher {
+public class CoordinatorChangeWatcher extends ServerBaseChangeWatcher {
 
-    private static final Logger LOG = LoggerFactory.getLogger(CoordinatorServerChangeWatcher.class);
-    private final CuratorCache curatorCache;
+    private static final Logger LOG = LoggerFactory.getLogger(CoordinatorChangeWatcher.class);
 
-    private volatile boolean running;
-
-    private final EventManager eventManager;
-
-    public CoordinatorServerChangeWatcher(
-            ZooKeeperClient zooKeeperClient, EventManager eventManager) {
-        this.curatorCache =
-                CuratorCache.build(
-                        zooKeeperClient.getCuratorClient(), ZkData.CoordinatorIdsZNode.path());
-        this.eventManager = eventManager;
-        this.curatorCache.listenable().addListener(new CoordinatorServerChangeListener());
+    public CoordinatorChangeWatcher(ZooKeeperClient zooKeeperClient, EventManager eventManager) {
+        super(zooKeeperClient, eventManager, ZkData.CoordinatorIdsZNode.path());
     }
 
-    public void start() {
-        running = true;
-        curatorCache.start();
+    @Override
+    protected CuratorCacheListener createListener() {
+        return new CoordinatorChangeListener();
     }
 
-    public void stop() {
-        if (!running) {
-            return;
-        }
-        running = false;
-        LOG.info("Stopping CoordinatorServerChangeWatcher");
-        curatorCache.close();
+    @Override
+    protected String getWatcherName() {
+        return "CoordinatorChangeWatcher";
     }
 
-    private final class CoordinatorServerChangeListener implements CuratorCacheListener {
+    private final class CoordinatorChangeListener implements CuratorCacheListener {
 
         @Override
         public void event(Type type, ChildData oldData, ChildData newData) {
@@ -80,7 +63,7 @@ public class CoordinatorServerChangeWatcher {
                         if (newData != null && newData.getData().length > 0) {
                             int serverId = getServerIdFromEvent(newData);
                             LOG.info("Received CHILD_ADDED event for server {}.", serverId);
-                            eventManager.put(new NewCoordinatorServerEvent(serverId));
+                            eventManager.put(new NewCoordinatorEvent(serverId));
                         }
                         break;
                     }
@@ -89,22 +72,13 @@ public class CoordinatorServerChangeWatcher {
                         if (oldData != null && oldData.getData().length > 0) {
                             int serverId = getServerIdFromEvent(oldData);
                             LOG.info("Received CHILD_REMOVED event for server {}.", serverId);
-                            eventManager.put(new DeadCoordinatorServerEvent(serverId));
+                            eventManager.put(new DeadCoordinatorEvent(serverId));
                         }
                         break;
                     }
                 default:
                     break;
             }
-        }
-    }
-
-    private int getServerIdFromEvent(ChildData data) {
-        try {
-            return Integer.parseInt(ZKPaths.getNodeFromPath(data.getPath()));
-        } catch (NumberFormatException e) {
-            throw new FlussRuntimeException(
-                    "Invalid server id in zookeeper path: " + data.getPath(), e);
         }
     }
 }

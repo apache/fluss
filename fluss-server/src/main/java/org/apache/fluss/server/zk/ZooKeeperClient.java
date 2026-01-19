@@ -200,36 +200,34 @@ public class ZooKeeperClient implements AutoCloseable {
      * epoch and coordinator epoch zk version.
      */
     public Optional<Integer> fenceBecomeCoordinatorLeader(int coordinatorId) throws Exception {
+        ensureEpochZnodeExists();
+
         try {
-            ensureEpochZnodeExists();
+            ZkEpoch getEpoch = getCurrentEpoch();
+            int currentEpoch = getEpoch.getCoordinatorEpoch();
+            int currentVersion = getEpoch.getCoordinatorEpochZkVersion();
+            int newEpoch = currentEpoch + 1;
+            LOG.info(
+                    "Coordinator leader {} tries to update epoch. Current epoch={}, Zookeeper version={}, new epoch={}",
+                    coordinatorId,
+                    currentEpoch,
+                    currentVersion,
+                    newEpoch);
 
-            try {
-                ZkEpoch getEpoch = getCurrentEpoch();
-                int currentEpoch = getEpoch.getCoordinatorEpoch();
-                int currentVersion = getEpoch.getCoordinatorEpochZkVersion();
-                int newEpoch = currentEpoch + 1;
-                LOG.info(
-                        "Coordinator leader {} tries to update epoch. Current epoch={}, Zookeeper version={}, new epoch={}",
-                        coordinatorId,
-                        currentEpoch,
-                        currentVersion,
-                        newEpoch);
+            // atomically update epoch
+            zkClient.setData()
+                    .withVersion(currentVersion)
+                    .forPath(
+                            ZkData.CoordinatorEpochZNode.path(),
+                            ZkData.CoordinatorEpochZNode.encode(newEpoch));
 
-                // atomically update epoch
-                zkClient.setData()
-                        .withVersion(currentVersion)
-                        .forPath(
-                                ZkData.CoordinatorEpochZNode.path(),
-                                ZkData.CoordinatorEpochZNode.encode(newEpoch));
-
-                return Optional.of(newEpoch);
-            } catch (KeeperException.BadVersionException e) {
-                // Other coordinator leader has updated epoch.
-                // If this happens, it means our fence is in effect.
-                LOG.info("Coordinator leader {} failed to update epoch.", coordinatorId);
-            }
-        } catch (KeeperException.NodeExistsException e) {
+            return Optional.of(newEpoch);
+        } catch (KeeperException.BadVersionException e) {
+            // Other coordinator leader has updated epoch.
+            // If this happens, it means our fence is in effect.
+            LOG.info("Coordinator leader {} failed to update epoch.", coordinatorId);
         }
+
         return Optional.empty();
     }
 
@@ -271,6 +269,9 @@ public class ZooKeeperClient implements AutoCloseable {
                                 ZkData.CoordinatorEpochZNode.encode(
                                         CoordinatorContext.INITIAL_COORDINATOR_EPOCH - 1));
             } catch (KeeperException.NodeExistsException e) {
+                // This should not happen.
+                throw new RuntimeException(
+                        "Coordinator leader try to init epoch znode failed. Epoch znode should not exist.");
             }
         }
     }
@@ -1791,6 +1792,7 @@ public class ZooKeeperClient implements AutoCloseable {
                             .withMode(CreateMode.PERSISTENT)
                             .forPath(path);
                 } catch (KeeperException.NodeExistsException ignored) {
+                    // ignore
                 }
             } else {
                 // indexOfLastSlash > 0
@@ -1800,6 +1802,9 @@ public class ZooKeeperClient implements AutoCloseable {
                 // After creating parent (or if parent is root), retry creating the original path
                 zkClient.transaction().forOperations(ops);
             }
+        } catch (KeeperException.BadVersionException e) {
+            LOG.error("Bad version for path {}, expected version {} ", path, expectedZkVersion);
+            throw e;
         }
     }
 

@@ -71,7 +71,7 @@ import org.apache.fluss.server.coordinator.event.CoordinatorEvent;
 import org.apache.fluss.server.coordinator.event.CoordinatorEventManager;
 import org.apache.fluss.server.coordinator.event.CreatePartitionEvent;
 import org.apache.fluss.server.coordinator.event.CreateTableEvent;
-import org.apache.fluss.server.coordinator.event.DeadCoordinatorServerEvent;
+import org.apache.fluss.server.coordinator.event.DeadCoordinatorEvent;
 import org.apache.fluss.server.coordinator.event.DeadTabletServerEvent;
 import org.apache.fluss.server.coordinator.event.DeleteReplicaResponseReceivedEvent;
 import org.apache.fluss.server.coordinator.event.DropPartitionEvent;
@@ -79,7 +79,7 @@ import org.apache.fluss.server.coordinator.event.DropTableEvent;
 import org.apache.fluss.server.coordinator.event.EventProcessor;
 import org.apache.fluss.server.coordinator.event.FencedCoordinatorEvent;
 import org.apache.fluss.server.coordinator.event.ListRebalanceProgressEvent;
-import org.apache.fluss.server.coordinator.event.NewCoordinatorServerEvent;
+import org.apache.fluss.server.coordinator.event.NewCoordinatorEvent;
 import org.apache.fluss.server.coordinator.event.NewTabletServerEvent;
 import org.apache.fluss.server.coordinator.event.NotifyKvSnapshotOffsetEvent;
 import org.apache.fluss.server.coordinator.event.NotifyLakeTableOffsetEvent;
@@ -88,7 +88,7 @@ import org.apache.fluss.server.coordinator.event.RebalanceEvent;
 import org.apache.fluss.server.coordinator.event.RemoveServerTagEvent;
 import org.apache.fluss.server.coordinator.event.SchemaChangeEvent;
 import org.apache.fluss.server.coordinator.event.TableRegistrationChangeEvent;
-import org.apache.fluss.server.coordinator.event.watcher.CoordinatorServerChangeWatcher;
+import org.apache.fluss.server.coordinator.event.watcher.CoordinatorChangeWatcher;
 import org.apache.fluss.server.coordinator.event.watcher.TableChangeWatcher;
 import org.apache.fluss.server.coordinator.event.watcher.TabletServerChangeWatcher;
 import org.apache.fluss.server.coordinator.rebalance.RebalanceManager;
@@ -176,7 +176,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
     private final LakeTableTieringManager lakeTableTieringManager;
     private final TableChangeWatcher tableChangeWatcher;
     private final CoordinatorChannelManager coordinatorChannelManager;
-    private final CoordinatorServerChangeWatcher coordinatorServerChangeWatcher;
+    private final CoordinatorChangeWatcher coordinatorChangeWatcher;
     private final TabletServerChangeWatcher tabletServerChangeWatcher;
     private final CoordinatorMetadataCache serverMetadataCache;
     private final CoordinatorRequestBatch coordinatorRequestBatch;
@@ -229,8 +229,8 @@ public class CoordinatorEventProcessor implements EventProcessor {
                         tableBucketStateMachine,
                         new RemoteStorageCleaner(conf, ioExecutor),
                         ioExecutor);
-        this.coordinatorServerChangeWatcher =
-                new CoordinatorServerChangeWatcher(zooKeeperClient, coordinatorEventManager);
+        this.coordinatorChangeWatcher =
+                new CoordinatorChangeWatcher(zooKeeperClient, coordinatorEventManager);
         this.tableChangeWatcher = new TableChangeWatcher(zooKeeperClient, coordinatorEventManager);
         this.tabletServerChangeWatcher =
                 new TabletServerChangeWatcher(zooKeeperClient, coordinatorEventManager);
@@ -268,7 +268,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
     public void startup() {
         coordinatorContext.setCoordinatorServerInfo(getCoordinatorServerInfo());
         // start watchers first so that we won't miss node in zk;
-        coordinatorServerChangeWatcher.start();
+        coordinatorChangeWatcher.start();
         tabletServerChangeWatcher.start();
         tableChangeWatcher.start();
         LOG.info("Initializing coordinator context.");
@@ -315,11 +315,8 @@ public class CoordinatorEventProcessor implements EventProcessor {
                     .getCoordinatorLeaderAddress()
                     .map(
                             coordinatorAddress ->
-                                    // TODO we set id to 0 as that CoordinatorServer don't support
-                                    // HA, if we support HA, we need to set id to the config
-                                    // CoordinatorServer id to avoid node drift.
                                     new ServerInfo(
-                                            0,
+                                            coordinatorAddress.getId(),
                                             null, // For coordinatorServer, no rack info
                                             coordinatorAddress.getEndpoints(),
                                             ServerType.COORDINATOR))
@@ -342,7 +339,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
         long start = System.currentTimeMillis();
         // get all coordinator servers
         int[] currentCoordinatorServers = zooKeeperClient.getCoordinatorServerList();
-        coordinatorContext.setLiveCoordinatorServers(
+        coordinatorContext.setLiveCoordinators(
                 Arrays.stream(currentCoordinatorServers).boxed().collect(Collectors.toSet()));
         LOG.info("Load coordinator servers success when initializing coordinator context.");
 
@@ -560,7 +557,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
         tableManager.shutdown();
 
         // then stop watchers
-        coordinatorServerChangeWatcher.stop();
+        coordinatorChangeWatcher.stop();
         tableChangeWatcher.stop();
         tabletServerChangeWatcher.stop();
     }
@@ -585,10 +582,10 @@ public class CoordinatorEventProcessor implements EventProcessor {
                     (NotifyLeaderAndIsrResponseReceivedEvent) event);
         } else if (event instanceof DeleteReplicaResponseReceivedEvent) {
             processDeleteReplicaResponseReceived((DeleteReplicaResponseReceivedEvent) event);
-        } else if (event instanceof NewCoordinatorServerEvent) {
-            processNewCoordinatorServer((NewCoordinatorServerEvent) event);
-        } else if (event instanceof DeadCoordinatorServerEvent) {
-            processDeadCoordinatorServer((DeadCoordinatorServerEvent) event);
+        } else if (event instanceof NewCoordinatorEvent) {
+            processNewCoordinator((NewCoordinatorEvent) event);
+        } else if (event instanceof DeadCoordinatorEvent) {
+            processDeadCoordinator((DeadCoordinatorEvent) event);
         } else if (event instanceof NewTabletServerEvent) {
             processNewTabletServer((NewTabletServerEvent) event);
         } else if (event instanceof DeadTabletServerEvent) {
@@ -1000,8 +997,8 @@ public class CoordinatorEventProcessor implements EventProcessor {
         replicaStateMachine.handleStateChanges(offlineReplicas, OfflineReplica);
     }
 
-    private void processNewCoordinatorServer(NewCoordinatorServerEvent newCoordinatorServerEvent) {
-        int coordinatorServerId = newCoordinatorServerEvent.getServerId();
+    private void processNewCoordinator(NewCoordinatorEvent newCoordinatorEvent) {
+        int coordinatorServerId = newCoordinatorEvent.getServerId();
         if (coordinatorContext.getLiveCoordinatorServers().contains(coordinatorServerId)) {
             return;
         }
@@ -1009,18 +1006,17 @@ public class CoordinatorEventProcessor implements EventProcessor {
         // process new coordinator server
         LOG.info("New coordinator server callback for coordinator server {}", coordinatorServerId);
 
-        coordinatorContext.addLiveCoordinatorServer(coordinatorServerId);
+        coordinatorContext.addLiveCoordinator(coordinatorServerId);
     }
 
-    private void processDeadCoordinatorServer(
-            DeadCoordinatorServerEvent deadCoordinatorServerEvent) {
-        int coordinatorServerId = deadCoordinatorServerEvent.getServerId();
+    private void processDeadCoordinator(DeadCoordinatorEvent deadCoordinatorEvent) {
+        int coordinatorServerId = deadCoordinatorEvent.getServerId();
         if (!coordinatorContext.getLiveCoordinatorServers().contains(coordinatorServerId)) {
             return;
         }
         // process dead coordinator server
         LOG.info("Coordinator server failure callback for {}.", coordinatorServerId);
-        coordinatorContext.removeLiveCoordinatorServer(coordinatorServerId);
+        coordinatorContext.removeLiveCoordinator(coordinatorServerId);
     }
 
     private void processNewTabletServer(NewTabletServerEvent newTabletServerEvent) {

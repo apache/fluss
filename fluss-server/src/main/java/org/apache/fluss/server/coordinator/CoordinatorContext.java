@@ -131,16 +131,16 @@ public class CoordinatorContext {
         return liveCoordinatorServers;
     }
 
-    public void setLiveCoordinatorServers(Set<Integer> servers) {
+    public void setLiveCoordinators(Set<Integer> servers) {
         liveCoordinatorServers.clear();
         liveCoordinatorServers.addAll(servers);
     }
 
-    public void addLiveCoordinatorServer(int serverId) {
+    public void addLiveCoordinator(int serverId) {
         this.liveCoordinatorServers.add(serverId);
     }
 
-    public void removeLiveCoordinatorServer(int serverId) {
+    public void removeLiveCoordinator(int serverId) {
         this.liveCoordinatorServers.remove(serverId);
     }
 

@@ -19,12 +19,12 @@ package org.apache.fluss.server.coordinator.event;
 
 import java.util.Objects;
 
-/** An event for coordinator server became dead. */
-public class DeadCoordinatorServerEvent implements CoordinatorEvent {
+/** An event for new coordinator server. */
+public class NewCoordinatorEvent implements CoordinatorEvent {
 
     private final int serverId;
 
-    public DeadCoordinatorServerEvent(int serverId) {
+    public NewCoordinatorEvent(int serverId) {
         this.serverId = serverId;
     }
 
@@ -40,7 +40,7 @@ public class DeadCoordinatorServerEvent implements CoordinatorEvent {
         if (o == null || getClass() != o.getClass()) {
             return false;
         }
-        DeadCoordinatorServerEvent that = (DeadCoordinatorServerEvent) o;
+        NewCoordinatorEvent that = (NewCoordinatorEvent) o;
         return serverId == that.serverId;
     }
 
@@ -51,6 +51,6 @@ public class DeadCoordinatorServerEvent implements CoordinatorEvent {
 
     @Override
     public String toString() {
-        return "DeadCoordinatorServerEvent{" + "serverId=" + serverId + '}';
+        return "NewCoordinatorEvent{" + "serverId=" + serverId + '}';
     }
 }

@@ -18,8 +18,8 @@
 package org.apache.fluss.server.coordinator.event.watcher;
 
 import org.apache.fluss.server.coordinator.event.CoordinatorEvent;
-import org.apache.fluss.server.coordinator.event.DeadCoordinatorServerEvent;
-import org.apache.fluss.server.coordinator.event.NewCoordinatorServerEvent;
+import org.apache.fluss.server.coordinator.event.DeadCoordinatorEvent;
+import org.apache.fluss.server.coordinator.event.NewCoordinatorEvent;
 import org.apache.fluss.server.coordinator.event.TestingEventManager;
 import org.apache.fluss.server.zk.NOPErrorHandler;
 import org.apache.fluss.server.zk.ZooKeeperClient;
@@ -36,8 +36,8 @@ import java.util.List;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
 
-/** Test for {@link CoordinatorServerChangeWatcher} . */
-class CoordinatorServerChangeWatcherTest {
+/** Test for {@link CoordinatorChangeWatcher} . */
+class CoordinatorChangeWatcherTest {
 
     @RegisterExtension
     public static final AllCallbackWrapper<ZooKeeperExtension> ZOO_KEEPER_EXTENSION_WRAPPER =
@@ -50,14 +50,14 @@ class CoordinatorServerChangeWatcherTest {
                         .getCustomExtension()
                         .getZooKeeperClient(NOPErrorHandler.INSTANCE);
         TestingEventManager eventManager = new TestingEventManager();
-        CoordinatorServerChangeWatcher coordinatorServerChangeWatcher =
-                new CoordinatorServerChangeWatcher(zookeeperClient, eventManager);
-        coordinatorServerChangeWatcher.start();
+        CoordinatorChangeWatcher coordinatorChangeWatcher =
+                new CoordinatorChangeWatcher(zookeeperClient, eventManager);
+        coordinatorChangeWatcher.start();
 
         // register new servers
         List<CoordinatorEvent> expectedEvents = new ArrayList<>();
         for (int i = 0; i < 10; i++) {
-            expectedEvents.add(new NewCoordinatorServerEvent(i));
+            expectedEvents.add(new NewCoordinatorEvent(i));
             zookeeperClient.registerCoordinatorServer(i);
         }
 
@@ -72,7 +72,7 @@ class CoordinatorServerChangeWatcherTest {
 
         // unregister servers
         for (int i = 0; i < 10; i++) {
-            expectedEvents.add(new DeadCoordinatorServerEvent(i));
+            expectedEvents.add(new DeadCoordinatorEvent(i));
         }
 
         retry(
@@ -81,6 +81,6 @@ class CoordinatorServerChangeWatcherTest {
                         assertThat(eventManager.getEvents())
                                 .containsExactlyInAnyOrderElementsOf(expectedEvents));
 
-        coordinatorServerChangeWatcher.stop();
+        coordinatorChangeWatcher.stop();
     }
 }

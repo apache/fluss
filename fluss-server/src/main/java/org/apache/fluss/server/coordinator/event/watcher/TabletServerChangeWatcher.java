@@ -18,7 +18,6 @@
 package org.apache.fluss.server.coordinator.event.watcher;
 
 import org.apache.fluss.cluster.ServerType;
-import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.server.coordinator.event.DeadTabletServerEvent;
 import org.apache.fluss.server.coordinator.event.EventManager;
 import org.apache.fluss.server.coordinator.event.NewTabletServerEvent;
@@ -28,42 +27,28 @@ import org.apache.fluss.server.zk.data.TabletServerRegistration;
 import org.apache.fluss.server.zk.data.ZkData.ServerIdZNode;
 import org.apache.fluss.server.zk.data.ZkData.ServerIdsZNode;
 import org.apache.fluss.shaded.curator5.org.apache.curator.framework.recipes.cache.ChildData;
-import org.apache.fluss.shaded.curator5.org.apache.curator.framework.recipes.cache.CuratorCache;
 import org.apache.fluss.shaded.curator5.org.apache.curator.framework.recipes.cache.CuratorCacheListener;
-import org.apache.fluss.shaded.curator5.org.apache.curator.utils.ZKPaths;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /** A watcher to watch the tablet server changes(new/delete) in zookeeper. */
-public class TabletServerChangeWatcher {
+public class TabletServerChangeWatcher extends ServerBaseChangeWatcher {
 
     private static final Logger LOG = LoggerFactory.getLogger(TabletServerChangeWatcher.class);
-    private final CuratorCache curatorCache;
-
-    private volatile boolean running;
-
-    private final EventManager eventManager;
 
     public TabletServerChangeWatcher(ZooKeeperClient zooKeeperClient, EventManager eventManager) {
-        this.curatorCache =
-                CuratorCache.build(zooKeeperClient.getCuratorClient(), ServerIdsZNode.path());
-        this.eventManager = eventManager;
-        this.curatorCache.listenable().addListener(new TabletServerChangeListener());
+        super(zooKeeperClient, eventManager, ServerIdsZNode.path());
     }
 
-    public void start() {
-        running = true;
-        curatorCache.start();
+    @Override
+    protected CuratorCacheListener createListener() {
+        return new TabletServerChangeListener();
     }
 
-    public void stop() {
-        if (!running) {
-            return;
-        }
-        running = false;
-        LOG.info("Stopping TabletServerChangeWatcher");
-        curatorCache.close();
+    @Override
+    protected String getWatcherName() {
+        return "TabletServerChangeWatcher";
     }
 
     private final class TabletServerChangeListener implements CuratorCacheListener {
@@ -106,15 +91,6 @@ public class TabletServerChangeWatcher {
                 default:
                     break;
             }
-        }
-    }
-
-    private int getServerIdFromEvent(ChildData data) {
-        try {
-            return Integer.parseInt(ZKPaths.getNodeFromPath(data.getPath()));
-        } catch (NumberFormatException e) {
-            throw new FlussRuntimeException(
-                    "Invalid server id in zookeeper path: " + data.getPath(), e);
         }
     }
 }

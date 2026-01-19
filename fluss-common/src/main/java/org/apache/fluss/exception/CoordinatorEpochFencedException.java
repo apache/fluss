@@ -18,7 +18,7 @@
 
 package org.apache.fluss.exception;
 
-/** Exception thrown when the Coordinator leader epoch is invalid. */
+/** Exception thrown when the Coordinator leader epoch is fenced. */
 public class CoordinatorEpochFencedException extends RuntimeException {
     public CoordinatorEpochFencedException(String message) {
         super(message);

@@ -49,22 +49,38 @@ public class CoordinatorAddressJsonSerdeTest extends JsonSerdeTestBase<Coordinat
     @Override
     protected String[] expectedJsons() {
         return new String[] {
-            "{\"version\":2,\"id\":1,\"listeners\":\"CLIENT://localhost:1001,FLUSS://127.0.0.1:9124\"}"
+            "{\"version\":3,\"id\":1,\"listeners\":\"CLIENT://localhost:1001,FLUSS://127.0.0.1:9124\"}"
         };
     }
 
     @Test
     void testCompatibility() throws IOException {
+        // version 1
         JsonNode jsonInVersion1 =
                 new ObjectMapper()
                         .readTree(
-                                "{\"version\":1,\"id\":1,\"host\":\"localhost\",\"port\":1001}"
+                                "{\"version\":1,\"id\":\"1\",\"host\":\"localhost\",\"port\":1001}"
                                         .getBytes(StandardCharsets.UTF_8));
 
-        CoordinatorAddress coordinatorAddress =
+        CoordinatorAddress coordinatorAddress1 =
                 CoordinatorAddressJsonSerde.INSTANCE.deserialize(jsonInVersion1);
-        CoordinatorAddress expectedCoordinator =
+        CoordinatorAddress expectedCoordinator1 =
                 new CoordinatorAddress(1, Endpoint.fromListenersString("CLIENT://localhost:1001"));
-        assertEquals(coordinatorAddress, expectedCoordinator);
+        assertEquals(coordinatorAddress1, expectedCoordinator1);
+
+        // version 2
+        JsonNode jsonInVersion2 =
+                new ObjectMapper()
+                        .readTree(
+                                "{\"version\":2,\"id\":\"2\",\"listeners\":\"CLIENT://localhost:1001,FLUSS://127.0.0.1:9124\"}"
+                                        .getBytes(StandardCharsets.UTF_8));
+        CoordinatorAddress coordinatorAddress2 =
+                CoordinatorAddressJsonSerde.INSTANCE.deserialize(jsonInVersion2);
+        CoordinatorAddress expectedCoordinator2 =
+                new CoordinatorAddress(
+                        2,
+                        Endpoint.fromListenersString(
+                                "CLIENT://localhost:1001,FLUSS://127.0.0.1:9124"));
+        assertEquals(coordinatorAddress2, expectedCoordinator2);
     }
 }
