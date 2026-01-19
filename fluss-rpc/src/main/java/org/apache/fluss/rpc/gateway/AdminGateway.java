@@ -41,8 +41,6 @@ import org.apache.fluss.rpc.messages.DropAclsRequest;
 import org.apache.fluss.rpc.messages.DropAclsResponse;
 import org.apache.fluss.rpc.messages.DropDatabaseRequest;
 import org.apache.fluss.rpc.messages.DropDatabaseResponse;
-import org.apache.fluss.rpc.messages.DropKvSnapshotLeaseRequest;
-import org.apache.fluss.rpc.messages.DropKvSnapshotLeaseResponse;
 import org.apache.fluss.rpc.messages.DropPartitionRequest;
 import org.apache.fluss.rpc.messages.DropPartitionResponse;
 import org.apache.fluss.rpc.messages.DropTableRequest;
@@ -53,10 +51,10 @@ import org.apache.fluss.rpc.messages.ListRebalanceProgressRequest;
 import org.apache.fluss.rpc.messages.ListRebalanceProgressResponse;
 import org.apache.fluss.rpc.messages.RebalanceRequest;
 import org.apache.fluss.rpc.messages.RebalanceResponse;
-import org.apache.fluss.rpc.messages.ReleaseKvSnapshotLeaseRequest;
-import org.apache.fluss.rpc.messages.ReleaseKvSnapshotLeaseResponse;
 import org.apache.fluss.rpc.messages.RegisterProducerOffsetsRequest;
 import org.apache.fluss.rpc.messages.RegisterProducerOffsetsResponse;
+import org.apache.fluss.rpc.messages.ReleaseKvSnapshotLeaseRequest;
+import org.apache.fluss.rpc.messages.ReleaseKvSnapshotLeaseResponse;
 import org.apache.fluss.rpc.messages.RemoveServerTagRequest;
 import org.apache.fluss.rpc.messages.RemoveServerTagResponse;
 import org.apache.fluss.rpc.protocol.ApiKeys;
@@ -199,10 +197,6 @@ public interface AdminGateway extends AdminReadOnlyGateway {
     @RPC(api = ApiKeys.RELEASE_KV_SNAPSHOT_LEASE)
     CompletableFuture<ReleaseKvSnapshotLeaseResponse> releaseKvSnapshotLease(
             ReleaseKvSnapshotLeaseRequest request);
-
-    @RPC(api = ApiKeys.DROP_KV_SNAPSHOT_LEASE)
-    CompletableFuture<DropKvSnapshotLeaseResponse> dropKvSnapshotLease(
-            DropKvSnapshotLeaseRequest request);
 
     // todo: rename table & alter table
 

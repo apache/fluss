@@ -48,6 +48,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
+import java.util.stream.Collectors;
 
 import static org.apache.fluss.utils.concurrent.LockUtils.inReadLock;
 import static org.apache.fluss.utils.concurrent.LockUtils.inWriteLock;
@@ -56,9 +57,8 @@ import static org.apache.fluss.utils.concurrent.LockUtils.inWriteLock;
 @ThreadSafe
 public class KvSnapshotLeaseManager {
     private static final Logger LOG = LoggerFactory.getLogger(KvSnapshotLeaseManager.class);
-    private static final AtomicInteger ZERO = new AtomicInteger(0);
 
-    private final KvSnapshotLeaseMetadataManager metadataHelper;
+    private final KvSnapshotLeaseMetadataManager metadataManager;
     private final CoordinatorContext coordinatorContext;
     private final Clock clock;
     private final ScheduledExecutorService scheduledExecutor;
@@ -83,13 +83,13 @@ public class KvSnapshotLeaseManager {
 
     public KvSnapshotLeaseManager(
             Configuration conf,
-            KvSnapshotLeaseMetadataManager metadataHelper,
+            KvSnapshotLeaseMetadataManager metadataManager,
             CoordinatorContext coordinatorContext,
             Clock clock,
             CoordinatorMetricGroup coordinatorMetricGroup) {
         this(
                 conf,
-                metadataHelper,
+                metadataManager,
                 coordinatorContext,
                 Executors.newScheduledThreadPool(
                         1, new ExecutorThreadFactory("kv-snapshot-lease-cleaner")),
@@ -100,12 +100,12 @@ public class KvSnapshotLeaseManager {
     @VisibleForTesting
     public KvSnapshotLeaseManager(
             Configuration conf,
-            KvSnapshotLeaseMetadataManager metadataHelper,
+            KvSnapshotLeaseMetadataManager metadataManager,
             CoordinatorContext coordinatorContext,
             ScheduledExecutorService scheduledExecutor,
             Clock clock,
             CoordinatorMetricGroup coordinatorMetricGroup) {
-        this.metadataHelper = metadataHelper;
+        this.metadataManager = metadataManager;
         this.conf = conf;
         this.scheduledExecutor = scheduledExecutor;
         this.coordinatorContext = coordinatorContext;
@@ -125,8 +125,8 @@ public class KvSnapshotLeaseManager {
     }
 
     public void initialize() throws Exception {
-        for (String leaseId : metadataHelper.getLeasesList()) {
-            Optional<KvSnapshotLease> kvSnapshotLeaseOpt = metadataHelper.getLease(leaseId);
+        for (String leaseId : metadataManager.getLeasesList()) {
+            Optional<KvSnapshotLease> kvSnapshotLeaseOpt = metadataManager.getLease(leaseId);
             if (kvSnapshotLeaseOpt.isPresent()) {
                 KvSnapshotLease kvSnapshotLease = kvSnapshotLeaseOpt.get();
                 this.leaseLocks.put(leaseId, new ReentrantReadWriteLock());
@@ -142,9 +142,10 @@ public class KvSnapshotLeaseManager {
     public boolean snapshotLeaseNotExist(KvSnapshotLeaseForBucket kvSnapshotLeaseForBucket) {
         return inReadLock(
                 refCountLock,
-                () ->
-                        refCount.getOrDefault(kvSnapshotLeaseForBucket, new AtomicInteger(0)).get()
-                                <= 0);
+                () -> {
+                    AtomicInteger count = refCount.get(kvSnapshotLeaseForBucket);
+                    return count == null || count.get() <= 0;
+                });
     }
 
     /**
@@ -169,21 +170,24 @@ public class KvSnapshotLeaseManager {
                     Map<TableBucket, Long> unavailableSnapshots = new HashMap<>();
 
                     boolean update = kvSnapshotLeaseMap.containsKey(leaseId);
-                    KvSnapshotLease kvSnapshotLease;
-                    long newLeaseDuration = clock.milliseconds() + leaseDuration;
-                    if (!update) {
-                        // set the expiration time as: current time + leaseDuration
-                        kvSnapshotLease = new KvSnapshotLease(newLeaseDuration);
-                        kvSnapshotLeaseMap.put(leaseId, kvSnapshotLease);
-                        LOG.info(
-                                "kv snapshot lease '"
-                                        + leaseId
-                                        + "' has been acquired. The lease expiration time is "
-                                        + kvSnapshotLease.getExpirationTime());
-                    } else {
-                        kvSnapshotLease = kvSnapshotLeaseMap.get(leaseId);
-                        kvSnapshotLease.setExpirationTime(newLeaseDuration);
-                    }
+                    // set the expiration time as: current time + leaseDuration
+                    long newExpirationTime = clock.milliseconds() + leaseDuration;
+                    KvSnapshotLease kvSnapshotLease =
+                            kvSnapshotLeaseMap.compute(
+                                    leaseId,
+                                    (key, existingLease) -> {
+                                        if (existingLease == null) {
+                                            LOG.info(
+                                                    "kv snapshot lease '{}' has been acquired. The lease expiration "
+                                                            + "time is {}",
+                                                    leaseId,
+                                                    newExpirationTime);
+                                            return new KvSnapshotLease(newExpirationTime);
+                                        } else {
+                                            existingLease.setExpirationTime(newExpirationTime);
+                                            return existingLease;
+                                        }
+                                    });
 
                     for (Map.Entry<Long, List<KvSnapshotLeaseForBucket>> entry :
                             tableIdToLeaseBucket.entrySet()) {
@@ -197,7 +201,7 @@ public class KvSnapshotLeaseManager {
                             long kvSnapshotId = bucket.getKvSnapshotId();
                             try {
                                 boolean snapshotExists =
-                                        metadataHelper.isSnapshotExists(tableBucket, kvSnapshotId);
+                                        metadataManager.isSnapshotExists(tableBucket, kvSnapshotId);
                                 if (!snapshotExists) {
                                     unavailableSnapshots.put(tableBucket, kvSnapshotId);
                                     continue;
@@ -228,9 +232,9 @@ public class KvSnapshotLeaseManager {
                     }
 
                     if (update) {
-                        metadataHelper.updateLease(leaseId, kvSnapshotLease);
+                        metadataManager.updateLease(leaseId, kvSnapshotLease);
                     } else {
-                        metadataHelper.registerLease(leaseId, kvSnapshotLease);
+                        metadataManager.registerLease(leaseId, kvSnapshotLease);
                     }
 
                     return unavailableSnapshots;
@@ -265,20 +269,20 @@ public class KvSnapshotLeaseManager {
                     }
 
                     if (lease.isEmpty()) {
-                        drop(leaseId);
+                        releaseAll(leaseId);
                     } else {
-                        metadataHelper.updateLease(leaseId, lease);
+                        metadataManager.updateLease(leaseId, lease);
                     }
                 });
     }
 
     /**
-     * Drop kv snapshot lease.
+     * Release kv snapshot lease.
      *
      * @param leaseId the lease id
      * @return true if clear success, false if lease not exist
      */
-    public boolean drop(String leaseId) throws Exception {
+    public boolean releaseAll(String leaseId) throws Exception {
         ReadWriteLock lock = leaseLocks.get(leaseId);
         if (lock == null) {
             return false;
@@ -294,9 +298,12 @@ public class KvSnapshotLeaseManager {
                             }
 
                             clearRefCount(kvSnapshotLease);
-                            metadataHelper.deleteLease(leaseId);
+                            metadataManager.deleteLease(leaseId);
 
-                            LOG.info("kv snapshot lease '" + leaseId + "' has been dropped.");
+                            LOG.info(
+                                    "kv snapshots of lease '"
+                                            + leaseId
+                                            + "' has been all released.");
                             return true;
                         });
 
@@ -400,17 +407,22 @@ public class KvSnapshotLeaseManager {
 
     private void expireLeases() {
         long currentTime = clock.milliseconds();
-        kvSnapshotLeaseMap.entrySet().stream()
-                .filter(entry -> entry.getValue().getExpirationTime() < currentTime)
-                .map(Map.Entry::getKey)
-                .forEach(
-                        leaseId -> {
-                            try {
-                                drop(leaseId);
-                            } catch (Exception e) {
-                                LOG.error("Failed to clear kv snapshot lease {}", leaseId, e);
-                            }
-                        });
+        // 1. First collect all expired lease IDs
+        List<String> expiredLeaseIds =
+                kvSnapshotLeaseMap.entrySet().stream()
+                        .filter(entry -> entry.getValue().getExpirationTime() < currentTime)
+                        .map(Map.Entry::getKey)
+                        .collect(Collectors.toList());
+
+        // 2. Then process each collected ID
+        expiredLeaseIds.forEach(
+                leaseId -> {
+                    try {
+                        releaseAll(leaseId);
+                    } catch (Exception e) {
+                        LOG.error("Failed to clear kv snapshot lease {}", leaseId, e);
+                    }
+                });
     }
 
     private void registerMetrics(CoordinatorMetricGroup coordinatorMetricGroup) {
@@ -433,7 +445,11 @@ public class KvSnapshotLeaseManager {
     @VisibleForTesting
     int getRefCount(KvSnapshotLeaseForBucket kvSnapshotLeaseForBucket) {
         return inReadLock(
-                refCountLock, () -> refCount.getOrDefault(kvSnapshotLeaseForBucket, ZERO).get());
+                refCountLock,
+                () -> {
+                    AtomicInteger count = refCount.get(kvSnapshotLeaseForBucket);
+                    return count == null ? 0 : count.get();
+                });
     }
 
     @VisibleForTesting

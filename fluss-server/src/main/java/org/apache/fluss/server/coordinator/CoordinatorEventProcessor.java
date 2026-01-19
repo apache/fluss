@@ -56,7 +56,6 @@ import org.apache.fluss.rpc.messages.CommitKvSnapshotResponse;
 import org.apache.fluss.rpc.messages.CommitLakeTableSnapshotResponse;
 import org.apache.fluss.rpc.messages.CommitRemoteLogManifestResponse;
 import org.apache.fluss.rpc.messages.ControlledShutdownResponse;
-import org.apache.fluss.rpc.messages.DropKvSnapshotLeaseResponse;
 import org.apache.fluss.rpc.messages.ListRebalanceProgressResponse;
 import org.apache.fluss.rpc.messages.PbCommitLakeTableSnapshotRespForTable;
 import org.apache.fluss.rpc.messages.PbKvSnapshotLeaseForBucket;
@@ -79,7 +78,6 @@ import org.apache.fluss.server.coordinator.event.CreatePartitionEvent;
 import org.apache.fluss.server.coordinator.event.CreateTableEvent;
 import org.apache.fluss.server.coordinator.event.DeadTabletServerEvent;
 import org.apache.fluss.server.coordinator.event.DeleteReplicaResponseReceivedEvent;
-import org.apache.fluss.server.coordinator.event.DropKvSnapshotLeaseEvent;
 import org.apache.fluss.server.coordinator.event.DropPartitionEvent;
 import org.apache.fluss.server.coordinator.event.DropTableEvent;
 import org.apache.fluss.server.coordinator.event.EventProcessor;
@@ -672,11 +670,6 @@ public class CoordinatorEventProcessor implements EventProcessor {
             completeFromCallable(
                     releaseKvSnapshotLeaseEvent.getRespCallback(),
                     () -> tryProcessReleaseKvSnapshotLease(releaseKvSnapshotLeaseEvent));
-        } else if (event instanceof DropKvSnapshotLeaseEvent) {
-            DropKvSnapshotLeaseEvent dropKvSnapshotLeaseEvent = (DropKvSnapshotLeaseEvent) event;
-            completeFromCallable(
-                    dropKvSnapshotLeaseEvent.getRespCallback(),
-                    () -> tryProcessDropKvSnapshotLease(dropKvSnapshotLeaseEvent));
         } else if (event instanceof AccessContextEvent) {
             AccessContextEvent<?> accessContextEvent = (AccessContextEvent<?>) event;
             processAccessContext(accessContextEvent);
@@ -2129,17 +2122,16 @@ public class CoordinatorEventProcessor implements EventProcessor {
     private ReleaseKvSnapshotLeaseResponse tryProcessReleaseKvSnapshotLease(
             ReleaseKvSnapshotLeaseEvent event) throws Exception {
         ReleaseKvSnapshotLeaseResponse response = new ReleaseKvSnapshotLeaseResponse();
-        kvSnapshotLeaseManager.release(event.getLeaseId(), event.getTableIdToReleasedBucket());
-        return response;
-    }
-
-    private DropKvSnapshotLeaseResponse tryProcessDropKvSnapshotLease(
-            DropKvSnapshotLeaseEvent event) throws Exception {
-        DropKvSnapshotLeaseResponse response = new DropKvSnapshotLeaseResponse();
-        boolean exist = kvSnapshotLeaseManager.drop(event.getLeaseId());
-        if (!exist) {
-            throw new KvSnapshotLeaseNotExistException(
-                    "kv snapshot lease '" + event.getLeaseId() + "' not exits.");
+        Map<Long, List<TableBucket>> tableIdToReleasedBucket = event.getTableIdToReleasedBucket();
+        if (tableIdToReleasedBucket.isEmpty()) {
+            // release all
+            boolean exist = kvSnapshotLeaseManager.releaseAll(event.getLeaseId());
+            if (!exist) {
+                throw new KvSnapshotLeaseNotExistException(
+                        "kv snapshot lease '" + event.getLeaseId() + "' not exits.");
+            }
+        } else {
+            kvSnapshotLeaseManager.release(event.getLeaseId(), tableIdToReleasedBucket);
         }
         return response;
     }

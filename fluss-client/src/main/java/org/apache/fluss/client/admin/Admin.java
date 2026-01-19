@@ -456,14 +456,15 @@ public interface Admin extends AutoCloseable {
             String leaseId, Set<TableBucket> bucketsToRelease);
 
     /**
-     * Releases the entire lease asynchronously.
+     * Releases the entire lease asynchronously for all leased snapshots for all table buckets of
+     * specified leaseId.
      *
      * <p>All snapshots locked under this {@code leaseId} will be released immediately. This is
      * equivalent to calling {@link #releaseKvSnapshotLease} with all held buckets.
      *
      * @param leaseId The lease id to release.
      */
-    CompletableFuture<Void> dropKvSnapshotLease(String leaseId);
+    CompletableFuture<Void> releaseAllKvSnapshotLease(String leaseId);
 
     /**
      * Get table lake snapshot info of the given table asynchronously.

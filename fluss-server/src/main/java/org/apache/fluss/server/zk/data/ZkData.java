@@ -26,10 +26,10 @@ import org.apache.fluss.security.acl.Resource;
 import org.apache.fluss.security.acl.ResourceType;
 import org.apache.fluss.server.zk.data.lake.LakeTable;
 import org.apache.fluss.server.zk.data.lake.LakeTableJsonSerde;
-import org.apache.fluss.server.zk.data.producer.ProducerOffsets;
-import org.apache.fluss.server.zk.data.producer.ProducerOffsetsJsonSerde;
 import org.apache.fluss.server.zk.data.lease.KvSnapshotLeaseMetadata;
 import org.apache.fluss.server.zk.data.lease.KvSnapshotLeaseMetadataJsonSerde;
+import org.apache.fluss.server.zk.data.producer.ProducerOffsets;
+import org.apache.fluss.server.zk.data.producer.ProducerOffsetsJsonSerde;
 import org.apache.fluss.utils.json.JsonSerdeUtils;
 import org.apache.fluss.utils.types.Tuple2;
 

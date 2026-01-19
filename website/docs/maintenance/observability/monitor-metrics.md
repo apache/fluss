@@ -327,7 +327,7 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
     </tr>
     <tr>
       <td>kvSnapshotLeaseCount</td>
-      <td>The total number of kv snapshots in this cluster.</td>
+      <td>The total number of kv snapshot leases in this cluster.</td>
       <td>Gauge</td>
     </tr>
     <tr>

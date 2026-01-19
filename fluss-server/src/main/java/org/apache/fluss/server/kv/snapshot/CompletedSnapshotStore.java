@@ -67,7 +67,7 @@ public class CompletedSnapshotStore {
 
     private final Executor ioExecutor;
     private final SnapshotsCleaner snapshotsCleaner;
-    private final CanSubsume canSubsume;
+    private final SubsumptionChecker subsumptionChecker;
 
     private final ReentrantLock lock = new ReentrantLock();
 
@@ -83,13 +83,13 @@ public class CompletedSnapshotStore {
             Collection<CompletedSnapshot> completedSnapshots,
             CompletedSnapshotHandleStore completedSnapshotHandleStore,
             Executor executor,
-            CanSubsume canSubsume) {
+            SubsumptionChecker subsumptionChecker) {
         this.maxNumberOfSnapshotsToRetain = maxNumberOfSnapshotsToRetain;
         this.sharedKvFileRegistry = sharedKvFileRegistry;
         this.completedSnapshots = new ArrayDeque<>();
         this.completedSnapshots.addAll(completedSnapshots);
         this.completedSnapshotHandleStore = completedSnapshotHandleStore;
-        this.canSubsume = canSubsume;
+        this.subsumptionChecker = subsumptionChecker;
         this.ioExecutor = executor;
         this.snapshotsCleaner = new SnapshotsCleaner();
     }
@@ -149,7 +149,7 @@ public class CompletedSnapshotStore {
                                                 completedSnapshot.getSnapshotID());
                                         snapshotsCleaner.addSubsumedSnapshot(completedSnapshot);
                                     },
-                                    canSubsume);
+                                    subsumptionChecker);
 
                     findLowest(completedSnapshots)
                             .ifPresent(
@@ -176,7 +176,7 @@ public class CompletedSnapshotStore {
             Deque<CompletedSnapshot> snapshots,
             int numRetain,
             SubsumeAction subsumeAction,
-            CanSubsume canSubsume) {
+            SubsumptionChecker subsumptionChecker) {
         if (snapshots.isEmpty()) {
             return Optional.empty();
         }
@@ -186,7 +186,7 @@ public class CompletedSnapshotStore {
         Iterator<CompletedSnapshot> iterator = snapshots.iterator();
         while (snapshots.size() > numRetain && iterator.hasNext()) {
             CompletedSnapshot next = iterator.next();
-            if (canSubsume(next, latest, canSubsume)) {
+            if (canSubsume(next, latest, subsumptionChecker)) {
                 // always return the subsumed snapshot with larger snapshot id.
                 if (!lastSubsumedSnapshot.isPresent()
                         || next.getSnapshotID() > lastSubsumedSnapshot.get().getSnapshotID()) {
@@ -208,20 +208,22 @@ public class CompletedSnapshotStore {
         void subsume(CompletedSnapshot snapshot) throws Exception;
     }
 
-    /** A function to determine whether a snapshot can be subsumed. */
+    /** A function to check whether a snapshot can be subsumed. */
     @FunctionalInterface
-    public interface CanSubsume {
+    public interface SubsumptionChecker {
         boolean canSubsume(KvSnapshotLeaseForBucket bucket);
     }
 
     private static boolean canSubsume(
-            CompletedSnapshot next, CompletedSnapshot latest, CanSubsume canSubsume) {
+            CompletedSnapshot next,
+            CompletedSnapshot latest,
+            SubsumptionChecker subsumptionChecker) {
         // if the snapshot is equal to the latest snapshot, it means it can't be subsumed
         if (next == latest) {
             return false;
         }
 
-        return canSubsume.canSubsume(
+        return subsumptionChecker.canSubsume(
                 new KvSnapshotLeaseForBucket(next.getTableBucket(), next.getSnapshotID()));
     }
 

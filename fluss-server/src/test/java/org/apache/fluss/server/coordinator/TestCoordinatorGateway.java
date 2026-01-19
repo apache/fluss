@@ -62,8 +62,6 @@ import org.apache.fluss.rpc.messages.DropAclsRequest;
 import org.apache.fluss.rpc.messages.DropAclsResponse;
 import org.apache.fluss.rpc.messages.DropDatabaseRequest;
 import org.apache.fluss.rpc.messages.DropDatabaseResponse;
-import org.apache.fluss.rpc.messages.DropKvSnapshotLeaseRequest;
-import org.apache.fluss.rpc.messages.DropKvSnapshotLeaseResponse;
 import org.apache.fluss.rpc.messages.DropPartitionRequest;
 import org.apache.fluss.rpc.messages.DropPartitionResponse;
 import org.apache.fluss.rpc.messages.DropTableRequest;
@@ -412,12 +410,6 @@ public class TestCoordinatorGateway implements CoordinatorGateway {
     @Override
     public CompletableFuture<ReleaseKvSnapshotLeaseResponse> releaseKvSnapshotLease(
             ReleaseKvSnapshotLeaseRequest request) {
-        throw new UnsupportedOperationException();
-    }
-
-    @Override
-    public CompletableFuture<DropKvSnapshotLeaseResponse> dropKvSnapshotLease(
-            DropKvSnapshotLeaseRequest request) {
         throw new UnsupportedOperationException();
     }
 

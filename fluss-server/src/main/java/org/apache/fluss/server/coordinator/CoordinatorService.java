@@ -85,8 +85,6 @@ import org.apache.fluss.rpc.messages.DropAclsRequest;
 import org.apache.fluss.rpc.messages.DropAclsResponse;
 import org.apache.fluss.rpc.messages.DropDatabaseRequest;
 import org.apache.fluss.rpc.messages.DropDatabaseResponse;
-import org.apache.fluss.rpc.messages.DropKvSnapshotLeaseRequest;
-import org.apache.fluss.rpc.messages.DropKvSnapshotLeaseResponse;
 import org.apache.fluss.rpc.messages.DropPartitionRequest;
 import org.apache.fluss.rpc.messages.DropPartitionResponse;
 import org.apache.fluss.rpc.messages.DropTableRequest;
@@ -109,10 +107,10 @@ import org.apache.fluss.rpc.messages.PrepareLakeTableSnapshotRequest;
 import org.apache.fluss.rpc.messages.PrepareLakeTableSnapshotResponse;
 import org.apache.fluss.rpc.messages.RebalanceRequest;
 import org.apache.fluss.rpc.messages.RebalanceResponse;
-import org.apache.fluss.rpc.messages.ReleaseKvSnapshotLeaseRequest;
-import org.apache.fluss.rpc.messages.ReleaseKvSnapshotLeaseResponse;
 import org.apache.fluss.rpc.messages.RegisterProducerOffsetsRequest;
 import org.apache.fluss.rpc.messages.RegisterProducerOffsetsResponse;
+import org.apache.fluss.rpc.messages.ReleaseKvSnapshotLeaseRequest;
+import org.apache.fluss.rpc.messages.ReleaseKvSnapshotLeaseResponse;
 import org.apache.fluss.rpc.messages.RemoveServerTagRequest;
 import org.apache.fluss.rpc.messages.RemoveServerTagResponse;
 import org.apache.fluss.rpc.netty.server.Session;
@@ -137,7 +135,6 @@ import org.apache.fluss.server.coordinator.event.CommitKvSnapshotEvent;
 import org.apache.fluss.server.coordinator.event.CommitLakeTableSnapshotEvent;
 import org.apache.fluss.server.coordinator.event.CommitRemoteLogManifestEvent;
 import org.apache.fluss.server.coordinator.event.ControlledShutdownEvent;
-import org.apache.fluss.server.coordinator.event.DropKvSnapshotLeaseEvent;
 import org.apache.fluss.server.coordinator.event.EventManager;
 import org.apache.fluss.server.coordinator.event.ListRebalanceProgressEvent;
 import org.apache.fluss.server.coordinator.event.RebalanceEvent;
@@ -195,8 +192,8 @@ import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getAdjustIsrDa
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getCommitLakeTableSnapshotData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getCommitRemoteLogManifestData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getPartitionSpec;
-import static org.apache.fluss.server.utils.ServerRpcMessageUtils.groupOffsetsByTableId;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getReleaseKvSnapshotLeaseData;
+import static org.apache.fluss.server.utils.ServerRpcMessageUtils.groupOffsetsByTableId;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeCreateAclsResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeDropAclsResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toAlterTableConfigChanges;
@@ -869,16 +866,6 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                                 request.getLeaseId(),
                                 getReleaseKvSnapshotLeaseData(request),
                                 response));
-        return response;
-    }
-
-    @Override
-    public CompletableFuture<DropKvSnapshotLeaseResponse> dropKvSnapshotLease(
-            DropKvSnapshotLeaseRequest request) {
-        CompletableFuture<DropKvSnapshotLeaseResponse> response = new CompletableFuture<>();
-        eventManagerSupplier
-                .get()
-                .put(new DropKvSnapshotLeaseEvent(request.getLeaseId(), response));
         return response;
     }
 
