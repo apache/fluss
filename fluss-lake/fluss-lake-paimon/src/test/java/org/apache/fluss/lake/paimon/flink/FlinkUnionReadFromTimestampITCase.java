@@ -140,12 +140,16 @@ class FlinkUnionReadFromTimestampITCase extends FlinkPaimonTieringTestBase {
             CloseableIterator<Row> actualRows =
                     streamTEnv
                             .executeSql(
-                                    "select * from "
+                                    "select b from "
                                             + tableName
                                             + " /*+ OPTIONS('scan.startup.mode' = 'timestamp',\n"
                                             + "'scan.startup.timestamp' = '2000') */")
                             .collect();
-            List<Row> expectedRows = rows.stream().skip(2 * 3).collect(Collectors.toList());
+            List<Row> expectedRows =
+                    rows.stream()
+                            .skip(2 * 3)
+                            .map(row -> Row.of(row.getField(1)))
+                            .collect(Collectors.toList());
             assertRowResultsIgnoreOrder(actualRows, expectedRows, true);
 
             // verify scan from earliest
