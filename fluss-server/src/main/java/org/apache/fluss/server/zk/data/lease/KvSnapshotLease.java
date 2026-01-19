@@ -34,8 +34,8 @@ public class KvSnapshotLease {
     /** A map from table id to kv snapshot lease for one table. */
     private final Map<Long, KvSnapshotTableLease> tableIdToTableLease;
 
-    public KvSnapshotLease(long leaseDuration) {
-        this(leaseDuration, MapUtils.newConcurrentHashMap());
+    public KvSnapshotLease(long expirationTime) {
+        this(expirationTime, MapUtils.newConcurrentHashMap());
     }
 
     public KvSnapshotLease(

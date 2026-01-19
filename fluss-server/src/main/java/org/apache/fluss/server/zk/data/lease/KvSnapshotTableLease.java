@@ -181,7 +181,7 @@ public class KvSnapshotTableLease {
             Long key = entry.getKey();
             Long[] value = entry.getValue();
             // Combine key hash and array content hash
-            hash += Objects.hashCode(key) ^ Arrays.hashCode(value);
+            hash = 31 * hash + (Objects.hashCode(key) ^ Arrays.hashCode(value));
         }
         return hash;
     }

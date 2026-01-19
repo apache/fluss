@@ -60,7 +60,7 @@ public class FlinkSourceReader<OUT>
     private static final Logger LOG = LoggerFactory.getLogger(FlinkSourceReader.class);
 
     /** the tableBuckets ignore to send FinishedKvSnapshotConsumeEvent as it already sending. */
-    private final Set<TableBucket> ignoreBuckets;
+    private final Set<TableBucket> finishedKvSnapshotConsumeBuckets;
 
     public FlinkSourceReader(
             FutureCompletingBlockingQueue<RecordsWithSplitIds<RecordAndPos>> elementsQueue,
@@ -88,7 +88,7 @@ public class FlinkSourceReader<OUT>
                 recordEmitter,
                 context.getConfiguration(),
                 context);
-        this.ignoreBuckets = new HashSet<>();
+        this.finishedKvSnapshotConsumeBuckets = new HashSet<>();
     }
 
     @Override
@@ -104,7 +104,7 @@ public class FlinkSourceReader<OUT>
         List<SourceSplitBase> sourceSplitBases = super.snapshotState(checkpointId);
         for (SourceSplitBase sourceSplitBase : sourceSplitBases) {
             TableBucket tableBucket = sourceSplitBase.getTableBucket();
-            if (ignoreBuckets.contains(tableBucket)) {
+            if (finishedKvSnapshotConsumeBuckets.contains(tableBucket)) {
                 continue;
             }
 
@@ -129,7 +129,7 @@ public class FlinkSourceReader<OUT>
                             checkpointId, bucketsFinishedConsumeKvSnapshot));
             // It won't be sent anymore in the future for this table bucket, but will be resent
             // after failover recovery as ignoreBuckets is cleared.
-            ignoreBuckets.addAll(bucketsFinishedConsumeKvSnapshot);
+            finishedKvSnapshotConsumeBuckets.addAll(bucketsFinishedConsumeKvSnapshot);
         }
 
         return sourceSplitBases;

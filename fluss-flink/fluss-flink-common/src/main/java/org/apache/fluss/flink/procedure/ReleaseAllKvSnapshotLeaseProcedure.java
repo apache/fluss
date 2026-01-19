@@ -22,15 +22,25 @@ import org.apache.flink.table.annotation.DataTypeHint;
 import org.apache.flink.table.annotation.ProcedureHint;
 import org.apache.flink.table.procedure.ProcedureContext;
 
-/** Procedure to release kv snapshot lease. */
-public class DropKvSnapshotLeaseProcedure extends ProcedureBase {
+/**
+ * Procedure to release all kv snapshots leased of specified leaseId. See {@link
+ * org.apache.fluss.client.admin.Admin#releaseAllKvSnapshotLease(String)} for more details.
+ *
+ * <p>Usage examples:
+ *
+ * <pre>
+ * -- Release all kv snapshots leased of specified leaseId
+ * CALL sys.release_all_kv_snapshot_lease('test-lease-id');
+ * </pre>
+ */
+public class ReleaseAllKvSnapshotLeaseProcedure extends ProcedureBase {
 
     @ProcedureHint(
             argument = {
                 @ArgumentHint(name = "leaseId", type = @DataTypeHint("STRING")),
             })
     public String[] call(ProcedureContext context, String leaseId) throws Exception {
-        admin.dropKvSnapshotLease(leaseId).get();
+        admin.releaseAllKvSnapshotLease(leaseId).get();
         return new String[] {"success"};
     }
 }

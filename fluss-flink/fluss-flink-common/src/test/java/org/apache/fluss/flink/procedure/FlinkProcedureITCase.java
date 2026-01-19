@@ -20,7 +20,6 @@ package org.apache.fluss.flink.procedure;
 import org.apache.fluss.client.Connection;
 import org.apache.fluss.client.ConnectionFactory;
 import org.apache.fluss.client.admin.Admin;
-import org.apache.fluss.client.metadata.KvSnapshots;
 import org.apache.fluss.cluster.rebalance.RebalanceProgress;
 import org.apache.fluss.cluster.rebalance.RebalanceStatus;
 import org.apache.fluss.cluster.rebalance.ServerTag;
@@ -63,7 +62,6 @@ import static org.apache.fluss.flink.utils.FlinkTestBase.writeRows;
 import static org.apache.fluss.server.testutils.FlussClusterExtension.BUILTIN_DATABASE;
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
-import static org.apache.fluss.testutils.common.CommonTestUtils.waitUntil;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -146,7 +144,7 @@ public abstract class FlinkProcedureITCase {
                             "+I[sys.rebalance]",
                             "+I[sys.cancel_rebalance]",
                             "+I[sys.list_rebalance]",
-                            "+I[sys.drop_kv_snapshot_lease]");
+                            "+I[sys.release_all_kv_snapshot_lease]");
             // make sure no more results is unread.
             assertResultsIgnoreOrder(showProceduresIterator, expectedShowProceduresResult, true);
         }
@@ -786,7 +784,7 @@ public abstract class FlinkProcedureITCase {
     }
 
     @Test
-    void testDropKvSnapshotLeaseProcedure() throws Exception {
+    void testReleaseAllKvSnapshotLeaseProcedure() throws Exception {
         tEnv.executeSql(
                 "create table testcatalog.fluss.pk_table_test_kv_snapshot_lease ("
                         + "a int not null primary key not enforced, b varchar)");
@@ -797,7 +795,7 @@ public abstract class FlinkProcedureITCase {
         // write records
         writeRows(conn, tablePath, rows, false);
 
-        waitUntilAllBucketFinishSnapshot(admin, tablePath);
+        FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshot(tablePath);
 
         List<String> expectedRows = Arrays.asList("+I[1, v1]", "+I[2, v2]", "+I[3, v3]");
 
@@ -816,7 +814,7 @@ public abstract class FlinkProcedureITCase {
         assertThat(zkClient.getKvSnapshotLeaseMetadata(leaseId)).isPresent();
         tEnv.executeSql(
                         String.format(
-                                "Call %s.sys.drop_kv_snapshot_lease('" + leaseId + "' )",
+                                "Call %s.sys.release_all_kv_snapshot_lease('" + leaseId + "' )",
                                 CATALOG_NAME))
                 .await();
         assertThat(zkClient.getKvSnapshotLeaseMetadata(leaseId)).isNotPresent();
@@ -859,20 +857,5 @@ public abstract class FlinkProcedureITCase {
         } else {
             assertThat(actual).containsExactlyInAnyOrder(expected);
         }
-    }
-
-    private void waitUntilAllBucketFinishSnapshot(Admin admin, TablePath tablePath) {
-        waitUntil(
-                () -> {
-                    KvSnapshots snapshots = admin.getLatestKvSnapshots(tablePath).get();
-                    for (int bucketId : snapshots.getBucketIds()) {
-                        if (!snapshots.getSnapshotId(bucketId).isPresent()) {
-                            return false;
-                        }
-                    }
-                    return true;
-                },
-                Duration.ofMinutes(1),
-                "Fail to wait until all bucket finish snapshot");
     }
 }

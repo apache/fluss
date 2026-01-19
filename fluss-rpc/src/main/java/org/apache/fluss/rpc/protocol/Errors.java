@@ -248,8 +248,7 @@ public enum Errors {
             "The client has attempted to perform an operation with an invalid producer ID.",
             InvalidProducerIdException::new),
     KV_SNAPSHOT_LEASE_NOT_EXIST(
-            63, "The kv snapshot lease is not exist.", KvSnapshotLeaseNotExistException::new);
-
+            64, "The kv snapshot lease is not exist.", KvSnapshotLeaseNotExistException::new);
 
     private static final Logger LOG = LoggerFactory.getLogger(Errors.class);
 

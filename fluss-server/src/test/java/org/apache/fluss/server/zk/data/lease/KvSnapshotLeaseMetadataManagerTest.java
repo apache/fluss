@@ -50,7 +50,7 @@ public class KvSnapshotLeaseMetadataManagerTest {
 
     protected static ZooKeeperClient zookeeperClient;
     private @TempDir Path tempDir;
-    private KvSnapshotLeaseMetadataManager metadataHelper;
+    private KvSnapshotLeaseMetadataManager metadataManager;
 
     @BeforeAll
     static void beforeAll() {
@@ -62,7 +62,7 @@ public class KvSnapshotLeaseMetadataManagerTest {
 
     @BeforeEach
     void beforeEach() {
-        metadataHelper = new KvSnapshotLeaseMetadataManager(zookeeperClient, tempDir.toString());
+        metadataManager = new KvSnapshotLeaseMetadataManager(zookeeperClient, tempDir.toString());
     }
 
     @AfterEach
@@ -72,15 +72,15 @@ public class KvSnapshotLeaseMetadataManagerTest {
 
     @Test
     void testGetLeasesList() throws Exception {
-        List<String> leasesList = metadataHelper.getLeasesList();
+        List<String> leasesList = metadataManager.getLeasesList();
         assertThat(leasesList).isEmpty();
 
-        metadataHelper.registerLease("leaseId1", new KvSnapshotLease(1000L));
+        metadataManager.registerLease("leaseId1", new KvSnapshotLease(1000L));
 
         Map<Long, KvSnapshotTableLease> tableIdToTableLease = new HashMap<>();
         tableIdToTableLease.put(1L, new KvSnapshotTableLease(1L, new Long[] {100L, -1L}));
-        metadataHelper.registerLease("leaseId2", new KvSnapshotLease(2000L, tableIdToTableLease));
-        leasesList = metadataHelper.getLeasesList();
+        metadataManager.registerLease("leaseId2", new KvSnapshotLease(2000L, tableIdToTableLease));
+        leasesList = metadataManager.getLeasesList();
         assertThat(leasesList).containsExactlyInAnyOrder("leaseId1", "leaseId2");
     }
 
@@ -95,9 +95,9 @@ public class KvSnapshotLeaseMetadataManagerTest {
         tableIdToTableLease.put(2L, new KvSnapshotTableLease(2L, partitionSnapshots));
 
         KvSnapshotLease expectedLease = new KvSnapshotLease(1000L, tableIdToTableLease);
-        metadataHelper.registerLease("leaseId1", expectedLease);
+        metadataManager.registerLease("leaseId1", expectedLease);
 
-        Optional<KvSnapshotLease> lease = metadataHelper.getLease("leaseId1");
+        Optional<KvSnapshotLease> lease = metadataManager.getLease("leaseId1");
         assertThat(lease).hasValue(expectedLease);
         // assert zk and remote fs.
         assertRemoteFsAndZkEquals("leaseId1", expectedLease);
@@ -105,15 +105,15 @@ public class KvSnapshotLeaseMetadataManagerTest {
         // test update lease.
         tableIdToTableLease.remove(1L);
         expectedLease = new KvSnapshotLease(2000L, tableIdToTableLease);
-        metadataHelper.updateLease("leaseId1", expectedLease);
-        lease = metadataHelper.getLease("leaseId1");
+        metadataManager.updateLease("leaseId1", expectedLease);
+        lease = metadataManager.getLease("leaseId1");
         assertThat(lease).hasValue(expectedLease);
         // assert zk and remote fs.
         assertRemoteFsAndZkEquals("leaseId1", expectedLease);
 
         // test delete lease.
-        metadataHelper.deleteLease("leaseId1");
-        lease = metadataHelper.getLease("leaseId1");
+        metadataManager.deleteLease("leaseId1");
+        lease = metadataManager.getLease("leaseId1");
         assertThat(lease).isEmpty();
     }
 

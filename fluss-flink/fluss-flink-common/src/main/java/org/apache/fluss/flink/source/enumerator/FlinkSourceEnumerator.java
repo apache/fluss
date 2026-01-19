@@ -25,13 +25,13 @@ import org.apache.fluss.client.initializer.NoStoppingOffsetsInitializer;
 import org.apache.fluss.client.initializer.OffsetsInitializer;
 import org.apache.fluss.client.initializer.OffsetsInitializer.BucketOffsetsRetriever;
 import org.apache.fluss.client.initializer.SnapshotOffsetsInitializer;
-import org.apache.fluss.flink.source.event.FinishedKvSnapshotConsumeEvent;
 import org.apache.fluss.client.metadata.KvSnapshots;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.lake.LakeSplitGenerator;
 import org.apache.fluss.flink.lake.split.LakeSnapshotAndFlussLogSplit;
 import org.apache.fluss.flink.lake.split.LakeSnapshotSplit;
+import org.apache.fluss.flink.source.event.FinishedKvSnapshotConsumeEvent;
 import org.apache.fluss.flink.source.event.PartitionBucketsUnsubscribedEvent;
 import org.apache.fluss.flink.source.event.PartitionsRemovedEvent;
 import org.apache.fluss.flink.source.reader.LeaseContext;
@@ -62,7 +62,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
-import javax.annotation.concurrent.GuardedBy;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -79,13 +78,10 @@ import java.util.Objects;
 import java.util.OptionalLong;
 import java.util.Set;
 import java.util.TreeMap;
-import java.util.concurrent.locks.ReadWriteLock;
-import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 import static org.apache.fluss.utils.Preconditions.checkState;
-import static org.apache.fluss.utils.concurrent.LockUtils.inWriteLock;
 
 /**
  * An implementation of {@link SplitEnumerator} for the data of Fluss.
@@ -142,9 +138,7 @@ public class FlinkSourceEnumerator
 
     private final LeaseContext leaseContext;
 
-    private final ReadWriteLock lock = new ReentrantReadWriteLock();
     /** checkpointId -> tableBuckets who finished consume kv snapshots. */
-    @GuardedBy("lock")
     private final TreeMap<Long, Set<TableBucket>> consumedKvSnapshotMap = new TreeMap<>();
 
     // Lazily instantiated or mutable fields.
@@ -556,66 +550,58 @@ public class FlinkSourceEnumerator
         Map<Integer, Long> snapshotIds = new HashMap<>();
         Map<Integer, Long> logOffsets = new HashMap<>();
 
-        // retry to get the latest kv snapshots and acquire kvSnapshot lease util all buckets
-        // acquire success. The reason is that getLatestKvSnapshots and acquireKvSnapshotLease
-        // are not atomic operations, the latest kv snapshot obtained via get may become outdated by
-        // the time it is passed to acquire. Therefore, this logic must implement a retry
-        // mechanism: the unavailable tableBuckets in the AcquiredKvSnapshotLeaseResult returned by
-        // acquireKvSnapshotLease must be retried repeatedly until all buckets are successfully
-        // acquired.
+        // retry to get the latest kv snapshots and acquire kvSnapshot lease.
         try {
-            Set<TableBucket> remainingTableBuckets;
-            do {
-                KvSnapshots kvSnapshots = getLatestKvSnapshots(partitionName);
-                remainingTableBuckets = new HashSet<>(kvSnapshots.getTableBuckets());
+            KvSnapshots kvSnapshots = getLatestKvSnapshots(partitionName);
+            Set<TableBucket> remainingTableBuckets = new HashSet<>(kvSnapshots.getTableBuckets());
 
-                tableId = kvSnapshots.getTableId();
-                partitionId = kvSnapshots.getPartitionId();
+            tableId = kvSnapshots.getTableId();
+            partitionId = kvSnapshots.getPartitionId();
 
-                Set<TableBucket> ignoreBuckets = new HashSet<>();
-                Map<TableBucket, Long> bucketsToLease = new HashMap<>();
-                for (TableBucket tb : remainingTableBuckets) {
-                    int bucket = tb.getBucket();
-                    OptionalLong snapshotIdOpt = kvSnapshots.getSnapshotId(bucket);
-                    OptionalLong logOffsetOpt = kvSnapshots.getLogOffset(bucket);
-                    if (snapshotIdOpt.isPresent() && !ignoreTableBucket(tb)) {
-                        bucketsToLease.put(tb, snapshotIdOpt.getAsLong());
-                    } else {
-                        ignoreBuckets.add(tb);
-                    }
-
-                    snapshotIds.put(
-                            bucket, snapshotIdOpt.isPresent() ? snapshotIdOpt.getAsLong() : null);
-                    logOffsets.put(
-                            bucket, logOffsetOpt.isPresent() ? logOffsetOpt.getAsLong() : null);
+            Set<TableBucket> ignoreBuckets = new HashSet<>();
+            Map<TableBucket, Long> bucketsToLease = new HashMap<>();
+            for (TableBucket tb : remainingTableBuckets) {
+                int bucket = tb.getBucket();
+                OptionalLong snapshotIdOpt = kvSnapshots.getSnapshotId(bucket);
+                OptionalLong logOffsetOpt = kvSnapshots.getLogOffset(bucket);
+                if (snapshotIdOpt.isPresent() && !ignoreTableBucket(tb)) {
+                    bucketsToLease.put(tb, snapshotIdOpt.getAsLong());
+                } else {
+                    ignoreBuckets.add(tb);
                 }
 
-                if (!ignoreBuckets.isEmpty()) {
-                    remainingTableBuckets.removeAll(ignoreBuckets);
-                }
+                snapshotIds.put(
+                        bucket, snapshotIdOpt.isPresent() ? snapshotIdOpt.getAsLong() : null);
+                logOffsets.put(bucket, logOffsetOpt.isPresent() ? logOffsetOpt.getAsLong() : null);
+            }
 
-                if (!bucketsToLease.isEmpty()) {
-                    String kvSnapshotLeaseId = leaseContext.getKvSnapshotLeaseId();
+            if (!ignoreBuckets.isEmpty()) {
+                remainingTableBuckets.removeAll(ignoreBuckets);
+            }
+
+            if (!bucketsToLease.isEmpty()) {
+                String kvSnapshotLeaseId = leaseContext.getKvSnapshotLeaseId();
+                LOG.info(
+                        "Try to acquire kv snapshot lease {} for table {}",
+                        kvSnapshotLeaseId,
+                        tablePath);
+                Long kvSnapshotLeaseDurationMs = leaseContext.getKvSnapshotLeaseDurationMs();
+                checkNotNull(kvSnapshotLeaseDurationMs, "kv snapshot lease duration is null.");
+                remainingTableBuckets =
+                        flussAdmin
+                                .acquireKvSnapshotLease(
+                                        kvSnapshotLeaseId,
+                                        bucketsToLease,
+                                        kvSnapshotLeaseDurationMs)
+                                .get()
+                                .getUnavailableTableBucketSet();
+                if (!remainingTableBuckets.isEmpty()) {
                     LOG.info(
-                            "Try to acquire kv snapshot lease {} for table {}",
-                            kvSnapshotLeaseId,
-                            tablePath);
-                    remainingTableBuckets =
-                            flussAdmin
-                                    .acquireKvSnapshotLease(
-                                            kvSnapshotLeaseId,
-                                            bucketsToLease,
-                                            leaseContext.getKvSnapshotLeaseDurationMs())
-                                    .get()
-                                    .getUnavailableTableBucketSet();
-                    if (!remainingTableBuckets.isEmpty()) {
-                        LOG.info(
-                                "Failed to acquire kv snapshot lease for table {}: {}. Retry to re-acquire",
-                                tablePath,
-                                remainingTableBuckets);
-                    }
+                            "Failed to acquire kv snapshot lease for table {}: {}. Retry to re-acquire",
+                            tablePath,
+                            remainingTableBuckets);
                 }
-            } while (!remainingTableBuckets.isEmpty());
+            }
         } catch (Exception e) {
             throw new FlinkRuntimeException(
                     String.format("Failed to get table snapshot for %s", tablePath),
@@ -1055,29 +1041,19 @@ public class FlinkSourceEnumerator
 
     /** Add bucket who has been consumed kv snapshot to the consumedKvSnapshotMap. */
     public void addConsumedBucket(long checkpointId, TableBucket tableBucket) {
-        inWriteLock(
-                lock,
-                () -> {
-                    consumedKvSnapshotMap
-                            .computeIfAbsent(checkpointId, k -> new HashSet<>())
-                            .add(tableBucket);
-                });
+        consumedKvSnapshotMap.computeIfAbsent(checkpointId, k -> new HashSet<>()).add(tableBucket);
     }
 
     /** Get and remove the buckets who have been consumed kv snapshot up to the checkpoint id. */
     public Set<TableBucket> getAndRemoveConsumedBucketsUpTo(long checkpointId) {
-        return inWriteLock(
-                lock,
-                () -> {
-                    NavigableMap<Long, Set<TableBucket>> toRemove =
-                            consumedKvSnapshotMap.headMap(checkpointId, false);
-                    Set<TableBucket> result = new HashSet<>();
-                    for (Set<TableBucket> snapshots : toRemove.values()) {
-                        result.addAll(snapshots);
-                    }
-                    toRemove.clear();
-                    return result;
-                });
+        NavigableMap<Long, Set<TableBucket>> toRemove =
+                consumedKvSnapshotMap.headMap(checkpointId, false);
+        Set<TableBucket> result = new HashSet<>();
+        for (Set<TableBucket> snapshots : toRemove.values()) {
+            result.addAll(snapshots);
+        }
+        toRemove.clear();
+        return result;
     }
 
     @Override

@@ -90,7 +90,7 @@ public class KvSnapshotLeaseManagerTest {
     private ManualClock manualClock;
     private ManuallyTriggeredScheduledExecutorService clearLeaseScheduler;
     private KvSnapshotLeaseManager kvSnapshotLeaseManager;
-    private KvSnapshotLeaseMetadataManager metadataHelper;
+    private KvSnapshotLeaseMetadataManager metadataManager;
 
     private @TempDir Path tempDir;
 
@@ -110,11 +110,11 @@ public class KvSnapshotLeaseManagerTest {
         conf.set(ConfigOptions.KV_SNAPSHOT_LEASE_EXPIRATION_CHECK_INTERVAL, Duration.ofDays(7));
         manualClock = new ManualClock(System.currentTimeMillis());
         clearLeaseScheduler = new ManuallyTriggeredScheduledExecutorService();
-        metadataHelper = new KvSnapshotLeaseMetadataManager(zookeeperClient, tempDir.toString());
+        metadataManager = new KvSnapshotLeaseMetadataManager(zookeeperClient, tempDir.toString());
         kvSnapshotLeaseManager =
                 new KvSnapshotLeaseManager(
                         conf,
-                        metadataHelper,
+                        metadataManager,
                         coordinatorContext,
                         clearLeaseScheduler,
                         manualClock,
@@ -156,7 +156,7 @@ public class KvSnapshotLeaseManagerTest {
         acquire(kvSnapshotLease, new KvSnapshotLeaseForBucket(t1p0b0, 0L));
         acquire(kvSnapshotLease, new KvSnapshotLeaseForBucket(t1p0b1, 0L));
         acquire(kvSnapshotLease, new KvSnapshotLeaseForBucket(t1p1b0, 0L));
-        metadataHelper.registerLease("lease1", kvSnapshotLease);
+        metadataManager.registerLease("lease1", kvSnapshotLease);
 
         kvSnapshotLeaseManager.initialize();
 
@@ -182,7 +182,7 @@ public class KvSnapshotLeaseManagerTest {
         tableIdToTableLease.put(PARTITION_TABLE_ID, leaseForPartitionTable);
         KvSnapshotLease expectedLease = new KvSnapshotLease(1000L, tableIdToTableLease);
         assertThat(kvSnapshotLeaseManager.getKvSnapshotLease("lease1")).isEqualTo(expectedLease);
-        assertThat(metadataHelper.getLease("lease1")).hasValue(expectedLease);
+        assertThat(metadataManager.getLease("lease1")).hasValue(expectedLease);
     }
 
     @Test
@@ -265,7 +265,7 @@ public class KvSnapshotLeaseManagerTest {
         KvSnapshotLease expectedLease =
                 new KvSnapshotLease(manualClock.milliseconds() + 1000L, tableIdToTableLease);
         assertThat(kvSnapshotLeaseManager.getKvSnapshotLease("lease1")).isEqualTo(expectedLease);
-        assertThat(metadataHelper.getLease("lease1")).hasValue(expectedLease);
+        assertThat(metadataManager.getLease("lease1")).hasValue(expectedLease);
 
         // check detail content for lease2.
         tableIdToTableLease = new HashMap<>();
@@ -275,7 +275,7 @@ public class KvSnapshotLeaseManagerTest {
         KvSnapshotLease expectedLease2 =
                 new KvSnapshotLease(manualClock.milliseconds() + 1000L, tableIdToTableLease);
         assertThat(kvSnapshotLeaseManager.getKvSnapshotLease("lease2")).isEqualTo(expectedLease2);
-        assertThat(metadataHelper.getLease("lease2")).hasValue(expectedLease2);
+        assertThat(metadataManager.getLease("lease2")).hasValue(expectedLease2);
     }
 
     @Test
@@ -332,21 +332,21 @@ public class KvSnapshotLeaseManagerTest {
         assertThat(kvSnapshotLeaseManager.getLeasedBucketCount()).isEqualTo(8);
         assertThat(kvSnapshotLeaseManager.getLeaseCount()).isEqualTo(2);
 
-        kvSnapshotLeaseManager.drop("lease1");
+        kvSnapshotLeaseManager.releaseAll("lease1");
         assertThat(kvSnapshotLeaseManager.getRefCount(new KvSnapshotLeaseForBucket(t0b0, 0L)))
                 .isEqualTo(1);
         assertThat(kvSnapshotLeaseManager.getLeasedBucketCount()).isEqualTo(3);
         assertThat(kvSnapshotLeaseManager.getLeaseCount()).isEqualTo(1);
         assertThat(zookeeperClient.getKvSnapshotLeaseMetadata("lease1")).isEmpty();
 
-        kvSnapshotLeaseManager.drop("lease2");
+        kvSnapshotLeaseManager.releaseAll("lease2");
         assertThat(kvSnapshotLeaseManager.getRefCount(new KvSnapshotLeaseForBucket(t0b0, 0L)))
                 .isEqualTo(0);
         assertThat(kvSnapshotLeaseManager.getLeasedBucketCount()).isEqualTo(0);
         assertThat(kvSnapshotLeaseManager.getLeaseCount()).isEqualTo(0);
         assertThat(zookeeperClient.getKvSnapshotLeaseMetadata("lease2")).isEmpty();
 
-        assertThat(kvSnapshotLeaseManager.drop("non-exist")).isFalse();
+        assertThat(kvSnapshotLeaseManager.releaseAll("non-exist")).isFalse();
     }
 
     @Test

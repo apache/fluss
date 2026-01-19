@@ -51,6 +51,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 import static org.apache.fluss.record.TestData.DATA1_ROW_TYPE;
 import static org.apache.fluss.testutils.DataTestUtils.compactedRow;
@@ -203,7 +204,7 @@ class KvSnapshotBatchScannerITCase extends ClientToServerITCaseBase {
 
         ZooKeeperClient zkClient = FLUSS_CLUSTER_EXTENSION.getZooKeeperClient();
         String remoteDataDir = FLUSS_CLUSTER_EXTENSION.getRemoteDataDir();
-        KvSnapshotLeaseMetadataManager metadataHelper =
+        KvSnapshotLeaseMetadataManager metadataManager =
                 new KvSnapshotLeaseMetadataManager(zkClient, remoteDataDir);
 
         assertThat(zkClient.getKvSnapshotLeasesList()).isEmpty();
@@ -219,7 +220,7 @@ class KvSnapshotBatchScannerITCase extends ClientToServerITCaseBase {
                         kvSnapshotLease1, consumeBuckets, Duration.ofDays(1).toMillis())
                 .get();
         checkKvSnapshotLeaseEquals(
-                metadataHelper, kvSnapshotLease1, tableId, new Long[] {0L, 0L, 0L});
+                metadataManager, kvSnapshotLease1, tableId, new Long[] {0L, 0L, 0L});
 
         expectedRowByBuckets = putRows(tableId, tablePath, 10);
         // wait snapshot2 finish
@@ -236,7 +237,7 @@ class KvSnapshotBatchScannerITCase extends ClientToServerITCaseBase {
                         kvSnapshotLease2, consumeBuckets, Duration.ofDays(1).toMillis())
                 .get();
         checkKvSnapshotLeaseEquals(
-                metadataHelper, kvSnapshotLease2, tableId, new Long[] {1L, 1L, 1L});
+                metadataManager, kvSnapshotLease2, tableId, new Long[] {1L, 1L, 1L});
         // check even snapshot1 is generated, snapshot0 also retained as lease exists.
         for (TableBucket tb : expectedRowByBuckets.keySet()) {
             assertThat(zkClient.getTableBucketSnapshot(tb, 0L).isPresent()).isTrue();
@@ -252,14 +253,14 @@ class KvSnapshotBatchScannerITCase extends ClientToServerITCaseBase {
                         kvSnapshotLease1, Collections.singleton(new TableBucket(tableId, 0)))
                 .get();
         checkKvSnapshotLeaseEquals(
-                metadataHelper, kvSnapshotLease1, tableId, new Long[] {-1L, 0L, 0L});
+                metadataManager, kvSnapshotLease1, tableId, new Long[] {-1L, 0L, 0L});
 
         // release lease2.
         admin.releaseKvSnapshotLease(kvSnapshotLease2, consumeBuckets.keySet()).get();
         assertThat(zkClient.getKvSnapshotLeasesList()).doesNotContain(kvSnapshotLease2);
 
-        // drop lease1
-        admin.dropKvSnapshotLease(kvSnapshotLease1).get();
+        // release all kv snapshot lease of lease1
+        admin.releaseAllKvSnapshotLease(kvSnapshotLease1).get();
         assertThat(zkClient.getKvSnapshotLeasesList()).isEmpty();
 
         expectedRowByBuckets = putRows(tableId, tablePath, 10);
@@ -272,7 +273,7 @@ class KvSnapshotBatchScannerITCase extends ClientToServerITCaseBase {
             assertThat(zkClient.getTableBucketSnapshot(tb, 1L).isPresent()).isFalse();
         }
 
-        assertThatThrownBy(() -> admin.dropKvSnapshotLease("no-exist-lease").get())
+        assertThatThrownBy(() -> admin.releaseAllKvSnapshotLease("no-exist-lease").get())
                 .rootCause()
                 .isInstanceOf(KvSnapshotLeaseNotExistException.class)
                 .hasMessageContaining("kv snapshot lease 'no-exist-lease' not exits");
@@ -338,13 +339,13 @@ class KvSnapshotBatchScannerITCase extends ClientToServerITCaseBase {
     }
 
     private void checkKvSnapshotLeaseEquals(
-            KvSnapshotLeaseMetadataManager metadataHelper,
+            KvSnapshotLeaseMetadataManager metadataManager,
             String leaseId,
             long tableId,
             Long[] expectedBucketIndex)
             throws Exception {
-        assertThat(metadataHelper.getLeasesList()).contains(leaseId);
-        Optional<KvSnapshotLease> leaseOpt = metadataHelper.getLease(leaseId);
+        assertThat(metadataManager.getLeasesList()).contains(leaseId);
+        Optional<KvSnapshotLease> leaseOpt = metadataManager.getLease(leaseId);
         assertThat(leaseOpt).isPresent();
         KvSnapshotLease actualLease = leaseOpt.get();
         Map<Long, KvSnapshotTableLease> tableIdToTableLease = actualLease.getTableIdToTableLease();
