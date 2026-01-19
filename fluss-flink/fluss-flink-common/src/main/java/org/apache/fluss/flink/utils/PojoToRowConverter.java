@@ -77,12 +77,62 @@ public class PojoToRowConverter<T> {
 
     static {
         SUPPORTED_TYPES.put(DataTypeRoot.BOOLEAN, orderedSet(Boolean.class, boolean.class));
+
+        // Numeric types with widening support - include primitives and boxed types
         SUPPORTED_TYPES.put(DataTypeRoot.TINYINT, orderedSet(Byte.class, byte.class));
-        SUPPORTED_TYPES.put(DataTypeRoot.SMALLINT, orderedSet(Short.class, short.class));
-        SUPPORTED_TYPES.put(DataTypeRoot.INTEGER, orderedSet(Integer.class, int.class));
-        SUPPORTED_TYPES.put(DataTypeRoot.BIGINT, orderedSet(Long.class, long.class));
-        SUPPORTED_TYPES.put(DataTypeRoot.FLOAT, orderedSet(Float.class, float.class));
-        SUPPORTED_TYPES.put(DataTypeRoot.DOUBLE, orderedSet(Double.class, double.class));
+        SUPPORTED_TYPES.put(
+                DataTypeRoot.SMALLINT,
+                orderedSet(Short.class, short.class, Byte.class, byte.class));
+        SUPPORTED_TYPES.put(
+                DataTypeRoot.INTEGER,
+                orderedSet(
+                        Integer.class,
+                        int.class,
+                        Short.class,
+                        short.class,
+                        Byte.class,
+                        byte.class));
+        SUPPORTED_TYPES.put(
+                DataTypeRoot.BIGINT,
+                orderedSet(
+                        Long.class,
+                        long.class,
+                        Integer.class,
+                        int.class,
+                        Short.class,
+                        short.class,
+                        Byte.class,
+                        byte.class));
+        SUPPORTED_TYPES.put(
+                DataTypeRoot.FLOAT,
+                orderedSet(
+                        Float.class,
+                        float.class,
+                        Long.class,
+                        long.class,
+                        Integer.class,
+                        int.class,
+                        Short.class,
+                        short.class,
+                        Byte.class,
+                        byte.class));
+        SUPPORTED_TYPES.put(
+                DataTypeRoot.DOUBLE,
+                orderedSet(
+                        Double.class,
+                        double.class,
+                        Float.class,
+                        float.class,
+                        Long.class,
+                        long.class,
+                        Integer.class,
+                        int.class,
+                        Short.class,
+                        short.class,
+                        Byte.class,
+                        byte.class));
+
+        // Non-numeric types remain unchanged
         SUPPORTED_TYPES.put(
                 DataTypeRoot.CHAR, orderedSet(String.class, Character.class, char.class));
         SUPPORTED_TYPES.put(
@@ -97,8 +147,6 @@ public class PojoToRowConverter<T> {
         SUPPORTED_TYPES.put(
                 DataTypeRoot.TIMESTAMP_WITH_LOCAL_TIME_ZONE,
                 orderedSet(Instant.class, OffsetDateTime.class));
-        // Add more supported types as needed
-
     }
 
     /** Interface for field conversion from POJO field to Fluss InternalRow field. */
@@ -198,15 +246,21 @@ public class PojoToRowConverter<T> {
 
         switch (fieldType.getTypeRoot()) {
             case BOOLEAN:
-            case TINYINT:
-            case SMALLINT:
-            case INTEGER:
-            case BIGINT:
-            case FLOAT:
-            case DOUBLE:
             case BINARY:
             case BYTES:
                 return field::get;
+            case TINYINT:
+                return obj -> convertToTinyInt(field, field.get(obj));
+            case SMALLINT:
+                return obj -> convertToSmallInt(field, field.get(obj));
+            case INTEGER:
+                return obj -> convertToInteger(field, field.get(obj));
+            case BIGINT:
+                return obj -> convertToBigInt(field, field.get(obj));
+            case FLOAT:
+                return obj -> convertToFloat(field, field.get(obj));
+            case DOUBLE:
+                return obj -> convertToDouble(field, field.get(obj));
             case CHAR:
             case STRING:
                 return obj -> {
@@ -333,6 +387,109 @@ public class PojoToRowConverter<T> {
         }
 
         return row;
+    }
+
+    // Numeric conversion methods for type widening
+    private static Object convertToTinyInt(Field field, Object value)
+            throws IllegalArgumentException {
+        if (value == null) {
+            return null;
+        }
+        if (value instanceof Byte) {
+            return value;
+        }
+        throw new IllegalArgumentException(
+                "Field " + field.getName() + " cannot be converted to TINYINT");
+    }
+
+    private static Object convertToSmallInt(Field field, Object value)
+            throws IllegalArgumentException {
+        if (value == null) {
+            return null;
+        }
+        if (value instanceof Short) {
+            return value;
+        }
+        if (value instanceof Byte) {
+            return ((Byte) value).shortValue();
+        }
+        throw new IllegalArgumentException(
+                "Field " + field.getName() + " cannot be converted to SMALLINT");
+    }
+
+    private static Object convertToInteger(Field field, Object value)
+            throws IllegalArgumentException {
+        if (value == null) {
+            return null;
+        }
+        if (value instanceof Integer) {
+            return value;
+        }
+        if (value instanceof Short) {
+            return ((Short) value).intValue();
+        }
+        if (value instanceof Byte) {
+            return ((Byte) value).intValue();
+        }
+        throw new IllegalArgumentException(
+                "Field " + field.getName() + " cannot be converted to INTEGER");
+    }
+
+    private static Object convertToBigInt(Field field, Object value)
+            throws IllegalArgumentException {
+        if (value == null) {
+            return null;
+        }
+        if (value instanceof Long) {
+            return value;
+        }
+        if (value instanceof Integer) {
+            return ((Integer) value).longValue();
+        }
+        if (value instanceof Short) {
+            return ((Short) value).longValue();
+        }
+        if (value instanceof Byte) {
+            return ((Byte) value).longValue();
+        }
+        throw new IllegalArgumentException(
+                "Field " + field.getName() + " cannot be converted to BIGINT");
+    }
+
+    private static Object convertToFloat(Field field, Object value)
+            throws IllegalArgumentException {
+        if (value == null) {
+            return null;
+        }
+        if (value instanceof Float) {
+            return value;
+        }
+        if (value instanceof Long) {
+            return ((Long) value).floatValue();
+        }
+        if (value instanceof Integer) {
+            return ((Integer) value).floatValue();
+        }
+        if (value instanceof Short) {
+            return ((Short) value).floatValue();
+        }
+        if (value instanceof Byte) {
+            return ((Byte) value).floatValue();
+        }
+        throw new IllegalArgumentException(
+                "Field " + field.getName() + " cannot be converted to FLOAT");
+    }
+
+    private static Object convertToDouble(Field field, Object value)
+            throws IllegalArgumentException {
+        if (value == null) {
+            return null;
+        }
+        if (value instanceof Number) {
+            return ((Number) value).doubleValue();
+        }
+        throw new IllegalArgumentException(
+                "Field " + field.getName() + " cannot be converted to DOUBLE");
     }
 
     /**
