@@ -53,6 +53,13 @@ Specify the aggregate function for each non-primary key field using connector op
 'fields.<field-name>.agg' = '<function-name>'
 ```
 
+For functions that require parameters (e.g., `listagg` with custom delimiter):
+
+```sql
+'fields.<field-name>.agg' = '<function-name>',
+'fields.<field-name>.<function-name>.<param-name>' = '<param-value>'
+```
+
 </TabItem>
 <TabItem value="java-client" label="Java Client">
 
@@ -714,7 +721,7 @@ CREATE TABLE test_listagg  (
     'table.merge-engine' = 'aggregation',
     'fields.tags1.agg' = 'listagg',
     'fields.tags2.agg' = 'listagg',
-    'fields.tags2.delimiter' = ';'   -- Specify delimiter inline
+    'fields.tags2.listagg.delimiter' = ';'   -- Specify delimiter as parameter
 );
 
 INSERT INTO test_listagg VALUES
@@ -776,7 +783,7 @@ CREATE TABLE test_string_agg  (
     'table.merge-engine' = 'aggregation',
     'fields.tags1.agg' = 'string_agg',
     'fields.tags2.agg' = 'string_agg',
-    'fields.tags2.delimiter' = ';'   -- Specify delimiter inline
+    'fields.tags2.string_agg.delimiter' = ';'   -- Specify delimiter as parameter
 );
 
 INSERT INTO test_string_agg VALUES

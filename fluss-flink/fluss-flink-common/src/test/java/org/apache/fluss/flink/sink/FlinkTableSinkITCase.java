@@ -1307,6 +1307,136 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
         assertResultsIgnoreOrder(rowIter, expectedRows, true);
     }
 
+    @Test
+    void testComprehensiveAggregationFunctions() throws Exception {
+        // Test all 11 aggregate functions (each function tested once with representative data type)
+        tEnv.executeSql(
+                "create table comprehensive_agg ("
+                        + "id int not null primary key not enforced, "
+                        // Numeric aggregations
+                        + "sum_int int, "
+                        + "sum_double double, "
+                        + "product_int int, "
+                        // Max/Min aggregations (representative types: int, double, string,
+                        // timestamp)
+                        + "max_int int, "
+                        + "max_timestamp timestamp(3), "
+                        + "min_double double, "
+                        + "min_string string, "
+                        // Value selection aggregations (test with/without nulls)
+                        + "first_val int, "
+                        + "first_val_non_null int, "
+                        + "last_val int, "
+                        + "last_val_non_null int, "
+                        // Boolean aggregations
+                        + "bool_and_val boolean, "
+                        + "bool_or_val boolean, "
+                        // String aggregation with custom delimiter
+                        + "listagg_val string"
+                        + ") with ("
+                        + "'table.merge-engine' = 'aggregation', "
+                        + "'fields.sum_int.agg' = 'sum', "
+                        + "'fields.sum_double.agg' = 'sum', "
+                        + "'fields.product_int.agg' = 'product', "
+                        + "'fields.max_int.agg' = 'max', "
+                        + "'fields.max_timestamp.agg' = 'max', "
+                        + "'fields.min_double.agg' = 'min', "
+                        + "'fields.min_string.agg' = 'min', "
+                        + "'fields.first_val.agg' = 'first_value', "
+                        + "'fields.first_val_non_null.agg' = 'first_value_ignore_nulls', "
+                        + "'fields.last_val.agg' = 'last_value', "
+                        + "'fields.last_val_non_null.agg' = 'last_value_ignore_nulls', "
+                        + "'fields.bool_and_val.agg' = 'bool_and', "
+                        + "'fields.bool_or_val.agg' = 'bool_or', "
+                        + "'fields.listagg_val.agg' = 'listagg', "
+                        + "'fields.listagg_val.listagg.delimiter' = '|')");
+
+        // Insert first batch - initial values
+        tEnv.executeSql(
+                        "INSERT INTO comprehensive_agg VALUES ("
+                                + "1, " // id
+                                + "1000, 10.5, " // sum_int, sum_double
+                                + "2, " // product_int
+                                + "100, TIMESTAMP '2024-01-15 15:00:00', " // max_int, max_timestamp
+                                + "100.0, 'beta', " // min_double, min_string
+                                + "100, 100, 100, 100, " // first_value, first_value_ignore_nulls,
+                                // last_value, last_value_ignore_nulls
+                                + "true, false, " // bool_and_val, bool_or_val
+                                + "'alpha'" // listagg_val
+                                + ")")
+                .await();
+
+        // Insert second batch - trigger aggregation
+        tEnv.executeSql(
+                        "INSERT INTO comprehensive_agg VALUES ("
+                                + "1, " // id
+                                + "2000, 20.5, " // sum: 1000+2000=3000, 10.5+20.5=31.0
+                                + "3, " // product: 2*3=6
+                                + "200, TIMESTAMP '2024-02-01 18:00:00', " // max: 200, 2024-02-01
+                                // 18:00
+                                + "50.0, 'alpha', " // min: 50.0, alpha
+                                + "200, 200, 200, 200, " // first: keep 100, first_ignore_nulls:
+                                // 200, last: 200, last_ignore_nulls: 200
+                                + "true, true, " // bool_and: true AND true=true, bool_or: false OR
+                                // true=true
+                                + "'beta'" // listagg: alpha|beta
+                                + ")")
+                .await();
+
+        // Insert third batch - further aggregation with null handling test
+        tEnv.executeSql(
+                        "INSERT INTO comprehensive_agg VALUES ("
+                                + "1, " // id
+                                + "3000, 30.5, " // sum: 3000+3000=6000, 31.0+30.5=61.5
+                                + "5, " // product: 6*5=30
+                                + "150, TIMESTAMP '2024-01-20 14:00:00', " // max: keep 200, keep
+                                // 2024-02-01 18:00
+                                + "80.0, 'charlie', " // min: keep 50.0, keep alpha
+                                + "300, CAST(NULL AS INT), 300, 300, " // first: keep 100, ignore
+                                // null keep 200, last: 300,
+                                // last_ignore_nulls: 300
+                                + "false, true, " // bool_and: true AND false=false, bool_or: true
+                                // OR true=true
+                                + "'gamma'" // listagg: alpha|beta|gamma
+                                + ")")
+                .await();
+
+        // Query and verify aggregated results
+        CloseableIterator<Row> rowIter =
+                tEnv.executeSql("SELECT * FROM comprehensive_agg").collect();
+
+        // Expected results: changelog with 5 records (+I, -U, +U, -U, +U)
+        List<String> expectedRows =
+                Arrays.asList(
+                        // First insert: initial values
+                        "+I[1, 1000, 10.5, 2, 100, 2024-01-15T15:00, 100.0, beta, 100, 100, 100, 100, true, false, alpha]",
+                        // Second insert: retraction
+                        "-U[1, 1000, 10.5, 2, 100, 2024-01-15T15:00, 100.0, beta, 100, 100, 100, 100, true, false, alpha]",
+                        // Second insert: aggregated result
+                        // sum: 1000+2000=3000, 10.5+20.5=31.0
+                        // product: 2*3=6
+                        // max: 200, 2024-02-01T18:00
+                        // min: 50.0, alpha
+                        // first: 100, first_non_null: 200, last: 200, last_non_null: 200
+                        // bool_and: true, bool_or: true
+                        // listagg: alpha|beta
+                        "+U[1, 3000, 31.0, 6, 200, 2024-02-01T18:00, 50.0, alpha, 100, 100, 200, 200, true, true, alpha|beta]",
+                        // Third insert: retraction
+                        "-U[1, 3000, 31.0, 6, 200, 2024-02-01T18:00, 50.0, alpha, 100, 100, 200, 200, true, true, alpha|beta]",
+                        // Third insert: final aggregated result
+                        // sum: 3000+3000=6000, 31.0+30.5=61.5
+                        // product: 6*5=30
+                        // max: 200 (unchanged), 2024-02-01T18:00 (unchanged)
+                        // min: 50.0 (unchanged), alpha (unchanged)
+                        // first: 100, first_ignore_nulls: 200 (null ignored), last: 300,
+                        // last_ignore_nulls: 300
+                        // bool_and: false, bool_or: true
+                        // listagg: alpha|beta|gamma
+                        "+U[1, 6000, 61.5, 30, 200, 2024-02-01T18:00, 50.0, alpha, 100, 100, 300, 300, false, true, alpha|beta|gamma]");
+
+        assertResultsIgnoreOrder(rowIter, expectedRows, true);
+    }
+
     private InsertAndExpectValues rowsToInsertInto(Collection<String> partitions) {
         List<String> insertValues = new ArrayList<>();
         List<String> expectedValues = new ArrayList<>();

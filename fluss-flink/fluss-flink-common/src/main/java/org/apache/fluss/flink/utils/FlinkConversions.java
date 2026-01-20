@@ -23,7 +23,9 @@ import org.apache.fluss.config.MemorySize;
 import org.apache.fluss.config.Password;
 import org.apache.fluss.flink.adapter.CatalogTableAdapter;
 import org.apache.fluss.flink.catalog.FlinkCatalogFactory;
+import org.apache.fluss.metadata.AggFunction;
 import org.apache.fluss.metadata.DatabaseDescriptor;
+import org.apache.fluss.metadata.MergeEngineType;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
@@ -60,6 +62,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.stream.Collectors;
 
 import static org.apache.flink.table.factories.FactoryUtil.CONNECTOR;
@@ -67,6 +70,7 @@ import static org.apache.flink.table.utils.EncodingUtils.decodeBase64ToBytes;
 import static org.apache.flink.table.utils.EncodingUtils.encodeBytesToBase64;
 import static org.apache.flink.util.Preconditions.checkNotNull;
 import static org.apache.flink.util.Preconditions.checkState;
+import static org.apache.fluss.config.ConfigOptions.TABLE_MERGE_ENGINE;
 import static org.apache.fluss.config.FlussConfigUtils.isTableStorageConfig;
 import static org.apache.fluss.flink.FlinkConnectorOptions.AUTO_INCREMENT_FIELDS;
 import static org.apache.fluss.flink.FlinkConnectorOptions.BUCKET_KEY;
@@ -127,6 +131,14 @@ public class FlinkConversions {
         }
 
         Schema schema = tableInfo.getSchema();
+
+        // convert aggregation functions to flink options
+        for (Schema.Column column : schema.getColumns()) {
+            if (column.getAggFunction().isPresent()) {
+                FlinkAggFunctionParser.formatAggFunctionToOptions(
+                        column.getName(), column.getAggFunction().get(), newOptions);
+            }
+        }
         List<String> physicalColumns = schema.getColumnNames();
         int columnCount =
                 physicalColumns.size()
@@ -197,17 +209,16 @@ public class FlinkConversions {
             schemBuilder.primaryKey(resolvedSchema.getPrimaryKey().get().getColumns());
         }
 
-        // first build schema with physical columns
+        // Check if aggregation merge engine is enabled to optimize parsing
+        boolean isAggregationEngine = isAggregationMergeEngine(flinkTableConf);
+
+        // Build schema with physical columns
         resolvedSchema.getColumns().stream()
                 .filter(Column::isPhysical)
                 .forEachOrdered(
-                        column -> {
-                            schemBuilder
-                                    .column(
-                                            column.getName(),
-                                            FlinkConversions.toFlussType(column.getDataType()))
-                                    .withComment(column.getComment().orElse(null));
-                        });
+                        column ->
+                                addColumnToSchema(
+                                        schemBuilder, column, flinkTableConf, isAggregationEngine));
 
         // Configure auto-increment columns based on the 'auto-increment.fields' option.
         if (flinkTableConf.containsKey(AUTO_INCREMENT_FIELDS.key())) {
@@ -647,6 +658,51 @@ public class FlinkConversions {
                 .refreshHandlerDescription(refreshHandlerDesc)
                 .serializedRefreshHandler(refreshHandlerBytes);
         return builder.build();
+    }
+
+    /**
+     * Check if the table uses aggregation merge engine.
+     *
+     * @param tableConf the table configuration
+     * @return true if aggregation merge engine is enabled, false otherwise
+     */
+    private static boolean isAggregationMergeEngine(Configuration tableConf) {
+        String mergeEngineStr = tableConf.getString(TABLE_MERGE_ENGINE.key(), null);
+        return mergeEngineStr != null
+                && MergeEngineType.fromString(mergeEngineStr) == MergeEngineType.AGGREGATION;
+    }
+
+    /**
+     * Add a column to the schema builder with optional aggregation function.
+     *
+     * @param schemaBuilder the schema builder
+     * @param column the Flink column
+     * @param tableConf the table configuration
+     * @param parseAggFunction whether to parse aggregation function from config
+     */
+    private static void addColumnToSchema(
+            Schema.Builder schemaBuilder,
+            Column column,
+            Configuration tableConf,
+            boolean parseAggFunction) {
+        String columnName = column.getName();
+        DataType flussDataType = toFlussType(column.getDataType());
+
+        // Parse and add aggregation function if needed
+        if (parseAggFunction) {
+            Optional<AggFunction> aggFunction =
+                    FlinkAggFunctionParser.parseAggFunction(columnName, tableConf);
+            if (aggFunction.isPresent()) {
+                schemaBuilder.column(columnName, flussDataType, aggFunction.get());
+            } else {
+                schemaBuilder.column(columnName, flussDataType);
+            }
+        } else {
+            schemaBuilder.column(columnName, flussDataType);
+        }
+
+        // Add comment if present
+        column.getComment().ifPresent(schemaBuilder::withComment);
     }
 
     private static Map<String, String> extractCustomProperties(
