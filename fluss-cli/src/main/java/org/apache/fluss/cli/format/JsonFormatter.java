@@ -25,6 +25,7 @@ import org.apache.fluss.types.RowType;
 import java.io.PrintWriter;
 import java.util.List;
 
+/** Formats query results as JSON array with type-aware serialization. */
 public class JsonFormatter implements OutputFormatter {
 
     private final RowType rowType;
@@ -99,8 +100,7 @@ public class JsonFormatter implements OutputFormatter {
         if (value == null) {
             return "";
         }
-        return value
-                .replace("\\", "\\\\")
+        return value.replace("\\", "\\\\")
                 .replace("\"", "\\\"")
                 .replace("\n", "\\n")
                 .replace("\r", "\\r")

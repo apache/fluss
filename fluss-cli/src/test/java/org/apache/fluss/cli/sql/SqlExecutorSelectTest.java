@@ -372,7 +372,12 @@ class SqlExecutorSelectTest {
                 .thenReturn(scanRecords)
                 .thenReturn(ScanRecords.EMPTY);
 
-        String output = executeSqlWithFormat(connection, "SELECT * FROM db1.tbl", org.apache.fluss.cli.format.OutputFormat.CSV, true);
+        String output =
+                executeSqlWithFormat(
+                        connection,
+                        "SELECT * FROM db1.tbl",
+                        org.apache.fluss.cli.format.OutputFormat.CSV,
+                        true);
 
         assertThat(output).doesNotContain("Executing SELECT");
         assertThat(output).contains("1,Alice");
@@ -411,7 +416,12 @@ class SqlExecutorSelectTest {
                 .thenReturn(scanRecords)
                 .thenReturn(ScanRecords.EMPTY);
 
-        String output = executeSqlWithFormat(connection, "SELECT * FROM db1.tbl", org.apache.fluss.cli.format.OutputFormat.JSON, true);
+        String output =
+                executeSqlWithFormat(
+                        connection,
+                        "SELECT * FROM db1.tbl",
+                        org.apache.fluss.cli.format.OutputFormat.JSON,
+                        true);
 
         assertThat(output).doesNotContain("Executing SELECT");
         assertThat(output).contains("{\"id\":42,\"name\":\"Bob\"}");
@@ -499,7 +509,13 @@ class SqlExecutorSelectTest {
 
         ConnectionManager connectionManager = new StubConnectionManager(connection);
         StringWriter writer = new StringWriter();
-        SqlExecutor executor = new SqlExecutor(connectionManager, new PrintWriter(writer), org.apache.fluss.cli.format.OutputFormat.TABLE, true, 45);
+        SqlExecutor executor =
+                new SqlExecutor(
+                        connectionManager,
+                        new PrintWriter(writer),
+                        org.apache.fluss.cli.format.OutputFormat.TABLE,
+                        true,
+                        45);
         executor.executeSql("SELECT * FROM db1.log_tbl");
         String output = writer.toString();
 
@@ -518,23 +534,41 @@ class SqlExecutorSelectTest {
     private static String executeSqlWithQuiet(Connection connection, String sql) throws Exception {
         ConnectionManager connectionManager = new StubConnectionManager(connection);
         StringWriter writer = new StringWriter();
-        SqlExecutor executor = new SqlExecutor(connectionManager, new PrintWriter(writer), org.apache.fluss.cli.format.OutputFormat.TABLE, true);
+        SqlExecutor executor =
+                new SqlExecutor(
+                        connectionManager,
+                        new PrintWriter(writer),
+                        org.apache.fluss.cli.format.OutputFormat.TABLE,
+                        true);
         executor.executeSql(sql);
         return writer.toString();
     }
 
-    private static String executeSqlWithFormat(Connection connection, String sql, org.apache.fluss.cli.format.OutputFormat format, boolean quiet) throws Exception {
+    private static String executeSqlWithFormat(
+            Connection connection,
+            String sql,
+            org.apache.fluss.cli.format.OutputFormat format,
+            boolean quiet)
+            throws Exception {
         ConnectionManager connectionManager = new StubConnectionManager(connection);
         StringWriter writer = new StringWriter();
-        SqlExecutor executor = new SqlExecutor(connectionManager, new PrintWriter(writer), format, quiet);
+        SqlExecutor executor =
+                new SqlExecutor(connectionManager, new PrintWriter(writer), format, quiet);
         executor.executeSql(sql);
         return writer.toString();
     }
 
-    private static String executeSqlWithTimeout(Connection connection, String sql, long timeoutSeconds) throws Exception {
+    private static String executeSqlWithTimeout(
+            Connection connection, String sql, long timeoutSeconds) throws Exception {
         ConnectionManager connectionManager = new StubConnectionManager(connection);
         StringWriter writer = new StringWriter();
-        SqlExecutor executor = new SqlExecutor(connectionManager, new PrintWriter(writer), org.apache.fluss.cli.format.OutputFormat.TABLE, false, timeoutSeconds);
+        SqlExecutor executor =
+                new SqlExecutor(
+                        connectionManager,
+                        new PrintWriter(writer),
+                        org.apache.fluss.cli.format.OutputFormat.TABLE,
+                        false,
+                        timeoutSeconds);
         executor.executeSql(sql);
         return writer.toString();
     }

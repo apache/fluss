@@ -25,6 +25,7 @@ import org.apache.fluss.types.RowType;
 import java.io.PrintWriter;
 import java.util.List;
 
+/** Formats query results as TSV (Tab-Separated Values) with escape sequences. */
 public class TsvFormatter implements OutputFormatter {
 
     private final RowType rowType;

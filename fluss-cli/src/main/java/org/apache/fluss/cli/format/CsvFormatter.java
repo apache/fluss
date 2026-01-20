@@ -25,6 +25,7 @@ import org.apache.fluss.types.RowType;
 import java.io.PrintWriter;
 import java.util.List;
 
+/** Formats query results as CSV (Comma-Separated Values) with proper escaping. */
 public class CsvFormatter implements OutputFormatter {
 
     private final RowType rowType;

@@ -137,8 +137,7 @@ class JsonFormatterTest {
 
     @Test
     void testStringTypeQuoted() {
-        RowType rowType =
-                RowType.of(new DataType[] {DataTypes.STRING()}, new String[] {"text"});
+        RowType rowType = RowType.of(new DataType[] {DataTypes.STRING()}, new String[] {"text"});
 
         StringWriter sw = new StringWriter();
         JsonFormatter formatter = new JsonFormatter(rowType, new PrintWriter(sw));
@@ -157,8 +156,7 @@ class JsonFormatterTest {
 
     @Test
     void testEscapeJsonSpecialCharacters() {
-        RowType rowType =
-                RowType.of(new DataType[] {DataTypes.STRING()}, new String[] {"text"});
+        RowType rowType = RowType.of(new DataType[] {DataTypes.STRING()}, new String[] {"text"});
 
         StringWriter sw = new StringWriter();
         JsonFormatter formatter = new JsonFormatter(rowType, new PrintWriter(sw));

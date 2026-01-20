@@ -55,15 +55,25 @@ public class QueryExecutor {
         this(connectionManager, out, OutputFormat.TABLE, false, 30);
     }
 
-    public QueryExecutor(ConnectionManager connectionManager, PrintWriter out, OutputFormat outputFormat) {
+    public QueryExecutor(
+            ConnectionManager connectionManager, PrintWriter out, OutputFormat outputFormat) {
         this(connectionManager, out, outputFormat, false, 30);
     }
 
-    public QueryExecutor(ConnectionManager connectionManager, PrintWriter out, OutputFormat outputFormat, boolean quiet) {
+    public QueryExecutor(
+            ConnectionManager connectionManager,
+            PrintWriter out,
+            OutputFormat outputFormat,
+            boolean quiet) {
         this(connectionManager, out, outputFormat, quiet, 30);
     }
 
-    public QueryExecutor(ConnectionManager connectionManager, PrintWriter out, OutputFormat outputFormat, boolean quiet, long streamingTimeoutSeconds) {
+    public QueryExecutor(
+            ConnectionManager connectionManager,
+            PrintWriter out,
+            OutputFormat outputFormat,
+            boolean quiet,
+            long streamingTimeoutSeconds) {
         this.connectionManager = connectionManager;
         this.out = out;
         this.outputFormat = outputFormat;
@@ -161,7 +171,8 @@ public class QueryExecutor {
             } else {
                 if (!quiet) {
                     if (whereClause != null && isLogTable) {
-                        out.println("Warning: WHERE clause on log table - using client-side filtering");
+                        out.println(
+                                "Warning: WHERE clause on log table - using client-side filtering");
                     } else if (whereClause != null) {
                         out.println(
                                 "Warning: WHERE clause without all primary key columns - using full"
@@ -353,7 +364,10 @@ public class QueryExecutor {
                 long currentTime = System.currentTimeMillis();
                 if (currentTime - lastRecordTime > idleTimeoutMs) {
                     if (streamingMode && !quiet) {
-                        out.println("\nIdle timeout reached (" + streamingTimeoutSeconds + "s). Exiting.");
+                        out.println(
+                                "\nIdle timeout reached ("
+                                        + streamingTimeoutSeconds
+                                        + "s). Exiting.");
                         out.flush();
                     }
                     break;

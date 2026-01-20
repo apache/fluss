@@ -91,7 +91,8 @@ public class SqlCommand implements Callable<Integer> {
         try (ConnectionManager connectionManager = new ConnectionManager(connectionConfig)) {
             PrintWriter out = new PrintWriter(System.out, true);
             OutputFormat format = OutputFormat.fromString(outputFormat);
-            SqlExecutor executor = new SqlExecutor(connectionManager, out, format, quiet, streamingTimeoutSeconds);
+            SqlExecutor executor =
+                    new SqlExecutor(connectionManager, out, format, quiet, streamingTimeoutSeconds);
 
             if (sqlFile != null) {
                 String sql =

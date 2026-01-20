@@ -60,15 +60,25 @@ public class SqlExecutor {
         this(connectionManager, out, OutputFormat.TABLE, false, 30);
     }
 
-    public SqlExecutor(ConnectionManager connectionManager, PrintWriter out, OutputFormat outputFormat) {
+    public SqlExecutor(
+            ConnectionManager connectionManager, PrintWriter out, OutputFormat outputFormat) {
         this(connectionManager, out, outputFormat, false, 30);
     }
 
-    public SqlExecutor(ConnectionManager connectionManager, PrintWriter out, OutputFormat outputFormat, boolean quiet) {
+    public SqlExecutor(
+            ConnectionManager connectionManager,
+            PrintWriter out,
+            OutputFormat outputFormat,
+            boolean quiet) {
         this(connectionManager, out, outputFormat, quiet, 30);
     }
 
-    public SqlExecutor(ConnectionManager connectionManager, PrintWriter out, OutputFormat outputFormat, boolean quiet, long streamingTimeoutSeconds) {
+    public SqlExecutor(
+            ConnectionManager connectionManager,
+            PrintWriter out,
+            OutputFormat outputFormat,
+            boolean quiet,
+            long streamingTimeoutSeconds) {
         this.connectionManager = connectionManager;
         this.sqlParser = new CalciteSqlParser();
         this.flussParser = new FlussStatementParser();
@@ -78,7 +88,9 @@ public class SqlExecutor {
         this.streamingTimeoutSeconds = streamingTimeoutSeconds;
         this.aclExecutor = new AclExecutor(connectionManager, out);
         this.clusterExecutor = new ClusterExecutor(connectionManager, out);
-        this.queryExecutor = new QueryExecutor(connectionManager, out, outputFormat, quiet, streamingTimeoutSeconds);
+        this.queryExecutor =
+                new QueryExecutor(
+                        connectionManager, out, outputFormat, quiet, streamingTimeoutSeconds);
         this.dmlExecutor = new DmlExecutor(connectionManager, out);
         this.ddlExecutor = new DdlExecutor(connectionManager, out);
         this.metadataExecutor = new MetadataExecutor(connectionManager, out, outputFormat);

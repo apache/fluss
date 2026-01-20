@@ -62,7 +62,8 @@ public class MetadataExecutor {
         this(connectionManager, out, OutputFormat.TABLE);
     }
 
-    public MetadataExecutor(ConnectionManager connectionManager, PrintWriter out, OutputFormat outputFormat) {
+    public MetadataExecutor(
+            ConnectionManager connectionManager, PrintWriter out, OutputFormat outputFormat) {
         this.connectionManager = connectionManager;
         this.out = out;
         this.outputFormat = outputFormat;
@@ -209,7 +210,9 @@ public class MetadataExecutor {
         org.apache.fluss.metadata.Schema schema = tableInfo.getSchema();
 
         out.println("Table: " + tablePath);
-        out.println("Type: " + (schema.getPrimaryKey().isPresent() ? "Primary Key Table" : "Log Table"));
+        out.println(
+                "Type: "
+                        + (schema.getPrimaryKey().isPresent() ? "Primary Key Table" : "Log Table"));
         out.println(repeat("=", 60));
         out.println();
 
@@ -444,7 +447,9 @@ public class MetadataExecutor {
             TablePath tablePath, org.apache.fluss.metadata.Schema schema, int schemaId) {
         out.println("Table: " + tablePath);
         out.println("Schema ID: " + schemaId);
-        out.println("Type: " + (schema.getPrimaryKey().isPresent() ? "Primary Key Table" : "Log Table"));
+        out.println(
+                "Type: "
+                        + (schema.getPrimaryKey().isPresent() ? "Primary Key Table" : "Log Table"));
         out.println(repeat("=", 60));
         out.println();
 
