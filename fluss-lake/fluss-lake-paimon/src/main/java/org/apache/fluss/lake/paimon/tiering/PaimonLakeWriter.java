@@ -53,18 +53,29 @@ public class PaimonLakeWriter implements LakeWriter<PaimonWriteResult> {
 
         List<String> partitionKeys = fileStoreTable.partitionKeys();
 
+        // currently, when the storage version is not present, the corresponding
+        // paimon table must include system columns
+        boolean paimonIncludeSystemColumns =
+                !writerInitContext
+                        .tableInfo()
+                        .getTableConfig()
+                        .getDataLakeStorageVersion()
+                        .isPresent();
+
         this.recordWriter =
                 fileStoreTable.primaryKeys().isEmpty()
                         ? new AppendOnlyWriter(
                                 fileStoreTable,
                                 writerInitContext.tableBucket(),
                                 writerInitContext.partition(),
-                                partitionKeys)
+                                partitionKeys,
+                                paimonIncludeSystemColumns)
                         : new MergeTreeWriter(
                                 fileStoreTable,
                                 writerInitContext.tableBucket(),
                                 writerInitContext.partition(),
-                                partitionKeys);
+                                partitionKeys,
+                                paimonIncludeSystemColumns);
     }
 
     @Override

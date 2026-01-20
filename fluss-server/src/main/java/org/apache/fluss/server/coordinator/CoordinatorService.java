@@ -159,6 +159,7 @@ import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.config.FlussConfigUtils.isTableStorageConfig;
+import static org.apache.fluss.lake.lakestorage.LakeCatalog.CURRENT_LAKE_STORAGE_VERSION;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toAclBindingFilters;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toAclBindings;
 import static org.apache.fluss.server.coordinator.rebalance.goal.GoalUtils.getGoalByType;
@@ -467,9 +468,16 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         }
 
         // override the datalake format if the table hasn't set it and the cluster configured
-        if (dataLakeFormat != null
-                && !properties.containsKey(ConfigOptions.TABLE_DATALAKE_FORMAT.key())) {
-            newDescriptor = newDescriptor.withDataLakeFormat(dataLakeFormat);
+        if (dataLakeFormat != null) {
+            Map<String, String> newProperties = new HashMap<>(newDescriptor.getProperties());
+            if (!properties.containsKey(ConfigOptions.TABLE_DATALAKE_FORMAT.key())) {
+                newProperties.put(
+                        ConfigOptions.TABLE_DATALAKE_FORMAT.key(), dataLakeFormat.toString());
+            }
+            newProperties.put(
+                    ConfigOptions.TABLE_DATALAKE_STORAGE_VERSION.key(),
+                    String.valueOf(CURRENT_LAKE_STORAGE_VERSION));
+            newDescriptor = newDescriptor.withProperties(newProperties);
         }
 
         // lake table can only be enabled when the cluster configures datalake format
