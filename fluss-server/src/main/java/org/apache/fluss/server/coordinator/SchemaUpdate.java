@@ -21,15 +21,9 @@ import org.apache.fluss.exception.SchemaChangeException;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableInfo;
-import org.apache.fluss.types.DataType;
-import org.apache.fluss.types.ReassignFieldId;
 
-import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.Objects;
-import java.util.concurrent.atomic.AtomicInteger;
 
 /** Schema update. */
 public class SchemaUpdate {
@@ -43,36 +37,16 @@ public class SchemaUpdate {
         return schemaUpdate.getSchema();
     }
 
-    private final List<Schema.Column> columns;
-    private final AtomicInteger highestFieldId;
-    private final List<String> primaryKeys;
-    private final Map<String, Schema.Column> existedColumns;
-    private final List<String> autoIncrementColumns;
+    // Now we only maintain the Builder
+    private final Schema.Builder builder;
 
     public SchemaUpdate(TableInfo tableInfo) {
-        this.columns = new ArrayList<>();
-        this.existedColumns = new HashMap<>();
-        this.highestFieldId = new AtomicInteger(tableInfo.getSchema().getHighestFieldId());
-        this.primaryKeys = tableInfo.getPrimaryKeys();
-        this.autoIncrementColumns = tableInfo.getSchema().getAutoIncrementColumnNames();
-        this.columns.addAll(tableInfo.getSchema().getColumns());
-        for (Schema.Column column : columns) {
-            existedColumns.put(column.getName(), column);
-        }
+        // Initialize builder from the current table schema
+        this.builder = Schema.newBuilder().fromSchema(tableInfo.getSchema());
     }
 
     public Schema getSchema() {
-        Schema.Builder builder =
-                Schema.newBuilder()
-                        .fromColumns(columns)
-                        .highestFieldId((short) highestFieldId.get());
-        if (!primaryKeys.isEmpty()) {
-            builder.primaryKey(primaryKeys);
-        }
-        for (String autoIncrementColumn : autoIncrementColumns) {
-            builder.enableAutoIncrement(autoIncrementColumn);
-        }
-
+        // Validation and building are now delegated
         return builder.build();
     }
 
@@ -91,9 +65,10 @@ public class SchemaUpdate {
     }
 
     private SchemaUpdate addColumn(TableChange.AddColumn addColumn) {
-        Schema.Column existingColumn = existedColumns.get(addColumn.getName());
+        // Use the builder to check if column exists
+        Schema.Column existingColumn = builder.getColumn(addColumn.getName()).orElse(null);
+
         if (existingColumn != null) {
-            // Allow idempotent retries: if column name/type/comment match existing, treat as no-op
             if (!existingColumn.getDataType().equals(addColumn.getDataType())
                     || !Objects.equals(
                             existingColumn.getComment().orElse(null), addColumn.getComment())) {
@@ -103,8 +78,7 @@ public class SchemaUpdate {
             return this;
         }
 
-        TableChange.ColumnPosition position = addColumn.getPosition();
-        if (position != TableChange.ColumnPosition.last()) {
+        if (addColumn.getPosition() != TableChange.ColumnPosition.last()) {
             throw new IllegalArgumentException("Only support addColumn column at last now.");
         }
 
@@ -113,13 +87,15 @@ public class SchemaUpdate {
                     "Column " + addColumn.getName() + " must be nullable.");
         }
 
-        int columnId = highestFieldId.incrementAndGet();
-        DataType dataType = ReassignFieldId.reassign(addColumn.getDataType(), highestFieldId);
+        // Delegate the actual addition to the builder
+        builder.column(addColumn.getName(), addColumn.getDataType());
 
-        Schema.Column newColumn =
-                new Schema.Column(addColumn.getName(), dataType, addColumn.getComment(), columnId);
-        columns.add(newColumn);
-        existedColumns.put(newColumn.getName(), newColumn);
+        // Fixed: Use null check for the String comment
+        String comment = addColumn.getComment();
+        if (comment != null) {
+            builder.withComment(comment);
+        }
+
         return this;
     }
 

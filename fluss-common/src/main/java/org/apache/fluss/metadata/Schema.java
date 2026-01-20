@@ -285,18 +285,21 @@ public final class Schema implements Serializable {
 
         /** Adopts all members from the given schema. */
         public Builder fromSchema(Schema schema) {
-            columns.addAll(schema.columns);
-            if (schema.primaryKey != null) {
-                primaryKeyNamed(schema.primaryKey.constraintName, schema.primaryKey.columnNames);
-            }
-            if (schema.autoIncrementColumnNames != null
-                    && !schema.autoIncrementColumnNames.isEmpty()) {
-                checkState(
-                        schema.autoIncrementColumnNames.size() == 1,
-                        "Multiple auto increment columns are not supported yet.");
-                enableAutoIncrement(schema.autoIncrementColumnNames.get(0));
-            }
-            this.highestFieldId = new AtomicInteger(schema.highestFieldId);
+            // Check that the builder is empty before adopting from an existing schema
+            checkState(
+                    columns.isEmpty() && autoIncrementColumnNames.isEmpty() && primaryKey == null,
+                    "Schema.Builder#fromSchema should be the first API to be called on the builder.");
+
+            // Adopt columns while preserving their original IDs
+            this.fromColumns(schema.getColumns());
+
+            // Sync the highest field ID counter to prevent ID conflicts
+            this.highestFieldId.set(schema.getHighestFieldId());
+
+            // Copy the metadata members
+            this.autoIncrementColumnNames.addAll(schema.getAutoIncrementColumnNames());
+            schema.getPrimaryKey().ifPresent(pk -> this.primaryKey = pk);
+
             return this;
         }
 
@@ -544,6 +547,13 @@ public final class Schema implements Serializable {
             checkArgument(columnName != null, "Auto increment column name must not be null.");
             autoIncrementColumnNames.add(columnName);
             return this;
+        }
+
+        /** Returns the column with the given name, if it exists. */
+        public Optional<Column> getColumn(String columnName) {
+            return columns.stream()
+                    .filter(column -> column.getName().equals(columnName))
+                    .findFirst();
         }
 
         /** Returns an instance of an {@link Schema}. */
