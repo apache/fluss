@@ -121,6 +121,21 @@ spec:
               echo "bind.listeners: ${BIND_LISTENERS}" >> $FLUSS_HOME/conf/server.yaml && \
               echo "advertised.listeners: ${ADVERTISED_LISTENERS}" >> $FLUSS_HOME/conf/server.yaml && \
 
+              {{- if .Values.sasl.enabled }}
+              {{- $jaasUsers := list -}}
+              {{- range .Values.sasl.users }}
+              {{- $jaasUsers = append $jaasUsers (printf "user_%s=\\\"%s\\\"" .username .password) -}}
+              {{- end }}
+              echo "security.sasl.enabled.mechanisms: {{ .Values.sasl.mechanism }}" >> $FLUSS_HOME/conf/server.yaml && \
+              echo "security.sasl.plain.jaas.config: org.apache.fluss.security.auth.sasl.plain.PlainLoginModule required {{ join " " $jaasUsers }};" >> $FLUSS_HOME/conf/server.yaml && \
+              echo "security.protocol.map: INTERNAL:sasl,CLIENT:sasl{{ if .Values.externalAccess.enabled }},EXTERNAL:sasl{{ end }}" >> $FLUSS_HOME/conf/server.yaml && \
+
+              echo "client.security.protocol: SASL" >> conf/server.yaml && \
+              echo "client.security.sasl.mechanism: {{ .Values.sasl.mechanism }}" >> conf/server.yaml && \
+              echo "client.security.sasl.username: {{ (first .Values.sasl.users).username }}" >> conf/server.yaml && \
+              echo "client.security.sasl.password: {{ (first .Values.sasl.users).password }}" >> conf/server.yaml && \
+              {{- end }}
+
               bin/coordinator-server.sh start-foreground
           livenessProbe:
             failureThreshold: 100
@@ -143,6 +158,11 @@ spec:
               mountPath: /opt/conf
             - name: data
               mountPath: /tmp/fluss/data
+            {{- if .Values.sasl.enabled }}
+            - name: sasl-config
+              mountPath: /etc/fluss/conf
+              readOnly: true
+            {{- end }}
             {{- if .Values.externalAccess.enabled }}
             - name: shared
               mountPath: /shared
@@ -154,6 +174,11 @@ spec:
         {{- if not .Values.persistence.enabled }}
         - name: data
           emptyDir: {}
+        {{- end }}
+        {{- if .Values.sasl.enabled }}
+        - name: sasl-config
+          secret:
+            secretName: {{ if .Values.sasl.existingSecret }}{{ .Values.sasl.existingSecret }}{{ else }}{{ include "fluss.fullname" . }}-sasl-jaas-config{{ end }}
         {{- end }}
         {{- if .Values.externalAccess.enabled }}
         - name: shared

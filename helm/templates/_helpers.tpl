@@ -75,3 +75,19 @@ Create the name of the service account to use
 {{- default "default" .Values.serviceAccount.name }}
 {{- end }}
 {{- end }}
+
+{{/*
+Generate JAAS configuration for SASL
+*/}}
+{{- define "fluss.sasl.jaasConfig" -}}
+{{- if .Values.sasl.jaasConfig }}
+{{- .Values.sasl.jaasConfig -}}
+{{- else }}
+FlussServer {
+   org.apache.fluss.security.auth.sasl.plain.PlainLoginModule required
+   {{- range .Values.sasl.users }}
+   user_{{ .username }}="{{ .password }}"
+   {{- end }};
+};
+{{- end }}
+{{- end }}

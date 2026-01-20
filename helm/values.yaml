@@ -113,3 +113,16 @@ serviceAccount:
 rbac:
   create: false
 
+sasl:
+  enabled: false
+  mechanism: PLAIN
+  # List of users for PLAIN authentication
+  # Used to generate the JAAS config for the server
+  users:
+    - username: admin
+      password: password
+  # If specified, the existing secret must contain a key 'jaas.conf' with the JAAS configuration
+  existingSecret: ""
+  # If specified, this content will be used for the JAAS configuration instead of generating it from 'users'
+  jaasConfig: ""
+
