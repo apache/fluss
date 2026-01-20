@@ -49,7 +49,11 @@ public enum AggFunctionType {
 
     // Boolean aggregation
     BOOL_AND,
-    BOOL_OR;
+    BOOL_OR,
+
+    // Roaring bitmap aggregation
+    RBM32,
+    RBM64;
 
     /** Parameter name for delimiter used in LISTAGG and STRING_AGG functions. */
     public static final String PARAM_DELIMITER = "delimiter";

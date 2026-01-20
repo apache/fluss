@@ -29,6 +29,7 @@ import org.apache.fluss.row.Decimal;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
 import org.apache.fluss.server.kv.rowmerger.AggregateRowMerger;
+import org.apache.fluss.server.utils.RoaringBitmapUtils;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypeChecks;
 import org.apache.fluss.types.DataTypes;
@@ -37,7 +38,10 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.roaringbitmap.RoaringBitmap;
+import org.roaringbitmap.longlong.Roaring64Bitmap;
 
+import java.io.IOException;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -701,6 +705,85 @@ class FieldAggregatorParameterizedTest {
 
         BinaryValue merged2 = merger.merge(merged1, toBinaryValue(row3));
         assertThat(merged2.row.getString(1).toString()).isEqualTo("a,b");
+    }
+
+    // ===================================================================================
+    // Roaring Bitmap Aggregation Tests
+    // ===================================================================================
+
+    @Test
+    void testRbm32Aggregation() throws IOException {
+        Schema schema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("value", DataTypes.BYTES(), AggFunctions.RBM32())
+                        .primaryKey("id")
+                        .build();
+
+        TableConfig tableConfig = new TableConfig(new Configuration());
+        AggregateRowMerger merger = createMerger(schema, tableConfig);
+
+        RoaringBitmap bitmap1 = new RoaringBitmap();
+        bitmap1.add(1);
+        bitmap1.add(2);
+        RoaringBitmap bitmap2 = new RoaringBitmap();
+        bitmap2.add(2);
+        bitmap2.add(3);
+
+        BinaryRow row1 =
+                compactedRow(
+                        schema.getRowType(),
+                        new Object[] {1, RoaringBitmapUtils.serializeRoaringBitmap32(bitmap1)});
+        BinaryRow row2 =
+                compactedRow(
+                        schema.getRowType(),
+                        new Object[] {1, RoaringBitmapUtils.serializeRoaringBitmap32(bitmap2)});
+
+        BinaryValue merged = merger.merge(toBinaryValue(row1), toBinaryValue(row2));
+
+        RoaringBitmap expected = bitmap1.clone();
+        expected.or(bitmap2);
+        byte[] expectedBytes = RoaringBitmapUtils.serializeRoaringBitmap32(expected);
+
+        assertThat(merged.row.getBinary(1, expectedBytes.length)).isEqualTo(expectedBytes);
+    }
+
+    @Test
+    void testRbm64Aggregation() throws IOException {
+        Schema schema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("value", DataTypes.BYTES(), AggFunctions.RBM64())
+                        .primaryKey("id")
+                        .build();
+
+        TableConfig tableConfig = new TableConfig(new Configuration());
+        AggregateRowMerger merger = createMerger(schema, tableConfig);
+
+        Roaring64Bitmap bitmap1 = new Roaring64Bitmap();
+        bitmap1.add(10L);
+        bitmap1.add(20L);
+        Roaring64Bitmap bitmap2 = new Roaring64Bitmap();
+        bitmap2.add(20L);
+        bitmap2.add(30L);
+
+        BinaryRow row1 =
+                compactedRow(
+                        schema.getRowType(),
+                        new Object[] {1, RoaringBitmapUtils.serializeRoaringBitmap64(bitmap1)});
+        BinaryRow row2 =
+                compactedRow(
+                        schema.getRowType(),
+                        new Object[] {1, RoaringBitmapUtils.serializeRoaringBitmap64(bitmap2)});
+
+        BinaryValue merged = merger.merge(toBinaryValue(row1), toBinaryValue(row2));
+
+        Roaring64Bitmap expected = new Roaring64Bitmap();
+        expected.or(bitmap1);
+        expected.or(bitmap2);
+        byte[] expectedBytes = RoaringBitmapUtils.serializeRoaringBitmap64(expected);
+
+        assertThat(merged.row.getBinary(1, expectedBytes.length)).isEqualTo(expectedBytes);
     }
 
     // ===================================================================================

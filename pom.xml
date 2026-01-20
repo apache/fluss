@@ -91,6 +91,7 @@
         <arrow.version>15.0.0</arrow.version>
         <paimon.version>1.3.1</paimon.version>
         <iceberg.version>1.10.0</iceberg.version>
+        <roaringbitmap.version>1.3.0</roaringbitmap.version>
 
         <!-- spark & scala -->
         <scala212.version>2.12.18</scala212.version>
