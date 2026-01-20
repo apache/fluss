@@ -919,6 +919,11 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         return lakeCatalogDynamicLoader.getLakeCatalogContainer().getDataLakeFormat();
     }
 
+    @VisibleForTesting
+    public LakeTableTieringManager getLakeTableTieringManager() {
+        return lakeTableTieringManager;
+    }
+
     private void validateHeartbeatRequest(
             PbHeartbeatReqForTable heartbeatReqForTable, int currentEpoch) {
         if (heartbeatReqForTable.getCoordinatorEpoch() != currentEpoch) {
