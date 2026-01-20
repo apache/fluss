@@ -29,7 +29,6 @@ import org.apache.fluss.row.TimestampNtz;
 
 import org.apache.paimon.data.InternalArray;
 import org.apache.paimon.data.InternalMap;
-import org.apache.paimon.data.Timestamp;
 import org.apache.paimon.types.RowKind;
 import org.apache.paimon.types.RowType;
 import org.junit.jupiter.api.Test;
@@ -68,11 +67,7 @@ class FlussRecordAsPaimonRowTest {
                         new org.apache.paimon.types.LocalZonedTimestampType(6),
                         new org.apache.paimon.types.TimestampType(6),
                         new org.apache.paimon.types.BinaryType(),
-                        new org.apache.paimon.types.VarCharType(),
-                        // append three system columns: __bucket, __offset,__timestamp
-                        new org.apache.paimon.types.IntType(),
-                        new org.apache.paimon.types.BigIntType(),
-                        new org.apache.paimon.types.LocalZonedTimestampType(3));
+                        new org.apache.paimon.types.VarCharType());
 
         FlussRecordAsPaimonRow flussRecordAsPaimonRow =
                 new FlussRecordAsPaimonRow(tableBucket, tableRowType);
@@ -120,28 +115,14 @@ class FlussRecordAsPaimonRowTest {
         assertThat(flussRecordAsPaimonRow.getBinary(12)).isEqualTo(new byte[] {1, 2, 3, 4});
         assertThat(flussRecordAsPaimonRow.isNullAt(13)).isTrue();
 
-        // verify FlussRecordAsPaimonRow system columns (no partition fields, so indices stay same)
-        assertThat(flussRecordAsPaimonRow.getInt(14)).isEqualTo(tableBucket);
-        assertThat(flussRecordAsPaimonRow.getLong(15)).isEqualTo(logOffset);
-        assertThat(flussRecordAsPaimonRow.getLong(16)).isEqualTo(timeStamp);
-        assertThat(flussRecordAsPaimonRow.getTimestamp(16, 4))
-                .isEqualTo(Timestamp.fromEpochMillis(timeStamp));
         assertThat(flussRecordAsPaimonRow.getRowKind()).isEqualTo(RowKind.INSERT);
-
-        assertThat(flussRecordAsPaimonRow.getFieldCount())
-                .isEqualTo(14 + 3); // business  + system = 14 + 0 + 3 = 17
+        assertThat(flussRecordAsPaimonRow.getFieldCount()).isEqualTo(14);
     }
 
     @Test
     void testPrimaryKeyTableRecord() {
         int tableBucket = 0;
-        RowType tableRowType =
-                RowType.of(
-                        new org.apache.paimon.types.BooleanType(),
-                        // append three system columns: __bucket, __offset,__timestamp
-                        new org.apache.paimon.types.IntType(),
-                        new org.apache.paimon.types.BigIntType(),
-                        new org.apache.paimon.types.LocalZonedTimestampType(3));
+        RowType tableRowType = RowType.of(new org.apache.paimon.types.BooleanType());
         FlussRecordAsPaimonRow flussRecordAsPaimonRow =
                 new FlussRecordAsPaimonRow(tableBucket, tableRowType);
         long logOffset = 0;
@@ -153,8 +134,7 @@ class FlussRecordAsPaimonRowTest {
         flussRecordAsPaimonRow.setFlussRecord(logRecord);
 
         assertThat(flussRecordAsPaimonRow.getBoolean(0)).isTrue();
-        // normal columns + system columns
-        assertThat(flussRecordAsPaimonRow.getFieldCount()).isEqualTo(4);
+        assertThat(flussRecordAsPaimonRow.getFieldCount()).isEqualTo(1);
         // verify rowkind
         assertThat(flussRecordAsPaimonRow.getRowKind()).isEqualTo(RowKind.INSERT);
 
@@ -178,11 +158,7 @@ class FlussRecordAsPaimonRowTest {
                 RowType.of(
                         new org.apache.paimon.types.IntType(),
                         new org.apache.paimon.types.ArrayType(
-                                new org.apache.paimon.types.IntType()),
-                        // system columns: __bucket, __offset, __timestamp
-                        new org.apache.paimon.types.IntType(),
-                        new org.apache.paimon.types.BigIntType(),
-                        new org.apache.paimon.types.LocalZonedTimestampType(3));
+                                new org.apache.paimon.types.IntType()));
 
         FlussRecordAsPaimonRow flussRecordAsPaimonRow =
                 new FlussRecordAsPaimonRow(tableBucket, tableRowType);
@@ -204,11 +180,6 @@ class FlussRecordAsPaimonRowTest {
         assertThat(array.getInt(2)).isEqualTo(3);
         assertThat(array.getInt(3)).isEqualTo(4);
         assertThat(array.getInt(4)).isEqualTo(5);
-
-        // Verify system columns are still accessible
-        assertThat(flussRecordAsPaimonRow.getInt(2)).isEqualTo(tableBucket);
-        assertThat(flussRecordAsPaimonRow.getLong(3)).isEqualTo(logOffset);
-        assertThat(flussRecordAsPaimonRow.getLong(4)).isEqualTo(timeStamp);
     }
 
     @Test
@@ -217,11 +188,7 @@ class FlussRecordAsPaimonRowTest {
         RowType tableRowType =
                 RowType.of(
                         new org.apache.paimon.types.ArrayType(
-                                new org.apache.paimon.types.VarCharType()),
-                        // system columns: __bucket, __offset, __timestamp
-                        new org.apache.paimon.types.IntType(),
-                        new org.apache.paimon.types.BigIntType(),
-                        new org.apache.paimon.types.LocalZonedTimestampType(3));
+                                new org.apache.paimon.types.VarCharType()));
 
         FlussRecordAsPaimonRow flussRecordAsPaimonRow =
                 new FlussRecordAsPaimonRow(tableBucket, tableRowType);
@@ -252,11 +219,7 @@ class FlussRecordAsPaimonRowTest {
                 RowType.of(
                         new org.apache.paimon.types.ArrayType(
                                 new org.apache.paimon.types.ArrayType(
-                                        new org.apache.paimon.types.IntType())),
-                        // system columns: __bucket, __offset, __timestamp
-                        new org.apache.paimon.types.IntType(),
-                        new org.apache.paimon.types.BigIntType(),
-                        new org.apache.paimon.types.LocalZonedTimestampType(3));
+                                        new org.apache.paimon.types.IntType())));
 
         FlussRecordAsPaimonRow flussRecordAsPaimonRow =
                 new FlussRecordAsPaimonRow(tableBucket, tableRowType);
@@ -306,11 +269,7 @@ class FlussRecordAsPaimonRowTest {
                         new org.apache.paimon.types.ArrayType(
                                 new org.apache.paimon.types.FloatType()),
                         new org.apache.paimon.types.ArrayType(
-                                new org.apache.paimon.types.DoubleType()),
-                        // system columns: __bucket, __offset, __timestamp
-                        new org.apache.paimon.types.IntType(),
-                        new org.apache.paimon.types.BigIntType(),
-                        new org.apache.paimon.types.LocalZonedTimestampType(3));
+                                new org.apache.paimon.types.DoubleType()));
 
         FlussRecordAsPaimonRow flussRecordAsPaimonRow =
                 new FlussRecordAsPaimonRow(tableBucket, tableRowType);
@@ -367,10 +326,6 @@ class FlussRecordAsPaimonRowTest {
         InternalArray doubleArray = flussRecordAsPaimonRow.getArray(6);
         assertThat(doubleArray.getDouble(0)).isEqualTo(1.11);
         assertThat(doubleArray.toDoubleArray()).isEqualTo(new double[] {1.11, 2.22, 3.33});
-
-        // Verify system columns
-        assertThat(flussRecordAsPaimonRow.getInt(7)).isEqualTo(tableBucket);
-        assertThat(flussRecordAsPaimonRow.getLong(8)).isEqualTo(logOffset);
     }
 
     @Test
@@ -379,11 +334,7 @@ class FlussRecordAsPaimonRowTest {
         RowType tableRowType =
                 RowType.of(
                         new org.apache.paimon.types.ArrayType(
-                                new org.apache.paimon.types.DecimalType(10, 2)),
-                        // system columns
-                        new org.apache.paimon.types.IntType(),
-                        new org.apache.paimon.types.BigIntType(),
-                        new org.apache.paimon.types.LocalZonedTimestampType(3));
+                                new org.apache.paimon.types.DecimalType(10, 2)));
 
         FlussRecordAsPaimonRow flussRecordAsPaimonRow =
                 new FlussRecordAsPaimonRow(tableBucket, tableRowType);
@@ -413,11 +364,7 @@ class FlussRecordAsPaimonRowTest {
         RowType tableRowType =
                 RowType.of(
                         new org.apache.paimon.types.ArrayType(
-                                new org.apache.paimon.types.TimestampType(3)),
-                        // system columns
-                        new org.apache.paimon.types.IntType(),
-                        new org.apache.paimon.types.BigIntType(),
-                        new org.apache.paimon.types.LocalZonedTimestampType(3));
+                                new org.apache.paimon.types.TimestampType(3)));
 
         FlussRecordAsPaimonRow flussRecordAsPaimonRow =
                 new FlussRecordAsPaimonRow(tableBucket, tableRowType);
@@ -447,11 +394,7 @@ class FlussRecordAsPaimonRowTest {
         RowType tableRowType =
                 RowType.of(
                         new org.apache.paimon.types.ArrayType(
-                                new org.apache.paimon.types.VarBinaryType()),
-                        // system columns
-                        new org.apache.paimon.types.IntType(),
-                        new org.apache.paimon.types.BigIntType(),
-                        new org.apache.paimon.types.LocalZonedTimestampType(3));
+                                new org.apache.paimon.types.VarBinaryType()));
 
         FlussRecordAsPaimonRow flussRecordAsPaimonRow =
                 new FlussRecordAsPaimonRow(tableBucket, tableRowType);
@@ -476,11 +419,7 @@ class FlussRecordAsPaimonRowTest {
         RowType tableRowType =
                 RowType.of(
                         new org.apache.paimon.types.ArrayType(new org.apache.paimon.types.IntType())
-                                .nullable(),
-                        // system columns
-                        new org.apache.paimon.types.IntType(),
-                        new org.apache.paimon.types.BigIntType(),
-                        new org.apache.paimon.types.LocalZonedTimestampType(3));
+                                .nullable());
 
         FlussRecordAsPaimonRow flussRecordAsPaimonRow =
                 new FlussRecordAsPaimonRow(tableBucket, tableRowType);
@@ -501,11 +440,7 @@ class FlussRecordAsPaimonRowTest {
         RowType tableRowType =
                 RowType.of(
                         new org.apache.paimon.types.ArrayType(
-                                new org.apache.paimon.types.IntType().nullable()),
-                        // system columns
-                        new org.apache.paimon.types.IntType(),
-                        new org.apache.paimon.types.BigIntType(),
-                        new org.apache.paimon.types.LocalZonedTimestampType(3));
+                                new org.apache.paimon.types.IntType().nullable()));
 
         FlussRecordAsPaimonRow flussRecordAsPaimonRow =
                 new FlussRecordAsPaimonRow(tableBucket, tableRowType);
@@ -530,11 +465,7 @@ class FlussRecordAsPaimonRowTest {
         RowType tableRowType =
                 RowType.of(
                         new org.apache.paimon.types.ArrayType(
-                                new org.apache.paimon.types.IntType()),
-                        // system columns
-                        new org.apache.paimon.types.IntType(),
-                        new org.apache.paimon.types.BigIntType(),
-                        new org.apache.paimon.types.LocalZonedTimestampType(3));
+                                new org.apache.paimon.types.IntType()));
 
         FlussRecordAsPaimonRow flussRecordAsPaimonRow =
                 new FlussRecordAsPaimonRow(tableBucket, tableRowType);
@@ -557,11 +488,7 @@ class FlussRecordAsPaimonRowTest {
         RowType tableRowType =
                 RowType.of(
                         new org.apache.paimon.types.BooleanType(),
-                        new org.apache.paimon.types.VarCharType(),
-                        // append three system columns: __bucket, __offset,__timestamp
-                        new org.apache.paimon.types.IntType(),
-                        new org.apache.paimon.types.BigIntType(),
-                        new org.apache.paimon.types.LocalZonedTimestampType(3));
+                        new org.apache.paimon.types.VarCharType());
 
         FlussRecordAsPaimonRow flussRecordAsPaimonRow =
                 new FlussRecordAsPaimonRow(tableBucket, tableRowType);
@@ -573,26 +500,16 @@ class FlussRecordAsPaimonRowTest {
         LogRecord logRecord = new GenericRecord(logOffset, timeStamp, APPEND_ONLY, genericRow);
         flussRecordAsPaimonRow.setFlussRecord(logRecord);
 
-        assertThat(flussRecordAsPaimonRow.getFieldCount()).isEqualTo(5);
+        assertThat(flussRecordAsPaimonRow.getFieldCount()).isEqualTo(2);
 
         assertThat(flussRecordAsPaimonRow.getBoolean(0)).isTrue();
         assertThat(flussRecordAsPaimonRow.isNullAt(1)).isTrue();
-        assertThat(flussRecordAsPaimonRow.getInt(2)).isEqualTo(tableBucket);
-        assertThat(flussRecordAsPaimonRow.getLong(3)).isEqualTo(logOffset);
-        assertThat(flussRecordAsPaimonRow.getTimestamp(4, 3))
-                .isEqualTo(Timestamp.fromEpochMillis(timeStamp));
     }
 
     @Test
     void testFlussRecordWiderThanPaimonSchema() {
         int tableBucket = 0;
-        RowType tableRowType =
-                RowType.of(
-                        new org.apache.paimon.types.BooleanType(),
-                        // append three system columns: __bucket, __offset,__timestamp
-                        new org.apache.paimon.types.IntType(),
-                        new org.apache.paimon.types.BigIntType(),
-                        new org.apache.paimon.types.LocalZonedTimestampType(3));
+        RowType tableRowType = RowType.of(new org.apache.paimon.types.BooleanType());
 
         FlussRecordAsPaimonRow flussRecordAsPaimonRow =
                 new FlussRecordAsPaimonRow(tableBucket, tableRowType);
@@ -683,11 +600,7 @@ class FlussRecordAsPaimonRowTest {
                         rowWithArrayType,
                         new org.apache.paimon.types.ArrayType(arrayElementRowType),
                         simpleNestedRowType.nullable(),
-                        nullableFieldsRowType,
-                        // system columns
-                        new org.apache.paimon.types.IntType(),
-                        new org.apache.paimon.types.BigIntType(),
-                        new org.apache.paimon.types.LocalZonedTimestampType(3));
+                        nullableFieldsRowType);
 
         FlussRecordAsPaimonRow flussRecordAsPaimonRow =
                 new FlussRecordAsPaimonRow(tableBucket, tableRowType);
@@ -820,11 +733,6 @@ class FlussRecordAsPaimonRowTest {
         assertThat(paimonNullableFieldsRow).isNotNull();
         assertThat(paimonNullableFieldsRow.getInt(0)).isEqualTo(42);
         assertThat(paimonNullableFieldsRow.isNullAt(1)).isTrue();
-
-        // Verify system columns
-        assertThat(flussRecordAsPaimonRow.getInt(8)).isEqualTo(tableBucket);
-        assertThat(flussRecordAsPaimonRow.getLong(9)).isEqualTo(logOffset);
-        assertThat(flussRecordAsPaimonRow.getLong(10)).isEqualTo(timeStamp);
     }
 
     @Test
@@ -990,11 +898,7 @@ class FlussRecordAsPaimonRowTest {
                         new org.apache.paimon.types.MapType(
                                         new org.apache.paimon.types.IntType(),
                                         new org.apache.paimon.types.IntType())
-                                .nullable(),
-                        // system columns
-                        new org.apache.paimon.types.IntType(),
-                        new org.apache.paimon.types.BigIntType(),
-                        new org.apache.paimon.types.LocalZonedTimestampType(3));
+                                .nullable());
 
         FlussRecordAsPaimonRow flussRecordAsPaimonRow =
                 new FlussRecordAsPaimonRow(tableBucket, tableRowType);
@@ -1016,11 +920,7 @@ class FlussRecordAsPaimonRowTest {
                 RowType.of(
                         new org.apache.paimon.types.MapType(
                                 new org.apache.paimon.types.IntType(),
-                                new org.apache.paimon.types.IntType().nullable()),
-                        // system columns
-                        new org.apache.paimon.types.IntType(),
-                        new org.apache.paimon.types.BigIntType(),
-                        new org.apache.paimon.types.LocalZonedTimestampType(3));
+                                new org.apache.paimon.types.IntType().nullable()));
 
         FlussRecordAsPaimonRow flussRecordAsPaimonRow =
                 new FlussRecordAsPaimonRow(tableBucket, tableRowType);
@@ -1051,11 +951,7 @@ class FlussRecordAsPaimonRowTest {
                 RowType.of(
                         new org.apache.paimon.types.MapType(
                                 new org.apache.paimon.types.IntType(),
-                                new org.apache.paimon.types.IntType()),
-                        // system columns
-                        new org.apache.paimon.types.IntType(),
-                        new org.apache.paimon.types.BigIntType(),
-                        new org.apache.paimon.types.LocalZonedTimestampType(3));
+                                new org.apache.paimon.types.IntType()));
 
         FlussRecordAsPaimonRow flussRecordAsPaimonRow =
                 new FlussRecordAsPaimonRow(tableBucket, tableRowType);
