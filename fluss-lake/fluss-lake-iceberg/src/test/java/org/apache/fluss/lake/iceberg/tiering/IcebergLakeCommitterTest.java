@@ -95,9 +95,9 @@ class IcebergLakeCommitterTest {
      * <p>Bug behavior: RowDelta commits first (because delete files are present), advancing the
      * snapshot from N to N+1. The rewrite then calls validateFromSnapshot(N), but N is now stale.
      * Iceberg's retry loop detects the mismatch and retries, but the conflict is permanent because
-     * the validation snapshot is fixed. With default Iceberg settings (commit.retry.total-timeout-ms
-     * = 30 minutes), this causes blocking for 15+ minutes before failing.
-     *
+     * the validation snapshot is fixed. With default Iceberg settings
+     * (commit.retry.total-timeout-ms = 30 minutes), this causes blocking for 15+ minutes before
+     * failing.
      */
     @Test
     void testRewriteFailsWhenDeleteFilesAddedInSameCycle() throws Exception {
@@ -137,7 +137,8 @@ class IcebergLakeCommitterTest {
                 new RewriteDataFileResult(rewriteSnapshotId, filesToDelete, filesToAdd);
 
         // Create a delete file that references one of the data files being rewritten
-        // IMPORTANT: when RowDelta commits this delete file, it will conflict with the rewrite's validation
+        // IMPORTANT: when RowDelta commits this delete file, it will conflict with the rewrite's
+        // validation
         // since the file now has pending deletes
         DeleteFile deleteFile =
                 createDeleteFile(icebergTable, firstDataFile.partition(), firstDataFile.location());
@@ -394,7 +395,8 @@ class IcebergLakeCommitterTest {
         return count;
     }
 
-    private DeleteFile createDeleteFile(Table table, StructLike partition, CharSequence dataFilePath) {
+    private DeleteFile createDeleteFile(
+            Table table, StructLike partition, CharSequence dataFilePath) {
         // Create a position delete file that references the given data file
         // This simulates a delete operation on the same file being rewritten
         return FileMetadata.deleteFileBuilder(table.spec())
