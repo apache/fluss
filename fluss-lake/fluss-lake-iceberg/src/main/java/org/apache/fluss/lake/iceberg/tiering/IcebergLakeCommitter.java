@@ -106,9 +106,18 @@ public class IcebergLakeCommitter implements LakeCommitter<IcebergWriteResult, I
 
             Long snapshotId = null;
 
-            // Since rewrite operations validate against a specific snapshot ID, it's important
-            // to commit rewrite files BEFORE data/delete files to avoid the snapshot advancing
-            // too soon (causing rewrite validation to fail)
+            /*
+             Rewrite files MUST be committed BEFORE data/delete files.
+
+             Rewrite operations call validateFromSnapshot(snapshotId) to ensure the files being
+             replaced haven't changed since the rewrite was planned. If we commit data/delete
+             files first (via AppendFiles or RowDelta), the table's current snapshot advances.
+             The subsequent rewrite validation then fails because it's checking against a
+             now-stale snapshot ID, triggering Iceberg's retry loop indefinitely.
+
+             By committing rewrites first, the validation succeeds against the current snapshot,
+             and subsequent data/delete commits simply advance the snapshot further.
+            */
             List<RewriteDataFileResult> rewriteDataFileResults =
                     committable.rewriteDataFileResults();
             if (!rewriteDataFileResults.isEmpty()) {

@@ -299,7 +299,7 @@ class IcebergLakeCommitterTest {
         icebergTable.refresh();
         int finalFileCount = countDataFiles(icebergTable);
         assertThat(finalFileCount)
-                .as("Rewrite should succeed with delete files present - got %d files", finalFileCount)
+                .as("Rewrite should succeed with delete files present")
                 .isEqualTo(2);
     }
 
