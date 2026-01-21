@@ -17,6 +17,7 @@
 
 package org.apache.fluss.flink.source.split;
 
+import org.apache.fluss.client.table.scanner.log.LogScanner;
 import org.apache.fluss.metadata.TableBucket;
 
 import javax.annotation.Nullable;
@@ -27,7 +28,7 @@ import java.util.Optional;
 /** The split for log. It's used to describe the log data of a table bucket. */
 public class LogSplit extends SourceSplitBase {
 
-    public static final long NO_STOPPING_OFFSET = Long.MIN_VALUE;
+    public static final long NO_STOPPING_OFFSET = LogScanner.NO_STOPPING_OFFSET;
 
     private static final String LOG_SPLIT_PREFIX = "log-";
 

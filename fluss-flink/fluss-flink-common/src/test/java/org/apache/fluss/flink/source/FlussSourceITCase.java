@@ -17,11 +17,11 @@
 
 package org.apache.fluss.flink.source;
 
+import org.apache.fluss.client.initializer.OffsetsInitializer;
 import org.apache.fluss.client.table.Table;
 import org.apache.fluss.client.table.writer.AppendWriter;
 import org.apache.fluss.client.table.writer.UpsertWriter;
 import org.apache.fluss.flink.source.deserializer.RowDataDeserializationSchema;
-import org.apache.fluss.flink.source.enumerator.initializer.OffsetsInitializer;
 import org.apache.fluss.flink.source.testutils.MockDataUtils;
 import org.apache.fluss.flink.source.testutils.Order;
 import org.apache.fluss.flink.source.testutils.OrderPartial;

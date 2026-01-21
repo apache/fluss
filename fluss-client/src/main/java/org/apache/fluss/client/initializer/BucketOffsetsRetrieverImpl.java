@@ -15,16 +15,14 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.flink.source.enumerator.initializer;
+package org.apache.fluss.client.initializer;
 
 import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.client.admin.ListOffsetsResult;
 import org.apache.fluss.client.admin.OffsetSpec;
-import org.apache.fluss.flink.source.enumerator.initializer.OffsetsInitializer.BucketOffsetsRetriever;
+import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.metadata.TablePath;
-
-import org.apache.flink.util.ExceptionUtils;
-import org.apache.flink.util.FlinkRuntimeException;
+import org.apache.fluss.utils.ExceptionUtils;
 
 import javax.annotation.Nullable;
 
@@ -36,7 +34,7 @@ import java.util.concurrent.ExecutionException;
 import static org.apache.fluss.client.table.scanner.log.LogScanner.EARLIEST_OFFSET;
 
 /** The default implementation for offsets retriever. */
-public class BucketOffsetsRetrieverImpl implements BucketOffsetsRetriever {
+public class BucketOffsetsRetrieverImpl implements OffsetsInitializer.BucketOffsetsRetriever {
     private final Admin flussAdmin;
     private final TablePath tablePath;
 
@@ -79,10 +77,10 @@ public class BucketOffsetsRetrieverImpl implements BucketOffsetsRetriever {
             return result.all().get();
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            throw new FlinkRuntimeException(
+            throw new FlussRuntimeException(
                     "Interrupted while listing offsets for table buckets: " + buckets, e);
         } catch (ExecutionException e) {
-            throw new FlinkRuntimeException(
+            throw new FlussRuntimeException(
                     "Failed to list offsets for table buckets: " + buckets + " due to",
                     ExceptionUtils.stripExecutionException(e));
         }

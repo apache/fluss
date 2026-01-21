@@ -15,27 +15,33 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.flink.source.enumerator.initializer;
+package org.apache.fluss.client.initializer;
 
 import javax.annotation.Nullable;
 
 import java.util.Collection;
+import java.util.HashMap;
 import java.util.Map;
 
+import static org.apache.fluss.client.table.scanner.log.LogScanner.EARLIEST_OFFSET;
+
 /**
- * An implementation of {@link OffsetsInitializer} to initialize the offsets based on a
- * latest-offset.
+ * A initializer that initialize the buckets to the earliest offsets.
  *
  * <p>Package private and should be instantiated via {@link OffsetsInitializer}.
  */
-public class LatestOffsetsInitializer implements OffsetsInitializer {
-    private static final long serialVersionUID = 3014700244733286989L;
+class EarliestOffsetsInitializer implements OffsetsInitializer {
+    private static final long serialVersionUID = 172938052008787981L;
 
     @Override
     public Map<Integer, Long> getBucketOffsets(
             @Nullable String partitionName,
             Collection<Integer> buckets,
             BucketOffsetsRetriever bucketOffsetsRetriever) {
-        return bucketOffsetsRetriever.latestOffsets(partitionName, buckets);
+        Map<Integer, Long> initialOffsets = new HashMap<>();
+        for (Integer tb : buckets) {
+            initialOffsets.put(tb, EARLIEST_OFFSET);
+        }
+        return initialOffsets;
     }
 }

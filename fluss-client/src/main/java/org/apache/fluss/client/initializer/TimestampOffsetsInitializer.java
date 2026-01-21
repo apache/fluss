@@ -15,30 +15,32 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.flink.source.enumerator.initializer;
+package org.apache.fluss.client.initializer;
 
 import javax.annotation.Nullable;
 
 import java.util.Collection;
 import java.util.Map;
-import java.util.stream.Collectors;
-
-import static org.apache.fluss.flink.source.split.LogSplit.NO_STOPPING_OFFSET;
 
 /**
- * An implementation of {@link OffsetsInitializer} which does not initialize anything.
+ * An implementation of {@link OffsetsInitializer} to initialize the offsets based on a timestamp.
  *
- * <p>This class is used as the default stopping offsets initializer for unbounded Fluss sources.
+ * <p>Package private and should be instantiated via {@link OffsetsInitializer}.
  */
-public class NoStoppingOffsetsInitializer implements OffsetsInitializer {
+public class TimestampOffsetsInitializer implements OffsetsInitializer {
+    private static final long serialVersionUID = 2932230571773627233L;
 
-    private static final long serialVersionUID = 1L;
+    private final long timestamp;
+
+    public TimestampOffsetsInitializer(long timestamp) {
+        this.timestamp = timestamp;
+    }
 
     @Override
     public Map<Integer, Long> getBucketOffsets(
             @Nullable String partitionName,
             Collection<Integer> buckets,
-            OffsetsInitializer.BucketOffsetsRetriever bucketOffsetsRetriever) {
-        return buckets.stream().collect(Collectors.toMap(x -> x, x -> NO_STOPPING_OFFSET));
+            BucketOffsetsRetriever bucketOffsetsRetriever) {
+        return bucketOffsetsRetriever.offsetsFromTimestamp(partitionName, buckets, timestamp);
     }
 }

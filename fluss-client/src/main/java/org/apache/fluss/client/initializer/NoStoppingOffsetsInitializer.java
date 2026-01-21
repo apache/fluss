@@ -15,38 +15,30 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.flink.source.enumerator.initializer;
-
-import org.apache.fluss.flink.source.enumerator.FlinkSourceEnumerator;
-import org.apache.fluss.flink.source.reader.FlinkSourceSplitReader;
+package org.apache.fluss.client.initializer;
 
 import javax.annotation.Nullable;
 
 import java.util.Collection;
-import java.util.HashMap;
 import java.util.Map;
+import java.util.stream.Collectors;
 
-import static org.apache.fluss.client.table.scanner.log.LogScanner.EARLIEST_OFFSET;
+import static org.apache.fluss.client.table.scanner.log.LogScanner.NO_STOPPING_OFFSET;
 
 /**
- * A initializer that initialize the buckets to the earliest offsets. The offsets initialization are
- * taken care of by the {@link FlinkSourceSplitReader} instead of by the {@link
- * FlinkSourceEnumerator}.
+ * An implementation of {@link OffsetsInitializer} which does not initialize anything.
  *
- * <p>Package private and should be instantiated via {@link OffsetsInitializer}.
+ * <p>This class is used as the default stopping offsets initializer for unbounded Fluss sources.
  */
-class EarliestOffsetsInitializer implements OffsetsInitializer {
-    private static final long serialVersionUID = 172938052008787981L;
+public class NoStoppingOffsetsInitializer implements OffsetsInitializer {
+
+    private static final long serialVersionUID = 1L;
 
     @Override
     public Map<Integer, Long> getBucketOffsets(
             @Nullable String partitionName,
             Collection<Integer> buckets,
-            BucketOffsetsRetriever bucketOffsetsRetriever) {
-        Map<Integer, Long> initialOffsets = new HashMap<>();
-        for (Integer tb : buckets) {
-            initialOffsets.put(tb, EARLIEST_OFFSET);
-        }
-        return initialOffsets;
+            OffsetsInitializer.BucketOffsetsRetriever bucketOffsetsRetriever) {
+        return buckets.stream().collect(Collectors.toMap(x -> x, x -> NO_STOPPING_OFFSET));
     }
 }

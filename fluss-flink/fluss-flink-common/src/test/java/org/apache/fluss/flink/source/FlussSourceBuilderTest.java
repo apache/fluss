@@ -17,9 +17,9 @@
 
 package org.apache.fluss.flink.source;
 
+import org.apache.fluss.client.initializer.OffsetsInitializer;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.flink.source.deserializer.FlussDeserializationSchema;
-import org.apache.fluss.flink.source.enumerator.initializer.OffsetsInitializer;
 import org.apache.fluss.flink.utils.FlinkTestBase;
 import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.row.InternalRow;
