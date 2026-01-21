@@ -30,6 +30,7 @@ import org.apache.paimon.flink.FlinkFileIOLoader;
 import org.apache.paimon.options.Options;
 
 import java.lang.reflect.Method;
+import java.util.HashMap;
 import java.util.Map;
 
 import static org.apache.fluss.metadata.DataLakeFormat.ICEBERG;
@@ -72,11 +73,11 @@ public class LakeFlinkCatalog implements AutoCloseable {
                                         + "' is set.");
                     }
                     Map<String, String> catalogProperties =
-                            PropertiesUtils.extractAndRemovePrefix(
-                                    lakeCatalogProperties, lakeFormat + ".");
-
+                            new HashMap<>(DataLakeUtils.extractLakeCatalogProperties(tableOptions));
+                    // properties in catalog are preferred
                     catalogProperties.putAll(
-                            DataLakeUtils.extractLakeCatalogProperties(tableOptions));
+                            PropertiesUtils.extractAndRemovePrefix(
+                                    lakeCatalogProperties, lakeFormat + "."));
                     if (lakeFormat == PAIMON) {
                         catalog =
                                 PaimonCatalogFactory.create(
