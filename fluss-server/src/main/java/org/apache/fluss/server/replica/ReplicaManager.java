@@ -467,15 +467,17 @@ public class ReplicaManager {
     private void updateReplicaTableConfig(ClusterMetadata clusterMetadata) {
         for (TableMetadata tableMetadata : clusterMetadata.getTableMetadataList()) {
             TableInfo tableInfo = tableMetadata.getTableInfo();
-            long tableId = tableInfo.getTableId();
-            boolean dataLakeEnabled = tableInfo.getTableConfig().isDataLakeEnabled();
+            if (tableInfo.getTableConfig().getDataLakeFormat().isPresent()) {
+                long tableId = tableInfo.getTableId();
+                boolean dataLakeEnabled = tableInfo.getTableConfig().isDataLakeEnabled();
 
-            for (Map.Entry<TableBucket, HostedReplica> entry : allReplicas.entrySet()) {
-                HostedReplica hostedReplica = entry.getValue();
-                if (hostedReplica instanceof OnlineReplica) {
-                    Replica replica = ((OnlineReplica) hostedReplica).getReplica();
-                    if (replica.getTableBucket().getTableId() == tableId) {
-                        replica.updateIsDataLakeEnabled(dataLakeEnabled);
+                for (Map.Entry<TableBucket, HostedReplica> entry : allReplicas.entrySet()) {
+                    HostedReplica hostedReplica = entry.getValue();
+                    if (hostedReplica instanceof OnlineReplica) {
+                        Replica replica = ((OnlineReplica) hostedReplica).getReplica();
+                        if (replica.getTableBucket().getTableId() == tableId) {
+                            replica.updateIsDataLakeEnabled(dataLakeEnabled);
+                        }
                     }
                 }
             }

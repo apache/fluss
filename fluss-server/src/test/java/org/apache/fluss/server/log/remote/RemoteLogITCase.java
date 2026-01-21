@@ -27,6 +27,7 @@ import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.remote.RemoteLogSegment;
 import org.apache.fluss.rpc.entity.FetchLogResultForBucket;
 import org.apache.fluss.rpc.gateway.CoordinatorGateway;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
@@ -47,8 +48,11 @@ import org.junit.jupiter.params.provider.ValueSource;
 
 import java.time.Duration;
 import java.util.Collections;
+import java.util.Comparator;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.stream.Collectors;
 
 import static org.apache.fluss.record.TestData.DATA1;
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
@@ -87,6 +91,11 @@ public class RemoteLogITCase {
 
     private void produceRecordsAndWaitRemoteLogCopy(
             TabletServerGateway leaderGateway, TableBucket tb) throws Exception {
+        produceRecordsAndWaitRemoteLogCopy(leaderGateway, tb, 0L);
+    }
+
+    private void produceRecordsAndWaitRemoteLogCopy(
+            TabletServerGateway leaderGateway, TableBucket tb, long baseOffset) throws Exception {
         for (int i = 0; i < 10; i++) {
             assertProduceLogResponse(
                     leaderGateway
@@ -98,7 +107,7 @@ public class RemoteLogITCase {
                                             genMemoryLogRecordsByObject(DATA1)))
                             .get(),
                     0,
-                    i * 10L);
+                    baseOffset + i * 10L);
         }
         FLUSS_CLUSTER_EXTENSION.waitUntilSomeLogSegmentsCopyToRemote(
                 new TableBucket(tb.getTableId(), 0));
@@ -215,155 +224,10 @@ public class RemoteLogITCase {
     }
 
     @Test
-    void testRemoteLogTTLWithLakeDisabled() throws Exception {
+    void testRemoteLogTTLWithDynamicLakeToggle() throws Exception {
+        TablePath tablePath = TablePath.of("fluss", "test_remote_log_ttl_dynamic_lake");
+        // ==================== Stage A: Lake Disabled (Initial) ====================
         // Create table without data lake enabled
-        TableDescriptor tableDescriptor =
-                TableDescriptor.builder()
-                        .schema(DATA1_SCHEMA)
-                        .distributedBy(1)
-                        // Set a short TTL for testing (2 hours)
-                        .property(ConfigOptions.TABLE_LOG_TTL, Duration.ofHours(2))
-                        .build();
-
-        long tableId = createTable(FLUSS_CLUSTER_EXTENSION, DATA1_TABLE_PATH, tableDescriptor);
-        TableBucket tb = new TableBucket(tableId, 0);
-        FLUSS_CLUSTER_EXTENSION.waitUntilAllReplicaReady(tb);
-
-        int leaderId = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(tb);
-        TabletServerGateway leaderGateway =
-                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leaderId);
-
-        // Produce records to create remote log segments
-        produceRecordsAndWaitRemoteLogCopy(leaderGateway, tb);
-
-        // Verify remote log segments exist
-        TabletServer tabletServer = FLUSS_CLUSTER_EXTENSION.getTabletServerById(leaderId);
-        RemoteLogManager remoteLogManager = tabletServer.getReplicaManager().getRemoteLogManager();
-        RemoteLogTablet remoteLogTablet = remoteLogManager.remoteLogTablet(tb);
-
-        int initialSegmentCount = remoteLogTablet.allRemoteLogSegments().size();
-        assertThat(initialSegmentCount).isGreaterThan(0);
-        long initialRemoteLogStartOffset = remoteLogTablet.getRemoteLogStartOffset();
-        assertThat(initialRemoteLogStartOffset).isEqualTo(0L);
-
-        // Verify data lake is disabled
-        Replica leaderReplica = FLUSS_CLUSTER_EXTENSION.waitAndGetLeaderReplica(tb);
-        LogTablet logTablet = leaderReplica.getLogTablet();
-        assertThat(logTablet.isDataLakeEnabled()).isFalse();
-
-        // Advance time past TTL (2 hours + buffer)
-        MANUAL_CLOCK.advanceTime(Duration.ofHours(2).plusMinutes(30));
-
-        // Wait for remote log segments to be cleaned up
-        // Since lake is disabled, expired segments should be deleted directly
-        retry(
-                Duration.ofMinutes(2),
-                () -> {
-                    // Remote log segments should be deleted after TTL
-                    assertThat(remoteLogTablet.allRemoteLogSegments()).isEmpty();
-                    // Remote log start offset should be reset
-                    assertThat(remoteLogTablet.getRemoteLogStartOffset()).isEqualTo(Long.MAX_VALUE);
-                });
-    }
-
-    @Test
-    void testRemoteLogTTLWithLakeEnabled() throws Exception {
-        TablePath tablePath = TablePath.of("fluss", "test_remote_log_ttl_lake");
-        // Create table with data lake enabled
-        TableDescriptor tableDescriptor =
-                TableDescriptor.builder()
-                        .schema(DATA1_SCHEMA)
-                        .distributedBy(1)
-                        // Set a short TTL for testing (2 hours)
-                        .property(ConfigOptions.TABLE_LOG_TTL, Duration.ofHours(2))
-                        // Enable data lake
-                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
-                        .build();
-
-        long tableId = createTable(FLUSS_CLUSTER_EXTENSION, tablePath, tableDescriptor);
-        TableBucket tb = new TableBucket(tableId, 0);
-        FLUSS_CLUSTER_EXTENSION.waitUntilAllReplicaReady(tb);
-
-        int leaderId = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(tb);
-        TabletServerGateway leaderGateway =
-                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leaderId);
-
-        // Produce records to create remote log segments
-        produceRecordsAndWaitRemoteLogCopy(leaderGateway, tb);
-
-        // Verify remote log segments exist
-        TabletServer tabletServer = FLUSS_CLUSTER_EXTENSION.getTabletServerById(leaderId);
-        RemoteLogManager remoteLogManager = tabletServer.getReplicaManager().getRemoteLogManager();
-        RemoteLogTablet remoteLogTablet = remoteLogManager.remoteLogTablet(tb);
-
-        int initialSegmentCount = remoteLogTablet.allRemoteLogSegments().size();
-        assertThat(initialSegmentCount).isGreaterThan(0);
-
-        // Verify data lake is enabled
-        Replica leaderReplica = FLUSS_CLUSTER_EXTENSION.waitAndGetLeaderReplica(tb);
-        LogTablet logTablet = leaderReplica.getLogTablet();
-        assertThat(logTablet.isDataLakeEnabled()).isTrue();
-
-        // Record the remote log end offset before advancing time
-        long remoteLogEndOffset = remoteLogTablet.getRemoteLogEndOffset().orElse(-1L);
-        assertThat(remoteLogEndOffset).isGreaterThan(0L);
-
-        // Advance time past TTL (2 hours + buffer)
-        MANUAL_CLOCK.advanceTime(Duration.ofHours(2).plusMinutes(30));
-
-        // Since lake is enabled but no data has been tiered to lake (lakeLogEndOffset = -1),
-        // the expired segments should NOT be deleted
-        assertThat(remoteLogTablet.allRemoteLogSegments()).hasSize(initialSegmentCount);
-        assertThat(remoteLogTablet.getRemoteLogStartOffset()).isEqualTo(0L);
-
-        // Now simulate lake tiering by updating the lake log end offset
-        // This simulates that some segments have been tiered to lake
-        // Use a value that will cover at least one segment but not all
-        // Segments are deleted when segment.remoteLogEndOffset() <= lakeLogEndOffset
-        long partialLakeOffset = remoteLogEndOffset / 2;
-        // Ensure we have at least some offset to tier
-        if (partialLakeOffset < 10) {
-            partialLakeOffset = 10;
-        }
-        logTablet.updateLakeLogEndOffset(partialLakeOffset);
-
-        final long expectedMinStartOffset = partialLakeOffset;
-
-        // Wait for partial cleanup - only segments that have been tiered should be deleted
-        retry(
-                Duration.ofMinutes(2),
-                () -> {
-                    // Some segments should be deleted (those that have been tiered)
-                    int currentSegmentCount = remoteLogTablet.allRemoteLogSegments().size();
-                    assertThat(currentSegmentCount).isLessThan(initialSegmentCount);
-                    // Remote log start offset should be updated to at least the tiered offset
-                    assertThat(remoteLogTablet.getRemoteLogStartOffset())
-                            .isGreaterThanOrEqualTo(expectedMinStartOffset);
-                    // Remaining segments should have remoteLogEndOffset > partialLakeOffset
-                    assertThat(remoteLogTablet.allRemoteLogSegments())
-                            .allSatisfy(
-                                    segment ->
-                                            assertThat(segment.remoteLogEndOffset())
-                                                    .isGreaterThan(expectedMinStartOffset));
-                });
-
-        // Now update lake log end offset to include all segments
-        logTablet.updateLakeLogEndOffset(remoteLogEndOffset);
-
-        // Wait for all segments to be cleaned up
-        retry(
-                Duration.ofMinutes(2),
-                () -> {
-                    // All segments should now be deleted
-                    assertThat(remoteLogTablet.allRemoteLogSegments()).isEmpty();
-                    assertThat(remoteLogTablet.getRemoteLogStartOffset()).isEqualTo(Long.MAX_VALUE);
-                });
-    }
-
-    @Test
-    void testDynamicLakeEnableAffectsTTL() throws Exception {
-        TablePath tablePath = TablePath.of("fluss", "test_dynamic_lake_ttl");
-        // Create table without data lake enabled initially
         TableDescriptor tableDescriptor =
                 TableDescriptor.builder()
                         .schema(DATA1_SCHEMA)
@@ -387,18 +251,26 @@ public class RemoteLogITCase {
         RemoteLogManager remoteLogManager = tabletServer.getReplicaManager().getRemoteLogManager();
         RemoteLogTablet remoteLogTablet = remoteLogManager.remoteLogTablet(tb);
 
-        int initialSegmentCount = remoteLogTablet.allRemoteLogSegments().size();
-        assertThat(initialSegmentCount).isGreaterThan(0);
-
-        // Record the remote log end offset
-        long remoteLogEndOffset = remoteLogTablet.getRemoteLogEndOffset().orElse(-1L);
-        assertThat(remoteLogEndOffset).isGreaterThan(0L);
+        assertThat(remoteLogTablet.allRemoteLogSegments().size()).isGreaterThan(0);
+        assertThat(remoteLogTablet.getRemoteLogStartOffset()).isEqualTo(0L);
 
         Replica leaderReplica = FLUSS_CLUSTER_EXTENSION.waitAndGetLeaderReplica(tb);
         LogTablet logTablet = leaderReplica.getLogTablet();
         assertThat(logTablet.isDataLakeEnabled()).isFalse();
 
-        // Dynamically enable data lake using admin API
+        // Advance time past TTL (1 hour + buffer)
+        MANUAL_CLOCK.advanceTime(Duration.ofHours(1).plusMinutes(30));
+
+        // Since lake is disabled, expired segments should be deleted directly
+        retry(
+                Duration.ofMinutes(2),
+                () -> {
+                    assertThat(remoteLogTablet.allRemoteLogSegments()).isEmpty();
+                    assertThat(remoteLogTablet.getRemoteLogStartOffset()).isEqualTo(Long.MAX_VALUE);
+                });
+
+        // ==================== Stage B: Dynamic Enable & Retention ====================
+        // Dynamically enable data lake
         CoordinatorGateway coordinatorGateway = FLUSS_CLUSTER_EXTENSION.newCoordinatorClient();
         coordinatorGateway
                 .alterTable(
@@ -412,14 +284,72 @@ public class RemoteLogITCase {
                 .get();
         retry(Duration.ofMinutes(1), () -> assertThat(logTablet.isDataLakeEnabled()).isTrue());
 
+        // Produce new data after enabling lake (baseOffset = 100 from Stage A)
+        produceRecordsAndWaitRemoteLogCopy(leaderGateway, tb, 100L);
+        retry(
+                Duration.ofMinutes(2),
+                () -> assertThat(remoteLogTablet.allRemoteLogSegments().size()).isGreaterThan(0));
+        int stageBSegmentCount = remoteLogTablet.allRemoteLogSegments().size();
+        long stageBRemoteLogEndOffset = remoteLogTablet.getRemoteLogEndOffset().orElse(-1L);
+        assertThat(stageBRemoteLogEndOffset).isGreaterThan(0L);
+
         // Advance time past TTL (1 hour + buffer)
         MANUAL_CLOCK.advanceTime(Duration.ofHours(1).plusMinutes(30));
 
-        // Since lake is now enabled but no data has been tiered (lakeLogEndOffset = -1),
+        // Since lake is enabled but no data has been tiered (lakeLogEndOffset = -1),
         // the expired segments should NOT be deleted
-        assertThat(remoteLogTablet.allRemoteLogSegments()).hasSize(initialSegmentCount);
+        assertThat(remoteLogTablet.allRemoteLogSegments()).hasSize(stageBSegmentCount);
 
-        // Now disable data lake using admin API
+        // ==================== Stage C: Lake Progress Update (Cleanup) ====================
+        // Step 1: Partially update lake log end offset to trigger partial cleanup
+        // Get segments sorted by remoteLogEndOffset and use middle segment's end offset
+        List<RemoteLogSegment> sortedSegments =
+                remoteLogTablet.allRemoteLogSegments().stream()
+                        .sorted(Comparator.comparingLong(RemoteLogSegment::remoteLogEndOffset))
+                        .collect(Collectors.toList());
+        assertThat(sortedSegments.size()).isGreaterThanOrEqualTo(2);
+
+        // Use the end offset of a middle segment to ensure partial deletion
+        int midIndex = sortedSegments.size() / 2;
+        long partialLakeOffset = sortedSegments.get(midIndex).remoteLogEndOffset();
+        logTablet.updateLakeLogEndOffset(partialLakeOffset);
+
+        final int expectedRemainingSegments = sortedSegments.size() - midIndex - 1;
+        // The new remoteLogStartOffset should be the start offset of the first remaining segment
+        final long expectedNewStartOffset = sortedSegments.get(midIndex + 1).remoteLogStartOffset();
+
+        // Wait for partial cleanup - only segments that have been tiered should be deleted
+        retry(
+                Duration.ofMinutes(2),
+                () -> {
+                    // Some segments should be deleted (those with endOffset <= partialLakeOffset)
+                    int currentSegmentCount = remoteLogTablet.allRemoteLogSegments().size();
+                    assertThat(currentSegmentCount).isEqualTo(expectedRemainingSegments);
+                    // Remote log start offset should be updated to the first remaining segment's
+                    // start
+                    assertThat(remoteLogTablet.getRemoteLogStartOffset())
+                            .isEqualTo(expectedNewStartOffset);
+                    // Remaining segments should have remoteLogEndOffset > partialLakeOffset
+                    assertThat(remoteLogTablet.allRemoteLogSegments())
+                            .allSatisfy(
+                                    segment ->
+                                            assertThat(segment.remoteLogEndOffset())
+                                                    .isGreaterThan(partialLakeOffset));
+                });
+
+        // Step 2: Fully update lake log end offset to trigger complete cleanup
+        logTablet.updateLakeLogEndOffset(stageBRemoteLogEndOffset);
+
+        // Wait for complete cleanup - all segments should be deleted
+        retry(
+                Duration.ofMinutes(2),
+                () -> {
+                    assertThat(remoteLogTablet.allRemoteLogSegments()).isEmpty();
+                    assertThat(remoteLogTablet.getRemoteLogStartOffset()).isEqualTo(Long.MAX_VALUE);
+                });
+
+        // ==================== Stage D: Dynamic Disable ====================
+        // Dynamically disable data lake
         coordinatorGateway
                 .alterTable(
                         newAlterTableRequest(
@@ -432,7 +362,17 @@ public class RemoteLogITCase {
                 .get();
         retry(Duration.ofMinutes(1), () -> assertThat(logTablet.isDataLakeEnabled()).isFalse());
 
-        // Wait for cleanup - now segments should be deleted since lake is disabled
+        // Produce new data after disabling lake (baseOffset = 200 from Stage A + B)
+        produceRecordsAndWaitRemoteLogCopy(leaderGateway, tb, 200L);
+        retry(
+                Duration.ofMinutes(2),
+                () -> assertThat(remoteLogTablet.allRemoteLogSegments().size()).isGreaterThan(0));
+
+        // Advance time past TTL (1 hour + buffer)
+        MANUAL_CLOCK.advanceTime(Duration.ofHours(1).plusMinutes(30));
+
+        // Since lake is disabled, expired segments should be deleted directly,
+        // ignoring the lake offset status
         retry(
                 Duration.ofMinutes(2),
                 () -> {

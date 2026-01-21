@@ -126,6 +126,7 @@ import org.slf4j.LoggerFactory;
 import javax.annotation.Nullable;
 import javax.annotation.concurrent.NotThreadSafe;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
@@ -730,6 +731,10 @@ public class CoordinatorEventProcessor implements EventProcessor {
         // Skip if the table is not yet registered in coordinator context.
         // Should not happen in normal cases.
         if (tableId == null) {
+            LOG.warn(
+                    "Table {} is not registered in coordinator context, "
+                            + "skip processing table registration change.",
+                    tablePath);
             return;
         }
 
@@ -749,6 +754,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
     }
 
     private void postAlterTableProperties(TableInfo oldTableInfo, TableInfo newTableInfo) {
+        boolean dataLakeEnabled = newTableInfo.getTableConfig().isDataLakeEnabled();
         boolean toEnableDataLake =
                 !oldTableInfo.getTableConfig().isDataLakeEnabled()
                         && newTableInfo.getTableConfig().isDataLakeEnabled();
@@ -761,7 +767,18 @@ public class CoordinatorEventProcessor implements EventProcessor {
             lakeTableTieringManager.addNewLakeTable(newTableInfo);
         } else if (toDisableDataLake) {
             lakeTableTieringManager.removeLakeTable(newTableInfo.getTableId());
+        } else if (dataLakeEnabled) {
+            // The table is still a lake table, check if freshness has changed
+            Duration oldFreshness = oldTableInfo.getTableConfig().getDataLakeFreshness();
+            Duration newFreshness = newTableInfo.getTableConfig().getDataLakeFreshness();
+
+            // Check if freshness has changed
+            if (!Objects.equals(oldFreshness, newFreshness)) {
+                lakeTableTieringManager.updateTableLakeFreshness(
+                        newTableInfo.getTableId(), newFreshness.toMillis());
+            }
         }
+        // more post-alter actions can be added here
     }
 
     private void processCreatePartition(CreatePartitionEvent createPartitionEvent) {

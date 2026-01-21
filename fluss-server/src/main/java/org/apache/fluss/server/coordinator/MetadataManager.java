@@ -60,14 +60,12 @@ import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
 
-import java.time.Duration;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.Callable;
@@ -500,41 +498,6 @@ public class MetadataManager {
         }
     }
 
-    private void postAlterTableProperties(
-            TablePath tablePath,
-            SchemaInfo schemaInfo,
-            TableDescriptor oldTableDescriptor,
-            TableRegistration newTableRegistration,
-            LakeTableTieringManager lakeTableTieringManager) {
-
-        boolean dataLakeEnabled = isDataLakeEnabled(newTableRegistration.properties);
-        boolean toEnableDataLake = !isDataLakeEnabled(oldTableDescriptor) && dataLakeEnabled;
-        boolean toDisableDataLake = isDataLakeEnabled(oldTableDescriptor) && !dataLakeEnabled;
-
-        if (toEnableDataLake) {
-            TableInfo newTableInfo = newTableRegistration.toTableInfo(tablePath, schemaInfo);
-            // if the table is lake table, we need to add it to lake table tiering manager
-            lakeTableTieringManager.addNewLakeTable(newTableInfo);
-        } else if (toDisableDataLake) {
-            lakeTableTieringManager.removeLakeTable(newTableRegistration.tableId);
-        } else if (dataLakeEnabled) {
-            // The table is still a lake table, check if freshness has changed
-            Duration oldFreshness =
-                    Configuration.fromMap(oldTableDescriptor.getProperties())
-                            .get(ConfigOptions.TABLE_DATALAKE_FRESHNESS);
-            Duration newFreshness =
-                    Configuration.fromMap(newTableRegistration.properties)
-                            .get(ConfigOptions.TABLE_DATALAKE_FRESHNESS);
-
-            // Check if freshness has changed
-            if (!Objects.equals(oldFreshness, newFreshness)) {
-                lakeTableTieringManager.updateTableLakeFreshness(
-                        newTableRegistration.tableId, newFreshness.toMillis());
-            }
-        }
-        // more post-alter actions can be added here
-    }
-
     /**
      * Get a new TableDescriptor with updated properties.
      *
@@ -573,11 +536,6 @@ public class MetadataManager {
     private boolean isDataLakeEnabled(TableDescriptor tableDescriptor) {
         String dataLakeEnabledValue =
                 tableDescriptor.getProperties().get(ConfigOptions.TABLE_DATALAKE_ENABLED.key());
-        return Boolean.parseBoolean(dataLakeEnabledValue);
-    }
-
-    private boolean isDataLakeEnabled(Map<String, String> properties) {
-        String dataLakeEnabledValue = properties.get(ConfigOptions.TABLE_DATALAKE_ENABLED.key());
         return Boolean.parseBoolean(dataLakeEnabledValue);
     }
 

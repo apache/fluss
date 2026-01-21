@@ -280,6 +280,7 @@ public class CoordinatorRequestBatch {
      *   <li>case8: One newly tabletServer added into cluster
      *   <li>case9: One tabletServer is removed from cluster
      *   <li>case10: schemaId is changed after table is created.
+     *   <li>case 11: TableRegistration changed after table is created.
      * </ol>
      */
     // todo: improve this with different phase enum.
@@ -300,7 +301,7 @@ public class CoordinatorRequestBatch {
                         .computeIfAbsent(tableId, k -> new HashMap<>())
                         .put(partitionId, Collections.emptyList());
             } else {
-                // case3, case4, case10
+                // case3, case4, case10, case 11
                 updateMetadataRequestBucketMap.put(tableId, Collections.emptyList());
             }
         } else {
