@@ -21,16 +21,10 @@ import org.apache.fluss.client.{Connection, ConnectionFactory}
 import org.apache.fluss.client.admin.Admin
 import org.apache.fluss.config.{ConfigOptions, Configuration}
 import org.apache.fluss.exception.FlussRuntimeException
-import org.apache.fluss.flink.tiering.LakeTieringJobBuilder
-import org.apache.fluss.flink.tiering.source.TieringSourceOptions.POLL_TIERING_TABLE_INTERVAL
-import org.apache.fluss.metadata.DataLakeFormat
 import org.apache.fluss.server.testutils.FlussClusterExtension
 import org.apache.fluss.server.utils.LakeStorageUtils.extractLakeProperties
 import org.apache.fluss.spark.SparkCatalog
 
-import org.apache.flink.api.common.RuntimeExecutionMode
-import org.apache.flink.core.execution.JobClient
-import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment
 import org.apache.paimon.catalog.{Catalog, CatalogContext, CatalogFactory}
 import org.apache.paimon.options.Options
 import org.apache.spark.sql.QueryTest
@@ -38,7 +32,6 @@ import org.apache.spark.sql.test.SharedSparkSession
 
 import java.nio.file.Files
 import java.time.Duration
-import java.util
 
 class SparkLakePaimonTestBase extends QueryTest with SharedSparkSession {
 
@@ -47,8 +40,6 @@ class SparkLakePaimonTestBase extends QueryTest with SharedSparkSession {
 
   protected var conn: Connection = _
   protected var admin: Admin = _
-
-  private var execEnv: StreamExecutionEnvironment = _
 
   val flussServer: FlussClusterExtension =
     FlussClusterExtension.builder
@@ -94,10 +85,6 @@ class SparkLakePaimonTestBase extends QueryTest with SharedSparkSession {
     spark.conf.set("spark.sql.defaultCatalog", DEFAULT_CATALOG)
 
     sql(s"USE $DEFAULT_DATABASE")
-
-    execEnv = StreamExecutionEnvironment.getExecutionEnvironment
-    execEnv.setParallelism(2)
-    execEnv.enableCheckpointing(1000)
   }
 
   override protected def afterAll(): Unit = {
@@ -119,11 +106,6 @@ class SparkLakePaimonTestBase extends QueryTest with SharedSparkSession {
 
     conn = ConnectionFactory.createConnection(flussServer.getClientConfig)
     admin = conn.getAdmin
-
-    execEnv = StreamExecutionEnvironment.getExecutionEnvironment
-    execEnv.setRuntimeMode(RuntimeExecutionMode.STREAMING)
-    execEnv.setParallelism(2)
-    execEnv = StreamExecutionEnvironment.getExecutionEnvironment
   }
 
   override protected def afterEach(): Unit = {
@@ -146,25 +128,5 @@ class SparkLakePaimonTestBase extends QueryTest with SharedSparkSession {
         paimonCatalog.dropTable(
           org.apache.paimon.catalog.Identifier.create(DEFAULT_DATABASE, tableName),
           true))
-  }
-
-  protected def buildTieringJob(execEnv: StreamExecutionEnvironment): JobClient = {
-    val flussConfig = new Configuration(flussServer.getClientConfig)
-    flussConfig.set(POLL_TIERING_TABLE_INTERVAL, Duration.ofMillis(500L))
-    LakeTieringJobBuilder
-      .newBuilder(
-        execEnv,
-        flussConfig,
-        Configuration.fromMap(getPaimonCatalogConf),
-        new Configuration,
-        DataLakeFormat.PAIMON.toString)
-      .build
-  }
-
-  protected def getPaimonCatalogConf: util.Map[String, String] = {
-    val paimonConf = new util.HashMap[String, String]
-    paimonConf.put("metastore", "filesystem")
-    paimonConf.put("warehouse", warehousePath)
-    paimonConf
   }
 }

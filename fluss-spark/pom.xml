@@ -36,7 +36,6 @@
         <module>fluss-spark-ut</module>
         <module>fluss-spark-3.5</module>
         <module>fluss-spark-3.4</module>
-        <module>fluss-spark-lake</module>
     </modules>
 
     <dependencies>
