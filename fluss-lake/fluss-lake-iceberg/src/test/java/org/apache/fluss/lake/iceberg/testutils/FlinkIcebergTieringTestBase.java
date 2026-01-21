@@ -358,17 +358,19 @@ public class FlinkIcebergTieringTestBase {
             throws IOException {
         org.apache.iceberg.Table table = icebergCatalog.loadTable(toIceberg(tablePath));
         int count = 0;
+        boolean deleteFileExists = false;
         try (CloseableIterable<FileScanTask> tasks = table.newScan().planFiles()) {
             for (FileScanTask ignored : tasks) {
-                if (shouldDeleteFileExist) {
-                    assertThat(ignored.deletes()).isNotEmpty();
-                } else {
-                    assertThat(ignored.deletes()).isEmpty();
+                // A deletion status may be mixed (some may contain deletions and
+                // others may not) so we want to flag if deletions are present
+                if (shouldDeleteFileExist && !deleteFileExists) {
+                    deleteFileExists = !ignored.deletes().isEmpty();
                 }
                 count++;
             }
         }
         assertThat(count).isEqualTo(expectedFileCount);
+        assertThat(deleteFileExists).isEqualTo(shouldDeleteFileExist);
     }
 
     protected void checkDataInIcebergAppendOnlyPartitionedTable(
