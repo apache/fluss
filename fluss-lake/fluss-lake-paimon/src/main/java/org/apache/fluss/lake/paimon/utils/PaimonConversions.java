@@ -57,6 +57,7 @@ public class PaimonConversions {
 
     // for fluss config
     public static final String FLUSS_CONF_PREFIX = "fluss.";
+    public static final String TABLE_DATALAKE_PAIMON_PREFIX = "table.datalake.paimon.";
     // for paimon config
     private static final String PAIMON_CONF_PREFIX = "paimon.";
 
@@ -261,7 +262,7 @@ public class PaimonConversions {
     private static void setFlussPropertyToPaimon(String key, String value, Options options) {
         if (key.startsWith(PAIMON_CONF_PREFIX)) {
             options.set(key.substring(PAIMON_CONF_PREFIX.length()), value);
-        } else {
+        } else if (!key.startsWith(TABLE_DATALAKE_PAIMON_PREFIX)) {
             options.set(FLUSS_CONF_PREFIX + key, value);
         }
     }

@@ -37,7 +37,6 @@ import org.apache.paimon.schema.Schema;
 import org.apache.paimon.schema.SchemaChange;
 import org.apache.paimon.table.FileStoreTable;
 import org.apache.paimon.table.Table;
-import org.apache.paimon.types.DataField;
 import org.apache.paimon.types.DataType;
 import org.apache.paimon.types.DataTypes;
 import org.slf4j.Logger;
@@ -51,7 +50,7 @@ import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toPaimon;
 import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toPaimonSchema;
 import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toPaimonSchemaChanges;
 import static org.apache.fluss.lake.paimon.utils.PaimonTableValidation.checkTableIsEmpty;
-import static org.apache.fluss.lake.paimon.utils.PaimonTableValidation.validatePaimonSchemaCompatible;
+import static org.apache.fluss.lake.paimon.utils.PaimonTableValidation.isPaimonSchemaCompatible;
 import static org.apache.fluss.metadata.TableDescriptor.BUCKET_COLUMN_NAME;
 import static org.apache.fluss.metadata.TableDescriptor.OFFSET_COLUMN_NAME;
 import static org.apache.fluss.metadata.TableDescriptor.TIMESTAMP_COLUMN_NAME;
@@ -114,18 +113,41 @@ public class PaimonLakeCatalog implements LakeCatalog {
     public void alterTable(TablePath tablePath, List<TableChange> tableChanges, Context context)
             throws TableNotExistException {
         try {
-            List<SchemaChange> paimonSchemaChanges = toPaimonSchemaChanges(tableChanges);
-            org.apache.fluss.metadata.Schema flussSchema = context.getFlussSchema();
-            boolean needsApplyChanges =
-                    needsApplyTableChanges(tablePath, tableChanges, flussSchema);
-            if (needsApplyChanges) {
-                alterTable(tablePath, paimonSchemaChanges);
+            Table table = paimonCatalog.getTable(toPaimon(tablePath));
+            FileStoreTable fileStoreTable = (FileStoreTable) table;
+            Schema currentPaimonSchema = fileStoreTable.schema().toSchema();
+
+            List<SchemaChange> paimonSchemaChanges;
+            if (isPaimonSchemaCompatible(
+                    currentPaimonSchema, toPaimonSchema(context.getCurrentTable()))) {
+                // if the paimon schema is same as current fluss schema, directly apply all the
+                // changes.
+                paimonSchemaChanges = toPaimonSchemaChanges(tableChanges);
+            } else if (isPaimonSchemaCompatible(
+                    currentPaimonSchema, toPaimonSchema(context.getExpectedTable()))) {
+                // if the schema is same as applied fluss schema , skip adding columns.
+                paimonSchemaChanges =
+                        toPaimonSchemaChanges(
+                                tableChanges.stream()
+                                        .filter(
+                                                tableChange ->
+                                                        !(tableChange
+                                                                instanceof TableChange.AddColumn))
+                                        .collect(Collectors.toList()));
             } else {
-                // If schemas already match, treat as idempotent success
-                LOG.info(
-                        "Skipping schema evolution for Paimon table {} because the column(s) to add {} already exist.",
-                        tablePath,
-                        tableChanges);
+                throw new InvalidAlterTableException(
+                        String.format(
+                                "Paimon schema is not compatible with Fluss schema: "
+                                        + "Paimon schema: %s, Fluss schema: %s. "
+                                        + "therefore you need to add the diff columns all at once, "
+                                        + "rather than applying other table changes: %s.",
+                                currentPaimonSchema,
+                                context.getCurrentTable().getSchema(),
+                                tableChanges));
+            }
+
+            if (!paimonSchemaChanges.isEmpty()) {
+                alterTable(tablePath, paimonSchemaChanges);
             }
         } catch (Catalog.ColumnAlreadyExistException e) {
             // This shouldn't happen if shouldAlterTable works correctly, but keep as safeguard
@@ -133,150 +155,75 @@ public class PaimonLakeCatalog implements LakeCatalog {
         } catch (Catalog.ColumnNotExistException e) {
             // This shouldn't happen for AddColumn operations
             throw new InvalidAlterTableException(e.getMessage());
-        }
-    }
-
-    /**
-     * Check if table changes need to be applied to reconcile Paimon and Fluss schemas.
-     *
-     * <p>This method determines whether the provided table changes need to be applied based on the
-     * current state of Paimon and Fluss schemas.
-     *
-     * @param tablePath the table path
-     * @param tableChanges the proposed table changes
-     * @param flussSchema the current Fluss schema
-     * @return true if changes need to be applied (schemas are consistent), false if changes can be
-     *     skipped (schemas already match after changes, idempotent)
-     * @throws TableNotExistException if the table does not exist
-     * @throws InvalidAlterTableException if schemas are inconsistent and cannot be reconciled
-     */
-    private boolean needsApplyTableChanges(
-            TablePath tablePath,
-            List<TableChange> tableChanges,
-            org.apache.fluss.metadata.Schema flussSchema)
-            throws TableNotExistException {
-        if (tableChanges.isEmpty()) {
-            return false;
-        }
-
-        try {
-            // Get current Paimon table schema
-            Table table = paimonCatalog.getTable(toPaimon(tablePath));
-            FileStoreTable fileStoreTable = (FileStoreTable) table;
-            List<DataField> paimonFields =
-                    fileStoreTable.schema().toSchema().fields().stream()
-                            .filter(field -> !SYSTEM_COLUMNS.containsKey(field.name()))
-                            .collect(Collectors.toList());
-            List<org.apache.fluss.metadata.Schema.Column> flussColumns = flussSchema.getColumns();
-
-            if (paimonFields.size() < flussColumns.size()) {
-                throw new InvalidAlterTableException(
-                        String.format(
-                                "Paimon table has less columns (%d) than Fluss schema (%d)",
-                                paimonFields.size(), flussColumns.size()));
-            }
-
-            // Validate schema compatibility
-            validateExistingColumns(paimonFields, flussColumns);
-
-            // If schemas are same, can apply all table changes
-            if (paimonFields.size() == flussColumns.size()) {
-                return true;
-            }
-
-            // If Paimon has more columns, check if table changes would reconcile schemas
-            if (canTableChangesReconcileSchemas(flussColumns, paimonFields, tableChanges)) {
-                // Schemas will match after applying changes, skip duplicate operations
-                return false;
-            } else {
-                throw new InvalidAlterTableException(
-                        String.format(
-                                "Paimon table has more columns (%d) than Fluss schema (%d); "
-                                        + "therefore you need to add the diff columns all at once, "
-                                        + "rather than applying other table changes: %s.",
-                                paimonFields.size(), flussColumns.size(), tableChanges));
-            }
-
         } catch (Catalog.TableNotExistException e) {
             throw new TableNotExistException("Table " + tablePath + " does not exist.");
         }
     }
 
-    private void validateExistingColumns(
-            List<DataField> paimonFields,
-            List<org.apache.fluss.metadata.Schema.Column> flussColumns) {
-        for (int i = 0; i < flussColumns.size(); i++) {
-            if (!paimonFields.get(i).name().equals(flussColumns.get(i).getName())) {
-                throw new InvalidAlterTableException(
-                        String.format(
-                                "Column mismatch at position %d. Paimon: '%s', Fluss: '%s'",
-                                i, paimonFields.get(i).name(), flussColumns.get(i).getName()));
+    private boolean shouldAlterTable(TablePath tablePath, List<TableChange> tableChanges)
+            throws TableNotExistException {
+        try {
+            Table table = paimonCatalog.getTable(toPaimon(tablePath));
+            FileStoreTable fileStoreTable = (FileStoreTable) table;
+            Schema currentSchema = fileStoreTable.schema().toSchema();
+
+            for (TableChange change : tableChanges) {
+                if (change instanceof TableChange.AddColumn) {
+                    TableChange.AddColumn addColumn = (TableChange.AddColumn) change;
+                    if (!isColumnAlreadyExists(currentSchema, addColumn)) {
+                        return true;
+                    }
+                } else {
+                    return true;
+                }
             }
+
+            return false;
+        } catch (Catalog.TableNotExistException e) {
+            throw new TableNotExistException("Table " + tablePath + " does not exist.");
         }
     }
 
-    private boolean isColumnAlreadyExists(
-            org.apache.paimon.types.DataField field, TableChange.AddColumn addColumn) {
+    private boolean isColumnAlreadyExists(Schema currentSchema, TableChange.AddColumn addColumn) {
         String columnName = addColumn.getName();
 
-        if (field.name().equals(columnName)) {
-            org.apache.paimon.types.DataType expectedType =
-                    addColumn
-                            .getDataType()
-                            .accept(
-                                    org.apache.fluss.lake.paimon.utils.FlussDataTypeToPaimonDataType
-                                            .INSTANCE);
+        for (org.apache.paimon.types.DataField field : currentSchema.fields()) {
+            if (field.name().equals(columnName)) {
+                org.apache.paimon.types.DataType expectedType =
+                        addColumn
+                                .getDataType()
+                                .accept(
+                                        org.apache.fluss.lake.paimon.utils
+                                                .FlussDataTypeToPaimonDataType.INSTANCE);
 
-            if (!field.type().equals(expectedType)) {
-                throw new InvalidAlterTableException(
-                        String.format(
-                                "Column '%s' already exists but with different type. "
-                                        + "Existing: %s, Expected: %s",
-                                columnName, field.type(), expectedType));
+                if (!field.type().equals(expectedType)) {
+                    throw new InvalidAlterTableException(
+                            String.format(
+                                    "Column '%s' already exists but with different type. "
+                                            + "Existing: %s, Expected: %s",
+                                    columnName, field.type(), expectedType));
+                }
+                String existingComment = field.description();
+                String expectedComment = addColumn.getComment();
+
+                boolean commentsMatch =
+                        (existingComment == null && expectedComment == null)
+                                || (existingComment != null
+                                        && existingComment.equals(expectedComment));
+
+                if (!commentsMatch) {
+                    throw new InvalidAlterTableException(
+                            String.format(
+                                    "Column %s already exists but with different comment. "
+                                            + "Existing: %s, Expected: %s",
+                                    columnName, existingComment, expectedComment));
+                }
+
+                return true;
             }
-            String existingComment = field.description();
-            String expectedComment = addColumn.getComment();
-
-            boolean commentsMatch =
-                    (existingComment == null && expectedComment == null)
-                            || (existingComment != null && existingComment.equals(expectedComment));
-
-            if (!commentsMatch) {
-                throw new InvalidAlterTableException(
-                        String.format(
-                                "Column %s already exists but with different comment. "
-                                        + "Existing: %s, Expected: %s",
-                                columnName, existingComment, expectedComment));
-            }
-
-            return true;
         }
+
         return false;
-    }
-
-    /** Check if applying the table changes would reconcile Paimon and Fluss schemas. */
-    private boolean canTableChangesReconcileSchemas(
-            List<org.apache.fluss.metadata.Schema.Column> flussColumns,
-            List<DataField> paimonFields,
-            List<TableChange> tableChanges) {
-        if (flussColumns.size() + tableChanges.size() != paimonFields.size()) {
-            return false;
-        }
-
-        for (int i = 0; i < paimonFields.size() - flussColumns.size(); i++) {
-            DataField paimonDataField = paimonFields.get(i + flussColumns.size());
-            TableChange tableChange = tableChanges.get(i);
-            if (!(tableChange instanceof TableChange.AddColumn
-                    && ((TableChange.AddColumn) tableChange).getPosition()
-                            == TableChange.ColumnPosition.last()
-                    && isColumnAlreadyExists(
-                            paimonDataField, (TableChange.AddColumn) tableChange))) {
-                return false;
-            }
-        }
-
-        // All validations passed: applying these changes would reconcile the schemas
-        return true;
     }
 
     private void createTable(TablePath tablePath, Schema schema, boolean isCreatingFlussTable)
@@ -289,8 +236,15 @@ public class PaimonLakeCatalog implements LakeCatalog {
             try {
                 Table table = paimonCatalog.getTable(paimonPath);
                 FileStoreTable fileStoreTable = (FileStoreTable) table;
-                validatePaimonSchemaCompatible(
-                        paimonPath, fileStoreTable.schema().toSchema(), schema);
+                Schema existingSchema = fileStoreTable.schema().toSchema();
+                if (!isPaimonSchemaCompatible(existingSchema, schema)) {
+                    throw new TableAlreadyExistException(
+                            String.format(
+                                    "The table %s already exists in Paimon catalog, but the table schema is not compatible. "
+                                            + "Existing schema: %s, new schema: %s. "
+                                            + "Please first drop the table in Paimon catalog or use a new table name.",
+                                    paimonPath.getEscapedFullName(), existingSchema, schema));
+                }
                 // if creating a new fluss table, we should ensure the lake table is empty
                 if (isCreatingFlussTable) {
                     checkTableIsEmpty(tablePath, fileStoreTable);

@@ -25,9 +25,11 @@ import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.server.coordinator.SchemaUpdate;
 import org.apache.fluss.types.DataTypes;
 
 import org.apache.paimon.catalog.Identifier;
+import org.apache.paimon.table.FileStoreTable;
 import org.apache.paimon.table.Table;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -38,6 +40,9 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 
+import static org.apache.fluss.config.ConfigOptions.TABLE_DATALAKE_ENABLED;
+import static org.apache.fluss.config.ConfigOptions.TABLE_DATALAKE_FORMAT;
+import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toPaimon;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -51,7 +56,7 @@ class PaimonLakeCatalogTest {
                     .column("address", DataTypes.STRING())
                     .build();
     private static final TestingLakeCatalogContext LAKE_CATALOG_CONTEXT =
-            new TestingLakeCatalogContext(FLUSS_SCHEMA);
+            new TestingLakeCatalogContext(TableDescriptor.builder().schema(FLUSS_SCHEMA).build());
 
     @TempDir private File tempWarehouseDir;
 
@@ -202,12 +207,11 @@ class PaimonLakeCatalogTest {
     }
 
     @Test
-    void testAlterTableAddExistingColumns() {
+    void testAlterTableAddExistingColumns() throws Exception {
         String database = "test_alter_table_add_existing_column_db";
         String tableName = "test_alter_table_add_existing_column_table";
         TablePath tablePath = TablePath.of(database, tableName);
         createTable(database, tableName);
-
         List<TableChange> changes =
                 Collections.singletonList(
                         TableChange.addColumn(
@@ -219,10 +223,11 @@ class PaimonLakeCatalogTest {
         assertThatThrownBy(
                         () ->
                                 flussPaimonCatalog.alterTable(
-                                        tablePath, changes, LAKE_CATALOG_CONTEXT))
+                                        tablePath,
+                                        changes,
+                                        getLakeCatalogContext(FLUSS_SCHEMA, changes)))
                 .isInstanceOf(InvalidAlterTableException.class)
-                .hasMessageContaining(
-                        "Column address already exists in the test_alter_table_add_existing_column_db.test_alter_table_add_existing_column_table table.");
+                .hasMessageContaining("Column address already exists");
 
         List<TableChange> changes2 =
                 Arrays.asList(
@@ -238,7 +243,8 @@ class PaimonLakeCatalogTest {
                                 TableChange.ColumnPosition.last()));
 
         // mock add columns to paimon successfully but fail to add columns to fluss.
-        flussPaimonCatalog.alterTable(tablePath, changes2, LAKE_CATALOG_CONTEXT);
+        flussPaimonCatalog.alterTable(
+                tablePath, changes2, getLakeCatalogContext(FLUSS_SCHEMA, changes2));
         List<TableChange> changes3 =
                 Arrays.asList(
                         TableChange.addColumn(
@@ -255,10 +261,15 @@ class PaimonLakeCatalogTest {
         assertThatThrownBy(
                         () ->
                                 flussPaimonCatalog.alterTable(
-                                        tablePath, changes3, LAKE_CATALOG_CONTEXT))
+                                        tablePath,
+                                        changes3,
+                                        getLakeCatalogContext(FLUSS_SCHEMA, changes3)))
                 .isInstanceOf(InvalidAlterTableException.class)
-                .hasMessage(
-                        "Column 'new_column2' already exists but with different type. Existing: STRING, Expected: INT");
+                .hasMessageContaining("Paimon schema is not compatible with Fluss schema")
+                .hasMessageContaining(
+                        String.format(
+                                "therefore you need to add the diff columns all at once, rather than applying other table changes: %s.",
+                                changes3));
 
         List<TableChange> changes4 =
                 Arrays.asList(
@@ -276,23 +287,34 @@ class PaimonLakeCatalogTest {
         assertThatThrownBy(
                         () ->
                                 flussPaimonCatalog.alterTable(
-                                        tablePath, changes4, LAKE_CATALOG_CONTEXT))
+                                        tablePath,
+                                        changes4,
+                                        getLakeCatalogContext(FLUSS_SCHEMA, changes4)))
                 .isInstanceOf(InvalidAlterTableException.class)
-                .hasMessage(
-                        "Column new_column2 already exists but with different comment. Existing: null, Expected: the address comment");
+                .hasMessageContaining("Paimon schema is not compatible with Fluss schema")
+                .hasMessageContaining(
+                        String.format(
+                                "therefore you need to add the diff columns all at once, rather than applying other table changes: %s.",
+                                changes4));
 
         // no exception thrown only when adding existing column to match fluss and paimon.
-        flussPaimonCatalog.alterTable(tablePath, changes2, LAKE_CATALOG_CONTEXT);
+        flussPaimonCatalog.alterTable(
+                tablePath, changes2, getLakeCatalogContext(FLUSS_SCHEMA, changes2));
     }
 
     @Test
-    void testAlterTableAddColumnWhenPaimonSchemaNotMatch() {
+    void testAlterTableAddColumnWhenPaimonSchemaNotMatch() throws Exception {
         // this rarely happens only when new fluss lake table with an existed paimon table or use
         // alter table in paimon side directly.
         String database = "test_alter_table_add_column_fluss_wider";
         String tableName = "test_alter_table_add_column_fluss_wider";
         createTable(database, tableName);
         TablePath tablePath = TablePath.of(database, tableName);
+        org.apache.paimon.schema.Schema paimonSchema =
+                ((FileStoreTable)
+                                flussPaimonCatalog.getPaimonCatalog().getTable(toPaimon(tablePath)))
+                        .schema()
+                        .toSchema();
 
         List<TableChange> changes =
                 Collections.singletonList(
@@ -302,48 +324,71 @@ class PaimonLakeCatalogTest {
                                 "new_col comment",
                                 TableChange.ColumnPosition.last()));
 
+        // test column number mismatch.
+        Schema widerFlussSchema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.BIGINT())
+                        .column("name", DataTypes.STRING())
+                        .column("amount", DataTypes.INT())
+                        .column("address", DataTypes.STRING())
+                        .column("phone", DataTypes.INT())
+                        .build();
         assertThatThrownBy(
                         () ->
                                 flussPaimonCatalog.alterTable(
                                         tablePath,
                                         changes,
-                                        new TestingLakeCatalogContext(
-                                                Schema.newBuilder()
-                                                        .column("id", DataTypes.BIGINT())
-                                                        .column("name", DataTypes.STRING())
-                                                        .column("amount", DataTypes.INT())
-                                                        .column("address", DataTypes.STRING())
-                                                        .column("phone", DataTypes.INT())
-                                                        .build())))
+                                        getLakeCatalogContext(widerFlussSchema, changes)))
                 .isInstanceOf(InvalidAlterTableException.class)
-                .hasMessageContaining("Paimon table has less columns (4) than Fluss schema (5)");
-
-        assertThatThrownBy(
-                        () ->
-                                flussPaimonCatalog.alterTable(
-                                        tablePath,
-                                        changes,
-                                        new TestingLakeCatalogContext(
-                                                Schema.newBuilder()
-                                                        .column("id", DataTypes.BIGINT())
-                                                        .column("amount", DataTypes.INT())
-                                                        .column("name", DataTypes.STRING())
-                                                        .column("address", DataTypes.STRING())
-                                                        .build())))
-                .isInstanceOf(InvalidAlterTableException.class)
+                .hasMessageContaining("Paimon schema is not compatible with Fluss schema")
                 .hasMessageContaining(
-                        "Column mismatch at position 1. Paimon: 'name', Fluss: 'amount'");
+                        String.format(
+                                "therefore you need to add the diff columns all at once, rather than applying other table changes: %s.",
+                                changes));
+
+        // test column order mismatch.
+        Schema disorderflussSchema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.BIGINT())
+                        .column("amount", DataTypes.INT())
+                        .column("name", DataTypes.STRING())
+                        .column("address", DataTypes.STRING())
+                        .build();
+        assertThatThrownBy(
+                        () ->
+                                flussPaimonCatalog.alterTable(
+                                        tablePath,
+                                        changes,
+                                        getLakeCatalogContext(disorderflussSchema, changes)))
+                .isInstanceOf(InvalidAlterTableException.class)
+                .hasMessageContaining("Paimon schema is not compatible with Fluss schema")
+                .hasMessageContaining(
+                        String.format(
+                                "therefore you need to add the diff columns all at once, rather than applying other table changes: %s.",
+                                changes));
     }
 
     private void createTable(String database, String tableName) {
-        TableDescriptor td =
-                TableDescriptor.builder()
-                        .schema(FLUSS_SCHEMA)
-                        .distributedBy(3) // no bucket key
-                        .build();
-
+        TableDescriptor td = getTableDescriptor(FLUSS_SCHEMA);
         TablePath tablePath = TablePath.of(database, tableName);
 
         flussPaimonCatalog.createTable(tablePath, td, LAKE_CATALOG_CONTEXT);
+    }
+
+    private TestingLakeCatalogContext getLakeCatalogContext(
+            Schema schema, List<TableChange> schemaChanges) {
+        Schema expectedSchema = SchemaUpdate.applySchemaChanges(schema, schemaChanges);
+        return new TestingLakeCatalogContext(
+                getTableDescriptor(schema), getTableDescriptor(expectedSchema));
+    }
+
+    private TableDescriptor getTableDescriptor(Schema schema) {
+        return TableDescriptor.builder()
+                .schema(schema)
+                .property(TABLE_DATALAKE_ENABLED.key(), "true")
+                .property(TABLE_DATALAKE_FORMAT.key(), "paimon")
+                .property("table.datalake.paimon.warehouse", tempWarehouseDir.toURI().toString())
+                .distributedBy(3) // no bucket key
+                .build();
     }
 }

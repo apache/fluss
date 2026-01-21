@@ -436,6 +436,22 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                         DataTypeChecks.equalsWithFieldId(
                                 schemaInfo.getSchema().getRowType(), expectedSchema.getRowType()))
                 .isTrue();
+
+        assertThatThrownBy(
+                        () ->
+                                admin.alterTable(
+                                                tablePath,
+                                                Collections.singletonList(
+                                                        TableChange.addColumn(
+                                                                "nested_row",
+                                                                DataTypes.ROW(
+                                                                        DataTypes.STRING(),
+                                                                        DataTypes.INT()),
+                                                                "new nested column",
+                                                                TableChange.ColumnPosition.last())),
+                                                false)
+                                        .get())
+                .hasMessageContaining("Column nested_row already exists");
     }
 
     @Test

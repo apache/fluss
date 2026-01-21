@@ -47,7 +47,6 @@ import org.apache.fluss.metadata.MergeEngineType;
 import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.TableBucket;
-import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
@@ -392,7 +391,8 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                                 new DefaultLakeCatalogContext(
                                         true,
                                         currentSession().getPrincipal(),
-                                        tableDescriptor.getSchema()));
+                                        null,
+                                        tableDescriptor));
             } catch (TableAlreadyExistException e) {
                 throw new LakeTableAlreadyExistException(e.getMessage(), e);
             }
@@ -422,9 +422,6 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                     "Table alteration can only be applied to one of the following: "
                             + "table properties or table schema.");
         }
-
-        LakeCatalog.Context lakeCatalogContext =
-                new DefaultLakeCatalogContext(false, currentSession().getPrincipal());
 
         if (!alterSchemaChanges.isEmpty()) {
             metadataManager.alterTableSchema(
@@ -1014,13 +1011,18 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
 
         private final boolean isCreatingFlussTable;
         private final FlussPrincipal flussPrincipal;
-        private final Schema schema;
+        private final TableDescriptor currentTable;
+        private final TableDescriptor expectedTable;
 
         public DefaultLakeCatalogContext(
-                boolean isCreatingFlussTable, FlussPrincipal flussPrincipal, Schema schema) {
+                boolean isCreatingFlussTable,
+                FlussPrincipal flussPrincipal,
+                TableDescriptor currentTable,
+                TableDescriptor expectedTable) {
             this.isCreatingFlussTable = isCreatingFlussTable;
             this.flussPrincipal = flussPrincipal;
-            this.schema = schema;
+            this.currentTable = currentTable;
+            this.expectedTable = expectedTable;
         }
 
         @Override
@@ -1034,8 +1036,13 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         }
 
         @Override
-        public Schema getFlussSchema() {
-            return schema;
+        public TableDescriptor getCurrentTable() {
+            return currentTable;
+        }
+
+        @Override
+        public TableDescriptor getExpectedTable() {
+            return expectedTable;
         }
     }
 
