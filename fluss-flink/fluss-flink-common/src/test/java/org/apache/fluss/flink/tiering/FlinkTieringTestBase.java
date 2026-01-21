@@ -67,8 +67,7 @@ class FlinkTieringTestBase {
 
     private static Configuration initConfig() {
         Configuration conf = new Configuration();
-        conf.set(ConfigOptions.KV_SNAPSHOT_INTERVAL, Duration.ofSeconds(1))
-                .set(ConfigOptions.KV_MAX_RETAINED_SNAPSHOTS, Integer.MAX_VALUE);
+        conf.set(ConfigOptions.KV_MAX_RETAINED_SNAPSHOTS, Integer.MAX_VALUE);
 
         // Configure the tiering sink to be Lance
         conf.set(ConfigOptions.DATALAKE_FORMAT, DataLakeFormat.LANCE);
@@ -150,14 +149,6 @@ class FlinkTieringTestBase {
         }
     }
 
-    protected void waitUntilSnapshot(long tableId, int bucketNum, long snapshotId) {
-        for (int i = 0; i < bucketNum; i++) {
-            TableBucket tableBucket = new TableBucket(tableId, i);
-            FLUSS_CLUSTER_EXTENSION.waitUntilSnapshotFinished(tableBucket, snapshotId);
-        }
-    }
-
-    @SuppressWarnings("resource")
     public List<InternalRow> getValuesRecords(TablePath tablePath) {
         return TestingValuesLake.getResults(tablePath.toString());
     }

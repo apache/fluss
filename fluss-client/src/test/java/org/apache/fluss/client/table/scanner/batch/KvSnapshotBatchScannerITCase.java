@@ -45,7 +45,6 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
 import static org.apache.fluss.record.TestData.DATA1_ROW_TYPE;
 import static org.apache.fluss.testutils.DataTestUtils.compactedRow;
@@ -104,7 +103,7 @@ class KvSnapshotBatchScannerITCase extends ClientToServerITCaseBase {
         Map<TableBucket, List<InternalRow>> expectedRowByBuckets = putRows(tableId, tablePath, 10);
 
         // wait snapshot finish
-        waitUntilAllSnapshotFinished(expectedRowByBuckets.keySet(), 0);
+        FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshots(expectedRowByBuckets.keySet());
 
         // test read snapshot
         testSnapshotRead(tablePath, expectedRowByBuckets);
@@ -113,7 +112,7 @@ class KvSnapshotBatchScannerITCase extends ClientToServerITCaseBase {
         expectedRowByBuckets = putRows(tableId, tablePath, 20);
 
         // wait snapshot finish
-        waitUntilAllSnapshotFinished(expectedRowByBuckets.keySet(), 1);
+        FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshots(expectedRowByBuckets.keySet());
 
         // test read snapshot
         testSnapshotRead(tablePath, expectedRowByBuckets);
@@ -126,7 +125,7 @@ class KvSnapshotBatchScannerITCase extends ClientToServerITCaseBase {
 
         // put into values with old schema.
         Map<TableBucket, List<InternalRow>> oldSchemaRowByBuckets = putRows(tableId, tablePath, 10);
-        waitUntilAllSnapshotFinished(oldSchemaRowByBuckets.keySet(), 0);
+        FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshots(oldSchemaRowByBuckets.keySet());
 
         // add a new column and rename an existing column
         admin.alterTable(
@@ -175,7 +174,7 @@ class KvSnapshotBatchScannerITCase extends ClientToServerITCaseBase {
         }
 
         // wait snapshot finish
-        waitUntilAllSnapshotFinished(expectedRowByBuckets.keySet(), 1);
+        FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshots(expectedRowByBuckets.keySet());
 
         // test read snapshot with new Schema
         testSnapshotRead(tablePath, expectedRowByBuckets);
@@ -238,11 +237,5 @@ class KvSnapshotBatchScannerITCase extends ClientToServerITCaseBase {
         BucketingFunction function = BucketingFunction.of(DataLakeFormat.PAIMON);
         byte[] key = keyEncoder.encodeKey(row);
         return function.bucketing(key, DEFAULT_BUCKET_NUM);
-    }
-
-    private void waitUntilAllSnapshotFinished(Set<TableBucket> tableBuckets, long snapshotId) {
-        for (TableBucket tableBucket : tableBuckets) {
-            FLUSS_CLUSTER_EXTENSION.waitUntilSnapshotFinished(tableBucket, snapshotId);
-        }
     }
 }

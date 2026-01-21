@@ -19,6 +19,7 @@ package org.apache.fluss.server.kv.snapshot;
 
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.TableBucket;
@@ -153,6 +154,16 @@ public class KvTabletSnapshotTarget implements PeriodicSnapshotManager.SnapshotT
         this.ioExecutor = ioExecutor;
         this.snapshotRunner = createSnapshotRunner(cancelStreamRegistry);
         this.snapshotsCleaner = new SnapshotsCleaner();
+    }
+
+    @Override
+    public long currentSnapshotId() {
+        try {
+            return snapshotIdCounter.getCurrent();
+        } catch (Exception e) {
+            throw new FlussRuntimeException(
+                    "Failed to get current snapshot ID for TableBucket " + tableBucket + ".", e);
+        }
     }
 
     @Override

@@ -66,7 +66,7 @@ class ReCreateSameTableAfterTieringTest extends FlinkPaimonTieringTestBase {
         // write records
         List<InternalRow> rows = Arrays.asList(row(1, "v1"), row(2, "v2"), row(3, "v3"));
         writeRows(t1, rows, false);
-        waitUntilSnapshot(t1Id, 1, 0);
+        triggerAndWaitSnapshot(t1Id, 1);
         // then start tiering job
         JobClient jobClient = buildTieringJob(execEnv);
 
@@ -84,7 +84,7 @@ class ReCreateSameTableAfterTieringTest extends FlinkPaimonTieringTestBase {
         List<InternalRow> newRows = Arrays.asList(row(4, "v4"), row(5, "v5"));
         writeRows(t1, newRows, false);
         // new table, so the snapshot id should be 0
-        waitUntilSnapshot(t2Id, 1, 0);
+        triggerAndWaitSnapshot(t2Id, 1);
         // check the status of replica after synced
         assertReplicaStatus(t2Bucket, 2);
         // check data in paimon

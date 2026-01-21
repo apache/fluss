@@ -108,8 +108,7 @@ public class FlinkIcebergTieringTestBase {
 
     private static Configuration initConfig() {
         Configuration conf = new Configuration();
-        conf.set(ConfigOptions.KV_SNAPSHOT_INTERVAL, Duration.ofSeconds(1))
-                .set(ConfigOptions.KV_MAX_RETAINED_SNAPSHOTS, Integer.MAX_VALUE);
+        conf.set(ConfigOptions.KV_MAX_RETAINED_SNAPSHOTS, Integer.MAX_VALUE);
 
         // Configure the tiering sink to be Iceberg
         conf.set(ConfigOptions.DATALAKE_FORMAT, DataLakeFormat.ICEBERG);
@@ -316,13 +315,6 @@ public class FlinkIcebergTieringTestBase {
                 }
             }
             tableWriter.flush();
-        }
-    }
-
-    protected void waitUntilSnapshot(long tableId, int bucketNum, long snapshotId) {
-        for (int i = 0; i < bucketNum; i++) {
-            TableBucket tableBucket = new TableBucket(tableId, i);
-            FLUSS_CLUSTER_EXTENSION.waitUntilSnapshotFinished(tableBucket, snapshotId);
         }
     }
 

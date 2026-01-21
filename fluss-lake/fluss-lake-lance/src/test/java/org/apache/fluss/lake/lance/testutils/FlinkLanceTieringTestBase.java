@@ -78,9 +78,8 @@ public class FlinkLanceTieringTestBase {
 
     private static Configuration initConfig() {
         Configuration conf = new Configuration();
-        conf.set(ConfigOptions.KV_SNAPSHOT_INTERVAL, Duration.ofSeconds(1))
-                // not to clean snapshots for test purpose
-                .set(ConfigOptions.KV_MAX_RETAINED_SNAPSHOTS, Integer.MAX_VALUE);
+        // not to clean snapshots for test purpose
+        conf.set(ConfigOptions.KV_MAX_RETAINED_SNAPSHOTS, Integer.MAX_VALUE);
         conf.setString("datalake.format", "lance");
         try {
             warehousePath =
@@ -209,12 +208,5 @@ public class FlinkLanceTieringTestBase {
                         new Configuration(),
                         DataLakeFormat.LANCE.toString())
                 .build();
-    }
-
-    protected void waitUntilSnapshot(long tableId, int bucketNum, long snapshotId) {
-        for (int i = 0; i < bucketNum; i++) {
-            TableBucket tableBucket = new TableBucket(tableId, i);
-            FLUSS_CLUSTER_EXTENSION.waitUntilSnapshotFinished(tableBucket, snapshotId);
-        }
     }
 }

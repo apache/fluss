@@ -168,6 +168,11 @@ public class PeriodicSnapshotManager implements Closeable {
         }
     }
 
+    @VisibleForTesting
+    public long currentSnapshotId() {
+        return target.currentSnapshotId();
+    }
+
     public void triggerSnapshot() {
         // todo: consider shrink the scope
         // of using guardedExecutor
@@ -229,8 +234,9 @@ public class PeriodicSnapshotManager implements Closeable {
                                             snapshotLocation,
                                             snapshotResult);
                                     LOG.info(
-                                            "TableBucket {} snapshot finished successfully, cost {} ms.",
+                                            "TableBucket {} snapshot {} finished successfully, cost {} ms.",
                                             tableBucket,
+                                            snapshotId,
                                             System.currentTimeMillis() - triggerTime);
                                 } catch (Throwable t) {
                                     LOG.warn(
@@ -312,6 +318,10 @@ public class PeriodicSnapshotManager implements Closeable {
     /** {@link SnapshotRunnable} provider and consumer. */
     @NotThreadSafe
     public interface SnapshotTarget {
+
+        /** Gets current snapshot id. */
+        long currentSnapshotId();
+
         /**
          * Initialize kv snapshot.
          *

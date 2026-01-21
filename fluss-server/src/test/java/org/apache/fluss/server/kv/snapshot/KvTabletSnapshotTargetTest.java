@@ -656,6 +656,11 @@ class KvTabletSnapshotTargetTest {
     private class TestingSnapshotIDCounter implements SequenceIDCounter {
 
         @Override
+        public long getCurrent() {
+            return snapshotIdGenerator.get();
+        }
+
+        @Override
         public long getAndIncrement() {
             return snapshotIdGenerator.getAndIncrement();
         }

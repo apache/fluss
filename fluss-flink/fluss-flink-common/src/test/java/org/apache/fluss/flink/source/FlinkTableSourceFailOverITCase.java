@@ -49,7 +49,6 @@ import org.junit.jupiter.api.io.TempDir;
 import javax.annotation.Nullable;
 
 import java.io.File;
-import java.time.Duration;
 import java.time.Year;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -76,8 +75,6 @@ abstract class FlinkTableSourceFailOverITCase {
             FlussClusterExtension.builder()
                     .setClusterConf(
                             new org.apache.fluss.config.Configuration()
-                                    // set snapshot interval to 1s for testing purposes
-                                    .set(ConfigOptions.KV_SNAPSHOT_INTERVAL, Duration.ofSeconds(1))
                                     // not to clean snapshots for test purpose
                                     .set(
                                             ConfigOptions.KV_MAX_RETAINED_SNAPSHOTS,

@@ -144,7 +144,7 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
             Map<TableBucket, List<InternalRow>> rows = putRows(tableId, tablePath, 10);
 
             // check the expected records
-            waitUntilSnapshot(tableId, 0);
+            FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshot(tablePath);
 
             hybridSnapshotLogSplits = getHybridSnapshotLogSplits(tablePath);
 
@@ -252,7 +252,7 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
             Map<TableBucket, List<InternalRow>> rows = putRows(tableId, tablePath, 10);
 
             // check the expected records
-            waitUntilSnapshot(tableId, 0);
+            FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshot(tablePath);
 
             List<SourceSplitBase> totalSplits =
                     new ArrayList<>(getHybridSnapshotLogSplits(tablePath));

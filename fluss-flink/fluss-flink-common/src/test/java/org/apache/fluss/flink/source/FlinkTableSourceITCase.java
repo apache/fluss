@@ -20,7 +20,6 @@ package org.apache.fluss.flink.source;
 import org.apache.fluss.client.Connection;
 import org.apache.fluss.client.ConnectionFactory;
 import org.apache.fluss.client.admin.Admin;
-import org.apache.fluss.client.metadata.KvSnapshots;
 import org.apache.fluss.client.table.Table;
 import org.apache.fluss.client.table.writer.UpsertWriter;
 import org.apache.fluss.config.ConfigOptions;
@@ -78,7 +77,6 @@ import static org.apache.fluss.flink.utils.FlinkTestBase.writeRows;
 import static org.apache.fluss.flink.utils.FlinkTestBase.writeRowsToPartition;
 import static org.apache.fluss.server.testutils.FlussClusterExtension.BUILTIN_DATABASE;
 import static org.apache.fluss.testutils.DataTestUtils.row;
-import static org.apache.fluss.testutils.common.CommonTestUtils.waitUntil;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -91,8 +89,6 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
             FlussClusterExtension.builder()
                     .setClusterConf(
                             new Configuration()
-                                    // set snapshot interval to 1s for testing purposes
-                                    .set(ConfigOptions.KV_SNAPSHOT_INTERVAL, Duration.ofSeconds(1))
                                     // not to clean snapshots for test purpose
                                     .set(
                                             ConfigOptions.KV_MAX_RETAINED_SNAPSHOTS,
@@ -161,8 +157,7 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
 
         // write records
         writeRows(conn, tablePath, rows, false);
-
-        waitUntilAllBucketFinishSnapshot(admin, tablePath);
+        FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshot(tablePath);
 
         List<String> expectedRows = Arrays.asList("+I[1, v1]", "+I[2, v2]", "+I[3, v3]");
 
@@ -181,7 +176,7 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
         // write records
         writeRows(conn, tablePath, rows, false);
 
-        waitUntilAllBucketFinishSnapshot(admin, tablePath);
+        FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshot(tablePath);
 
         List<String> expectedRows = Arrays.asList("+I[1, v1]", "+I[2, v2]", "+I[3, v3]");
 
@@ -288,7 +283,7 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
                 // write records and wait snapshot before collect job start,
                 // to make sure reading from kv snapshot
                 writeRows(conn, tablePath, rows, false);
-                waitUntilAllBucketFinishSnapshot(admin, TablePath.of(DEFAULT_DB, tableName));
+                FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshot(TablePath.of(DEFAULT_DB, tableName));
             }
         } else {
             writeRows(conn, tablePath, rows, true);
@@ -336,7 +331,7 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
         // write records
         writeRows(conn, tablePath, rows, false);
 
-        waitUntilAllBucketFinishSnapshot(admin, tablePath);
+        FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshot(tablePath);
 
         List<String> expectedRows = Arrays.asList("+I[1, v1]", "+I[2, v2]", "+I[3, v3]");
 
@@ -461,7 +456,7 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
 
         // write records and wait generate snapshot.
         writeRows(conn, tablePath, rows1, false);
-        waitUntilAllBucketFinishSnapshot(admin, tablePath);
+        FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshot(tablePath);
 
         List<InternalRow> rows2 = Arrays.asList(row(1, "v11"), row(2, "v22"), row(4, "v4"));
 
@@ -531,12 +526,8 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
 
         // write records and wait generate snapshot.
         writeRows(conn, tablePath, rows1, false);
-        if (partitionName == null) {
-            waitUntilAllBucketFinishSnapshot(admin, tablePath);
-        } else {
-            waitUntilAllBucketFinishSnapshot(
-                    admin, tablePath, Collections.singleton(partitionName));
-        }
+        FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshot(tablePath);
+
         CLOCK.advanceTime(Duration.ofMillis(100));
 
         List<InternalRow> rows2 =
@@ -605,7 +596,7 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
 
         List<String> expectedRowValues =
                 writeRowsToPartition(conn, tablePath, partitionNameById.values());
-        waitUntilAllBucketFinishSnapshot(admin, tablePath, partitionNameById.values());
+        FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshot(tablePath);
 
         // This test requires dynamically discovering newly created partitions, so
         // 'scan.partition.discovery.interval' needs to be set to 2s (default is 1 minute),
@@ -988,7 +979,7 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
                 writeRowsToPartition(conn, tablePath, Arrays.asList("2025", "2026")).stream()
                         .filter(s -> s.contains("2025"))
                         .collect(Collectors.toList());
-        waitUntilAllBucketFinishSnapshot(admin, tablePath, Arrays.asList("2025", "2026"));
+        FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshot(tablePath);
 
         String plan = tEnv.explainSql("select * from partitioned_table where c ='2025'");
         assertThat(plan)
@@ -1079,8 +1070,7 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
                         .stream()
                         .filter(s -> s.contains("2025"))
                         .collect(Collectors.toList());
-        waitUntilAllBucketFinishSnapshot(
-                admin, tablePath, Arrays.asList("2025$1", "2025$2", "2026$1"));
+        FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshot(tablePath);
 
         String plan = tEnv.explainSql("select * from multi_partitioned_table where c ='2025'");
         assertThat(plan)
@@ -1107,7 +1097,7 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
                         .stream()
                         .filter(s -> s.contains("2025"))
                         .collect(Collectors.toList());
-        waitUntilAllBucketFinishSnapshot(admin, tablePath, Arrays.asList("2025$3", "2026$2"));
+        FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshot(tablePath);
         assertResultsIgnoreOrder(rowIter, expectedRowValues, true);
 
         String plan2 =
@@ -1155,7 +1145,7 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
         }
 
         writeRows(conn, tablePath, rows, false);
-        waitUntilAllBucketFinishSnapshot(admin, tablePath, Arrays.asList("2025", "2026"));
+        FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshot(tablePath);
 
         String plan =
                 tEnv.explainSql(
@@ -1203,7 +1193,7 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
 
         List<String> expectedRowValues =
                 writeRowsToPartition(conn, tablePath, Arrays.asList("2025", "2026"));
-        waitUntilAllBucketFinishSnapshot(admin, tablePath, Arrays.asList("2025", "2026"));
+        FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshot(tablePath);
 
         org.apache.flink.util.CloseableIterator<Row> rowIter =
                 tEnv.executeSql("select * from partitioned_table_no_filter").collect();
@@ -1249,7 +1239,7 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
                         .stream()
                         .filter(s -> s.contains("2025") || s.contains("2026"))
                         .collect(Collectors.toList());
-        waitUntilAllBucketFinishSnapshot(admin, tablePath, Arrays.asList("2025", "2026", "2027"));
+        FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshot(tablePath);
 
         String query1 = "select * from partitioned_table_in where c in ('2025','2026')";
         String plan = tEnv.explainSql(query1);
@@ -1300,7 +1290,7 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
         }
 
         writeRows(conn, tablePath, rows, false);
-        waitUntilAllBucketFinishSnapshot(admin, tablePath, Arrays.asList("2025", "2026", "2027"));
+        FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshot(tablePath);
 
         String query1 =
                 "select a,c,d from combined_filters_table_in where c in ('2025','2026') and d % 200 = 0";
@@ -1339,7 +1329,7 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
                 allData.stream()
                         .filter(s -> s.contains("2025") || s.contains("2026"))
                         .collect(Collectors.toList());
-        waitUntilAllBucketFinishSnapshot(admin, tablePath, Arrays.asList("2025", "2026", "3026"));
+        FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshot(tablePath);
 
         String query1 = "select * from partitioned_table_like where c like '202%'";
         String plan = tEnv.explainSql(query1);
@@ -1392,8 +1382,7 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
                 allData.stream()
                         .filter(s -> s.contains("v3") && !s.contains("2025, 2"))
                         .collect(Collectors.toList());
-        waitUntilAllBucketFinishSnapshot(
-                admin, tablePath, Arrays.asList("2025$1", "2025$2", "2026$1"));
+        FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshot(tablePath);
 
         String query =
                 "select * from partitioned_table_complex where  a = 3\n"
@@ -1542,40 +1531,6 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
         tEnv.createTemporaryView("src", tEnv.fromDataStream(srcDs, srcSchema));
 
         return tableName;
-    }
-
-    private void waitUntilAllBucketFinishSnapshot(Admin admin, TablePath tablePath) {
-        waitUntil(
-                () -> {
-                    KvSnapshots snapshots = admin.getLatestKvSnapshots(tablePath).get();
-                    for (int bucketId : snapshots.getBucketIds()) {
-                        if (!snapshots.getSnapshotId(bucketId).isPresent()) {
-                            return false;
-                        }
-                    }
-                    return true;
-                },
-                Duration.ofMinutes(1),
-                "Fail to wait until all bucket finish snapshot");
-    }
-
-    private void waitUntilAllBucketFinishSnapshot(
-            Admin admin, TablePath tablePath, Collection<String> partitions) {
-        waitUntil(
-                () -> {
-                    for (String partition : partitions) {
-                        KvSnapshots snapshots =
-                                admin.getLatestKvSnapshots(tablePath, partition).get();
-                        for (int bucketId : snapshots.getBucketIds()) {
-                            if (!snapshots.getSnapshotId(bucketId).isPresent()) {
-                                return false;
-                            }
-                        }
-                    }
-                    return true;
-                },
-                Duration.ofMinutes(1),
-                "Fail to wait until all bucket finish snapshot");
     }
 
     private GenericRow rowWithPartition(Object[] values, @Nullable String partition) {
