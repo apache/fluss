@@ -50,7 +50,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 
-import java.time.Duration;
 import java.util.Arrays;
 import java.util.List;
 
@@ -67,8 +66,6 @@ abstract class FlinkMetricsITCase {
             FlussClusterExtension.builder()
                     .setClusterConf(
                             new org.apache.fluss.config.Configuration()
-                                    // set snapshot interval to 1s for testing purposes
-                                    .set(ConfigOptions.KV_SNAPSHOT_INTERVAL, Duration.ofSeconds(1))
                                     // not to clean snapshots for test purpose
                                     .set(
                                             ConfigOptions.KV_MAX_RETAINED_SNAPSHOTS,

@@ -84,7 +84,7 @@ class TieringFailoverITCase extends FlinkTieringTestBase {
         List<InternalRow> rows = Arrays.asList(row(1, "i1"), row(2, "i2"), row(3, "i3"));
         List<InternalRow> expectedRows = new ArrayList<>(rows);
         writeRows(t1, rows);
-        waitUntilSnapshot(t1Id, 1, 0);
+        FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshot(t1);
 
         // fail the first write to the pk table
         TestingValuesLake.failWhen(t1.toString()).failWriteOnce();

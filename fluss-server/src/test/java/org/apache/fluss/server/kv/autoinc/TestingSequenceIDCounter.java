@@ -40,6 +40,11 @@ public class TestingSequenceIDCounter implements SequenceIDCounter {
     }
 
     @Override
+    public long getCurrent() {
+        return idGenerator.get();
+    }
+
+    @Override
     public long getAndIncrement() {
         return idGenerator.getAndIncrement();
     }

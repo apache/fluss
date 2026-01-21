@@ -111,8 +111,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
 
             Map<Integer, Long> bucketOffsetOfSecondWrite =
                     upsertRow(tablePath, DEFAULT_PK_TABLE_DESCRIPTOR, 0, 10);
-            long snapshotId = 0;
-            waitUntilSnapshot(tableId, snapshotId);
+            triggerAndWaitSnapshot(tableId);
 
             // request tiering table splits
             for (int subtaskId = 0; subtaskId < 3; subtaskId++) {
@@ -150,7 +149,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
         final Map<Integer, Long> bucketOffsetOfInitialWrite =
                 upsertRow(tablePath, DEFAULT_PK_TABLE_DESCRIPTOR, 0, 10);
         long snapshotId = 0;
-        waitUntilSnapshot(tableId, snapshotId);
+        triggerAndWaitSnapshot(tableId);
 
         int expectNumberOfSplits = 3;
 
@@ -203,8 +202,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
 
             Map<Integer, Long> bucketOffsetOfSecondWrite =
                     upsertRow(tablePath, DEFAULT_PK_TABLE_DESCRIPTOR, 10, 20);
-            snapshotId = 1;
-            waitUntilSnapshot(tableId, snapshotId);
+            triggerAndWaitSnapshot(tableId);
 
             // request tiering table splits
             for (int subtaskId = 0; subtaskId < 3; subtaskId++) {
@@ -392,7 +390,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
             Map<Long, Map<Integer, Long>> bucketOffsetOfSecondWrite =
                     upsertRowForPartitionedTable(
                             tablePath, DEFAULT_PK_TABLE_DESCRIPTOR, partitionNameByIds, 10, 20);
-            waitUntilPartitionTableSnapshot(tableId, partitionNameByIds, 0);
+            triggerAndWaitUntilPartitionTableSnapshot(tableId, partitionNameByIds);
 
             // request tiering table splits
             for (int subtaskId = 0; subtaskId < numSubtasks; subtaskId++) {

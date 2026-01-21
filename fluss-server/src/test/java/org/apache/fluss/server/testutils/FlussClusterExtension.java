@@ -51,6 +51,7 @@ import org.apache.fluss.server.coordinator.rebalance.RebalanceManager;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshotHandle;
+import org.apache.fluss.server.kv.snapshot.PeriodicSnapshotManager;
 import org.apache.fluss.server.metadata.ServerInfo;
 import org.apache.fluss.server.metadata.TabletServerMetadataCache;
 import org.apache.fluss.server.replica.Replica;
@@ -65,6 +66,7 @@ import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
 import org.apache.fluss.server.zk.data.RemoteLogManifestHandle;
 import org.apache.fluss.server.zk.data.TableAssignment;
+import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.clock.Clock;
 import org.apache.fluss.utils.clock.SystemClock;
@@ -103,6 +105,7 @@ import static org.apache.fluss.testutils.common.CommonTestUtils.waitUntil;
 import static org.apache.fluss.testutils.common.CommonTestUtils.waitValue;
 import static org.apache.fluss.utils.function.FunctionUtils.uncheckedFunction;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.fail;
 
 /**
  * A Junit {@link Extension} which starts a Fluss Cluster.
@@ -681,7 +684,90 @@ public final class FlussClusterExtension
                 });
     }
 
-    public CompletedSnapshot waitUntilSnapshotFinished(TableBucket tableBucket, long snapshotId) {
+    public void triggerAndWaitSnapshot(TablePath tablePath) throws Exception {
+        Optional<TableRegistration> table = zooKeeperClient.getTable(tablePath);
+        //noinspection SimplifyOptionalCallChains (Java 8 compatibility)
+        if (!table.isPresent()) {
+            throw new IllegalStateException("Table not found for table path " + tablePath);
+        }
+
+        TableRegistration tableRegistration = table.get();
+        long tableId = tableRegistration.tableId;
+        int bucketCount = tableRegistration.bucketCount;
+
+        List<TableBucket> tableBuckets = new ArrayList<>();
+        if (!tableRegistration.isPartitioned()) {
+            for (int bucketId = 0; bucketId < bucketCount; bucketId++) {
+                tableBuckets.add(new TableBucket(tableId, null, bucketId));
+            }
+        } else {
+            Map<String, Long> partitions = zooKeeperClient.getPartitionNameAndIds(tablePath);
+            for (Long partitionId : partitions.values()) {
+                for (int bucketId = 0; bucketId < bucketCount; bucketId++) {
+                    tableBuckets.add(new TableBucket(tableId, partitionId, bucketId));
+                }
+            }
+        }
+
+        // trigger and wait all snapshots finished
+        triggerAndWaitSnapshots(tableBuckets);
+    }
+
+    public void triggerAndWaitSnapshots(Collection<TableBucket> tableBuckets) {
+        Map<TableBucket, Long> snapshotMap = new HashMap<>();
+        for (TableBucket tableBucket : tableBuckets) {
+            Long snapshotId = triggerSnapshot(tableBucket);
+            if (snapshotId != null) {
+                snapshotMap.put(tableBucket, snapshotId);
+            }
+        }
+        // wait all snapshots finished
+        for (Map.Entry<TableBucket, Long> entry : snapshotMap.entrySet()) {
+            waitUntilSnapshotFinished(entry.getKey(), entry.getValue());
+        }
+    }
+
+    public CompletedSnapshot triggerAndWaitSnapshot(TableBucket tableBucket) {
+        Long snapshotId = triggerSnapshot(tableBucket);
+        if (snapshotId != null) {
+            return waitUntilSnapshotFinished(tableBucket, snapshotId);
+        } else {
+            fail("No new snapshot triggered for table bucket " + tableBucket);
+            return null;
+        }
+    }
+
+    private Long triggerSnapshot(TableBucket tableBucket) {
+        Long snapshotId = null;
+        Long nextSnapshotId = null;
+        for (TabletServer ts : tabletServers.values()) {
+            ReplicaManager.HostedReplica replica = ts.getReplicaManager().getReplica(tableBucket);
+            if (replica instanceof ReplicaManager.OnlineReplica) {
+                Replica r = ((ReplicaManager.OnlineReplica) replica).getReplica();
+                PeriodicSnapshotManager kvSnapshotManager = r.getKvSnapshotManager();
+                if (r.isLeader() && kvSnapshotManager != null) {
+                    snapshotId = kvSnapshotManager.currentSnapshotId();
+                    kvSnapshotManager.triggerSnapshot();
+                    nextSnapshotId = kvSnapshotManager.currentSnapshotId();
+                    break;
+                }
+            }
+        }
+
+        if (snapshotId != null) {
+            if (nextSnapshotId > snapshotId) {
+                // only there is a new snapshot triggered, we return the snapshot id
+                return snapshotId;
+            } else {
+                return null;
+            }
+        } else {
+            fail("No KV snapshot manager found for table bucket " + tableBucket);
+            return null;
+        }
+    }
+
+    private CompletedSnapshot waitUntilSnapshotFinished(TableBucket tableBucket, long snapshotId) {
         ZooKeeperClient zkClient = getZooKeeperClient();
         return waitValue(
                 () -> {
@@ -693,7 +779,7 @@ public final class FlussClusterExtension
                                     uncheckedFunction(
                                             CompletedSnapshotHandle::retrieveCompleteSnapshot));
                 },
-                Duration.ofMinutes(2),
+                Duration.ofSeconds(30),
                 String.format(
                         "Fail to wait bucket %s snapshot %d finished", tableBucket, snapshotId));
     }

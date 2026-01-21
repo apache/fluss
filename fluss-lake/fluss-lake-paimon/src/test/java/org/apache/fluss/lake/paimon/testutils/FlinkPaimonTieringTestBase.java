@@ -93,9 +93,8 @@ public abstract class FlinkPaimonTieringTestBase {
 
     protected static Configuration initConfig() {
         Configuration conf = new Configuration();
-        conf.set(ConfigOptions.KV_SNAPSHOT_INTERVAL, Duration.ofSeconds(1))
-                // not to clean snapshots for test purpose
-                .set(ConfigOptions.KV_MAX_RETAINED_SNAPSHOTS, Integer.MAX_VALUE);
+        // not to clean snapshots for test purpose
+        conf.set(ConfigOptions.KV_MAX_RETAINED_SNAPSHOTS, Integer.MAX_VALUE);
         conf.setString("datalake.format", "paimon");
         conf.setString("datalake.paimon.metastore", "filesystem");
         try {
@@ -163,11 +162,12 @@ public abstract class FlinkPaimonTieringTestBase {
         return admin.getTableInfo(tablePath).get().getTableId();
     }
 
-    protected void waitUntilSnapshot(long tableId, int bucketNum, long snapshotId) {
+    protected void triggerAndWaitSnapshot(long tableId, int bucketNum) {
+        List<TableBucket> allBuckets = new ArrayList<>();
         for (int i = 0; i < bucketNum; i++) {
-            TableBucket tableBucket = new TableBucket(tableId, i);
-            getFlussClusterExtension().waitUntilSnapshotFinished(tableBucket, snapshotId);
+            allBuckets.add(new TableBucket(tableId, i));
         }
+        getFlussClusterExtension().triggerAndWaitSnapshots(allBuckets);
     }
 
     protected void writeRows(TablePath tablePath, List<InternalRow> rows, boolean append)

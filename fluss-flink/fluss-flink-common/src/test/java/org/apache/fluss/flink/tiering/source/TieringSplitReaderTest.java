@@ -103,7 +103,7 @@ class TieringSplitReaderTest extends FlinkTestBase {
             Map<TableBucket, List<InternalRow>> firstRows = putRows(tableId, tablePath, 10);
 
             // check the expected records
-            waitUntilSnapshot(tableId, 0);
+            FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshot(tablePath);
 
             splitsAddition =
                     new SplitsAddition<>(
@@ -168,8 +168,8 @@ class TieringSplitReaderTest extends FlinkTestBase {
                         createTieringReader(connection)) {
             Map<TableBucket, List<InternalRow>> table0Rows = putRows(tableId0, tablePath0, 10);
             Map<TableBucket, List<InternalRow>> table1Rows = putRows(tableId1, tablePath1, 10);
-            waitUntilSnapshot(tableId0, 0);
-            waitUntilSnapshot(tableId1, 0);
+            FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshot(tablePath0);
+            FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshot(tablePath1);
 
             // first add snapshot split of bucket 0, bucket 1 of table id 0
             SplitsAddition<TieringSplit> splitsAddition =

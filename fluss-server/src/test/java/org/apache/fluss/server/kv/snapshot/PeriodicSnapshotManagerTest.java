@@ -158,6 +158,11 @@ class PeriodicSnapshotManagerTest {
         private static final NopSnapshotTarget INSTANCE = new NopSnapshotTarget();
 
         @Override
+        public long currentSnapshotId() {
+            return 0;
+        }
+
+        @Override
         public Optional<PeriodicSnapshotManager.SnapshotRunnable> initSnapshot() {
             return Optional.empty();
         }
@@ -203,6 +208,11 @@ class PeriodicSnapshotManagerTest {
             } catch (IOException e) {
                 throw new FlussRuntimeException(e);
             }
+        }
+
+        @Override
+        public long currentSnapshotId() {
+            return 0;
         }
 
         @Override

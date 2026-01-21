@@ -30,7 +30,6 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.Schema;
-import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
@@ -70,8 +69,6 @@ public class FlinkTestBase extends AbstractTestBase {
             FlussClusterExtension.builder()
                     .setClusterConf(
                             new Configuration()
-                                    // set snapshot interval to 1s for testing purposes
-                                    .set(ConfigOptions.KV_SNAPSHOT_INTERVAL, Duration.ofSeconds(1))
                                     // not to clean snapshots for test purpose
                                     .set(
                                             ConfigOptions.KV_MAX_RETAINED_SNAPSHOTS,
@@ -179,13 +176,6 @@ public class FlinkTestBase extends AbstractTestBase {
             throws Exception {
         admin.createTable(tablePath, tableDescriptor, true).get();
         return admin.getTableInfo(tablePath).get().getTableId();
-    }
-
-    protected void waitUntilSnapshot(long tableId, long snapshotId) {
-        for (int i = 0; i < DEFAULT_BUCKET_NUM; i++) {
-            TableBucket tableBucket = new TableBucket(tableId, i);
-            FLUSS_CLUSTER_EXTENSION.waitUntilSnapshotFinished(tableBucket, snapshotId);
-        }
     }
 
     /**

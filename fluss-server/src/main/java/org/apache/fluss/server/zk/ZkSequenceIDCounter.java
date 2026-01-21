@@ -47,6 +47,11 @@ public class ZkSequenceIDCounter implements SequenceIDCounter {
                                 BASE_SLEEP_MS, MAX_SLEEP_MS, RETRY_TIMES));
     }
 
+    @Override
+    public long getCurrent() throws Exception {
+        return sequenceIdCounter.get().postValue();
+    }
+
     /**
      * Atomically increments the current sequence ID.
      *

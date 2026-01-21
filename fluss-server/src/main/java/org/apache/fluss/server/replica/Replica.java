@@ -1932,4 +1932,10 @@ public final class Replica {
     public SchemaGetter getSchemaGetter() {
         return schemaGetter;
     }
+
+    @VisibleForTesting
+    @Nullable
+    public PeriodicSnapshotManager getKvSnapshotManager() {
+        return kvSnapshotManager;
+    }
 }

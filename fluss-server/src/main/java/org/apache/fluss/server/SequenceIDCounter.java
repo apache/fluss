@@ -20,6 +20,9 @@ package org.apache.fluss.server;
 /** A counter for generating unique sequence IDs. */
 public interface SequenceIDCounter {
 
+    /** Gets the current sequence ID without incrementing it. */
+    long getCurrent() throws Exception;
+
     /**
      * Atomically increments the sequence ID.
      *

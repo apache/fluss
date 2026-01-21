@@ -172,7 +172,7 @@ class IcebergTieringITCase extends FlinkIcebergTieringTestBase {
                                 BinaryString.fromString("abc"),
                                 new byte[] {1, 2, 3, 4, 5, 6, 7, 8, 9, 10}));
         writeRows(t1, rows, false);
-        waitUntilSnapshot(t1Id, 1, 0);
+        FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshot(t1);
 
         // then start tiering job
         JobClient jobClient = buildTieringJob(execEnv);
