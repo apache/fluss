@@ -50,6 +50,9 @@ class FlussSparkTestBase extends QueryTest with SharedSparkSession {
       .set(s"spark.sql.catalog.$DEFAULT_CATALOG", classOf[SparkCatalog].getName)
       .set(s"spark.sql.catalog.$DEFAULT_CATALOG.bootstrap.servers", bootstrapServers)
       .set("spark.sql.defaultCatalog", DEFAULT_CATALOG)
+      // Enable read optimized by default temporarily.
+      // TODO: remove this when https://github.com/apache/fluss/issues/2427 is done.
+      .set("spark.sql.fluss.readOptimized", "true")
   }
 
   override protected def beforeAll(): Unit = {
