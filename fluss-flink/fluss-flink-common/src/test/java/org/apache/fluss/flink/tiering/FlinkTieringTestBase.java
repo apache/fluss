@@ -96,8 +96,6 @@ class FlinkTieringTestBase {
             conn.close();
             conn = null;
         }
-
-        System.out.println("after all");
     }
 
     @BeforeEach

@@ -31,7 +31,6 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.messages.CommitLakeTableSnapshotRequest;
 import org.apache.fluss.rpc.messages.PbLakeTableOffsetForBucket;
 import org.apache.fluss.rpc.messages.PbLakeTableSnapshotInfo;
-import org.apache.fluss.utils.clock.ManualClock;
 
 import org.apache.flink.api.connector.source.SourceEvent;
 import org.apache.flink.api.connector.source.SplitsAssignment;
@@ -79,8 +78,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
         // test get snapshot split & log split and the assignment
         try (FlussMockSplitEnumeratorContext<TieringSplit> context =
                 new FlussMockSplitEnumeratorContext<>(numSubtasks)) {
-            TieringSourceEnumerator enumerator =
-                    createDefaultTieringSourceEnumerator(flussConf, context);
+            TieringSourceEnumerator enumerator = createTieringSourceEnumerator(flussConf, context);
 
             enumerator.start();
             assertThat(context.getSplitsAssignmentSequence()).isEmpty();
@@ -158,8 +156,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
         // test get snapshot split assignment
         try (FlussMockSplitEnumeratorContext<TieringSplit> context =
                 new FlussMockSplitEnumeratorContext<>(numSubtasks)) {
-            TieringSourceEnumerator enumerator =
-                    createDefaultTieringSourceEnumerator(flussConf, context);
+            TieringSourceEnumerator enumerator = createTieringSourceEnumerator(flussConf, context);
 
             enumerator.start();
             assertThat(context.getSplitsAssignmentSequence()).isEmpty();
@@ -241,8 +238,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
         // test get log split and the assignment
         try (FlussMockSplitEnumeratorContext<TieringSplit> context =
                 new FlussMockSplitEnumeratorContext<>(numSubtasks)) {
-            TieringSourceEnumerator enumerator =
-                    createDefaultTieringSourceEnumerator(flussConf, context);
+            TieringSourceEnumerator enumerator = createTieringSourceEnumerator(flussConf, context);
 
             enumerator.start();
             assertThat(context.getSplitsAssignmentSequence()).isEmpty();
@@ -333,8 +329,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
         // test get snapshot split assignment
         try (FlussMockSplitEnumeratorContext<TieringSplit> context =
                 new FlussMockSplitEnumeratorContext<>(numSubtasks)) {
-            TieringSourceEnumerator enumerator =
-                    createDefaultTieringSourceEnumerator(flussConf, context);
+            TieringSourceEnumerator enumerator = createTieringSourceEnumerator(flussConf, context);
 
             enumerator.start();
             assertThat(context.getSplitsAssignmentSequence()).isEmpty();
@@ -434,8 +429,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
         // test get log split assignment
         try (FlussMockSplitEnumeratorContext<TieringSplit> context =
                 new FlussMockSplitEnumeratorContext<>(numSubtasks)) {
-            TieringSourceEnumerator enumerator =
-                    createDefaultTieringSourceEnumerator(flussConf, context);
+            TieringSourceEnumerator enumerator = createTieringSourceEnumerator(flussConf, context);
 
             enumerator.start();
             assertThat(context.getSplitsAssignmentSequence()).isEmpty();
@@ -555,8 +549,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
         // test get log split and the assignment
         try (FlussMockSplitEnumeratorContext<TieringSplit> context =
                 new FlussMockSplitEnumeratorContext<>(numSubtasks)) {
-            TieringSourceEnumerator enumerator =
-                    createDefaultTieringSourceEnumerator(flussConf, context);
+            TieringSourceEnumerator enumerator = createTieringSourceEnumerator(flussConf, context);
 
             enumerator.start();
             assertThat(context.getSplitsAssignmentSequence()).isEmpty();
@@ -610,8 +603,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
 
         try (FlussMockSplitEnumeratorContext<TieringSplit> context =
                 new FlussMockSplitEnumeratorContext<>(3)) {
-            TieringSourceEnumerator enumerator =
-                    createDefaultTieringSourceEnumerator(flussConf, context);
+            TieringSourceEnumerator enumerator = createTieringSourceEnumerator(flussConf, context);
 
             enumerator.start();
             assertThat(context.getSplitsAssignmentSequence()).isEmpty();
@@ -716,29 +708,16 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
                 .allMatch(tieringSplit -> tieringSplit.getTablePath().equals(expectedTablePath));
     }
 
-    private TieringSourceEnumerator createDefaultTieringSourceEnumerator(
+    private TieringSourceEnumerator createTieringSourceEnumerator(
             Configuration flussConf, MockSplitEnumeratorContext<TieringSplit> context) {
-        return new TieringSourceEnumerator(
-                flussConf,
-                context,
-                500,
-                Duration.ofMinutes(10).toMillis(),
-                Duration.ofSeconds(10).toMillis());
+        return createTieringSourceEnumerator(flussConf, context, Duration.ofSeconds(10).toMillis());
     }
 
-    private TieringSourceEnumerator createTieringSourceEnumeratorWithManualClock(
+    private TieringSourceEnumerator createTieringSourceEnumerator(
             Configuration flussConf,
             MockSplitEnumeratorContext<TieringSplit> context,
-            ManualClock clock,
-            long tieringTableDurationMaxMs,
-            long tieringTableDurationDetectIntervalMs) {
-        return new TieringSourceEnumerator(
-                flussConf,
-                context,
-                500,
-                tieringTableDurationMaxMs,
-                tieringTableDurationDetectIntervalMs,
-                clock);
+            long tieringTableDurationMaxMs) {
+        return new TieringSourceEnumerator(flussConf, context, 500, tieringTableDurationMaxMs);
     }
 
     @Test
@@ -748,19 +727,12 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
         int numSubtasks = 2;
 
         long tieringTableDurationMaxMs = Duration.ofMinutes(10).toMillis();
-        long tieringTableDurationDetectIntervalMs = Duration.ofMillis(100).toMillis();
-
-        ManualClock manualClock = new ManualClock();
 
         try (FlussMockSplitEnumeratorContext<TieringSplit> context =
                         new FlussMockSplitEnumeratorContext<>(numSubtasks);
                 TieringSourceEnumerator enumerator =
-                        createTieringSourceEnumeratorWithManualClock(
-                                flussConf,
-                                context,
-                                manualClock,
-                                tieringTableDurationMaxMs,
-                                tieringTableDurationDetectIntervalMs); ) {
+                        createTieringSourceEnumerator(
+                                flussConf, context, tieringTableDurationMaxMs); ) {
             enumerator.start();
 
             // Register all readers
@@ -777,13 +749,8 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
             // Wait for initial assignment
             waitUntilTieringTableSplitAssignmentReady(context, 2, 200L);
 
-            // Advance time to mock exceed max duration
-            manualClock.advanceTime(Duration.ofMillis(tieringTableDurationMaxMs + 60_000));
-
-            // Run periodic callable to trigger max duration check
-            // Index 0 is for requestTieringTableSplitsViaHeartBeat
-            // Index 1 is for checkTableReachMaxTieringDuration
-            context.runPeriodicCallable(1);
+            // call handleTableTieringReachMaxDuration to mock tiering reach max duration
+            enumerator.handleTableTieringReachMaxDuration(tableId, 1);
 
             // Verify that TieringReachMaxDurationEvent was sent to all readers
             // Use reflection to access events sent to readers

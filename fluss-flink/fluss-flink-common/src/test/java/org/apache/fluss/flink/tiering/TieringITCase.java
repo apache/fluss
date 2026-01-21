@@ -44,8 +44,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
-import static org.apache.fluss.config.ConfigOptions.LAKE_TIERING_TABLE_DURATION_DETECT_INTERVAL;
-import static org.apache.fluss.config.ConfigOptions.LAKE_TIERING_TABLE_DURATION_MAX;
+import static org.apache.fluss.config.ConfigOptions.LAKE_TIERING_TABLE_MAX_DURATION;
 import static org.apache.fluss.testutils.common.CommonTestUtils.waitValue;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -63,6 +62,7 @@ class TieringITCase extends FlinkTieringTestBase {
     }
 
     @BeforeEach
+    @Override
     void beforeEach() {
         execEnv =
                 StreamExecutionEnvironment.getExecutionEnvironment()
@@ -96,8 +96,7 @@ class TieringITCase extends FlinkTieringTestBase {
 
         // set tiering duration to a small value for testing purpose
         Configuration lakeTieringConfig = new Configuration();
-        lakeTieringConfig.set(LAKE_TIERING_TABLE_DURATION_MAX, Duration.ofSeconds(1));
-        lakeTieringConfig.set(LAKE_TIERING_TABLE_DURATION_DETECT_INTERVAL, Duration.ofMillis(100));
+        lakeTieringConfig.set(LAKE_TIERING_TABLE_MAX_DURATION, Duration.ofSeconds(1));
         JobClient jobClient = buildTieringJob(execEnv, lakeTieringConfig);
 
         try {
@@ -117,7 +116,7 @@ class TieringITCase extends FlinkTieringTestBase {
         }
     }
 
-    private long countTieredRecords(LakeSnapshot lakeSnapshot) throws Exception {
+    private long countTieredRecords(LakeSnapshot lakeSnapshot) {
         return lakeSnapshot.getTableBucketsOffset().values().stream()
                 .mapToLong(Long::longValue)
                 .sum();

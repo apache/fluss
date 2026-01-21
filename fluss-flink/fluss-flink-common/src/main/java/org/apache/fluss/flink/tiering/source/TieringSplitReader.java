@@ -533,7 +533,7 @@ public class TieringSplitReader<WriteResult>
         } catch (Exception e) {
             throw new IOException("Fail to finish current table.", e);
         }
-
+        reachTieringMaxDurationTables.remove(currentTableId);
         // before switch to a new table, mark all as empty or null
         currentTableId = null;
         currentTablePath = null;
