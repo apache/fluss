@@ -150,14 +150,13 @@ class IcebergRewriteITCase extends FlinkIcebergTieringTestBase {
             checkRecords(getIcebergRecords(t1), flussRows);
             checkFileStatusInIcebergTable(t1, 2, true);
 
-            // previous compaction conflicts won't prevent further compaction, and check iceberg
-            // records
+            // previous compaction conflicts won't prevent further compaction, and
+            // check iceberg records
             rows = Collections.singletonList(row(5, "v1"));
             flussRows.addAll(writeIcebergTableRecords(t1, t1Bucket, 7, false, rows));
             checkRecords(getIcebergRecords(t1), flussRows);
-            // check that the correct number of files (2 from compaction + 1 new) exist and that a
-            // deletion
-            // file is present
+            // check that the correct number of files (2 from compaction + 1 new)
+            // exist and that a deletion file is present
             checkFileStatusInIcebergTable(t1, 3, true);
         } finally {
             jobClient.cancel().get();

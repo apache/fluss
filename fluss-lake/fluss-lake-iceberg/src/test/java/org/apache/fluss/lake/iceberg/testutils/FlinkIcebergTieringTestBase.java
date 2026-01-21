@@ -361,8 +361,8 @@ public class FlinkIcebergTieringTestBase {
         boolean deleteFileExists = false;
         try (CloseableIterable<FileScanTask> tasks = table.newScan().planFiles()) {
             for (FileScanTask ignored : tasks) {
-                // A deletion status may be mixed (some may contain deletions and
-                // others may not) so we want to flag if deletions are present
+                // Not all data files may have associated delete files, so track if
+                // any exist when the shouldDeleteFileExist flag is set
                 if (shouldDeleteFileExist && !deleteFileExists) {
                     deleteFileExists = !ignored.deletes().isEmpty();
                 }
