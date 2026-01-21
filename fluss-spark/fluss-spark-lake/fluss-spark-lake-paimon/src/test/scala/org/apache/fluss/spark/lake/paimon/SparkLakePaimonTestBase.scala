@@ -117,10 +117,35 @@ class SparkLakePaimonTestBase extends QueryTest with SharedSparkSession {
   override protected def beforeEach(): Unit = {
     super.beforeEach()
 
+    conn = ConnectionFactory.createConnection(flussServer.getClientConfig)
+    admin = conn.getAdmin
+
     execEnv = StreamExecutionEnvironment.getExecutionEnvironment
     execEnv.setRuntimeMode(RuntimeExecutionMode.STREAMING)
     execEnv.setParallelism(2)
     execEnv = StreamExecutionEnvironment.getExecutionEnvironment
+  }
+
+  override protected def afterEach(): Unit = {
+    super.afterEach()
+
+    if (admin != null) {
+      admin.close()
+      admin = null
+    }
+    if (conn != null) {
+      conn.close()
+      conn = null
+    }
+  }
+
+  override protected def withTable(tableNames: String*)(f: => Unit): Unit = {
+    super.withTable(tableNames: _*)(f)
+    tableNames.foreach(
+      tableName =>
+        paimonCatalog.dropTable(
+          org.apache.paimon.catalog.Identifier.create(DEFAULT_DATABASE, tableName),
+          true))
   }
 
   protected def buildTieringJob(execEnv: StreamExecutionEnvironment): JobClient = {

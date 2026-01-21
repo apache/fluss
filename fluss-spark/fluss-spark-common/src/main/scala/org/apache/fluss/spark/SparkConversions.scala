@@ -54,7 +54,7 @@ object SparkConversions {
     tableDescriptorBuilder.partitionedBy(partitionKey: _*)
 
     val primaryKeys = if (caseInsensitiveProps.contains(PRIMARY_KEY.key)) {
-      val pks = caseInsensitiveProps.get(PRIMARY_KEY.key).get.split(",")
+      val pks = caseInsensitiveProps.get(PRIMARY_KEY.key).get.split(",").map(_.trim)
       schemaBuilder.primaryKey(pks: _*)
       pks
     } else {
@@ -64,7 +64,7 @@ object SparkConversions {
     if (caseInsensitiveProps.contains(BUCKET_NUMBER.key)) {
       val bucketNum = caseInsensitiveProps.get(BUCKET_NUMBER.key).get.toInt
       val bucketKeys = if (caseInsensitiveProps.contains(BUCKET_KEY.key)) {
-        caseInsensitiveProps.get(BUCKET_KEY.key).get.split(",")
+        caseInsensitiveProps.get(BUCKET_KEY.key).get.split(",").map(_.trim)
       } else {
         primaryKeys.filterNot(partitionKey.contains)
       }
@@ -76,7 +76,7 @@ object SparkConversions {
     }
 
     val (tableProps, customProps) =
-      caseInsensitiveProps.filterNot(SPARK_TABLE_OPTIONS.contains).partition {
+      caseInsensitiveProps.filterNot(e => SPARK_TABLE_OPTIONS.contains(e._1)).partition {
         case (key, _) => key.startsWith(FlussConfigUtils.TABLE_PREFIX)
       }
 
