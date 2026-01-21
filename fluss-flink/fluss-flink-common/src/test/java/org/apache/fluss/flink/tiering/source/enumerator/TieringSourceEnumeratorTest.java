@@ -17,6 +17,9 @@
 
 package org.apache.fluss.flink.tiering.source.enumerator;
 
+import org.apache.flink.api.connector.source.SourceEvent;
+import org.apache.flink.api.connector.source.SplitsAssignment;
+import org.apache.flink.api.connector.source.mocks.MockSplitEnumeratorContext;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.tiering.event.FailedTieringEvent;
 import org.apache.fluss.flink.tiering.event.FinishedTieringEvent;
@@ -31,17 +34,11 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.messages.CommitLakeTableSnapshotRequest;
 import org.apache.fluss.rpc.messages.PbLakeTableOffsetForBucket;
 import org.apache.fluss.rpc.messages.PbLakeTableSnapshotInfo;
-
-import org.apache.flink.api.connector.source.SourceEvent;
-import org.apache.flink.api.connector.source.SplitsAssignment;
-import org.apache.flink.api.connector.source.mocks.MockSplitEnumeratorContext;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import javax.annotation.Nullable;
-
-import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
@@ -710,14 +707,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
 
     private TieringSourceEnumerator createTieringSourceEnumerator(
             Configuration flussConf, MockSplitEnumeratorContext<TieringSplit> context) {
-        return createTieringSourceEnumerator(flussConf, context, Duration.ofSeconds(10).toMillis());
-    }
-
-    private TieringSourceEnumerator createTieringSourceEnumerator(
-            Configuration flussConf,
-            MockSplitEnumeratorContext<TieringSplit> context,
-            long tieringTableDurationMaxMs) {
-        return new TieringSourceEnumerator(flussConf, context, 500, tieringTableDurationMaxMs);
+        return new TieringSourceEnumerator(flussConf, context, 500);
     }
 
     @Test
@@ -726,13 +716,10 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
         long tableId = createTable(tablePath, DEFAULT_LOG_TABLE_DESCRIPTOR);
         int numSubtasks = 2;
 
-        long tieringTableDurationMaxMs = Duration.ofMinutes(10).toMillis();
-
         try (FlussMockSplitEnumeratorContext<TieringSplit> context =
                         new FlussMockSplitEnumeratorContext<>(numSubtasks);
                 TieringSourceEnumerator enumerator =
-                        createTieringSourceEnumerator(
-                                flussConf, context, tieringTableDurationMaxMs); ) {
+                        createTieringSourceEnumerator(flussConf, context); ) {
             enumerator.start();
 
             // Register all readers
