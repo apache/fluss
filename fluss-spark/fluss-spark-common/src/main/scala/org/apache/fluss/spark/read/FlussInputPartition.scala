@@ -48,9 +48,12 @@ case class FlussAppendInputPartition(tableBucket: TableBucket) extends FlussInpu
  *   the snapshot ID to read from, -1 if no snapshot
  * @param logStartingOffset
  *   the log offset where incremental reading should start
+ * @param logStoppingOffset
+ *   the log offset where incremental reading should end
  */
 case class FlussUpsertInputPartition(
     tableBucket: TableBucket,
     snapshotId: Long,
-    logStartingOffset: Long)
+    logStartingOffset: Long,
+    logStoppingOffset: Long)
   extends FlussInputPartition

@@ -37,7 +37,7 @@ abstract class FlussPartitionReader(tablePath: TablePath, flussConfig: Configura
   protected val POLL_TIMEOUT: Duration = Duration.ofMillis(100)
   protected lazy val conn: Connection = ConnectionFactory.createConnection(flussConfig)
   protected lazy val table: Table = conn.getTable(tablePath)
-  protected lazy val tableInfo: TableInfo = conn.getAdmin.getTableInfo(tablePath).get()
+  protected lazy val tableInfo: TableInfo = table.getTableInfo
   protected val rowType: RowType = tableInfo.getRowType
 
   protected var currentRow: InternalRow = _

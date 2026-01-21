@@ -54,7 +54,7 @@ public class InternalRowUtils {
             GenericRow genericRow = new GenericRow(row.getFieldCount());
             for (int i = 0; i < row.getFieldCount(); i++) {
                 genericRow.setField(
-                        i, copyRow(fieldGetters[i].getFieldOrNull(row), rowType.getTypeAt(i)));
+                        i, copyValue(fieldGetters[i].getFieldOrNull(row), rowType.getTypeAt(i)));
             }
             return genericRow;
         }
@@ -86,7 +86,7 @@ public class InternalRowUtils {
         Object[] newArray = new Object[from.size()];
         for (int i = 0; i < newArray.length; ++i) {
             if (!from.isNullAt(i)) {
-                newArray[i] = copyRow(elementGetter.getElementOrNull(from, i), eleType);
+                newArray[i] = copyValue(elementGetter.getElementOrNull(from, i), eleType);
             } else {
                 newArray[i] = null;
             }
@@ -94,7 +94,7 @@ public class InternalRowUtils {
         return new GenericArray(newArray);
     }
 
-    public static InternalMap copyMap(InternalMap map, DataType keyType, DataType valueType) {
+    private static InternalMap copyMap(InternalMap map, DataType keyType, DataType valueType) {
         if (map instanceof BinaryMap) {
             return ((BinaryMap) map).copy();
         }
@@ -105,13 +105,13 @@ public class InternalRowUtils {
         InternalArray values = map.valueArray();
         for (int i = 0; i < keys.size(); i++) {
             newMap.put(
-                    copyRow(keyGetter.getElementOrNull(keys, i), keyType),
-                    copyRow(valueGetter.getElementOrNull(values, i), valueType));
+                    copyValue(keyGetter.getElementOrNull(keys, i), keyType),
+                    copyValue(valueGetter.getElementOrNull(values, i), valueType));
         }
         return new GenericMap(newMap);
     }
 
-    public static Object copyRow(Object o, DataType type) {
+    private static Object copyValue(Object o, DataType type) {
         if (o instanceof BinaryString) {
             return ((BinaryString) o).copy();
         } else if (o instanceof InternalRow) {
