@@ -25,6 +25,7 @@ import org.apache.fluss.types.RowType
 
 import org.apache.spark.sql.FlussIdentityTransform
 import org.apache.spark.sql.catalyst.util.CaseInsensitiveMap
+import org.apache.spark.sql.connector.catalog.TableChange
 import org.apache.spark.sql.connector.expressions.Transform
 import org.apache.spark.sql.types.StructType
 
@@ -96,5 +97,14 @@ object SparkConversions {
         throw new UnsupportedOperationException("Unsupported partition transform: " + p)
     }
     partitionKeys.toArray
+  }
+
+  def toFlussTableChanges(changes: Seq[TableChange]): Seq[org.apache.fluss.metadata.TableChange] = {
+    changes.map {
+      case e: TableChange.SetProperty =>
+        org.apache.fluss.metadata.TableChange.set(e.property(), e.value())
+      // TODO Add full support for table changes
+      case _ => throw new UnsupportedOperationException("Unsupported table change")
+    }
   }
 }
