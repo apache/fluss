@@ -83,19 +83,22 @@ import static org.apache.fluss.utils.concurrent.LockUtils.inLock;
  *    ▼       ▼
  *  ┌──────────┐ (lake freshness > tiering interval)
  *  │Scheduled ├──────┐
- *  └──────────┘      ▼
- *       ▲        ┌───────┐ (assign to tier service)  ┌───────┐
- *       |        |Pending├──────────────────────────►|Tiering├─┐
- *       |        └───────┘                           └───┬───┘ │
- *       |            ▲                 ┌─────────────────┘     │
- *       |            |                 | (timeout or failure)  | (finished)
- *       |            |                 ▼                       ▼
- *       |            |  (retry)   ┌─────────┐             ┌────────┐
- *       |            └────────────│ Failed  │             │ Tiered │
- *       |                         └─────────┘             └────┬───┘
- *       |                                                      |
- *       └──────────────────────────────────────────────────────┘
- *                   (ready for next round of tiering)
+ *  └─────▲────┘      ▼
+ *        │      ┌───────┐ (assign to tier service)  ┌───────┐
+ *        │      |Pending├──────────────────────────►|Tiering├─┐
+ *        │      └───▲───┘                           └───┬───┘ │
+ *        │          │                 ┌─────────────────┘     │
+ *        │          │                 | (timeout or failure)  | (finished)
+ *        │          │                 ▼                       ▼
+ *        │          │  (retry)   ┌─────────┐             ┌────────┐
+ *        │          │            │ Failed  │             │ Tiered │
+ *        │          │            └─────────┘             └───┬────┘
+ *        │          │                                        │
+ *        │          │ (force finished)                       │ (ready for next round)
+ *        │          └───────────────────────────────────────-┘
+ *        │                                                   │
+ *        └───────────────────────────────────────────────────┘
+ *                    (ready for next round of tiering)
  * }</pre>
  */
 public class LakeTableTieringManager implements AutoCloseable {
@@ -330,15 +333,20 @@ public class LakeTableTieringManager implements AutoCloseable {
                 });
     }
 
-    public void finishTableTiering(long tableId, long tieredEpoch) {
+    public void finishTableTiering(long tableId, long tieredEpoch, boolean isForceFinished) {
         inLock(
                 lock,
                 () -> {
                     validateTieringServiceRequest(tableId, tieredEpoch);
                     // to tiered state firstly
                     doHandleStateChange(tableId, TieringState.Tiered);
-                    // then to scheduled state to enable other tiering service can pick it
-                    doHandleStateChange(tableId, TieringState.Scheduled);
+                    if (isForceFinished) {
+                        // add to pending again since it's forced to finish
+                        doHandleStateChange(tableId, TieringState.Pending);
+                    } else {
+                        // then to scheduled state to enable other tiering service can pick it
+                        doHandleStateChange(tableId, TieringState.Scheduled);
+                    }
                 });
     }
 
@@ -420,7 +428,17 @@ public class LakeTableTieringManager implements AutoCloseable {
      * <p>Tiering -> Failed
      *
      * <p>-- When the tiering service timeout to report heartbeat or report failure for the table,
-     * do: transmit to Tiered state
+     * do: transmit to Failed state
+     *
+     * <p>Tiered -> Pending
+     *
+     * <p>-- When the tiering is force finished due to exceeding the specified tiering duration, do:
+     * transmit to Pending state to enable immediate re-tiering
+     *
+     * <p>Tiered -> Scheduled
+     *
+     * <p>-- When the tiering is normally finished, do: transmit to Scheduled state to wait for the
+     * next round of tiering
      */
     private void doHandleStateChange(long tableId, TieringState targetState) {
         TieringState currentState = tieringStates.get(tableId);
@@ -570,7 +588,7 @@ public class LakeTableTieringManager implements AutoCloseable {
         Pending {
             @Override
             public Set<TieringState> validPreviousStates() {
-                return EnumSet.of(Scheduled, Failed);
+                return EnumSet.of(Scheduled, Failed, Tiered);
             }
         },
         // When one tiering service is tiering the table, the state will be Tiering

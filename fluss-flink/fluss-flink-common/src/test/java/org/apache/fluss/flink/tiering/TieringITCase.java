@@ -44,7 +44,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
-import static org.apache.fluss.config.ConfigOptions.LAKE_TIERING_TABLE_MAX_DURATION;
 import static org.apache.fluss.testutils.common.CommonTestUtils.waitValue;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -75,7 +74,7 @@ class TieringITCase extends FlinkTieringTestBase {
         TablePath logTablePath = TablePath.of("fluss", "logtable");
         createTable(logTablePath, false);
         TablePath pkTablePath = TablePath.of("fluss", "pktable");
-        long pkTableId = createTable(pkTablePath, true);
+        createTable(pkTablePath, true);
 
         // write some records to log table
         List<InternalRow> rows = new ArrayList<>();
@@ -92,11 +91,10 @@ class TieringITCase extends FlinkTieringTestBase {
         }
         writeRows(pkTablePath, rows, false);
 
-        waitUntilSnapshot(pkTableId, 3, 0);
+        FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshot(pkTablePath);
 
         // set tiering duration to a small value for testing purpose
         Configuration lakeTieringConfig = new Configuration();
-        lakeTieringConfig.set(LAKE_TIERING_TABLE_MAX_DURATION, Duration.ofSeconds(1));
         JobClient jobClient = buildTieringJob(execEnv, lakeTieringConfig);
 
         try {
@@ -139,7 +137,7 @@ class TieringITCase extends FlinkTieringTestBase {
                 "Fail to wait for one round of tiering finish for table " + tablePath);
     }
 
-    private long createTable(TablePath tablePath, boolean isPrimaryKeyTable) throws Exception {
+    private void createTable(TablePath tablePath, boolean isPrimaryKeyTable) throws Exception {
         Schema.Builder schemaBuilder =
                 Schema.newBuilder().column("a", DataTypes.INT()).column("b", DataTypes.STRING());
         if (isPrimaryKeyTable) {
@@ -149,7 +147,7 @@ class TieringITCase extends FlinkTieringTestBase {
         // see TestingPaimonStoragePlugin#TestingPaimonWriter, we set write-pause
         // to 1s to make it easy to mock tiering reach max duration
         Map<String, String> customProperties = Collections.singletonMap("write-pause", "1s");
-        return createTable(
+        createTable(
                 tablePath,
                 3,
                 Collections.singletonList("a"),

@@ -17,9 +17,7 @@
 
 package org.apache.fluss.flink.tiering.source.enumerator;
 
-import org.apache.flink.api.connector.source.SourceEvent;
-import org.apache.flink.api.connector.source.SplitsAssignment;
-import org.apache.flink.api.connector.source.mocks.MockSplitEnumeratorContext;
+import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.tiering.event.FailedTieringEvent;
 import org.apache.fluss.flink.tiering.event.FinishedTieringEvent;
@@ -30,15 +28,22 @@ import org.apache.fluss.flink.tiering.source.split.TieringSnapshotSplit;
 import org.apache.fluss.flink.tiering.source.split.TieringSplit;
 import org.apache.fluss.flink.tiering.source.split.TieringSplitGenerator;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.messages.CommitLakeTableSnapshotRequest;
 import org.apache.fluss.rpc.messages.PbLakeTableOffsetForBucket;
 import org.apache.fluss.rpc.messages.PbLakeTableSnapshotInfo;
+
+import org.apache.flink.api.connector.source.SourceEvent;
+import org.apache.flink.api.connector.source.SplitsAssignment;
+import org.apache.flink.api.connector.source.mocks.MockSplitEnumeratorContext;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import javax.annotation.Nullable;
+
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
@@ -48,6 +53,7 @@ import java.util.stream.Collectors;
 
 import static org.apache.fluss.client.table.scanner.log.LogScanner.EARLIEST_OFFSET;
 import static org.apache.fluss.config.ConfigOptions.TABLE_AUTO_PARTITION_NUM_PRECREATE;
+import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Unit tests for {@link TieringSourceEnumerator} and {@link TieringSplitGenerator}. */
@@ -627,11 +633,16 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
 
             // readers failover again: Enumerator marks tablePath2 as failed and clears its splits
             // register readers and process split requests for attempt 2
-            registerReaderAndHandleSplitRequests(context, enumerator, 3, 2);
+            registerReaderAndHandleSplitRequests(context, enumerator, 2, 2);
 
             // now, should get no tiering split, since all pending split for tablePath1 and
-            // tablePath2 is clear
+            // tablePath2 is clear and there still one sub-task is not registered
             verifyTieringSplitAssignment(context, 0, tablePath2);
+
+            // register reader 2 again, should get tiering split for table1 since the failover is
+            // finished, and reader2 request tiering split
+            registerSingleReaderAndHandleSplitRequests(context, enumerator, 2, 2);
+            verifyTieringSplitAssignment(context, 3, tablePath1);
         }
     }
 
@@ -665,10 +676,19 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
             int numSubtasks,
             int attemptNumber) {
         for (int subtaskId = 0; subtaskId < numSubtasks; subtaskId++) {
-            context.registerSourceReader(subtaskId, attemptNumber, "localhost-" + subtaskId);
-            enumerator.addReader(subtaskId);
-            enumerator.handleSplitRequest(subtaskId, "localhost-" + subtaskId);
+            registerSingleReaderAndHandleSplitRequests(
+                    context, enumerator, subtaskId, attemptNumber);
         }
+    }
+
+    private void registerSingleReaderAndHandleSplitRequests(
+            FlussMockSplitEnumeratorContext<TieringSplit> context,
+            TieringSourceEnumerator enumerator,
+            int subtaskId,
+            int attemptNumber) {
+        context.registerSourceReader(subtaskId, attemptNumber, "localhost-" + subtaskId);
+        enumerator.addReader(subtaskId);
+        enumerator.handleSplitRequest(subtaskId, "localhost-" + subtaskId);
     }
 
     private void waitUntilTieringTableSplitAssignmentReady(
@@ -736,17 +756,20 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
             // Wait for initial assignment
             waitUntilTieringTableSplitAssignmentReady(context, 2, 200L);
 
-            // call handleTableTieringReachMaxDuration to mock tiering reach max duration
-            enumerator.handleTableTieringReachMaxDuration(tableId, 1);
-
-            // Verify that TieringReachMaxDurationEvent was sent to all readers
-            // Use reflection to access events sent to readers
-            Map<Integer, List<SourceEvent>> eventsToReaders = context.getSentSourceEvent();
-            assertThat(eventsToReaders).hasSize(numSubtasks);
-            for (Map.Entry<Integer, List<SourceEvent>> entry : eventsToReaders.entrySet()) {
-                assertThat(entry.getValue())
-                        .containsExactly(new TieringReachMaxDurationEvent(tableId));
-            }
+            retry(
+                    Duration.ofSeconds(30),
+                    () -> {
+                        // Verify that TieringReachMaxDurationEvent was sent to all readers
+                        // Use reflection to access events sent to readers
+                        Map<Integer, List<SourceEvent>> eventsToReaders =
+                                context.getSentSourceEvent();
+                        assertThat(eventsToReaders).hasSize(numSubtasks);
+                        for (Map.Entry<Integer, List<SourceEvent>> entry :
+                                eventsToReaders.entrySet()) {
+                            assertThat(entry.getValue())
+                                    .containsExactly(new TieringReachMaxDurationEvent(tableId));
+                        }
+                    });
 
             // clear split assignment
             context.getSplitsAssignmentSequence().clear();
@@ -762,6 +785,57 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
                     .forEach(a -> a.assignment().values().forEach(assignedSplits::addAll));
             assertThat(assignedSplits).hasSize(1);
             assertThat(assignedSplits.get(0).shouldSkipCurrentRound()).isTrue();
+
+            // alter table freshness to 10 min to make sure we won't assign in
+            // normal finish
+            conn.getAdmin()
+                    .alterTable(
+                            tablePath,
+                            Collections.singletonList(
+                                    TableChange.set(
+                                            ConfigOptions.TABLE_DATALAKE_FRESHNESS.key(), "10min")),
+                            false)
+                    .get();
+
+            // Mock tiering finished
+            // This simulates the reader finishing tiering after reaching max duration
+            enumerator.handleSourceEvent(0, new FinishedTieringEvent(tableId));
+
+            // Clear split assignment to prepare for next round
+            context.getSplitsAssignmentSequence().clear();
+
+            // Run periodic callable to trigger heartbeat, which will report force finish to
+            // coordinator
+            // The coordinator will move the table from Tiered to Pending state
+            if (!context.getPeriodicCallables().isEmpty()) {
+                context.runPeriodicCallable(0);
+            }
+
+            // Request table again - since the table was force finished, it should be immediately
+            // available in Pending state
+            for (int subTask = 0; subTask < numSubtasks; subTask++) {
+                enumerator.handleSplitRequest(subTask, "localhost-" + subTask);
+            }
+
+            // Run periodic callable again to request table from coordinator
+            if (!context.getPeriodicCallables().isEmpty()) {
+                context.runPeriodicCallable(0);
+            }
+
+            // The table should be immediately requested again (epoch should be 2)
+            // Wait for the table to be assigned again
+            waitUntilTieringTableSplitAssignmentReady(context, 2, 500L);
+
+            List<TieringSplit> reassignedSplits = new ArrayList<>();
+            context.getSplitsAssignmentSequence()
+                    .forEach(a -> a.assignment().values().forEach(reassignedSplits::addAll));
+            assertThat(reassignedSplits).hasSize(2);
+            // Verify that the table is requested again with a new epoch (epoch 2)
+            assertThat(reassignedSplits)
+                    .allMatch(
+                            split ->
+                                    split.getTableBucket().getTableId() == tableId
+                                            && !split.shouldSkipCurrentRound());
         }
     }
 }

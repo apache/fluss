@@ -17,13 +17,6 @@
 
 package org.apache.fluss.flink.tiering.source.enumerator;
 
-import org.apache.flink.api.connector.source.ReaderInfo;
-import org.apache.flink.api.connector.source.SourceEvent;
-import org.apache.flink.api.connector.source.SplitEnumerator;
-import org.apache.flink.api.connector.source.SplitEnumeratorContext;
-import org.apache.flink.api.java.tuple.Tuple3;
-import org.apache.flink.metrics.groups.SplitEnumeratorMetricGroup;
-import org.apache.flink.util.FlinkRuntimeException;
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.client.Connection;
 import org.apache.fluss.client.ConnectionFactory;
@@ -48,10 +41,19 @@ import org.apache.fluss.rpc.messages.PbHeartbeatReqForTable;
 import org.apache.fluss.rpc.messages.PbLakeTieringTableInfo;
 import org.apache.fluss.rpc.metrics.ClientMetricGroup;
 import org.apache.fluss.utils.MapUtils;
+
+import org.apache.flink.api.connector.source.ReaderInfo;
+import org.apache.flink.api.connector.source.SourceEvent;
+import org.apache.flink.api.connector.source.SplitEnumerator;
+import org.apache.flink.api.connector.source.SplitEnumeratorContext;
+import org.apache.flink.api.java.tuple.Tuple3;
+import org.apache.flink.metrics.groups.SplitEnumeratorMetricGroup;
+import org.apache.flink.util.FlinkRuntimeException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
+
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -102,7 +104,7 @@ public class TieringSourceEnumerator
 
     private final Map<Long, Long> tieringTableEpochs;
     private final Map<Long, Long> failedTableEpochs;
-    private final Map<Long, Long> finishedTableEpochs;
+    private final Map<Long, TieringFinishInfo> finishedTables;
     private final Set<Long> tieringReachMaxDurationsTables;
 
     // lazily instantiated
@@ -131,7 +133,7 @@ public class TieringSourceEnumerator
         this.pendingSplits = Collections.synchronizedList(new ArrayList<>());
         this.readersAwaitingSplit = Collections.synchronizedSet(new TreeSet<>());
         this.tieringTableEpochs = MapUtils.newConcurrentHashMap();
-        this.finishedTableEpochs = MapUtils.newConcurrentHashMap();
+        this.finishedTables = MapUtils.newConcurrentHashMap();
         this.failedTableEpochs = MapUtils.newConcurrentHashMap();
         this.tieringReachMaxDurationsTables = Collections.synchronizedSet(new TreeSet<>());
     }
@@ -179,8 +181,24 @@ public class TieringSourceEnumerator
         }
         LOG.info("TieringSourceReader {} requests split.", subtaskId);
         readersAwaitingSplit.add(subtaskId);
-        this.context.callAsync(
-                this::requestTieringTableSplitsViaHeartBeat, this::generateAndAssignSplits);
+
+        // If pending splits exist, assign them directly to the requesting reader
+        if (!pendingSplits.isEmpty()) {
+            assignSplits();
+        } else {
+            // Note: Ideally, only one table should be tiering at a time.
+            // Here we block to request a tiering table synchronously to avoid multiple threads
+            // requesting tiering tables concurrently, which would cause the enumerator to contain
+            // multiple tiering tables simultaneously. This is not optimal for tiering performance.
+            Tuple3<Long, Long, TablePath> tieringTable = null;
+            Throwable throwable = null;
+            try {
+                tieringTable = this.requestTieringTableSplitsViaHeartBeat();
+            } catch (Throwable t) {
+                throwable = t;
+            }
+            this.generateAndAssignSplits(tieringTable, throwable);
+        }
     }
 
     @Override
@@ -252,7 +270,9 @@ public class TieringSourceEnumerator
                         "The finished table {} is not in tiering table, won't report it to Fluss to mark as finished.",
                         finishedTableId);
             } else {
-                finishedTableEpochs.put(finishedTableId, tieringEpoch);
+                boolean isForceFinished = tieringReachMaxDurationsTables.remove(finishedTableId);
+                finishedTables.put(
+                        finishedTableId, TieringFinishInfo.from(tieringEpoch, isForceFinished));
             }
         }
 
@@ -274,7 +294,7 @@ public class TieringSourceEnumerator
             }
         }
 
-        if (!finishedTableEpochs.isEmpty() || !failedTableEpochs.isEmpty()) {
+        if (!finishedTables.isEmpty() || !failedTableEpochs.isEmpty()) {
             // call one round of heartbeat to notify table has been finished or failed
             this.context.callAsync(
                     this::requestTieringTableSplitsViaHeartBeat, this::generateAndAssignSplits);
@@ -288,6 +308,7 @@ public class TieringSourceEnumerator
         // we need to make all as failed
         failedTableEpochs.putAll(new HashMap<>(tieringTableEpochs));
         tieringTableEpochs.clear();
+        tieringReachMaxDurationsTables.clear();
         // also clean all pending splits since we mark all as failed
         pendingSplits.clear();
         if (!failedTableEpochs.isEmpty()) {
@@ -298,10 +319,11 @@ public class TieringSourceEnumerator
     }
 
     @VisibleForTesting
-    protected void handleTableTieringReachMaxDuration(long tableId, long tieringEpoch) {
+    protected void handleTableTieringReachMaxDuration(
+            TablePath tablePath, long tableId, long tieringEpoch) {
         Long currentEpoch = tieringTableEpochs.get(tableId);
         if (currentEpoch != null && currentEpoch.equals(tieringEpoch)) {
-            LOG.info("Table {} reached max duration. Force completing.", tableId);
+            LOG.info("Table {}-{} reached max duration. Force completing.", tablePath, tableId);
             tieringReachMaxDurationsTables.add(tableId);
 
             for (TieringSplit tieringSplit : pendingSplits) {
@@ -309,11 +331,6 @@ public class TieringSourceEnumerator
                     // mark this tiering split to skip the current round since the tiering for
                     // this table has timed out, so the tiering source reader can skip them directly
                     tieringSplit.skipCurrentRound();
-                } else {
-                    // we can break directly, if found any one split's table id is not equal to the
-                    // timeout
-                    // table, the following split must be not equal to the table id
-                    break;
                 }
             }
 
@@ -362,13 +379,13 @@ public class TieringSourceEnumerator
         if (closed) {
             return null;
         }
-        Map<Long, Long> currentFinishedTableEpochs = new HashMap<>(this.finishedTableEpochs);
+        Map<Long, TieringFinishInfo> currentFinishedTables = new HashMap<>(this.finishedTables);
         Map<Long, Long> currentFailedTableEpochs = new HashMap<>(this.failedTableEpochs);
         LakeTieringHeartbeatRequest tieringHeartbeatRequest =
                 tieringTableHeartBeat(
                         basicHeartBeat(),
                         this.tieringTableEpochs,
-                        currentFinishedTableEpochs,
+                        currentFinishedTables,
                         currentFailedTableEpochs,
                         this.flussCoordinatorEpoch);
 
@@ -397,9 +414,9 @@ public class TieringSourceEnumerator
             waitHeartbeatResponse(coordinatorGateway.lakeTieringHeartbeat(tieringHeartbeatRequest));
         }
 
-        // if come to here, we can remove currentFinishedTableEpochs/failedTableEpochs to avoid send
+        // if come to here, we can remove currentFinishedTables/failedTableEpochs to avoid send
         // in next round
-        currentFinishedTableEpochs.forEach(finishedTableEpochs::remove);
+        currentFinishedTables.forEach(finishedTables::remove);
         currentFailedTableEpochs.forEach(failedTableEpochs::remove);
         return lakeTieringInfo;
     }
@@ -428,7 +445,7 @@ public class TieringSourceEnumerator
                 LOG.info(
                         "Generate Tiering splits for table {} is empty, no need to tier data.",
                         tieringTable.f2.getTableName());
-                finishedTableEpochs.put(tieringTable.f0, tieringTable.f1);
+                finishedTables.put(tieringTable.f0, TieringFinishInfo.from(tieringTable.f1));
             } else {
                 tieringTableEpochs.put(tieringTable.f0, tieringTable.f1);
                 pendingSplits.addAll(tieringSplits);
@@ -438,7 +455,9 @@ public class TieringSourceEnumerator
                                 context.runInCoordinatorThread(
                                         () ->
                                                 handleTableTieringReachMaxDuration(
-                                                        tieringTable.f0, tieringTable.f1)),
+                                                        tablePath,
+                                                        tieringTable.f0,
+                                                        tieringTable.f1)),
 
                         // for simplicity, we use the freshness as
                         tableInfo.getTableConfig().getDataLakeFreshness().toMillis(),
@@ -537,16 +556,28 @@ public class TieringSourceEnumerator
         static LakeTieringHeartbeatRequest tieringTableHeartBeat(
                 LakeTieringHeartbeatRequest heartbeatRequest,
                 Map<Long, Long> tieringTableEpochs,
-                Map<Long, Long> finishedTableEpochs,
+                Map<Long, TieringFinishInfo> finishedTables,
                 Map<Long, Long> failedTableEpochs,
                 int coordinatorEpoch) {
             if (!tieringTableEpochs.isEmpty()) {
                 heartbeatRequest.addAllTieringTables(
                         toPbHeartbeatReqForTable(tieringTableEpochs, coordinatorEpoch));
             }
-            if (!finishedTableEpochs.isEmpty()) {
+            if (!finishedTables.isEmpty()) {
+                Map<Long, Long> finishTieringEpochs = new HashMap<>();
+                Set<Long> forceFinishedTables = new HashSet<>();
+                finishedTables.forEach(
+                        (tableId, tieringFinishInfo) -> {
+                            finishTieringEpochs.put(tableId, tieringFinishInfo.tieringEpoch);
+                            if (tieringFinishInfo.isForceFinished) {
+                                forceFinishedTables.add(tableId);
+                            }
+                        });
                 heartbeatRequest.addAllFinishedTables(
-                        toPbHeartbeatReqForTable(finishedTableEpochs, coordinatorEpoch));
+                        toPbHeartbeatReqForTable(finishTieringEpochs, coordinatorEpoch));
+                for (long forceFinishedTableId : forceFinishedTables) {
+                    heartbeatRequest.addForceFinishedTable(forceFinishedTableId);
+                }
             }
             // add failed tiering table to heart beat request
             return failedTableHeartBeat(heartbeatRequest, failedTableEpochs, coordinatorEpoch);
@@ -588,6 +619,31 @@ public class TieringSourceEnumerator
                 LOG.error("Failed to wait heartbeat response due to ", e);
                 throw new FlinkRuntimeException("Failed to wait heartbeat response due to ", e);
             }
+        }
+    }
+
+    private static class TieringFinishInfo {
+        /** The epoch of the tiering operation for this table. */
+        long tieringEpoch;
+
+        /**
+         * Whether this table was force finished due to reaching the maximum tiering duration. When
+         * a table's tiering operation exceeds the max duration (data lake freshness), it will be
+         * force finished to prevent it from blocking other tables' tiering operations.
+         */
+        boolean isForceFinished;
+
+        public static TieringFinishInfo from(long tieringEpoch) {
+            return new TieringFinishInfo(tieringEpoch, false);
+        }
+
+        public static TieringFinishInfo from(long tieringEpoch, boolean isForceFinished) {
+            return new TieringFinishInfo(tieringEpoch, isForceFinished);
+        }
+
+        private TieringFinishInfo(long tieringEpoch, boolean isForceFinished) {
+            this.tieringEpoch = tieringEpoch;
+            this.isForceFinished = isForceFinished;
         }
     }
 }

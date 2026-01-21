@@ -170,13 +170,6 @@ class FlinkTieringTestBase {
         }
     }
 
-    protected void waitUntilSnapshot(long tableId, int bucketNum, long snapshotId) {
-        for (int i = 0; i < bucketNum; i++) {
-            TableBucket tableBucket = new TableBucket(tableId, i);
-            FLUSS_CLUSTER_EXTENSION.waitUntilSnapshotFinished(tableBucket, snapshotId);
-        }
-    }
-
     public List<InternalRow> getValuesRecords(TablePath tablePath) {
         return TestingValuesLake.getResults(tablePath.toString());
     }
