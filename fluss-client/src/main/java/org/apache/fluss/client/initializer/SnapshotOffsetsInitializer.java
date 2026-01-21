@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.flink.source.enumerator.initializer;
+package org.apache.fluss.client.initializer;
 
 import javax.annotation.Nullable;
 
@@ -23,24 +23,24 @@ import java.util.Collection;
 import java.util.Map;
 
 /**
- * An implementation of {@link OffsetsInitializer} to initialize the offsets based on a timestamp.
+ * An implementation of {@link OffsetsInitializer} which initializes the offsets.
+ *
+ * <p>If the user don't specify the offsets for a bucket, the initial offset of the bucket will be
+ * the earliest offset.
  *
  * <p>Package private and should be instantiated via {@link OffsetsInitializer}.
  */
-public class TimestampOffsetsInitializer implements OffsetsInitializer {
-    private static final long serialVersionUID = 2932230571773627233L;
+public class SnapshotOffsetsInitializer implements OffsetsInitializer {
+    private static final long serialVersionUID = 1649702397250402877L;
 
-    private final long timestamp;
-
-    public TimestampOffsetsInitializer(long timestamp) {
-        this.timestamp = timestamp;
-    }
-
+    /**
+     * For table with primary key. This method will be invoked only when the kv snapshot not exists.
+     */
     @Override
     public Map<Integer, Long> getBucketOffsets(
             @Nullable String partitionName,
             Collection<Integer> buckets,
             BucketOffsetsRetriever bucketOffsetsRetriever) {
-        return bucketOffsetsRetriever.offsetsFromTimestamp(partitionName, buckets, timestamp);
+        return bucketOffsetsRetriever.earliestOffsets(partitionName, buckets);
     }
 }

@@ -17,12 +17,12 @@
 
 package org.apache.fluss.flink.source;
 
+import org.apache.fluss.client.initializer.OffsetsInitializer;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.source.deserializer.DeserializerInitContextImpl;
 import org.apache.fluss.flink.source.deserializer.FlussDeserializationSchema;
 import org.apache.fluss.flink.source.emitter.FlinkRecordEmitter;
 import org.apache.fluss.flink.source.enumerator.FlinkSourceEnumerator;
-import org.apache.fluss.flink.source.enumerator.initializer.OffsetsInitializer;
 import org.apache.fluss.flink.source.metrics.FlinkSourceReaderMetrics;
 import org.apache.fluss.flink.source.reader.FlinkSourceReader;
 import org.apache.fluss.flink.source.reader.RecordAndPos;

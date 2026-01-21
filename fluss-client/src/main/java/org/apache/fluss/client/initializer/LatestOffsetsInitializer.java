@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.flink.source.enumerator.initializer;
+package org.apache.fluss.client.initializer;
 
 import javax.annotation.Nullable;
 
@@ -23,24 +23,19 @@ import java.util.Collection;
 import java.util.Map;
 
 /**
- * An implementation of {@link OffsetsInitializer} which initializes the offsets.
- *
- * <p>If the user don't specify the offsets for a bucket, the initial offset of the bucket will be
- * the earliest offset.
+ * An implementation of {@link OffsetsInitializer} to initialize the offsets based on a
+ * latest-offset.
  *
  * <p>Package private and should be instantiated via {@link OffsetsInitializer}.
  */
-public class SnapshotOffsetsInitializer implements OffsetsInitializer {
-    private static final long serialVersionUID = 1649702397250402877L;
+public class LatestOffsetsInitializer implements OffsetsInitializer {
+    private static final long serialVersionUID = 3014700244733286989L;
 
-    /**
-     * For table with primary key. This method will be invoked only when the kv snapshot not exists.
-     */
     @Override
     public Map<Integer, Long> getBucketOffsets(
             @Nullable String partitionName,
             Collection<Integer> buckets,
             BucketOffsetsRetriever bucketOffsetsRetriever) {
-        return bucketOffsetsRetriever.earliestOffsets(partitionName, buckets);
+        return bucketOffsetsRetriever.latestOffsets(partitionName, buckets);
     }
 }

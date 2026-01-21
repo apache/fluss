@@ -15,11 +15,10 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.flink.source.enumerator.initializer;
+package org.apache.fluss.client.initializer;
 
 import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.client.admin.OffsetSpec;
-import org.apache.fluss.flink.source.split.SourceSplitBase;
 import org.apache.fluss.metadata.TablePath;
 
 import javax.annotation.Nullable;
@@ -28,7 +27,7 @@ import java.io.Serializable;
 import java.util.Collection;
 import java.util.Map;
 
-/** An interface for users to specify the starting offset of a {@link SourceSplitBase}. */
+/** An interface for users to specify the starting offset. */
 public interface OffsetsInitializer extends Serializable {
 
     /**

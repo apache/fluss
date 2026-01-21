@@ -36,6 +36,12 @@ public interface LogScanner extends AutoCloseable {
     long EARLIEST_OFFSET = -2L;
 
     /**
+     * The latest offset to fetch to. Fluss uses this to indicate the default stopping offset for
+     * unbounded Fluss sources.
+     */
+    long NO_STOPPING_OFFSET = Long.MIN_VALUE;
+
+    /**
      * Poll log data from tablet server.
      *
      * <p>On each poll, scanner will try to use the last scanned offset as the starting offset and

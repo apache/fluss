@@ -18,9 +18,9 @@
 package org.apache.fluss.flink.source;
 
 import org.apache.fluss.annotation.VisibleForTesting;
+import org.apache.fluss.client.initializer.OffsetsInitializer;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.source.deserializer.FlussDeserializationSchema;
-import org.apache.fluss.flink.source.enumerator.initializer.OffsetsInitializer;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.types.RowType;
 
