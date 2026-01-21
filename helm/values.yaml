@@ -27,11 +27,6 @@ image:
   pullPolicy: IfNotPresent
   pullSecrets: []
 
-appConfig:
-  internalPort: 9123
-  externalPort: 9124
-
-
 # Fluss server configuration options
 configurationOverrides:
   default.bucket.number: 3
@@ -104,10 +99,9 @@ resources: {}
 
 serviceAccount:
   create: false
-  # If not set and create is true, a name is generated using the fullname template
+  # If not set and create is true, a name is generated using the `fullname` template
   name: ""
-  # Additional annotations to apply to the ServiceAccount.
-  # These can be useful, for example, to support integrations like workload identity.
+  # Additional annotations to apply to the ServiceAccount
   annotations: {}
 
 rbac:
@@ -116,13 +110,9 @@ rbac:
 sasl:
   enabled: false
   mechanism: PLAIN
-  # List of users for PLAIN authentication
-  # Used to generate the JAAS config for the server
+  # List of client users for authentication
   users:
     - username: admin
       password: password
-  # If specified, the existing secret must contain a key 'jaas.conf' with the JAAS configuration
+  # If specified, the existing secret must contain a key `jaas.conf` with the JAAS configuration
   existingSecret: ""
-  # If specified, this content will be used for the JAAS configuration instead of generating it from 'users'
-  jaasConfig: ""
-

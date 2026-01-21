@@ -200,6 +200,15 @@ The following table lists the configurable parameters of the Fluss chart and the
 | `configurationOverrides.data.dir` | Local data directory | `/tmp/fluss/data` |
 | `configurationOverrides.internal.listener.name` | Internal listener name | `INTERNAL` |
 
+### SASL Parameters
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `sasl.enabled` | Enable SASL authentication | `false` |
+| `sasl.mechanism` | SASL mechanism | `PLAIN` |
+| `sasl.users` | User list for PLAIN authentication | `[{username: admin, password: password}]` |
+| `sasl.existingSecret` | Use existing secret containing `jaas.conf` | `""` |
+
 ### External Access Parameters
 
 | Parameter | Description | Default |
@@ -208,8 +217,10 @@ The following table lists the configurable parameters of the Fluss chart and the
 | `externalAccess.service.type` | Service type (only `LoadBalancer` supported) | `LoadBalancer` |
 | `externalAccess.service.allowedSourceRanges` | Allowed source IP ranges | `nil` |
 | `externalAccess.service.annotations` | Service annotations | `{}` |
+| `externalAccess.initContainer.image.registry` | Init container image registry | `docker.io` |
 | `externalAccess.initContainer.image.repository` | Init container image repository | `bitnami/kubectl` |
-| `externalAccess.initContainer.image.tag` | Init container image tag | `1.30.0` |
+| `externalAccess.initContainer.image.tag` | Init container image tag | `latest` |
+| `externalAccess.initContainer.image.pullPolicy` | Init container image pull policy | `IfNotPresent` |
 
 ### Persistence Parameters
 
@@ -232,6 +243,14 @@ The following table lists the configurable parameters of the Fluss chart and the
 | `resources.tabletServer.limits.cpu` | CPU limits for tablet servers | Not set |
 | `resources.tabletServer.limits.memory` | Memory limits for tablet servers | Not set |
 
+### RBAC and Service Account
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `serviceAccount.create` | Create a service account for the chart | `false` |
+| `serviceAccount.name` | Service account name (auto-generated if empty and create=true) | `""` |
+| `serviceAccount.annotations` | Extra annotations for the service account | `{}` |
+| `rbac.create` | Create RBAC resources required for external access discovery | `false` |
 
 ## Advanced Configuration
 
@@ -253,7 +272,7 @@ The chart automatically configures listeners for internal cluster communication 
 - **Client Port (9124)**: Used for client connections
 - **External Port (9125)**: Used for external access if enabled
 
-Custom listener and external access configuration:
+Listeners configuration:
 
 ```yaml
 listeners:
@@ -271,6 +290,54 @@ externalAccess:
     annotations:
       service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
 ```
+
+### External Access to Fluss Cluster
+
+To enable the external access to the Fluss clusters an additional service should be enabled.
+
+At the moment, only the `LoadBalancer` service is supported.
+
+To enable external access, add the following values:
+
+```yaml
+externalAccess:
+  enabled: true
+  service:
+    type: LoadBalancer
+    annotations:
+      service.beta.kubernetes.io/aws-load-balancer-type: "external"
+
+rbac:
+  create: true
+```
+
+For this option we need to create `RBAC` so that the service metadata could be obtained before starting the stateful sets.
+
+### Enable Secure Connection to Fluss
+
+With the helm deployment, you can specify authentication protocols when connecting to the Fluss cluster.
+
+The following table shows the currently supported protocols and security they provide:
+
+| Method      | Authentication | TLS Encryption     |
+|-------------|:--------------:|:------------------:|
+| `PLAINTEXT` | No             | No                 |
+| `SASL`      | Yes            | No                 |
+
+By default the `PLAINTEXT` protocol is used.
+
+To enable SASL protocol with `PLAIN` authentication, add the following values:
+
+```yaml
+sasl:
+  enabled: true
+  mechanism: PLAIN
+  users:
+    - username: admin
+      password: password
+```
+
+The `users` defines comma-separated list of usernames and passwords for client communications when SASL is enabled.
 
 ### Storage Configuration
 
