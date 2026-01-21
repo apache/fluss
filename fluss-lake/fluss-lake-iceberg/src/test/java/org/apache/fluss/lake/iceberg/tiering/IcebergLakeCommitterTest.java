@@ -79,97 +79,6 @@ class IcebergLakeCommitterTest {
         icebergCatalog = catalogProvider.get();
     }
 
-    /**
-     * Reproduces the rewrite conflict bug documented in GitHub issue #2420.
-     *
-     * <p>This test reproduces the scenario from IcebergRewriteITCase where PK table writes with
-     * auto-compaction enabled cause blocking. The flow is:
-     *
-     * <ol>
-     *   <li>IcebergLakeWriter writes data to a PK table, generating delete files for updates
-     *   <li>Auto-compaction runs concurrently, producing RewriteDataFileResult
-     *   <li>complete() combines both: WriteResult (data + delete files) + RewriteDataFileResult
-     *   <li>IcebergLakeCommitter.commit() receives both in the same cycle
-     * </ol>
-     *
-     * <p>Bug behavior: RowDelta commits first (because delete files are present), advancing the
-     * snapshot from N to N+1. The rewrite then calls validateFromSnapshot(N), but N is now stale.
-     * Iceberg's retry loop detects the mismatch and retries, but the conflict is permanent because
-     * the validation snapshot is fixed. With default Iceberg settings
-     * (commit.retry.total-timeout-ms = 30 minutes), this causes blocking for 15+ minutes before
-     * failing.
-     */
-    @Test
-    void testRewriteFailsWhenDeleteFilesAddedInSameCycle() throws Exception {
-        // Create table and seed with initial data files
-        TablePath tablePath = TablePath.of("iceberg", "conflict_test_table");
-        createTable(tablePath);
-        Table icebergTable = icebergCatalog.loadTable(toIceberg(tablePath));
-        int bucket = 0;
-
-        // Write 3 initial data files that will be the target of the rewrite
-        appendDataFiles(icebergTable, 3, 10, 0, bucket);
-        icebergTable.refresh();
-
-        int initialFileCount = countDataFiles(icebergTable);
-        assertThat(initialFileCount).isEqualTo(3);
-
-        // Capture the current snapshot ID - this is what the rewrite will validate against
-        long rewriteSnapshotId = icebergTable.currentSnapshot().snapshotId();
-
-        // Collect the data files to be rewritten and get one to reference in delete file
-        DataFileSet filesToDelete = DataFileSet.create();
-        DataFile firstDataFile = null;
-        for (FileScanTask task : icebergTable.newScan().planFiles()) {
-            filesToDelete.add(task.file());
-            if (firstDataFile == null) {
-                firstDataFile = task.file();
-            }
-        }
-        assertThat(filesToDelete).hasSize(3);
-        assertThat(firstDataFile).isNotNull();
-
-        // Create the rewrite result: compacting the 3 files into 1
-        DataFileSet filesToAdd = DataFileSet.create();
-        filesToAdd.add(writeDataFile(icebergTable, 30, 0, bucket));
-
-        RewriteDataFileResult rewriteResult =
-                new RewriteDataFileResult(rewriteSnapshotId, filesToDelete, filesToAdd);
-
-        // Create a delete file that references one of the data files being rewritten
-        // IMPORTANT: when RowDelta commits this delete file, it will conflict with the rewrite's
-        // validation
-        // since the file now has pending deletes
-        DeleteFile deleteFile =
-                createDeleteFile(icebergTable, firstDataFile.partition(), firstDataFile.location());
-
-        // Create new data file to include in the commit
-        DataFile newDataFile = writeDataFile(icebergTable, 5, 100, bucket);
-
-        // Build a committable with data file, delete file, AND rewrite results
-        // The presence of delete file triggers RowDelta path which commits first
-        IcebergCommittable committable =
-                IcebergCommittable.builder()
-                        .addDataFile(newDataFile)
-                        .addDeleteFile(deleteFile)
-                        .addRewriteDataFileResult(rewriteResult)
-                        .build();
-
-        // Perform the commit operation (to trigger the bug)
-        IcebergLakeCommitter committer = new IcebergLakeCommitter(catalogProvider, tablePath);
-        committer.commit(committable, Collections.emptyMap());
-        committer.close();
-
-        // Verify that the rewrite will _silently_ resulting in the incorrect file counts
-        icebergTable.refresh();
-        int finalFileCount = countDataFiles(icebergTable);
-        assertThat(finalFileCount)
-                .as(
-                        "Rewrite failed silently. Expecting 4 files "
-                                + "(3 original + 1 new) to demonstrate bug, should otherwise be 2 (due to compaction).")
-                .isEqualTo(4);
-    }
-
     @Test
     void testRewriteWithDataFilesSucceeds() throws Exception {
         // Create table with minimal retry configuration to fail fast instead of blocking
@@ -288,7 +197,6 @@ class IcebergLakeCommitterTest {
         committer.close();
     }
 
-    /** Tests that committing data files with delete files (no rewrite) succeeds. */
     @Test
     void testCommitWithDeleteFilesSucceeds() throws Exception {
         TablePath tablePath = TablePath.of("iceberg", "data_delete_table");
@@ -324,6 +232,75 @@ class IcebergLakeCommitterTest {
         assertThat(finalFileCount).isEqualTo(2);
 
         committer.close();
+    }
+
+    @Test
+    void testRewriteWithDeleteFilesInSameCycleSucceeds() throws Exception {
+        // Create table and seed with initial data files
+        TablePath tablePath = TablePath.of("iceberg", "conflict_test_table");
+        createTable(tablePath);
+        Table icebergTable = icebergCatalog.loadTable(toIceberg(tablePath));
+        int bucket = 0;
+
+        // Write 3 initial data files that will be the target of the rewrite
+        appendDataFiles(icebergTable, 3, 10, 0, bucket);
+        icebergTable.refresh();
+
+        int initialFileCount = countDataFiles(icebergTable);
+        assertThat(initialFileCount).isEqualTo(3);
+
+        // Capture the current snapshot ID - this is what the rewrite will validate against
+        long rewriteSnapshotId = icebergTable.currentSnapshot().snapshotId();
+
+        // Collect the data files to be rewritten and get one to reference in delete file
+        DataFileSet filesToDelete = DataFileSet.create();
+        DataFile firstDataFile = null;
+        for (FileScanTask task : icebergTable.newScan().planFiles()) {
+            filesToDelete.add(task.file());
+            if (firstDataFile == null) {
+                firstDataFile = task.file();
+            }
+        }
+        assertThat(filesToDelete).hasSize(3);
+        assertThat(firstDataFile).isNotNull();
+
+        // Create the rewrite result: compacting the 3 files into 1
+        DataFileSet filesToAdd = DataFileSet.create();
+        filesToAdd.add(writeDataFile(icebergTable, 30, 0, bucket));
+
+        RewriteDataFileResult rewriteResult =
+                new RewriteDataFileResult(rewriteSnapshotId, filesToDelete, filesToAdd);
+
+        // Create a delete file that references one of the data files being rewritten
+        // IMPORTANT: when RowDelta commits this delete file, it will conflict with the rewrite's
+        // validation
+        // since the file now has pending deletes
+        DeleteFile deleteFile =
+                createDeleteFile(icebergTable, firstDataFile.partition(), firstDataFile.location());
+
+        // Create new data file to include in the commit
+        DataFile newDataFile = writeDataFile(icebergTable, 5, 100, bucket);
+
+        // Build a committable with data file, delete file, AND rewrite results
+        // The presence of delete file triggers RowDelta path which commits first
+        IcebergCommittable committable =
+                IcebergCommittable.builder()
+                        .addDataFile(newDataFile)
+                        .addDeleteFile(deleteFile)
+                        .addRewriteDataFileResult(rewriteResult)
+                        .build();
+
+        // Perform the commit operation
+        IcebergLakeCommitter committer = new IcebergLakeCommitter(catalogProvider, tablePath);
+        committer.commit(committable, Collections.emptyMap());
+        committer.close();
+
+        // Verify that rewrite succeeded
+        icebergTable.refresh();
+        int finalFileCount = countDataFiles(icebergTable);
+        assertThat(finalFileCount)
+                .as("Rewrite should succeed with delete files present - got %d files", finalFileCount)
+                .isEqualTo(2);
     }
 
     // Helper methods
