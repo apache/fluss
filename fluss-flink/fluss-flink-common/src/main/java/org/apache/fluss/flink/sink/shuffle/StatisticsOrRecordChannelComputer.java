@@ -187,12 +187,10 @@ public class StatisticsOrRecordChannelComputer<InputT>
         String currentKey = null;
         long keyRemainingWeight = 0L;
         long subtaskRemainingWeight = targetWeightPerSubtask;
-        // todo: 计算assigned 的 subtasks 列表，并计算每个subtask的 weight
         List<Integer> assignedSubtasks = new ArrayList<>();
         List<Long> subtaskWeights = new ArrayList<>();
         while (mapKeyIterator.hasNext() || currentKey != null) {
             // This should never happen because target weight is calculated using ceil function.
-            // todo: numPartitions是下游的所有id
             if (subtaskId >= downstreamParallelism) {
                 LOG.error(
                         "Internal algorithm error: exhausted subtasks with unassigned keys left. number of partitions: {}, "
