@@ -27,6 +27,7 @@ import org.apache.flink.core.execution.JobClient;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 
 import java.util.Map;
+import java.util.ServiceLoader;
 
 import static org.apache.flink.runtime.executiongraph.failover.FailoverStrategyFactoryLoader.FULL_RESTART_STRATEGY_NAME;
 import static org.apache.fluss.flink.tiering.source.TieringSourceOptions.DATA_LAKE_CONFIG_PREFIX;
@@ -39,10 +40,9 @@ import static org.apache.fluss.utils.PropertiesUtils.extractPrefix;
  * <p>This class is responsible for parsing configuration parameters, initializing the Flink
  * execution environment, and coordinating the construction of the tiering pipeline.
  *
- * <p>Design Motivation: By decoupling the logic from {@link FlussLakeTieringEntrypoint} into this
- * class, extensibility is significantly improved. Developers can now extend this class to customize
- * configuration extraction (e.g., injecting internal security tokens) without duplicating the core
- * entrypoint boilerplate.
+ * <p>Extensibility: Customization of Flink execution environment and configurations is supported
+ * through the {@link LakeTieringDecoratorPlugin} SPI mechanism. Different environments (e.g.,
+ * internal vs. public cloud) can provide their own decorator implementations.
  */
 public class FlussLakeTiering {
 
@@ -51,9 +51,9 @@ public class FlussLakeTiering {
 
     protected final StreamExecutionEnvironment execEnv;
     protected final String dataLake;
-    protected final Map<String, String> flussConfigMap;
-    protected final Map<String, String> lakeConfigMap;
-    protected final Map<String, String> lakeTieringConfigMap;
+    protected final Configuration flussConfig;
+    protected final Configuration lakeConfig;
+    protected final Configuration lakeTieringConfig;
 
     public FlussLakeTiering(String[] args) {
         // parse params
@@ -61,7 +61,7 @@ public class FlussLakeTiering {
         Map<String, String> paramsMap = params.toMap();
 
         // extract fluss config
-        flussConfigMap = extractAndRemovePrefix(paramsMap, FLUSS_CONF_PREFIX);
+        Map<String, String> flussConfigMap = extractAndRemovePrefix(paramsMap, FLUSS_CONF_PREFIX);
         // we need to get bootstrap.servers
         String bootstrapServers = flussConfigMap.get(ConfigOptions.BOOTSTRAP_SERVERS.key());
         if (bootstrapServers == null) {
@@ -70,6 +70,7 @@ public class FlussLakeTiering {
                             "The bootstrap server to fluss is not configured, please configure %s",
                             FLUSS_CONF_PREFIX + ConfigOptions.BOOTSTRAP_SERVERS.key()));
         }
+        this.flussConfig = Configuration.fromMap(flussConfigMap);
 
         dataLake = paramsMap.get(ConfigOptions.DATALAKE_FORMAT.key());
         if (dataLake == null) {
@@ -78,12 +79,15 @@ public class FlussLakeTiering {
         }
 
         // extract lake config
-        lakeConfigMap =
+        Map<String, String> lakeConfigMap =
                 extractAndRemovePrefix(
                         paramsMap, String.format("%s%s.", DATA_LAKE_CONFIG_PREFIX, dataLake));
+        this.lakeConfig = Configuration.fromMap(lakeConfigMap);
 
         // extract tiering service config
-        lakeTieringConfigMap = extractPrefix(paramsMap, LAKE_TIERING_CONFIG_PREFIX);
+        Map<String, String> lakeTieringConfigMap =
+                extractPrefix(paramsMap, LAKE_TIERING_CONFIG_PREFIX);
+        this.lakeTieringConfig = Configuration.fromMap(lakeTieringConfigMap);
 
         // now, we must use full restart strategy if any task is failed,
         // since committer is stateless, if tiering committer is failover, committer
@@ -97,18 +101,40 @@ public class FlussLakeTiering {
     }
 
     protected void run() throws Exception {
+        // Load and apply all available decorator plugins
+        loadAndApplyDecoratorPlugins();
+
         // build and run lake tiering job
         JobClient jobClient =
                 LakeTieringJobBuilder.newBuilder(
-                                execEnv,
-                                Configuration.fromMap(flussConfigMap),
-                                Configuration.fromMap(lakeConfigMap),
-                                Configuration.fromMap(lakeTieringConfigMap),
-                                dataLake)
+                                execEnv, flussConfig, lakeConfig, lakeTieringConfig, dataLake)
                         .build();
 
         System.out.printf(
                 "Starting data tiering service from Fluss to %s, jobId is %s.....%n",
                 dataLake, jobClient.getJobID());
+    }
+
+    /**
+     * Loads all available {@link LakeTieringDecoratorPlugin} implementations and applies their
+     * decorators in sequence.
+     *
+     * <p>All available plugins will be loaded and their decorators will be called in the order they
+     * are discovered by the ServiceLoader. This allows multiple decorators to be applied
+     * sequentially, where each decorator can further customize the Flink execution environment and
+     * configurations.
+     */
+    protected void loadAndApplyDecoratorPlugins() {
+        ServiceLoader<LakeTieringDecoratorPlugin> serviceLoader =
+                ServiceLoader.load(
+                        LakeTieringDecoratorPlugin.class,
+                        LakeTieringDecoratorPlugin.class.getClassLoader());
+        for (LakeTieringDecoratorPlugin plugin : serviceLoader) {
+            String identifier = plugin.identifier();
+            System.out.printf(
+                    "Applying LakeTieringDecoratorPlugin with identifier: %s%n", identifier);
+            LakeTieringDecorator decorator = plugin.createLakeTieringDecorator();
+            decorator.decorate(execEnv, flussConfig, lakeConfig, lakeTieringConfig, dataLake);
+        }
     }
 }
