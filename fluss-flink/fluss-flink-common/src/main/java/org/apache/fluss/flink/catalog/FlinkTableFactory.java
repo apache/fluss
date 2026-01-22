@@ -98,6 +98,7 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
 
         FactoryUtil.TableFactoryHelper helper = FactoryUtil.createTableFactoryHelper(this, context);
         final ReadableConfig tableOptions = helper.getOptions();
+        validateSourceOptions(helper, tableOptions);
         Optional<DataLakeFormat> datalakeFormat = getDatalakeFormat(tableOptions);
         List<String> prefixesToSkip =
                 new ArrayList<>(Arrays.asList("table.", "client.", "fields."));
@@ -109,7 +110,6 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
                         == RuntimeExecutionMode.STREAMING;
 
         RowType tableOutputType = (RowType) context.getPhysicalRowDataType().getLogicalType();
-        FlinkConnectorOptionsUtils.validateTableSourceOptions(tableOptions);
 
         ZoneId timeZone =
                 FlinkConnectorOptionsUtils.getLocalTimeZone(
@@ -274,6 +274,21 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
         return lakeTableFactory;
     }
 
+    /**
+     * Validates table source options using the standard validation pattern.
+     *
+     * @param helper the factory helper for option validation
+     * @param tableOptions the table options to validate
+     */
+    private static void validateSourceOptions(
+            FactoryUtil.TableFactoryHelper helper, ReadableConfig tableOptions) {
+        Optional<DataLakeFormat> datalakeFormat = getDatalakeFormat(tableOptions);
+        List<String> prefixesToSkip = new ArrayList<>(Arrays.asList("table.", "client."));
+        datalakeFormat.ifPresent(dataLakeFormat -> prefixesToSkip.add(dataLakeFormat + "."));
+        helper.validateExcept(prefixesToSkip.toArray(new String[0]));
+        FlinkConnectorOptionsUtils.validateTableSourceOptions(tableOptions);
+    }
+
     /** Creates a ChangelogFlinkTableSource for $changelog virtual tables. */
     private DynamicTableSource createChangelogTableSource(
             Context context, ObjectIdentifier tableIdentifier, String tableName) {
@@ -301,6 +316,7 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
         Map<String, String> catalogTableOptions = context.getCatalogTable().getOptions();
         FactoryUtil.TableFactoryHelper helper = FactoryUtil.createTableFactoryHelper(this, context);
         final ReadableConfig tableOptions = helper.getOptions();
+        validateSourceOptions(helper, tableOptions);
 
         ZoneId timeZone =
                 FlinkConnectorOptionsUtils.getLocalTimeZone(
@@ -310,11 +326,12 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
 
         ResolvedCatalogTable resolvedCatalogTable = context.getCatalogTable();
 
-        // bucket.key is set from the base table's primary key
         int[] bucketKeyIndexes = getBucketKeyIndexes(tableOptions, dataColumnsType);
 
-        // For changelog virtual tables, if bucket key is present, base table has a PK
-        int[] primaryKeyIndexes = bucketKeyIndexes;
+        // Changelog/binlog virtual tables are purely log-based and don't have a primary key.
+        // Setting primaryKeyIndexes to empty ensures the enumerator fetches log-only splits
+        // (not snapshot splits), which is the correct behavior for virtual tables.
+        int[] primaryKeyIndexes = new int[0];
 
         // Partition key indexes based on data columns
         int[] partitionKeyIndexes =
@@ -337,8 +354,6 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
                 isStreamingMode,
                 startupOptions,
                 partitionDiscoveryIntervalMs,
-                tableOptions.get(toFlinkOption(ConfigOptions.TABLE_DATALAKE_ENABLED)),
-                tableOptions.get(toFlinkOption(ConfigOptions.TABLE_MERGE_ENGINE)),
                 catalogTableOptions);
     }
 }

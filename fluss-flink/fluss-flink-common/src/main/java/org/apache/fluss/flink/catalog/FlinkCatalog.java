@@ -85,6 +85,9 @@ import java.util.Optional;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
+import static org.apache.flink.table.api.DataTypes.BIGINT;
+import static org.apache.flink.table.api.DataTypes.STRING;
+import static org.apache.flink.table.api.DataTypes.TIMESTAMP_LTZ;
 import static org.apache.flink.util.Preconditions.checkArgument;
 import static org.apache.fluss.config.ConfigOptions.BOOTSTRAP_SERVERS;
 import static org.apache.fluss.flink.FlinkConnectorOptions.ALTER_DISALLOW_OPTIONS;
@@ -307,9 +310,11 @@ public class FlinkCatalog extends AbstractCatalog {
         String tableName = objectPath.getObjectName();
 
         // Check if this is a virtual table ($changelog or $binlog)
-        if (tableName.endsWith(CHANGELOG_TABLE_SUFFIX)) {
+        if (tableName.endsWith(CHANGELOG_TABLE_SUFFIX)
+                && !tableName.contains(LAKE_TABLE_SPLITTER)) {
             return getVirtualChangelogTable(objectPath);
-        } else if (tableName.endsWith(BINLOG_TABLE_SUFFIX)) {
+        } else if (tableName.endsWith(BINLOG_TABLE_SUFFIX)
+                && !tableName.contains(LAKE_TABLE_SPLITTER)) {
             // TODO: Implement binlog virtual table in future
             throw new UnsupportedOperationException(
                     String.format(
@@ -925,7 +930,7 @@ public class FlinkCatalog extends AbstractCatalog {
             newOptions.putAll(securityConfigs);
 
             // Create a new CatalogTable with the modified schema
-            return CatalogTable.of(
+            return CatalogTableAdapter.toCatalogTable(
                     changelogSchema,
                     baseTable.getComment(),
                     baseTable.getPartitionKeys(),
@@ -949,32 +954,12 @@ public class FlinkCatalog extends AbstractCatalog {
         Schema.Builder builder = Schema.newBuilder();
 
         // Add metadata columns first
-        builder.column("_change_type", org.apache.flink.table.api.DataTypes.STRING().notNull());
-        builder.column("_log_offset", org.apache.flink.table.api.DataTypes.BIGINT().notNull());
-        builder.column(
-                "_commit_timestamp", org.apache.flink.table.api.DataTypes.TIMESTAMP(3).notNull());
+        builder.column("_change_type", STRING().notNull());
+        builder.column("_log_offset", BIGINT().notNull());
+        builder.column("_commit_timestamp", TIMESTAMP_LTZ().notNull());
 
-        // Add all original columns
-        for (Schema.UnresolvedColumn column : originalSchema.getColumns()) {
-            if (column instanceof Schema.UnresolvedPhysicalColumn) {
-                Schema.UnresolvedPhysicalColumn physicalColumn =
-                        (Schema.UnresolvedPhysicalColumn) column;
-                builder.column(physicalColumn.getName(), physicalColumn.getDataType());
-            } else if (column instanceof Schema.UnresolvedComputedColumn) {
-                Schema.UnresolvedComputedColumn computedColumn =
-                        (Schema.UnresolvedComputedColumn) column;
-                builder.columnByExpression(
-                        computedColumn.getName(), computedColumn.getExpression());
-            } else if (column instanceof Schema.UnresolvedMetadataColumn) {
-                Schema.UnresolvedMetadataColumn metadataColumn =
-                        (Schema.UnresolvedMetadataColumn) column;
-                builder.columnByMetadata(
-                        metadataColumn.getName(),
-                        metadataColumn.getDataType(),
-                        metadataColumn.getMetadataKey(),
-                        metadataColumn.isVirtual());
-            }
-        }
+        // Add all original columns (preserves all column attributes including comments)
+        builder.fromColumns(originalSchema.getColumns());
 
         // Note: We don't copy primary keys or watermarks for virtual tables
 

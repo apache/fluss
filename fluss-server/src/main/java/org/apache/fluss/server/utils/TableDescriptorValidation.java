@@ -53,9 +53,9 @@ import static org.apache.fluss.config.FlussConfigUtils.TABLE_OPTIONS;
 import static org.apache.fluss.config.FlussConfigUtils.isAlterableTableOption;
 import static org.apache.fluss.config.FlussConfigUtils.isTableStorageConfig;
 import static org.apache.fluss.metadata.TableDescriptor.BUCKET_COLUMN_NAME;
-import static org.apache.fluss.metadata.TableDescriptor.CHANGELOG_CHANGE_TYPE_COLUMN;
-import static org.apache.fluss.metadata.TableDescriptor.CHANGELOG_COMMIT_TIMESTAMP_COLUMN;
-import static org.apache.fluss.metadata.TableDescriptor.CHANGELOG_LOG_OFFSET_COLUMN;
+import static org.apache.fluss.metadata.TableDescriptor.CHANGE_TYPE_COLUMN;
+import static org.apache.fluss.metadata.TableDescriptor.COMMIT_TIMESTAMP_COLUMN;
+import static org.apache.fluss.metadata.TableDescriptor.LOG_OFFSET_COLUMN;
 import static org.apache.fluss.metadata.TableDescriptor.OFFSET_COLUMN_NAME;
 import static org.apache.fluss.metadata.TableDescriptor.TIMESTAMP_COLUMN_NAME;
 import static org.apache.fluss.utils.PartitionUtils.PARTITION_KEY_SUPPORTED_TYPES;
@@ -70,9 +70,9 @@ public class TableDescriptorValidation {
                                     OFFSET_COLUMN_NAME,
                                     TIMESTAMP_COLUMN_NAME,
                                     BUCKET_COLUMN_NAME,
-                                    CHANGELOG_CHANGE_TYPE_COLUMN,
-                                    CHANGELOG_LOG_OFFSET_COLUMN,
-                                    CHANGELOG_COMMIT_TIMESTAMP_COLUMN)));
+                                    CHANGE_TYPE_COLUMN,
+                                    LOG_OFFSET_COLUMN,
+                                    COMMIT_TIMESTAMP_COLUMN)));
 
     private static final List<DataTypeRoot> KEY_UNSUPPORTED_TYPES =
             Arrays.asList(DataTypeRoot.ARRAY, DataTypeRoot.MAP, DataTypeRoot.ROW);

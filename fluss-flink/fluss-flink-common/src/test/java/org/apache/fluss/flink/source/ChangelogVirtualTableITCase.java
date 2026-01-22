@@ -27,6 +27,7 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
+import org.apache.fluss.utils.clock.ManualClock;
 
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.table.api.EnvironmentSettings;
@@ -41,6 +42,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -56,11 +58,14 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 /** Integration test for $changelog virtual table functionality. */
 abstract class ChangelogVirtualTableITCase extends AbstractTestBase {
 
+    protected static final ManualClock CLOCK = new ManualClock();
+
     @RegisterExtension
     public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION =
             FlussClusterExtension.builder()
                     .setClusterConf(new Configuration())
                     .setNumOfTabletServers(1)
+                    .setClock(CLOCK)
                     .build();
 
     static final String CATALOG_NAME = "testcatalog";
@@ -116,116 +121,69 @@ abstract class ChangelogVirtualTableITCase extends AbstractTestBase {
     }
 
     @Test
-    public void testChangelogVirtualTableWithPrimaryKeyTable() throws Exception {
-        // Create a primary key table
+    public void testDescribeChangelogTable() throws Exception {
+        // Create a table with various data types to test complex schema
         tEnv.executeSql(
-                "CREATE TABLE orders ("
-                        + "  order_id INT NOT NULL,"
-                        + "  product_name STRING,"
-                        + "  amount BIGINT,"
-                        + "  PRIMARY KEY (order_id) NOT ENFORCED"
-                        + ")");
-
-        TablePath tablePath = TablePath.of(DEFAULT_DB, "orders");
-
-        // Insert initial data
-        List<InternalRow> initialRows =
-                Arrays.asList(
-                        row(1, "Product A", 100L),
-                        row(2, "Product B", 200L),
-                        row(3, "Product C", 300L));
-        writeRows(conn, tablePath, initialRows, false);
-
-        // Query the changelog virtual table
-        String query = "SELECT * FROM orders$changelog";
-        CloseableIterator<Row> rowIter = tEnv.executeSql(query).collect();
-
-        // Collect initial inserts (don't close iterator - we need it for more batches)
-        List<String> results = new ArrayList<>();
-        List<String> batch1 = collectRowsWithTimeout(rowIter, 3, false);
-        results.addAll(batch1);
-
-        // Verify initial data has INSERT change type
-        for (String result : batch1) {
-            // Result format: +I[change_type, offset, timestamp, order_id, product_name, amount]
-            assertThat(result).startsWith("+I[+I,");
-        }
-
-        // Update some records
-        List<InternalRow> updateRows =
-                Arrays.asList(row(1, "Product A Updated", 150L), row(2, "Product B Updated", 250L));
-        writeRows(conn, tablePath, updateRows, false);
-
-        // Collect updates (don't close iterator yet)
-        List<String> batch2 = collectRowsWithTimeout(rowIter, 4, false);
-        results.addAll(batch2);
-
-        // Verify we see UPDATE_BEFORE (-U) and UPDATE_AFTER (+U) records
-        long updateBeforeCount = batch2.stream().filter(r -> r.contains("[-U,")).count();
-        long updateAfterCount = batch2.stream().filter(r -> r.contains("[+U,")).count();
-        assertThat(updateBeforeCount).isEqualTo(2);
-        assertThat(updateAfterCount).isEqualTo(2);
-
-        // Delete a record using the proper delete API
-        // Note: delete() expects the full row with actual values, not nulls
-        deleteRows(conn, tablePath, Arrays.asList(row(3, "Product C", 300L)));
-
-        // Collect delete (close iterator after this)
-        List<String> batch3 = collectRowsWithTimeout(rowIter, 1, true);
-        results.addAll(batch3);
-
-        // Verify we see DELETE (-D) record
-        // Note: Fluss DELETE operation produces ChangeType.DELETE which maps to "-D"
-        // The test verifies that a delete record is captured in the changelog
-        assertThat(batch3.get(0)).contains("3"); // The deleted row ID should be present
-
-        // Verify metadata columns are present in all records
-        for (String result : results) {
-            // Each row should have: change_type, log_offset, timestamp, then original columns
-            String[] parts = result.substring(3, result.length() - 1).split(", ");
-            assertThat(parts.length).isGreaterThanOrEqualTo(6); // 3 metadata + 3 data columns
-        }
-    }
-
-    @Test
-    public void testChangelogVirtualTableSchemaIntrospection() throws Exception {
-        // Create a primary key table
-        tEnv.executeSql(
-                "CREATE TABLE products ("
+                "CREATE TABLE complex_table ("
                         + "  id INT NOT NULL,"
                         + "  name STRING,"
-                        + "  price DECIMAL(10, 2),"
+                        + "  score DOUBLE,"
+                        + "  is_active BOOLEAN,"
+                        + "  created_date DATE,"
+                        + "  metadata MAP<STRING, STRING>,"
+                        + "  tags ARRAY<STRING>,"
                         + "  PRIMARY KEY (id) NOT ENFORCED"
                         + ")");
 
         // Test DESCRIBE on changelog virtual table
         CloseableIterator<Row> describeResult =
-                tEnv.executeSql("DESCRIBE products$changelog").collect();
+                tEnv.executeSql("DESCRIBE complex_table$changelog").collect();
 
         List<String> schemaRows = new ArrayList<>();
         while (describeResult.hasNext()) {
             schemaRows.add(describeResult.next().toString());
         }
 
+        // Should have 3 metadata columns + 7 data columns = 10 total
+        assertThat(schemaRows).hasSize(10);
+
         // Verify metadata columns are listed first
-        // Format: +I[column_name, type, nullable (true/false), ...]
-        assertThat(schemaRows.get(0)).contains("_change_type");
-        assertThat(schemaRows.get(0)).contains("STRING");
-        // Flink DESCRIBE shows nullability as 'false' for NOT NULL columns
-        assertThat(schemaRows.get(0)).contains("false");
+        // DESCRIBE format: +I[name, type, null, key, extras, watermark]
+        assertThat(schemaRows.get(0))
+                .isEqualTo("+I[_change_type, STRING, false, null, null, null]");
+        assertThat(schemaRows.get(1)).isEqualTo("+I[_log_offset, BIGINT, false, null, null, null]");
+        assertThat(schemaRows.get(2))
+                .isEqualTo("+I[_commit_timestamp, TIMESTAMP_LTZ(6), false, null, null, null]");
 
-        assertThat(schemaRows.get(1)).contains("_log_offset");
-        assertThat(schemaRows.get(1)).contains("BIGINT");
-        assertThat(schemaRows.get(1)).contains("false");
+        // Verify data columns maintain their types
+        // Note: Primary key info is not preserved in $changelog virtual table
+        assertThat(schemaRows.get(3)).isEqualTo("+I[id, INT, false, null, null, null]");
+        assertThat(schemaRows.get(4)).isEqualTo("+I[name, STRING, true, null, null, null]");
+        assertThat(schemaRows.get(5)).isEqualTo("+I[score, DOUBLE, true, null, null, null]");
+        assertThat(schemaRows.get(6)).isEqualTo("+I[is_active, BOOLEAN, true, null, null, null]");
+        assertThat(schemaRows.get(7)).isEqualTo("+I[created_date, DATE, true, null, null, null]");
+        assertThat(schemaRows.get(8))
+                .isEqualTo("+I[metadata, MAP<STRING NOT NULL, STRING>, true, null, null, null]");
+        assertThat(schemaRows.get(9)).isEqualTo("+I[tags, ARRAY<STRING>, true, null, null, null]");
 
-        assertThat(schemaRows.get(2)).contains("_commit_timestamp");
-        assertThat(schemaRows.get(2)).contains("TIMESTAMP");
-        assertThat(schemaRows.get(2)).contains("false");
+        // Test SHOW CREATE TABLE on changelog virtual table
+        CloseableIterator<Row> showCreateResult =
+                tEnv.executeSql("SHOW CREATE TABLE complex_table$changelog").collect();
 
-        // Verify original columns follow
-        assertThat(schemaRows.get(3)).contains("id");
-        assertThat(schemaRows.get(4)).contains("name");
-        assertThat(schemaRows.get(5)).contains("price");
+        StringBuilder createTableStatement = new StringBuilder();
+        while (showCreateResult.hasNext()) {
+            createTableStatement.append(showCreateResult.next().toString());
+        }
+
+        String createStatement = createTableStatement.toString();
+        // Verify metadata columns are included in the CREATE TABLE statement
+        assertThat(createStatement).contains("_change_type");
+        assertThat(createStatement).contains("_log_offset");
+        assertThat(createStatement).contains("_commit_timestamp");
+        // Verify original columns are also included
+        assertThat(createStatement).contains("id");
+        assertThat(createStatement).contains("name");
+        assertThat(createStatement).contains("score");
     }
 
     @Test
@@ -249,138 +207,58 @@ abstract class ChangelogVirtualTableITCase extends AbstractTestBase {
     }
 
     @Test
-    public void testAllChangeTypes() throws Exception {
-        // Create a primary key table
-        // Note: Using `val` instead of `value` as `value` is a reserved keyword in Flink SQL
+    public void testProjectionOnChangelogTable() throws Exception {
+        // Create a primary key table with 1 bucket and extra columns to test projection
         tEnv.executeSql(
-                "CREATE TABLE test_changes ("
-                        + "  id INT NOT NULL,"
-                        + "  val STRING,"
-                        + "  PRIMARY KEY (id) NOT ENFORCED"
-                        + ")");
-
-        TablePath tablePath = TablePath.of(DEFAULT_DB, "test_changes");
-
-        String query = "SELECT _change_type, id, val FROM test_changes$changelog";
-        CloseableIterator<Row> rowIter = tEnv.executeSql(query).collect();
-
-        // Test INSERT (+I)
-        writeRows(conn, tablePath, Arrays.asList(row(1, "initial")), false);
-        List<String> insertResult = collectRowsWithTimeout(rowIter, 1, false);
-        assertThat(insertResult.get(0)).startsWith("+I[+I, 1, initial]");
-
-        // Test UPDATE (-U/+U)
-        writeRows(conn, tablePath, Arrays.asList(row(1, "updated")), false);
-        List<String> updateResults = collectRowsWithTimeout(rowIter, 2, false);
-        assertThat(updateResults.get(0)).startsWith("+I[-U, 1, initial]");
-        assertThat(updateResults.get(1)).startsWith("+I[+U, 1, updated]");
-
-        // Test DELETE operation using the proper delete API
-        deleteRows(conn, tablePath, Arrays.asList(row(1, "updated")));
-        List<String> deleteResult = collectRowsWithTimeout(rowIter, 1, true);
-        // Verify the delete record contains the row data and has DELETE change type (-D)
-        // DELETE produces ChangeType.DELETE which maps to "-D" in the changelog
-        assertThat(deleteResult.get(0)).startsWith("+I[-D, 1, updated]");
-    }
-
-    @Test
-    public void testChangelogVirtualTableConcurrentChanges() throws Exception {
-        // Create a primary key table
-        tEnv.executeSql(
-                "CREATE TABLE concurrent_test ("
-                        + "  id INT NOT NULL,"
-                        + "  counter INT,"
-                        + "  PRIMARY KEY (id) NOT ENFORCED"
-                        + ")");
-
-        TablePath tablePath = TablePath.of(DEFAULT_DB, "concurrent_test");
-
-        // Start collecting from changelog
-        String query = "SELECT _change_type, id, counter FROM concurrent_test$changelog";
-        CloseableIterator<Row> rowIter = tEnv.executeSql(query).collect();
-
-        // Perform multiple concurrent-like changes
-        for (int i = 1; i <= 5; i++) {
-            writeRows(conn, tablePath, Arrays.asList(row(i, i * 10)), false);
-        }
-
-        // Collect all inserts (don't close iterator - we need it for updates)
-        List<String> results = collectRowsWithTimeout(rowIter, 5, false);
-
-        // Verify all are inserts
-        for (String result : results) {
-            assertThat(result).startsWith("+I[+I,");
-        }
-
-        // Update all records
-        for (int i = 1; i <= 5; i++) {
-            writeRows(conn, tablePath, Arrays.asList(row(i, i * 20)), false);
-        }
-
-        // Collect all updates (5 * 2 = 10 records: before and after for each)
-        // Now we can close the iterator
-        results = collectRowsWithTimeout(rowIter, 10, true);
-
-        // Verify we have equal number of -U and +U
-        long updateBeforeCount = results.stream().filter(r -> r.contains("[-U,")).count();
-        long updateAfterCount = results.stream().filter(r -> r.contains("[+U,")).count();
-        assertThat(updateBeforeCount).isEqualTo(5);
-        assertThat(updateAfterCount).isEqualTo(5);
-    }
-
-    @Test
-    public void testChangelogVirtualTableWithComplexSchema() throws Exception {
-        // Create a table with various data types
-        tEnv.executeSql(
-                "CREATE TABLE complex_table ("
+                "CREATE TABLE projection_test ("
                         + "  id INT NOT NULL,"
                         + "  name STRING,"
-                        + "  score DOUBLE,"
-                        + "  is_active BOOLEAN,"
-                        + "  created_date DATE,"
-                        + "  metadata MAP<STRING, STRING>,"
-                        + "  tags ARRAY<STRING>,"
+                        + "  amount BIGINT,"
+                        + "  description STRING,"
                         + "  PRIMARY KEY (id) NOT ENFORCED"
-                        + ")");
+                        + ") WITH ('bucket.num' = '1')");
 
-        // Verify the schema includes metadata columns
-        CloseableIterator<Row> describeResult =
-                tEnv.executeSql("DESCRIBE complex_table$changelog").collect();
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "projection_test");
 
-        List<String> schemaRows = new ArrayList<>();
-        while (describeResult.hasNext()) {
-            schemaRows.add(describeResult.next().toString());
-        }
+        // Select only _change_type, id, and name (skip amount and description)
+        String query = "SELECT _change_type, id, name FROM projection_test$changelog";
+        CloseableIterator<Row> rowIter = tEnv.executeSql(query).collect();
 
-        // Should have 3 metadata columns + 7 data columns = 10 total
-        assertThat(schemaRows).hasSize(10);
+        // Test INSERT
+        CLOCK.advanceTime(Duration.ofMillis(100));
+        writeRows(conn, tablePath, Arrays.asList(row(1, "Item-1", 100L, "Desc-1")), false);
+        List<String> insertResult = collectRowsWithTimeout(rowIter, 1, false);
+        assertThat(insertResult.get(0)).isEqualTo("+I[+I, 1, Item-1]");
 
-        // Verify metadata columns
-        assertThat(schemaRows.get(0)).contains("_change_type");
-        assertThat(schemaRows.get(1)).contains("_log_offset");
-        assertThat(schemaRows.get(2)).contains("_commit_timestamp");
+        // Test UPDATE
+        CLOCK.advanceTime(Duration.ofMillis(100));
+        writeRows(
+                conn,
+                tablePath,
+                Arrays.asList(row(1, "Item-1-Updated", 150L, "Desc-1-Updated")),
+                false);
+        List<String> updateResults = collectRowsWithTimeout(rowIter, 2, false);
+        assertThat(updateResults.get(0)).isEqualTo("+I[-U, 1, Item-1]");
+        assertThat(updateResults.get(1)).isEqualTo("+I[+U, 1, Item-1-Updated]");
 
-        // Verify data columns maintain their types
-        assertThat(schemaRows.get(3)).contains("id");
-        assertThat(schemaRows.get(4)).contains("name");
-        assertThat(schemaRows.get(5)).contains("score");
-        assertThat(schemaRows.get(6)).contains("is_active");
-        assertThat(schemaRows.get(7)).contains("created_date");
-        assertThat(schemaRows.get(8)).contains("metadata");
-        assertThat(schemaRows.get(9)).contains("tags");
+        // Test DELETE
+        CLOCK.advanceTime(Duration.ofMillis(100));
+        deleteRows(
+                conn, tablePath, Arrays.asList(row(1, "Item-1-Updated", 150L, "Desc-1-Updated")));
+        List<String> deleteResult = collectRowsWithTimeout(rowIter, 1, true);
+        assertThat(deleteResult.get(0)).isEqualTo("+I[-D, 1, Item-1-Updated]");
     }
 
     @Test
-    public void testBasicChangelogScanWithMetadataValidation() throws Exception {
-        // Create a primary key table
-        // Note: Avoiding `value` as it's a reserved keyword in Flink SQL
+    public void testChangelogScanWithAllChangeTypes() throws Exception {
+        // Create a primary key table with 1 bucket for consistent log_offset numbers
         tEnv.executeSql(
                 "CREATE TABLE scan_test ("
                         + "  id INT NOT NULL,"
                         + "  name STRING,"
                         + "  amount BIGINT,"
                         + "  PRIMARY KEY (id) NOT ENFORCED"
-                        + ")");
+                        + ") WITH ('bucket.num' = '1')");
 
         TablePath tablePath = TablePath.of(DEFAULT_DB, "scan_test");
 
@@ -388,63 +266,139 @@ abstract class ChangelogVirtualTableITCase extends AbstractTestBase {
         String query = "SELECT * FROM scan_test$changelog";
         CloseableIterator<Row> rowIter = tEnv.executeSql(query).collect();
 
-        // Insert initial data
+        // Insert initial data with controlled timestamp
+        CLOCK.advanceTime(Duration.ofMillis(1000));
         List<InternalRow> initialData =
                 Arrays.asList(row(1, "Item-1", 100L), row(2, "Item-2", 200L));
         writeRows(conn, tablePath, initialData, false);
 
-        // Collect and validate inserts (don't close iterator - we need it for update/delete tests)
+        // Collect and validate inserts - with 1 bucket, offsets are predictable (0, 1)
         List<String> results = collectRowsWithTimeout(rowIter, 2, false);
-
-        // Validate that we received 2 INSERT records
         assertThat(results).hasSize(2);
 
-        // Validate metadata columns are present and correctly formatted
-        for (String result : results) {
-            // Parse the row to validate structure
-            String[] parts = result.substring(3, result.length() - 1).split(", ", 6);
+        // With ManualClock and 1 bucket, we can assert exact row values
+        // Format: +I[_change_type, _log_offset, _commit_timestamp, id, name, amount]
+        assertThat(results.get(0)).isEqualTo("+I[+I, 0, 1970-01-01T00:00:01Z, 1, Item-1, 100]");
+        assertThat(results.get(1)).isEqualTo("+I[+I, 1, 1970-01-01T00:00:01Z, 2, Item-2, 200]");
 
-            // Validate change type column
-            assertThat(parts[0]).isEqualTo("+I");
-
-            // Validate log offset column (should be a valid long)
-            assertThat(Long.parseLong(parts[1])).isGreaterThanOrEqualTo(0);
-
-            // Validate timestamp column exists (we can't predict exact value)
-            assertThat(parts[2]).isNotEmpty();
-
-            // Validate data columns follow metadata
-            int id = Integer.parseInt(parts[3]);
-            assertThat(id).isIn(1, 2);
-            assertThat(parts[4]).isIn("Item-1", "Item-2");
-            assertThat(Long.parseLong(parts[5])).isIn(100L, 200L);
-        }
-
-        // Test an update operation
+        // Test UPDATE operation with new timestamp
+        CLOCK.advanceTime(Duration.ofMillis(1000));
         writeRows(conn, tablePath, Arrays.asList(row(1, "Item-1-Updated", 150L)), false);
 
         // Collect update records (should get -U and +U)
         List<String> updateResults = collectRowsWithTimeout(rowIter, 2, false);
         assertThat(updateResults).hasSize(2);
+        assertThat(updateResults.get(0))
+                .isEqualTo("+I[-U, 2, 1970-01-01T00:00:02Z, 1, Item-1, 100]");
+        assertThat(updateResults.get(1))
+                .isEqualTo("+I[+U, 3, 1970-01-01T00:00:02Z, 1, Item-1-Updated, 150]");
 
-        // Validate UPDATE_BEFORE record
-        assertThat(updateResults.get(0)).contains("-U");
-        assertThat(updateResults.get(0)).contains("Item-1");
-        assertThat(updateResults.get(0)).contains("100");
-
-        // Validate UPDATE_AFTER record
-        assertThat(updateResults.get(1)).contains("+U");
-        assertThat(updateResults.get(1)).contains("Item-1-Updated");
-        assertThat(updateResults.get(1)).contains("150");
-
-        // Test delete operation using the proper delete API
+        // Test DELETE operation with new timestamp
+        CLOCK.advanceTime(Duration.ofMillis(1000));
         deleteRows(conn, tablePath, Arrays.asList(row(2, "Item-2", 200L)));
 
         // Collect delete record
         List<String> deleteResult = collectRowsWithTimeout(rowIter, 1, true);
         assertThat(deleteResult).hasSize(1);
-        // Verify the delete record contains the row data (the change type may be -D or -U)
-        assertThat(deleteResult.get(0)).contains("2");
-        assertThat(deleteResult.get(0)).contains("Item-2");
+        assertThat(deleteResult.get(0))
+                .isEqualTo("+I[-D, 4, 1970-01-01T00:00:03Z, 2, Item-2, 200]");
+    }
+
+    @Test
+    public void testChangelogWithScanStartupMode() throws Exception {
+        // Create a primary key table with 1 bucket for consistent log_offset numbers
+        tEnv.executeSql(
+                "CREATE TABLE startup_mode_test ("
+                        + "  id INT NOT NULL,"
+                        + "  name STRING,"
+                        + "  PRIMARY KEY (id) NOT ENFORCED"
+                        + ") WITH ('bucket.num' = '1')");
+
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "startup_mode_test");
+
+        // Write first batch of data
+        CLOCK.advanceTime(Duration.ofMillis(100));
+        List<InternalRow> batch1 = Arrays.asList(row(1, "v1"), row(2, "v2"), row(3, "v3"));
+        writeRows(conn, tablePath, batch1, false);
+
+        // Write second batch of data
+        CLOCK.advanceTime(Duration.ofMillis(100));
+        List<InternalRow> batch2 = Arrays.asList(row(4, "v4"), row(5, "v5"));
+        writeRows(conn, tablePath, batch2, false);
+
+        // 1. Test scan.startup.mode='earliest' - should read all records from beginning
+        String optionsEarliest = " /*+ OPTIONS('scan.startup.mode' = 'earliest') */";
+        String queryEarliest =
+                "SELECT _change_type, id, name FROM startup_mode_test$changelog" + optionsEarliest;
+        CloseableIterator<Row> rowIterEarliest = tEnv.executeSql(queryEarliest).collect();
+        List<String> earliestResults = collectRowsWithTimeout(rowIterEarliest, 5, true);
+        assertThat(earliestResults).hasSize(5);
+        // All should be INSERT change types
+        for (String result : earliestResults) {
+            assertThat(result).startsWith("+I[+I,");
+        }
+
+        // 2. Test scan.startup.mode='latest' - should only read new records after subscription
+        String optionsLatest = " /*+ OPTIONS('scan.startup.mode' = 'latest') */";
+        String queryLatest =
+                "SELECT _change_type, id, name FROM startup_mode_test$changelog" + optionsLatest;
+        CloseableIterator<Row> rowIterLatest = tEnv.executeSql(queryLatest).collect();
+
+        // Write new data after subscribing with 'latest'
+        CLOCK.advanceTime(Duration.ofMillis(100));
+        writeRows(conn, tablePath, Arrays.asList(row(6, "v6")), false);
+        List<String> latestResults = collectRowsWithTimeout(rowIterLatest, 1, true);
+        assertThat(latestResults).hasSize(1);
+        assertThat(latestResults.get(0)).isEqualTo("+I[+I, 6, v6]");
+    }
+
+    @Test
+    public void testChangelogWithPartitionedTable() throws Exception {
+        // Create a partitioned primary key table with 1 bucket per partition
+        tEnv.executeSql(
+                "CREATE TABLE partitioned_test ("
+                        + "  id INT NOT NULL,"
+                        + "  name STRING,"
+                        + "  region STRING NOT NULL,"
+                        + "  PRIMARY KEY (id, region) NOT ENFORCED"
+                        + ") PARTITIONED BY (region) WITH ('bucket.num' = '1')");
+
+        // Insert data into different partitions using Flink SQL
+        CLOCK.advanceTime(Duration.ofMillis(100));
+        tEnv.executeSql(
+                        "INSERT INTO partitioned_test VALUES "
+                                + "(1, 'Item-1', 'us'), "
+                                + "(2, 'Item-2', 'us'), "
+                                + "(3, 'Item-3', 'eu')")
+                .await();
+
+        // Query the changelog virtual table for all partitions
+        String query = "SELECT _change_type, id, name, region FROM partitioned_test$changelog";
+        CloseableIterator<Row> rowIter = tEnv.executeSql(query).collect();
+
+        // Collect initial inserts
+        List<String> results = collectRowsWithTimeout(rowIter, 3, false);
+        assertThat(results).hasSize(3);
+
+        // Verify all are INSERT change types
+        for (String result : results) {
+            assertThat(result).startsWith("+I[+I,");
+        }
+
+        // Verify we have data from both partitions
+        long usCount = results.stream().filter(r -> r.contains("us")).count();
+        long euCount = results.stream().filter(r -> r.contains("eu")).count();
+        assertThat(usCount).isEqualTo(2);
+        assertThat(euCount).isEqualTo(1);
+
+        // Update a record in a specific partition
+        CLOCK.advanceTime(Duration.ofMillis(100));
+        tEnv.executeSql("INSERT INTO partitioned_test VALUES (1, 'Item-1-Updated', 'us')").await();
+        List<String> updateResults = collectRowsWithTimeout(rowIter, 2, false);
+        assertThat(updateResults).hasSize(2);
+        assertThat(updateResults.get(0)).contains("-U", "1", "Item-1", "us");
+        assertThat(updateResults.get(1)).contains("+U", "1", "Item-1-Updated", "us");
+
+        rowIter.close();
     }
 }

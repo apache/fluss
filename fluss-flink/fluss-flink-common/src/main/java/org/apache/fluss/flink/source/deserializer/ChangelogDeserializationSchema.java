@@ -32,9 +32,6 @@ import static org.apache.fluss.flink.utils.FlinkConversions.toFlinkRowType;
  * format with additional changelog metadata columns.
  */
 public class ChangelogDeserializationSchema implements FlussDeserializationSchema<RowData> {
-    private static final long serialVersionUID = 1L;
-
-    private final org.apache.flink.table.types.logical.RowType originalTableType;
 
     /**
      * Converter responsible for transforming Fluss row data into Flink's {@link RowData} format
@@ -43,10 +40,7 @@ public class ChangelogDeserializationSchema implements FlussDeserializationSchem
     private transient ChangelogRowConverter converter;
 
     /** Creates a new ChangelogDeserializationSchema. */
-    public ChangelogDeserializationSchema(
-            org.apache.flink.table.types.logical.RowType originalTableType) {
-        this.originalTableType = originalTableType;
-    }
+    public ChangelogDeserializationSchema() {}
 
     /** Initializes the deserialization schema. */
     @Override

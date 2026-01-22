@@ -22,7 +22,7 @@ import org.apache.fluss.flink.source.deserializer.ChangelogDeserializationSchema
 import org.apache.fluss.flink.source.enumerator.initializer.OffsetsInitializer;
 import org.apache.fluss.flink.utils.FlinkConnectorOptionsUtils;
 import org.apache.fluss.flink.utils.FlinkConversions;
-import org.apache.fluss.metadata.MergeEngineType;
+import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.predicate.Predicate;
 import org.apache.fluss.types.RowType;
@@ -37,16 +37,15 @@ import org.apache.flink.table.types.logical.LogicalType;
 
 import javax.annotation.Nullable;
 
-import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 /** A Flink table source for the $changelog virtual table. */
 public class ChangelogFlinkTableSource implements ScanTableSource {
-
-    private static final String CHANGE_TYPE_COLUMN = "_change_type";
-    private static final String LOG_OFFSET_COLUMN = "_log_offset";
-    private static final String COMMIT_TIMESTAMP_COLUMN = "_commit_timestamp";
 
     private final TablePath tablePath;
     private final Configuration flussConfig;
@@ -60,8 +59,6 @@ public class ChangelogFlinkTableSource implements ScanTableSource {
     private final boolean streaming;
     private final FlinkConnectorOptionsUtils.StartupOptions startupOptions;
     private final long scanPartitionDiscoveryIntervalMs;
-    private final boolean isDataLakeEnabled;
-    @Nullable private final MergeEngineType mergeEngineType;
     private final Map<String, String> tableOptions;
 
     // Projection pushdown
@@ -70,8 +67,12 @@ public class ChangelogFlinkTableSource implements ScanTableSource {
 
     @Nullable private Predicate partitionFilters;
 
-    /** Number of metadata columns prepended to the changelog schema. */
-    private static final int NUM_METADATA_COLUMNS = 3;
+    private static final Set<String> METADATA_COLUMN_NAMES =
+            new HashSet<>(
+                    Arrays.asList(
+                            TableDescriptor.CHANGE_TYPE_COLUMN,
+                            TableDescriptor.LOG_OFFSET_COLUMN,
+                            TableDescriptor.COMMIT_TIMESTAMP_COLUMN));
 
     public ChangelogFlinkTableSource(
             TablePath tablePath,
@@ -83,8 +84,6 @@ public class ChangelogFlinkTableSource implements ScanTableSource {
             boolean streaming,
             FlinkConnectorOptionsUtils.StartupOptions startupOptions,
             long scanPartitionDiscoveryIntervalMs,
-            boolean isDataLakeEnabled,
-            @Nullable MergeEngineType mergeEngineType,
             Map<String, String> tableOptions) {
         this.tablePath = tablePath;
         this.flussConfig = flussConfig;
@@ -96,11 +95,9 @@ public class ChangelogFlinkTableSource implements ScanTableSource {
         this.streaming = streaming;
         this.startupOptions = startupOptions;
         this.scanPartitionDiscoveryIntervalMs = scanPartitionDiscoveryIntervalMs;
-        this.isDataLakeEnabled = isDataLakeEnabled;
-        this.mergeEngineType = mergeEngineType;
         this.tableOptions = tableOptions;
 
-        // Extract data columns by removing the first 3 metadata columns
+        // Extract data columns by filtering out metadata columns by name
         this.dataColumnsType = extractDataColumnsType(changelogOutputType);
         this.producedDataType = changelogOutputType;
     }
@@ -111,14 +108,13 @@ public class ChangelogFlinkTableSource implements ScanTableSource {
      */
     private org.apache.flink.table.types.logical.RowType extractDataColumnsType(
             org.apache.flink.table.types.logical.RowType changelogType) {
-        List<org.apache.flink.table.types.logical.RowType.RowField> allFields =
-                changelogType.getFields();
-
-        // Skip the first NUM_METADATA_COLUMNS fields (metadata columns)
+        // Filter out metadata columns by name
         List<org.apache.flink.table.types.logical.RowType.RowField> dataFields =
-                allFields.subList(NUM_METADATA_COLUMNS, allFields.size());
+                changelogType.getFields().stream()
+                        .filter(field -> !METADATA_COLUMN_NAMES.contains(field.getName()))
+                        .collect(Collectors.toList());
 
-        return new org.apache.flink.table.types.logical.RowType(new ArrayList<>(dataFields));
+        return new org.apache.flink.table.types.logical.RowType(dataFields);
     }
 
     @Override
@@ -171,13 +167,13 @@ public class ChangelogFlinkTableSource implements ScanTableSource {
                         projectedFields,
                         offsetsInitializer,
                         scanPartitionDiscoveryIntervalMs,
-                        new ChangelogDeserializationSchema(dataColumnsType),
+                        new ChangelogDeserializationSchema(),
                         streaming,
                         partitionFilters,
                         null); // Lake source not supported
 
         if (!streaming) {
-            // Batch mode
+            // Batch mode - changelog virtual tables read from log, not data lake
             return new SourceProvider() {
                 @Override
                 public boolean isBounded() {
@@ -186,10 +182,6 @@ public class ChangelogFlinkTableSource implements ScanTableSource {
 
                 @Override
                 public Source<RowData, ?, ?> createSource() {
-                    if (!isDataLakeEnabled) {
-                        throw new UnsupportedOperationException(
-                                "Changelog virtual table requires data lake to be enabled for batch queries");
-                    }
                     return source;
                 }
             };
@@ -211,8 +203,6 @@ public class ChangelogFlinkTableSource implements ScanTableSource {
                         streaming,
                         startupOptions,
                         scanPartitionDiscoveryIntervalMs,
-                        isDataLakeEnabled,
-                        mergeEngineType,
                         tableOptions);
         copy.producedDataType = producedDataType;
         copy.projectedFields = projectedFields;
@@ -222,7 +212,7 @@ public class ChangelogFlinkTableSource implements ScanTableSource {
 
     @Override
     public String asSummaryString() {
-        return "ChangelogFlinkTableSource";
+        return "FlussChangelogTableSource";
     }
 
     // TODO: Implement projection pushdown handling for metadata columns

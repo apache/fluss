@@ -28,7 +28,7 @@ import org.apache.flink.table.data.StringData;
 import org.apache.flink.table.data.TimestampData;
 import org.apache.flink.table.data.utils.JoinedRowData;
 import org.apache.flink.table.types.logical.BigIntType;
-import org.apache.flink.table.types.logical.TimestampType;
+import org.apache.flink.table.types.logical.LocalZonedTimestampType;
 import org.apache.flink.table.types.logical.VarCharType;
 import org.apache.flink.types.RowKind;
 
@@ -41,23 +41,18 @@ import java.util.List;
  */
 public class ChangelogRowConverter implements RecordToFlinkRowConverter {
 
-    private static final long serialVersionUID = 1L;
-
     private final FlussRowToFlinkRowConverter baseConverter;
-    private final RowType flussRowType;
     private final org.apache.flink.table.types.logical.RowType producedType;
 
     /** Creates a new ChangelogRowConverter. */
     public ChangelogRowConverter(RowType rowType) {
-        this.flussRowType = rowType;
         this.baseConverter = new FlussRowToFlinkRowConverter(rowType);
         this.producedType = buildChangelogRowType(FlinkConversions.toFlinkRowType(rowType));
     }
 
     /** Converts a LogRecord to a Flink RowData with metadata columns. */
     public RowData toChangelogRowData(LogRecord record) {
-
-        RowData physicalRowData = baseConverter.toFlinkRowData(record);
+        RowData physicalRowData = baseConverter.toFlinkRowData(record.getRow());
 
         // Create metadata row with 3 fields
         GenericRowData metadataRow = new GenericRowData(3);
@@ -108,14 +103,14 @@ public class ChangelogRowConverter implements RecordToFlinkRowConverter {
         // Add metadata columns first (using centralized constants from TableDescriptor)
         fields.add(
                 new org.apache.flink.table.types.logical.RowType.RowField(
-                        TableDescriptor.CHANGELOG_CHANGE_TYPE_COLUMN, new VarCharType(false, 2)));
+                        TableDescriptor.CHANGE_TYPE_COLUMN, new VarCharType(false, 2)));
         fields.add(
                 new org.apache.flink.table.types.logical.RowType.RowField(
-                        TableDescriptor.CHANGELOG_LOG_OFFSET_COLUMN, new BigIntType(false)));
+                        TableDescriptor.LOG_OFFSET_COLUMN, new BigIntType(false)));
         fields.add(
                 new org.apache.flink.table.types.logical.RowType.RowField(
-                        TableDescriptor.CHANGELOG_COMMIT_TIMESTAMP_COLUMN,
-                        new TimestampType(false, 3)));
+                        TableDescriptor.COMMIT_TIMESTAMP_COLUMN,
+                        new LocalZonedTimestampType(false, 6)));
 
         // Add all original fields
         fields.addAll(originalType.getFields());
