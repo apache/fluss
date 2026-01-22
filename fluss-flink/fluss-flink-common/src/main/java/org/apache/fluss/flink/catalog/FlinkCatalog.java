@@ -901,14 +901,9 @@ public class FlinkCatalog extends AbstractCatalog {
             // Retrieve base table info
             TableInfo tableInfo = admin.getTableInfo(baseTablePath).get();
 
-            // Validate that this is a primary key table
-            if (tableInfo.getPhysicalPrimaryKeys().isEmpty()) {
-                throw new UnsupportedOperationException(
-                        String.format(
-                                "Virtual $changelog tables are only supported for primary key tables. "
-                                        + "Table %s does not have a primary key.",
-                                baseTablePath));
-            }
+            // $changelog is supported for both PK tables and log tables:
+            // - PK tables: have change types +I, -U, +U, -D
+            // - Log tables: only have +A (append-only)
 
             // Convert to Flink table
             CatalogBaseTable catalogBaseTable = FlinkConversions.toFlinkTable(tableInfo);

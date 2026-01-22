@@ -920,18 +920,27 @@ abstract class FlinkCatalogITCase {
         // Verify options are inherited from base table
         assertThat(changelogTable.getOptions()).containsEntry("bucket.num", "1");
 
-        // Verify $changelog on non-PK table throws appropriate error
-        tEnv.executeSql("CREATE TABLE log_table_for_changelog (id INT, name STRING)");
+        // Verify $changelog also works for log tables (non-PK tables)
+        tEnv.executeSql(
+                "CREATE TABLE log_table_for_changelog (id INT, name STRING) WITH ('bucket.num' = '1')");
 
-        assertThatThrownBy(
-                        () ->
-                                catalog.getTable(
-                                        new ObjectPath(
-                                                DEFAULT_DB, "log_table_for_changelog$changelog")))
-                .isInstanceOf(CatalogException.class)
-                .hasRootCauseMessage(
-                        "Virtual $changelog tables are only supported for primary key tables. "
-                                + "Table fluss.log_table_for_changelog does not have a primary key.");
+        CatalogTable logChangelogTable =
+                (CatalogTable)
+                        catalog.getTable(
+                                new ObjectPath(DEFAULT_DB, "log_table_for_changelog$changelog"));
+
+        // Build expected schema for log table: metadata columns + original columns
+        Schema expectedLogSchema =
+                Schema.newBuilder()
+                        .column("_change_type", DataTypes.STRING().notNull())
+                        .column("_log_offset", DataTypes.BIGINT().notNull())
+                        .column("_commit_timestamp", DataTypes.TIMESTAMP_LTZ().notNull())
+                        .column("id", DataTypes.INT())
+                        .column("name", DataTypes.STRING())
+                        .build();
+
+        assertThat(logChangelogTable.getUnresolvedSchema()).isEqualTo(expectedLogSchema);
+        assertThat(logChangelogTable.getOptions()).containsEntry("bucket.num", "1");
     }
 
     /**
