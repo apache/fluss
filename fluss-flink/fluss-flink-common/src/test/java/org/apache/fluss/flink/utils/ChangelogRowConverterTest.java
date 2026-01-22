@@ -141,7 +141,7 @@ class ChangelogRowConverterTest {
         assertThat(producedType.getTypeAt(1))
                 .isInstanceOf(org.apache.flink.table.types.logical.BigIntType.class);
         assertThat(producedType.getTypeAt(2))
-                .isInstanceOf(org.apache.flink.table.types.logical.TimestampType.class);
+                .isInstanceOf(org.apache.flink.table.types.logical.LocalZonedTimestampType.class);
     }
 
     @Test
