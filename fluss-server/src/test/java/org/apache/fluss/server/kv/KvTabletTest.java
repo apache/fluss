@@ -1321,28 +1321,6 @@ class KvTabletTest {
                 DEFAULT_COMPRESSION);
     }
 
-    private MemoryLogRecords logRecords(
-            RowType rowType,
-            long baseOffset,
-            List<ChangeType> changeTypes,
-            List<Object[]> values,
-            short schemaId,
-            int magicValue)
-            throws Exception {
-        return createBasicMemoryLogRecords(
-                rowType,
-                schemaId,
-                baseOffset,
-                -1L,
-                CURRENT_LOG_MAGIC_VALUE,
-                NO_WRITER_ID,
-                NO_BATCH_SEQUENCE,
-                changeTypes,
-                values,
-                LogFormat.ARROW,
-                DEFAULT_COMPRESSION);
-    }
-
     private void checkEqual(
             LogRecords actaulLogRecords, List<MemoryLogRecords> expectedLogs, RowType rowType) {
         LogTestBase.assertLogRecordsListEquals(expectedLogs, actaulLogRecords, rowType);

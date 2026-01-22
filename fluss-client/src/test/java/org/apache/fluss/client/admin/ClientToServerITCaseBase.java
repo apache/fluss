@@ -110,7 +110,7 @@ public abstract class ClientToServerITCaseBase {
         return admin.getTableInfo(tablePath).get().getTableId();
     }
 
-    protected static Configuration initConfig() {
+    private static Configuration initConfig() {
         Configuration conf = new Configuration();
         conf.setInt(ConfigOptions.DEFAULT_REPLICATION_FACTOR, 3);
         // set a shorter interval for testing purpose
