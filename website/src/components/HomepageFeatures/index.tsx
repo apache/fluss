@@ -29,47 +29,41 @@ type FeatureItem = {
 
 const FeatureList: FeatureItem[] = [
     {
-        title: 'Sub-Second Latency',
+        title: 'Sub-Second Data Freshness',
         content:
-            'Fluss supports low-latency streaming reads and writes, similar to Apache Kafka. Combined with Apache Flink, Fluss enables the creation of high-throughput, low-latency streaming data warehouses, optimized for real-time applications.',
+            'Continuous ingestion and immediate availability of data enable low-latency analytics and real-time decision-making at scale.',
         Svg: require('@site/static/img/feature_real_time.svg').default
-    },
-    {
-        title: 'Columnar Stream',
-        content:
-            'Fluss stores streaming data in a columnar format, delivering up to 10x improvement in streaming read performance. Networking costs are significantly reduced through efficient pushdown projections.',
-        Svg: require('@site/static/img/feature_column.svg').default
     },
     {
         title: 'Streaming & Lakehouse Unification',
         content:
-            'Fluss unifies data streaming and the data Lakehouse by serving streaming data on top of the Lakehouse. This allows for low latencies on the Lakehouse and powerful analytics to data streams.',
+            'Streaming-native storage with low-latency access on top of the lakehouse, using tables as a single abstraction to unify real-time and historical data across engines.',
         Svg: require('@site/static/img/feature_lake.svg').default
     },
     {
-        title: 'Real-Time Updates',
+        title: 'Columnar Streaming',
         content:
-            'The PrimaryKey Table supports real-time streaming updates for large-scale data. It also enables cost-efficient partial updates, making it ideal for enriching wide tables without expensive join operations.',
+            'Based on Apache Arrow it allows database primitives on data streams and techniques like column pruning and predicate pushdown. This ensures engines read only the data they need, minimizing I/O and network costs.',
+        Svg: require('@site/static/img/feature_column.svg').default
+    },
+    {
+        title: 'Compute–Storage Separation',
+        content:
+            'Stream processors focus on pure computation while Fluss manages state and storage, with features like deduplication, partial updates, delta joins, and aggregation merge engines.',
         Svg: require('@site/static/img/feature_update.svg').default
     },
     {
-        title: 'Changelog Generation & Tracking',
+        title: 'ML & AI–Ready Storage',
         content:
-            'Updates generate complete changelogs that can be directly consumed by streaming processors in real time. This allows to streamline streaming analytics workflows and reduce operational costs.',
-        Svg: require('@site/static/img/feature_changelog.svg').default
+            'A unified storage layer supporting row-based, columnar, vector, and multi-modal data, enabling real-time feature stores and a centralized data repository for ML and AI systems.',
+        Svg: require('@site/static/img/feature_query.svg').default
     },
     {
-        title: 'Lookup Queries',
+        title: 'Changelogs & Decision Tracking',
         content:
-            'Fluss supports ultra-high QPS for primary key point lookups, making it an ideal solution for serving dimension tables. When combined with Apache Flink, it enables high-throughput lookup joins with exceptional efficiency.',
-        Svg: require('@site/static/img/feature_lookup.svg').default
+            'Built-in changelog generation provides an append-only history of state and decision evolution, enabling auditing, reproducibility, and deep system observability.',
+        Svg: require('@site/static/img/feature_changelog.svg').default
     },
-    // {
-    //     title: 'Interactive Queries',
-    //     content:
-    //         'Fluss is queryable with query engines like Flink, enabling direct data analytics. This reduces development complexity and simplifies debugging.',
-    //     Svg: require('@site/static/img/feature_query.svg').default
-    // },
 ];
 
 function Feature({ title, content, Svg }: FeatureItem) {

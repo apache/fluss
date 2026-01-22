@@ -434,7 +434,7 @@ Subject: [ANNOUNCE] Apache Fluss Shaded 1.0-incubating released
 
 The Apache Fluss community is very happy to announce the release of Apache Fluss Shaded 1.0-incubating.
 
-Apache Fluss is a streaming storage built for real-time analytics which can serve as the real-time data layer for Lakehouse architectures.
+Apache Fluss is a streaming storage built for real-time analytics & AI which can serve as the real-time data layer for Lakehouse architectures.
 
 The release is available for download at:
 https://downloads.apache.org/incubator/fluss/fluss-shaded-1.0-incubating/

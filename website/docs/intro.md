@@ -6,7 +6,7 @@ slug: /
 
 # What is Fluss?
 
-Fluss is a streaming storage built for real-time analytics which can serve as the real-time data layer for Lakehouse architectures.
+Fluss is a streaming storage built for real-time analytics & AI which can serve as the real-time data layer for Lakehouse architectures.
 
 ![arch](/img/fluss.png)
 

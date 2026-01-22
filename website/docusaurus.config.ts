@@ -24,7 +24,7 @@ const { versionsMap, latestVersion } = loadVersionData();
 
 const config: Config = {
   title: 'Apache Fluss™ (Incubating)',
-  tagline: 'Streaming Storage for Real-Time Analytics',
+  tagline: 'Streaming Storage for Real-Time Analytics & AI',
   favicon: 'img/logo/fluss_favicon.svg',
 
   // Set the production url of your site here

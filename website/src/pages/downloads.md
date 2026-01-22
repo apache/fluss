@@ -1,6 +1,6 @@
 # Apache Fluss (Incubating) Downloads
 
-> Apache Fluss (Incubating) is a streaming storage built for real-time analytics which can serve as the real-time data layer for Lakehouse architectures.
+> Apache Fluss (Incubating) is a streaming storage built for real-time analytics & AI which can serve as the real-time data layer for Lakehouse architectures.
 
 Apache Fluss 0.8.0 is the latest stable release.
 
