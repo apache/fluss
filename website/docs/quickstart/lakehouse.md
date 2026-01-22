@@ -37,23 +37,60 @@ cd fluss-quickstart-paimon
 
 ```yaml
 services:
+  #begin Hadoop cluster
+  namenode:
+    image: apache/hadoop:3.3.6
+    hostname: namenode
+    user: root
+    command: [ "hdfs", "namenode" ]
+    ports:
+      - 9870:9870
+      - 8020:8020
+    environment:
+      ENSURE_NAMENODE_DIR: "/tmp/hadoop/dfs/name"
+      CORE-SITE.XML_fs.defaultFS: hdfs://namenode:8020
+      CORE-SITE.XML_hadoop.tmp.dir: /hadoop/tmp
+      HDFS-SITE.XML_dfs.namenode.rpc-address: namenode:8020
+      HDFS-SITE.XML_dfs.replication: 1
+      HDFS-SITE.XML_dfs.permissions.enabled: false
+      HDFS-SITE.XML_dfs.datanode.address: datanode:9866
+    healthcheck:
+      test: ["CMD", "nc", "-z", "namenode", "8020"]
+      interval: 5s
+
+  datanode:
+    image: apache/hadoop:3.3.6
+    user: root
+    command: [ "hdfs", "datanode" ]
+    environment:
+      CORE-SITE.XML_fs.defaultFS: hdfs://namenode:8020
+      CORE-SITE.XML_hadoop.tmp.dir: /hadoop/tmp
+      HDFS-SITE.XML_dfs.namenode.rpc-address: namenode:8020
+      HDFS-SITE.XML_dfs.replication: 1
+      HDFS-SITE.XML_dfs.permissions.enabled: false
+      HDFS-SITE.XML_dfs.datanode.address: datanode:9866
+    depends_on:
+      - namenode
+  #end
   #begin Fluss cluster
   coordinator-server:
     image: apache/fluss:$FLUSS_DOCKER_VERSION$
     command: coordinatorServer
     depends_on:
-      - zookeeper
+      namenode:
+        condition: service_healthy
+      zookeeper:
+        condition: service_started
     environment:
       - |
         FLUSS_PROPERTIES=
         zookeeper.address: zookeeper:2181
         bind.listeners: FLUSS://coordinator-server:9123
-        remote.data.dir: /tmp/fluss/remote-data
+        remote.data.dir: hdfs://namenode:8020/fluss-data
         datalake.format: paimon
         datalake.paimon.metastore: filesystem
-        datalake.paimon.warehouse: /tmp/paimon
-    volumes:
-      - shared-tmpfs:/tmp/paimon
+        datalake.paimon.warehouse: hdfs://namenode:8020/fluss-lake
+        
   tablet-server:
     image: apache/fluss:$FLUSS_DOCKER_VERSION$
     command: tabletServer
@@ -65,13 +102,12 @@ services:
         zookeeper.address: zookeeper:2181
         bind.listeners: FLUSS://tablet-server:9123
         data.dir: /tmp/fluss/data
-        remote.data.dir: /tmp/fluss/remote-data
-        kv.snapshot.interval: 0s
+        remote.data.dir: hdfs://namenode:8020/fluss-data
+        kv.snapshot.interval: 30s
         datalake.format: paimon
         datalake.paimon.metastore: filesystem
-        datalake.paimon.warehouse: /tmp/paimon
-    volumes:
-      - shared-tmpfs:/tmp/paimon
+        datalake.paimon.warehouse: hdfs://namenode:8020/fluss-lake
+        
   zookeeper:
     restart: always
     image: zookeeper:3.9.2
@@ -86,8 +122,7 @@ services:
       - |
         FLINK_PROPERTIES=
         jobmanager.rpc.address: jobmanager
-    volumes:
-      - shared-tmpfs:/tmp/paimon
+        
   taskmanager:
     image: apache/fluss-quickstart-flink:1.20-$FLUSS_DOCKER_VERSION$
     depends_on:
@@ -100,16 +135,7 @@ services:
         taskmanager.numberOfTaskSlots: 10
         taskmanager.memory.process.size: 2048m
         taskmanager.memory.framework.off-heap.size: 256m
-    volumes:
-      - shared-tmpfs:/tmp/paimon
   #end
-  
-volumes:
-  shared-tmpfs:
-    driver: local
-    driver_opts:
-      type: "tmpfs"
-      device: "tmpfs"
 ```
 
 The Docker Compose environment consists of the following containers:
@@ -180,25 +206,59 @@ Any jar placed in the `lib` directory will be automatically loaded by the Fluss 
 
 ```yaml
 services:
-  zookeeper:
-    restart: always
-    image: zookeeper:3.9.2
-
+  #begin Hadoop cluster
+  namenode:
+    image: apache/hadoop:3.3.6
+    hostname: namenode
+    user: root
+    command: [ "hdfs", "namenode" ]
+    ports:
+      - 9870:9870
+      - 8020:8020
+    environment:
+      ENSURE_NAMENODE_DIR: "/tmp/hadoop/dfs/name"
+      CORE-SITE.XML_fs.defaultFS: hdfs://namenode:8020
+      CORE-SITE.XML_hadoop.tmp.dir: /hadoop/tmp
+      HDFS-SITE.XML_dfs.namenode.rpc-address: namenode:8020
+      HDFS-SITE.XML_dfs.replication: 1
+      HDFS-SITE.XML_dfs.permissions.enabled: false
+      HDFS-SITE.XML_dfs.datanode.address: datanode:9866
+    healthcheck:
+      test: ["CMD", "nc", "-z", "namenode", "8020"]
+      interval: 5s
+      
+  datanode:
+    image: apache/hadoop:3.3.6
+    user: root
+    command: [ "hdfs", "datanode" ]
+    environment:
+      CORE-SITE.XML_fs.defaultFS: hdfs://namenode:8020
+      CORE-SITE.XML_hadoop.tmp.dir: /hadoop/tmp
+      HDFS-SITE.XML_dfs.namenode.rpc-address: namenode:8020
+      HDFS-SITE.XML_dfs.replication: 1
+      HDFS-SITE.XML_dfs.permissions.enabled: false
+      HDFS-SITE.XML_dfs.datanode.address: datanode:9866
+    depends_on:
+      - namenode
+  #end
+  #begin Fluss cluster
   coordinator-server:
     image: apache/fluss:$FLUSS_DOCKER_VERSION$
     depends_on:
-      - zookeeper
+      namenode:
+        condition: service_healthy
+      zookeeper:
+        condition: service_started
     environment:
       - |
         FLUSS_PROPERTIES=
         zookeeper.address: zookeeper:2181
         bind.listeners: FLUSS://coordinator-server:9123
-        remote.data.dir: /tmp/fluss/remote-data
+        remote.data.dir: hdfs://namenode:8020/fluss-data
         datalake.format: iceberg
         datalake.iceberg.type: hadoop
-        datalake.iceberg.warehouse: /tmp/iceberg
+        datalake.iceberg.warehouse: hdfs://namenode:8020/fluss-lake
     volumes:
-      - shared-tmpfs:/tmp/iceberg
       - ./lib:/tmp/lib
     entrypoint: ["sh", "-c", "cp -v /tmp/lib/*.jar /opt/fluss/plugins/iceberg/ && exec /docker-entrypoint.sh coordinatorServer"]
 
@@ -213,14 +273,17 @@ services:
         zookeeper.address: zookeeper:2181
         bind.listeners: FLUSS://tablet-server:9123
         data.dir: /tmp/fluss/data
-        remote.data.dir: /tmp/fluss/remote-data
-        kv.snapshot.interval: 0s
+        remote.data.dir: hdfs://namenode:8020/fluss-data
+        kv.snapshot.interval: 30s
         datalake.format: iceberg
         datalake.iceberg.type: hadoop
-        datalake.iceberg.warehouse: /tmp/iceberg
-    volumes:
-      - shared-tmpfs:/tmp/iceberg
-
+        datalake.iceberg.warehouse: hdfs://namenode:8020/fluss-lake
+        
+  zookeeper:
+    restart: always
+    image: zookeeper:3.9.2
+  #end
+  #begin Flink cluster
   jobmanager:
     image: apache/fluss-quickstart-flink:1.20-$FLUSS_DOCKER_VERSION$
     ports:
@@ -230,8 +293,6 @@ services:
       - |
         FLINK_PROPERTIES=
         jobmanager.rpc.address: jobmanager
-    volumes:
-      - shared-tmpfs:/tmp/iceberg
 
   taskmanager:
     image: apache/fluss-quickstart-flink:1.20-$FLUSS_DOCKER_VERSION$
@@ -245,15 +306,7 @@ services:
         taskmanager.numberOfTaskSlots: 10
         taskmanager.memory.process.size: 2048m
         taskmanager.memory.framework.off-heap.size: 256m
-    volumes:
-      - shared-tmpfs:/tmp/iceberg
-
-volumes:
-  shared-tmpfs:
-    driver: local
-    driver_opts:
-      type: "tmpfs"
-      device: "tmpfs"
+  #end
 ```
 
 The Docker Compose environment consists of the following containers:
@@ -437,7 +490,7 @@ docker compose exec jobmanager \
     --fluss.bootstrap.servers coordinator-server:9123 \
     --datalake.format paimon \
     --datalake.paimon.metastore filesystem \
-    --datalake.paimon.warehouse /tmp/paimon
+    --datalake.paimon.warehouse hdfs://namenode:8020/fluss-lake
 ```
 You should see a Flink Job to tier data from Fluss to Paimon running in the [Flink Web UI](http://localhost:8083/).
 
@@ -454,7 +507,7 @@ docker compose exec jobmanager \
     --fluss.bootstrap.servers coordinator-server:9123 \
     --datalake.format iceberg \
     --datalake.iceberg.type hadoop \
-    --datalake.iceberg.warehouse /tmp/iceberg
+    --datalake.iceberg.warehouse hdfs://namenode:8020/fluss-lake
 ```
 You should see a Flink Job to tier data from Fluss to Iceberg running in the [Flink Web UI](http://localhost:8083/).
 
@@ -636,34 +689,6 @@ The result looks like:
 ```
 You can execute the real-time analytics query multiple times, and the results will vary with each run as new data is continuously written to Fluss in real-time.
 
-Finally, you can use the following command to view the files stored in Paimon:
-```shell
-docker compose exec taskmanager tree /tmp/paimon/fluss.db
-```
-
-**Sample Output:**
-```shell
-/tmp/paimon/fluss.db
-└── datalake_enriched_orders
-    ├── bucket-0
-    │   ├── changelog-aef1810f-85b2-4eba-8eb8-9b136dec5bdb-0.orc
-    │   └── data-aef1810f-85b2-4eba-8eb8-9b136dec5bdb-1.orc
-    ├── manifest
-    │   ├── manifest-aaa007e1-81a2-40b3-ba1f-9df4528bc402-0
-    │   ├── manifest-aaa007e1-81a2-40b3-ba1f-9df4528bc402-1
-    │   ├── manifest-list-ceb77e1f-7d17-4160-9e1f-f334918c6e0d-0
-    │   ├── manifest-list-ceb77e1f-7d17-4160-9e1f-f334918c6e0d-1
-    │   └── manifest-list-ceb77e1f-7d17-4160-9e1f-f334918c6e0d-2
-    ├── schema
-    │   └── schema-0
-    └── snapshot
-        ├── EARLIEST
-        ├── LATEST
-        └── snapshot-1
-```
-
-The files adhere to Paimon's standard format, enabling seamless querying with other engines such as [Spark](https://paimon.apache.org/docs/1.3/spark/quick-start/) and [Trino](https://paimon.apache.org/docs/1.3/ecosystem/trino/).
-
   </TabItem>
 
   <TabItem value="iceberg" label="Iceberg">
@@ -730,22 +755,89 @@ SELECT sum(total_price) as sum_price FROM datalake_enriched_orders;
 
 You can execute the real-time analytics query multiple times, and the results will vary with each run as new data is continuously written to Fluss in real-time.
 
-Finally, you can use the following command to view the files stored in Iceberg:
+  </TabItem>
+</Tabs>
+
+### Remote Storage
+
+Finally, you can use the following command to view the fluss kv snapshot stored in fluss remote storage:
 ```shell
-docker compose exec taskmanager tree /tmp/iceberg/fluss
+docker compose exec namenode hdfs dfs -ls -R /fluss-data/ | awk '{print $8}' | grep -v '^$' | tree --fromfile .
 ```
 
 **Sample Output:**
 ```shell
-/tmp/iceberg/fluss
-└── datalake_enriched_orders
-    ├── data
-    │   └── 00000-0-abc123.parquet
-    └── metadata
-        ├── snap-1234567890123456789-1-abc123.avro
-        └── v1.metadata.json
+hdfs://namenode:8020/fluss-data
+└── kv
+    └── fluss
+        ├── enriched_orders-3
+        │   └── 0
+        │       ├── shared
+        │       │   ├── 71fca534-ecca-489b-a19a-bd0538c9f9e9
+        │       │   ├── b06ef3a3-2873-470e-961f-da25582136a1
+        │       │   └── b93bad5c-00fb-4e62-8217-71b010621479
+        │       └── snap-2
+        │           ├── _METADATA
+        │           ├── 08d39726-f847-4401-8f31-4e905f2ba3f6
+        │           ├── b6a7bc2c-b5c3-4eeb-a523-b2b6fff159f3
+        │           └── e6278555-d71f-431f-954e-71bf066dd29f
+        ├── fluss_customer-1
+        ... # Remaining entries omitted for brevity
 ```
-The files adhere to Iceberg's standard format, enabling seamless querying with other engines such as [Spark](https://iceberg.apache.org/docs/latest/spark-queries/) and [Trino](https://trino.io/docs/current/connector/iceberg.html).
+
+### Lake Storage
+
+<Tabs groupId="lake-tabs">
+  <TabItem value="paimon" label="Paimon" default>
+
+Finally, you can use the following command to view the files stored in Paimon Hadoop warehouse:
+```shell
+docker compose exec namenode hdfs dfs -ls -R /fluss-lake/ | awk '{print $8}' | grep -v '^$' | tree --fromfile .
+```
+
+**Sample Output:**
+```shell
+hdfs://namenode:8020/fluss-lake
+├── default.db
+└── fluss.db
+    └── datalake_enriched_orders
+        ├── bucket-0
+        │   └── data-02acf76d-c4cc-4bc1-9292-e64a77dfcc72-0.parquet
+        ├── manifest
+        │   ├── manifest-df5b6833-7e92-4ec9-a196-51d6fd60b1d1-0
+        │   ├── manifest-list-b683c5a2-4072-4c7a-8586-2c853de8d964-0
+        │   └── manifest-list-b683c5a2-4072-4c7a-8586-2c853de8d964-1
+        ├── schema
+        │   └── schema-0
+        └── snapshot
+            ├── LATEST
+            └── snapshot-1
+```
+
+  </TabItem>
+
+  <TabItem value="iceberg" label="Iceberg">
+
+Finally, you can use the following command to view the files stored in Iceberg Hadoop warehouse:
+```shell
+docker compose exec namenode hdfs dfs -ls -R /fluss-lake/ | awk '{print $8}' | grep -v '^$' | tree --fromfile .
+```
+
+**Sample Output:**
+```shell
+hdfs://namenode:8020/fluss-lake
+└── fluss
+    └── datalake_enriched_orders
+        ├── data
+        │   └── __bucket=0
+        │       └── 00000-0-3ff95845-47af-456f-83e0-8411576cfffe-00001.parquet
+        └── metadata
+            ├── 528ae521-d683-4c5e-8dd7-779a83dd9c6f-m0.avro
+            ├── snap-3496049107217731071-1-528ae521-d683-4c5e-8dd7-779a83dd9c6f.avro
+            ├── v1.metadata.json
+            ├── v2.metadata.json
+            └── version-hint.text
+```
 
   </TabItem>
 </Tabs>
