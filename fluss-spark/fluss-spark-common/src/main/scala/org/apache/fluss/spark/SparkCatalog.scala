@@ -74,7 +74,7 @@ class SparkCatalog extends TableCatalog with SupportsFlussNamespaces with WithFl
         } else if (e.getCause.isInstanceOf[TableAlreadyExistException]) {
           throw new TableAlreadyExistsException(ident)
         } else {
-          throw new RuntimeException(e)
+          throw e
         }
     }
   }

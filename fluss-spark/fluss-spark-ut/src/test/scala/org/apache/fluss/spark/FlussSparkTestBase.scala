@@ -26,10 +26,8 @@ import org.apache.fluss.metadata.{DataLakeFormat, TableDescriptor, TablePath}
 import org.apache.fluss.row.InternalRow
 import org.apache.fluss.server.testutils.FlussClusterExtension
 
-import org.apache.spark.SparkConf
 import org.apache.spark.sql.QueryTest
 import org.apache.spark.sql.test.SharedSparkSession
-import org.junit.jupiter.api.extension.RegisterExtension
 
 import java.time.Duration
 
@@ -37,30 +35,47 @@ import scala.collection.JavaConverters._
 
 class FlussSparkTestBase extends QueryTest with SharedSparkSession {
 
-  import FlussSparkTestBase._
-
   protected val DEFAULT_CATALOG = "fluss_catalog"
   protected val DEFAULT_DATABASE = "fluss"
 
   protected var conn: Connection = _
   protected var admin: Admin = _
 
-  override protected def sparkConf: SparkConf = {
-    super.sparkConf
-      .set(s"spark.sql.catalog.$DEFAULT_CATALOG", classOf[SparkCatalog].getName)
-      .set(s"spark.sql.catalog.$DEFAULT_CATALOG.bootstrap.servers", bootstrapServers)
-      .set("spark.sql.defaultCatalog", DEFAULT_CATALOG)
-      // Enable read optimized by default temporarily.
-      // TODO: remove this when https://github.com/apache/fluss/issues/2427 is done.
-      .set("spark.sql.fluss.readOptimized", "true")
-  }
+  val flussServer: FlussClusterExtension =
+    FlussClusterExtension.builder
+      .setClusterConf(flussConf)
+      .setNumOfTabletServers(3)
+      .build
 
   override protected def beforeAll(): Unit = {
     super.beforeAll()
-    conn = ConnectionFactory.createConnection(clientConf)
+    flussServer.start()
+    conn = ConnectionFactory.createConnection(flussServer.getClientConfig)
     admin = conn.getAdmin
 
+    spark.conf.set(s"spark.sql.catalog.$DEFAULT_CATALOG", classOf[SparkCatalog].getName)
+    spark.conf.set(
+      s"spark.sql.catalog.$DEFAULT_CATALOG.bootstrap.servers",
+      flussServer.getBootstrapServers)
+    spark.conf.set("spark.sql.defaultCatalog", DEFAULT_CATALOG)
+    // Enable read optimized by default temporarily.
+    // TODO: remove this when https://github.com/apache/fluss/issues/2427 is done.
+    spark.conf.set("spark.sql.fluss.readOptimized", "true")
+
     sql(s"USE $DEFAULT_DATABASE")
+  }
+
+  override protected def afterAll(): Unit = {
+    super.afterAll()
+    if (admin != null) {
+      admin.close()
+      admin = null
+    }
+    if (conn != null) {
+      conn.close()
+      conn = null
+    }
+    flussServer.close()
   }
 
   def createTablePath(tableName: String): TablePath = {
@@ -98,22 +113,10 @@ class FlussSparkTestBase extends QueryTest with SharedSparkSession {
       .map(record => (record.getChangeType.shortString(), record.getRow))
       .toArray
   }
-}
 
-@RegisterExtension
-object FlussSparkTestBase {
-  val FLUSS_CLUSTER_EXTENSION: FlussClusterExtension =
-    FlussClusterExtension.builder
-      .setClusterConf(
-        new Configuration()
-          .set(ConfigOptions.KV_SNAPSHOT_INTERVAL, Duration.ofSeconds(1))
-          .set(ConfigOptions.DATALAKE_FORMAT, DataLakeFormat.PAIMON)
-      )
-      .setNumOfTabletServers(3)
-      .build
-
-  FLUSS_CLUSTER_EXTENSION.start()
-
-  val clientConf: Configuration = FLUSS_CLUSTER_EXTENSION.getClientConfig
-  val bootstrapServers: String = FLUSS_CLUSTER_EXTENSION.getBootstrapServers
+  protected def flussConf: Configuration = {
+    val conf = new Configuration
+    conf.set(ConfigOptions.KV_SNAPSHOT_INTERVAL, Duration.ofSeconds(1))
+    conf.set(ConfigOptions.DATALAKE_FORMAT, DataLakeFormat.PAIMON)
+  }
 }
