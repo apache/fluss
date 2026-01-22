@@ -17,6 +17,7 @@
 
 package org.apache.fluss.spark
 
+import org.apache.fluss.config.ConfigOptions
 import org.apache.fluss.metadata._
 import org.apache.fluss.types.{DataTypes, RowType}
 
@@ -190,6 +191,33 @@ class SparkCatalogTest extends FlussSparkTestBase {
 
     admin.dropDatabase(dbName, true, true).get()
     checkAnswer(sql("SHOW DATABASES"), Row(DEFAULT_DATABASE) :: Nil)
+  }
+
+  test("Catalog: set/remove table properties") {
+    withTable("t") {
+      sql(
+        s"CREATE TABLE $DEFAULT_DATABASE.t (id int, name string) TBLPROPERTIES('key1' = 'value1', '${SparkConnectorOptions.BUCKET_NUMBER.key()}' = 3)")
+      var flussTable = admin.getTableInfo(createTablePath("t")).get()
+      assertResult(
+        Map(ConfigOptions.TABLE_REPLICATION_FACTOR.key() -> "1"),
+        "check table properties")(flussTable.getProperties.toMap.asScala)
+      assert(
+        flussTable.getCustomProperties.toMap.asScala.getOrElse("key1", "non-exists") == "value1")
+
+      sql(s"ALTER TABLE t SET TBLPROPERTIES('key1' = 'value2')")
+      flussTable = admin.getTableInfo(createTablePath("t")).get()
+      assertResult(
+        Map(ConfigOptions.TABLE_REPLICATION_FACTOR.key() -> "1"),
+        "check table properties")(flussTable.getProperties.toMap.asScala)
+      assert(
+        flussTable.getCustomProperties.toMap.asScala.getOrElse("key1", "non-exists") == "value2")
+
+      sql(s"ALTER TABLE t UNSET TBLPROPERTIES('key1')")
+      flussTable = admin.getTableInfo(createTablePath("t")).get()
+      assert(!flussTable.getCustomProperties.toMap.asScala.contains("key1"))
+
+      sql(s"ALTER TABLE t UNSET TBLPROPERTIES('key1')")
+    }
   }
 
   test("Partition: show partitions") {

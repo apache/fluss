@@ -25,6 +25,7 @@ import org.apache.fluss.types.RowType
 
 import org.apache.spark.sql.FlussIdentityTransform
 import org.apache.spark.sql.catalyst.util.CaseInsensitiveMap
+import org.apache.spark.sql.connector.catalog.TableChange
 import org.apache.spark.sql.connector.expressions.Transform
 import org.apache.spark.sql.types.StructType
 
@@ -54,7 +55,7 @@ object SparkConversions {
     tableDescriptorBuilder.partitionedBy(partitionKey: _*)
 
     val primaryKeys = if (caseInsensitiveProps.contains(PRIMARY_KEY.key)) {
-      val pks = caseInsensitiveProps.get(PRIMARY_KEY.key).get.split(",")
+      val pks = caseInsensitiveProps.get(PRIMARY_KEY.key).get.split(",").map(_.trim)
       schemaBuilder.primaryKey(pks: _*)
       pks
     } else {
@@ -64,7 +65,7 @@ object SparkConversions {
     if (caseInsensitiveProps.contains(BUCKET_NUMBER.key)) {
       val bucketNum = caseInsensitiveProps.get(BUCKET_NUMBER.key).get.toInt
       val bucketKeys = if (caseInsensitiveProps.contains(BUCKET_KEY.key)) {
-        caseInsensitiveProps.get(BUCKET_KEY.key).get.split(",")
+        caseInsensitiveProps.get(BUCKET_KEY.key).get.split(",").map(_.trim)
       } else {
         primaryKeys.filterNot(partitionKey.contains)
       }
@@ -76,7 +77,7 @@ object SparkConversions {
     }
 
     val (tableProps, customProps) =
-      caseInsensitiveProps.filterNot(SPARK_TABLE_OPTIONS.contains).partition {
+      caseInsensitiveProps.filterNot(e => SPARK_TABLE_OPTIONS.contains(e._1)).partition {
         case (key, _) => key.startsWith(FlussConfigUtils.TABLE_PREFIX)
       }
 
@@ -96,5 +97,16 @@ object SparkConversions {
         throw new UnsupportedOperationException("Unsupported partition transform: " + p)
     }
     partitionKeys.toArray
+  }
+
+  def toFlussTableChanges(changes: Seq[TableChange]): Seq[org.apache.fluss.metadata.TableChange] = {
+    changes.map {
+      case p: TableChange.SetProperty =>
+        org.apache.fluss.metadata.TableChange.set(p.property(), p.value())
+      case p: TableChange.RemoveProperty =>
+        org.apache.fluss.metadata.TableChange.reset(p.property())
+      // TODO Add full support for table changes
+      case _ => throw new UnsupportedOperationException("Unsupported table change")
+    }
   }
 }
