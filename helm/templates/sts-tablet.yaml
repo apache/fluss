@@ -60,10 +60,6 @@ spec:
               containerPort: {{ .Values.listeners.internal.port }}
             - name: client
               containerPort: {{ .Values.listeners.client.port }}
-            {{- if .Values.externalAccess.enabled }}
-            - name: external
-              containerPort: {{ .Values.listeners.external.port }}
-            {{- end }}
           command:
             - "/bin/sh"
             - "-c"

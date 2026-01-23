@@ -182,7 +182,6 @@ The following table lists the configurable parameters of the Fluss chart and the
 |-----------|-------------|---------|
 | `listeners.internal.port` | Internal communication port | `9123` |
 | `listeners.client.port` | Client port (intra-cluster) | `9124` |
-| `listeners.external.port` | External access port | `9125` |
 
 ### Fluss Configuration Overrides
 
@@ -245,7 +244,6 @@ The chart automatically configures listeners for internal cluster communication 
 
 - **Internal Port (9123)**: Used for internal communication within the cluster
 - **Client Port (9124)**: Used for client connections
-- **External Port (9125)**: Used for external access if enabled
 
 Custom listener configuration:
 
@@ -255,8 +253,6 @@ listeners:
     port: 9123
   client:
     port: 9124
-  external:
-    port: 9125
 ```
 
 ### Storage Configuration
