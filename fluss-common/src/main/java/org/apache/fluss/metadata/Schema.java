@@ -285,6 +285,10 @@ public final class Schema implements Serializable {
 
         /** Adopts all members from the given schema. */
         public Builder fromSchema(Schema schema) {
+            // Check that the builder is empty before adopting from an existing schema
+            checkState(
+                    columns.isEmpty() && autoIncrementColumnNames.isEmpty() && primaryKey == null,
+                    "Schema.Builder#fromSchema should be the first API to be called on the builder.");
 
             // Adopt columns while preserving their original IDs
             this.fromColumns(schema.getColumns());
