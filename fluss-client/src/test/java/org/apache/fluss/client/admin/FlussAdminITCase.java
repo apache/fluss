@@ -1495,6 +1495,33 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                                 + "because they are reserved system columns in Fluss. "
                                 + "Please use other names for these columns. "
                                 + "The reserved system columns are: __offset, __timestamp, __bucket");
+
+        // Test changelog virtual table metadata columns are also reserved
+        TableDescriptor changelogColumnsDescriptor =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("f0", DataTypes.STRING())
+                                        .column("_change_type", DataTypes.STRING())
+                                        .column("_log_offset", DataTypes.BIGINT())
+                                        .column("_commit_timestamp", DataTypes.TIMESTAMP())
+                                        .build())
+                        .distributedBy(1)
+                        .build();
+
+        TablePath changelogTablePath = TablePath.of(dbName, "test_changelog_columns");
+
+        assertThatThrownBy(
+                        () ->
+                                admin.createTable(
+                                                changelogTablePath,
+                                                changelogColumnsDescriptor,
+                                                false)
+                                        .get())
+                .cause()
+                .isInstanceOf(InvalidTableException.class)
+                .hasMessageContaining(
+                        "_change_type, _log_offset, _commit_timestamp cannot be used as column names");
     }
 
     @Test

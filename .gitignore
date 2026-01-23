@@ -22,6 +22,9 @@ dependency-reduced-pom.xml
 ### VS Code ###
 .vscode/
 
+### claude code ###
+.claude/
+
 ### Mac OS ###
 .DS_Store
 
