@@ -702,6 +702,8 @@ message PbFetchLogReqForTable {
   required bool projection_pushdown_enabled = 2;
   repeated int32 projected_fields = 3 [packed = true];
   repeated PbFetchLogReqForBucket buckets_req = 4;
+  // If true, projected_fields are interpreted as field IDs; if false, they are field positions.
+  optional bool project_by_ids = 5;
 }
 
 message PbFetchLogReqForBucket {

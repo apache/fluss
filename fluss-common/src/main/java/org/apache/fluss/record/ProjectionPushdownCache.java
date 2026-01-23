@@ -50,26 +50,33 @@ public class ProjectionPushdownCache {
 
     @Nullable
     public ProjectionInfo getProjectionInfo(
-            long tableId, short schemaId, int[] selectedFieldPositions) {
-        ProjectionKey key = new ProjectionKey(tableId, schemaId, selectedFieldPositions);
+            long tableId, short schemaId, int[] selectedColumns, boolean isSelectedByIds) {
+        ProjectionKey key = new ProjectionKey(tableId, schemaId, selectedColumns, isSelectedByIds);
         return projectionCache.getIfPresent(key);
     }
 
     public void setProjectionInfo(
-            long tableId, short schemaId, int[] selectedColumnIds, ProjectionInfo projectionInfo) {
-        ProjectionKey key = new ProjectionKey(tableId, schemaId, selectedColumnIds);
+            long tableId,
+            short schemaId,
+            int[] selectedColumns,
+            boolean isSelectedByIds,
+            ProjectionInfo projectionInfo) {
+        ProjectionKey key = new ProjectionKey(tableId, schemaId, selectedColumns, isSelectedByIds);
         projectionCache.put(key, projectionInfo);
     }
 
     static final class ProjectionKey {
         private final long tableId;
         private final short schemaId;
-        private final int[] selectedColumnIds;
+        private final int[] selectedColumns;
+        private final boolean isSelectedByIds;
 
-        ProjectionKey(long tableId, short schemaId, int[] selectedColumnIds) {
+        ProjectionKey(
+                long tableId, short schemaId, int[] selectedColumns, boolean isSelectedByIds) {
             this.tableId = tableId;
             this.schemaId = schemaId;
-            this.selectedColumnIds = selectedColumnIds;
+            this.selectedColumns = selectedColumns;
+            this.isSelectedByIds = isSelectedByIds;
         }
 
         @Override
@@ -80,12 +87,14 @@ public class ProjectionPushdownCache {
             ProjectionKey that = (ProjectionKey) o;
             return tableId == that.tableId
                     && schemaId == that.schemaId
-                    && Arrays.equals(selectedColumnIds, that.selectedColumnIds);
+                    && Arrays.equals(selectedColumns, that.selectedColumns)
+                    && isSelectedByIds == that.isSelectedByIds;
         }
 
         @Override
         public int hashCode() {
-            return Objects.hash(tableId, schemaId, Arrays.hashCode(selectedColumnIds));
+            return Objects.hash(
+                    tableId, schemaId, Arrays.hashCode(selectedColumns), isSelectedByIds);
         }
     }
 }

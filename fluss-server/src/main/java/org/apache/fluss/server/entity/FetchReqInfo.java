@@ -30,19 +30,25 @@ public final class FetchReqInfo {
     private final long tableId;
     private final long fetchOffset;
     @Nullable private final int[] projectFields;
+    private final boolean isProjectByIds;
 
-    private int maxBytes;
+    private final int maxBytes;
 
     public FetchReqInfo(long tableId, long fetchOffset, int maxBytes) {
-        this(tableId, fetchOffset, maxBytes, null);
+        this(tableId, fetchOffset, maxBytes, null, false);
     }
 
     public FetchReqInfo(
-            long tableId, long fetchOffset, int maxBytes, @Nullable int[] projectFields) {
+            long tableId,
+            long fetchOffset,
+            int maxBytes,
+            @Nullable int[] projectFields,
+            boolean isProjectByIds) {
         this.tableId = tableId;
         this.fetchOffset = fetchOffset;
         this.maxBytes = maxBytes;
         this.projectFields = projectFields;
+        this.isProjectByIds = isProjectByIds;
     }
 
     public long getTableId() {
@@ -53,12 +59,12 @@ public final class FetchReqInfo {
         return fetchOffset;
     }
 
-    public void setFetchMaxBytes(int maxBytes) {
-        this.maxBytes = maxBytes;
-    }
-
     public int getMaxBytes() {
         return maxBytes;
+    }
+
+    public boolean isProjectByIds() {
+        return isProjectByIds;
     }
 
     @Nullable
@@ -77,6 +83,8 @@ public final class FetchReqInfo {
                 + maxBytes
                 + ", projectionFields="
                 + Arrays.toString(projectFields)
+                + ", isProjectByIds="
+                + isProjectByIds
                 + '}';
     }
 
@@ -97,11 +105,14 @@ public final class FetchReqInfo {
             return false;
         }
 
-        return fetchOffset == fetchReqInfo.fetchOffset && maxBytes == fetchReqInfo.maxBytes;
+        return fetchOffset == fetchReqInfo.fetchOffset
+                && maxBytes == fetchReqInfo.maxBytes
+                && isProjectByIds == fetchReqInfo.isProjectByIds;
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(tableId, fetchOffset, maxBytes, Arrays.hashCode(projectFields));
+        return Objects.hash(
+                tableId, fetchOffset, maxBytes, Arrays.hashCode(projectFields), isProjectByIds);
     }
 }

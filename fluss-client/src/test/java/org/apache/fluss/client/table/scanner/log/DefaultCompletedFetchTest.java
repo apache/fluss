@@ -427,7 +427,8 @@ public class DefaultCompletedFetchTest {
                 DATA2_TABLE_ID,
                 testingSchemaGetter,
                 DEFAULT_COMPRESSION,
-                projection.getProjectionInOrder());
+                projection.getProjectionInOrder(),
+                false);
         ByteBuffer buffer =
                 toByteBuffer(
                         fileLogProjection

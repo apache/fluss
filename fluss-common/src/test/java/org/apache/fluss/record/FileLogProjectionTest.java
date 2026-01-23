@@ -20,8 +20,10 @@ package org.apache.fluss.record;
 import org.apache.fluss.exception.InvalidColumnProjectionException;
 import org.apache.fluss.exception.SchemaNotExistException;
 import org.apache.fluss.metadata.LogFormat;
+import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.CloseableIterator;
 
@@ -32,12 +34,15 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.EOFException;
 import java.io.File;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.UUID;
 import java.util.stream.Stream;
@@ -58,6 +63,7 @@ import static org.assertj.core.api.Assertions.fail;
 /** Tests for {@link FileLogProjection}. */
 class FileLogProjectionTest {
 
+    private static final Logger log = LoggerFactory.getLogger(FileLogProjectionTest.class);
     private @TempDir File tempDir;
     private TestingSchemaGetter testingSchemaGetter;
 
@@ -67,8 +73,9 @@ class FileLogProjectionTest {
         testingSchemaGetter.updateLatestSchemaInfo(new SchemaInfo(TestData.DATA2_SCHEMA, 2));
     }
 
-    @Test
-    void testSetCurrentProjection() throws Exception {
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testSetCurrentProjection(boolean isProjectedByIds) throws Exception {
         short schemaId = (short) 2;
         FileLogRecords recordsOfData2RowType =
                 createFileLogRecords(
@@ -87,10 +94,11 @@ class FileLogProjectionTest {
                 projection,
                 recordsOfData2RowType,
                 new int[] {0, 2},
+                isProjectedByIds,
                 recordsOfData2RowType.sizeInBytes());
         assertThat(cache.projectionCache.size()).isEqualTo(1);
         FileLogProjection.ProjectionInfo info1 =
-                cache.getProjectionInfo(1L, schemaId, new int[] {0, 2});
+                cache.getProjectionInfo(1L, schemaId, new int[] {0, 2}, isProjectedByIds);
         assertThat(info1).isNotNull();
         assertThat(info1.nodesProjection.stream().toArray()).isEqualTo(new int[] {0, 2});
         // a int: [0,1] ; b string: [2,3,4] ; c string: [5,6,7]
@@ -102,10 +110,11 @@ class FileLogProjectionTest {
                 projection,
                 recordsOfData2RowType,
                 new int[] {1},
+                isProjectedByIds,
                 recordsOfData2RowType.sizeInBytes());
         assertThat(cache.projectionCache.size()).isEqualTo(2);
         FileLogProjection.ProjectionInfo info2 =
-                cache.getProjectionInfo(2L, schemaId, new int[] {1});
+                cache.getProjectionInfo(2L, schemaId, new int[] {1}, isProjectedByIds);
         assertThat(info2).isNotNull();
         assertThat(info2.nodesProjection.stream().toArray()).isEqualTo(new int[] {1});
         // a int: [0,1] ; b string: [2,3,4] ; c string: [5,6,7]
@@ -209,23 +218,24 @@ class FileLogProjectionTest {
 
     static Stream<Arguments> projectedFieldsArgs() {
         return Stream.of(
-                Arguments.of((Object) new int[] {0}, LOG_MAGIC_VALUE_V0, (short) 1),
-                Arguments.arguments((Object) new int[] {1}, LOG_MAGIC_VALUE_V0, (short) 1),
-                Arguments.arguments((Object) new int[] {0, 1}, LOG_MAGIC_VALUE_V0, (short) 1),
-                Arguments.of((Object) new int[] {0}, LOG_MAGIC_VALUE_V1, (short) 1),
-                Arguments.arguments((Object) new int[] {1}, LOG_MAGIC_VALUE_V1, (short) 1),
-                Arguments.arguments((Object) new int[] {0, 1}, LOG_MAGIC_VALUE_V1, (short) 1),
-                Arguments.of((Object) new int[] {0}, LOG_MAGIC_VALUE_V0, (short) 2),
-                Arguments.arguments((Object) new int[] {1}, LOG_MAGIC_VALUE_V0, (short) 2),
-                Arguments.arguments((Object) new int[] {0, 1}, LOG_MAGIC_VALUE_V0, (short) 2),
-                Arguments.of((Object) new int[] {0}, LOG_MAGIC_VALUE_V1, (short) 2),
-                Arguments.arguments((Object) new int[] {1}, LOG_MAGIC_VALUE_V1, (short) 2),
-                Arguments.arguments((Object) new int[] {0, 1}, LOG_MAGIC_VALUE_V1, (short) 2));
+                Arguments.of(new int[] {0}, LOG_MAGIC_VALUE_V0, (short) 1, true),
+                Arguments.arguments(new int[] {1}, LOG_MAGIC_VALUE_V0, (short) 1, true),
+                Arguments.arguments(new int[] {0, 1}, LOG_MAGIC_VALUE_V0, (short) 1, true),
+                Arguments.of(new int[] {0}, LOG_MAGIC_VALUE_V1, (short) 1, false),
+                Arguments.arguments(new int[] {1}, LOG_MAGIC_VALUE_V1, (short) 1, false),
+                Arguments.arguments(new int[] {0, 1}, LOG_MAGIC_VALUE_V1, (short) 1, false),
+                Arguments.of(new int[] {0}, LOG_MAGIC_VALUE_V0, (short) 2, false),
+                Arguments.arguments(new int[] {1}, LOG_MAGIC_VALUE_V0, (short) 2, false),
+                Arguments.arguments(new int[] {0, 1}, LOG_MAGIC_VALUE_V0, (short) 2, false),
+                Arguments.of(new int[] {0}, LOG_MAGIC_VALUE_V1, (short) 2, true),
+                Arguments.arguments(new int[] {1}, LOG_MAGIC_VALUE_V1, (short) 2, true),
+                Arguments.arguments(new int[] {0, 1}, LOG_MAGIC_VALUE_V1, (short) 2, true));
     }
 
     @ParameterizedTest
     @MethodSource("projectedFieldsArgs")
-    void testProject(int[] projectedFields, byte recordBatchMagic, short schemaId)
+    void testProject(
+            int[] projectedFields, byte recordBatchMagic, short schemaId, boolean isProjectedByIds)
             throws Exception {
         testingSchemaGetter.updateLatestSchemaInfo(new SchemaInfo(TestData.DATA1_SCHEMA, schemaId));
         FileLogRecords fileLogRecords =
@@ -242,6 +252,7 @@ class FileLogProjectionTest {
                         new FileLogProjection(new ProjectionPushdownCache()),
                         fileLogRecords,
                         projectedFields,
+                        isProjectedByIds,
                         Integer.MAX_VALUE);
         List<Object[]> allData = new ArrayList<>();
         allData.addAll(TestData.DATA1);
@@ -412,6 +423,84 @@ class FileLogProjectionTest {
         }
     }
 
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testNestedRowProjection(boolean isProjectedByIds) throws Exception {
+        int schemaId = 1;
+        final Schema schema =
+                Schema.newBuilder()
+                        .column("a", DataTypes.INT())
+                        .column("b", DataTypes.STRING())
+                        .column(
+                                "c",
+                                DataTypes.ROW(
+                                        DataTypes.INT(),
+                                        DataTypes.ROW(DataTypes.INT(), DataTypes.STRING())))
+                        .column("d", DataTypes.INT())
+                        .column("e", DataTypes.STRING())
+                        .build();
+        List<Object[]> data =
+                Arrays.asList(
+                        new Object[] {
+                            1, "a", new Object[] {11, new Object[] {111, "aa"}}, 1111, "aaa"
+                        },
+                        new Object[] {
+                            2, "b", new Object[] {22, new Object[] {222, "bb"}}, 2222, "bbb"
+                        },
+                        new Object[] {
+                            3, "c", new Object[] {33, new Object[] {333, "cc"}}, 3333, "ccc"
+                        },
+                        new Object[] {
+                            4, "d", new Object[] {44, new Object[] {444, "dd"}}, 4444, "ddd"
+                        },
+                        new Object[] {
+                            5, "e", new Object[] {55, new Object[] {555, "ee"}}, 5555, "eee"
+                        });
+
+        int[] projectedFields = new int[] {0, 3, 4};
+        List<Object[]> expected =
+                Arrays.asList(
+                        new Object[] {
+                            1,
+                            isProjectedByIds ? 11 : 1111,
+                            isProjectedByIds ? new Object[] {111, "aa"} : "aaa"
+                        },
+                        new Object[] {
+                            2,
+                            isProjectedByIds ? 22 : 2222,
+                            isProjectedByIds ? new Object[] {222, "bb"} : "bbb"
+                        },
+                        new Object[] {
+                            3,
+                            isProjectedByIds ? 33 : 3333,
+                            isProjectedByIds ? new Object[] {333, "cc"} : "ccc"
+                        },
+                        new Object[] {
+                            4,
+                            isProjectedByIds ? 44 : 4444,
+                            isProjectedByIds ? new Object[] {444, "dd"} : "ddd"
+                        },
+                        new Object[] {
+                            5,
+                            isProjectedByIds ? 55 : 5555,
+                            isProjectedByIds ? new Object[] {555, "ee"} : "eee"
+                        });
+
+        testingSchemaGetter.updateLatestSchemaInfo(new SchemaInfo(schema, 1));
+        FileLogRecords fileLogRecords =
+                createFileLogRecords(schemaId, (byte) 1, schema.getRowType(), data);
+        List<Object[]> results =
+                doProjection(
+                        1L,
+                        schemaId,
+                        new FileLogProjection(new ProjectionPushdownCache()),
+                        fileLogRecords,
+                        projectedFields,
+                        isProjectedByIds,
+                        Integer.MAX_VALUE);
+        assertEquals(results, expected);
+    }
+
     private FileLogRecords createFileWithLogHeader(byte magic, int length) throws Exception {
         ByteBuffer buffer = ByteBuffer.allocate(length).order(ByteOrder.LITTLE_ENDIAN);
         buffer.position(MAGIC_OFFSET);
@@ -471,14 +560,42 @@ class FileLogProjectionTest {
             int[] projectedFields,
             int fetchMaxBytes)
             throws Exception {
+        return doProjection(
+                tableId,
+                schemaId,
+                projection,
+                fileLogRecords,
+                projectedFields,
+                false,
+                fetchMaxBytes);
+    }
+
+    private List<Object[]> doProjection(
+            long tableId,
+            int schemaId,
+            FileLogProjection projection,
+            FileLogRecords fileLogRecords,
+            int[] projectedFields,
+            boolean isProjectedByIds,
+            int fetchMaxBytes)
+            throws Exception {
         projection.setCurrentProjection(
-                tableId, testingSchemaGetter, DEFAULT_COMPRESSION, projectedFields);
+                tableId,
+                testingSchemaGetter,
+                DEFAULT_COMPRESSION,
+                projectedFields,
+                isProjectedByIds);
         LogRecords project =
                 projection.project(
                         fileLogRecords.channel(), 0, fileLogRecords.sizeInBytes(), fetchMaxBytes);
         assertThat(project.sizeInBytes()).isLessThanOrEqualTo(fetchMaxBytes);
-        RowType rowType = testingSchemaGetter.getSchema(schemaId).getRowType();
-        RowType projectedType = rowType.project(projectedFields);
+        Schema schema = testingSchemaGetter.getSchema(schemaId);
+        RowType rowType = schema.getRowType();
+        RowType projectedType =
+                isProjectedByIds
+                        ? FileLogProjection.projectByIds(
+                                rowType, schema.getHighestFieldId(), projectedFields)
+                        : rowType.project(projectedFields);
         List<Object[]> results = new ArrayList<>();
         long expectedOffset = 0L;
         try (LogRecordReadContext context =
@@ -491,24 +608,7 @@ class FileLogProjectionTest {
                         assertThat(record.getChangeType()).isEqualTo(ChangeType.APPEND_ONLY);
                         InternalRow row = record.getRow();
                         assertThat(row.getFieldCount()).isEqualTo(projectedFields.length);
-                        Object[] objs = new Object[projectedFields.length];
-                        for (int i = 0; i < projectedFields.length; i++) {
-                            if (row.isNullAt(i)) {
-                                objs[i] = null;
-                                continue;
-                            }
-                            switch (projectedType.getTypeAt(i).getTypeRoot()) {
-                                case INTEGER:
-                                    objs[i] = row.getInt(i);
-                                    break;
-                                case STRING:
-                                    objs[i] = row.getString(i).toString();
-                                    break;
-                                default:
-                                    throw new IllegalArgumentException(
-                                            "Unsupported type: " + projectedType.getTypeAt(i));
-                            }
-                        }
+                        Object[] objs = getRow(projectedType, row);
                         results.add(objs);
                         expectedOffset++;
                     }
@@ -523,5 +623,31 @@ class FileLogProjectionTest {
         for (int i = 0; i < actual.size(); i++) {
             assertThat(actual.get(i)).isEqualTo(expected.get(i));
         }
+    }
+
+    private static Object[] getRow(RowType projectedType, InternalRow row) {
+        Object[] results = new Object[projectedType.getFieldCount()];
+        for (int i = 0; i < projectedType.getFieldCount(); i++) {
+            if (row.isNullAt(i)) {
+                results[i] = null;
+                continue;
+            }
+            switch (projectedType.getTypeAt(i).getTypeRoot()) {
+                case INTEGER:
+                    results[i] = row.getInt(i);
+                    break;
+                case STRING:
+                    results[i] = row.getString(i).toString();
+                    break;
+                case ROW:
+                    RowType rowType = (RowType) projectedType.getTypeAt(i);
+                    results[i] = getRow(rowType, row.getRow(i, rowType.getFieldCount()));
+                    break;
+                default:
+                    throw new IllegalArgumentException(
+                            "Unsupported type: " + projectedType.getTypeAt(i));
+            }
+        }
+        return results;
     }
 }
