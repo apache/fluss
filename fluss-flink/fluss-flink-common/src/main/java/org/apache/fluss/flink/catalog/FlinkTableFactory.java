@@ -99,11 +99,6 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
         FactoryUtil.TableFactoryHelper helper = FactoryUtil.createTableFactoryHelper(this, context);
         final ReadableConfig tableOptions = helper.getOptions();
         validateSourceOptions(helper, tableOptions);
-        Optional<DataLakeFormat> datalakeFormat = getDatalakeFormat(tableOptions);
-        List<String> prefixesToSkip =
-                new ArrayList<>(Arrays.asList("table.", "client.", "fields."));
-        datalakeFormat.ifPresent(dataLakeFormat -> prefixesToSkip.add(dataLakeFormat + "."));
-        helper.validateExcept(prefixesToSkip.toArray(new String[0]));
 
         boolean isStreamingMode =
                 context.getConfiguration().get(ExecutionOptions.RUNTIME_MODE)
@@ -283,7 +278,8 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
     private static void validateSourceOptions(
             FactoryUtil.TableFactoryHelper helper, ReadableConfig tableOptions) {
         Optional<DataLakeFormat> datalakeFormat = getDatalakeFormat(tableOptions);
-        List<String> prefixesToSkip = new ArrayList<>(Arrays.asList("table.", "client."));
+        List<String> prefixesToSkip =
+                new ArrayList<>(Arrays.asList("table.", "client.", "fields."));
         datalakeFormat.ifPresent(dataLakeFormat -> prefixesToSkip.add(dataLakeFormat + "."));
         helper.validateExcept(prefixesToSkip.toArray(new String[0]));
         FlinkConnectorOptionsUtils.validateTableSourceOptions(tableOptions);
