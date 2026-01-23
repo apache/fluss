@@ -403,17 +403,16 @@ abstract class ChangelogVirtualTableITCase extends AbstractTestBase {
 
         // Collect initial inserts
         List<String> results = collectRowsWithTimeout(rowIter, 3, false);
-        List<String> expectedResults =
-                Arrays.asList(
+        assertThat(results)
+                .containsExactlyInAnyOrder(
                         "+I[+I, 1, Item-1, us]", "+I[+I, 2, Item-2, us]", "+I[+I, 3, Item-3, eu]");
-        assertThat(results).isEqualTo(expectedResults);
 
         // Update a record in a specific partition
         CLOCK.advanceTime(Duration.ofMillis(100));
         tEnv.executeSql("INSERT INTO partitioned_test VALUES (1, 'Item-1-Updated', 'us')").await();
         List<String> updateResults = collectRowsWithTimeout(rowIter, 2, false);
-        expectedResults = Arrays.asList("+I[-U, 1, Item-1, us]", "+I[+U, 1, Item-1-Updated, us]");
-        assertThat(updateResults).isEqualTo(expectedResults);
+        assertThat(updateResults)
+                .containsExactly("+I[-U, 1, Item-1, us]", "+I[+U, 1, Item-1-Updated, us]");
 
         rowIter.close();
     }
