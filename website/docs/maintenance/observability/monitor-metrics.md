@@ -294,7 +294,7 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
   </thead>
   <tbody>
     <tr>
-      <th rowspan="13"><strong>coordinator</strong></th>
+      <th rowspan="20"><strong>coordinator</strong></th>
       <td style={{textAlign: 'center', verticalAlign: 'middle' }} rowspan="8">-</td>
       <td>activeCoordinatorCount</td>
       <td>The number of active CoordinatorServer in this cluster.</td>
@@ -361,6 +361,43 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
      <tr>
       <td>allKvSnapshotSize</td>
       <td>all kv snapshot size of each table bucket.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td rowspan="3">lakeTiering</td>
+      <td>pendingTablesCount</td>
+      <td>The number of tables waiting to be tiered.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>runningTablesCount</td>
+      <td>The number of tables currently being tiered.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>failuresTotal</td>
+      <td>The total number of tiering failures across all tables.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td rowspan="4">lakeTiering_table</td>
+      <td>lastSuccessAgeMs</td>
+      <td>Time in milliseconds since the last successful tiering operation for this table. For newly created tables that have never been tiered, this represents the time since table creation.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>lastDurationMs</td>
+      <td>Duration in milliseconds of the last tiering operation for this table.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>failuresTotal</td>
+      <td>The total number of tiering failures for this table.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>state</td>
+      <td>Current tiering state of the table: 0=New, 1=Initialized, 2=Scheduled, 3=Pending, 4=Tiering, 5=Tiered, 6=Failed. Returns -1 if the table is not in the tiering system.</td>
       <td>Gauge</td>
     </tr>
   </tbody>

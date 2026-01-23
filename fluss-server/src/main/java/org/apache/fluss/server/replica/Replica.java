@@ -535,7 +535,7 @@ public final class Replica {
                 MetricNames.LOG_LAKE_PENDING_RECORDS,
                 () ->
                         getLakeLogEndOffset() < 0L
-                                ? -1
+                                ? getLogHighWatermark() - getLogStartOffset()
                                 : getLogHighWatermark() - getLakeLogEndOffset());
         lakeTieringMetricGroup.gauge(
                 MetricNames.LOG_LAKE_TIMESTAMP_LAG,

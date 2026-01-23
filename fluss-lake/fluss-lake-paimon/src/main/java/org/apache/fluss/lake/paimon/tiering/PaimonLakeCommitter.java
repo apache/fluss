@@ -22,13 +22,19 @@ import org.apache.fluss.lake.committer.CommittedLakeSnapshot;
 import org.apache.fluss.lake.committer.CommitterInitContext;
 import org.apache.fluss.lake.committer.LakeCommitter;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.utils.types.Tuple2;
 
 import org.apache.paimon.CoreOptions;
+import org.apache.paimon.FileStore;
 import org.apache.paimon.Snapshot;
 import org.apache.paimon.catalog.Catalog;
+import org.apache.paimon.manifest.FileKind;
 import org.apache.paimon.manifest.IndexManifestEntry;
 import org.apache.paimon.manifest.ManifestCommittable;
 import org.apache.paimon.manifest.ManifestEntry;
+import org.apache.paimon.manifest.ManifestFile;
+import org.apache.paimon.manifest.ManifestFileMeta;
+import org.apache.paimon.manifest.ManifestList;
 import org.apache.paimon.manifest.SimpleFileEntry;
 import org.apache.paimon.table.FileStoreTable;
 import org.apache.paimon.table.sink.CommitCallback;
@@ -92,6 +98,14 @@ public class PaimonLakeCommitter implements LakeCommitter<PaimonWriteResult, Pai
             tableCommit = fileStoreTable.newCommit(FLUSS_LAKE_TIERING_COMMIT_USER);
             tableCommit.commit(manifestCommittable);
 
+            Snapshot snapshot = fileStoreTable.snapshotManager().latestSnapshot();
+            if (snapshot != null) {
+                Tuple2<Integer, Long> info = manifestListInfo(fileStoreTable.store(), snapshot);
+                System.out.printf(
+                        "Committed snapshot %d with %d files and %d bytes.%n",
+                        snapshot.id(), info.f0, info.f1);
+            }
+
             Long commitSnapshotId = currentCommitSnapshotId.get();
             currentCommitSnapshotId.remove();
 
@@ -103,6 +117,27 @@ public class PaimonLakeCommitter implements LakeCommitter<PaimonWriteResult, Pai
             }
             throw new IOException(t);
         }
+    }
+
+    private Tuple2<Integer, Long> manifestListInfo(FileStore<?> store, Snapshot snapshot) {
+        ManifestList manifestList = store.manifestListFactory().create();
+        ManifestFile manifestFile = store.manifestFileFactory().create();
+        List<ManifestFileMeta> manifestFileMetas = manifestList.readDataManifests(snapshot);
+        int fileCount = 0;
+        long fileSize = 0;
+        for (ManifestFileMeta manifestFileMeta : manifestFileMetas) {
+            List<ManifestEntry> manifestEntries = manifestFile.read(manifestFileMeta.fileName());
+            for (ManifestEntry entry : manifestEntries) {
+                if (entry.kind() == FileKind.ADD) {
+                    fileSize += entry.file().fileSize();
+                    fileCount++;
+                } else {
+                    fileSize -= entry.file().fileSize();
+                    fileCount--;
+                }
+            }
+        }
+        return Tuple2.of(fileCount, fileSize);
     }
 
     @Override

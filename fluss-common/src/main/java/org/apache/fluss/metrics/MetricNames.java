@@ -53,6 +53,17 @@ public class MetricNames {
     public static final String KV_ALL_SNAPSHOT_SIZE = "allKvSnapshotSize";
     public static final String SERVER_PHYSICAL_STORAGE_REMOTE_KV_SIZE = "remoteKvSize";
 
+    // for lake tiering metrics - global level
+    public static final String LAKE_TIERING_PENDING_TABLES_COUNT = "pendingTablesCount";
+    public static final String LAKE_TIERING_RUNNING_TABLES_COUNT = "runningTablesCount";
+    public static final String LAKE_TIERING_FAILURES_TOTAL = "failuresTotal";
+
+    // for lake tiering table-level metrics
+    public static final String LAKE_TIERING_LAST_SUCCESS_AGE_MS = "lastSuccessAgeMs";
+    public static final String LAKE_TIERING_LAST_DURATION_MS = "lastDurationMs";
+    public static final String LAKE_TIERING_TABLE_FAILURES_TOTAL = "failuresTotal";
+    public static final String LAKE_TIERING_TABLE_STATE = "state";
+
     // --------------------------------------------------------------------------------------------
     // metrics for tablet server
     // --------------------------------------------------------------------------------------------

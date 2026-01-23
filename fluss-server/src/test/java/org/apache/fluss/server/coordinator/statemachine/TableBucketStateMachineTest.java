@@ -118,7 +118,8 @@ class TableBucketStateMachineTest {
                                 new Configuration(),
                                 new LakeCatalogDynamicLoader(new Configuration(), null, true)),
                         new Configuration());
-        lakeTableTieringManager = new LakeTableTieringManager();
+        lakeTableTieringManager =
+                new LakeTableTieringManager(TestingMetricGroups.LAKE_TIERING_METRICS);
     }
 
     @Test
