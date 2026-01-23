@@ -55,4 +55,9 @@ public class TieringReachMaxDurationEvent implements SourceEvent {
     public int hashCode() {
         return Objects.hashCode(tableId);
     }
+
+    @Override
+    public String toString() {
+        return "TieringReachMaxDurationEvent{" + "tableId=" + tableId + '}';
+    }
 }

@@ -329,8 +329,12 @@ public class TieringSplitReader<WriteResult>
                 writeResults.put(bucket, bucketWriteResult);
                 finishedSplitIds.put(bucket, split.splitId());
                 LOG.info(
-                        "Split {} is forced to be finished due to tiering reach max duration.",
-                        split.splitId());
+                        "Split {} is forced to be finished due to tiering reach max duration, "
+                                + "write result {}, logEndOffset {}, timestamp {}",
+                        split.splitId(),
+                        bucketWriteResult,
+                        logEndOffset,
+                        timestamp);
                 currentTieringSplitsIterator.remove();
             }
         }
@@ -343,16 +347,20 @@ public class TieringSplitReader<WriteResult>
             ScanRecords scanRecords) throws IOException {
         Map<TableBucket, TableBucketWriteResult<WriteResult>> writeResults = new HashMap<>();
         Map<TableBucket, String> finishedSplitIds = new HashMap<>();
+        LOG.info("for log records to tier table {}.", currentTableId);
         for (TableBucket bucket : scanRecords.buckets()) {
+            LOG.info("tiering table bucket {}.", bucket);
             List<ScanRecord> bucketScanRecords = scanRecords.records(bucket);
             if (bucketScanRecords.isEmpty()) {
                 continue;
             }
+            LOG.info("tiering table bucket is not empty {}.", bucket);
             // no any stopping offset, just skip handle the records for the bucket
             Long stoppingOffset = currentTableStoppingOffsets.get(bucket);
             if (stoppingOffset == null) {
                 continue;
             }
+            LOG.info("tiering table bucket stoppingOffset is not empty {}.", bucket);
             LakeWriter<WriteResult> lakeWriter =
                     getOrCreateLakeWriter(
                             bucket, currentTableSplitsByBucket.get(bucket).getPartitionName());
@@ -551,6 +559,10 @@ public class TieringSplitReader<WriteResult>
      * duration, and it will be force completed in the next fetch cycle.
      */
     public void handleTableReachTieringMaxDuration(long tableId) {
+        LOG.info(
+                "handleTableReachTieringMaxDuration, currentTableId: {}, pendingTieringSplits: {}",
+                currentTableId,
+                pendingTieringSplits);
         if ((currentTableId != null && currentTableId.equals(tableId))
                 || pendingTieringSplits.containsKey(tableId)) {
             LOG.info("Table {} reach tiering max duration, will force to complete.", tableId);

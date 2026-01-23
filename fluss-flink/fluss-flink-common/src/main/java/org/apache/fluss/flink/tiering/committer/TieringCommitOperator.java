@@ -178,6 +178,10 @@ public class TieringCommitOperator<WriteResult, Committable>
         // empty, means all write result is null, which is a empty commit,
         // return null to skip the empty commit
         if (committableWriteResults.isEmpty()) {
+            LOG.info(
+                    "Commit tiering write results is empty for table {}, table path {}",
+                    tableId,
+                    tablePath);
             return null;
         }
 

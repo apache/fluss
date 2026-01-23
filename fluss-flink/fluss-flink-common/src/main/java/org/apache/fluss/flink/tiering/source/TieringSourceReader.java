@@ -31,6 +31,8 @@ import org.apache.flink.api.connector.source.SourceReader;
 import org.apache.flink.api.connector.source.SourceReaderContext;
 import org.apache.flink.connector.base.source.reader.RecordsWithSplitIds;
 import org.apache.flink.connector.base.source.reader.synchronization.FutureCompletingBlockingQueue;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
 import java.util.Collections;
@@ -47,6 +49,8 @@ public final class TieringSourceReader<WriteResult>
                 TableBucketWriteResult<WriteResult>,
                 TieringSplit,
                 TieringSplitState> {
+
+    private static final Logger LOG = LoggerFactory.getLogger(TieringSourceReader.class);
 
     private final Connection connection;
 
@@ -121,6 +125,7 @@ public final class TieringSourceReader<WriteResult>
             TieringReachMaxDurationEvent reachMaxDurationEvent =
                     (TieringReachMaxDurationEvent) sourceEvent;
             long tableId = reachMaxDurationEvent.getTableId();
+            LOG.info("Received reach max duration for table {}", tableId);
             ((TieringSourceFetcherManager<WriteResult>) splitFetcherManager)
                     .markTableReachTieringMaxDuration(tableId);
         }

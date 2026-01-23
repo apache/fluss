@@ -27,6 +27,8 @@ import org.apache.flink.connector.base.source.reader.fetcher.SplitFetcher;
 import org.apache.flink.connector.base.source.reader.fetcher.SplitFetcherTask;
 import org.apache.flink.connector.base.source.reader.splitreader.SplitReader;
 import org.apache.flink.connector.base.source.reader.synchronization.FutureCompletingBlockingQueue;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.Collection;
 import java.util.function.Consumer;
@@ -39,6 +41,8 @@ import java.util.function.Supplier;
 public class TieringSourceFetcherManager<WriteResult>
         extends SingleThreadFetcherManagerAdapter<
                 TableBucketWriteResult<WriteResult>, TieringSplit> {
+
+    private static final Logger LOG = LoggerFactory.getLogger(TieringSourceFetcherManager.class);
 
     public TieringSourceFetcherManager(
             FutureCompletingBlockingQueue<RecordsWithSplitIds<TableBucketWriteResult<WriteResult>>>
@@ -53,6 +57,7 @@ public class TieringSourceFetcherManager<WriteResult>
     public void markTableReachTieringMaxDuration(long tableId) {
         if (!fetchers.isEmpty()) {
             // The fetcher thread is still running. This should be the majority of the cases.
+            LOG.info("fetchers is not empty, marking tiering max duration for table {}", tableId);
             fetchers.values()
                     .forEach(
                             splitFetcher ->
@@ -61,6 +66,9 @@ public class TieringSourceFetcherManager<WriteResult>
         } else {
             SplitFetcher<TableBucketWriteResult<WriteResult>, TieringSplit> splitFetcher =
                     createSplitFetcher();
+            LOG.info(
+                    "fetchers is empty, enqueue marking tiering max duration for table {}",
+                    tableId);
             enqueueMarkTableReachTieringMaxDurationTask(splitFetcher, tableId);
             startFetcher(splitFetcher);
         }

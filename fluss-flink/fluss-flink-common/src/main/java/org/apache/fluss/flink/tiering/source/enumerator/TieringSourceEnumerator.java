@@ -264,6 +264,7 @@ public class TieringSourceEnumerator
             FinishedTieringEvent finishedTieringEvent = (FinishedTieringEvent) sourceEvent;
             long finishedTableId = finishedTieringEvent.getTableId();
             Long tieringEpoch = tieringTableEpochs.remove(finishedTableId);
+            LOG.info("Got FinishedTieringEvent for tiering table {}. ", finishedTableId);
             if (tieringEpoch == null) {
                 // shouldn't happen, warn it
                 LOG.warn(
@@ -271,8 +272,10 @@ public class TieringSourceEnumerator
                         finishedTableId);
             } else {
                 boolean isForceFinished = tieringReachMaxDurationsTables.remove(finishedTableId);
+                LOG.info("Before finishedTables table {}.", finishedTables);
                 finishedTables.put(
                         finishedTableId, TieringFinishInfo.from(tieringEpoch, isForceFinished));
+                LOG.info("After finishedTables table {}.", finishedTables);
             }
         }
 
@@ -296,6 +299,7 @@ public class TieringSourceEnumerator
 
         if (!finishedTables.isEmpty() || !failedTableEpochs.isEmpty()) {
             // call one round of heartbeat to notify table has been finished or failed
+            LOG.info("Finished tiering table {}.", finishedTables);
             this.context.callAsync(
                     this::requestTieringTableSplitsViaHeartBeat, this::generateAndAssignSplits);
         }
@@ -338,7 +342,10 @@ public class TieringSourceEnumerator
             // we broadcast all for simplicity
             Set<Integer> readers = new HashSet<>(context.registeredReaders().keySet());
             for (int reader : readers) {
-                context.sendEventToSourceReader(reader, new TieringReachMaxDurationEvent(tableId));
+                TieringReachMaxDurationEvent tieringReachMaxDurationEvent =
+                        new TieringReachMaxDurationEvent(tableId);
+                LOG.info("Send {} to reader {}", tieringReachMaxDurationEvent, reader);
+                context.sendEventToSourceReader(reader, tieringReachMaxDurationEvent);
             }
         }
     }
@@ -369,6 +376,7 @@ public class TieringSourceEnumerator
                 if (!pendingSplits.isEmpty()) {
                     TieringSplit tieringSplit = pendingSplits.remove(0);
                     context.assignSplit(tieringSplit, nextAwaitingReader);
+                    LOG.info("Assigning split {} to readers {}", tieringSplit, nextAwaitingReader);
                     readersAwaitingSplit.remove(nextAwaitingReader);
                 }
             }
@@ -390,9 +398,14 @@ public class TieringSourceEnumerator
                         this.flussCoordinatorEpoch);
 
         Tuple3<Long, Long, TablePath> lakeTieringInfo = null;
+        // report heartbeat with request table to fluss coordinator
+        LOG.info(
+                "currentFinishedTables: {}, currentFailedTableEpochs: {}, tieringTableEpochs: {}",
+                currentFinishedTables,
+                currentFailedTableEpochs,
+                tieringTableEpochs);
 
         if (pendingSplits.isEmpty() && !readersAwaitingSplit.isEmpty()) {
-            // report heartbeat with request table to fluss coordinator
             LakeTieringHeartbeatResponse heartbeatResponse =
                     waitHeartbeatResponse(
                             coordinatorGateway.lakeTieringHeartbeat(
@@ -406,6 +419,7 @@ public class TieringSourceEnumerator
                                 TablePath.of(
                                         tieringTable.getTablePath().getDatabaseName(),
                                         tieringTable.getTablePath().getTableName()));
+                LOG.info("Tiering table {} has been requested.", lakeTieringInfo);
             } else {
                 LOG.info("No available Tiering table found, will poll later.");
             }
