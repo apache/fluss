@@ -1,6 +1,6 @@
 ---
-title: "Client Feature Support Matrix"
-sidebar_position: 1
+title: "Client Support Matrix"
+sidebar_position: 2
 ---
 
 # Client Feature Support Matrix
