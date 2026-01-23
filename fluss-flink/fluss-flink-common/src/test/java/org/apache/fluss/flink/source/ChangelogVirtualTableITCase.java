@@ -233,7 +233,6 @@ abstract class ChangelogVirtualTableITCase extends AbstractTestBase {
 
     @Test
     public void testProjectionOnChangelogTable() throws Exception {
-        // Create a primary key table with 1 bucket and extra columns to test projection
         tEnv.executeSql(
                 "CREATE TABLE projection_test ("
                         + "  id INT NOT NULL,"
