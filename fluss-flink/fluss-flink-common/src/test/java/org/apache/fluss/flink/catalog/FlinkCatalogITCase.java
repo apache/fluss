@@ -893,8 +893,9 @@ abstract class FlinkCatalogITCase {
                         + "  id INT NOT NULL,"
                         + "  name STRING,"
                         + "  amount BIGINT,"
-                        + "  PRIMARY KEY (id) NOT ENFORCED"
-                        + ") WITH ('bucket.num' = '1')");
+                        + "  PRIMARY KEY (id, name) NOT ENFORCED"
+                        + ") PARTITIONED BY (name) "
+                        + "WITH ('bucket.num' = '1')");
 
         // Get the $changelog virtual table via catalog API
         CatalogTable changelogTable =
@@ -907,13 +908,14 @@ abstract class FlinkCatalogITCase {
                 Schema.newBuilder()
                         .column("_change_type", DataTypes.STRING().notNull())
                         .column("_log_offset", DataTypes.BIGINT().notNull())
-                        .column("_commit_timestamp", DataTypes.TIMESTAMP_LTZ().notNull())
+                        .column("_commit_timestamp", DataTypes.TIMESTAMP_LTZ(3).notNull())
                         .column("id", DataTypes.INT().notNull())
-                        .column("name", DataTypes.STRING())
+                        .column("name", DataTypes.STRING().notNull())
                         .column("amount", DataTypes.BIGINT())
                         .build();
 
         assertThat(changelogTable.getUnresolvedSchema()).isEqualTo(expectedSchema);
+        assertThat(changelogTable.getPartitionKeys()).isEqualTo(Collections.singletonList("name"));
 
         // Verify options are inherited from base table
         assertThat(changelogTable.getOptions()).containsEntry("bucket.num", "1");

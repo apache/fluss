@@ -956,7 +956,7 @@ public class FlinkCatalog extends AbstractCatalog {
         // Add metadata columns first
         builder.column("_change_type", STRING().notNull());
         builder.column("_log_offset", BIGINT().notNull());
-        builder.column("_commit_timestamp", TIMESTAMP_LTZ().notNull());
+        builder.column("_commit_timestamp", TIMESTAMP_LTZ(3).notNull());
 
         // Add all original columns (preserves all column attributes including comments)
         builder.fromColumns(originalSchema.getColumns());

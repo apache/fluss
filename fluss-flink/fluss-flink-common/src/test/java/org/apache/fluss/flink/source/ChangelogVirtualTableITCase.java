@@ -46,6 +46,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 
 import static org.apache.fluss.flink.FlinkConnectorOptions.BOOTSTRAP_SERVERS;
 import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.collectRowsWithTimeout;
@@ -100,6 +101,8 @@ abstract class ChangelogVirtualTableITCase extends AbstractTestBase {
         tEnv.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 2);
         tEnv.executeSql("create database " + DEFAULT_DB);
         tEnv.useDatabase(DEFAULT_DB);
+        // reset clock before each test
+        CLOCK.advanceTime(-CLOCK.milliseconds(), TimeUnit.MILLISECONDS);
     }
 
     @AfterEach
@@ -153,7 +156,7 @@ abstract class ChangelogVirtualTableITCase extends AbstractTestBase {
                 .isEqualTo("+I[_change_type, STRING, false, null, null, null]");
         assertThat(schemaRows.get(1)).isEqualTo("+I[_log_offset, BIGINT, false, null, null, null]");
         assertThat(schemaRows.get(2))
-                .isEqualTo("+I[_commit_timestamp, TIMESTAMP_LTZ(6), false, null, null, null]");
+                .isEqualTo("+I[_commit_timestamp, TIMESTAMP_LTZ(3), false, null, null, null]");
 
         // Verify data columns maintain their types
         // Note: Primary key info is not preserved in $changelog virtual table
@@ -177,13 +180,21 @@ abstract class ChangelogVirtualTableITCase extends AbstractTestBase {
 
         String createStatement = createTableStatement.toString();
         // Verify metadata columns are included in the CREATE TABLE statement
-        assertThat(createStatement).contains("_change_type");
-        assertThat(createStatement).contains("_log_offset");
-        assertThat(createStatement).contains("_commit_timestamp");
-        // Verify original columns are also included
-        assertThat(createStatement).contains("id");
-        assertThat(createStatement).contains("name");
-        assertThat(createStatement).contains("score");
+        assertThat(createStatement)
+                .contains(
+                        "CREATE TABLE `testcatalog`.`test_changelog_db`.`complex_table$changelog` (\n"
+                                + "  `_change_type` VARCHAR(2147483647) NOT NULL,\n"
+                                + "  `_log_offset` BIGINT NOT NULL,\n"
+                                + "  `_commit_timestamp` TIMESTAMP(3) WITH LOCAL TIME ZONE NOT NULL,\n"
+                                + "  `id` INT NOT NULL,\n"
+                                + "  `name` VARCHAR(2147483647),\n"
+                                + "  `score` DOUBLE,\n"
+                                + "  `is_active` BOOLEAN,\n"
+                                + "  `created_date` DATE,\n"
+                                + "  `metadata` MAP<VARCHAR(2147483647) NOT NULL, VARCHAR(2147483647)>,\n"
+                                + "  `tags` ARRAY<VARCHAR(2147483647)>\n"
+                                // with options contains random properties, skip checking
+                                + ")");
     }
 
     @Test
@@ -350,6 +361,20 @@ abstract class ChangelogVirtualTableITCase extends AbstractTestBase {
         List<String> latestResults = collectRowsWithTimeout(rowIterLatest, 1, true);
         assertThat(latestResults).hasSize(1);
         assertThat(latestResults.get(0)).isEqualTo("+I[+I, 6, v6]");
+
+        // 3. Test scan.startup.mode='timestamp' - should read records from specific timestamp
+        // read between batch1 and batch2
+        String optionsTimestamp =
+                " /*+ OPTIONS('scan.startup.mode' = 'timestamp', 'scan.startup.timestamp' = '150') */";
+        String queryTimestamp = "SELECT * FROM startup_mode_test$changelog " + optionsTimestamp;
+        CloseableIterator<Row> rowIterTimestamp = tEnv.executeSql(queryTimestamp).collect();
+        List<String> timestampResults = collectRowsWithTimeout(rowIterTimestamp, 2, true);
+        assertThat(timestampResults).hasSize(2);
+        // Should contain records from batch2 only
+        assertThat(timestampResults)
+                .containsExactlyInAnyOrder(
+                        "+I[+I, 3, 1970-01-01T00:00:00.200Z, 4, v4]",
+                        "+I[+I, 4, 1970-01-01T00:00:00.200Z, 5, v5]");
     }
 
     @Test
@@ -378,26 +403,17 @@ abstract class ChangelogVirtualTableITCase extends AbstractTestBase {
 
         // Collect initial inserts
         List<String> results = collectRowsWithTimeout(rowIter, 3, false);
-        assertThat(results).hasSize(3);
-
-        // Verify all are INSERT change types
-        for (String result : results) {
-            assertThat(result).startsWith("+I[+I,");
-        }
-
-        // Verify we have data from both partitions
-        long usCount = results.stream().filter(r -> r.contains("us")).count();
-        long euCount = results.stream().filter(r -> r.contains("eu")).count();
-        assertThat(usCount).isEqualTo(2);
-        assertThat(euCount).isEqualTo(1);
+        List<String> expectedResults =
+                Arrays.asList(
+                        "+I[+I, 1, Item-1, us]", "+I[+I, 2, Item-2, us]", "+I[+I, 3, Item-3, eu]");
+        assertThat(results).isEqualTo(expectedResults);
 
         // Update a record in a specific partition
         CLOCK.advanceTime(Duration.ofMillis(100));
         tEnv.executeSql("INSERT INTO partitioned_test VALUES (1, 'Item-1-Updated', 'us')").await();
         List<String> updateResults = collectRowsWithTimeout(rowIter, 2, false);
-        assertThat(updateResults).hasSize(2);
-        assertThat(updateResults.get(0)).contains("-U", "1", "Item-1", "us");
-        assertThat(updateResults.get(1)).contains("+U", "1", "Item-1-Updated", "us");
+        expectedResults = Arrays.asList("+I[-U, 1, Item-1, us]", "+I[+U, 1, Item-1-Updated, us]");
+        assertThat(updateResults).isEqualTo(expectedResults);
 
         rowIter.close();
     }

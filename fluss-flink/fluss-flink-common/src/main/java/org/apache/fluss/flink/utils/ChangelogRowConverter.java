@@ -110,7 +110,7 @@ public class ChangelogRowConverter implements RecordToFlinkRowConverter {
         fields.add(
                 new org.apache.flink.table.types.logical.RowType.RowField(
                         TableDescriptor.COMMIT_TIMESTAMP_COLUMN,
-                        new LocalZonedTimestampType(false, 6)));
+                        new LocalZonedTimestampType(false, 3)));
 
         // Add all original fields
         fields.addAll(originalType.getFields());

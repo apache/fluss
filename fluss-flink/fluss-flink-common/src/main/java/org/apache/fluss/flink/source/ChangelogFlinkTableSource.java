@@ -53,8 +53,6 @@ public class ChangelogFlinkTableSource implements ScanTableSource {
     // _commit_timestamp)
     private final org.apache.flink.table.types.logical.RowType changelogOutputType;
     private final org.apache.flink.table.types.logical.RowType dataColumnsType;
-    private final int[] primaryKeyIndexes;
-    private final int[] bucketKeyIndexes;
     private final int[] partitionKeyIndexes;
     private final boolean streaming;
     private final FlinkConnectorOptionsUtils.StartupOptions startupOptions;
@@ -78,8 +76,6 @@ public class ChangelogFlinkTableSource implements ScanTableSource {
             TablePath tablePath,
             Configuration flussConfig,
             org.apache.flink.table.types.logical.RowType changelogOutputType,
-            int[] primaryKeyIndexes,
-            int[] bucketKeyIndexes,
             int[] partitionKeyIndexes,
             boolean streaming,
             FlinkConnectorOptionsUtils.StartupOptions startupOptions,
@@ -89,8 +85,6 @@ public class ChangelogFlinkTableSource implements ScanTableSource {
         this.flussConfig = flussConfig;
         // The changelogOutputType already includes metadata columns from FlinkCatalog
         this.changelogOutputType = changelogOutputType;
-        this.primaryKeyIndexes = primaryKeyIndexes;
-        this.bucketKeyIndexes = bucketKeyIndexes;
         this.partitionKeyIndexes = partitionKeyIndexes;
         this.streaming = streaming;
         this.startupOptions = startupOptions;
@@ -161,7 +155,11 @@ public class ChangelogFlinkTableSource implements ScanTableSource {
                 new FlinkSource<>(
                         flussConfig,
                         tablePath,
-                        hasPrimaryKey(),
+                        // Changelog/binlog virtual tables are purely log-based and don't have a
+                        // primary key, setting hasPrimaryKey "false" to ensure the enumerator
+                        // fetches log-only splits (not snapshot splits), which is the correct
+                        // behavior for virtual tables.
+                        false,
                         isPartitioned(),
                         flussRowType,
                         projectedFields,
@@ -197,8 +195,6 @@ public class ChangelogFlinkTableSource implements ScanTableSource {
                         tablePath,
                         flussConfig,
                         changelogOutputType,
-                        primaryKeyIndexes,
-                        bucketKeyIndexes,
                         partitionKeyIndexes,
                         streaming,
                         startupOptions,
@@ -217,10 +213,6 @@ public class ChangelogFlinkTableSource implements ScanTableSource {
 
     // TODO: Implement projection pushdown handling for metadata columns
     // TODO: Implement filter pushdown
-
-    private boolean hasPrimaryKey() {
-        return primaryKeyIndexes.length > 0;
-    }
 
     private boolean isPartitioned() {
         return partitionKeyIndexes.length > 0;

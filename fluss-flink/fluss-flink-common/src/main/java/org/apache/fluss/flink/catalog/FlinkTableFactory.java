@@ -322,13 +322,6 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
 
         ResolvedCatalogTable resolvedCatalogTable = context.getCatalogTable();
 
-        int[] bucketKeyIndexes = getBucketKeyIndexes(tableOptions, dataColumnsType);
-
-        // Changelog/binlog virtual tables are purely log-based and don't have a primary key.
-        // Setting primaryKeyIndexes to empty ensures the enumerator fetches log-only splits
-        // (not snapshot splits), which is the correct behavior for virtual tables.
-        int[] primaryKeyIndexes = new int[0];
-
         // Partition key indexes based on data columns
         int[] partitionKeyIndexes =
                 resolvedCatalogTable.getPartitionKeys().stream()
@@ -344,8 +337,6 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
                 TablePath.of(tableIdentifier.getDatabaseName(), baseTableName),
                 toFlussClientConfig(catalogTableOptions, context.getConfiguration()),
                 tableOutputType,
-                primaryKeyIndexes,
-                bucketKeyIndexes,
                 partitionKeyIndexes,
                 isStreamingMode,
                 startupOptions,
