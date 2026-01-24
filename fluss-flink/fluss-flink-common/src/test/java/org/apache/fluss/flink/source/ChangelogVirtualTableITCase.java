@@ -54,7 +54,6 @@ import static org.apache.fluss.flink.utils.FlinkTestBase.writeRows;
 import static org.apache.fluss.server.testutils.FlussClusterExtension.BUILTIN_DATABASE;
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Integration test for $changelog virtual table functionality. */
 abstract class ChangelogVirtualTableITCase extends AbstractTestBase {
@@ -198,23 +197,39 @@ abstract class ChangelogVirtualTableITCase extends AbstractTestBase {
     }
 
     @Test
-    public void testChangelogVirtualTableWithNonPrimaryKeyTable() {
-        // Create a non-primary key table (log table)
+    public void testChangelogVirtualTableWithLogTable() throws Exception {
+        // Create a log table (no primary key) with 1 bucket for predictable offsets
         tEnv.executeSql(
                 "CREATE TABLE events ("
                         + "  event_id INT,"
-                        + "  event_type STRING,"
-                        + "  event_time TIMESTAMP"
-                        + ")");
+                        + "  event_type STRING"
+                        + ") WITH ('bucket.num' = '1')");
 
-        // Attempt to query changelog virtual table should fail
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "events");
+
+        // Query the changelog virtual table
         String query = "SELECT * FROM events$changelog";
+        CloseableIterator<Row> rowIter = tEnv.executeSql(query).collect();
 
-        // The error message is wrapped in a CatalogException, so we check for the root cause
-        assertThatThrownBy(() -> tEnv.executeSql(query).await())
-                .hasRootCauseMessage(
-                        "Virtual $changelog tables are only supported for primary key tables. "
-                                + "Table test_changelog_db.events does not have a primary key.");
+        // Insert data into log table - log tables only have APPEND_ONLY (+A) change type
+        CLOCK.advanceTime(Duration.ofMillis(1000));
+        writeRows(conn, tablePath, Arrays.asList(row(1, "click"), row(2, "view")), true);
+
+        // Collect and validate - log table changelog should have +A change type
+        List<String> results = collectRowsWithTimeout(rowIter, 2, false);
+        assertThat(results).hasSize(2);
+
+        // Format: +I[_change_type, _log_offset, _commit_timestamp, event_id, event_type]
+        // Log tables use +A (append-only) change type
+        assertThat(results.get(0)).isEqualTo("+I[+A, 0, 1970-01-01T00:00:01Z, 1, click]");
+        assertThat(results.get(1)).isEqualTo("+I[+A, 1, 1970-01-01T00:00:01Z, 2, view]");
+
+        // Insert more data with new timestamp
+        CLOCK.advanceTime(Duration.ofMillis(1000));
+        writeRows(conn, tablePath, Arrays.asList(row(3, "purchase")), true);
+
+        List<String> moreResults = collectRowsWithTimeout(rowIter, 1, true);
+        assertThat(moreResults.get(0)).isEqualTo("+I[+A, 2, 1970-01-01T00:00:02Z, 3, purchase]");
     }
 
     @Test
