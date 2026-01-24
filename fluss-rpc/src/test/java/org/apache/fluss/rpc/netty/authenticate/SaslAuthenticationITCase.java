@@ -220,7 +220,8 @@ public class SaslAuthenticationITCase {
 
             Configuration serverConfig = new Configuration();
             serverConfig.setString(ConfigOptions.SERVER_SECURITY_PROTOCOL_MAP.key(), "CLIENT:sasl");
-            serverConfig.setString("security.sasl.enabled.mechanisms", "GSSAPI");
+            serverConfig.setString(
+                    ConfigOptions.SERVER_SASL_ENABLED_MECHANISMS_CONFIG.key(), "GSSAPI");
             String serverJaas =
                     String.format(
                             "com.sun.security.auth.module.Krb5LoginModule required "

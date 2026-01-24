@@ -198,7 +198,8 @@ abstract class FlinkAuthorizationITCase extends AbstractTestBase {
             // Configure Fluss Cluster
             Configuration serverConf = initConfig();
             serverConf.setString(ConfigOptions.SERVER_SECURITY_PROTOCOL_MAP.key(), "CLIENT:sasl");
-            serverConf.setString("security.sasl.enabled.mechanisms", "GSSAPI");
+            serverConf.setString(
+                    ConfigOptions.SERVER_SASL_ENABLED_MECHANISMS_CONFIG.key(), "GSSAPI");
 
             String serverJaas =
                     String.format(
