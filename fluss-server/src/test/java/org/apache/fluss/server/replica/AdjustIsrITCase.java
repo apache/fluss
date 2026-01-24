@@ -98,7 +98,7 @@ public class AdjustIsrITCase {
                                 RpcMessageTestUtils.newProduceLogRequest(
                                         tableId,
                                         tb.getBucket(),
-                                        -1,
+                                        1,
                                         genMemoryLogRecordsByObject(DATA1)))
                         .get(),
                 0,
