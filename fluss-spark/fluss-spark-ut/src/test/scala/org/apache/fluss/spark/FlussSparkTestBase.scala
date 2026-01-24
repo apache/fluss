@@ -25,7 +25,7 @@ import org.apache.fluss.config.{ConfigOptions, Configuration}
 import org.apache.fluss.metadata.{DataLakeFormat, TableDescriptor, TablePath}
 import org.apache.fluss.row.InternalRow
 import org.apache.fluss.server.testutils.FlussClusterExtension
-import org.apache.fluss.spark.extensions.FlussSparkSessionExtensions
+import org.apache.fluss.spark.FlussSparkSessionExtensions
 
 import org.apache.spark.sql.QueryTest
 import org.apache.spark.sql.test.SharedSparkSession

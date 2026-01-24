@@ -15,13 +15,13 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.spark.extensions
+package org.apache.fluss.spark
 
 import org.apache.fluss.spark.catalyst.analysis.FlussProcedureResolver
 import org.apache.fluss.spark.execution.FlussStrategy
 
 import org.apache.spark.sql.SparkSessionExtensions
-import org.apache.spark.sql.catalyst.parser.extensions.FlussSparkSqlParser
+import org.apache.spark.sql.catalyst.parser.FlussSparkSqlParser
 
 /** Spark session extensions for Fluss. */
 class FlussSparkSessionExtensions extends (SparkSessionExtensions => Unit) {

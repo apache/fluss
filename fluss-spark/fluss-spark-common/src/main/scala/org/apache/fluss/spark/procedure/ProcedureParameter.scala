@@ -19,33 +19,13 @@ package org.apache.fluss.spark.procedure
 
 import org.apache.spark.sql.types.DataType
 
-trait ProcedureParameter {
-
-  def name(): String
-
-  def dataType(): DataType
-
-  def required(): Boolean
-}
+case class ProcedureParameter(name: String, dataType: DataType, isRequired: Boolean = false)
 
 object ProcedureParameter {
 
   def required(name: String, dataType: DataType): ProcedureParameter =
-    ProcedureParameterImpl(name, dataType, isRequired = true)
+    ProcedureParameter(name, dataType, isRequired = true)
 
   def optional(name: String, dataType: DataType): ProcedureParameter =
-    ProcedureParameterImpl(name, dataType, isRequired = false)
-}
-
-private case class ProcedureParameterImpl(
-    paramName: String,
-    paramDataType: DataType,
-    isRequired: Boolean)
-  extends ProcedureParameter {
-
-  override def name(): String = paramName
-
-  override def dataType(): DataType = paramDataType
-
-  override def required(): Boolean = isRequired
+    ProcedureParameter(name, dataType, isRequired = false)
 }

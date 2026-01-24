@@ -33,20 +33,14 @@ class CompactProcedure(tableCatalog: TableCatalog) extends BaseProcedure(tableCa
   }
 
   override def call(args: InternalRow): Array[InternalRow] = {
-    val tableIdent = toIdentifier(args.getString(0), CompactProcedure.PARAMETERS(0).name())
+    val tableIdent = toIdentifier(args.getString(0), CompactProcedure.PARAMETERS(0).name)
     val sparkTable = loadSparkTable(tableIdent)
 
-    try {
-      val tablePath = toTablePath(tableIdent)
-      val admin = getAdmin(sparkTable)
-
-      val message = s"Compact operation queued for table $tablePath"
-
-      Array(newInternalRow(UTF8String.fromString(message)))
-    } catch {
-      case e: Exception =>
-        throw new RuntimeException(s"Failed to compact table: ${e.getMessage}", e)
-    }
+    val tablePath = toTablePath(tableIdent)
+    throw new UnsupportedOperationException(
+      s"Compact procedure for table $tablePath is not yet supported. " +
+        "See https://github.com/apache/fluss/issues/2406 for more details."
+    )
   }
 
   override def description(): String = {

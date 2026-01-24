@@ -17,7 +17,7 @@
 
 package org.apache.fluss.spark.catalyst.analysis
 
-import org.apache.fluss.spark.catalog.ProcedureCatalog
+import org.apache.fluss.spark.catalog.SupportsProcedures
 import org.apache.fluss.spark.catalyst.plans.logical._
 import org.apache.fluss.spark.procedure.ProcedureParameter
 
@@ -35,11 +35,11 @@ case class FlussProcedureResolver(sparkSession: SparkSession) extends Rule[Logic
   override def apply(plan: LogicalPlan): LogicalPlan = plan.resolveOperators {
     case FlussCallStatement(nameParts, arguments) if nameParts.nonEmpty =>
       val (catalog, identifier) = resolveCatalogAndIdentifier(nameParts)
-      if (catalog == null || !catalog.isInstanceOf[ProcedureCatalog]) {
-        throw new RuntimeException(s"Catalog ${nameParts.head} is not a ProcedureCatalog")
+      if (catalog == null || !catalog.isInstanceOf[SupportsProcedures]) {
+        throw new RuntimeException(s"Catalog ${nameParts.head} is not a SupportsProcedures")
       }
 
-      val procedureCatalog = catalog.asInstanceOf[ProcedureCatalog]
+      val procedureCatalog = catalog.asInstanceOf[SupportsProcedures]
       val procedure = procedureCatalog.loadProcedure(identifier)
       val parameters = procedure.parameters
       val normalizedParameters = normalizeParameters(parameters)
@@ -96,7 +96,7 @@ case class FlussProcedureResolver(sparkSession: SparkSession) extends Rule[Logic
     parameters.map {
       parameter =>
         val normalizedName = parameter.name.toLowerCase(Locale.ROOT)
-        if (parameter.required) {
+        if (parameter.isRequired) {
           ProcedureParameter.required(normalizedName, parameter.dataType)
         } else {
           ProcedureParameter.optional(normalizedName, parameter.dataType)
@@ -113,7 +113,8 @@ case class FlussProcedureResolver(sparkSession: SparkSession) extends Rule[Logic
         s"Parameter names ${duplicateParamNames.mkString("[", ",", "]")} are duplicated.")
     }
     parameters.sliding(2).foreach {
-      case Seq(previousParam, currentParam) if !previousParam.required && currentParam.required =>
+      case Seq(previousParam, currentParam)
+          if !previousParam.isRequired && currentParam.isRequired =>
         throw new RuntimeException(
           s"Optional parameters should be after required ones but $currentParam is after $previousParam.")
       case _ =>
@@ -132,7 +133,7 @@ case class FlussProcedureResolver(sparkSession: SparkSession) extends Rule[Logic
       arguments: Seq[FlussCallArgument]): Seq[Expression] = {
     val nameToPositionMap = parameters.map(_.name).zipWithIndex.toMap
     val nameToArgumentMap = buildNameToArgumentMap(parameters, arguments, nameToPositionMap)
-    val missingParamNames = parameters.filter(_.required).collect {
+    val missingParamNames = parameters.filter(_.isRequired).collect {
       case parameter if !nameToArgumentMap.contains(parameter.name) => parameter.name
     }
     if (missingParamNames.nonEmpty) {
@@ -144,7 +145,7 @@ case class FlussProcedureResolver(sparkSession: SparkSession) extends Rule[Logic
       case (name, argument) => argumentExpressions(nameToPositionMap(name)) = argument.expr
     }
     parameters.foreach {
-      case parameter if !parameter.required && !nameToArgumentMap.contains(parameter.name) =>
+      case parameter if !parameter.isRequired && !nameToArgumentMap.contains(parameter.name) =>
         argumentExpressions(nameToPositionMap(parameter.name)) =
           Literal.create(null, parameter.dataType)
       case _ =>

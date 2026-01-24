@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package org.apache.spark.sql.catalyst.parser.extensions
+package org.apache.spark.sql.catalyst.parser
 
 import org.antlr.v4.runtime._
 import org.antlr.v4.runtime.atn.PredictionMode
@@ -35,7 +35,7 @@ import org.apache.spark.sql.types.{DataType, StructType}
  */
 class FlussSparkSqlParser(delegate: ParserInterface) extends ParserInterface {
 
-  private lazy val astBuilder = new FlussSqlExtensionsAstBuilder(delegate)
+  private lazy val astBuilder = new FlussSqlAstBuilder(delegate)
 
   override def parsePlan(sqlText: String): LogicalPlan = {
     try {
@@ -73,16 +73,15 @@ class FlussSparkSqlParser(delegate: ParserInterface) extends ParserInterface {
   }
 
   private def parse[T](sqlText: String)(
-      toResult: org.apache.spark.sql.catalyst.parser.extensions.FlussSqlExtensionsParser => T)
-      : T = {
-    val lexer = new FlussSqlExtensionsLexer(
+      toResult: org.apache.spark.sql.catalyst.parser.FlussSparkSqlParserParser => T): T = {
+    val lexer = new FlussSparkSqlParserLexer(
       new UpperCaseCharStream(CharStreams.fromString(sqlText)))
     lexer.removeErrorListeners()
     lexer.addErrorListener(FlussParseErrorListener)
 
     val tokenStream = new CommonTokenStream(lexer)
     val parser =
-      new org.apache.spark.sql.catalyst.parser.extensions.FlussSqlExtensionsParser(tokenStream)
+      new org.apache.spark.sql.catalyst.parser.FlussSparkSqlParserParser(tokenStream)
     parser.removeErrorListeners()
     parser.addErrorListener(FlussParseErrorListener)
 

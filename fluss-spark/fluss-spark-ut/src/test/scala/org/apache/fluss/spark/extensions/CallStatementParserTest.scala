@@ -17,6 +17,7 @@
 
 package org.apache.fluss.spark.extensions
 
+import org.apache.fluss.spark.FlussSparkSessionExtensions
 import org.apache.fluss.spark.catalyst.plans.logical.{FlussCallArgument, FlussCallStatement, FlussNamedArgument, FlussPositionalArgument}
 
 import org.apache.spark.sql.SparkSession

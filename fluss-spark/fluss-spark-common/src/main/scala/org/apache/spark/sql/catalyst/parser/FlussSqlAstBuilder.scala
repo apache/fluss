@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package org.apache.spark.sql.catalyst.parser.extensions
+package org.apache.spark.sql.catalyst.parser
 
 import org.apache.fluss.spark.catalyst.plans.logical._
 
@@ -24,8 +24,8 @@ import org.antlr.v4.runtime.misc.Interval
 import org.antlr.v4.runtime.tree.{ParseTree, TerminalNode}
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.catalyst.expressions.Expression
+import org.apache.spark.sql.catalyst.parser.FlussSparkSqlParserParser._
 import org.apache.spark.sql.catalyst.parser.ParserInterface
-import org.apache.spark.sql.catalyst.parser.extensions.FlussSqlExtensionsParser._
 import org.apache.spark.sql.catalyst.plans.logical._
 
 import scala.collection.JavaConverters._
@@ -34,10 +34,10 @@ import scala.collection.JavaConverters._
  * The AST Builder for Fluss SQL extensions.
  *
  * @param delegate
- *   The extension parser.
+ *   The main Spark SQL parser.
  */
-class FlussSqlExtensionsAstBuilder(delegate: ParserInterface)
-  extends FlussSqlExtensionsBaseVisitor[AnyRef]
+class FlussSqlAstBuilder(delegate: ParserInterface)
+  extends FlussSparkSqlParserBaseVisitor[AnyRef]
   with Logging {
 
   /** Creates a single statement of extension statements. */

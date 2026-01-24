@@ -16,7 +16,7 @@
  * limitations under the License.
  */
 
-grammar FlussSqlExtensions;
+grammar FlussSparkSqlParser;
 
 @lexer::members {
   public boolean isValidDecimal() {

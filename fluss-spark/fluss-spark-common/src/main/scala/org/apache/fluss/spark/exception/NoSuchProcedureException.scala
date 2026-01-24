@@ -15,15 +15,13 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.spark.catalog
-
-import org.apache.fluss.spark.analysis.NoSuchProcedureException
-import org.apache.fluss.spark.procedure.Procedure
+package org.apache.fluss.spark.exception
 
 import org.apache.spark.sql.connector.catalog.Identifier
 
-trait ProcedureCatalog {
+class NoSuchProcedureException(message: String) extends Exception(message) {
 
-  @throws[NoSuchProcedureException]
-  def loadProcedure(identifier: Identifier): Procedure
+  def this(identifier: Identifier) = {
+    this(s"Procedure not found: $identifier")
+  }
 }

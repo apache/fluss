@@ -11,13 +11,13 @@ Fluss provides stored procedures to perform administrative and management operat
 To enable Fluss procedures in Spark, you need to configure the Spark session extensions:
 
 ```scala
-spark.conf.set("spark.sql.extensions", "org.apache.fluss.spark.extensions.FlussSparkSessionExtensions")
+spark.conf.set("spark.sql.extensions", "org.apache.fluss.spark.FlussSparkSessionExtensions")
 ```
 
 Or in `spark-defaults.conf`:
 
 ```properties
-spark.sql.extensions=org.apache.fluss.spark.extensions.FlussSparkSessionExtensions
+spark.sql.extensions=org.apache.fluss.spark.FlussSparkSessionExtensions
 ```
 
 ## Syntax
@@ -67,7 +67,7 @@ Procedures will throw exceptions in the following cases:
 ```scala
 // Start Spark with Fluss extensions
 val spark = SparkSession.builder()
-  .config("spark.sql.extensions", "org.apache.fluss.spark.extensions.FlussSparkSessionExtensions")
+  .config("spark.sql.extensions", "org.apache.fluss.spark.FlussSparkSessionExtensions")
   .config("spark.sql.catalog.fluss_catalog", "org.apache.fluss.spark.SparkCatalog")
   .config("spark.sql.catalog.fluss_catalog.bootstrap.servers", "localhost:9092")
   .getOrCreate()
