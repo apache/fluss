@@ -6,17 +6,19 @@ sidebar_position: 2
 # Fluss Python Client
 
 ## Overview
-The Fluss Python Client provides an interface for interacting with Fluss clusters. It supports both synchronous and asynchronous operations for managing resources and handling data.
+The Fluss Python Client provides an interface for interacting with Fluss clusters. It supports asynchronous operations for managing resources and handling data.
 
 The client provides two main APIs:
 * **Admin API**: For managing databases, tables, partitions, and retrieving metadata.
 * **Table API**: For reading from and writing to Fluss tables.
 
 ## Installation
-To use the Fluss Python client, you need to install the `fluss-python` package.
+The Fluss Python client is provided as bindings within the Rust client repository. To install it from source:
 
 ```bash
-pip install fluss-python
+git clone https://github.com/apache/fluss-rust.git
+cd fluss-rust/bindings/python
+pip install .
 ```
 
 ## Initialization
@@ -29,6 +31,7 @@ from fluss.config import Configuration
 
 # Create configuration
 conf = Configuration()
+# Adjust according to where your Fluss cluster is running
 conf.set_string("bootstrap.servers", "localhost:9123")
 
 # Create connection
@@ -74,7 +77,6 @@ descriptor.add_custom_property("owner", "data-team")
 
 # Create database (ignore_if_exists=True)
 admin.create_database("my_db", descriptor, True)
-print("Database created successfully")
 ```
 
 ### Creating a Table
@@ -120,18 +122,16 @@ table = connection.get_table("my_db.user_table")
 #### Writing to a Primary Key Table
 
 ```python
-from fluss.client.write import UpsertWriter
 from datetime import datetime
 
 # Create writer
 writer = table.new_upsert().create_writer()
 
-# Prepare data
-# Note: Data must be passed as a list of values matching the schema
+# Prepare data as a list of values matching the schema
 row1 = ["1", 20, datetime.now(), True]
 row2 = ["2", 22, datetime.now(), True]
 
-# Upsert data
+# Upsert data and flush
 writer.upsert(row1)
 writer.upsert(row2)
 
@@ -155,7 +155,7 @@ writer.flush()
 To read data, create a `LogScanner` and subscribe to buckets.
 
 ```python
-from fluss.client.scanner import LogScanner
+import time
 
 # Create scanner
 scanner = table.new_scan().create_log_scanner()
@@ -166,17 +166,13 @@ for i in range(num_buckets):
     scanner.subscribe_from_beginning(i)
 
 # Poll for records
-import time
-
 while True:
     scan_records = scanner.poll(1000) # timeout in ms
     for bucket in scan_records.buckets():
-        records = scan_records.records(bucket)
-        for record in records:
+        for record in scan_records.records(bucket):
             row = record.get_row()
             print(f"Received row: {row}")
-    
-    time.sleep(1)
+    time.sleep(0.1)
 ```
 
 ### Lookup
@@ -188,7 +184,6 @@ You can perform key-based lookups on Primary Key tables.
 lookuper = table.new_lookup().create_lookuper()
 
 # Lookup by key
-# Key must be passed as a list of values corresponding to PK columns
 key = ["1"] 
 result_row = lookuper.lookup(key)
 
