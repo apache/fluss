@@ -17,6 +17,7 @@
 
 package org.apache.fluss.client.table;
 
+import org.apache.commons.lang3.StringUtils;
 import org.apache.fluss.client.Connection;
 import org.apache.fluss.client.ConnectionFactory;
 import org.apache.fluss.client.admin.ClientToServerITCaseBase;
@@ -54,8 +55,6 @@ import org.apache.fluss.types.BigIntType;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.types.StringType;
-
-import org.apache.commons.lang3.StringUtils;
 import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -63,7 +62,6 @@ import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import javax.annotation.Nullable;
-
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -1748,7 +1746,8 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                         .logFormat(LogFormat.COMPACTED)
                         .build();
         TablePath path = TablePath.of("test_db_1", "test_pk_compacted_latest");
-        createTable(path, td, false);
+        long tableId = createTable(path, td, false);
+        FLUSS_CLUSTER_EXTENSION.waitUntilTableReady(tableId);
 
         try (Table table = conn.getTable(path)) {
             LogScanner scanner = createLogScanner(table);
