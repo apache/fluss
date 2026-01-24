@@ -6,19 +6,20 @@ sidebar_position: 3
 # Fluss Rust Client
 
 ## Overview
-The Fluss Rust Client provides an interface for interacting with Fluss clusters. It supports asynchronous operations for managing resources and handling data.
+The Fluss Rust Client provides a high-performance, asynchronous interface for interacting with Fluss clusters. Built on top of the Tokio runtime, it serves as the core engine for other language bindings.
 
 The client provides two main APIs:
-* **Admin API**: For managing databases, tables, partitions, and retrieving metadata.
-* **Table API**: For reading from and writing to Fluss tables.
+* **Admin API**: For managing databases, tables, and retrieving metadata.
+* **Table API**: For high-performance data reading and writing.
 
 ## Installation
-To use the Fluss Rust client, add the following dependency to your `Cargo.toml` file:
+The Fluss Rust client is currently available via the official Git repository. Add it to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-fluss-client = "0.6.0" # Replace with the latest version
-tokio = { version = "1", features = ["full"] }
+# Install directly from the official Apache repository
+fluss-client = { git = "https://github.com/apache/fluss-rust.git" }
+tokio = { version = "1.0", features = ["full"] }
 ```
 
 ## Initialization
@@ -28,40 +29,22 @@ The `Connection` object is the entry point for interacting with Fluss. It is cre
 The `Connection` object is thread-safe and can be shared across multiple tasks. It is recommended to create a single `Connection` instance per application and use it to create multiple `Admin` and `Table` instances.
 
 ```rust
-use fluss_client::Connection;
+use fluss_client::connection::Connection;
 use fluss_client::config::Configuration;
-use fluss_client::admin::Admin;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Create configuration
-    let mut conf = Configuration::default();
+    let mut conf = Configuration::new();
+    // Adjust according to where your Fluss cluster is running
     conf.set_string("bootstrap.servers", "localhost:9123");
 
-    // Create connection
-    let connection = Connection::create(conf).await?;
-
+    let connection = Connection::new(conf).await?;
+    
     // Obtain Admin instance
-    let admin = connection.get_admin();
-    let databases = admin.list_databases().await?;
-    println!("Databases: {:?}", databases);
-
+    let admin = connection.admin().await;
+    
     Ok(())
 }
-```
-
-### SASL Authentication
-If your Fluss cluster uses SASL authentication, configure the security properties:
-
-```rust
-    let mut conf = Configuration::default();
-    conf.set_string("bootstrap.servers", "localhost:9123");
-    conf.set_string("client.security.protocol", "sasl");
-    conf.set_string("client.security.sasl.mechanism", "PLAIN");
-    conf.set_string("client.security.sasl.username", "alice");
-    conf.set_string("client.security.sasl.password", "alice-secret");
-
-    let connection = Connection::create(conf).await?;
 ```
 
 ## Async Operations
@@ -76,45 +59,30 @@ The `Admin` API allows you to manage databases and tables.
 ```rust
 use fluss_client::admin::DatabaseDescriptor;
 
-// Create database descriptor
-let descriptor = DatabaseDescriptor::builder()
-    .comment("This is a test database")
-    .add_custom_property("owner", "data-team")
-    .build();
+let mut descriptor = DatabaseDescriptor::new();
+descriptor.set_comment("Test database");
 
-// Create database (ignore_if_exists=true)
 admin.create_database("my_db", descriptor, true).await?;
-println!("Database created successfully");
 ```
 
 ### Creating a Table
 
 ```rust
 use fluss_client::metadata::{Schema, TableDescriptor};
-use fluss_client::types::DataTypes;
+use fluss_client::types::DataType;
 
-// Define schema
 let schema = Schema::builder()
-    .column("id", DataTypes::STRING())
-    .column("age", DataTypes::INT())
-    .column("created_at", DataTypes::TIMESTAMP())
-    .column("is_active", DataTypes::BOOLEAN())
+    .column("id", DataType::String)
+    .column("value", DataType::Int)
     .primary_key(vec!["id"])
     .build();
 
-// Create table descriptor
 let table_descriptor = TableDescriptor::builder()
     .schema(schema)
     .distributed_by(1, vec!["id"])
     .build();
 
-// Create table
-let table_path = "my_db.user_table";
-admin.create_table(table_path, table_descriptor, false).await?;
-
-// Get table info
-let table_info = admin.get_table_info(table_path).await?;
-println!("Table Info: {:?}", table_info);
+admin.create_table("my_db.my_table", table_descriptor, false).await?;
 ```
 
 ## Table API
@@ -124,7 +92,7 @@ println!("Table Info: {:?}", table_info);
 To write data, first obtain a `Table` instance. Fluss supports `UpsertWriter` for Primary Key tables and `AppendWriter` for Log tables.
 
 ```rust
-let table = connection.get_table("my_db.user_table").await?;
+let table = connection.get_table("my_db.my_table").await?;
 ```
 
 #### Writing to a Primary Key Table
