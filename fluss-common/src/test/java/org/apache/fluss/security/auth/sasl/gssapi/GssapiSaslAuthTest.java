@@ -22,6 +22,7 @@ import org.apache.fluss.security.auth.ServerAuthenticator;
 import org.apache.fluss.security.auth.sasl.authenticator.SaslClientAuthenticator;
 import org.apache.fluss.security.auth.sasl.authenticator.SaslServerAuthenticator;
 import org.apache.fluss.security.auth.sasl.jaas.DefaultLogin;
+import org.apache.fluss.utils.FileUtils;
 
 import org.apache.hadoop.minikdc.MiniKdc;
 import org.junit.jupiter.api.AfterEach;
@@ -110,7 +111,7 @@ class GssapiSaslAuthTest {
             kdc.stop();
         }
         System.clearProperty("java.security.krb5.conf");
-        deleteDir(workDir);
+        FileUtils.deleteDirectoryQuietly(workDir);
     }
 
     @Test
@@ -241,18 +242,6 @@ class GssapiSaslAuthTest {
         assertThat(login.reLoginCount.get()).isGreaterThan(0);
 
         login.close();
-    }
-
-    private void deleteDir(File file) {
-        if (file.isDirectory()) {
-            File[] files = file.listFiles();
-            if (files != null) {
-                for (File f : files) {
-                    deleteDir(f);
-                }
-            }
-        }
-        file.delete();
     }
 
     static class TestableDefaultLogin extends DefaultLogin {
