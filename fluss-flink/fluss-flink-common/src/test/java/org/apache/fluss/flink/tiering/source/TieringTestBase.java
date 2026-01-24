@@ -271,7 +271,8 @@ public class TieringTestBase extends AbstractTestBase {
         RowType rowType = tableDescriptor.getSchema().getRowType();
         // use lake keyEncoder and bucketAssigner fot tiering tests
         KeyEncoder keyEncoder =
-                KeyEncoder.of(rowType, tableDescriptor.getBucketKeys(), DataLakeFormat.PAIMON);
+                KeyEncoder.ofBucketKeyEncoder(
+                        rowType, tableDescriptor.getBucketKeys(), DataLakeFormat.PAIMON);
         HashBucketAssigner hashBucketAssigner =
                 new HashBucketAssigner(
                         DEFAULT_BUCKET_NUM, BucketingFunction.of(DataLakeFormat.PAIMON));
@@ -325,7 +326,8 @@ public class TieringTestBase extends AbstractTestBase {
         RowType rowType = tableDescriptor.getSchema().getRowType();
         // use lake keyEncoder and bucketAssigner fot tiering tests
         KeyEncoder keyEncoder =
-                KeyEncoder.of(rowType, tableDescriptor.getBucketKeys(), DataLakeFormat.PAIMON);
+                KeyEncoder.ofBucketKeyEncoder(
+                        rowType, tableDescriptor.getBucketKeys(), DataLakeFormat.PAIMON);
         HashBucketAssigner hashBucketAssigner =
                 new HashBucketAssigner(
                         DEFAULT_BUCKET_NUM, BucketingFunction.of(DataLakeFormat.PAIMON));
