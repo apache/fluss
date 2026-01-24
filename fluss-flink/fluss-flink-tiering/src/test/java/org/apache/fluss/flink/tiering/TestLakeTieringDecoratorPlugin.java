@@ -17,10 +17,16 @@
 
 package org.apache.fluss.flink.tiering;
 
-/** The entrypoint for Flink to tier fluss data to lake format like paimon. */
-public class FlussLakeTieringEntrypoint {
+/** Test implementation of {@link LakeTieringDecoratorPlugin}. */
+public class TestLakeTieringDecoratorPlugin implements LakeTieringDecoratorPlugin {
 
-    public static void main(String[] args) throws Exception {
-        new FlussLakeTiering(args).run();
+    @Override
+    public String identifier() {
+        return "test-decorator-1";
+    }
+
+    @Override
+    public LakeTieringDecorator createLakeTieringDecorator() {
+        return new TestLakeTieringDecorator();
     }
 }
