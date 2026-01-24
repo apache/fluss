@@ -773,26 +773,20 @@ class KvTabletTest {
             kvTablet.putAsLeader(kvRecordBatch2, null);
             endOffset = logTablet.localLogEndOffset();
             assertThat(endOffset).isEqualTo(offsetBefore + i + 1);
+            MemoryLogRecords emptyLogs =
+                    logRecords(
+                            readLogRowType,
+                            offsetBefore + i,
+                            Collections.emptyList(),
+                            Collections.emptyList());
+            MultiBytesView bytesView =
+                    MultiBytesView.builder()
+                            .addBytes(
+                                    expectedLogs.getMemorySegment(), 0, expectedLogs.sizeInBytes())
+                            .addBytes(emptyLogs.getMemorySegment(), 0, emptyLogs.sizeInBytes())
+                            .build();
+            expectedLogs = MemoryLogRecords.pointToBytesView(bytesView);
 
-            // the empty batch will be read if no projection,
-            // the empty batch will not be read if has projection
-            if (!doProjection) {
-                MemoryLogRecords emptyLogs =
-                        logRecords(
-                                readLogRowType,
-                                offsetBefore + i,
-                                Collections.emptyList(),
-                                Collections.emptyList());
-                MultiBytesView bytesView =
-                        MultiBytesView.builder()
-                                .addBytes(
-                                        expectedLogs.getMemorySegment(),
-                                        0,
-                                        expectedLogs.sizeInBytes())
-                                .addBytes(emptyLogs.getMemorySegment(), 0, emptyLogs.sizeInBytes())
-                                .build();
-                expectedLogs = MemoryLogRecords.pointToBytesView(bytesView);
-            }
             actualLogRecords = readLogRecords(logTablet, 0, logProjection);
             assertThatLogRecords(actualLogRecords)
                     .withSchema(readLogRowType)
@@ -969,31 +963,25 @@ class KvTabletTest {
             endOffset = logTablet.localLogEndOffset();
             assertThat(endOffset).isEqualTo(offsetBefore + i + 1);
 
-            // the empty batch will be read if no projection,
-            // the empty batch will not be read if has projection
-            if (!doProjection) {
-                MemoryLogRecords emptyLogs =
-                        logRecords(
-                                readLogRowType,
-                                offsetBefore + i,
-                                Collections.emptyList(),
-                                Collections.emptyList());
-                MultiBytesView bytesView =
-                        MultiBytesView.builder()
-                                .addBytes(
-                                        expectedLogs.getMemorySegment(),
-                                        0,
-                                        expectedLogs.sizeInBytes())
-                                .addBytes(emptyLogs.getMemorySegment(), 0, emptyLogs.sizeInBytes())
-                                .build();
-                expectedLogs = MemoryLogRecords.pointToBytesView(bytesView);
-            }
-            actualLogRecords = readLogRecords(logTablet, 0, logProjection);
-            assertThatLogRecords(actualLogRecords)
-                    .withSchema(readLogRowType)
-                    .assertCheckSum(!doProjection)
-                    .isEqualTo(expectedLogs);
+            MemoryLogRecords emptyLogs =
+                    logRecords(
+                            readLogRowType,
+                            offsetBefore + i,
+                            Collections.emptyList(),
+                            Collections.emptyList());
+            MultiBytesView bytesView =
+                    MultiBytesView.builder()
+                            .addBytes(
+                                    expectedLogs.getMemorySegment(), 0, expectedLogs.sizeInBytes())
+                            .addBytes(emptyLogs.getMemorySegment(), 0, emptyLogs.sizeInBytes())
+                            .build();
+            expectedLogs = MemoryLogRecords.pointToBytesView(bytesView);
         }
+        actualLogRecords = readLogRecords(logTablet, 0, logProjection);
+        assertThatLogRecords(actualLogRecords)
+                .withSchema(readLogRowType)
+                .assertCheckSum(!doProjection)
+                .isEqualTo(expectedLogs);
 
         List<KvRecord> kvData3 =
                 Arrays.asList(
