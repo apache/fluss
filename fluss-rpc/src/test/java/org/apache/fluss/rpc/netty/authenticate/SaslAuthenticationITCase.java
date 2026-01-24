@@ -35,6 +35,7 @@ import org.apache.fluss.rpc.netty.server.RequestsMetrics;
 import org.apache.fluss.rpc.protocol.ApiKeys;
 import org.apache.fluss.security.auth.sasl.gssapi.FlussMiniKdc;
 import org.apache.fluss.security.auth.sasl.jaas.TestJaasConfig;
+import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.NetUtils;
 
 import org.apache.hadoop.minikdc.MiniKdc;
@@ -163,7 +164,7 @@ public class SaslAuthenticationITCase {
             testAuthentication(clientConfig, serverConfig);
         } finally {
             kdc.stop();
-            deleteDir(workDir);
+            FileUtils.deleteDirectory(workDir);
         }
     }
 
@@ -250,20 +251,8 @@ public class SaslAuthenticationITCase {
                     .hasMessageContaining("Failed to load login manager");
         } finally {
             kdc.stop();
-            deleteDir(workDir);
+            FileUtils.deleteDirectory(workDir);
         }
-    }
-
-    private void deleteDir(File file) {
-        if (file.isDirectory()) {
-            File[] files = file.listFiles();
-            if (files != null) {
-                for (File f : files) {
-                    deleteDir(f);
-                }
-            }
-        }
-        file.delete();
     }
 
     @Test

@@ -33,6 +33,7 @@ import org.apache.fluss.security.acl.Resource;
 import org.apache.fluss.security.auth.sasl.gssapi.FlussMiniKdc;
 import org.apache.fluss.security.auth.sasl.jaas.LoginManager;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
+import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.ParentResourceBlockingClassLoader;
 import org.apache.fluss.utils.TemporaryClassLoaderContext;
 
@@ -282,20 +283,8 @@ abstract class FlinkAuthorizationITCase extends AbstractTestBase {
         } finally {
             kdc.stop();
             System.clearProperty("java.security.krb5.conf");
-            deleteDir(workDir);
+            FileUtils.deleteDirectory(workDir);
         }
-    }
-
-    private void deleteDir(File file) {
-        if (file.isDirectory()) {
-            File[] files = file.listFiles();
-            if (files != null) {
-                for (File f : files) {
-                    deleteDir(f);
-                }
-            }
-        }
-        file.delete();
     }
 
     @Test
