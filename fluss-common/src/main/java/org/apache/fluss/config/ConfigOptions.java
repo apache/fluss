@@ -55,6 +55,9 @@ import static org.apache.fluss.config.ConfigOptions.NoKeyAssigner.STICKY;
 public class ConfigOptions {
     public static final String DEFAULT_LISTENER_NAME = "FLUSS";
 
+    public static final int KV_FORMAT_VERSION_2 = 2;
+    public static final int CURRENT_KV_FORMAT_VERSION = KV_FORMAT_VERSION_2;
+
     @Internal
     public static final String[] PARENT_FIRST_LOGGING_PATTERNS =
             new String[] {
@@ -1304,6 +1307,27 @@ public class ConfigOptions {
                     .withDescription(
                             "The format of the kv records in kv store. The default value is `compacted`. "
                                     + "The supported formats are `compacted` and `indexed`.");
+
+    /** The version of the KV format. */
+    public static final ConfigOption<Integer> TABLE_KV_FORMAT_VERSION =
+            key("table.kv.format-version")
+                    .intType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The version of the kv format. "
+                                    + "Automatically set by the coordinator during table creation if not configured by users. "
+                                    + "Note: The datalake encoding and bucketing strategy mentioned below only takes effect "
+                                    + "when 'datalake.format' is configured at cluster level. "
+                                    + "Version Behaviors: "
+                                    + "(1) Version 1: Tables created before 'table.kv.format-version' was introduced are treated as version 1. "
+                                    + "Uses datalake's encoder (e.g., Paimon/Iceberg) for both primary key and bucket key encoding. "
+                                    + "This may not support prefix lookup properly because some datalake encoders (like Paimon) "
+                                    + "don't guarantee that encoded bucket key bytes are a prefix of encoded primary key bytes. "
+                                    + "(2) Version 2 (current): New tables use Fluss's default encoder for primary key encoding "
+                                    + "when bucket key differs from primary key, which ensures proper prefix lookup support. "
+                                    + "When bucket key equals primary key (default bucket key), it still uses datalake's encoder "
+                                    + "for optimization (encoded bytes can be reused for bucket calculation). "
+                                    + "Bucket key encoding always uses datalake's encoder to align with datalake bucket calculation.");
 
     public static final ConfigOption<Boolean> TABLE_AUTO_PARTITION_ENABLED =
             key("table.auto-partition.enabled")

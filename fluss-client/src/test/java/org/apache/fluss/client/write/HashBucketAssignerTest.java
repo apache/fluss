@@ -133,7 +133,8 @@ class HashBucketAssignerTest {
         InternalRow row3 = row(2, "4", "a");
         InternalRow row4 = row(2, "4", "b");
         KeyEncoder keyEncoder =
-                KeyEncoder.of(schema.getRowType(), bucketKey, DataLakeFormat.PAIMON);
+                KeyEncoder.ofBucketKeyEncoder(
+                        schema.getRowType(), bucketKey, DataLakeFormat.PAIMON);
         HashBucketAssigner bucketAssigner =
                 new HashBucketAssigner(3, BucketingFunction.of(DataLakeFormat.PAIMON));
 

@@ -118,7 +118,8 @@ class AutoPartitionedTableITCase extends ClientToServerITCaseBase {
                         .column("b", DataTypes.STRING())
                         .column("c", DataTypes.BIGINT())
                         .column("d", DataTypes.STRING())
-                        .primaryKey("a", "b", "c")
+                        .column("e", DataTypes.STRING())
+                        .primaryKey("a", "b", "c", "d")
                         .build();
         TableDescriptor descriptor =
                 TableDescriptor.builder()
@@ -139,8 +140,8 @@ class AutoPartitionedTableITCase extends ClientToServerITCaseBase {
 
         Table table = conn.getTable(tablePath);
         for (String partition : partitionIdByNames.keySet()) {
-            verifyPutAndLookup(table, new Object[] {1, partition, 1L, "value1"});
-            verifyPutAndLookup(table, new Object[] {1, partition, 2L, "value2"});
+            verifyPutAndLookup(table, new Object[] {1, partition, 1L, "value1", "another_value1"});
+            verifyPutAndLookup(table, new Object[] {1, partition, 2L, "value2", "another_value2"});
         }
 
         for (int i = 0; i < 3; i++) {
@@ -164,7 +165,9 @@ class AutoPartitionedTableITCase extends ClientToServerITCaseBase {
                 List<InternalRow> rowList = prefixLookupResult.getRowList();
                 assertThat(rowList.size()).isEqualTo(1);
                 assertRowValueEquals(
-                        rowType, rowList.get(0), new Object[] {1, partition, 1L, "value1"});
+                        rowType,
+                        rowList.get(0),
+                        new Object[] {1, partition, 1L, "value1", "another_value1"});
             }
         }
     }

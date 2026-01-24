@@ -20,6 +20,7 @@ package org.apache.fluss.server.replica;
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.exception.FencedLeaderEpochException;
 import org.apache.fluss.exception.InvalidColumnProjectionException;
 import org.apache.fluss.exception.InvalidCoordinatorException;
@@ -29,6 +30,7 @@ import org.apache.fluss.exception.LogStorageException;
 import org.apache.fluss.exception.NotLeaderOrFollowerException;
 import org.apache.fluss.exception.StorageException;
 import org.apache.fluss.exception.UnknownTableOrBucketException;
+import org.apache.fluss.exception.UnsupportedVersionException;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
@@ -56,6 +58,7 @@ import org.apache.fluss.rpc.messages.NotifyKvSnapshotOffsetResponse;
 import org.apache.fluss.rpc.messages.NotifyLakeTableOffsetResponse;
 import org.apache.fluss.rpc.messages.NotifyRemoteLogOffsetsResponse;
 import org.apache.fluss.rpc.protocol.ApiError;
+import org.apache.fluss.rpc.protocol.ApiKeys;
 import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.server.coordinator.CoordinatorContext;
 import org.apache.fluss.server.entity.FetchReqInfo;
@@ -131,6 +134,7 @@ import java.util.function.Consumer;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
+import static org.apache.fluss.config.ConfigOptions.KV_FORMAT_VERSION_2;
 import static org.apache.fluss.server.TabletManagerBase.getTableInfo;
 import static org.apache.fluss.utils.FileUtils.isDirectoryEmpty;
 import static org.apache.fluss.utils.Preconditions.checkState;
@@ -547,12 +551,15 @@ public class ReplicaManager {
     /**
      * Put kv records to leader replicas of the buckets, the kv data will write to kv tablet and the
      * response callback need to wait for the cdc log to be replicated to other replicas if needed.
+     *
+     * @param apiVersion the client API version for backward compatibility validation
      */
     public void putRecordsToKv(
             int timeoutMs,
             int requiredAcks,
             Map<TableBucket, KvRecordBatch> entriesPerBucket,
             @Nullable int[] targetColumns,
+            short apiVersion,
             Consumer<List<PutKvResultForBucket>> responseCallback) {
         if (isRequiredAcksInvalid(requiredAcks)) {
             throw new InvalidRequiredAcksException("Invalid required acks: " + requiredAcks);
@@ -560,7 +567,7 @@ public class ReplicaManager {
 
         long startTime = System.currentTimeMillis();
         Map<TableBucket, PutKvResultForBucket> kvPutResult =
-                putToLocalKv(entriesPerBucket, targetColumns, requiredAcks);
+                putToLocalKv(entriesPerBucket, targetColumns, requiredAcks, apiVersion);
         LOG.debug(
                 "Put records to local kv storage and wait generate cdc log in {} ms",
                 System.currentTimeMillis() - startTime);
@@ -576,6 +583,7 @@ public class ReplicaManager {
     protected void lookup(TableBucket tableBucket, byte[] key, Consumer<byte[]> responseCallback) {
         lookups(
                 Collections.singletonMap(tableBucket, Collections.singletonList(key)),
+                ApiKeys.LOOKUP.highestSupportedVersion,
                 multiLookupResponseCallBack -> {
                     LookupResultForBucket result = multiLookupResponseCallBack.get(tableBucket);
                     List<byte[]> values = result.lookupValues();
@@ -588,9 +596,14 @@ public class ReplicaManager {
                 });
     }
 
-    /** Lookup with multi key from leader replica of the buckets. */
+    /**
+     * Lookup with multi key from leader replica of the buckets.
+     *
+     * @param apiVersion the client API version for backward compatibility validation
+     */
     public void lookups(
             Map<TableBucket, List<byte[]>> entriesPerBucket,
+            short apiVersion,
             Consumer<Map<TableBucket, LookupResultForBucket>> responseCallback) {
         Map<TableBucket, LookupResultForBucket> lookupResultForBucketMap = new HashMap<>();
         long startTime = System.currentTimeMillis();
@@ -599,6 +612,7 @@ public class ReplicaManager {
             TableBucket tb = entry.getKey();
             try {
                 Replica replica = getReplicaOrException(tb);
+                validateClientVersionForPkTable(apiVersion, replica.getTableInfo());
                 tableMetrics = replica.tableMetrics();
                 tableMetrics.totalLookupRequests().inc();
                 lookupResultForBucketMap.put(
@@ -621,9 +635,14 @@ public class ReplicaManager {
         responseCallback.accept(lookupResultForBucketMap);
     }
 
-    /** Lookup multi prefixKeys by prefix scan on kv store. */
+    /**
+     * Lookup multi prefixKeys by prefix scan on kv store.
+     *
+     * @param apiVersion the client API version for backward compatibility validation
+     */
     public void prefixLookups(
             Map<TableBucket, List<byte[]>> entriesPerBucket,
+            short apiVersion,
             Consumer<Map<TableBucket, PrefixLookupResultForBucket>> responseCallback) {
         TableMetricGroup tableMetrics = null;
         Map<TableBucket, PrefixLookupResultForBucket> result = new HashMap<>();
@@ -632,6 +651,7 @@ public class ReplicaManager {
             List<List<byte[]>> resultForBucket = new ArrayList<>();
             try {
                 Replica replica = getReplicaOrException(tb);
+                validateClientVersionForPkTable(apiVersion, replica.getTableInfo());
                 tableMetrics = replica.tableMetrics();
                 tableMetrics.totalPrefixLookupRequests().inc();
                 for (byte[] prefixKey : entry.getValue()) {
@@ -1027,7 +1047,8 @@ public class ReplicaManager {
     private Map<TableBucket, PutKvResultForBucket> putToLocalKv(
             Map<TableBucket, KvRecordBatch> entriesPerBucket,
             @Nullable int[] targetColumns,
-            int requiredAcks) {
+            int requiredAcks,
+            short apiVersion) {
         Map<TableBucket, PutKvResultForBucket> putResultForBucketMap = new HashMap<>();
         for (Map.Entry<TableBucket, KvRecordBatch> entry : entriesPerBucket.entrySet()) {
             TableBucket tb = entry.getKey();
@@ -1035,6 +1056,7 @@ public class ReplicaManager {
             try {
                 LOG.trace("Put records to local kv tablet for table bucket {}", tb);
                 Replica replica = getReplicaOrException(tb);
+                validateClientVersionForPkTable(apiVersion, replica.getTableInfo());
                 tableMetrics = replica.tableMetrics();
                 tableMetrics.totalPutKvRequests().inc();
                 LogAppendInfo appendInfo =
@@ -1744,6 +1766,29 @@ public class ReplicaManager {
 
         // Checkpoint highWatermark.
         checkpointHighWatermarks();
+    }
+
+    private void validateClientVersionForPkTable(int apiVersion, TableInfo tableInfo) {
+        if (apiVersion > 0) {
+            return;
+        }
+
+        // in the old version
+        TableConfig tableConfig = tableInfo.getTableConfig();
+        // is with datalake format
+        if (tableConfig.getDataLakeFormat().isPresent()) {
+            Optional<Integer> kvFormatVersion = tableConfig.getKvFormatVersion();
+            if (kvFormatVersion.isPresent()
+                    && kvFormatVersion.get() == KV_FORMAT_VERSION_2
+                    && !tableInfo.isDefaultBucketKey()) {
+                throw new UnsupportedVersionException(
+                        String.format(
+                                "Client API version %d is not supported for table '%s'. "
+                                        + "This table uses new key encoding strategy (kv format version %d). "
+                                        + "Please upgrade your Fluss client to a newer version.",
+                                apiVersion, tableInfo.getTablePath(), kvFormatVersion.get()));
+            }
+        }
     }
 
     /** The result of reading log. */

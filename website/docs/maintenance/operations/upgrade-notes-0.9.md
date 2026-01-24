@@ -50,3 +50,32 @@ The following options are deprecated and will be removed in a future version:
 - **Simplified Configuration**: One option instead of multiple options for IO thread pool management
 - **Better Resource Management**: Unified thread pool allows better resource sharing across different IO operations
 - **Consistent Behavior**: All IO operations (remote log, KV snapshot, etc.) now use the same thread pool configuration
+
+## Primary Key Encoding Change for Clusters with `datalake.format` Configured
+
+:::info
+This section only applies to primary key tables created on clusters with `datalake.format` configured (e.g., Paimon). If your cluster does not have `datalake.format` configured, you can skip this section.
+:::
+
+### What Changed
+
+- **New tables (version 2)**: Tables created in v0.9+ use Fluss's default encoder for primary key encoding when bucket key differs from primary key. This ensures proper prefix lookup support.
+- **Legacy tables (version 1)**: Tables created before v0.9 are treated as version 1 and continue using datalake's encoder (e.g., Paimon/Iceberg) for both primary key and bucket key encoding.
+
+### Prefix Lookup Limitation with Legacy Tables
+
+Legacy tables (version 1) may not support prefix lookup properly when:
+1. The cluster has `datalake.format` configured as `paimon`
+2. The table has a bucket key that differs from the primary key
+
+:::warning
+If you have legacy tables with bucket key different from primary key and need prefix lookup functionality, the prefix lookup results may be incorrect or incomplete.
+:::
+
+### How to Address This Issue
+
+For legacy tables that require prefix lookup support:
+
+1. **Recreate the table**: Drop and recreate the table after upgrading to v0.9.
+
+2. **Upgrade client and connector**: Make sure to upgrade your Fluss client and Flink connector to v0.9 to use the new encoding format.

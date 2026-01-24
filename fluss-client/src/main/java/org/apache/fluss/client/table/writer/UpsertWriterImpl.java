@@ -20,7 +20,6 @@ package org.apache.fluss.client.table.writer;
 import org.apache.fluss.client.write.WriteFormat;
 import org.apache.fluss.client.write.WriteRecord;
 import org.apache.fluss.client.write.WriterClient;
-import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
@@ -70,14 +69,20 @@ class UpsertWriterImpl extends AbstractTableWriter implements UpsertWriter {
                 partialUpdateColumns);
 
         this.targetColumns = partialUpdateColumns;
-        DataLakeFormat lakeFormat = tableInfo.getTableConfig().getDataLakeFormat().orElse(null);
         // encode primary key using physical primary key
         this.primaryKeyEncoder =
-                KeyEncoder.of(rowType, tableInfo.getPhysicalPrimaryKeys(), lakeFormat);
+                KeyEncoder.ofPrimaryKeyEncoder(
+                        tableInfo.getRowType(),
+                        tableInfo.getPhysicalPrimaryKeys(),
+                        tableInfo.getTableConfig(),
+                        tableInfo.isDefaultBucketKey());
         this.bucketKeyEncoder =
                 tableInfo.isDefaultBucketKey()
                         ? primaryKeyEncoder
-                        : KeyEncoder.of(rowType, tableInfo.getBucketKeys(), lakeFormat);
+                        : KeyEncoder.ofBucketKeyEncoder(
+                                tableInfo.getRowType(),
+                                tableInfo.getBucketKeys(),
+                                tableInfo.getTableConfig().getDataLakeFormat().orElse(null));
 
         this.kvFormat = tableInfo.getTableConfig().getKvFormat();
         this.writeFormat = WriteFormat.fromKvFormat(this.kvFormat);

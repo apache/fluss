@@ -229,13 +229,13 @@ class KvSnapshotBatchScannerITCase extends ClientToServerITCaseBase {
     // -------- Utils method
 
     private static int getBucketId(InternalRow row) {
-        KeyEncoder keyEncoder =
-                KeyEncoder.of(
+        KeyEncoder bucketKeyEncoder =
+                KeyEncoder.ofBucketKeyEncoder(
                         DEFAULT_SCHEMA.getRowType(),
                         DEFAULT_SCHEMA.getPrimaryKeyColumnNames(),
                         DataLakeFormat.PAIMON);
         BucketingFunction function = BucketingFunction.of(DataLakeFormat.PAIMON);
-        byte[] key = keyEncoder.encodeKey(row);
+        byte[] key = bucketKeyEncoder.encodeKey(row);
         return function.bucketing(key, DEFAULT_BUCKET_NUM);
     }
 }

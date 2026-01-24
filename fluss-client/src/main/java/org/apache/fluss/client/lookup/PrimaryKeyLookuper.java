@@ -71,14 +71,18 @@ class PrimaryKeyLookuper extends AbstractLookuper implements Lookuper {
         // the row type of the input lookup row
         RowType lookupRowType = tableInfo.getRowType().project(tableInfo.getPrimaryKeys());
         DataLakeFormat lakeFormat = tableInfo.getTableConfig().getDataLakeFormat().orElse(null);
-
-        // the encoded primary key is the physical primary key
         this.primaryKeyEncoder =
-                KeyEncoder.of(lookupRowType, tableInfo.getPhysicalPrimaryKeys(), lakeFormat);
+                KeyEncoder.ofPrimaryKeyEncoder(
+                        lookupRowType,
+                        tableInfo.getPhysicalPrimaryKeys(),
+                        tableInfo.getTableConfig(),
+                        tableInfo.isDefaultBucketKey());
         this.bucketKeyEncoder =
                 tableInfo.isDefaultBucketKey()
                         ? primaryKeyEncoder
-                        : KeyEncoder.of(lookupRowType, tableInfo.getBucketKeys(), lakeFormat);
+                        : KeyEncoder.ofBucketKeyEncoder(
+                                lookupRowType, tableInfo.getBucketKeys(), lakeFormat);
+
         this.bucketingFunction = BucketingFunction.of(lakeFormat);
 
         this.partitionGetter =

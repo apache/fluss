@@ -74,7 +74,7 @@ public class FlinkRowDataChannelComputer<InputT> implements ChannelComputer<Inpu
     public void setup(int numChannels) {
         this.numChannels = numChannels;
         this.bucketingFunction = BucketingFunction.of(lakeFormat);
-        this.bucketKeyEncoder = KeyEncoder.of(flussRowType, bucketKeys, lakeFormat);
+        this.bucketKeyEncoder = KeyEncoder.ofBucketKeyEncoder(flussRowType, bucketKeys, lakeFormat);
         if (partitionKeys.isEmpty()) {
             this.partitionGetter = null;
         } else {

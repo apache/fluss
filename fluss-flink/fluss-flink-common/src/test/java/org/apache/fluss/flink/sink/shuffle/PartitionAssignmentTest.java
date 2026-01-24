@@ -58,7 +58,8 @@ class PartitionAssignmentTest {
     void testWeightedBucketIdAssignment() {
         List<Integer> assignedSubtasks = Arrays.asList(0, 1, 2);
         List<Long> subtaskWeights = Arrays.asList(1L, 3L, 2L);
-        KeyEncoder keyEncoder = KeyEncoder.of(DATA1_ROW_TYPE, Collections.singletonList("a"), null);
+        KeyEncoder keyEncoder =
+                KeyEncoder.ofBucketKeyEncoder(DATA1_ROW_TYPE, Collections.singletonList("a"), null);
         BucketingFunction bucketingFunction = BucketingFunction.of(null);
         int bucketNum = 6;
 

@@ -175,6 +175,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
+import static org.apache.fluss.config.ConfigOptions.CURRENT_KV_FORMAT_VERSION;
 import static org.apache.fluss.config.FlussConfigUtils.isTableStorageConfig;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toAclBindingFilters;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toAclBindings;
@@ -534,6 +535,28 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                 newDescriptor = newDescriptor.withProperties(newProperties);
             }
         }
+
+        if (newDescriptor.hasPrimaryKey()) {
+            Map<String, String> newProperties = new HashMap<>(newDescriptor.getProperties());
+            Integer formatVersion =
+                    Configuration.fromMap(newProperties).get(ConfigOptions.TABLE_KV_FORMAT_VERSION);
+            if (formatVersion == null) {
+                // set current kv format version for default
+                newProperties.put(
+                        ConfigOptions.TABLE_KV_FORMAT_VERSION.key(),
+                        String.valueOf(CURRENT_KV_FORMAT_VERSION));
+                newDescriptor = newDescriptor.withProperties(newProperties);
+            } else {
+                if (formatVersion > CURRENT_KV_FORMAT_VERSION) {
+                    throw new IllegalArgumentException(
+                            String.format(
+                                    "Unsupported kv format version %d. "
+                                            + "The maximum supported version is %d.",
+                                    formatVersion, CURRENT_KV_FORMAT_VERSION));
+                }
+            }
+        }
+
         return newDescriptor;
     }
 

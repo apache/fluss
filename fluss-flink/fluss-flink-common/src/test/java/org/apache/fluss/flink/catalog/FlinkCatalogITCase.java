@@ -65,6 +65,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 
+import static org.apache.fluss.config.ConfigOptions.CURRENT_KV_FORMAT_VERSION;
 import static org.apache.fluss.config.ConfigOptions.DEFAULT_LISTENER_NAME;
 import static org.apache.fluss.flink.FlinkConnectorOptions.BOOTSTRAP_SERVERS;
 import static org.apache.fluss.flink.FlinkConnectorOptions.BUCKET_KEY;
@@ -634,6 +635,8 @@ abstract class FlinkCatalogITCase {
             Map<String, String> expectedTableProperties = new HashMap<>();
             expectedTableProperties.put("table.datalake.format", "paimon");
             expectedTableProperties.put("table.replication.factor", "1");
+            expectedTableProperties.put(
+                    "table.kv.format-version", String.valueOf(CURRENT_KV_FORMAT_VERSION));
             assertThat(tableInfo.getProperties().toMap()).isEqualTo(expectedTableProperties);
 
             Map<String, String> expectedCustomProperties = new HashMap<>();
@@ -943,6 +946,7 @@ abstract class FlinkCatalogITCase {
             Map<String, String> actualOptions, Map<String, String> expectedOptions) {
         actualOptions.remove(ConfigOptions.BOOTSTRAP_SERVERS.key());
         actualOptions.remove(ConfigOptions.TABLE_REPLICATION_FACTOR.key());
+        actualOptions.remove(ConfigOptions.TABLE_KV_FORMAT_VERSION.key());
         assertThat(actualOptions).isEqualTo(expectedOptions);
     }
 }
