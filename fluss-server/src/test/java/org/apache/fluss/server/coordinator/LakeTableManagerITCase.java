@@ -156,7 +156,8 @@ class LakeTableManagerITCase {
                 .alterTable(
                         newAlterTableRequest(
                                 tablePath,
-                                alterTableProperties(setProperties, new ArrayList<>()),
+                                setProperties,
+                                Collections.emptyList(),
                                 Collections.emptyList(),
                                 false))
                 .get();
@@ -185,7 +186,8 @@ class LakeTableManagerITCase {
                 .alterTable(
                         newAlterTableRequest(
                                 tablePath,
-                                alterTableProperties(new HashMap<>(), resetProperties),
+                                Collections.emptyMap(),
+                                resetProperties,
                                 Collections.emptyList(),
                                 false))
                 .get();
@@ -214,7 +216,8 @@ class LakeTableManagerITCase {
                 .alterTable(
                         newAlterTableRequest(
                                 tablePath,
-                                alterTableProperties(new HashMap<>(), resetProperties2),
+                                Collections.emptyMap(),
+                                resetProperties2,
                                 Collections.emptyList(),
                                 false))
                 .get();
@@ -280,7 +283,8 @@ class LakeTableManagerITCase {
                 .alterTable(
                         newAlterTableRequest(
                                 tablePath,
-                                alterTableProperties(setProperties, new ArrayList<>()),
+                                setProperties,
+                                Collections.emptyList(),
                                 Collections.emptyList(),
                                 false))
                 .get();

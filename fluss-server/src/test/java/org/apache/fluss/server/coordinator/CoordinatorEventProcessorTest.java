@@ -53,6 +53,7 @@ import org.apache.fluss.server.coordinator.statemachine.ReplicaState;
 import org.apache.fluss.server.entity.AdjustIsrResultForBucket;
 import org.apache.fluss.server.entity.CommitKvSnapshotData;
 import org.apache.fluss.server.entity.CommitRemoteLogManifestData;
+import org.apache.fluss.server.entity.TablePropertyChanges;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
 import org.apache.fluss.server.kv.snapshot.ZooKeeperCompletedSnapshotHandleStore;
 import org.apache.fluss.server.metadata.BucketMetadata;
@@ -907,6 +908,70 @@ class CoordinatorEventProcessorTest {
     }
 
     @Test
+    void testTableRegistrationChange() throws Exception {
+        // make sure all request to gateway should be successful
+        initCoordinatorChannel();
+
+        // create a table
+        TablePath t1 = TablePath.of(defaultDatabase, "test_table_registration_change");
+        int nBuckets = 1;
+        int replicationFactor = 3;
+        TableAssignment tableAssignment =
+                generateAssignment(
+                        nBuckets,
+                        replicationFactor,
+                        new TabletServerInfo[] {
+                            new TabletServerInfo(0, "rack0"),
+                            new TabletServerInfo(1, "rack1"),
+                            new TabletServerInfo(2, "rack2")
+                        });
+        // create table
+        List<Integer> replicas = tableAssignment.getBucketAssignment(0).getReplicas();
+        metadataManager.createTable(t1, TEST_TABLE, tableAssignment, false);
+        TableInfo tableInfo = metadataManager.getTable(t1);
+
+        retry(
+                Duration.ofMinutes(1),
+                () ->
+                        verifyMetadataUpdateRequest(
+                                3,
+                                new TableMetadata(
+                                        tableInfo,
+                                        Collections.singletonList(
+                                                new BucketMetadata(
+                                                        0, replicas.get(0), 0, replicas)))));
+
+        // alter table properties (custom property)
+        TablePropertyChanges.Builder builder = TablePropertyChanges.builder();
+        builder.setCustomProperty("custom.key", "custom.value");
+        TablePropertyChanges tablePropertyChanges = builder.build();
+        metadataManager.alterTableProperties(
+                t1, Collections.emptyList(), tablePropertyChanges, false, null);
+
+        // get updated table info and verify metadata update request is sent
+        TableInfo updatedTableInfo = metadataManager.getTable(t1);
+        assertThat(updatedTableInfo.getCustomProperties().toMap())
+                .containsEntry("custom.key", "custom.value");
+
+        retry(
+                Duration.ofMinutes(1),
+                () ->
+                        verifyMetadataUpdateRequest(
+                                3, new TableMetadata(updatedTableInfo, Collections.emptyList())));
+
+        // verify the table info in coordinator context is updated
+        retryVerifyContext(
+                ctx -> {
+                    Long tableId = ctx.getTableIdByPath(t1);
+                    assertThat(tableId).isNotNull();
+                    TableInfo tableInfoInCtx = ctx.getTableInfoById(tableId);
+                    assertThat(tableInfoInCtx).isNotNull();
+                    assertThat(tableInfoInCtx.getCustomProperties().toMap())
+                            .containsEntry("custom.key", "custom.value");
+                });
+    }
+
+    @Test
     void testDoBucketReassignment() throws Exception {
         zookeeperClient.registerTabletServer(
                 3,
@@ -1305,7 +1370,7 @@ class CoordinatorEventProcessorTest {
     }
 
     private void alterTable(TablePath tablePath, List<TableChange> schemaChanges) {
-        metadataManager.alterTableSchema(tablePath, schemaChanges, true, null, null);
+        metadataManager.alterTableSchema(tablePath, schemaChanges, true, null);
     }
 
     private TableDescriptor getPartitionedTable() {

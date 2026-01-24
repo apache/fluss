@@ -23,7 +23,6 @@ import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.config.AutoPartitionTimeUnit;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
-import org.apache.fluss.config.cluster.AlterConfigOpType;
 import org.apache.fluss.exception.DatabaseAlreadyExistException;
 import org.apache.fluss.exception.DatabaseNotEmptyException;
 import org.apache.fluss.exception.DatabaseNotExistException;
@@ -51,7 +50,6 @@ import org.apache.fluss.rpc.messages.ListDatabasesRequest;
 import org.apache.fluss.rpc.messages.MetadataRequest;
 import org.apache.fluss.rpc.messages.MetadataResponse;
 import org.apache.fluss.rpc.messages.PbAddColumn;
-import org.apache.fluss.rpc.messages.PbAlterConfig;
 import org.apache.fluss.rpc.messages.PbBucketMetadata;
 import org.apache.fluss.rpc.messages.PbPartitionMetadata;
 import org.apache.fluss.rpc.messages.PbServerNode;
@@ -303,7 +301,8 @@ class TableManagerITCase {
                 .alterTable(
                         newAlterTableRequest(
                                 tablePath,
-                                alterTableProperties(setProperties, resetProperties),
+                                setProperties,
+                                resetProperties,
                                 Collections.emptyList(),
                                 false))
                 .get();
@@ -679,7 +678,11 @@ class TableManagerITCase {
         adminGateway
                 .alterTable(
                         newAlterTableRequest(
-                                tablePath, Collections.emptyList(), alterTableAddColumns(), false))
+                                tablePath,
+                                Collections.emptyMap(),
+                                Collections.emptyList(),
+                                alterTableAddColumns(),
+                                false))
                 .get();
 
         // restart coordinatorServer
@@ -818,28 +821,6 @@ class TableManagerITCase {
                 .comment("first table")
                 .distributedBy(3, "a")
                 .build();
-    }
-
-    private static List<PbAlterConfig> alterTableProperties(
-            Map<String, String> setProperties, List<String> resetProperties) {
-        List<PbAlterConfig> res = new ArrayList<>();
-
-        for (Map.Entry<String, String> entry : setProperties.entrySet()) {
-            PbAlterConfig info = new PbAlterConfig();
-            info.setConfigKey(entry.getKey());
-            info.setConfigValue(entry.getValue());
-            info.setOpType(AlterConfigOpType.SET.value());
-            res.add(info);
-        }
-
-        for (String resetProperty : resetProperties) {
-            PbAlterConfig info = new PbAlterConfig();
-            info.setConfigKey(resetProperty);
-            info.setOpType(AlterConfigOpType.DELETE.value());
-            res.add(info);
-        }
-
-        return res;
     }
 
     private static List<PbAddColumn> alterTableAddColumns() {

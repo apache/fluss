@@ -17,6 +17,7 @@
 
 package org.apache.fluss.server.testutils;
 
+import org.apache.fluss.config.cluster.AlterConfigOpType;
 import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.TableDescriptor;
@@ -75,6 +76,7 @@ import javax.annotation.Nullable;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.record.TestData.DATA1_ROW_TYPE;
@@ -147,9 +149,25 @@ public class RpcMessageTestUtils {
 
     public static AlterTableRequest newAlterTableRequest(
             TablePath tablePath,
-            List<PbAlterConfig> alterConfigs,
+            Map<String, String> setProperties,
+            List<String> resetProperties,
             List<PbAddColumn> addColumns,
             boolean ignoreIfExists) {
+        List<PbAlterConfig> alterConfigs = new ArrayList<>();
+        for (Map.Entry<String, String> entry : setProperties.entrySet()) {
+            PbAlterConfig info = new PbAlterConfig();
+            info.setConfigKey(entry.getKey());
+            info.setConfigValue(entry.getValue());
+            info.setOpType(AlterConfigOpType.SET.value());
+            alterConfigs.add(info);
+        }
+        for (String resetProperty : resetProperties) {
+            PbAlterConfig info = new PbAlterConfig();
+            info.setConfigKey(resetProperty);
+            info.setOpType(AlterConfigOpType.DELETE.value());
+            alterConfigs.add(info);
+        }
+
         AlterTableRequest request = new AlterTableRequest();
         request.addAllConfigChanges(alterConfigs)
                 .addAllAddColumns(addColumns)

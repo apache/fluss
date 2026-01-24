@@ -84,6 +84,7 @@ import org.apache.fluss.server.log.LogTablet;
 import org.apache.fluss.server.log.checkpoint.OffsetCheckpointFile;
 import org.apache.fluss.server.log.remote.RemoteLogManager;
 import org.apache.fluss.server.metadata.ClusterMetadata;
+import org.apache.fluss.server.metadata.TableMetadata;
 import org.apache.fluss.server.metadata.TabletServerMetadataCache;
 import org.apache.fluss.server.metrics.UserMetrics;
 import org.apache.fluss.server.metrics.group.BucketMetricGroup;
@@ -459,7 +460,35 @@ public class ReplicaManager {
                     // check or apply coordinator epoch.
                     validateAndApplyCoordinatorEpoch(coordinatorEpoch, "updateMetadataCache");
                     metadataCache.updateClusterMetadata(clusterMetadata);
+                    updateReplicaTableConfig(clusterMetadata);
                 });
+    }
+
+    private void updateReplicaTableConfig(ClusterMetadata clusterMetadata) {
+        Map<Long, Boolean> tableIdToLakeFlag = new HashMap<>();
+        for (TableMetadata tableMetadata : clusterMetadata.getTableMetadataList()) {
+            TableInfo tableInfo = tableMetadata.getTableInfo();
+            if (tableInfo.getTableConfig().getDataLakeFormat().isPresent()) {
+                long tableId = tableInfo.getTableId();
+                boolean dataLakeEnabled = tableInfo.getTableConfig().isDataLakeEnabled();
+                tableIdToLakeFlag.put(tableId, dataLakeEnabled);
+            }
+        }
+
+        if (tableIdToLakeFlag.isEmpty()) {
+            return;
+        }
+
+        for (Map.Entry<TableBucket, HostedReplica> entry : allReplicas.entrySet()) {
+            HostedReplica hostedReplica = entry.getValue();
+            if (hostedReplica instanceof OnlineReplica) {
+                Replica replica = ((OnlineReplica) hostedReplica).getReplica();
+                long tableId = replica.getTableBucket().getTableId();
+                if (tableIdToLakeFlag.containsKey(tableId)) {
+                    replica.updateIsDataLakeEnabled(tableIdToLakeFlag.get(tableId));
+                }
+            }
+        }
     }
 
     /**

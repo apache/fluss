@@ -60,14 +60,12 @@ import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
 
-import java.time.Duration;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.Callable;
@@ -327,7 +325,6 @@ public class MetadataManager {
             TablePath tablePath,
             List<TableChange> schemaChanges,
             boolean ignoreIfNotExists,
-            @Nullable LakeCatalog lakeCatalog,
             LakeCatalog.Context lakeCatalogContext)
             throws TableNotExistException, TableNotPartitionedException {
         try {
@@ -339,8 +336,7 @@ public class MetadataManager {
                 Schema newSchema = SchemaUpdate.applySchemaChanges(table, schemaChanges);
 
                 // Lake First: sync to Lake before updating Fluss schema
-                syncSchemaChangesToLake(
-                        tablePath, table, schemaChanges, lakeCatalog, lakeCatalogContext);
+                syncSchemaChangesToLake(tablePath, table, schemaChanges, lakeCatalogContext);
 
                 // Update Fluss schema (ZK) after Lake sync succeeds
                 if (!newSchema.equals(table.getSchema())) {
@@ -370,12 +366,13 @@ public class MetadataManager {
             TablePath tablePath,
             TableInfo tableInfo,
             List<TableChange> schemaChanges,
-            @Nullable LakeCatalog lakeCatalog,
             LakeCatalog.Context lakeCatalogContext) {
         if (!isDataLakeEnabled(tableInfo.toTableDescriptor())) {
             return;
         }
 
+        LakeCatalog lakeCatalog =
+                lakeCatalogDynamicLoader.getLakeCatalogContainer().getLakeCatalog();
         if (lakeCatalog == null) {
             throw new InvalidAlterTableException(
                     "Cannot alter schema for datalake enabled table "
@@ -399,8 +396,6 @@ public class MetadataManager {
             List<TableChange> tableChanges,
             TablePropertyChanges tablePropertyChanges,
             boolean ignoreIfNotExists,
-            @Nullable LakeCatalog lakeCatalog,
-            LakeTableTieringManager lakeTableTieringManager,
             LakeCatalog.Context lakeCatalogContext) {
         try {
             // it throws TableNotExistException if the table or database not exists
@@ -431,22 +426,12 @@ public class MetadataManager {
                         tableDescriptor,
                         newDescriptor,
                         tableChanges,
-                        lakeCatalog,
                         lakeCatalogContext);
                 // update the table to zk
                 TableRegistration updatedTableRegistration =
                         tableReg.newProperties(
                                 newDescriptor.getProperties(), newDescriptor.getCustomProperties());
                 zookeeperClient.updateTable(tablePath, updatedTableRegistration);
-
-                // post alter table properties, e.g. add the table to lake table tiering manager if
-                // it's to enable datalake for the table
-                postAlterTableProperties(
-                        tablePath,
-                        schemaInfo,
-                        tableDescriptor,
-                        updatedTableRegistration,
-                        lakeTableTieringManager);
             } else {
                 LOG.info(
                         "No properties changed when alter table {}, skip update table.", tablePath);
@@ -471,8 +456,10 @@ public class MetadataManager {
             TableDescriptor tableDescriptor,
             TableDescriptor newDescriptor,
             List<TableChange> tableChanges,
-            LakeCatalog lakeCatalog,
             LakeCatalog.Context lakeCatalogContext) {
+        LakeCatalog lakeCatalog =
+                lakeCatalogDynamicLoader.getLakeCatalogContainer().getLakeCatalog();
+
         if (isDataLakeEnabled(newDescriptor)) {
             if (lakeCatalog == null) {
                 throw new InvalidAlterTableException(
@@ -509,41 +496,6 @@ public class MetadataManager {
                 }
             }
         }
-    }
-
-    private void postAlterTableProperties(
-            TablePath tablePath,
-            SchemaInfo schemaInfo,
-            TableDescriptor oldTableDescriptor,
-            TableRegistration newTableRegistration,
-            LakeTableTieringManager lakeTableTieringManager) {
-
-        boolean dataLakeEnabled = isDataLakeEnabled(newTableRegistration.properties);
-        boolean toEnableDataLake = !isDataLakeEnabled(oldTableDescriptor) && dataLakeEnabled;
-        boolean toDisableDataLake = isDataLakeEnabled(oldTableDescriptor) && !dataLakeEnabled;
-
-        if (toEnableDataLake) {
-            TableInfo newTableInfo = newTableRegistration.toTableInfo(tablePath, schemaInfo);
-            // if the table is lake table, we need to add it to lake table tiering manager
-            lakeTableTieringManager.addNewLakeTable(newTableInfo);
-        } else if (toDisableDataLake) {
-            lakeTableTieringManager.removeLakeTable(newTableRegistration.tableId);
-        } else if (dataLakeEnabled) {
-            // The table is still a lake table, check if freshness has changed
-            Duration oldFreshness =
-                    Configuration.fromMap(oldTableDescriptor.getProperties())
-                            .get(ConfigOptions.TABLE_DATALAKE_FRESHNESS);
-            Duration newFreshness =
-                    Configuration.fromMap(newTableRegistration.properties)
-                            .get(ConfigOptions.TABLE_DATALAKE_FRESHNESS);
-
-            // Check if freshness has changed
-            if (!Objects.equals(oldFreshness, newFreshness)) {
-                lakeTableTieringManager.updateTableLakeFreshness(
-                        newTableRegistration.tableId, newFreshness.toMillis());
-            }
-        }
-        // more post-alter actions can be added here
     }
 
     /**
@@ -584,11 +536,6 @@ public class MetadataManager {
     private boolean isDataLakeEnabled(TableDescriptor tableDescriptor) {
         String dataLakeEnabledValue =
                 tableDescriptor.getProperties().get(ConfigOptions.TABLE_DATALAKE_ENABLED.key());
-        return Boolean.parseBoolean(dataLakeEnabledValue);
-    }
-
-    private boolean isDataLakeEnabled(Map<String, String> properties) {
-        String dataLakeEnabledValue = properties.get(ConfigOptions.TABLE_DATALAKE_ENABLED.key());
         return Boolean.parseBoolean(dataLakeEnabledValue);
     }
 
