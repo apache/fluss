@@ -17,7 +17,7 @@
 
 package org.apache.fluss.spark.catalog
 
-import org.apache.fluss.spark.exception.NoSuchProcedureException
+import org.apache.fluss.exception.NoSuchProcedureException
 import org.apache.fluss.spark.procedure.Procedure
 
 import org.apache.spark.sql.connector.catalog.Identifier

@@ -15,13 +15,22 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.spark.exception
+package org.apache.fluss.exception;
 
-import org.apache.spark.sql.connector.catalog.Identifier
+import org.apache.fluss.annotation.PublicEvolving;
 
-class NoSuchProcedureException(message: String) extends Exception(message) {
+/**
+ * Exception for trying to execute a procedure that doesn't exist.
+ *
+ * @since 0.9
+ */
+@PublicEvolving
+public class NoSuchProcedureException extends ApiException {
+    public NoSuchProcedureException(String message) {
+        this(message, null);
+    }
 
-  def this(identifier: Identifier) = {
-    this(s"Procedure not found: $identifier")
-  }
+    public NoSuchProcedureException(String message, Throwable cause) {
+        super(message, cause);
+    }
 }

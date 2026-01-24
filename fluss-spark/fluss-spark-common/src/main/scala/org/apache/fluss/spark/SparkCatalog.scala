@@ -17,10 +17,9 @@
 
 package org.apache.fluss.spark
 
-import org.apache.fluss.exception.{DatabaseNotExistException, TableAlreadyExistException, TableNotExistException}
+import org.apache.fluss.exception.{DatabaseNotExistException, NoSuchProcedureException, TableAlreadyExistException, TableNotExistException}
 import org.apache.fluss.metadata.TablePath
 import org.apache.fluss.spark.catalog.{SupportsFlussNamespaces, SupportsProcedures, WithFlussAdmin}
-import org.apache.fluss.spark.exception.NoSuchProcedureException
 import org.apache.fluss.spark.procedure.{Procedure, ProcedureBuilder}
 
 import org.apache.spark.sql.catalyst.analysis.{NoSuchNamespaceException, NoSuchTableException, TableAlreadyExistsException}
@@ -130,7 +129,7 @@ class SparkCatalog
         return builder.withTableCatalog(this).build()
       }
     }
-    throw new NoSuchProcedureException(identifier)
+    throw new NoSuchProcedureException(s"Procedure not found: $identifier")
   }
 
   private def isSystemNamespace(namespace: Array[String]): Boolean = {
