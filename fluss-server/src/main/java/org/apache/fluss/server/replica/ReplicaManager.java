@@ -465,20 +465,27 @@ public class ReplicaManager {
     }
 
     private void updateReplicaTableConfig(ClusterMetadata clusterMetadata) {
+        Map<Long, Boolean> tableIdToLakeFlag = new HashMap<>();
         for (TableMetadata tableMetadata : clusterMetadata.getTableMetadataList()) {
             TableInfo tableInfo = tableMetadata.getTableInfo();
             if (tableInfo.getTableConfig().getDataLakeFormat().isPresent()) {
                 long tableId = tableInfo.getTableId();
                 boolean dataLakeEnabled = tableInfo.getTableConfig().isDataLakeEnabled();
+                tableIdToLakeFlag.put(tableId, dataLakeEnabled);
+            }
+        }
 
-                for (Map.Entry<TableBucket, HostedReplica> entry : allReplicas.entrySet()) {
-                    HostedReplica hostedReplica = entry.getValue();
-                    if (hostedReplica instanceof OnlineReplica) {
-                        Replica replica = ((OnlineReplica) hostedReplica).getReplica();
-                        if (replica.getTableBucket().getTableId() == tableId) {
-                            replica.updateIsDataLakeEnabled(dataLakeEnabled);
-                        }
-                    }
+        if (tableIdToLakeFlag.isEmpty()) {
+            return;
+        }
+
+        for (Map.Entry<TableBucket, HostedReplica> entry : allReplicas.entrySet()) {
+            HostedReplica hostedReplica = entry.getValue();
+            if (hostedReplica instanceof OnlineReplica) {
+                Replica replica = ((OnlineReplica) hostedReplica).getReplica();
+                long tableId = replica.getTableBucket().getTableId();
+                if (tableIdToLakeFlag.containsKey(tableId)) {
+                    replica.updateIsDataLakeEnabled(tableIdToLakeFlag.get(tableId));
                 }
             }
         }

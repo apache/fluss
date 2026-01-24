@@ -741,7 +741,8 @@ public class CoordinatorEventProcessor implements EventProcessor {
         TableInfo oldTableInfo = coordinatorContext.getTableInfoById(tableId);
 
         TableInfo newTableInfo =
-                event.getTableRegistration().toTableInfo(tablePath, oldTableInfo.getSchemaInfo());
+                event.getNewTableRegistration()
+                        .toTableInfo(tablePath, oldTableInfo.getSchemaInfo());
         coordinatorContext.putTableInfo(newTableInfo);
         postAlterTableProperties(oldTableInfo, newTableInfo);
 

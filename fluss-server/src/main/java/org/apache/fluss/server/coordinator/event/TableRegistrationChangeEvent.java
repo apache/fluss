@@ -25,19 +25,20 @@ import java.util.Objects;
 /** An event for table registration change. */
 public class TableRegistrationChangeEvent implements CoordinatorEvent {
     private final TablePath tablePath;
-    private final TableRegistration tableRegistration;
+    private final TableRegistration newTableRegistration;
 
-    public TableRegistrationChangeEvent(TablePath tablePath, TableRegistration tableRegistration) {
+    public TableRegistrationChangeEvent(
+            TablePath tablePath, TableRegistration newTableRegistration) {
         this.tablePath = tablePath;
-        this.tableRegistration = tableRegistration;
+        this.newTableRegistration = newTableRegistration;
     }
 
     public TablePath getTablePath() {
         return tablePath;
     }
 
-    public TableRegistration getTableRegistration() {
-        return tableRegistration;
+    public TableRegistration getNewTableRegistration() {
+        return newTableRegistration;
     }
 
     @Override
@@ -46,7 +47,7 @@ public class TableRegistrationChangeEvent implements CoordinatorEvent {
                 + "tablePath="
                 + tablePath
                 + ", tableRegistration="
-                + tableRegistration
+                + newTableRegistration
                 + '}';
     }
 
@@ -57,11 +58,11 @@ public class TableRegistrationChangeEvent implements CoordinatorEvent {
         }
         TableRegistrationChangeEvent that = (TableRegistrationChangeEvent) o;
         return Objects.equals(tablePath, that.tablePath)
-                && Objects.equals(tableRegistration, that.tableRegistration);
+                && Objects.equals(newTableRegistration, that.newTableRegistration);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(tablePath, tableRegistration);
+        return Objects.hash(tablePath, newTableRegistration);
     }
 }
