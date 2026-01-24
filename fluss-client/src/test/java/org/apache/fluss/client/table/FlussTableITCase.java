@@ -1748,7 +1748,8 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                         .logFormat(LogFormat.COMPACTED)
                         .build();
         TablePath path = TablePath.of("test_db_1", "test_pk_compacted_latest");
-        createTable(path, td, false);
+        long tableId = createTable(path, td, false);
+        FLUSS_CLUSTER_EXTENSION.waitUntilTableReady(tableId);
 
         try (Table table = conn.getTable(path)) {
             LogScanner scanner = createLogScanner(table);
