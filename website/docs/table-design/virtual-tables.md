@@ -1,7 +1,7 @@
 ---
 sidebar_label: Virtual Tables
 title: Virtual Tables
-sidebar_position: 3
+sidebar_position: 4
 ---
 
 # Virtual Tables
@@ -165,4 +165,4 @@ SELECT * FROM orders$changelog /*+ OPTIONS('scan.startup.mode' = 'timestamp', 's
 | `timestamp` | Start reading from a specific timestamp (milliseconds since epoch) |
 
 ### Limitations
-- Filter pushdown optimization is not currently supported; this will be addressed in future releases
+- Filter predicate pushdown is not currently supported. This will be addressed in future releases
