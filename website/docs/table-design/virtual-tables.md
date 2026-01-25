@@ -164,29 +164,5 @@ SELECT * FROM orders$changelog /*+ OPTIONS('scan.startup.mode' = 'timestamp', 's
 | `latest` | Start reading from the current end of the log (only new changes) |
 | `timestamp` | Start reading from a specific timestamp (milliseconds since epoch) |
 
-### Use Cases
-
-#### Building an Audit Trail
-
-```sql title="Flink SQL"
--- Create an audit log from changelog
-INSERT INTO audit_log
-SELECT
-    _change_type AS operation,
-    _commit_timestamp AS change_time,
-    order_id,
-    customer_name,
-    amount
-FROM orders$changelog;
-```
-
-#### Replicating Changes to External Systems
-
-```sql title="Flink SQL"
--- Send all changes to a Kafka topic for downstream processing
-INSERT INTO kafka_sink
-SELECT * FROM orders$changelog;
-```
-
 ### Limitations
 - Filter pushdown optimization is not currently supported; this will be addressed in future releases
