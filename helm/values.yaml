@@ -31,6 +31,31 @@ appConfig:
   internalPort: 9123
   externalPort: 9124
 
+coordinatorServer:
+  replicas: 1
+  livenessProbe:
+    failureThreshold: 100
+    timeoutSeconds: 1
+    initialDelaySeconds: 10
+    periodSeconds: 3
+  readinessProbe:
+    failureThreshold: 100
+    timeoutSeconds: 1
+    initialDelaySeconds: 10
+    periodSeconds: 3
+
+tabletServer:
+  replicas: 3
+  livenessProbe:
+    failureThreshold: 100
+    timeoutSeconds: 1
+    initialDelaySeconds: 10
+    periodSeconds: 3
+  readinessProbe:
+    failureThreshold: 100
+    timeoutSeconds: 1
+    initialDelaySeconds: 10
+    periodSeconds: 3
 
 # Fluss server configuration options
 configurationOverrides:
@@ -47,19 +72,15 @@ persistence:
   size: 1Gi
   storageClass:
 
-resources: {}
-  # We usually recommend not to specify default resources and to leave this as a conscious
-  # choice for the user. This also increases chances charts run on environments with little
-  # resources, such as Minikube. If you do want to specify resources, uncomment the following
-  # lines, adjust them as necessary, and remove the curly braces after 'resources:'.
-  # coordinatorServer:
+resources:
+  coordinatorServer: {}
   #   limits:
   #     cpu: 100m
   #     memory: 128Mi
   #   requests:
   #     cpu: 100m
   #     memory: 128Mi
-  # tabletServer:
+  tabletServer: {}
   #   requests:
   #     cpu: 100m
   #     memory: 128Mi

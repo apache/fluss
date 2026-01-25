@@ -24,7 +24,7 @@ metadata:
   {{- include "fluss.labels" . | nindent 4 }}
 spec:
   serviceName: coordinator-server-hs
-  replicas: 1 # can only be 1 for now
+  replicas: {{ .Values.coordinatorServer.replicas }}
   selector:
     matchLabels:
       {{- include "fluss.selectorLabels" . | nindent 6 }}
@@ -73,21 +73,21 @@ spec:
 
               bin/coordinator-server.sh start-foreground
           livenessProbe:
-            failureThreshold: 100
-            timeoutSeconds: 1
-            initialDelaySeconds: 10
-            periodSeconds: 3
+            failureThreshold: {{ .Values.coordinatorServer.livenessProbe.failureThreshold }}
+            timeoutSeconds: {{ .Values.coordinatorServer.livenessProbe.timeoutSeconds }}
+            initialDelaySeconds: {{ .Values.coordinatorServer.livenessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.coordinatorServer.livenessProbe.periodSeconds }}
             tcpSocket:
-              port: {{.Values.appConfig.externalPort}}
+              port: {{ .Values.appConfig.externalPort }}
           readinessProbe:
-            failureThreshold: 100
-            timeoutSeconds: 1
-            initialDelaySeconds: 10
-            periodSeconds: 3
+            failureThreshold: {{ .Values.coordinatorServer.readinessProbe.failureThreshold }}
+            timeoutSeconds: {{ .Values.coordinatorServer.readinessProbe.timeoutSeconds }}
+            initialDelaySeconds: {{ .Values.coordinatorServer.readinessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.coordinatorServer.readinessProbe.periodSeconds }}
             tcpSocket:
-              port: {{.Values.appConfig.externalPort}}
+              port: {{ .Values.appConfig.externalPort }}
           resources:
-            {{- toYaml .Values.resources.tabletServer | nindent 12 }}
+            {{- toYaml .Values.resources.coordinatorServer | nindent 12 }}
           volumeMounts:
             - name: fluss-conf
               mountPath: /opt/conf
