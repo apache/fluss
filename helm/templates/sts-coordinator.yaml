@@ -35,8 +35,39 @@ spec:
         {{- include "fluss.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: coordinator
     spec:
-      {{- if .Values.serviceAccount.create }}
-      serviceAccountName: {{ .Values.serviceAccount.name | default (include "fluss.fullname" .) }}
+      serviceAccountName: {{ include "fluss.serviceAccountName" . }}
+      {{- if .Values.externalAccess.enabled }}
+      initContainers:
+        - name: auto-discovery
+          image: "{{ .Values.externalAccess.initContainer.image.registry }}/{{ .Values.externalAccess.initContainer.image.repository }}:{{ .Values.externalAccess.initContainer.image.tag }}"
+          imagePullPolicy: {{ .Values.externalAccess.initContainer.image.pullPolicy }}
+          command:
+            - "/bin/bash"
+            - "-c"
+            - |
+              SVC_NAME="coordinator-server-external"
+              echo "Waiting for service $SVC_NAME external IP..."
+              EXTERNAL_HOST=""
+              while [ -z "$EXTERNAL_HOST" ]; do
+                EXTERNAL_HOST=$(kubectl get svc $SVC_NAME -n $POD_NAMESPACE -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+                if [ -z "$EXTERNAL_HOST" ]; then
+                  sleep 5
+                fi
+              done
+              echo "Found external hostname: $EXTERNAL_HOST"
+              echo "$EXTERNAL_HOST" > /shared/external.host
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          volumeMounts:
+            - name: shared
+              mountPath: /shared
       {{- end }}
       containers:
         - name: {{ .Chart.Name }}-coordinator
@@ -44,21 +75,30 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           env:
             - name: POD_NAME
-              valueFrom: 
-                fieldRef: 
-                  fieldPath: metadata.name 
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
             - name: POD_IP
-              valueFrom: 
-                fieldRef: 
+              valueFrom:
+                fieldRef:
                   fieldPath: status.podIP
             - name: POD_NAMESPACE
-              valueFrom: 
-                fieldRef: 
+              valueFrom:
+                fieldRef:
                   fieldPath: metadata.namespace
             - name: NODE_IP
               valueFrom:
                 fieldRef:
                   fieldPath: status.hostIP
+          ports:
+            - name: internal
+              containerPort: {{ .Values.listeners.internal.port }}
+            - name: client
+              containerPort: {{ .Values.listeners.client.port }}
+            {{- if .Values.externalAccess.enabled }}
+            - name: external
+              containerPort: {{ .Values.listeners.external.port }}
+            {{- end }}
           command:
             - "/bin/sh"
             - "-c"
@@ -66,10 +106,35 @@ spec:
               export FLUSS_SERVER_ID=${POD_NAME##*-} && \
               cp /opt/conf/server.yaml $FLUSS_HOME/conf && \
 
+              BIND_LISTENERS="INTERNAL://${POD_IP}:{{ .Values.listeners.internal.port }}, CLIENT://${POD_IP}:{{ .Values.listeners.client.port }}" && \
+              ADVERTISED_LISTENERS="CLIENT://${POD_NAME}.coordinator-server-hs.${POD_NAMESPACE}.svc.cluster.local:{{ .Values.listeners.client.port }}" && \
+
+              {{- if .Values.externalAccess.enabled }}
+              if [ -f /shared/external.host ]; then
+                EXTERNAL_HOST=$(cat /shared/external.host) && \
+                ADVERTISED_LISTENERS="${ADVERTISED_LISTENERS}, EXTERNAL://${EXTERNAL_HOST}:{{ .Values.listeners.external.port }}" && \
+                BIND_LISTENERS="${BIND_LISTENERS}, EXTERNAL://${POD_IP}:{{ .Values.listeners.external.port }}"
+              fi && \
+              {{- end }}
+
               echo "" >> $FLUSS_HOME/conf/server.yaml && \
-              echo "tablet-server.id: ${FLUSS_SERVER_ID}" >> $FLUSS_HOME/conf/server.yaml && \
-              echo "bind.listeners: INTERNAL://0.0.0.0:{{ .Values.appConfig.internalPort }}, CLIENT://0.0.0.0:{{ .Values.appConfig.externalPort }}" >> $FLUSS_HOME/conf/server.yaml && \
-              echo "advertised.listeners: CLIENT://${POD_NAME}.coordinator-server-hs.${POD_NAMESPACE}.svc.cluster.local:{{ .Values.appConfig.externalPort }}" >> $FLUSS_HOME/conf/server.yaml && \
+              echo "bind.listeners: ${BIND_LISTENERS}" >> $FLUSS_HOME/conf/server.yaml && \
+              echo "advertised.listeners: ${ADVERTISED_LISTENERS}" >> $FLUSS_HOME/conf/server.yaml && \
+
+              {{- if .Values.sasl.enabled }}
+              {{- $jaasUsers := list -}}
+              {{- range .Values.sasl.users }}
+              {{- $jaasUsers = append $jaasUsers (printf "user_%s=\\\"%s\\\"" .username .password) -}}
+              {{- end }}
+              echo "security.sasl.enabled.mechanisms: {{ .Values.sasl.mechanism }}" >> $FLUSS_HOME/conf/server.yaml && \
+              echo "security.sasl.plain.jaas.config: org.apache.fluss.security.auth.sasl.plain.PlainLoginModule required {{ join " " $jaasUsers }};" >> $FLUSS_HOME/conf/server.yaml && \
+              echo "security.protocol.map: INTERNAL:sasl,CLIENT:sasl{{ if .Values.externalAccess.enabled }},EXTERNAL:sasl{{ end }}" >> $FLUSS_HOME/conf/server.yaml && \
+
+              echo "client.security.protocol: SASL" >> conf/server.yaml && \
+              echo "client.security.sasl.mechanism: {{ .Values.sasl.mechanism }}" >> conf/server.yaml && \
+              echo "client.security.sasl.username: {{ (first .Values.sasl.users).username }}" >> conf/server.yaml && \
+              echo "client.security.sasl.password: {{ (first .Values.sasl.users).password }}" >> conf/server.yaml && \
+              {{- end }}
 
               bin/coordinator-server.sh start-foreground
           livenessProbe:
@@ -78,14 +143,14 @@ spec:
             initialDelaySeconds: 10
             periodSeconds: 3
             tcpSocket:
-              port: {{.Values.appConfig.externalPort}}
+              port: {{ .Values.listeners.client.port }}
           readinessProbe:
             failureThreshold: 100
             timeoutSeconds: 1
             initialDelaySeconds: 10
             periodSeconds: 3
             tcpSocket:
-              port: {{.Values.appConfig.externalPort}}
+              port: {{ .Values.listeners.client.port }}
           resources:
             {{- toYaml .Values.resources.tabletServer | nindent 12 }}
           volumeMounts:
@@ -93,12 +158,30 @@ spec:
               mountPath: /opt/conf
             - name: data
               mountPath: /tmp/fluss/data
+            {{- if .Values.sasl.enabled }}
+            - name: sasl-config
+              mountPath: /etc/fluss/conf
+              readOnly: true
+            {{- end }}
+            {{- if .Values.externalAccess.enabled }}
+            - name: shared
+              mountPath: /shared
+            {{- end }}
       volumes:
         - name: fluss-conf
           configMap:
             name: fluss-conf-file
         {{- if not .Values.persistence.enabled }}
         - name: data
+          emptyDir: {}
+        {{- end }}
+        {{- if .Values.sasl.enabled }}
+        - name: sasl-config
+          secret:
+            secretName: {{ if .Values.sasl.existingSecret }}{{ .Values.sasl.existingSecret }}{{ else }}{{ include "fluss.fullname" . }}-sasl-jaas-config{{ end }}
+        {{- end }}
+        {{- if .Values.externalAccess.enabled }}
+        - name: shared
           emptyDir: {}
         {{- end }}
   {{- if .Values.persistence.enabled }}

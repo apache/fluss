@@ -16,25 +16,31 @@
 # limitations under the License.
 #
 
+{{- if .Values.externalAccess.enabled }}
 apiVersion: v1
 kind: Service
 metadata:
-  name: tablet-server-hs
+  name: coordinator-server-external
   labels:
     {{- include "fluss.labels" . | nindent 4 }}
-    app.kubernetes.io/component: tablet
+    app.kubernetes.io/component: coordinator
+  {{- with .Values.externalAccess.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 spec:
-  clusterIP: None
-  type: ClusterIP
+  type: {{ default "LoadBalancer" .Values.externalAccess.service.type }}
+  {{- if .Values.externalAccess.service.allowedSourceRanges }}
+  loadBalancerSourceRanges:
+    {{- toYaml .Values.externalAccess.service.allowedSourceRanges | nindent 4 }}
+  {{- end }}
   ports:
-    - name: internal
+    - name: fluss-external
       protocol: TCP
-      port: {{ .Values.listeners.internal.port }}
-      targetPort: internal
-    - name: client
-      protocol: TCP
-      port: {{ .Values.listeners.client.port }}
-      targetPort: client
+      port: {{ .Values.listeners.external.port }}
+      targetPort: external
   selector:
     {{- include "fluss.selectorLabels" . | nindent 4 }}
-    app.kubernetes.io/component: tablet
+    app.kubernetes.io/component: coordinator
+    statefulset.kubernetes.io/pod-name: coordinator-server-0
+{{- end }}

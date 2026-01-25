@@ -64,3 +64,26 @@ Selector labels
 app.kubernetes.io/name: {{ include "fluss.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
+
+{{/*
+Create the name of the service account to use
+*/}}
+{{- define "fluss.serviceAccountName" -}}
+{{- if .Values.serviceAccount.create }}
+{{- default (include "fluss.fullname" .) .Values.serviceAccount.name }}
+{{- else }}
+{{- default "default" .Values.serviceAccount.name }}
+{{- end }}
+{{- end }}
+
+{{/*
+Generate JAAS configuration for SASL
+*/}}
+{{- define "fluss.sasl.jaasConfig" -}}
+FlussServer {
+   org.apache.fluss.security.auth.sasl.plain.PlainLoginModule required
+   {{- range .Values.sasl.users }}
+   user_{{ .username }}="{{ .password }}"
+   {{- end }};
+};
+{{- end }}

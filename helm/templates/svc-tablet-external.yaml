@@ -16,25 +16,37 @@
 # limitations under the License.
 #
 
+{{- if .Values.externalAccess.enabled }}
+{{- $tabletCount := .Values.tablet.count | int }}
+{{- $servicePort := .Values.listeners.external.port }}
+{{- range $i, $_ := until $tabletCount }}
+---
 apiVersion: v1
 kind: Service
 metadata:
-  name: tablet-server-hs
+  name: tablet-server-{{ $i }}-external
   labels:
-    {{- include "fluss.labels" . | nindent 4 }}
+    {{- include "fluss.labels" $ | nindent 4 }}
     app.kubernetes.io/component: tablet
+    statefulset.kubernetes.io/pod-name: tablet-server-{{ $i }}
+  {{- with $.Values.externalAccess.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 spec:
-  clusterIP: None
-  type: ClusterIP
+  type: {{ default "LoadBalancer" $.Values.externalAccess.service.type }}
+  {{- if $.Values.externalAccess.service.allowedSourceRanges }}
+  loadBalancerSourceRanges:
+    {{- toYaml $.Values.externalAccess.service.allowedSourceRanges | nindent 4 }}
+  {{- end }}
   ports:
-    - name: internal
+    - name: fluss-external
       protocol: TCP
-      port: {{ .Values.listeners.internal.port }}
-      targetPort: internal
-    - name: client
-      protocol: TCP
-      port: {{ .Values.listeners.client.port }}
-      targetPort: client
+      port: {{ $servicePort }}
+      targetPort: external
   selector:
-    {{- include "fluss.selectorLabels" . | nindent 4 }}
+    {{- include "fluss.selectorLabels" $ | nindent 4 }}
     app.kubernetes.io/component: tablet
+    statefulset.kubernetes.io/pod-name: tablet-server-{{ $i }}
+{{- end }}
+{{- end }}

@@ -27,11 +27,6 @@ image:
   pullPolicy: IfNotPresent
   pullSecrets: []
 
-appConfig:
-  internalPort: 9123
-  externalPort: 9124
-
-
 # Fluss server configuration options
 configurationOverrides:
   default.bucket.number: 3
@@ -46,6 +41,41 @@ persistence:
   enabled: false
   size: 1Gi
   storageClass:
+
+# Tablet server only configuration options
+tablet:
+  count: 3
+
+# Fluss listener configurations
+listeners:
+  internal:
+    name: INTERNAL
+    port: 9123
+  client:
+    name: CLIENT
+    port: 9124
+  ## Activated only when @param externalAccess.enabled is true
+  external:
+    name: EXTERNAL
+    port: 9125
+
+# Fluss cluster external access
+externalAccess:
+  enabled: false
+  ## Image used for the init container
+  initContainer:
+    image:
+      registry: docker.io
+      repository: bitnami/kubectl
+      tag: latest
+      pullPolicy: IfNotPresent
+  service:
+    ## Service type (only LoadBalancer is supported for now)
+    type: LoadBalancer
+    ## Allowed source IP address ranges for external access
+    allowedSourceRanges:
+    ## Load balancer annotations
+    annotations:
 
 resources: {}
   # We usually recommend not to specify default resources and to leave this as a conscious
@@ -69,8 +99,20 @@ resources: {}
 
 serviceAccount:
   create: false
-  # If not set and create is true, a name is generated using the fullname template
+  # If not set and create is true, a name is generated using the `fullname` template
   name: ""
-  # Additional annotations to apply to the ServiceAccount.
-  # These can be useful, for example, to support integrations like workload identity.
+  # Additional annotations to apply to the ServiceAccount
   annotations: {}
+
+rbac:
+  create: false
+
+sasl:
+  enabled: false
+  mechanism: PLAIN
+  # List of client users for authentication
+  users:
+    - username: admin
+      password: password
+  # If specified, the existing secret must contain a key `jaas.conf` with the JAAS configuration
+  existingSecret: ""
