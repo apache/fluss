@@ -920,18 +920,25 @@ abstract class FlinkCatalogITCase {
         // Verify options are inherited from base table
         assertThat(changelogTable.getOptions()).containsEntry("bucket.num", "1");
 
-        // Verify $changelog on non-PK table throws appropriate error
+        // Verify $changelog log tables (append-only with +A change type)
         tEnv.executeSql("CREATE TABLE log_table_for_changelog (id INT, name STRING)");
 
-        assertThatThrownBy(
-                        () ->
-                                catalog.getTable(
-                                        new ObjectPath(
-                                                DEFAULT_DB, "log_table_for_changelog$changelog")))
-                .isInstanceOf(CatalogException.class)
-                .hasRootCauseMessage(
-                        "Virtual $changelog tables are only supported for primary key tables. "
-                                + "Table fluss.log_table_for_changelog does not have a primary key.");
+        CatalogTable logChangelogTable =
+                (CatalogTable)
+                        catalog.getTable(
+                                new ObjectPath(DEFAULT_DB, "log_table_for_changelog$changelog"));
+
+        // Log table changelog should have same metadata columns
+        Schema expectedLogSchema =
+                Schema.newBuilder()
+                        .column("_change_type", DataTypes.STRING().notNull())
+                        .column("_log_offset", DataTypes.BIGINT().notNull())
+                        .column("_commit_timestamp", DataTypes.TIMESTAMP_LTZ(3).notNull())
+                        .column("id", DataTypes.INT())
+                        .column("name", DataTypes.STRING())
+                        .build();
+
+        assertThat(logChangelogTable.getUnresolvedSchema()).isEqualTo(expectedLogSchema);
     }
 
     /**
