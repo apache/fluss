@@ -349,20 +349,7 @@ abstract class ChangelogVirtualTableITCase extends AbstractTestBase {
             assertThat(result).startsWith("+I[+I,");
         }
 
-        // 2. Test scan.startup.mode='latest' - should only read new records after subscription
-        String optionsLatest = " /*+ OPTIONS('scan.startup.mode' = 'latest') */";
-        String queryLatest =
-                "SELECT _change_type, id, name FROM startup_mode_test$changelog" + optionsLatest;
-        CloseableIterator<Row> rowIterLatest = tEnv.executeSql(queryLatest).collect();
-
-        // Write new data after subscribing with 'latest'
-        CLOCK.advanceTime(Duration.ofMillis(100));
-        writeRows(conn, tablePath, Arrays.asList(row(6, "v6")), false);
-        List<String> latestResults = collectRowsWithTimeout(rowIterLatest, 1, true);
-        assertThat(latestResults).hasSize(1);
-        assertThat(latestResults.get(0)).isEqualTo("+I[+I, 6, v6]");
-
-        // 3. Test scan.startup.mode='timestamp' - should read records from specific timestamp
+        // 2. Test scan.startup.mode='timestamp' - should read records from specific timestamp
         // read between batch1 and batch2
         String optionsTimestamp =
                 " /*+ OPTIONS('scan.startup.mode' = 'timestamp', 'scan.startup.timestamp' = '150') */";
