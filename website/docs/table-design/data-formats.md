@@ -1,8 +1,9 @@
 ---
-title: Storage Formats
+title: Data Formats
+sidebar_position: 6
 ---
 
-In Fluss, a storage format primarily defines **how data is stored and accessed**. Each format is designed to balance storage efficiency, read performance, and query capabilities.
+In Fluss, a data format primarily defines **how data is stored and accessed**. Each format is designed to balance storage efficiency, read performance, and query capabilities.
 
 This page describes the available formats in Fluss and provides guidance on selecting the appropriate format based on workload characteristics.
 

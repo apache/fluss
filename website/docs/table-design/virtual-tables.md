@@ -165,4 +165,4 @@ SELECT * FROM orders$changelog /*+ OPTIONS('scan.startup.mode' = 'timestamp', 's
 | `timestamp` | Start reading from a specific timestamp (milliseconds since epoch) |
 
 ### Limitations
-- Filter predicate pushdown is not currently supported. This will be addressed in future releases
+- Projection & partition & predicate pushdowns are not supported yet. This will be addressed in future releases.
