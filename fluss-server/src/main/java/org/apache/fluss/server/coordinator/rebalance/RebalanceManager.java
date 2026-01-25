@@ -365,6 +365,11 @@ public class RebalanceManager {
             checkArgument(bucketLeaderAndIsrOpt.isPresent(), "Bucket leader and isr is empty.");
             LeaderAndIsr isr = bucketLeaderAndIsrOpt.get();
             int leader = isr.leader();
+            // Skip the bucket if it is in a transient state (e.g., during table creation)
+            // where the leader is elected but not yet present in the assignment list.
+            if (leader == -1 || !assignment.contains(leader)) {
+                continue;
+            }
             for (int i = 0; i < assignment.size(); i++) {
                 int replica = assignment.get(i);
                 clusterModel.createReplica(replica, tableBucket, i, leader == replica);

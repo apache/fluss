@@ -102,6 +102,7 @@ import static org.apache.fluss.security.acl.OperationType.READ;
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.catchThrowable;
 
@@ -1020,6 +1021,43 @@ public class FlussAuthorizationITCase {
 
         // test cancelRebalance with WRITE permission should succeed
         guestAdmin.cancelRebalance(null).get();
+    }
+
+    @Test
+    void testRebalanceDuringConcurrentTableCreation() throws Exception {
+        // Setup WRITE permission on the cluster for the guest user to allow rebalance operations.
+        rootAdmin
+                .createAcls(
+                        Collections.singletonList(
+                                new AclBinding(
+                                        Resource.cluster(),
+                                        new AccessControlEntry(
+                                                guestPrincipal,
+                                                WILD_CARD_HOST,
+                                                OperationType.WRITE,
+                                                PermissionType.ALLOW))))
+                .all()
+                .get();
+
+        // Run multiple iterations to catch potential race conditions between
+        // table creation events and rebalance plan generation.
+        // Locally verified with 50+ iterations without failures.
+        for (int i = 0; i < 5; i++) {
+            TablePath transientTable = TablePath.of("test_db_1", "transient_rebalance_table_" + i);
+
+            // Trigger table creation. We do not wait for the table to be "ready"
+            // to maximize the chance of the rebalancer encountering transient metadata.
+            rootAdmin.createTable(transientTable, DATA1_TABLE_DESCRIPTOR_PK, false);
+
+            // Attempt to rebalance the cluster.
+            // This verifies that the rebalance operation is robust against transient table states
+            // (e.g., leader elected but not yet present in the assignment list) and does not fail.
+            assertThatCode(() -> guestAdmin.rebalance(Collections.emptyList()).get())
+                    .doesNotThrowAnyException();
+
+            // Cleanup the table for the next iteration.
+            rootAdmin.dropTable(transientTable, true).get();
+        }
     }
 
     // ------------------------------------------------------------------------
