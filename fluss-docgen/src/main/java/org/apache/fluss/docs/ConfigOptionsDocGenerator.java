@@ -26,6 +26,7 @@ import java.lang.reflect.Field;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -44,23 +45,31 @@ public class ConfigOptionsDocGenerator {
     private static final String END_MARKER = "";
 
     public static void main(String[] args) throws Exception {
-        // Resolve project root directory.
-        String userDir = System.getProperty("user.dir");
-        File currentFile = new File(userDir);
+        // Resolve project root directory reliably.
+        Path projectRoot = Paths.get(System.getProperty("user.dir"));
 
-        // Adjust path if executed from within the module directory.
-        if (currentFile.getName().equals("fluss-docgen")) {
-            currentFile = currentFile.getParentFile();
+        // If we are deep in fluss-docgen, go up to the project root.
+        while (projectRoot != null && !Files.exists(projectRoot.resolve("pom.xml"))) {
+            projectRoot = projectRoot.getParent();
         }
 
-        File configFile = new File(currentFile, "website/docs/configuration.md");
+        if (projectRoot == null) {
+            throw new RuntimeException(
+                    "Could not find project root (pom.xml not found in parent hierarchy)");
+        }
+
+        File configFile = projectRoot.resolve("website/docs/configuration.md").toFile();
         Path configPath = configFile.toPath();
 
         System.out.println("Processing documentation file: " + configFile.getAbsolutePath());
 
-        // Initialize the documentation file with required markers if it does not exist.
+        // Create directory structure if missing.
+        if (!configFile.getParentFile().exists()) {
+            configFile.getParentFile().mkdirs();
+        }
+
+        // Initialize markers if file is missing.
         if (!configFile.exists()) {
-            Files.createDirectories(configPath.getParent());
             List<String> initialLines =
                     Arrays.asList("# Configuration Reference", "", BEGIN_MARKER, END_MARKER);
             Files.write(configPath, initialLines, StandardCharsets.UTF_8);
@@ -69,7 +78,7 @@ public class ConfigOptionsDocGenerator {
         String generatedContent = generateContent();
         updateFile(configPath, generatedContent);
 
-        System.out.println("Configuration documentation updated successfully.");
+        System.out.println("SUCCESS: Configuration documentation updated successfully.");
     }
 
     /** Scans ConfigOptions and groups them by their key prefix. */
@@ -115,12 +124,13 @@ public class ConfigOptionsDocGenerator {
         boolean markersFound = false;
 
         for (String line : lines) {
-            if (line.trim().equals(BEGIN_MARKER)) {
+            String trimmedLine = line.trim();
+            if (trimmedLine.equals(BEGIN_MARKER)) {
                 resultLines.add(line);
                 resultLines.add(content);
                 inGeneratedSection = true;
                 markersFound = true;
-            } else if (line.trim().equals(END_MARKER)) {
+            } else if (trimmedLine.equals(END_MARKER)) {
                 resultLines.add(line);
                 inGeneratedSection = false;
             } else if (!inGeneratedSection) {
@@ -128,7 +138,6 @@ public class ConfigOptionsDocGenerator {
             }
         }
 
-        // Fallback: if markers were manually removed, reconstruct the file structure.
         if (!markersFound) {
             resultLines.clear();
             resultLines.add("# Configuration Reference");

@@ -22,9 +22,15 @@ import org.apache.fluss.config.MemorySize;
 
 import java.time.Duration;
 
-/** Utils for generating configuration documentation. */
+/** Utility class for formatting configuration options into human-readable documentation. */
 public class ConfigDocUtils {
 
+    /**
+     * Formats the default value of a {@link ConfigOption} for documentation purposes.
+     *
+     * @param option The configuration option to format.
+     * @return A string representation of the default value.
+     */
     public static String formatDefaultValue(ConfigOption<?> option) {
         Object value = option.defaultValue();
 
@@ -32,27 +38,29 @@ public class ConfigDocUtils {
             return "none";
         }
 
-        // Handle Duration (PT15M -> 15 min)
+        // Handle Duration: Convert ISO-8601 (PT15M) to human-readable (15 min).
         if (value instanceof Duration) {
             Duration d = (Duration) value;
-            if (d.isZero()) {
-                return "0";
+            long seconds = d.getSeconds(); // Use Java 8 compatible method.
+
+            if (seconds == 0) {
+                return "0 s";
             }
-            if (d.toHours() > 0 && d.toMinutes() % 60 == 0) {
-                return d.toHours() + " hours";
+            if (seconds >= 3600 && seconds % 3600 == 0) {
+                return (seconds / 3600) + " hours";
             }
-            if (d.toMinutes() > 0 && d.toSeconds() % 60 == 0) {
-                return d.toMinutes() + " min";
+            if (seconds >= 60 && seconds % 60 == 0) {
+                return (seconds / 60) + " min";
             }
-            return d.getSeconds() + " s";
+            return seconds + " s";
         }
 
-        // Handle MemorySize (Uses Fluss's built-in human-readable conversion)
+        // Handle MemorySize: Uses internal toString() for human-readable units (e.g., 64 mb).
         if (value instanceof MemorySize) {
             return value.toString();
         }
 
-        // Handle Empty Strings (like client.id)
+        // Handle Strings: Specifically check for empty values.
         if (value instanceof String && ((String) value).isEmpty()) {
             return "(empty)";
         }
