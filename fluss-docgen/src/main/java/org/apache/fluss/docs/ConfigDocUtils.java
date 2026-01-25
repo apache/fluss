@@ -17,6 +17,7 @@
 
 package org.apache.fluss.docs;
 
+import org.apache.fluss.config.ConfigOption;
 import org.apache.fluss.config.MemorySize;
 
 import java.time.Duration;
@@ -24,31 +25,38 @@ import java.time.Duration;
 /** Utils for generating configuration documentation. */
 public class ConfigDocUtils {
 
-    public static String formatDefaultValue(Object value) {
+    public static String formatDefaultValue(ConfigOption<?> option) {
+        Object value = option.defaultValue();
+
         if (value == null) {
             return "none";
         }
+
+        // Handle Duration (PT15M -> 15 min)
         if (value instanceof Duration) {
-            return formatDuration((Duration) value);
+            Duration d = (Duration) value;
+            if (d.isZero()) {
+                return "0";
+            }
+            if (d.toHours() > 0 && d.toMinutes() % 60 == 0) {
+                return d.toHours() + " hours";
+            }
+            if (d.toMinutes() > 0 && d.toSeconds() % 60 == 0) {
+                return d.toMinutes() + " min";
+            }
+            return d.getSeconds() + " s";
         }
+
+        // Handle MemorySize (Uses Fluss's built-in human-readable conversion)
         if (value instanceof MemorySize) {
-            // No need to cast to MemorySize again, it's redundant
             return value.toString();
         }
-        return value.toString();
-    }
 
-    private static String formatDuration(Duration d) {
-        long seconds = d.getSeconds();
-        if (seconds == 0) {
-            return "0";
+        // Handle Empty Strings (like client.id)
+        if (value instanceof String && ((String) value).isEmpty()) {
+            return "(empty)";
         }
-        if (seconds % 3600 == 0) {
-            return (seconds / 3600) + " hours";
-        }
-        if (seconds % 60 == 0) {
-            return (seconds / 60) + " min";
-        }
-        return seconds + " s";
+
+        return value.toString();
     }
 }
