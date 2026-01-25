@@ -20,7 +20,6 @@ package org.apache.fluss.spark.procedure
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.connector.catalog.TableCatalog
 import org.apache.spark.sql.types.{DataTypes, Metadata, StructField, StructType}
-import org.apache.spark.unsafe.types.UTF8String
 
 class CompactProcedure(tableCatalog: TableCatalog) extends BaseProcedure(tableCatalog) {
 
@@ -35,11 +34,13 @@ class CompactProcedure(tableCatalog: TableCatalog) extends BaseProcedure(tableCa
   override def call(args: InternalRow): Array[InternalRow] = {
     val tableIdent = toIdentifier(args.getString(0), CompactProcedure.PARAMETERS(0).name)
     val sparkTable = loadSparkTable(tableIdent)
-
+    // TODO: Implement compact procedure logic:
+    // 1. Get FlussTable from sparkTable and validate it supports compaction
+    // 2. Trigger compaction via Fluss Admin API for the specified table
+    // 3. Return the compaction result status as InternalRow
     val tablePath = toTablePath(tableIdent)
     throw new UnsupportedOperationException(
-      s"Compact procedure for table $tablePath is not yet supported. " +
-        "See https://github.com/apache/fluss/issues/2406 for more details."
+      s"Compact procedure for table $tablePath is not yet supported. "
     )
   }
 
