@@ -24,7 +24,7 @@ metadata:
   {{- include "fluss.labels" . | nindent 4 }}
 spec:
   serviceName: tablet-server-hs
-  replicas: {{ .Values.tablet.numberOfReplicas }}
+  replicas: {{ .Values.tabletServer.replicas }}
   selector:
     matchLabels:
       {{- include "fluss.selectorLabels" . | nindent 6 }}
@@ -78,17 +78,17 @@ spec:
 
               bin/tablet-server.sh start-foreground
           livenessProbe:
-            failureThreshold: 100
-            timeoutSeconds: 1
-            initialDelaySeconds: 10
-            periodSeconds: 3
+            failureThreshold: {{ .Values.tabletServer.livenessProbe.failureThreshold }}
+            timeoutSeconds: {{ .Values.tabletServer.livenessProbe.timeoutSeconds }}
+            initialDelaySeconds: {{ .Values.tabletServer.livenessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.tabletServer.livenessProbe.periodSeconds }}
             tcpSocket:
               port: {{ .Values.listeners.client.port }}
           readinessProbe:
-            failureThreshold: 100
-            timeoutSeconds: 1
-            initialDelaySeconds: 10
-            periodSeconds: 3
+            failureThreshold: {{ .Values.tabletServer.readinessProbe.failureThreshold }}
+            timeoutSeconds: {{ .Values.tabletServer.readinessProbe.timeoutSeconds }}
+            initialDelaySeconds: {{ .Values.tabletServer.readinessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.tabletServer.readinessProbe.periodSeconds }}
             tcpSocket:
               port: {{ .Values.listeners.client.port }}
           resources:
