@@ -20,19 +20,23 @@ package org.apache.fluss.docs;
 import org.apache.fluss.config.ConfigOption;
 import org.apache.fluss.config.ConfigOptions;
 
+import java.io.File;
 import java.io.IOException;
 import java.lang.reflect.Field;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
 
 /**
- * Generator for configuration documentation that injects categorized content into MD files.
+ * Generator for configuration documentation.
+ *
+ * <p>This tool uses reflection to scan {@link ConfigOptions} and generates a categorized Markdown
+ * representation of all available configurations, injecting it into the documentation file.
  */
 public class ConfigOptionsDocGenerator {
 
@@ -40,88 +44,101 @@ public class ConfigOptionsDocGenerator {
     private static final String END_MARKER = "";
 
     public static void main(String[] args) throws Exception {
-        // 1. Get the current working directory
-        String projectRoot = System.getProperty("user.dir");
+        // Resolve project root directory.
+        String userDir = System.getProperty("user.dir");
+        File currentFile = new File(userDir);
 
-        // 2. Target the Docusaurus content directory in the website module
-        // Based on your screenshot, the docs live in 'website/docs'
-        Path path = Paths.get(projectRoot, "website", "docs", "configuration.md");
+        // Adjust path if executed from within the module directory.
+        if (currentFile.getName().equals("fluss-docgen")) {
+            currentFile = currentFile.getParentFile();
+        }
 
-        // 3. Generate content
-        String newContent = generateContent();
+        File configFile = new File(currentFile, "website/docs/configuration.md");
+        Path configPath = configFile.toPath();
 
-        // 4. Update the file
-        updateFile(path, newContent);
+        System.out.println("Processing documentation file: " + configFile.getAbsolutePath());
 
-        System.out.println(" Step 2 Complete: Injected into Docusaurus docs at:");
-        System.out.println(path.toAbsolutePath());
+        // Initialize the documentation file with required markers if it does not exist.
+        if (!configFile.exists()) {
+            Files.createDirectories(configPath.getParent());
+            List<String> initialLines =
+                    Arrays.asList("# Configuration Reference", "", BEGIN_MARKER, END_MARKER);
+            Files.write(configPath, initialLines, StandardCharsets.UTF_8);
+        }
+
+        String generatedContent = generateContent();
+        updateFile(configPath, generatedContent);
+
+        System.out.println("Configuration documentation updated successfully.");
     }
 
+    /** Scans ConfigOptions and groups them by their key prefix. */
     private static String generateContent() throws IllegalAccessException {
         StringBuilder builder = new StringBuilder();
         Field[] fields = ConfigOptions.class.getDeclaredFields();
-
-        // Use a TreeMap to keep categories sorted alphabetically
-        Map<String, List<ConfigOption<?>>> groups = new TreeMap<>();
+        Map<String, List<ConfigOption<?>>> groupedOptions = new TreeMap<>();
 
         for (Field field : fields) {
             if (field.getType().equals(ConfigOption.class)) {
                 ConfigOption<?> option = (ConfigOption<?>) field.get(null);
                 String key = option.key();
-
-                // Get the category from the first part of the key (e.g., "server" from "server.port")
+                // Categorize based on the first part of the configuration key.
                 String category = key.contains(".") ? key.split("\\.")[0] : "common";
-                groups.computeIfAbsent(category, k -> new ArrayList<>()).add(option);
+                groupedOptions.computeIfAbsent(category, k -> new ArrayList<>()).add(option);
             }
         }
 
-        // Build the Markdown sections
-        for (Map.Entry<String, List<ConfigOption<?>>> entry : groups.entrySet()) {
-            builder.append("## ").append(capitalize(entry.getKey())).append(" Configurations\n\n");
-
+        for (Map.Entry<String, List<ConfigOption<?>>> entry : groupedOptions.entrySet()) {
+            builder.append("\n## ")
+                    .append(capitalize(entry.getKey()))
+                    .append(" Configurations\n\n");
             for (ConfigOption<?> option : entry.getValue()) {
-                builder.append("### ").append(option.key()).append("\n")
-                        .append("- **Default:** ").append(ConfigDocUtils.formatDefaultValue(option.defaultValue())).append("\n")
-                        .append("- **Description:** ").append(option.description()).append("\n\n");
+                builder.append("### ")
+                        .append(option.key())
+                        .append("\n")
+                        .append("- **Default:** ")
+                        .append(ConfigDocUtils.formatDefaultValue(option))
+                        .append("\n")
+                        .append("- **Description:** ")
+                        .append(option.description())
+                        .append("\n\n");
             }
         }
         return builder.toString();
     }
 
+    /** Injects the generated content between the defined HTML markers in the target file. */
     private static void updateFile(Path path, String content) throws IOException {
-        // Check if the file exists. If not, create it with markers.
-        if (!Files.exists(path)) {
-            System.out.println("File not found. Creating new file at: " + path.toAbsolutePath());
-            List<String> initialLines = new ArrayList<>();
-            initialLines.add("# Configuration Reference");
-            initialLines.add("");
-            initialLines.add(BEGIN_MARKER);
-            initialLines.add(END_MARKER);
-
-            // Ensure the directory exists
-            Files.createDirectories(path.getParent());
-            Files.write(path, initialLines, StandardCharsets.UTF_8);
-        }
-
-        // Now it's safe to read
         List<String> lines = Files.readAllLines(path, StandardCharsets.UTF_8);
-        List<String> newLines = new ArrayList<>();
-        boolean insideGeneratedSection = false;
+        List<String> resultLines = new ArrayList<>();
+        boolean inGeneratedSection = false;
+        boolean markersFound = false;
 
         for (String line : lines) {
-            if (line.contains(BEGIN_MARKER)) {
-                newLines.add(line);
-                newLines.add(content);
-                insideGeneratedSection = true;
-            } else if (line.contains(END_MARKER)) {
-                newLines.add(line);
-                insideGeneratedSection = false;
-            } else if (!insideGeneratedSection) {
-                newLines.add(line);
+            if (line.trim().equals(BEGIN_MARKER)) {
+                resultLines.add(line);
+                resultLines.add(content);
+                inGeneratedSection = true;
+                markersFound = true;
+            } else if (line.trim().equals(END_MARKER)) {
+                resultLines.add(line);
+                inGeneratedSection = false;
+            } else if (!inGeneratedSection) {
+                resultLines.add(line);
             }
         }
 
-        Files.write(path, newLines, StandardCharsets.UTF_8);
+        // Fallback: if markers were manually removed, reconstruct the file structure.
+        if (!markersFound) {
+            resultLines.clear();
+            resultLines.add("# Configuration Reference");
+            resultLines.add("");
+            resultLines.add(BEGIN_MARKER);
+            resultLines.add(content);
+            resultLines.add(END_MARKER);
+        }
+
+        Files.write(path, resultLines, StandardCharsets.UTF_8);
     }
 
     private static String capitalize(String str) {
