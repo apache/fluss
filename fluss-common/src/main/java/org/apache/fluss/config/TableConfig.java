@@ -50,6 +50,11 @@ public class TableConfig {
         this.config = config;
     }
 
+    /** Gets the table properties configuration. */
+    public Configuration getConfiguration() {
+        return config;
+    }
+
     /** Gets the replication factor of the table. */
     public int getReplicationFactor() {
         return config.get(ConfigOptions.TABLE_REPLICATION_FACTOR);

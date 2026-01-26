@@ -439,6 +439,14 @@ public class ConfigOptions {
                                     + WRITER_ID_EXPIRATION_TIME.key()
                                     + " passing. The default value is 10 minutes.");
 
+    public static final ConfigOption<Duration> SERVER_SCANNER_TTL =
+            key("server.scanner.ttl")
+                    .durationType()
+                    .defaultValue(Duration.ofMinutes(10))
+                    .withDescription(
+                            "The time that the tablet server will wait without receiving any scan request from "
+                                    + "a client before expiring the related status. The default value is 10 minutes.");
+
     public static final ConfigOption<Integer> TABLET_SERVER_CONTROLLED_SHUTDOWN_MAX_RETRIES =
             key("tablet-server.controlled-shutdown.max-retries")
                     .intType()
@@ -1092,6 +1100,14 @@ public class ConfigOptions {
                                     + "non-empty bucket of the fetch is larger than this value, the record batch "
                                     + "will still be returned to ensure that the fetch can make progress. As such, "
                                     + "this is not a absolute maximum.");
+
+    public static final ConfigOption<MemorySize> CLIENT_SCANNER_KV_FETCH_MAX_BYTES =
+            key("client.scanner.kv.fetch.max-bytes")
+                    .memoryType()
+                    .defaultValue(MemorySize.parse("1mb"))
+                    .withDescription(
+                            "The maximum amount of data the server should return for a kv scan request. "
+                                    + "The default value is 1mb.");
 
     public static final ConfigOption<MemorySize> CLIENT_SCANNER_LOG_FETCH_MAX_BYTES_FOR_BUCKET =
             key("client.scanner.log.fetch.max-bytes-for-bucket")

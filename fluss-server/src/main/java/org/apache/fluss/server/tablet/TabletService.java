@@ -19,10 +19,14 @@ package org.apache.fluss.server.tablet;
 
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.exception.AuthorizationException;
+import org.apache.fluss.exception.FlussRuntimeException;
+import org.apache.fluss.exception.NonPrimaryKeyTableException;
+import org.apache.fluss.exception.NotLeaderOrFollowerException;
 import org.apache.fluss.exception.UnknownTableOrBucketException;
 import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.record.DefaultValueRecordBatch;
 import org.apache.fluss.record.KvRecordBatch;
 import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.rpc.entity.FetchLogResultForBucket;
@@ -50,12 +54,17 @@ import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrRequest;
 import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrResponse;
 import org.apache.fluss.rpc.messages.NotifyRemoteLogOffsetsRequest;
 import org.apache.fluss.rpc.messages.NotifyRemoteLogOffsetsResponse;
+import org.apache.fluss.rpc.messages.PbScanReqForBucket;
 import org.apache.fluss.rpc.messages.PrefixLookupRequest;
 import org.apache.fluss.rpc.messages.PrefixLookupResponse;
 import org.apache.fluss.rpc.messages.ProduceLogRequest;
 import org.apache.fluss.rpc.messages.ProduceLogResponse;
 import org.apache.fluss.rpc.messages.PutKvRequest;
 import org.apache.fluss.rpc.messages.PutKvResponse;
+import org.apache.fluss.rpc.messages.ScanKvRequest;
+import org.apache.fluss.rpc.messages.ScanKvResponse;
+import org.apache.fluss.rpc.messages.ScannerKeepAliveRequest;
+import org.apache.fluss.rpc.messages.ScannerKeepAliveResponse;
 import org.apache.fluss.rpc.messages.StopReplicaRequest;
 import org.apache.fluss.rpc.messages.StopReplicaResponse;
 import org.apache.fluss.rpc.messages.UpdateMetadataRequest;
@@ -71,16 +80,23 @@ import org.apache.fluss.server.coordinator.MetadataManager;
 import org.apache.fluss.server.entity.FetchReqInfo;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
 import org.apache.fluss.server.entity.UserContext;
+import org.apache.fluss.server.kv.scan.ScannerContext;
+import org.apache.fluss.server.kv.scan.ScannerManager;
 import org.apache.fluss.server.log.FetchParams;
 import org.apache.fluss.server.log.ListOffsetsParam;
 import org.apache.fluss.server.metadata.TabletServerMetadataCache;
 import org.apache.fluss.server.metadata.TabletServerMetadataProvider;
+import org.apache.fluss.server.replica.Replica;
 import org.apache.fluss.server.replica.ReplicaManager;
 import org.apache.fluss.server.utils.ServerRpcMessageUtils;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 
+import org.rocksdb.RocksIterator;
+
 import javax.annotation.Nullable;
 
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
@@ -127,6 +143,7 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
     private final ReplicaManager replicaManager;
     private final TabletServerMetadataCache metadataCache;
     private final TabletServerMetadataProvider metadataFunctionProvider;
+    private final ScannerManager scannerManager;
 
     public TabletService(
             int serverId,
@@ -137,6 +154,7 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
             MetadataManager metadataManager,
             @Nullable Authorizer authorizer,
             DynamicConfigManager dynamicConfigManager,
+            ScannerManager scannerManager,
             ExecutorService ioExecutor) {
         super(
                 remoteFileSystem,
@@ -149,6 +167,7 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
         this.serviceName = "server-" + serverId;
         this.replicaManager = replicaManager;
         this.metadataCache = metadataCache;
+        this.scannerManager = scannerManager;
         this.metadataFunctionProvider =
                 new TabletServerMetadataProvider(zkClient, metadataManager, metadataCache);
     }
@@ -283,6 +302,136 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
                 request.getLimit(),
                 value -> response.complete(makeLimitScanResponse(value)));
         return response;
+    }
+
+    @Override
+    public CompletableFuture<ScanKvResponse> scanKv(ScanKvRequest request) {
+        CompletableFuture<ScanKvResponse> response = new CompletableFuture<>();
+        try {
+            if (request.hasScannerId()) {
+                byte[] scannerId = request.getScannerId();
+                ScannerContext context = scannerManager.getScanner(scannerId);
+                if (context == null) {
+                    throw Errors.SCANNER_NOT_FOUND_EXCEPTION.exception(
+                            "Scanner not found: " + new String(scannerId, StandardCharsets.UTF_8));
+                }
+
+                if (request.hasCloseScanner() && request.isCloseScanner()) {
+                    scannerManager.removeScanner(scannerId);
+                    ScanKvResponse scanResponse = new ScanKvResponse();
+                    scanResponse.setScannerId(scannerId).setHasMoreResults(false);
+                    response.complete(scanResponse);
+                    return response;
+                }
+
+                // check call seq id
+                if (request.getCallSeqId() != context.getCallSeqId() + 1) {
+                    throw new FlussRuntimeException(
+                            "Out of order scan request. Expected call seq id: "
+                                    + (context.getCallSeqId() + 1)
+                                    + ", but got: "
+                                    + request.getCallSeqId());
+                }
+                context.setCallSeqId(request.getCallSeqId());
+
+                response.complete(continueScan(scannerId, context, request.getBatchSizeBytes()));
+            } else {
+                PbScanReqForBucket bucketScanReq = request.getBucketScanReq();
+                authorizeTable(READ, bucketScanReq.getTableId());
+
+                TableBucket tb =
+                        new TableBucket(
+                                bucketScanReq.getTableId(),
+                                bucketScanReq.hasPartitionId()
+                                        ? bucketScanReq.getPartitionId()
+                                        : null,
+                                bucketScanReq.getBucketId());
+                Replica replica = replicaManager.getReplicaOrException(tb);
+                if (!replica.isLeader()) {
+                    throw new NotLeaderOrFollowerException("Leader not local for bucket " + tb);
+                }
+                if (!replica.isKvTable()) {
+                    throw new NonPrimaryKeyTableException(
+                            "Table " + bucketScanReq.getTableId() + " is not a primary key table.");
+                }
+
+                long limit = bucketScanReq.hasLimit() ? bucketScanReq.getLimit() : Long.MAX_VALUE;
+                byte[] scannerId = scannerManager.createScanner(replica.getKvTablet(), limit);
+                ScannerContext context = scannerManager.getScanner(scannerId);
+
+                ScanKvResponse scanResponse =
+                        continueScan(scannerId, context, request.getBatchSizeBytes());
+                // The FIP says: "Returns the corresponding log offset at the time the scanner is
+                // created"
+                // We can use the high watermark or the current log end offset.
+                scanResponse.setLogOffset(replica.getLogHighWatermark());
+                response.complete(scanResponse);
+            }
+        } catch (Exception e) {
+            response.complete(makeScanKvErrorResponse(e));
+        }
+        return response;
+    }
+
+    private ScanKvResponse continueScan(
+            byte[] scannerId, ScannerContext context, int batchSizeBytes) throws IOException {
+        RocksIterator iterator = context.getIterator();
+        DefaultValueRecordBatch.Builder builder = DefaultValueRecordBatch.builder();
+        int currentBytes = 0;
+        long rowsScannedInThisBatch = 0;
+
+        while (iterator.isValid()
+                && context.getRowsScanned() + rowsScannedInThisBatch < context.getLimit()) {
+            byte[] value = iterator.value();
+            // Check if adding this record would exceed batch size.
+            // But we must add at least one record.
+            if (rowsScannedInThisBatch > 0 && currentBytes + value.length > batchSizeBytes) {
+                break;
+            }
+
+            builder.append(value);
+            currentBytes += value.length;
+            rowsScannedInThisBatch++;
+            iterator.next();
+        }
+
+        context.incrementRowsScanned(rowsScannedInThisBatch);
+        boolean hasMore = iterator.isValid() && context.getRowsScanned() < context.getLimit();
+
+        ScanKvResponse response = new ScanKvResponse();
+        response.setScannerId(scannerId).setHasMoreResults(hasMore);
+        if (rowsScannedInThisBatch > 0) {
+            DefaultValueRecordBatch batch = builder.build();
+            byte[] records = new byte[batch.sizeInBytes()];
+            batch.getSegment().get(0, records);
+            response.setRecords(records);
+        }
+
+        if (!hasMore) {
+            scannerManager.removeScanner(scannerId);
+        }
+
+        return response;
+    }
+
+    private ScanKvResponse makeScanKvErrorResponse(Throwable e) {
+        ScanKvResponse response = new ScanKvResponse();
+        ApiError error = ApiError.fromThrowable(e);
+        response.setErrorCode(error.error().code()).setErrorMessage(error.message());
+        return response;
+    }
+
+    @Override
+    public CompletableFuture<ScannerKeepAliveResponse> scannerKeepAlive(
+            ScannerKeepAliveRequest request) {
+        ScannerKeepAliveResponse response = new ScannerKeepAliveResponse();
+        try {
+            scannerManager.keepAlive(request.getScannerId());
+        } catch (Exception e) {
+            ApiError error = ApiError.fromThrowable(e);
+            response.setErrorCode(error.error().code()).setErrorMessage(error.message());
+        }
+        return CompletableFuture.completedFuture(response);
     }
 
     @Override

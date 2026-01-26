@@ -41,6 +41,7 @@ import org.apache.fluss.server.authorizer.AuthorizerLoader;
 import org.apache.fluss.server.coordinator.LakeCatalogDynamicLoader;
 import org.apache.fluss.server.coordinator.MetadataManager;
 import org.apache.fluss.server.kv.KvManager;
+import org.apache.fluss.server.kv.scan.ScannerManager;
 import org.apache.fluss.server.kv.snapshot.DefaultCompletedKvSnapshotCommitter;
 import org.apache.fluss.server.log.LogManager;
 import org.apache.fluss.server.log.remote.RemoteLogManager;
@@ -124,6 +125,9 @@ public class TabletServer extends ServerBase {
 
     @GuardedBy("lock")
     private TabletService tabletService;
+
+    @GuardedBy("lock")
+    private ScannerManager scannerManager;
 
     @GuardedBy("lock")
     private MetricRegistry metricRegistry;
@@ -230,6 +234,8 @@ public class TabletServer extends ServerBase {
             this.kvManager = KvManager.create(conf, zkClient, logManager, tabletServerMetricGroup);
             kvManager.startup();
 
+            this.scannerManager = new ScannerManager(conf, clock);
+
             // Register kvManager to dynamicConfigManager for dynamic reconfiguration
             dynamicConfigManager.register(kvManager);
             // Start dynamicConfigManager after all reconfigurable components are registered
@@ -286,6 +292,7 @@ public class TabletServer extends ServerBase {
                             metadataManager,
                             authorizer,
                             dynamicConfigManager,
+                            scannerManager,
                             ioExecutor);
 
             RequestsMetrics requestsMetrics =

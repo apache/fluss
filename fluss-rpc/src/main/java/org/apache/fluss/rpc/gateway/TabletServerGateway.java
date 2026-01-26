@@ -42,6 +42,10 @@ import org.apache.fluss.rpc.messages.ProduceLogRequest;
 import org.apache.fluss.rpc.messages.ProduceLogResponse;
 import org.apache.fluss.rpc.messages.PutKvRequest;
 import org.apache.fluss.rpc.messages.PutKvResponse;
+import org.apache.fluss.rpc.messages.ScanKvRequest;
+import org.apache.fluss.rpc.messages.ScanKvResponse;
+import org.apache.fluss.rpc.messages.ScannerKeepAliveRequest;
+import org.apache.fluss.rpc.messages.ScannerKeepAliveResponse;
 import org.apache.fluss.rpc.messages.StopReplicaRequest;
 import org.apache.fluss.rpc.messages.StopReplicaResponse;
 import org.apache.fluss.rpc.messages.UpdateMetadataRequest;
@@ -129,6 +133,24 @@ public interface TabletServerGateway extends RpcGateway, AdminReadOnlyGateway {
      */
     @RPC(api = ApiKeys.LIMIT_SCAN)
     CompletableFuture<LimitScanResponse> limitScan(LimitScanRequest request);
+
+    /**
+     * Scan kv data from the specified table bucket.
+     *
+     * @param request the scan kv request
+     * @return the scan kv response
+     */
+    @RPC(api = ApiKeys.SCAN_KV)
+    CompletableFuture<ScanKvResponse> scanKv(ScanKvRequest request);
+
+    /**
+     * Keep alive for the specified scanner.
+     *
+     * @param request the scanner keep alive request
+     * @return the scanner keep alive response
+     */
+    @RPC(api = ApiKeys.SCANNER_KEEP_ALIVE)
+    CompletableFuture<ScannerKeepAliveResponse> scannerKeepAlive(ScannerKeepAliveRequest request);
 
     /**
      * List offsets for the specified table bucket.

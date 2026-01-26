@@ -255,6 +255,84 @@ message PrefixLookupResponse {
 }
 
 
+// scan kv request and response
+message ScanKvRequest {
+  // If continuing an existing scan, then you must set scanner_id.
+  // Otherwise, you must set 'new_scan_request'.
+  optional bytes scanner_id = 1;
+  optional PbScanReqForBucket bucket_scan_req = 2;
+
+  // The sequence ID of this call. The sequence ID should start at 0
+  // with the request for a new scanner, and after each successful request,
+  // the client should increment it by 1. When retrying a request, the client
+  // should _not_ increment this value. If the server detects that the client
+  // missed a chunk of rows from the middle of a scan, it will respond with an
+  // error.
+  optional uint32 call_seq_id = 3;
+
+  // The maximum number of bytes to send in the response.
+  optional uint32 batch_size_bytes = 4;
+
+  // If set, the server will close the scanner after responding to
+  // this request, regardless of whether all rows have been delivered.
+  optional bool close_scanner = 5;
+}
+
+message PbScanReqForBucket {
+  // The tablet to scan.
+  required int64 table_id = 1;
+  optional int64 partition_id = 2;
+  required int32 bucket_id = 3;
+
+  // The maximum number of rows to scan with the new scanner.
+  //
+  // The scanner will automatically stop yielding results and close itself
+  // after reaching this number of result rows.
+  optional uint64 limit = 4;
+}
+
+message ScanKvResponse {
+  // The error, if an error occurred with this request.
+  optional int32 error_code = 1;
+  optional string error_message = 2;
+
+  // When a scanner is created, returns the scanner ID which may be used
+  // to pull new rows from the scanner.
+  optional bytes scanner_id = 3;
+
+  // Set to true to indicate that there may be further results to be fetched
+  // from this scanner. If the scanner has no more results, then the scanner
+  // ID will become invalid and cannot continue to be used.
+  //
+  // Note that if a scan returns no results, then the initial response from
+  // the first RPC may return false in this flag, in which case there will
+  // be no scanner ID assigned.
+  optional bool has_more_results = 4;
+
+  // The block of returned rows.
+  //
+  // NOTE: the schema-related fields will not be present in this row block.
+  // The schema will match the schema requested by the client when it created
+  // the scanner.
+  optional bytes records = 5;
+
+  // Returns the corresponding log offset at the time the scanner is created
+  optional int64 log_offset = 6;
+}
+
+// A scanner keep-alive request.
+// Updates the scanner access time, increasing its time-to-live.
+message ScannerKeepAliveRequest {
+  required bytes scanner_id = 1;
+}
+
+message ScannerKeepAliveResponse {
+  // The error, if an error occurred with this request.
+  optional int32 error_code = 1;
+  optional string error_message = 2;
+}
+
+
 // limit scan request and response
 message LimitScanRequest {
   required int64 table_id = 2;

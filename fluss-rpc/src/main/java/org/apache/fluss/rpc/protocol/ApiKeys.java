@@ -80,7 +80,9 @@ public enum ApiKeys {
     REBALANCE(1049, 0, 0, PUBLIC),
     LIST_REBALANCE_PROGRESS(1050, 0, 0, PUBLIC),
     CANCEL_REBALANCE(1051, 0, 0, PUBLIC),
-    PREPARE_LAKE_TABLE_SNAPSHOT(1052, 0, 0, PRIVATE);
+    PREPARE_LAKE_TABLE_SNAPSHOT(1052, 0, 0, PRIVATE),
+    SCAN_KV(1053, 0, 0, PUBLIC),
+    SCANNER_KEEP_ALIVE(1054, 0, 0, PUBLIC);
 
     private static final Map<Integer, ApiKeys> ID_TO_TYPE =
             Arrays.stream(ApiKeys.values())

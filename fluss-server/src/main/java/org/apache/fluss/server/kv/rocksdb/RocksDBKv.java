@@ -32,6 +32,7 @@ import org.rocksdb.ReadOptions;
 import org.rocksdb.RocksDB;
 import org.rocksdb.RocksDBException;
 import org.rocksdb.RocksIterator;
+import org.rocksdb.Snapshot;
 import org.rocksdb.Statistics;
 import org.rocksdb.WriteOptions;
 
@@ -149,6 +150,18 @@ public class RocksDBKv implements AutoCloseable {
         }
 
         return pkList;
+    }
+
+    public Snapshot getSnapshot() {
+        return db.getSnapshot();
+    }
+
+    public void releaseSnapshot(Snapshot snapshot) {
+        db.releaseSnapshot(snapshot);
+    }
+
+    public RocksIterator newIterator(ReadOptions readOptions) {
+        return db.newIterator(defaultColumnFamilyHandle, readOptions);
     }
 
     public void put(byte[] key, byte[] value) throws IOException {

@@ -22,6 +22,7 @@ import org.apache.fluss.client.Connection;
 import org.apache.fluss.client.lookup.Lookup;
 import org.apache.fluss.client.lookup.Lookuper;
 import org.apache.fluss.client.table.scanner.Scan;
+import org.apache.fluss.client.table.scanner.SnapshotQuery;
 import org.apache.fluss.client.table.writer.Append;
 import org.apache.fluss.client.table.writer.AppendWriter;
 import org.apache.fluss.client.table.writer.Upsert;
@@ -54,6 +55,12 @@ public interface Table extends AutoCloseable {
      * batch scanner to read batch data.
      */
     Scan newScan();
+
+    /**
+     * Creates a new {@link SnapshotQuery} for this table to configure and execute a snapshot query
+     * to read all current data in a table bucket (requires to be a Primary Key Table).
+     */
+    SnapshotQuery newSnapshotQuery();
 
     /**
      * Creates a new {@link Lookup} for this table to configure and create a {@link Lookuper} to
