@@ -1,0 +1,53 @@
+public final class ArrayFieldEqualiser$0 implements org.apache.fluss.codegen.types.RecordEqualiser {
+  private boolean arrEq$1(org.apache.fluss.row.InternalArray left, org.apache.fluss.row.InternalArray right) {
+    if (left instanceof org.apache.fluss.row.BinaryArray && right instanceof org.apache.fluss.row.BinaryArray) {
+      return left.equals(right);
+    }
+    if (left.size() != right.size()) {
+      return false;
+    }
+    for (int i = 0; i < left.size(); i++) {
+      if (left.isNullAt(i) && right.isNullAt(i)) {
+        continue;
+      }
+      if (left.isNullAt(i) || right.isNullAt(i)) {
+        return false;
+      }
+      int l = left.getInt(i);
+      int r = right.getInt(i);
+      if (l != r) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+
+  public ArrayFieldEqualiser$0(java.lang.Object[] references) throws Exception {
+  }
+
+  @Override
+  public boolean equals(org.apache.fluss.row.InternalRow left, org.apache.fluss.row.InternalRow right) {
+    if (left instanceof org.apache.fluss.row.BinaryRow && right instanceof org.apache.fluss.row.BinaryRow) {
+      return left.equals(right);
+    }
+    boolean result = true;
+    result = result && equalsField0(left, right);
+    return result;
+  }
+
+  private boolean equalsField0(org.apache.fluss.row.InternalRow left, org.apache.fluss.row.InternalRow right) {
+    boolean leftNull = left.isNullAt(0);
+    boolean rightNull = right.isNullAt(0);
+    if (leftNull && rightNull) {
+      return true;
+    }
+    if (leftNull || rightNull) {
+      return false;
+    }
+    org.apache.fluss.row.InternalArray leftVal = left.getArray(0);
+    org.apache.fluss.row.InternalArray rightVal = right.getArray(0);
+    return arrEq$1(leftVal, rightVal);
+  }
+
+}
