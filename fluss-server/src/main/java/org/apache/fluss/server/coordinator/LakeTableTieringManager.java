@@ -82,23 +82,22 @@ import static org.apache.fluss.utils.concurrent.LockUtils.inLock;
  * └──┬──┘ └──┬───┘
  *    ▼       ▼
  *  ┌──────────┐ (lake freshness > tiering interval)
- *  │Scheduled ├──────┐
- *  └─────▲────┘      ▼
- *        │      ┌───────┐ (assign to tier service)  ┌───────┐
- *        │      |Pending├──────────────────────────►|Tiering├─┐
+ *  │Scheduled ├─────┐
+ *  └─────▲────┘     │
+ *        │      ┌───▼───┐ (assign to tier service)  ┌───────┐
+ *        │      |Pending├──────────────────────────►│Tiering├─┐
  *        │      └───▲───┘                           └───┬───┘ │
  *        │          │                 ┌─────────────────┘     │
- *        │          │                 | (timeout or failure)  | (finished)
+ *        │          │                 │ (timeout or failure)  │ (finished)
  *        │          │                 ▼                       ▼
  *        │          │  (retry)   ┌─────────┐             ┌────────┐
- *        │          │            │ Failed  │             │ Tiered │
- *        │          │            └─────────┘             └───┬────┘
- *        │          │                                        │
- *        │          │ (force finished)                       │ (ready for next round)
- *        │          └───────────────────────────────────────-┘
- *        │                                                   │
- *        └───────────────────────────────────────────────────┘
- *                    (ready for next round of tiering)
+ *        │          │◀───────────│ Failed  │             │ Tiered │
+ *        │          │            └─────────┘             └─┬───┬──┘
+ *        │          │                                      │   │
+ *        │          │           (force finished)           │   │
+ *        │          └─────────────────────────────────────-┘   │
+ *        │                     (ready for next round)          │
+ *        └─────────────────────────────────────────────────────┘
  * }</pre>
  */
 public class LakeTableTieringManager implements AutoCloseable {
