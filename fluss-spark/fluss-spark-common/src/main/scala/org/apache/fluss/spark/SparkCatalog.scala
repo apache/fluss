@@ -80,13 +80,6 @@ class SparkCatalog extends TableCatalog with SupportsFlussNamespaces with WithFl
   }
 
   override def alterTable(ident: Identifier, changes: TableChange*): Table = {
-    if (
-      !changes.forall(
-        e => e.isInstanceOf[TableChange.SetProperty] || e.isInstanceOf[TableChange.RemoveProperty])
-    ) {
-      throw new IllegalArgumentException(
-        "Altering table only supports set or remove properties for now")
-    }
     try {
       admin
         .alterTable(toTablePath(ident), SparkConversions.toFlussTableChanges(changes).asJava, false)
@@ -99,8 +92,6 @@ class SparkCatalog extends TableCatalog with SupportsFlussNamespaces with WithFl
         } else {
           throw e
         }
-      case e: UnsupportedOperationException =>
-        throw new IllegalArgumentException(e)
     }
   }
 

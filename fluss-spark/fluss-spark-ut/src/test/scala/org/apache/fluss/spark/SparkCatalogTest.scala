@@ -18,6 +18,7 @@
 package org.apache.fluss.spark
 
 import org.apache.fluss.config.ConfigOptions
+import org.apache.fluss.exception.InvalidAlterTableException
 import org.apache.fluss.metadata._
 import org.apache.fluss.types.{DataTypes, RowType}
 
@@ -25,6 +26,9 @@ import org.apache.spark.sql.{AnalysisException, Row}
 import org.apache.spark.sql.catalyst.analysis.PartitionsAlreadyExistException
 import org.apache.spark.sql.connector.catalog.Identifier
 import org.assertj.core.api.Assertions.{assertThat, assertThatList}
+import org.scalatest.matchers.should.Matchers.{a, convertToAnyShouldWrapper}
+
+import java.util.concurrent.ExecutionException
 
 import scala.collection.JavaConverters._
 
@@ -204,19 +208,32 @@ class SparkCatalogTest extends FlussSparkTestBase {
       assert(
         flussTable.getCustomProperties.toMap.asScala.getOrElse("key1", "non-exists") == "value1")
 
-      sql(s"ALTER TABLE t SET TBLPROPERTIES('key1' = 'value2')")
+      sql("ALTER TABLE t SET TBLPROPERTIES('key1' = 'value2', 'key2' = 'value2')")
       flussTable = admin.getTableInfo(createTablePath("t")).get()
       assertResult(
         Map(ConfigOptions.TABLE_REPLICATION_FACTOR.key() -> "1"),
         "check table properties")(flussTable.getProperties.toMap.asScala)
       assert(
         flussTable.getCustomProperties.toMap.asScala.getOrElse("key1", "non-exists") == "value2")
+      assert(
+        flussTable.getCustomProperties.toMap.asScala.getOrElse("key2", "non-exists") == "value2")
 
-      sql(s"ALTER TABLE t UNSET TBLPROPERTIES('key1')")
+      sql("ALTER TABLE t UNSET TBLPROPERTIES('key1', 'key2')")
       flussTable = admin.getTableInfo(createTablePath("t")).get()
       assert(!flussTable.getCustomProperties.toMap.asScala.contains("key1"))
+      assert(!flussTable.getCustomProperties.toMap.asScala.contains("key2"))
 
-      sql(s"ALTER TABLE t UNSET TBLPROPERTIES('key1')")
+      sql("ALTER TABLE t UNSET TBLPROPERTIES('key1')")
+
+      // Most table properties with prefix of 'table.' are not allowed to be modified.
+      intercept[ExecutionException] {
+        sql(
+          s"ALTER TABLE t SET TBLPROPERTIES('${ConfigOptions.TABLE_REPLICATION_FACTOR.key()}' = '2')")
+      }.getCause.shouldBe(a[InvalidAlterTableException])
+      intercept[ExecutionException] {
+        sql(
+          s"ALTER TABLE t SET TBLPROPERTIES('${ConfigOptions.TABLE_DATALAKE_FORMAT.key()}' = 'paimon')")
+      }.getCause.shouldBe(a[InvalidAlterTableException])
     }
   }
 
