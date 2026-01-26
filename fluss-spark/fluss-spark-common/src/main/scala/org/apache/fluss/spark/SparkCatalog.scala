@@ -80,7 +80,19 @@ class SparkCatalog extends TableCatalog with SupportsFlussNamespaces with WithFl
   }
 
   override def alterTable(ident: Identifier, changes: TableChange*): Table = {
-    throw new UnsupportedOperationException("Altering table is not supported")
+    try {
+      admin
+        .alterTable(toTablePath(ident), SparkConversions.toFlussTableChanges(changes).asJava, false)
+        .get()
+      loadTable(ident)
+    } catch {
+      case e: ExecutionException =>
+        if (e.getCause.isInstanceOf[TableNotExistException]) {
+          throw new NoSuchTableException(ident)
+        } else {
+          throw e
+        }
+    }
   }
 
   override def dropTable(ident: Identifier): Boolean = {

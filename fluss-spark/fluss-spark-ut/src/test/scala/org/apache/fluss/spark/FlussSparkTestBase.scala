@@ -22,7 +22,7 @@ import org.apache.fluss.client.admin.Admin
 import org.apache.fluss.client.table.Table
 import org.apache.fluss.client.table.scanner.log.LogScanner
 import org.apache.fluss.config.{ConfigOptions, Configuration}
-import org.apache.fluss.metadata.{TableDescriptor, TablePath}
+import org.apache.fluss.metadata.{DataLakeFormat, TableDescriptor, TablePath}
 import org.apache.fluss.row.InternalRow
 import org.apache.fluss.server.testutils.FlussClusterExtension
 
@@ -107,6 +107,7 @@ object FlussSparkTestBase {
       .setClusterConf(
         new Configuration()
           .set(ConfigOptions.KV_SNAPSHOT_INTERVAL, Duration.ofSeconds(1))
+          .set(ConfigOptions.DATALAKE_FORMAT, DataLakeFormat.PAIMON)
       )
       .setNumOfTabletServers(3)
       .build
