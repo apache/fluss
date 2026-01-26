@@ -15,10 +15,12 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.flink.lake.reader;
+package org.apache.fluss.client.table.scanner;
 
+import org.apache.fluss.client.utils.SingleElementHeadIterator;
 import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.row.KeyValueRow;
 import org.apache.fluss.row.ProjectedRow;
 import org.apache.fluss.utils.CloseableIterator;
 
@@ -34,7 +36,7 @@ import java.util.PriorityQueue;
 import java.util.function.Function;
 
 /** A sort merge reader to merge lakehouse snapshot record and fluss change log. */
-class SortMergeReader {
+public class SortMergeReader {
 
     private final ProjectedRow snapshotProjectedPkRow;
     private final CloseableIterator<LogRecord> lakeRecordIterator;
@@ -45,6 +47,22 @@ class SortMergeReader {
 
     private final ChangeLogIteratorWrapper changeLogIteratorWrapper;
     private @Nullable final ProjectedRow projectedRow;
+
+    public SortMergeReader(
+            @Nullable int[] projectedFields,
+            int[] pkIndexes,
+            @Nullable CloseableIterator<LogRecord> lakeRecordIterator,
+            Comparator<InternalRow> userKeyComparator,
+            CloseableIterator<KeyValueRow> changeLogIterator) {
+        this(
+                projectedFields,
+                pkIndexes,
+                lakeRecordIterator == null
+                        ? Collections.emptyList()
+                        : Collections.singletonList(lakeRecordIterator),
+                userKeyComparator,
+                changeLogIterator);
+    }
 
     public SortMergeReader(
             @Nullable int[] projectedFields,
@@ -224,64 +242,6 @@ class SortMergeReader {
                 emitRows.add(lakeSnapshotRow);
             }
             return new SortMergeRows(emitRows);
-        }
-    }
-
-    private static class SingleElementHeadIterator<T> implements CloseableIterator<T> {
-        private T singleElement;
-        private CloseableIterator<T> inner;
-        private boolean singleElementReturned;
-
-        public SingleElementHeadIterator(T element, CloseableIterator<T> inner) {
-            this.singleElement = element;
-            this.inner = inner;
-            this.singleElementReturned = false;
-        }
-
-        public static <T> SingleElementHeadIterator<T> addElementToHead(
-                T firstElement, CloseableIterator<T> originElementIterator) {
-            if (originElementIterator instanceof SingleElementHeadIterator) {
-                SingleElementHeadIterator<T> singleElementHeadIterator =
-                        (SingleElementHeadIterator<T>) originElementIterator;
-                singleElementHeadIterator.set(firstElement, singleElementHeadIterator.inner);
-                return singleElementHeadIterator;
-            } else {
-                return new SingleElementHeadIterator<>(firstElement, originElementIterator);
-            }
-        }
-
-        public void set(T element, CloseableIterator<T> inner) {
-            this.singleElement = element;
-            this.inner = inner;
-            this.singleElementReturned = false;
-        }
-
-        @Override
-        public boolean hasNext() {
-            return !singleElementReturned || inner.hasNext();
-        }
-
-        @Override
-        public T next() {
-            if (singleElementReturned) {
-                return inner.next();
-            }
-            singleElementReturned = true;
-            return singleElement;
-        }
-
-        public T peek() {
-            if (singleElementReturned) {
-                this.singleElement = inner.next();
-                this.singleElementReturned = false;
-                return this.singleElement;
-            }
-            return singleElement;
-        }
-
-        @Override
-        public void close() {
-            inner.close();
         }
     }
 

@@ -20,6 +20,7 @@ package org.apache.fluss.spark
 import org.apache.fluss.client.admin.Admin
 import org.apache.fluss.config.{Configuration => FlussConfiguration}
 import org.apache.fluss.metadata.{TableInfo, TablePath}
+import org.apache.fluss.spark.SparkFlussConf.READ_OPTIMIZED
 import org.apache.fluss.spark.catalog.{AbstractSparkTable, SupportsFlussPartitionManagement}
 import org.apache.fluss.spark.read.{FlussAppendScanBuilder, FlussUpsertScanBuilder}
 import org.apache.fluss.spark.write.{FlussAppendWriteBuilder, FlussUpsertWriteBuilder}
@@ -28,7 +29,6 @@ import org.apache.spark.sql.catalyst.SQLConfHelper
 import org.apache.spark.sql.connector.catalog.{SupportsRead, SupportsWrite}
 import org.apache.spark.sql.connector.read.ScanBuilder
 import org.apache.spark.sql.connector.write.{LogicalWriteInfo, WriteBuilder}
-import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.util.CaseInsensitiveStringMap
 
 class SparkTable(
@@ -54,10 +54,8 @@ class SparkTable(
     if (tableInfo.getPrimaryKeys.isEmpty) {
       new FlussAppendScanBuilder(tablePath, tableInfo, options, flussConfig)
     } else {
-      if (!conf.getConf(SparkFlussConf.READ_OPTIMIZED, false)) {
-        throw new UnsupportedOperationException(
-          "For now, only data in snapshot can be read, without merging them with changes. " +
-            "If you can accept it, please set `spark.sql.fluss.readOptimized` true, and execute query again.")
+      if (conf.getConf(SparkFlussConf.READ_OPTIMIZED, false)) {
+        flussConfig.setBoolean(SparkFlussConf.READ_OPTIMIZED_OPTION.key(), true)
       }
       new FlussUpsertScanBuilder(tablePath, tableInfo, options, flussConfig)
     }

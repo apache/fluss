@@ -17,6 +17,9 @@
 
 package org.apache.fluss.spark
 
+import org.apache.fluss.config.ConfigBuilder.key
+import org.apache.fluss.config.ConfigOption
+
 import org.apache.spark.sql.internal.SQLConf.buildConf
 
 object SparkFlussConf {
@@ -26,5 +29,11 @@ object SparkFlussConf {
     .doc("If true, Spark will only read data from data lake snapshot or kv snapshot, not execute merge them with log changes. This is a temporary configuration that will be deprecated when read-optimized table(e.g. `mytbl$ro`) is supported.")
     .booleanConf
     .createWithDefault(false)
+
+  val READ_OPTIMIZED_OPTION: ConfigOption[java.lang.Boolean] =
+    key(READ_OPTIMIZED.key)
+      .booleanType()
+      .defaultValue(READ_OPTIMIZED.defaultValue.get)
+      .withDescription(READ_OPTIMIZED.doc)
 
 }

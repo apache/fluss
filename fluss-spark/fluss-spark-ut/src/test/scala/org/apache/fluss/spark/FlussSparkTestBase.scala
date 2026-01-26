@@ -22,10 +22,11 @@ import org.apache.fluss.client.admin.Admin
 import org.apache.fluss.client.table.Table
 import org.apache.fluss.client.table.scanner.log.LogScanner
 import org.apache.fluss.config.{ConfigOptions, Configuration}
-import org.apache.fluss.metadata.{DataLakeFormat, TableDescriptor, TablePath}
+import org.apache.fluss.metadata.{TableDescriptor, TablePath}
 import org.apache.fluss.row.InternalRow
 import org.apache.fluss.server.testutils.FlussClusterExtension
 
+import org.apache.spark.SparkConf
 import org.apache.spark.sql.QueryTest
 import org.apache.spark.sql.test.SharedSparkSession
 
@@ -41,27 +42,25 @@ class FlussSparkTestBase extends QueryTest with SharedSparkSession {
   protected var conn: Connection = _
   protected var admin: Admin = _
 
-  val flussServer: FlussClusterExtension =
+  protected val flussServer: FlussClusterExtension =
     FlussClusterExtension.builder
       .setClusterConf(flussConf)
       .setNumOfTabletServers(3)
       .build
 
+  override protected def sparkConf: SparkConf = {
+    super.sparkConf
+      .set(s"spark.sql.catalog.$DEFAULT_CATALOG", classOf[SparkCatalog].getName)
+      .set(s"spark.sql.catalog.$DEFAULT_CATALOG.bootstrap.servers", flussServer.getBootstrapServers)
+      .set("spark.sql.defaultCatalog", DEFAULT_CATALOG)
+  }
+
   override protected def beforeAll(): Unit = {
-    super.beforeAll()
     flussServer.start()
     conn = ConnectionFactory.createConnection(flussServer.getClientConfig)
     admin = conn.getAdmin
 
-    spark.conf.set(s"spark.sql.catalog.$DEFAULT_CATALOG", classOf[SparkCatalog].getName)
-    spark.conf.set(
-      s"spark.sql.catalog.$DEFAULT_CATALOG.bootstrap.servers",
-      flussServer.getBootstrapServers)
-    spark.conf.set("spark.sql.defaultCatalog", DEFAULT_CATALOG)
-    // Enable read optimized by default temporarily.
-    // TODO: remove this when https://github.com/apache/fluss/issues/2427 is done.
-    spark.conf.set("spark.sql.fluss.readOptimized", "true")
-
+    super.beforeAll()
     sql(s"USE $DEFAULT_DATABASE")
   }
 

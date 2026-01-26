@@ -16,10 +16,7 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.flink.lake.reader;
-
-import org.apache.fluss.row.InternalRow;
-import org.apache.fluss.row.ProjectedRow;
+package org.apache.fluss.row;
 
 /** An {@link InternalRow} with the key part. */
 public class KeyValueRow {
