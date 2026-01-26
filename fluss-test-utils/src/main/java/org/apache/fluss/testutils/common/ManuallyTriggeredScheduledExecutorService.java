@@ -19,6 +19,7 @@ package org.apache.fluss.testutils.common;
 
 import javax.annotation.Nonnull;
 
+import java.time.Duration;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -26,9 +27,10 @@ import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
 import java.util.NoSuchElementException;
+import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.Callable;
-import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.Future;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
@@ -45,11 +47,11 @@ public class ManuallyTriggeredScheduledExecutorService implements ScheduledExecu
 
     private final ArrayDeque<Runnable> queuedRunnables = new ArrayDeque<>();
 
-    private final ConcurrentLinkedQueue<ScheduledTask<?>> nonPeriodicScheduledTasks =
-            new ConcurrentLinkedQueue<>();
+    private final BlockingQueue<ScheduledTask<?>> nonPeriodicScheduledTasks =
+            new LinkedBlockingQueue<>();
 
-    private final ConcurrentLinkedQueue<ScheduledTask<?>> periodicScheduledTasks =
-            new ConcurrentLinkedQueue<>();
+    private final BlockingQueue<ScheduledTask<?>> periodicScheduledTasks =
+            new LinkedBlockingQueue<>();
 
     private boolean shutdown;
 
@@ -252,6 +254,20 @@ public class ManuallyTriggeredScheduledExecutorService implements ScheduledExecu
         final ScheduledTask<?> poll = nonPeriodicScheduledTasks.remove();
         if (poll != null) {
             poll.execute();
+        }
+    }
+
+    /**
+     * Triggers next non-periodically scheduled task. If there is no such task, blocks until one is
+     * available for giving timeout. Throws {@link NoSuchElementException} if timeout reached.
+     */
+    public void triggerNextNonPeriodicScheduledTask(Duration timeout) throws InterruptedException {
+        final ScheduledTask<?> task =
+                nonPeriodicScheduledTasks.poll(timeout.toMillis(), TimeUnit.MILLISECONDS);
+        if (task != null) {
+            task.execute();
+        } else {
+            throw new NoSuchElementException("No scheduled task available within the timeout.");
         }
     }
 

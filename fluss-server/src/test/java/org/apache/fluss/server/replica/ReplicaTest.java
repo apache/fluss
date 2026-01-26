@@ -450,8 +450,8 @@ final class ReplicaTest extends ReplicaTestBase {
                         Tuple2.of("k2", new Object[] {3, "b1"}));
         putRecordsToLeader(kvReplica, kvRecords);
 
-        // trigger one snapshot,
-        scheduledExecutorService.triggerNonPeriodicScheduledTask();
+        // trigger one snapshot (task has been scheduled after becoming leader)
+        scheduledExecutorService.triggerAllNonPeriodicTasks();
 
         // wait until the snapshot 0 success
         CompletedSnapshot completedSnapshot0 =
@@ -472,7 +472,7 @@ final class ReplicaTest extends ReplicaTestBase {
         putRecordsToLeader(kvReplica, kvRecords);
 
         // trigger next checkpoint
-        scheduledExecutorService.triggerNonPeriodicScheduledTask();
+        scheduledExecutorService.triggerNextNonPeriodicScheduledTask(Duration.ofSeconds(30));
         // wait until the snapshot 1 success
         CompletedSnapshot completedSnapshot1 =
                 kvSnapshotStore.waitUntilSnapshotComplete(tableBucket, 1);
@@ -512,8 +512,8 @@ final class ReplicaTest extends ReplicaTestBase {
                         Tuple2.of("k3", new Object[] {5, "k3"}));
         putRecordsToLeader(kvReplica, kvRecords);
 
-        // trigger another one snapshot,
-        scheduledExecutorService.triggerNonPeriodicScheduledTask();
+        // trigger another one snapshot (task has been scheduled after becoming leader)
+        scheduledExecutorService.triggerAllNonPeriodicTasks();
         //  wait until the snapshot 2 success
         CompletedSnapshot completedSnapshot2 =
                 kvSnapshotStore.waitUntilSnapshotComplete(tableBucket, 2);
@@ -583,8 +583,8 @@ final class ReplicaTest extends ReplicaTestBase {
                         Tuple2.of("k2", new Object[] {2, "b"}));
         putRecordsToLeader(kvReplica, kvRecords);
 
-        // trigger first snapshot
-        triggerSnapshotTaskWithRetry(scheduledExecutorService, 5);
+        // trigger first snapshot (task has been scheduled after becoming leader)
+        scheduledExecutorService.triggerAllNonPeriodicTasks();
         kvSnapshotStore.waitUntilSnapshotComplete(tableBucket, 0);
 
         // put more data and create second snapshot
@@ -594,8 +594,8 @@ final class ReplicaTest extends ReplicaTestBase {
                         Tuple2.of("k3", new Object[] {4, "d"}));
         putRecordsToLeader(kvReplica, kvRecords);
 
-        // trigger second snapshot
-        triggerSnapshotTaskWithRetry(scheduledExecutorService, 5);
+        // trigger second snapshot (may need to wait the task being scheduled)
+        scheduledExecutorService.triggerNextNonPeriodicScheduledTask(Duration.ofSeconds(30));
         kvSnapshotStore.waitUntilSnapshotComplete(tableBucket, 1);
 
         // put more data and create third snapshot (this will be the broken one)
@@ -605,8 +605,8 @@ final class ReplicaTest extends ReplicaTestBase {
                         Tuple2.of("k5", new Object[] {6, "f"}));
         putRecordsToLeader(kvReplica, kvRecords);
 
-        // trigger third snapshot
-        triggerSnapshotTaskWithRetry(scheduledExecutorService, 5);
+        // trigger third snapshot (may need to wait the task being scheduled)
+        scheduledExecutorService.triggerNextNonPeriodicScheduledTask(Duration.ofSeconds(30));
         CompletedSnapshot snapshot2 = kvSnapshotStore.waitUntilSnapshotComplete(tableBucket, 2);
 
         // verify that snapshot2 is the latest one before we break it
@@ -688,12 +688,8 @@ final class ReplicaTest extends ReplicaTestBase {
                 getKeyValuePairs(genKvRecords(new Object[] {1, "a"}, new Object[] {2, "b"}));
         verifyGetKeyValues(kvTablet, expectedKeyValues);
 
-        // We have to remove the first scheduled snapshot task since it's for the previous kv tablet
-        // whose rocksdb has been dropped.
-        scheduledExecutorService.removeNonPeriodicScheduledTask();
-
-        // trigger one snapshot,
-        scheduledExecutorService.triggerNonPeriodicScheduledTask();
+        // trigger first snapshot (task has been scheduled after becoming leader)
+        scheduledExecutorService.triggerAllNonPeriodicTasks();
         // wait until the snapshot success
         kvSnapshotStore.waitUntilSnapshotComplete(tableBucket, 0);
 
@@ -715,9 +711,8 @@ final class ReplicaTest extends ReplicaTestBase {
 
         // test recover with schema evolution.
         short newSchemaId = 2;
-        // trigger one snapshot.
-        scheduledExecutorService.removeNonPeriodicScheduledTask();
-        scheduledExecutorService.triggerNonPeriodicScheduledTask();
+        // trigger second snapshot (task has been scheduled after becoming leader again)
+        scheduledExecutorService.triggerAllNonPeriodicTasks();
         // wait until the snapshot success
         kvSnapshotStore.waitUntilSnapshotComplete(tableBucket, 1);
         // write data with old schema
@@ -916,24 +911,6 @@ final class ReplicaTest extends ReplicaTestBase {
 
         public void reset() {
             isScheduled = false;
-        }
-    }
-
-    /** A helper function with support for retries for flaky triggering operations. */
-    private static void triggerSnapshotTaskWithRetry(
-            ManuallyTriggeredScheduledExecutorService scheduledExecutorService, int maxRetries)
-            throws Exception {
-        for (int i = 0; i < maxRetries; i++) {
-            try {
-                scheduledExecutorService.triggerNonPeriodicScheduledTask();
-                return;
-            } catch (java.util.NoSuchElementException e) {
-                if (i == maxRetries - 1) {
-                    throw e;
-                }
-
-                Thread.sleep(50);
-            }
         }
     }
 }
