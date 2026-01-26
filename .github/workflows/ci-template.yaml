@@ -40,9 +40,9 @@ jobs:
     name: "${{ matrix.module }}"
     steps:
       - name: Checkout code
-        uses: actions/checkout@v2
+        uses: actions/checkout@v6
       - name: Set up JDK
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           java-version: ${{ inputs.java-version }}
           distribution: 'temurin'
@@ -66,13 +66,13 @@ jobs:
           ARTIFACTS_OSS_STS_ENDPOINT: ${{ secrets.ARTIFACTS_OSS_STS_ENDPOINT }}
           ARTIFACTS_OSS_ROLE_ARN: ${{ secrets.ARTIFACTS_OSS_ROLE_ARN }}
       - name: Upload build logs
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         if: ${{ failure() }}
         with:
           name: logs-test-${{ matrix.module }}-${{ github.run_number}}#${{ github.run_attempt }}
           path: ${{ runner.temp }}/fluss-logs/*
       - name: Upload JaCoCo coverage report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         if: ${{ success() && github.ref == 'refs/heads/main' }}
         with:
           name: jacoco-report-${{ matrix.module }}-${{ github.run_number}}#${{ github.run_attempt }}
