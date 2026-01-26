@@ -591,6 +591,8 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     }
 
     public CompletableFuture<AdjustIsrResponse> adjustIsr(AdjustIsrRequest request) {
+        authorizeInternal();
+
         CompletableFuture<AdjustIsrResponse> response = new CompletableFuture<>();
         eventManagerSupplier
                 .get()
@@ -601,6 +603,8 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     @Override
     public CompletableFuture<CommitKvSnapshotResponse> commitKvSnapshot(
             CommitKvSnapshotRequest request) {
+        authorizeInternal();
+
         CompletableFuture<CommitKvSnapshotResponse> response = new CompletableFuture<>();
         // parse completed snapshot from request
         byte[] completedSnapshotBytes = request.getCompletedSnapshot();
@@ -618,6 +622,8 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     @Override
     public CompletableFuture<CommitRemoteLogManifestResponse> commitRemoteLogManifest(
             CommitRemoteLogManifestRequest request) {
+        authorizeInternal();
+
         CompletableFuture<CommitRemoteLogManifestResponse> response = new CompletableFuture<>();
         eventManagerSupplier
                 .get()
@@ -650,6 +656,8 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     @Override
     public CompletableFuture<PrepareLakeTableSnapshotResponse> prepareLakeTableSnapshot(
             PrepareLakeTableSnapshotRequest request) {
+        authorizeCluster(OperationType.WRITE);
+
         CompletableFuture<PrepareLakeTableSnapshotResponse> future = new CompletableFuture<>();
         ioExecutor.submit(
                 () -> {
@@ -696,6 +704,8 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     @Override
     public CompletableFuture<CommitLakeTableSnapshotResponse> commitLakeTableSnapshot(
             CommitLakeTableSnapshotRequest request) {
+        authorizeCluster(OperationType.WRITE);
+
         CompletableFuture<CommitLakeTableSnapshotResponse> response = new CompletableFuture<>();
         eventManagerSupplier
                 .get()
@@ -708,6 +718,8 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     @Override
     public CompletableFuture<LakeTieringHeartbeatResponse> lakeTieringHeartbeat(
             LakeTieringHeartbeatRequest request) {
+        authorizeCluster(OperationType.READ);
+
         LakeTieringHeartbeatResponse heartbeatResponse = new LakeTieringHeartbeatResponse();
         int currentCoordinatorEpoch = coordinatorEpochSupplier.get();
         heartbeatResponse.setCoordinatorEpoch(currentCoordinatorEpoch);
@@ -767,9 +779,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     @Override
     public CompletableFuture<ControlledShutdownResponse> controlledShutdown(
             ControlledShutdownRequest request) {
-        if (authorizer != null) {
-            authorizer.authorize(currentSession(), OperationType.ALTER, Resource.cluster());
-        }
+        authorizeInternal();
 
         CompletableFuture<ControlledShutdownResponse> response = new CompletableFuture<>();
         eventManagerSupplier
@@ -791,9 +801,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
             return CompletableFuture.completedFuture(new AlterClusterConfigsResponse());
         }
 
-        if (authorizer != null) {
-            authorizer.authorize(currentSession(), OperationType.ALTER, Resource.cluster());
-        }
+        authorizeCluster(OperationType.ALTER);
 
         List<AlterConfig> serverConfigChanges =
                 infos.stream()
@@ -823,9 +831,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
 
     @Override
     public CompletableFuture<AddServerTagResponse> addServerTag(AddServerTagRequest request) {
-        if (authorizer != null) {
-            authorizer.authorize(currentSession(), OperationType.ALTER, Resource.cluster());
-        }
+        authorizeCluster(OperationType.ALTER);
 
         CompletableFuture<AddServerTagResponse> response = new CompletableFuture<>();
         eventManagerSupplier
@@ -843,9 +849,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     @Override
     public CompletableFuture<RemoveServerTagResponse> removeServerTag(
             RemoveServerTagRequest request) {
-        if (authorizer != null) {
-            authorizer.authorize(currentSession(), OperationType.ALTER, Resource.cluster());
-        }
+        authorizeCluster(OperationType.ALTER);
 
         CompletableFuture<RemoveServerTagResponse> response = new CompletableFuture<>();
         eventManagerSupplier
@@ -862,9 +866,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
 
     @Override
     public CompletableFuture<RebalanceResponse> rebalance(RebalanceRequest request) {
-        if (authorizer != null) {
-            authorizer.authorize(currentSession(), OperationType.WRITE, Resource.cluster());
-        }
+        authorizeCluster(OperationType.WRITE);
 
         List<Goal> goalsByPriority = new ArrayList<>();
         Arrays.stream(request.getGoals())
@@ -878,9 +880,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     @Override
     public CompletableFuture<ListRebalanceProgressResponse> listRebalanceProgress(
             ListRebalanceProgressRequest request) {
-        if (authorizer != null) {
-            authorizer.authorize(currentSession(), OperationType.DESCRIBE, Resource.cluster());
-        }
+        authorizeCluster(OperationType.DESCRIBE);
 
         CompletableFuture<ListRebalanceProgressResponse> response = new CompletableFuture<>();
         eventManagerSupplier
@@ -895,9 +895,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     @Override
     public CompletableFuture<CancelRebalanceResponse> cancelRebalance(
             CancelRebalanceRequest request) {
-        if (authorizer != null) {
-            authorizer.authorize(currentSession(), OperationType.WRITE, Resource.cluster());
-        }
+        authorizeCluster(OperationType.WRITE);
 
         CompletableFuture<CancelRebalanceResponse> response = new CompletableFuture<>();
         eventManagerSupplier

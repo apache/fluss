@@ -50,11 +50,17 @@ import org.apache.fluss.rpc.gateway.AdminGateway;
 import org.apache.fluss.rpc.gateway.AdminReadOnlyGateway;
 import org.apache.fluss.rpc.gateway.CoordinatorGateway;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
+import org.apache.fluss.rpc.messages.AdjustIsrRequest;
+import org.apache.fluss.rpc.messages.CommitKvSnapshotRequest;
+import org.apache.fluss.rpc.messages.CommitLakeTableSnapshotRequest;
+import org.apache.fluss.rpc.messages.CommitRemoteLogManifestRequest;
 import org.apache.fluss.rpc.messages.ControlledShutdownRequest;
 import org.apache.fluss.rpc.messages.GetKvSnapshotMetadataRequest;
 import org.apache.fluss.rpc.messages.InitWriterRequest;
 import org.apache.fluss.rpc.messages.InitWriterResponse;
+import org.apache.fluss.rpc.messages.LakeTieringHeartbeatRequest;
 import org.apache.fluss.rpc.messages.MetadataRequest;
+import org.apache.fluss.rpc.messages.PrepareLakeTableSnapshotRequest;
 import org.apache.fluss.rpc.metrics.TestingClientMetricGroup;
 import org.apache.fluss.security.acl.AccessControlEntry;
 import org.apache.fluss.security.acl.AccessControlEntryFilter;
@@ -826,6 +832,125 @@ public class FlussAuthorizationITCase {
     }
 
     @Test
+    void testAdjustIsr() throws Exception {
+        AdjustIsrRequest request = new AdjustIsrRequest().setServerId(-1);
+
+        try (RpcClient rpcClient =
+                RpcClient.create(guestConf, TestingClientMetricGroup.newInstance(), false)) {
+            CoordinatorGateway guestGateway =
+                    GatewayClientProxy.createGatewayProxy(
+                            () -> FLUSS_CLUSTER_EXTENSION.getCoordinatorServerNode("CLIENT"),
+                            rpcClient,
+                            CoordinatorGateway.class);
+
+            // test adjustIsr with external connection (CLIENT listener)
+            // External connections should be rejected
+            assertThatThrownBy(() -> guestGateway.adjustIsr(request).get())
+                    .rootCause()
+                    .isInstanceOf(AuthorizationException.class)
+                    .hasMessageContaining("Only internal requests are permitted.");
+        }
+
+        // test adjustIsr with internal connection (FLUSS listener)
+        // Internal connections should bypass authorization check
+        CoordinatorGateway internalGateway =
+                GatewayClientProxy.createGatewayProxy(
+                        () -> FLUSS_CLUSTER_EXTENSION.getCoordinatorServerNode("FLUSS"),
+                        FLUSS_CLUSTER_EXTENSION.getRpcClient(),
+                        CoordinatorGateway.class);
+
+        // Even without any ACL permission, internal connection should succeed
+        // (won't throw AuthorizationException)
+        // The request may fail for other reasons (e.g., empty tables),
+        // but it should not fail due to authorization
+        internalGateway.adjustIsr(request).get();
+    }
+
+    @Test
+    void testCommitKvSnapshot() throws Exception {
+        CommitKvSnapshotRequest request =
+                new CommitKvSnapshotRequest()
+                        .setCoordinatorEpoch(-1)
+                        .setBucketLeaderEpoch(-1)
+                        .setCompletedSnapshot(new byte[0]);
+
+        try (RpcClient rpcClient =
+                RpcClient.create(guestConf, TestingClientMetricGroup.newInstance(), false)) {
+            CoordinatorGateway guestGateway =
+                    GatewayClientProxy.createGatewayProxy(
+                            () -> FLUSS_CLUSTER_EXTENSION.getCoordinatorServerNode("CLIENT"),
+                            rpcClient,
+                            CoordinatorGateway.class);
+
+            // test commitKvSnapshot with external connection (CLIENT listener)
+            // External connections should be rejected
+            assertThatThrownBy(() -> guestGateway.commitKvSnapshot(request).get())
+                    .rootCause()
+                    .isInstanceOf(AuthorizationException.class)
+                    .hasMessageContaining("Only internal requests are permitted.");
+        }
+
+        // test commitKvSnapshot with internal connection (FLUSS listener)
+        // Internal connections should bypass authorization check
+        CoordinatorGateway internalGateway =
+                GatewayClientProxy.createGatewayProxy(
+                        () -> FLUSS_CLUSTER_EXTENSION.getCoordinatorServerNode("FLUSS"),
+                        FLUSS_CLUSTER_EXTENSION.getRpcClient(),
+                        CoordinatorGateway.class);
+
+        // Even without any ACL permission, internal connection should succeed
+        // (won't throw AuthorizationException)
+        // The request may fail for other reasons (e.g., invalid snapshot data),
+        // but it should not fail due to authorization
+        assertThatThrownBy(() -> internalGateway.commitKvSnapshot(request).get())
+                .rootCause()
+                .isNotInstanceOf(AuthorizationException.class);
+    }
+
+    @Test
+    void testCommitRemoteLogManifest() throws Exception {
+        CommitRemoteLogManifestRequest request =
+                new CommitRemoteLogManifestRequest()
+                        .setTableId(-1)
+                        .setBucketId(-1)
+                        .setRemoteLogManifestPath("test-path")
+                        .setRemoteLogStartOffset(0)
+                        .setRemoteLogEndOffset(0)
+                        .setCoordinatorEpoch(-1)
+                        .setBucketLeaderEpoch(-1);
+
+        try (RpcClient rpcClient =
+                RpcClient.create(guestConf, TestingClientMetricGroup.newInstance(), false)) {
+            CoordinatorGateway guestGateway =
+                    GatewayClientProxy.createGatewayProxy(
+                            () -> FLUSS_CLUSTER_EXTENSION.getCoordinatorServerNode("CLIENT"),
+                            rpcClient,
+                            CoordinatorGateway.class);
+
+            // test commitRemoteLogManifest with external connection (CLIENT listener)
+            // External connections should be rejected
+            assertThatThrownBy(() -> guestGateway.commitRemoteLogManifest(request).get())
+                    .rootCause()
+                    .isInstanceOf(AuthorizationException.class)
+                    .hasMessageContaining("Only internal requests are permitted.");
+        }
+
+        // test commitRemoteLogManifest with internal connection (FLUSS listener)
+        // Internal connections should bypass authorization check
+        CoordinatorGateway internalGateway =
+                GatewayClientProxy.createGatewayProxy(
+                        () -> FLUSS_CLUSTER_EXTENSION.getCoordinatorServerNode("FLUSS"),
+                        FLUSS_CLUSTER_EXTENSION.getRpcClient(),
+                        CoordinatorGateway.class);
+
+        // Even without any ACL permission, internal connection should succeed
+        // (won't throw AuthorizationException)
+        // The request may fail for other reasons (e.g., invalid manifest data),
+        // but it should not fail due to authorization
+        internalGateway.commitRemoteLogManifest(request).get();
+    }
+
+    @Test
     void testControlledShutdown() throws Exception {
         ControlledShutdownRequest request =
                 new ControlledShutdownRequest().setTabletServerId(-1).setTabletServerEpoch(-1);
@@ -838,14 +963,12 @@ public class FlussAuthorizationITCase {
                             rpcClient,
                             CoordinatorGateway.class);
 
-            // test controlledShutdown without ALTER permission on cluster resource
+            // test controlledShutdown with external connection (CLIENT listener)
+            // External connections should be rejected
             assertThatThrownBy(() -> guestGateway.controlledShutdown(request).get())
                     .rootCause()
                     .isInstanceOf(AuthorizationException.class)
-                    .hasMessageContaining(
-                            String.format(
-                                    "Principal %s have no authorization to operate ALTER on resource Resource{type=CLUSTER, name='fluss-cluster'}",
-                                    guestPrincipal));
+                    .hasMessageContaining("Only internal requests are permitted.");
         }
 
         // test controlledShutdown with internal connection (FLUSS listener)
@@ -1018,6 +1141,126 @@ public class FlussAuthorizationITCase {
 
         // test cancelRebalance with WRITE permission should succeed
         guestAdmin.cancelRebalance(null).get();
+    }
+
+    @Test
+    void testPrepareLakeTableSnapshot() throws Exception {
+        PrepareLakeTableSnapshotRequest request = new PrepareLakeTableSnapshotRequest();
+
+        try (RpcClient rpcClient =
+                RpcClient.create(guestConf, TestingClientMetricGroup.newInstance(), false)) {
+            CoordinatorGateway guestGateway =
+                    GatewayClientProxy.createGatewayProxy(
+                            () -> FLUSS_CLUSTER_EXTENSION.getCoordinatorServerNode("CLIENT"),
+                            rpcClient,
+                            CoordinatorGateway.class);
+
+            // test prepareLakeTableSnapshot without WRITE permission on cluster resource
+            assertThatThrownBy(() -> guestGateway.prepareLakeTableSnapshot(request).get())
+                    .rootCause()
+                    .isInstanceOf(AuthorizationException.class)
+                    .hasMessageContaining(
+                            String.format(
+                                    "Principal %s have no authorization to operate WRITE on resource Resource{type=CLUSTER, name='fluss-cluster'}",
+                                    guestPrincipal));
+
+            // add WRITE permission to guest user on cluster resource
+            rootAdmin
+                    .createAcls(
+                            Collections.singletonList(
+                                    new AclBinding(
+                                            Resource.cluster(),
+                                            new AccessControlEntry(
+                                                    guestPrincipal,
+                                                    "*",
+                                                    OperationType.WRITE,
+                                                    PermissionType.ALLOW))))
+                    .all()
+                    .get();
+
+            // test prepareLakeTableSnapshot with WRITE permission should succeed
+            guestGateway.prepareLakeTableSnapshot(request).get();
+        }
+    }
+
+    @Test
+    void testCommitLakeTableSnapshot() throws Exception {
+        CommitLakeTableSnapshotRequest request = new CommitLakeTableSnapshotRequest();
+
+        try (RpcClient rpcClient =
+                RpcClient.create(guestConf, TestingClientMetricGroup.newInstance(), false)) {
+            CoordinatorGateway guestGateway =
+                    GatewayClientProxy.createGatewayProxy(
+                            () -> FLUSS_CLUSTER_EXTENSION.getCoordinatorServerNode("CLIENT"),
+                            rpcClient,
+                            CoordinatorGateway.class);
+
+            // test commitLakeTableSnapshot without WRITE permission on cluster resource
+            assertThatThrownBy(() -> guestGateway.commitLakeTableSnapshot(request).get())
+                    .rootCause()
+                    .isInstanceOf(AuthorizationException.class)
+                    .hasMessageContaining(
+                            String.format(
+                                    "Principal %s have no authorization to operate WRITE on resource Resource{type=CLUSTER, name='fluss-cluster'}",
+                                    guestPrincipal));
+
+            // add WRITE permission to guest user on cluster resource
+            rootAdmin
+                    .createAcls(
+                            Collections.singletonList(
+                                    new AclBinding(
+                                            Resource.cluster(),
+                                            new AccessControlEntry(
+                                                    guestPrincipal,
+                                                    "*",
+                                                    OperationType.WRITE,
+                                                    PermissionType.ALLOW))))
+                    .all()
+                    .get();
+
+            // test commitLakeTableSnapshot with WRITE permission should succeed
+            guestGateway.commitLakeTableSnapshot(request).get();
+        }
+    }
+
+    @Test
+    void testLakeTieringHeartbeat() throws Exception {
+        LakeTieringHeartbeatRequest request = new LakeTieringHeartbeatRequest();
+
+        try (RpcClient rpcClient =
+                RpcClient.create(guestConf, TestingClientMetricGroup.newInstance(), false)) {
+            CoordinatorGateway guestGateway =
+                    GatewayClientProxy.createGatewayProxy(
+                            () -> FLUSS_CLUSTER_EXTENSION.getCoordinatorServerNode("CLIENT"),
+                            rpcClient,
+                            CoordinatorGateway.class);
+
+            // test lakeTieringHeartbeat without READ permission on cluster resource
+            assertThatThrownBy(() -> guestGateway.lakeTieringHeartbeat(request).get())
+                    .rootCause()
+                    .isInstanceOf(AuthorizationException.class)
+                    .hasMessageContaining(
+                            String.format(
+                                    "Principal %s have no authorization to operate READ on resource Resource{type=CLUSTER, name='fluss-cluster'}",
+                                    guestPrincipal));
+
+            // add READ permission to guest user on cluster resource
+            rootAdmin
+                    .createAcls(
+                            Collections.singletonList(
+                                    new AclBinding(
+                                            Resource.cluster(),
+                                            new AccessControlEntry(
+                                                    guestPrincipal,
+                                                    "*",
+                                                    READ,
+                                                    PermissionType.ALLOW))))
+                    .all()
+                    .get();
+
+            // test lakeTieringHeartbeat with READ permission should succeed
+            guestGateway.lakeTieringHeartbeat(request).get();
+        }
     }
 
     private static Configuration initConfig() {

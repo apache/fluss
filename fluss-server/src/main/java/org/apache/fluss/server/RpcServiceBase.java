@@ -20,6 +20,7 @@ package org.apache.fluss.server;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.config.cluster.ConfigEntry;
+import org.apache.fluss.exception.AuthorizationException;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.KvSnapshotNotExistException;
 import org.apache.fluss.exception.LakeTableSnapshotNotExistException;
@@ -181,6 +182,18 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
     public void authorizeTable(OperationType operationType, TablePath tablePath) {
         if (authorizer != null) {
             authorizer.authorize(currentSession(), operationType, Resource.table(tablePath));
+        }
+    }
+
+    public void authorizeCluster(OperationType operationType) {
+        if (authorizer != null) {
+            authorizer.authorize(currentSession(), operationType, Resource.cluster());
+        }
+    }
+
+    public void authorizeInternal() {
+        if (!currentSession().isInternal()) {
+            throw new AuthorizationException("Only internal requests are permitted.");
         }
     }
 
