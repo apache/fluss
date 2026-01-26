@@ -30,7 +30,7 @@ const IntroduceList: IntroduceItem[] = [
   {
     description: (
       <>
-        <b>Apache Fluss (Incubating)</b> is a streaming storage built for real-time analytics which can serve as the real-time data layer for Lakehouse architectures. With its columnar stream and real-time update capabilities, Fluss integrates seamlessly with Apache Flink to enable high-throughput, low-latency, cost-effective streaming data warehouses tailored for real-time applications.
+        <b>Apache Fluss (Incubating)</b> is a streaming storage built for real-time analytics & AI which can serve as the real-time data layer for Lakehouse architectures. With its columnar stream and real-time update capabilities, Fluss integrates seamlessly with Apache Flink to enable high-throughput, low-latency, cost-effective streaming data warehouses tailored for real-time applications.
       </>
     ),
     image: require('@site/static/img/fluss.png').default,

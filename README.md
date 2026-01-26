@@ -47,12 +47,12 @@ Apache Spark, and StarRocks are coming soon.
 
 ## Features
 
-- **Sub-Second Latency**: Low-latency streaming reads/writes optimized for real-time applications with Apache Flink.
-- **Columnar Stream**: 10x improvement in streaming read performance with efficient pushdown projections.
-- **Streaming & Lakehouse Unification**: Unified data streaming and Lakehouse with low latencies for powerful analytics.
-- **Real-Time Updates**: Cost-efficient partial updates for large-scale data without expensive join operations.
-- **Changelog Generation**: Complete changelogs for streaming processors, streamlining analytics workflows.
-- **Lookup Queries**: Ultra-high QPS for primary key lookups, enabling efficient dimension table serving.
+- **Sub-Second Data Freshness**: Continuous ingestion and immediate availability of data enable low-latency analytics and real-time decision-making at scale.
+- **Streaming & Lakehouse Unification**: Streaming-native storage with low-latency access on top of the lakehouse, using tables as a single abstraction to unify real-time and historical data across engines.
+- **Columnar Streaming**: Based on Apache Arrow it allows database primitives on data streams and techniques like column pruning and predicate pushdown. This ensures engines read only the data they need, minimizing I/O and network costs.
+- **Compute–Storage Separation**: Stream processors focus on pure computation while Fluss manages state and storage, with features like deduplication, partial updates, delta joins, and aggregation merge engines.
+- **ML & AI–Ready Storage**: A unified storage layer supporting row-based, columnar, vector, and multi-modal data, enabling real-time feature stores and a centralized data repository for ML and AI systems.
+- **Changelogs & Decision Tracking**: Built-in changelog generation provides an append-only history of state and decision evolution, enabling auditing, reproducibility, and deep system observability.
 
 ## Building
 
