@@ -25,12 +25,14 @@ import org.apache.fluss.config.{ConfigOptions, Configuration}
 import org.apache.fluss.metadata.{DataLakeFormat, TableDescriptor, TablePath}
 import org.apache.fluss.row.InternalRow
 import org.apache.fluss.server.testutils.FlussClusterExtension
+
 import org.apache.spark.SparkConf
 import org.apache.spark.sql.QueryTest
 import org.apache.spark.sql.test.SharedSparkSession
 import org.junit.jupiter.api.extension.RegisterExtension
 
 import java.time.Duration
+
 import scala.collection.JavaConverters._
 
 class FlussSparkTestBase extends QueryTest with SharedSparkSession {

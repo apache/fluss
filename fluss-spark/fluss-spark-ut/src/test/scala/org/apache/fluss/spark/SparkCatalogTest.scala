@@ -204,7 +204,8 @@ class SparkCatalogTest extends FlussSparkTestBase {
       var flussTable = admin.getTableInfo(createTablePath("t")).get()
       assertResult(flussTable.getNumBuckets, "check bucket num")(3)
       assertResult(
-        Map(ConfigOptions.TABLE_REPLICATION_FACTOR.key() -> "1",
+        Map(
+          ConfigOptions.TABLE_REPLICATION_FACTOR.key() -> "1",
           ConfigOptions.TABLE_DATALAKE_FORMAT.key() -> "paimon"),
         "check table properties")(flussTable.getProperties.toMap.asScala)
       assert(
@@ -213,7 +214,8 @@ class SparkCatalogTest extends FlussSparkTestBase {
       sql("ALTER TABLE t SET TBLPROPERTIES('key1' = 'value2', 'key2' = 'value2')")
       flussTable = admin.getTableInfo(createTablePath("t")).get()
       assertResult(
-        Map(ConfigOptions.TABLE_REPLICATION_FACTOR.key() -> "1",
+        Map(
+          ConfigOptions.TABLE_REPLICATION_FACTOR.key() -> "1",
           ConfigOptions.TABLE_DATALAKE_FORMAT.key() -> "paimon"),
         "check table properties")(flussTable.getProperties.toMap.asScala)
       assert(
@@ -233,10 +235,13 @@ class SparkCatalogTest extends FlussSparkTestBase {
         s"ALTER TABLE t SET TBLPROPERTIES('${ConfigOptions.TABLE_DATALAKE_ENABLED.key()}' = 'true')")
       flussTable = admin.getTableInfo(createTablePath("t")).get()
       assertResult(
-        Map(ConfigOptions.TABLE_REPLICATION_FACTOR.key() -> "1",
+        Map(
+          ConfigOptions.TABLE_REPLICATION_FACTOR.key() -> "1",
           ConfigOptions.TABLE_DATALAKE_FORMAT.key() -> "paimon",
-          ConfigOptions.TABLE_DATALAKE_ENABLED.key() -> "true"),
-        "check table properties")(flussTable.getProperties.toMap.asScala)
+          ConfigOptions.TABLE_DATALAKE_ENABLED.key() -> "true"
+        ),
+        "check table properties"
+      )(flussTable.getProperties.toMap.asScala)
 
       // Most table properties with prefix of 'table.' are not allowed to be modified.
       intercept[ExecutionException] {
