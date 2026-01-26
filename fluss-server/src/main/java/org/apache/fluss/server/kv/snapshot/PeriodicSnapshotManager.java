@@ -80,8 +80,13 @@ public class PeriodicSnapshotManager implements Closeable {
     /** Whether snapshot is started. */
     private volatile boolean started = false;
 
-    /** The scheduled snapshot task. */
-    private volatile ScheduledFuture<?> scheduledTask = null;
+    /**
+     * The scheduled snapshot task.
+     *
+     * <p>Since all reads and writes of {@code scheduledTask} are protected by synchronized, the
+     * volatile modifier is not necessary here.
+     */
+    private ScheduledFuture<?> scheduledTask = null;
 
     private final long initialDelay;
     /** The table bucket that the snapshot manager is for. */
