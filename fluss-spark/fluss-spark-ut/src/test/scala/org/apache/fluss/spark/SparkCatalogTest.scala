@@ -202,8 +202,10 @@ class SparkCatalogTest extends FlussSparkTestBase {
       sql(
         s"CREATE TABLE $DEFAULT_DATABASE.t (id int, name string) TBLPROPERTIES('key1' = 'value1', '${SparkConnectorOptions.BUCKET_NUMBER.key()}' = 3)")
       var flussTable = admin.getTableInfo(createTablePath("t")).get()
+      assertResult(flussTable.getNumBuckets, "check bucket num")(3)
       assertResult(
-        Map(ConfigOptions.TABLE_REPLICATION_FACTOR.key() -> "1"),
+        Map(ConfigOptions.TABLE_REPLICATION_FACTOR.key() -> "1",
+          ConfigOptions.TABLE_DATALAKE_FORMAT.key() -> "paimon"),
         "check table properties")(flussTable.getProperties.toMap.asScala)
       assert(
         flussTable.getCustomProperties.toMap.asScala.getOrElse("key1", "non-exists") == "value1")
@@ -211,7 +213,8 @@ class SparkCatalogTest extends FlussSparkTestBase {
       sql("ALTER TABLE t SET TBLPROPERTIES('key1' = 'value2', 'key2' = 'value2')")
       flussTable = admin.getTableInfo(createTablePath("t")).get()
       assertResult(
-        Map(ConfigOptions.TABLE_REPLICATION_FACTOR.key() -> "1"),
+        Map(ConfigOptions.TABLE_REPLICATION_FACTOR.key() -> "1",
+          ConfigOptions.TABLE_DATALAKE_FORMAT.key() -> "paimon"),
         "check table properties")(flussTable.getProperties.toMap.asScala)
       assert(
         flussTable.getCustomProperties.toMap.asScala.getOrElse("key1", "non-exists") == "value2")
@@ -223,16 +226,22 @@ class SparkCatalogTest extends FlussSparkTestBase {
       assert(!flussTable.getCustomProperties.toMap.asScala.contains("key1"))
       assert(!flussTable.getCustomProperties.toMap.asScala.contains("key2"))
 
+      // no error if unset not-exists key
       sql("ALTER TABLE t UNSET TBLPROPERTIES('key1')")
+
+      sql(
+        s"ALTER TABLE t SET TBLPROPERTIES('${ConfigOptions.TABLE_DATALAKE_ENABLED.key()}' = 'true')")
+      flussTable = admin.getTableInfo(createTablePath("t")).get()
+      assertResult(
+        Map(ConfigOptions.TABLE_REPLICATION_FACTOR.key() -> "1",
+          ConfigOptions.TABLE_DATALAKE_FORMAT.key() -> "paimon",
+          ConfigOptions.TABLE_DATALAKE_ENABLED.key() -> "true"),
+        "check table properties")(flussTable.getProperties.toMap.asScala)
 
       // Most table properties with prefix of 'table.' are not allowed to be modified.
       intercept[ExecutionException] {
         sql(
           s"ALTER TABLE t SET TBLPROPERTIES('${ConfigOptions.TABLE_REPLICATION_FACTOR.key()}' = '2')")
-      }.getCause.shouldBe(a[InvalidAlterTableException])
-      intercept[ExecutionException] {
-        sql(
-          s"ALTER TABLE t SET TBLPROPERTIES('${ConfigOptions.TABLE_DATALAKE_FORMAT.key()}' = 'paimon')")
       }.getCause.shouldBe(a[InvalidAlterTableException])
     }
   }
