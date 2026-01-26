@@ -205,8 +205,7 @@ class SparkCatalogTest extends FlussSparkTestBase {
       assertResult(flussTable.getNumBuckets, "check bucket num")(3)
       assertResult(
         Map(
-          ConfigOptions.TABLE_REPLICATION_FACTOR.key() -> "1",
-          ConfigOptions.TABLE_DATALAKE_FORMAT.key() -> "paimon"),
+          ConfigOptions.TABLE_REPLICATION_FACTOR.key() -> "1"),
         "check table properties")(flussTable.getProperties.toMap.asScala)
       assert(
         flussTable.getCustomProperties.toMap.asScala.getOrElse("key1", "non-exists") == "value1")
@@ -215,8 +214,7 @@ class SparkCatalogTest extends FlussSparkTestBase {
       flussTable = admin.getTableInfo(createTablePath("t")).get()
       assertResult(
         Map(
-          ConfigOptions.TABLE_REPLICATION_FACTOR.key() -> "1",
-          ConfigOptions.TABLE_DATALAKE_FORMAT.key() -> "paimon"),
+          ConfigOptions.TABLE_REPLICATION_FACTOR.key() -> "1"),
         "check table properties")(flussTable.getProperties.toMap.asScala)
       assert(
         flussTable.getCustomProperties.toMap.asScala.getOrElse("key1", "non-exists") == "value2")
@@ -230,18 +228,6 @@ class SparkCatalogTest extends FlussSparkTestBase {
 
       // no error if unset not-exists key
       sql("ALTER TABLE t UNSET TBLPROPERTIES('key1')")
-
-      sql(
-        s"ALTER TABLE t SET TBLPROPERTIES('${ConfigOptions.TABLE_DATALAKE_ENABLED.key()}' = 'true')")
-      flussTable = admin.getTableInfo(createTablePath("t")).get()
-      assertResult(
-        Map(
-          ConfigOptions.TABLE_REPLICATION_FACTOR.key() -> "1",
-          ConfigOptions.TABLE_DATALAKE_FORMAT.key() -> "paimon",
-          ConfigOptions.TABLE_DATALAKE_ENABLED.key() -> "true"
-        ),
-        "check table properties"
-      )(flussTable.getProperties.toMap.asScala)
 
       // Most table properties with prefix of 'table.' are not allowed to be modified.
       intercept[ExecutionException] {

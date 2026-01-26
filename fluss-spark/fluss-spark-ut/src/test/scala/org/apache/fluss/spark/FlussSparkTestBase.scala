@@ -117,6 +117,5 @@ class FlussSparkTestBase extends QueryTest with SharedSparkSession {
   protected def flussConf: Configuration = {
     val conf = new Configuration
     conf.set(ConfigOptions.KV_SNAPSHOT_INTERVAL, Duration.ofSeconds(1))
-    conf.set(ConfigOptions.DATALAKE_FORMAT, DataLakeFormat.PAIMON)
   }
 }
