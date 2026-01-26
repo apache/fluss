@@ -224,7 +224,6 @@ public class KvTabletSnapshotTarget implements PeriodicSnapshotManager.SnapshotT
                 new CompletedSnapshot(
                         tableBucket,
                         snapshotId,
-                        snapshotResult.getSnapshotPath(),
                         snapshotResult.getKvSnapshotHandle(),
                         snapshotResult.getLogOffset());
         try {
@@ -323,7 +322,11 @@ public class KvTabletSnapshotTarget implements PeriodicSnapshotManager.SnapshotT
                                 + "The commit truly failed, proceeding with cleanup.",
                         snapshotId,
                         tableBucket);
-                snapshotsCleaner.cleanSnapshot(completedSnapshot, () -> {}, ioExecutor);
+                snapshotsCleaner.cleanSnapshot(
+                        snapshotResult.getSnapshotPath().getParent(),
+                        completedSnapshot,
+                        () -> {},
+                        ioExecutor);
                 handleSnapshotFailure(snapshotId, snapshotLocation, t);
             }
         } catch (Exception zkException) {

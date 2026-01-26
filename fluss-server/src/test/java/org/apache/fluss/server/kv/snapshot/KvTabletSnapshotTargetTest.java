@@ -22,6 +22,7 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.FlussException;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.fs.FsPath;
+import org.apache.fluss.fs.local.LocalFileSystem;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.server.SequenceIDCounter;
 import org.apache.fluss.server.kv.rocksdb.RocksDBExtension;
@@ -157,13 +158,18 @@ class KvTabletSnapshotTargetTest {
                 completedSnapshotHandleStore.get(tableBucket, snapshotId1).get();
         CompletedSnapshot snapshot = completedSnapshotHandle.retrieveCompleteSnapshot();
         assertThat(snapshot.getSnapshotID()).isEqualTo(snapshotId1);
-        // verify the metadata file path
-        assertThat(snapshot.getMetadataFilePath())
-                .isEqualTo(CompletedSnapshot.getMetadataFilePath(snapshot.getSnapshotLocation()));
+        SnapshotLocation snapshotLocation =
+                new SnapshotLocation(
+                        LocalFileSystem.getSharedInstance(),
+                        FlussPaths.remoteKvSnapshotDir(remoteKvTabletDir, snapshotId1),
+                        FlussPaths.remoteKvSharedDir(remoteKvTabletDir),
+                        1024);
         // rebuild from snapshot, and the check the rebuilt rocksdb
         try (RocksDBKv rocksDBKv =
                 KvTestUtils.buildFromSnapshotHandle(
-                        snapshot.getKvSnapshotHandle(), temoRebuildPath.resolve("restore1"))) {
+                        snapshotLocation,
+                        snapshot.getKvSnapshotHandle(),
+                        temoRebuildPath.resolve("restore1"))) {
             assertThat(rocksDBKv.get("key1".getBytes())).isEqualTo("val1".getBytes());
         }
 
@@ -181,14 +187,19 @@ class KvTabletSnapshotTargetTest {
         completedSnapshotHandle = completedSnapshotHandleStore.get(tableBucket, snapshotId2).get();
         snapshot = completedSnapshotHandle.retrieveCompleteSnapshot();
         // rebuild from snapshot, and the check the rebuilt rocksdb
-        // verify the metadata file path
-        assertThat(snapshot.getMetadataFilePath())
-                .isEqualTo(CompletedSnapshot.getMetadataFilePath(snapshot.getSnapshotLocation()));
         assertThat(snapshot.getSnapshotID()).isEqualTo(snapshotId2);
         assertThat(updateMinRetainOffsetConsumer.get()).isEqualTo(5);
+        snapshotLocation =
+                new SnapshotLocation(
+                        LocalFileSystem.getSharedInstance(),
+                        FlussPaths.remoteKvSnapshotDir(remoteKvTabletDir, snapshotId2),
+                        FlussPaths.remoteKvSharedDir(remoteKvTabletDir),
+                        1024);
         try (RocksDBKv rocksDBKv =
                 KvTestUtils.buildFromSnapshotHandle(
-                        snapshot.getKvSnapshotHandle(), temoRebuildPath.resolve("restore2"))) {
+                        snapshotLocation,
+                        snapshot.getKvSnapshotHandle(),
+                        temoRebuildPath.resolve("restore2"))) {
             assertThat(rocksDBKv.get("key1".getBytes())).isEqualTo("val1".getBytes());
             assertThat(rocksDBKv.get("key2".getBytes())).isEqualTo("val2".getBytes());
         }
@@ -320,7 +331,7 @@ class KvTabletSnapshotTargetTest {
                     CompletedSnapshotHandle handle =
                             new CompletedSnapshotHandle(
                                     snapshot.getSnapshotID(),
-                                    snapshot.getSnapshotLocation(),
+                                    remoteKvTabletDir,
                                     snapshot.getLogOffset());
                     completedSnapshotHandleStore.add(
                             snapshot.getTableBucket(), snapshot.getSnapshotID(), handle);
@@ -471,7 +482,7 @@ class KvTabletSnapshotTargetTest {
             SnapshotFailType snapshotFailType)
             throws IOException {
         TableBucket tableBucket = new TableBucket(1, 1);
-        SharedKvFileRegistry sharedKvFileRegistry = new SharedKvFileRegistry();
+        SharedKvFileRegistry sharedKvFileRegistry = new SharedKvFileRegistry(remoteKvTabletDir);
         Executor executor = Executors.directExecutor();
 
         CompletedSnapshotStore completedSnapshotStore =
@@ -480,7 +491,8 @@ class KvTabletSnapshotTargetTest {
                         sharedKvFileRegistry,
                         Collections.emptyList(),
                         snapshotHandleStore,
-                        executor);
+                        executor,
+                        remoteKvTabletDir);
 
         RocksIncrementalSnapshot rocksIncrementalSnapshot =
                 createIncrementalSnapshot(snapshotFailType);

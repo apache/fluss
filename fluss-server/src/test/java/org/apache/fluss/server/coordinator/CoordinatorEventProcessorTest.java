@@ -238,7 +238,7 @@ class CoordinatorEventProcessorTest {
         // mock CompletedSnapshotStore
         for (TableBucket tableBucket : allTableBuckets(t1Id, nBuckets)) {
             completedSnapshotStoreManager.getOrCreateCompletedSnapshotStore(
-                    t1, new TableBucket(tableBucket.getTableId(), tableBucket.getBucket()));
+                    null, new TableBucket(tableBucket.getTableId(), tableBucket.getBucket()));
         }
         assertThat(completedSnapshotStoreManager.getBucketCompletedSnapshotStores()).isNotEmpty();
 
@@ -632,7 +632,7 @@ class CoordinatorEventProcessorTest {
         // mock CompletedSnapshotStore for partition1
         for (TableBucket tableBucket : allTableBuckets(tableId, partition1Id, nBuckets)) {
             completedSnapshotStoreManager.getOrCreateCompletedSnapshotStore(
-                    tablePath,
+                    null,
                     new TableBucket(
                             tableBucket.getTableId(),
                             tableBucket.getPartitionId(),

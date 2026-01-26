@@ -18,8 +18,9 @@
 package org.apache.fluss.server.coordinator;
 
 import org.apache.fluss.annotation.VisibleForTesting;
+import org.apache.fluss.fs.FsPath;
+import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
-import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.metrics.MetricNames;
 import org.apache.fluss.metrics.groups.MetricGroup;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
@@ -30,6 +31,7 @@ import org.apache.fluss.server.kv.snapshot.SharedKvFileRegistry;
 import org.apache.fluss.server.kv.snapshot.ZooKeeperCompletedSnapshotHandleStore;
 import org.apache.fluss.server.metrics.group.CoordinatorMetricGroup;
 import org.apache.fluss.server.zk.ZooKeeperClient;
+import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.MapUtils;
 
 import org.slf4j.Logger;
@@ -66,17 +68,21 @@ public class CompletedSnapshotStoreManager {
             makeZookeeperCompletedSnapshotHandleStore;
     private final CoordinatorMetricGroup coordinatorMetricGroup;
 
+    private final FsPath remoteKvDir;
+
     public CompletedSnapshotStoreManager(
             int maxNumberOfSnapshotsToRetain,
             Executor ioExecutor,
             ZooKeeperClient zooKeeperClient,
-            CoordinatorMetricGroup coordinatorMetricGroup) {
+            CoordinatorMetricGroup coordinatorMetricGroup,
+            FsPath remoteKvDir) {
         this(
                 maxNumberOfSnapshotsToRetain,
                 ioExecutor,
                 zooKeeperClient,
                 ZooKeeperCompletedSnapshotHandleStore::new,
-                coordinatorMetricGroup);
+                coordinatorMetricGroup,
+                remoteKvDir);
     }
 
     @VisibleForTesting
@@ -86,7 +92,8 @@ public class CompletedSnapshotStoreManager {
             ZooKeeperClient zooKeeperClient,
             Function<ZooKeeperClient, CompletedSnapshotHandleStore>
                     makeZookeeperCompletedSnapshotHandleStore,
-            CoordinatorMetricGroup coordinatorMetricGroup) {
+            CoordinatorMetricGroup coordinatorMetricGroup,
+            FsPath remoteKvDir) {
         checkArgument(
                 maxNumberOfSnapshotsToRetain > 0, "maxNumberOfSnapshotsToRetain must be positive");
         this.maxNumberOfSnapshotsToRetain = maxNumberOfSnapshotsToRetain;
@@ -95,6 +102,7 @@ public class CompletedSnapshotStoreManager {
         this.ioExecutor = ioExecutor;
         this.makeZookeeperCompletedSnapshotHandleStore = makeZookeeperCompletedSnapshotHandleStore;
         this.coordinatorMetricGroup = coordinatorMetricGroup;
+        this.remoteKvDir = remoteKvDir;
 
         registerMetrics();
     }
@@ -121,7 +129,7 @@ public class CompletedSnapshotStoreManager {
     }
 
     public CompletedSnapshotStore getOrCreateCompletedSnapshotStore(
-            TablePath tablePath, TableBucket tableBucket) {
+            PhysicalTablePath tablePath, TableBucket tableBucket) {
         return bucketCompletedSnapshotStores.computeIfAbsent(
                 tableBucket,
                 (bucket) -> {
@@ -129,7 +137,7 @@ public class CompletedSnapshotStoreManager {
                         LOG.info("Creating snapshot store for table bucket {}.", bucket);
                         long start = System.currentTimeMillis();
                         CompletedSnapshotStore snapshotStore =
-                                createCompletedSnapshotStore(tableBucket, ioExecutor);
+                                createCompletedSnapshotStore(tablePath, tableBucket, ioExecutor);
                         long end = System.currentTimeMillis();
                         LOG.info(
                                 "Created snapshot store for table bucket {} in {} ms.",
@@ -138,7 +146,7 @@ public class CompletedSnapshotStoreManager {
 
                         MetricGroup bucketMetricGroup =
                                 coordinatorMetricGroup.getTableBucketMetricGroup(
-                                        tablePath, tableBucket);
+                                        tablePath.getTablePath(), tableBucket);
                         if (bucketMetricGroup != null) {
                             LOG.info("Add bucketMetricGroup for tableBucket {}.", bucket);
                             bucketMetricGroup.gauge(
@@ -168,7 +176,8 @@ public class CompletedSnapshotStoreManager {
     }
 
     private CompletedSnapshotStore createCompletedSnapshotStore(
-            TableBucket tableBucket, Executor ioExecutor) throws Exception {
+            PhysicalTablePath tablePath, TableBucket tableBucket, Executor ioExecutor)
+            throws Exception {
         final CompletedSnapshotHandleStore completedSnapshotHandleStore =
                 this.makeZookeeperCompletedSnapshotHandleStore.apply(zooKeeperClient);
 
@@ -179,14 +188,18 @@ public class CompletedSnapshotStoreManager {
         final int numberOfInitialSnapshots = initialSnapshots.size();
 
         LOG.info(
-                "Found {} snapshots in {}.",
+                "Found {} snapshots in {} of table bucket {}.",
                 numberOfInitialSnapshots,
-                completedSnapshotHandleStore.getClass().getSimpleName());
+                completedSnapshotHandleStore.getClass().getSimpleName(),
+                tableBucket);
 
         final List<CompletedSnapshot> retrievedSnapshots =
                 new ArrayList<>(numberOfInitialSnapshots);
 
-        LOG.info("Trying to fetch {} snapshots from storage.", numberOfInitialSnapshots);
+        LOG.info(
+                "Trying to fetch {} snapshots from storage of table bucket {}.",
+                numberOfInitialSnapshots,
+                tableBucket);
 
         for (CompletedSnapshotHandle snapshotStateHandle : initialSnapshots) {
             try {
@@ -205,28 +218,36 @@ public class CompletedSnapshotStoreManager {
                                 tableBucket, snapshotStateHandle.getSnapshotId());
                     } catch (Exception t) {
                         LOG.error(
-                                "Failed to remove snapshotStateHandle {}.", snapshotStateHandle, t);
+                                "Failed to remove snapshotStateHandle {} of table bucket {}.",
+                                snapshotStateHandle,
+                                tableBucket,
+                                t);
                         throw t;
                     }
                 } else {
                     LOG.error(
-                            "Failed to retrieveCompleteSnapshot for snapshotStateHandle {}.",
+                            "Failed to retrieveCompleteSnapshot for snapshotStateHandle {} of table bucket {}.",
                             snapshotStateHandle,
+                            tableBucket,
                             e);
                     throw e;
                 }
             }
         }
 
+        FsPath remoteKvTabletDir =
+                FlussPaths.remoteKvTabletDir(remoteKvDir, tablePath, tableBucket);
         // register all the files to shared kv file registry
-        SharedKvFileRegistry sharedKvFileRegistry = new SharedKvFileRegistry(ioExecutor);
+        SharedKvFileRegistry sharedKvFileRegistry =
+                new SharedKvFileRegistry(remoteKvTabletDir, ioExecutor);
         for (CompletedSnapshot completedSnapshot : retrievedSnapshots) {
             try {
                 sharedKvFileRegistry.registerAllAfterRestored(completedSnapshot);
             } catch (Exception e) {
                 LOG.error(
-                        "Failed to registerAllAfterRestored for completedSnapshot {}.",
+                        "Failed to registerAllAfterRestored for completedSnapshot {} of table bucket {}.",
                         completedSnapshot,
+                        tableBucket,
                         e);
                 throw e;
             }
@@ -237,7 +258,8 @@ public class CompletedSnapshotStoreManager {
                 sharedKvFileRegistry,
                 retrievedSnapshots,
                 completedSnapshotHandleStore,
-                ioExecutor);
+                ioExecutor,
+                remoteKvTabletDir);
     }
 
     @VisibleForTesting

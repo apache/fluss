@@ -17,6 +17,7 @@
 
 package org.apache.fluss.server.kv.snapshot;
 
+import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.utils.concurrent.Executors;
 
 import org.slf4j.Logger;
@@ -59,12 +60,15 @@ public class SharedKvFileRegistry implements AutoCloseable {
     /** Executor for async kv deletion. */
     private final Executor asyncDisposalExecutor;
 
-    public SharedKvFileRegistry() {
-        this(Executors.directExecutor());
+    private final FsPath remoteKvSnapshotSharedDir;
+
+    public SharedKvFileRegistry(FsPath remoteKvSnapshotSharedDir) {
+        this(remoteKvSnapshotSharedDir, Executors.directExecutor());
     }
 
-    public SharedKvFileRegistry(Executor asyncDisposalExecutor) {
+    public SharedKvFileRegistry(FsPath remoteKvSnapshotSharedDir, Executor asyncDisposalExecutor) {
         this.registeredKvEntries = new HashMap<>();
+        this.remoteKvSnapshotSharedDir = checkNotNull(remoteKvSnapshotSharedDir);
         this.asyncDisposalExecutor = checkNotNull(asyncDisposalExecutor);
         this.open = true;
         this.fileSize = 0L;
@@ -171,7 +175,8 @@ public class SharedKvFileRegistry implements AutoCloseable {
         // We do the small optimization to not issue discards for placeholders, which are NOPs.
         if (kvFileHandle != null && !isPlaceholder(kvFileHandle)) {
             LOG.debug("Scheduled delete of kv handle {}.", kvFileHandle);
-            AsyncDisposalRunnable asyncDisposalRunnable = new AsyncDisposalRunnable(kvFileHandle);
+            AsyncDisposalRunnable asyncDisposalRunnable =
+                    new AsyncDisposalRunnable(remoteKvSnapshotSharedDir, kvFileHandle);
             asyncDisposalExecutor.execute(asyncDisposalRunnable);
         }
     }
@@ -190,16 +195,18 @@ public class SharedKvFileRegistry implements AutoCloseable {
     /** Encapsulates the operation the delete state handles asynchronously. */
     private static final class AsyncDisposalRunnable implements Runnable {
 
+        private final FsPath remoteKvSnapshotSharedDir;
         private final KvFileHandle toDispose;
 
-        public AsyncDisposalRunnable(KvFileHandle toDispose) {
+        public AsyncDisposalRunnable(FsPath remoteKvSnapshotSharedDir, KvFileHandle toDispose) {
+            this.remoteKvSnapshotSharedDir = checkNotNull(remoteKvSnapshotSharedDir);
             this.toDispose = checkNotNull(toDispose);
         }
 
         @Override
         public void run() {
             try {
-                toDispose.discard();
+                toDispose.discard(remoteKvSnapshotSharedDir);
             } catch (Exception e) {
                 LOG.warn(
                         "A problem occurred during asynchronous disposal of a shared kv object: {}",

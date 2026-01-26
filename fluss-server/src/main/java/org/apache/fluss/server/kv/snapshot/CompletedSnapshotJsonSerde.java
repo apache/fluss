@@ -35,7 +35,8 @@ public class CompletedSnapshotJsonSerde
 
     public static final CompletedSnapshotJsonSerde INSTANCE = new CompletedSnapshotJsonSerde();
 
-    private static final int VERSION = 1;
+    // Version 2: use relative paths
+    private static final int VERSION = 2;
     private static final String VERSION_KEY = "version";
     // for table bucket the snapshot belongs to
     private static final String TABLE_ID = "table_id";
@@ -43,7 +44,6 @@ public class CompletedSnapshotJsonSerde
     private static final String BUCKET_ID = "bucket_id";
 
     private static final String SNAPSHOT_ID = "snapshot_id";
-    private static final String SNAPSHOT_LOCATION = "snapshot_location";
 
     // for kv snapshot's files
     private static final String KV_SNAPSHOT_HANDLE = "kv_snapshot_handle";
@@ -76,10 +76,6 @@ public class CompletedSnapshotJsonSerde
 
         // serialize snapshot id
         generator.writeNumberField(SNAPSHOT_ID, completedSnapshot.getSnapshotID());
-
-        // serialize snapshot location
-        generator.writeStringField(
-                SNAPSHOT_LOCATION, completedSnapshot.getSnapshotLocation().toString());
 
         // serialize kv snapshot handle
         generator.writeObjectFieldStart(KV_SNAPSHOT_HANDLE);
@@ -128,6 +124,10 @@ public class CompletedSnapshotJsonSerde
 
     @Override
     public CompletedSnapshot deserialize(JsonNode node) {
+        // read version (backward compatible)
+        int version = node.has(VERSION_KEY) ? node.get(VERSION_KEY).asInt() : 1;
+
+        // Deserialize table bucket
         JsonNode partitionIdNode = node.get(PARTITION_ID);
         Long partitionId = partitionIdNode == null ? null : partitionIdNode.asLong();
         // deserialize table bucket
@@ -138,19 +138,28 @@ public class CompletedSnapshotJsonSerde
         // deserialize snapshot id
         long snapshotId = node.get(SNAPSHOT_ID).asLong();
 
-        // deserialize snapshot location
-        String snapshotLocation = node.get(SNAPSHOT_LOCATION).asText();
-
         // deserialize kv snapshot file handle
         JsonNode kvSnapshotFileHandleNode = node.get(KV_SNAPSHOT_HANDLE);
 
         // deserialize shared file handles
-        List<KvFileHandleAndLocalPath> sharedFileHandles =
-                deserializeKvFileHandles(kvSnapshotFileHandleNode, KV_SHARED_FILES_HANDLE);
+        List<KvFileHandleAndLocalPath> sharedFileHandles;
+        if (version == 1) {
+            sharedFileHandles =
+                    deserializeKvFileHandlesV1(kvSnapshotFileHandleNode, KV_SHARED_FILES_HANDLE);
+        } else {
+            sharedFileHandles =
+                    deserializeKvFileHandles(kvSnapshotFileHandleNode, KV_SHARED_FILES_HANDLE);
+        }
 
         // deserialize private file handles
-        List<KvFileHandleAndLocalPath> privateFileHandles =
-                deserializeKvFileHandles(kvSnapshotFileHandleNode, KV_PRIVATE_FILES_HANDLE);
+        List<KvFileHandleAndLocalPath> privateFileHandles;
+        if (version == 1) {
+            privateFileHandles =
+                    deserializeKvFileHandlesV1(kvSnapshotFileHandleNode, KV_PRIVATE_FILES_HANDLE);
+        } else {
+            privateFileHandles =
+                    deserializeKvFileHandles(kvSnapshotFileHandleNode, KV_PRIVATE_FILES_HANDLE);
+        }
 
         // deserialize snapshot incremental size
         long incrementalSize = kvSnapshotFileHandleNode.get(SNAPSHOT_INCREMENTAL_SIZE).asLong();
@@ -161,8 +170,7 @@ public class CompletedSnapshotJsonSerde
         // construct CompletedSnapshot
         KvSnapshotHandle kvSnapshotHandle =
                 new KvSnapshotHandle(sharedFileHandles, privateFileHandles, incrementalSize);
-        return new CompletedSnapshot(
-                tableBucket, snapshotId, new FsPath(snapshotLocation), kvSnapshotHandle, logOffset);
+        return new CompletedSnapshot(tableBucket, snapshotId, kvSnapshotHandle, logOffset);
     }
 
     private List<KvFileHandleAndLocalPath> deserializeKvFileHandles(
@@ -174,6 +182,26 @@ public class CompletedSnapshotJsonSerde
             String filePath = kvFileHandleNode.get(KV_FILE_PATH).asText();
             long fileSize = kvFileHandleNode.get(KV_FILE_SIZE).asLong();
             KvFileHandle kvFileHandle = new KvFileHandle(filePath, fileSize);
+
+            // deserialize kv file local path
+            String localPath = kvFileHandleAndLocalPathNode.get(KV_FILE_LOCAL_PATH).asText();
+            KvFileHandleAndLocalPath kvFileHandleAndLocalPath =
+                    KvFileHandleAndLocalPath.of(kvFileHandle, localPath);
+            kvFileHandleAndLocalPaths.add(kvFileHandleAndLocalPath);
+        }
+        return kvFileHandleAndLocalPaths;
+    }
+
+    private List<KvFileHandleAndLocalPath> deserializeKvFileHandlesV1(
+            JsonNode node, String kvHandleType) {
+        List<KvFileHandleAndLocalPath> kvFileHandleAndLocalPaths = new ArrayList<>();
+        for (JsonNode kvFileHandleAndLocalPathNode : node.get(kvHandleType)) {
+            // deserialize kv file handle
+            JsonNode kvFileHandleNode = kvFileHandleAndLocalPathNode.get(KV_FILE_HANDLE);
+            String filePath = kvFileHandleNode.get(KV_FILE_PATH).asText();
+            long fileSize = kvFileHandleNode.get(KV_FILE_SIZE).asLong();
+            FsPath fsPath = new FsPath(filePath);
+            KvFileHandle kvFileHandle = new KvFileHandle(fsPath.getName(), fileSize);
 
             // deserialize kv file local path
             String localPath = kvFileHandleAndLocalPathNode.get(KV_FILE_LOCAL_PATH).asText();

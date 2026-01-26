@@ -164,6 +164,6 @@ class KvSnapshotDataDownloaderTest {
 
         KvSnapshotHandle kvSnapshotHandle = new KvSnapshotHandle(sharedStates, privateStates, -1);
 
-        return new KvSnapshotDownloadSpec(kvSnapshotHandle, dstPath);
+        return new KvSnapshotDownloadSpec(null, null, kvSnapshotHandle, dstPath);
     }
 }

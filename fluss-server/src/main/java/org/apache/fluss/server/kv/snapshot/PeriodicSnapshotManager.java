@@ -307,7 +307,9 @@ public class PeriodicSnapshotManager implements Closeable {
                 try {
                     SnapshotResult snapshotResult = snapshotedRunnableFuture.get();
                     if (snapshotResult != null) {
-                        snapshotResult.getKvSnapshotHandle().discard();
+                        snapshotResult
+                                .getKvSnapshotHandle()
+                                .discard(snapshotResult.getSnapshotPath(), 1);
                         FsPath remoteSnapshotPath = snapshotResult.getSnapshotPath();
                         remoteSnapshotPath.getFileSystem().delete(remoteSnapshotPath, true);
                     }
