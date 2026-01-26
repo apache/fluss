@@ -20,6 +20,7 @@ package org.apache.fluss.flink.tiering.source.enumerator;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.tiering.event.FailedTieringEvent;
 import org.apache.fluss.flink.tiering.event.FinishedTieringEvent;
+import org.apache.fluss.flink.tiering.event.TableTieringFailedEvent;
 import org.apache.fluss.flink.tiering.source.TieringTestBase;
 import org.apache.fluss.flink.tiering.source.split.TieringLogSplit;
 import org.apache.fluss.flink.tiering.source.split.TieringSnapshotSplit;
@@ -31,6 +32,7 @@ import org.apache.fluss.rpc.messages.CommitLakeTableSnapshotRequest;
 import org.apache.fluss.rpc.messages.PbLakeTableOffsetForBucket;
 import org.apache.fluss.rpc.messages.PbLakeTableSnapshotInfo;
 
+import org.apache.flink.api.connector.source.SourceEvent;
 import org.apache.flink.api.connector.source.SplitsAssignment;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -593,6 +595,22 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
             // mock tiering fail by send tiering fail event
             context.getSplitsAssignmentSequence().clear();
             enumerator.handleSourceEvent(1, new FailedTieringEvent(tableId, "test_reason"));
+
+            // verify failure event is broadcast to other readers
+            Map<Integer, List<SourceEvent>> sentSourceEvents = context.getSentSourceEvent();
+            assertThat(sentSourceEvents).hasSize(numSubtasks - 1);
+            for (int subtaskId = 0; subtaskId < numSubtasks; subtaskId++) {
+                if (subtaskId == 1) {
+                    assertThat(sentSourceEvents).doesNotContainKey(subtaskId);
+                    continue;
+                }
+                List<SourceEvent> sourceEvents = sentSourceEvents.get(subtaskId);
+                assertThat(sourceEvents).hasSize(1);
+                SourceEvent sourceEvent = sourceEvents.get(0);
+                TableTieringFailedEvent failedEvent = (TableTieringFailedEvent) sourceEvent;
+                assertThat(failedEvent.getTableId()).isEqualTo(tableId);
+                assertThat(failedEvent.getFailReason()).isEqualTo("test_reason");
+            }
 
             // request tiering table splits, should get splits
             for (int subtaskId = 0; subtaskId < numSubtasks; subtaskId++) {

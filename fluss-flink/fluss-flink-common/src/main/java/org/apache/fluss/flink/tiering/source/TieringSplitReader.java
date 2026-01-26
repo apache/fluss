@@ -33,6 +33,7 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.utils.CloseableIterator;
+import org.apache.fluss.utils.ExceptionUtils;
 
 import org.apache.flink.connector.base.source.reader.RecordsWithSplitIds;
 import org.apache.flink.connector.base.source.reader.splitreader.SplitReader;
@@ -54,6 +55,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Queue;
 import java.util.Set;
+import java.util.concurrent.ConcurrentLinkedQueue;
 
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
@@ -94,8 +96,21 @@ public class TieringSplitReader<WriteResult>
     private final Map<TableBucket, Long> currentTableStoppingOffsets;
     private final Set<TieringLogSplit> currentTableEmptyLogSplits;
 
+    // table ids that have been marked as failed by Enumerator, should be cleaned from pending state
+    private final Set<Long> failedTableIds;
+
+    // Queue to store failed table info for the SourceReader to send to Enumerator
+    private final Queue<FailedTableInfo> failedTableQueue;
+
     public TieringSplitReader(
             Connection connection, LakeTieringFactory<WriteResult, ?> lakeTieringFactory) {
+        this(connection, lakeTieringFactory, new ConcurrentLinkedQueue<>());
+    }
+
+    public TieringSplitReader(
+            Connection connection,
+            LakeTieringFactory<WriteResult, ?> lakeTieringFactory,
+            Queue<FailedTableInfo> failedTableQueue) {
         this.lakeTieringFactory = lakeTieringFactory;
         // owned by TieringSourceReader
         this.connection = connection;
@@ -106,10 +121,15 @@ public class TieringSplitReader<WriteResult>
         this.currentTableSplitsByBucket = new HashMap<>();
         this.lakeWriters = new HashMap<>();
         this.currentPendingSnapshotSplits = new ArrayDeque<>();
+        this.failedTableIds = new HashSet<>();
+        this.failedTableQueue = failedTableQueue;
     }
 
     @Override
     public RecordsWithSplitIds<TableBucketWriteResult<WriteResult>> fetch() throws IOException {
+        // first clean up any failed tables notified from Enumerator
+        cleanUpFailedTables();
+
         // check empty splits
         if (!currentTableEmptyLogSplits.isEmpty()) {
             LOG.info("Empty split(s) {} finished.", currentTableEmptyLogSplits);
@@ -124,18 +144,27 @@ public class TieringSplitReader<WriteResult>
 
         // may read snapshot firstly
         if (currentSnapshotSplitReader != null) {
-            CloseableIterator<RecordAndPos> recordIterator = currentSnapshotSplitReader.readBatch();
-            if (recordIterator == null) {
-                LOG.info("Split {} is finished", currentSnapshotSplit.splitId());
-                return finishCurrentSnapshotSplit();
-            } else {
-                return forSnapshotSplitRecords(
-                        currentSnapshotSplit.getTableBucket(), recordIterator);
+            try {
+                CloseableIterator<RecordAndPos> recordIterator =
+                        currentSnapshotSplitReader.readBatch();
+                if (recordIterator == null) {
+                    LOG.info("Split {} is finished", currentSnapshotSplit.splitId());
+                    return finishCurrentSnapshotSplit();
+                } else {
+                    return forSnapshotSplitRecords(
+                            currentSnapshotSplit.getTableBucket(), recordIterator);
+                }
+            } catch (Exception e) {
+                return handleTableTieringException(e);
             }
         } else {
             if (currentLogScanner != null) {
-                ScanRecords scanRecords = currentLogScanner.poll(POLL_TIMEOUT);
-                return forLogRecords(scanRecords);
+                try {
+                    ScanRecords scanRecords = currentLogScanner.poll(POLL_TIMEOUT);
+                    return forLogRecords(scanRecords);
+                } catch (Exception e) {
+                    return handleTableTieringException(e);
+                }
             } else {
                 return emptyTableBucketWriteResultWithSplitIds();
             }
@@ -441,6 +470,133 @@ public class TieringSplitReader<WriteResult>
         currentTableSplitsByBucket.clear();
     }
 
+    /** Cleans up the state for tables that have been marked as failed by the Enumerator. */
+    private void cleanUpFailedTables() {
+        if (failedTableIds.isEmpty()) {
+            return;
+        }
+
+        // clean up pending splits for failed tables
+        for (Long failedTableId : failedTableIds) {
+            pendingTieringSplits.remove(failedTableId);
+            pendingTieringTables.remove(failedTableId);
+
+            // if the failed table is the current table being processed, clean it up
+            if (currentTableId != null && currentTableId.equals(failedTableId)) {
+                LOG.info(
+                        "Cleaning up current table {} (id={}) as it has been marked as failed.",
+                        currentTablePath,
+                        currentTableId);
+                try {
+                    cleanupCurrentTableState();
+                } catch (Exception e) {
+                    LOG.warn(
+                            "Error while cleaning up failed table {} state: {}",
+                            failedTableId,
+                            e.getMessage());
+                }
+            }
+        }
+        failedTableIds.clear();
+    }
+
+    public void notifyTableTieringFailed(long tableId) {
+        LOG.info("Received notification that table {} tiering has failed.", tableId);
+        failedTableIds.add(tableId);
+    }
+
+    /**
+     * Handles an exception that occurred during table tiering.
+     *
+     * @param e the exception that occurred
+     * @return an empty result to indicate no records are available for this fetch cycle
+     */
+    private RecordsWithSplitIds<TableBucketWriteResult<WriteResult>> handleTableTieringException(
+            Exception e) {
+        if (currentTableId == null) {
+            // no current table, re-throw the exception
+            LOG.error("Exception occurred but no current table is being processed.", e);
+            throw new RuntimeException(e);
+        }
+
+        LOG.error(
+                "Tiering failed for table {} (id={}). Error: {}. "
+                        + "The table will be marked as failed and skipped.",
+                currentTablePath,
+                currentTableId,
+                e.getMessage(),
+                e);
+
+        // store the failure info in the queue
+        long failedTableId = currentTableId;
+        String failReason = ExceptionUtils.stringifyException(e);
+        failedTableQueue.offer(new FailedTableInfo(failedTableId, failReason));
+
+        // clean up current table state
+        try {
+            cleanupCurrentTableState();
+        } catch (Exception cleanupException) {
+            LOG.warn(
+                    "Error while cleaning up state for failed table {}: {}",
+                    failedTableId,
+                    cleanupException.getMessage());
+        }
+
+        return emptyTableBucketWriteResultWithSplitIds();
+    }
+
+    private void cleanupCurrentTableState() {
+        // close lake writers for current table
+        for (LakeWriter<WriteResult> writer : lakeWriters.values()) {
+            try {
+                writer.close();
+            } catch (Exception e) {
+                LOG.warn("Error closing lake writer: {}", e.getMessage());
+            }
+        }
+        lakeWriters.clear();
+
+        // close current snapshot split reader
+        if (currentSnapshotSplitReader != null) {
+            try {
+                currentSnapshotSplitReader.close();
+            } catch (Exception e) {
+                LOG.warn("Error closing snapshot split reader: {}", e.getMessage());
+            }
+            currentSnapshotSplitReader = null;
+        }
+        currentSnapshotSplit = null;
+
+        // close current log scanner
+        if (currentLogScanner != null) {
+            try {
+                currentLogScanner.close();
+            } catch (Exception e) {
+                LOG.warn("Error closing log scanner: {}", e.getMessage());
+            }
+            currentLogScanner = null;
+        }
+
+        // close current table
+        if (currentTable != null) {
+            try {
+                currentTable.close();
+            } catch (Exception e) {
+                LOG.warn("Error closing table: {}", e.getMessage());
+            }
+            currentTable = null;
+        }
+
+        // clear current table state
+        currentTableId = null;
+        currentTablePath = null;
+        currentTableNumberOfSplits = null;
+        currentPendingSnapshotSplits.clear();
+        currentTableStoppingOffsets.clear();
+        currentTableEmptyLogSplits.clear();
+        currentTableSplitsByBucket.clear();
+    }
+
     @Override
     public void wakeUp() {
         if (currentLogScanner != null) {
@@ -505,6 +661,25 @@ public class TieringSplitReader<WriteResult>
                 endLogOffset,
                 maxTimestamp,
                 numberOfSplits);
+    }
+
+    /** Info class to hold failed table information. */
+    public static class FailedTableInfo {
+        private final long tableId;
+        private final String failReason;
+
+        public FailedTableInfo(long tableId, String failReason) {
+            this.tableId = tableId;
+            this.failReason = failReason;
+        }
+
+        public long getTableId() {
+            return tableId;
+        }
+
+        public String getFailReason() {
+            return failReason;
+        }
     }
 
     private class TableBucketWriteResultWithSplitIds

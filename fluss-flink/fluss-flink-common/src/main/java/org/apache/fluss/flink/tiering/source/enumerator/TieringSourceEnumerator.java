@@ -26,6 +26,7 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.metrics.FlinkMetricRegistry;
 import org.apache.fluss.flink.tiering.event.FailedTieringEvent;
 import org.apache.fluss.flink.tiering.event.FinishedTieringEvent;
+import org.apache.fluss.flink.tiering.event.TableTieringFailedEvent;
 import org.apache.fluss.flink.tiering.source.split.TieringSplit;
 import org.apache.fluss.flink.tiering.source.split.TieringSplitGenerator;
 import org.apache.fluss.flink.tiering.source.state.TieringSourceEnumeratorState;
@@ -261,12 +262,39 @@ public class TieringSourceEnumerator
             } else {
                 failedTableEpochs.put(failedTableId, tieringEpoch);
             }
+
+            // Broadcast TableTieringFailedEvent to all other readers
+            broadcastTableTieringFailedEvent(subtaskId, failedTableId, failedEvent.failReason());
         }
 
         if (!finishedTableEpochs.isEmpty() || !failedTableEpochs.isEmpty()) {
             // call one round of heartbeat to notify table has been finished or failed
             this.context.callAsync(
                     this::requestTieringTableSplitsViaHeartBeat, this::generateAndAssignSplits);
+        }
+    }
+
+    /**
+     * Broadcasts a TableTieringFailedEvent to all readers except the source reader that reported
+     * the failure. This allows other readers to clean up their state for the failed table.
+     *
+     * @param sourceSubtaskId the subtask ID of the reader that reported the failure
+     * @param failedTableId the ID of the failed table
+     * @param failReason the reason for the failure
+     */
+    private void broadcastTableTieringFailedEvent(
+            int sourceSubtaskId, long failedTableId, String failReason) {
+        TableTieringFailedEvent failedEvent =
+                new TableTieringFailedEvent(failedTableId, failReason);
+
+        for (Integer readerSubtaskId : context.registeredReaders().keySet()) {
+            if (readerSubtaskId != sourceSubtaskId) {
+                LOG.info(
+                        "Sending TableTieringFailedEvent for table {} to reader {}.",
+                        failedTableId,
+                        readerSubtaskId);
+                context.sendEventToSourceReader(readerSubtaskId, failedEvent);
+            }
         }
     }
 
