@@ -67,8 +67,10 @@ import javax.annotation.Nullable;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 
 import static org.apache.fluss.client.table.scanner.batch.BatchScanUtils.collectRows;
@@ -103,6 +105,9 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                 DATA1_TABLE_DESCRIPTOR_PK
                         .withReplicationFactor(3)
                         .withDataLakeFormat(DataLakeFormat.PAIMON);
+        Map<String, String> options = new HashMap<>(expected.getProperties());
+        options.put(ConfigOptions.TABLE_KV_FORMAT_VERSION.key(), "2");
+        expected = expected.withProperties(options);
         assertThat(tableInfo.toTableDescriptor()).isEqualTo(expected);
     }
 
@@ -305,10 +310,16 @@ class FlussTableITCase extends ClientToServerITCaseBase {
         createTable(tablePath, descriptor, false);
         Table table = conn.getTable(tablePath);
         TableInfo tableInfo = table.getTableInfo();
-        verifyPutAndLookup(table, new Object[] {1, "a", 1L, "value1"});
-        verifyPutAndLookup(table, new Object[] {1, "a", 2L, "value2"});
-        verifyPutAndLookup(table, new Object[] {1, "a", 3L, "value3"});
-        verifyPutAndLookup(table, new Object[] {2, "a", 4L, "value4"});
+
+        // We use strings with length > 7 (e.g., "valuevalue1") to properly test prefix lookup.
+        // Previously, short strings like "value1" hid a bug: Paimon's encoder stores strings
+        // longer than 7 characters in a variable-length area, which breaks prefix lookup since
+        // the encoded bucket key bytes are no longer a prefix of the encoded primary key bytes.
+        // Using longer strings ensures we catch such issues.
+        verifyPutAndLookup(table, new Object[] {1, "a", 1L, "valuevalue1"});
+        verifyPutAndLookup(table, new Object[] {1, "a", 2L, "valuevalue2"});
+        verifyPutAndLookup(table, new Object[] {1, "a", 3L, "valuevalue3"});
+        verifyPutAndLookup(table, new Object[] {2, "a", 4L, "valuevalue4"});
         RowType rowType = schema.getRowType();
 
         // test prefix lookup.
@@ -327,7 +338,7 @@ class FlussTableITCase extends ClientToServerITCaseBase {
         assertThat(rowList.size()).isEqualTo(3);
         for (int i = 0; i < rowList.size(); i++) {
             assertRowValueEquals(
-                    rowType, rowList.get(i), new Object[] {1, "a", i + 1L, "value" + (i + 1)});
+                    rowType, rowList.get(i), new Object[] {1, "a", i + 1L, "valuevalue" + (i + 1)});
         }
 
         result = prefixLookuper.lookup(row(2, "a"));
@@ -335,7 +346,7 @@ class FlussTableITCase extends ClientToServerITCaseBase {
         assertThat(prefixLookupResult).isNotNull();
         rowList = prefixLookupResult.getRowList();
         assertThat(rowList.size()).isEqualTo(1);
-        assertRowValueEquals(rowType, rowList.get(0), new Object[] {2, "a", 4L, "value4"});
+        assertRowValueEquals(rowType, rowList.get(0), new Object[] {2, "a", 4L, "valuevalue4"});
 
         result = prefixLookuper.lookup(compactedRow(prefixKeyRowType, new Object[] {3, "a"}));
         prefixLookupResult = result.get();
@@ -367,7 +378,7 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                 Table newSchemaTable = connection.getTable(tableInfo.getTablePath())) {
             // schema change case1: read new data with new schema.
             verifyPutAndLookup(
-                    newSchemaTable, new Object[] {1, "a", 4L, "value4", "add_column_value"});
+                    newSchemaTable, new Object[] {1, "a", 4L, "valuevalue4", "add_column_value"});
             // schema change case2: read new data with old schema.
             result = prefixLookuper.lookup(row(1, "a"));
             prefixLookupResult = result.get();
@@ -376,7 +387,9 @@ class FlussTableITCase extends ClientToServerITCaseBase {
             assertThat(rowList.size()).isEqualTo(4);
             for (int i = 0; i < rowList.size(); i++) {
                 assertRowValueEquals(
-                        rowType, rowList.get(i), new Object[] {1, "a", i + 1L, "value" + (i + 1)});
+                        rowType,
+                        rowList.get(i),
+                        new Object[] {1, "a", i + 1L, "valuevalue" + (i + 1)});
             }
             admin.getTableSchema(tablePath, 1).get();
             // schema change case3: read old data with new schema.
@@ -395,7 +408,11 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                         rowType,
                         rowList.get(i),
                         new Object[] {
-                            1, "a", i + 1L, "value" + (i + 1), i == 3 ? "add_column_value" : null
+                            1,
+                            "a",
+                            i + 1L,
+                            "valuevalue" + (i + 1),
+                            i == 3 ? "add_column_value" : null
                         });
             }
         }

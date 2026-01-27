@@ -230,6 +230,7 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
                 request.getAcks(),
                 putKvData,
                 getTargetColumns(request),
+                currentSession().getApiVersion(),
                 bucketResponse -> response.complete(makePutKvResponse(bucketResponse)));
         return response;
     }
@@ -248,6 +249,7 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
         CompletableFuture<LookupResponse> response = new CompletableFuture<>();
         replicaManager.lookups(
                 lookupData,
+                currentSession().getApiVersion(),
                 value -> response.complete(makeLookupResponse(value, errorResponseMap)));
         return response;
     }
@@ -266,6 +268,7 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
         CompletableFuture<PrefixLookupResponse> response = new CompletableFuture<>();
         replicaManager.prefixLookups(
                 prefixLookupData,
+                currentSession().getApiVersion(),
                 value -> response.complete(makePrefixLookupResponse(value, errorResponseMap)));
         return response;
     }

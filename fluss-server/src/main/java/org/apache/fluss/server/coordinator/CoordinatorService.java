@@ -160,6 +160,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
+import static org.apache.fluss.config.ConfigOptions.CURRENT_KV_FORMAT_VERSION;
 import static org.apache.fluss.config.FlussConfigUtils.isTableStorageConfig;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toAclBindingFilters;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toAclBindings;
@@ -181,6 +182,7 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /** An RPC Gateway service for coordinator server. */
 public final class CoordinatorService extends RpcServiceBase implements CoordinatorGateway {
+
     private final int defaultBucketNumber;
     private final int defaultReplicationFactor;
     private final boolean logTableAllowCreation;
@@ -494,6 +496,27 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                 newDescriptor = newDescriptor.withProperties(newProperties);
             }
         }
+
+        if (newDescriptor.hasPrimaryKey()) {
+            Map<String, String> newProperties = new HashMap<>(newDescriptor.getProperties());
+            String formatVersion = newProperties.get(ConfigOptions.TABLE_KV_FORMAT_VERSION.key());
+            if (formatVersion != null) {
+                throw new IllegalArgumentException(
+                        "Manual configuration of '"
+                                + ConfigOptions.TABLE_KV_FORMAT_VERSION.key()
+                                + "' is not supported. The coordinator chooses the appropriate "
+                                + "KV format version automatically. Remove this property from the "
+                                + "table properties (current value: '"
+                                + formatVersion
+                                + "').");
+            } else {
+                newProperties.put(
+                        ConfigOptions.TABLE_KV_FORMAT_VERSION.key(),
+                        String.valueOf(CURRENT_KV_FORMAT_VERSION));
+                newDescriptor = newDescriptor.withProperties(newProperties);
+            }
+        }
+
         return newDescriptor;
     }
 

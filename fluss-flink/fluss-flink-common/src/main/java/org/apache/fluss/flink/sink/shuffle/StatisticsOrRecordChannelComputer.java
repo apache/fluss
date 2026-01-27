@@ -96,7 +96,7 @@ public class StatisticsOrRecordChannelComputer<InputT>
         LOG.info("Setting up with {} downstream channels", numChannels);
         this.downstreamNumChannels = numChannels;
         this.bucketingFunction = BucketingFunction.of(lakeFormat);
-        this.bucketKeyEncoder = KeyEncoder.of(flussRowType, bucketKeys, lakeFormat);
+        this.bucketKeyEncoder = KeyEncoder.ofBucketKeyEncoder(flussRowType, bucketKeys, lakeFormat);
         this.partitionGetter = new PartitionGetter(flussRowType, partitionKeys);
         try {
             this.serializationSchema.open(new SerializerInitContextImpl(flussRowType, false));

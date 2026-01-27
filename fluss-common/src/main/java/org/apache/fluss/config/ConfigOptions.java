@@ -55,6 +55,9 @@ import static org.apache.fluss.config.ConfigOptions.NoKeyAssigner.STICKY;
 public class ConfigOptions {
     public static final String DEFAULT_LISTENER_NAME = "FLUSS";
 
+    public static final int KV_FORMAT_VERSION_2 = 2;
+    public static final int CURRENT_KV_FORMAT_VERSION = KV_FORMAT_VERSION_2;
+
     @Internal
     public static final String[] PARENT_FIRST_LOGGING_PATTERNS =
             new String[] {
@@ -1282,6 +1285,21 @@ public class ConfigOptions {
                     .withDescription(
                             "The format of the kv records in kv store. The default value is `compacted`. "
                                     + "The supported formats are `compacted` and `indexed`.");
+
+    /**
+     * The version of the kv format. This is used for backward compatibility when encoding strategy
+     * changes. Version 1 (absent): Old tables use datalake encoding for both primary key and bucket
+     * key. Version 2: New tables use Fluss encoding for primary key (to support prefix lookup) and
+     * datalake encoding for bucket key (to align with datalake bucket).
+     */
+    public static final ConfigOption<Integer> TABLE_KV_FORMAT_VERSION =
+            key("table.kv.format.version")
+                    .intType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The version of the kv format for backward compatibility. "
+                                    + "When absent (old tables), primary key encoding may differ from new tables. "
+                                    + "Version 2 indicates new encoding strategy for datalake tables.");
 
     public static final ConfigOption<Boolean> TABLE_AUTO_PARTITION_ENABLED =
             key("table.auto-partition.enabled")

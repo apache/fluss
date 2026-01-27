@@ -19,7 +19,6 @@ package org.apache.fluss.client.table.writer;
 
 import org.apache.fluss.client.write.WriteRecord;
 import org.apache.fluss.client.write.WriterClient;
-import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableInfo;
@@ -32,7 +31,6 @@ import org.apache.fluss.row.encode.IndexedRowEncoder;
 import org.apache.fluss.row.encode.KeyEncoder;
 import org.apache.fluss.row.indexed.IndexedRow;
 import org.apache.fluss.types.DataType;
-import org.apache.fluss.types.RowType;
 
 import javax.annotation.Nullable;
 
@@ -57,9 +55,11 @@ class AppendWriterImpl extends AbstractTableWriter implements AppendWriter {
         if (bucketKeys.isEmpty()) {
             this.bucketKeyEncoder = null;
         } else {
-            RowType rowType = tableInfo.getSchema().getRowType();
-            DataLakeFormat lakeFormat = tableInfo.getTableConfig().getDataLakeFormat().orElse(null);
-            this.bucketKeyEncoder = KeyEncoder.of(rowType, bucketKeys, lakeFormat);
+            this.bucketKeyEncoder =
+                    KeyEncoder.ofBucketKeyEncoder(
+                            tableInfo.getRowType(),
+                            tableInfo.getBucketKeys(),
+                            tableInfo.getTableConfig().getDataLakeFormat().orElse(null));
         }
 
         DataType[] fieldDataTypes =

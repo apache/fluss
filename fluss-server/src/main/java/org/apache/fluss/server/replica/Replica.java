@@ -167,6 +167,7 @@ public final class Replica {
     private final AdjustIsrManager adjustIsrManager;
 
     private final SchemaGetter schemaGetter;
+    private final TableInfo tableInfo;
     private final TableConfig tableConfig;
     // logFormat and arrowCompressionInfo are used in hot-path, so cache them here.
     private final LogFormat logFormat;
@@ -240,6 +241,7 @@ public final class Replica {
                         tableInfo.getTableId(),
                         tableInfo.getSchemaId(),
                         tableInfo.getSchema());
+        this.tableInfo = tableInfo;
         this.tableConfig = tableInfo.getTableConfig();
         this.logFormat = tableConfig.getLogFormat();
         this.arrowCompressionInfo = tableConfig.getArrowCompressionInfo();
@@ -301,6 +303,10 @@ public final class Replica {
 
     public int getCoordinatorEpoch() {
         return coordinatorEpoch;
+    }
+
+    public TableInfo getTableInfo() {
+        return tableInfo;
     }
 
     public @Nullable Integer getLeaderId() {
