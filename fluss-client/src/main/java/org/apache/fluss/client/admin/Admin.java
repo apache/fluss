@@ -71,6 +71,7 @@ import javax.annotation.Nullable;
 
 import java.util.Collection;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 
@@ -604,4 +605,65 @@ public interface Admin extends AutoCloseable {
      *     NoRebalanceInProgressException} will be thrown.
      */
     CompletableFuture<Void> cancelRebalance(@Nullable String rebalanceId);
+
+    // ==================================================================================
+    // Producer Offset Management APIs (for Exactly-Once Semantics)
+    // ==================================================================================
+
+    /**
+     * Register producer offset snapshot.
+     *
+     * <p>This method provides atomic "check and register" semantics:
+     *
+     * <ul>
+     *   <li>If snapshot does not exist: create new snapshot and return {@link
+     *       RegisterResult#CREATED}
+     *   <li>If snapshot already exists: do NOT overwrite and return {@link
+     *       RegisterResult#ALREADY_EXISTS}
+     * </ul>
+     *
+     * <p>The atomicity is guaranteed by the server implementation. This enables the caller to
+     * determine whether undo recovery is needed based on the return value.
+     *
+     * <p>The snapshot will be automatically cleaned up after the configured TTL expires.
+     *
+     * <p>This API is typically used by Flink Operator Coordinator at job startup to register the
+     * initial offset snapshot before any data is written.
+     *
+     * @param producerId the ID of the producer (typically Flink job ID)
+     * @param offsets map of TableBucket to offset for all tables
+     * @return a CompletableFuture containing the registration result indicating whether the
+     *     snapshot was newly created or already existed
+     * @since 0.9
+     */
+    CompletableFuture<RegisterResult> registerProducerOffsets(
+            String producerId, Map<TableBucket, Long> offsets);
+
+    /**
+     * Get producer offset snapshot.
+     *
+     * <p>This method retrieves the registered offset snapshot for a producer. Returns null if no
+     * snapshot exists for the given producer ID.
+     *
+     * <p>This API is typically used by Flink Operator Coordinator at job startup to check if a
+     * previous snapshot exists (indicating a failover before first checkpoint).
+     *
+     * @param producerId the ID of the producer
+     * @return a CompletableFuture containing the producer offsets, or null if not found
+     * @since 0.9
+     */
+    CompletableFuture<ProducerOffsetsResult> getProducerOffsets(String producerId);
+
+    /**
+     * Delete producer offset snapshot.
+     *
+     * <p>This method deletes the registered offset snapshot for a producer. This is typically
+     * called after the first checkpoint completes successfully, as the checkpoint state will be
+     * used for recovery instead of the initial snapshot.
+     *
+     * @param producerId the ID of the producer
+     * @return a CompletableFuture that completes when deletion succeeds
+     * @since 0.9
+     */
+    CompletableFuture<Void> deleteProducerOffsets(String producerId);
 }

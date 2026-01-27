@@ -33,6 +33,8 @@ import org.apache.fluss.rpc.messages.CreatePartitionRequest;
 import org.apache.fluss.rpc.messages.CreatePartitionResponse;
 import org.apache.fluss.rpc.messages.CreateTableRequest;
 import org.apache.fluss.rpc.messages.CreateTableResponse;
+import org.apache.fluss.rpc.messages.DeleteProducerOffsetsRequest;
+import org.apache.fluss.rpc.messages.DeleteProducerOffsetsResponse;
 import org.apache.fluss.rpc.messages.DropAclsRequest;
 import org.apache.fluss.rpc.messages.DropAclsResponse;
 import org.apache.fluss.rpc.messages.DropDatabaseRequest;
@@ -41,10 +43,14 @@ import org.apache.fluss.rpc.messages.DropPartitionRequest;
 import org.apache.fluss.rpc.messages.DropPartitionResponse;
 import org.apache.fluss.rpc.messages.DropTableRequest;
 import org.apache.fluss.rpc.messages.DropTableResponse;
+import org.apache.fluss.rpc.messages.GetProducerOffsetsRequest;
+import org.apache.fluss.rpc.messages.GetProducerOffsetsResponse;
 import org.apache.fluss.rpc.messages.ListRebalanceProgressRequest;
 import org.apache.fluss.rpc.messages.ListRebalanceProgressResponse;
 import org.apache.fluss.rpc.messages.RebalanceRequest;
 import org.apache.fluss.rpc.messages.RebalanceResponse;
+import org.apache.fluss.rpc.messages.RegisterProducerOffsetsRequest;
+import org.apache.fluss.rpc.messages.RegisterProducerOffsetsResponse;
 import org.apache.fluss.rpc.messages.RemoveServerTagRequest;
 import org.apache.fluss.rpc.messages.RemoveServerTagResponse;
 import org.apache.fluss.rpc.protocol.ApiKeys;
@@ -145,6 +151,40 @@ public interface AdminGateway extends AdminReadOnlyGateway {
 
     @RPC(api = ApiKeys.CANCEL_REBALANCE)
     CompletableFuture<CancelRebalanceResponse> cancelRebalance(CancelRebalanceRequest request);
+
+    // ==================================================================================
+    // Producer Offset Management APIs (for Exactly-Once Semantics)
+    // ==================================================================================
+
+    /**
+     * Register producer offset snapshot with atomic "check and register" semantics.
+     *
+     * @param request the request containing producer ID and offsets
+     * @return response indicating whether snapshot was created or already existed
+     */
+    @RPC(api = ApiKeys.REGISTER_PRODUCER_OFFSETS)
+    CompletableFuture<RegisterProducerOffsetsResponse> registerProducerOffsets(
+            RegisterProducerOffsetsRequest request);
+
+    /**
+     * Get producer offset snapshot.
+     *
+     * @param request the request containing producer ID
+     * @return response containing the producer offsets
+     */
+    @RPC(api = ApiKeys.GET_PRODUCER_OFFSETS)
+    CompletableFuture<GetProducerOffsetsResponse> getProducerOffsets(
+            GetProducerOffsetsRequest request);
+
+    /**
+     * Delete producer offset snapshot.
+     *
+     * @param request the request containing producer ID
+     * @return response indicating deletion success
+     */
+    @RPC(api = ApiKeys.DELETE_PRODUCER_OFFSETS)
+    CompletableFuture<DeleteProducerOffsetsResponse> deleteProducerOffsets(
+            DeleteProducerOffsetsRequest request);
 
     // todo: rename table & alter table
 

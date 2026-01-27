@@ -354,6 +354,28 @@ public class ConfigOptions {
                                     + "The default value is 10. "
                                     + "This option is deprecated. Please use server.io-pool.size instead.");
 
+    /**
+     * The TTL (time-to-live) for producer offsets. Producer offsets older than this TTL will be
+     * automatically cleaned up by the coordinator server.
+     */
+    public static final ConfigOption<Duration> COORDINATOR_PRODUCER_OFFSETS_TTL =
+            key("coordinator.producer-offsets.ttl")
+                    .durationType()
+                    .defaultValue(Duration.ofHours(24))
+                    .withDescription(
+                            "The TTL (time-to-live) for producer offsets. "
+                                    + "Producer offsets older than this TTL will be automatically cleaned up "
+                                    + "by the coordinator server. Default is 24 hours.");
+
+    /** The interval for cleaning up expired producer offsets and orphan files in remote storage. */
+    public static final ConfigOption<Duration> COORDINATOR_PRODUCER_OFFSETS_CLEANUP_INTERVAL =
+            key("coordinator.producer-offsets.cleanup-interval")
+                    .durationType()
+                    .defaultValue(Duration.ofHours(1))
+                    .withDescription(
+                            "The interval for cleaning up expired producer offsets "
+                                    + "and orphan files in remote storage. Default is 1 hour.");
+
     // ------------------------------------------------------------------------
     //  ConfigOptions for Tablet Server
     // ------------------------------------------------------------------------

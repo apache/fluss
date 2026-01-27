@@ -68,6 +68,7 @@ import org.apache.fluss.rpc.messages.GetFileSystemSecurityTokenResponse;
 import org.apache.fluss.rpc.messages.GetKvSnapshotMetadataResponse;
 import org.apache.fluss.rpc.messages.GetLatestKvSnapshotsResponse;
 import org.apache.fluss.rpc.messages.GetLatestLakeSnapshotResponse;
+import org.apache.fluss.rpc.messages.GetProducerOffsetsResponse;
 import org.apache.fluss.rpc.messages.InitWriterResponse;
 import org.apache.fluss.rpc.messages.LakeTieringHeartbeatResponse;
 import org.apache.fluss.rpc.messages.LimitScanResponse;
@@ -122,6 +123,7 @@ import org.apache.fluss.rpc.messages.PbPrefixLookupReqForBucket;
 import org.apache.fluss.rpc.messages.PbPrefixLookupRespForBucket;
 import org.apache.fluss.rpc.messages.PbProduceLogReqForBucket;
 import org.apache.fluss.rpc.messages.PbProduceLogRespForBucket;
+import org.apache.fluss.rpc.messages.PbProducerTableOffsets;
 import org.apache.fluss.rpc.messages.PbPutKvReqForBucket;
 import org.apache.fluss.rpc.messages.PbPutKvRespForBucket;
 import org.apache.fluss.rpc.messages.PbRebalancePlanForBucket;
@@ -1624,6 +1626,71 @@ public class ServerRpcMessageUtils {
         return new TableBucketOffsets(tableId, bucketOffsets);
     }
 
+    /**
+     * Populates a PbTableOffsets with bucket offsets.
+     *
+     * @param pbTableOffsets the protobuf table offsets to populate
+     * @param bucketOffsets map of TableBucket to offset
+     */
+    public static void populatePbTableOffsets(
+            PbTableOffsets pbTableOffsets, Map<TableBucket, Long> bucketOffsets) {
+        for (Map.Entry<TableBucket, Long> entry : bucketOffsets.entrySet()) {
+            TableBucket bucket = entry.getKey();
+            PbBucketOffset pbBucketOffset =
+                    pbTableOffsets
+                            .addBucketOffset()
+                            .setBucketId(bucket.getBucket())
+                            .setLogEndOffset(entry.getValue());
+            if (bucket.getPartitionId() != null) {
+                pbBucketOffset.setPartitionId(bucket.getPartitionId());
+            }
+        }
+    }
+
+    /**
+     * Groups offsets by table ID.
+     *
+     * @param allOffsets map of TableBucket to offset
+     * @return map of tableId to (map of TableBucket to offset)
+     */
+    public static Map<Long, Map<TableBucket, Long>> groupOffsetsByTableId(
+            Map<TableBucket, Long> allOffsets) {
+        Map<Long, Map<TableBucket, Long>> offsetsByTable = new HashMap<>();
+        for (Map.Entry<TableBucket, Long> entry : allOffsets.entrySet()) {
+            TableBucket bucket = entry.getKey();
+            offsetsByTable
+                    .computeIfAbsent(bucket.getTableId(), k -> new HashMap<>())
+                    .put(bucket, entry.getValue());
+        }
+        return offsetsByTable;
+    }
+
+    /**
+     * Populates a GetProducerOffsetsResponse with table offsets.
+     *
+     * @param response the response to populate
+     * @param tableId the table ID
+     * @param bucketOffsets the bucket offsets for this table
+     */
+    public static void addTableOffsetsToResponse(
+            GetProducerOffsetsResponse response,
+            long tableId,
+            Map<TableBucket, Long> bucketOffsets) {
+        PbProducerTableOffsets pbTableOffsets = response.addTableOffset();
+        pbTableOffsets.setTableId(tableId);
+        for (Map.Entry<TableBucket, Long> entry : bucketOffsets.entrySet()) {
+            TableBucket bucket = entry.getKey();
+            PbBucketOffset pbBucketOffset =
+                    pbTableOffsets
+                            .addBucketOffset()
+                            .setBucketId(bucket.getBucket())
+                            .setLogEndOffset(entry.getValue());
+            if (bucket.getPartitionId() != null) {
+                pbBucketOffset.setPartitionId(bucket.getPartitionId());
+            }
+        }
+    }
+
     public static PbNotifyLakeTableOffsetReqForBucket makeNotifyLakeTableOffsetForBucket(
             TableBucket tableBucket,
             LakeTableSnapshot lakeTableSnapshot,
@@ -1881,5 +1948,27 @@ public class ServerRpcMessageUtils {
         result.addAll(response);
         result.addAll(errors);
         return result;
+    }
+
+    /**
+     * Converts a list of PbProducerTableOffsets to a map of TableBucket to offset.
+     *
+     * @param tableOffsetsList the list of PbProducerTableOffsets
+     * @return map of TableBucket to offset
+     */
+    public static Map<TableBucket, Long> toTableBucketOffsets(
+            List<PbProducerTableOffsets> tableOffsetsList) {
+        Map<TableBucket, Long> offsets = new HashMap<>();
+        for (PbProducerTableOffsets pbTableOffsets : tableOffsetsList) {
+            long tableId = pbTableOffsets.getTableId();
+            for (PbBucketOffset pbBucketOffset : pbTableOffsets.getBucketOffsetsList()) {
+                Long partitionId =
+                        pbBucketOffset.hasPartitionId() ? pbBucketOffset.getPartitionId() : null;
+                TableBucket bucket =
+                        new TableBucket(tableId, partitionId, pbBucketOffset.getBucketId());
+                offsets.put(bucket, pbBucketOffset.getLogEndOffset());
+            }
+        }
+        return offsets;
     }
 }

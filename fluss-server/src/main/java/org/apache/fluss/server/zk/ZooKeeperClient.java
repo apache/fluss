@@ -66,6 +66,8 @@ import org.apache.fluss.server.zk.data.ZkData.PartitionIdZNode;
 import org.apache.fluss.server.zk.data.ZkData.PartitionSequenceIdZNode;
 import org.apache.fluss.server.zk.data.ZkData.PartitionZNode;
 import org.apache.fluss.server.zk.data.ZkData.PartitionsZNode;
+import org.apache.fluss.server.zk.data.ZkData.ProducerIdZNode;
+import org.apache.fluss.server.zk.data.ZkData.ProducersZNode;
 import org.apache.fluss.server.zk.data.ZkData.RebalanceZNode;
 import org.apache.fluss.server.zk.data.ZkData.ResourceAclNode;
 import org.apache.fluss.server.zk.data.ZkData.SchemaZNode;
@@ -80,6 +82,7 @@ import org.apache.fluss.server.zk.data.ZkData.TablesZNode;
 import org.apache.fluss.server.zk.data.ZkData.WriterIdZNode;
 import org.apache.fluss.server.zk.data.lake.LakeTable;
 import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
+import org.apache.fluss.server.zk.data.producer.ProducerOffsets;
 import org.apache.fluss.shaded.curator5.org.apache.curator.framework.CuratorFramework;
 import org.apache.fluss.shaded.curator5.org.apache.curator.framework.api.BackgroundCallback;
 import org.apache.fluss.shaded.curator5.org.apache.curator.framework.api.CuratorEvent;
@@ -1589,5 +1592,136 @@ public class ZooKeeperClient implements AutoCloseable {
             }
         }
         return result;
+    }
+
+    // --------------------------------------------------------------------------------------------
+    // Producer Offset Snapshot
+    // --------------------------------------------------------------------------------------------
+
+    /**
+     * Tries to atomically register a producer offset snapshot to ZK.
+     *
+     * <p>This method leverages ZooKeeper's atomic create operation to ensure that only one
+     * concurrent request can successfully create the snapshot. If a snapshot already exists for the
+     * given producer ID, this method returns false instead of throwing an exception.
+     *
+     * @param producerId the producer ID (typically Flink job ID)
+     * @param producerOffsets the producer offsets containing expiration time and table offset
+     *     metadata
+     * @return true if the snapshot was created successfully, false if a snapshot already exists
+     * @throws Exception if the operation fails for reasons other than node already existing
+     */
+    public boolean tryRegisterProducerOffsets(String producerId, ProducerOffsets producerOffsets)
+            throws Exception {
+        String path = ProducerIdZNode.path(producerId);
+        try {
+            zkClient.create()
+                    .creatingParentsIfNeeded()
+                    .withMode(CreateMode.PERSISTENT)
+                    .forPath(path, ProducerIdZNode.encode(producerOffsets));
+            LOG.info("Registered producer snapshot for producer {} at path {}.", producerId, path);
+            return true;
+        } catch (KeeperException.NodeExistsException e) {
+            LOG.debug(
+                    "Producer snapshot already exists for producer {} at path {}, "
+                            + "returning false.",
+                    producerId,
+                    path);
+            return false;
+        }
+    }
+
+    /**
+     * Gets the {@link ProducerOffsets} for the given producer ID.
+     *
+     * @param producerId the producer ID
+     * @return an Optional containing the ProducerOffsets if it exists, empty otherwise
+     * @throws Exception if the operation fails
+     */
+    public Optional<ProducerOffsets> getProducerOffsets(String producerId) throws Exception {
+        String zkPath = ProducerIdZNode.path(producerId);
+        return getOrEmpty(zkPath).map(ProducerIdZNode::decode);
+    }
+
+    /**
+     * Deletes the producer offset snapshot for the given producer ID.
+     *
+     * @param producerId the producer ID
+     * @throws Exception if the operation fails
+     */
+    public void deleteProducerOffsets(String producerId) throws Exception {
+        String path = ProducerIdZNode.path(producerId);
+        zkClient.delete().forPath(path);
+        LOG.info("Deleted producer offsets snapshot for producer {} at path {}.", producerId, path);
+    }
+
+    /**
+     * Gets the {@link ProducerOffsets} for the given producer ID along with its ZK version.
+     *
+     * <p>The version can be used for conditional updates/deletes to handle concurrent modifications
+     * safely.
+     *
+     * @param producerId the producer ID
+     * @return an Optional containing a Tuple2 of (ProducerOffsets, version) if it exists, empty
+     *     otherwise
+     * @throws Exception if the operation fails
+     */
+    public Optional<Tuple2<ProducerOffsets, Integer>> getProducerOffsetsWithVersion(
+            String producerId) throws Exception {
+        String zkPath = ProducerIdZNode.path(producerId);
+        try {
+            Stat stat = new Stat();
+            byte[] data = zkClient.getData().storingStatIn(stat).forPath(zkPath);
+            return Optional.of(Tuple2.of(ProducerIdZNode.decode(data), stat.getVersion()));
+        } catch (KeeperException.NoNodeException e) {
+            return Optional.empty();
+        }
+    }
+
+    /**
+     * Deletes the producer offset snapshot for the given producer ID only if the version matches.
+     *
+     * <p>This provides optimistic concurrency control - the delete will only succeed if no other
+     * process has modified the snapshot since it was read.
+     *
+     * @param producerId the producer ID
+     * @param expectedVersion the expected ZK version (obtained from getProducerSnapshotWithVersion)
+     * @return true if deleted successfully, false if version mismatch (snapshot was modified)
+     * @throws Exception if the operation fails for reasons other than version mismatch
+     */
+    public boolean deleteProducerSnapshotIfVersion(String producerId, int expectedVersion)
+            throws Exception {
+        String path = ProducerIdZNode.path(producerId);
+        try {
+            zkClient.delete().withVersion(expectedVersion).forPath(path);
+            LOG.info(
+                    "Deleted producer snapshot for producer {} at path {} with version {}.",
+                    producerId,
+                    path,
+                    expectedVersion);
+            return true;
+        } catch (KeeperException.BadVersionException e) {
+            LOG.debug(
+                    "Failed to delete producer snapshot for producer {} - version mismatch "
+                            + "(expected {}, snapshot was modified by another process).",
+                    producerId,
+                    expectedVersion);
+            return false;
+        } catch (KeeperException.NoNodeException e) {
+            LOG.debug(
+                    "Producer snapshot for producer {} was already deleted by another process.",
+                    producerId);
+            return true; // Already deleted, consider it success
+        }
+    }
+
+    /**
+     * Lists all producer IDs that have registered snapshots.
+     *
+     * @return list of producer IDs
+     * @throws Exception if the operation fails
+     */
+    public List<String> listProducerIds() throws Exception {
+        return getChildren(ProducersZNode.path());
     }
 }

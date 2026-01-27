@@ -57,6 +57,7 @@ import org.apache.fluss.rpc.messages.CreateDatabaseRequest;
 import org.apache.fluss.rpc.messages.CreateTableRequest;
 import org.apache.fluss.rpc.messages.DatabaseExistsRequest;
 import org.apache.fluss.rpc.messages.DatabaseExistsResponse;
+import org.apache.fluss.rpc.messages.DeleteProducerOffsetsRequest;
 import org.apache.fluss.rpc.messages.DescribeClusterConfigsRequest;
 import org.apache.fluss.rpc.messages.DropAclsRequest;
 import org.apache.fluss.rpc.messages.DropDatabaseRequest;
@@ -65,6 +66,7 @@ import org.apache.fluss.rpc.messages.GetDatabaseInfoRequest;
 import org.apache.fluss.rpc.messages.GetKvSnapshotMetadataRequest;
 import org.apache.fluss.rpc.messages.GetLatestKvSnapshotsRequest;
 import org.apache.fluss.rpc.messages.GetLatestLakeSnapshotRequest;
+import org.apache.fluss.rpc.messages.GetProducerOffsetsRequest;
 import org.apache.fluss.rpc.messages.GetTableInfoRequest;
 import org.apache.fluss.rpc.messages.GetTableSchemaRequest;
 import org.apache.fluss.rpc.messages.ListAclsRequest;
@@ -105,6 +107,7 @@ import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeCreatePart
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeDropPartitionRequest;
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeListOffsetsRequest;
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makePbPartitionSpec;
+import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeRegisterProducerOffsetsRequest;
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.toConfigEntries;
 import static org.apache.fluss.client.utils.MetadataUtils.sendMetadataRequestAndRebuildCluster;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toAclBindings;
@@ -586,6 +589,49 @@ public class FlussAdmin implements Admin {
         }
 
         return gateway.cancelRebalance(request).thenApply(r -> null);
+    }
+
+    // ==================================================================================
+    // Producer Offset Management APIs (for Exactly-Once Semantics)
+    // ==================================================================================
+
+    @Override
+    public CompletableFuture<RegisterResult> registerProducerOffsets(
+            String producerId, Map<TableBucket, Long> offsets) {
+        checkNotNull(producerId, "producerId must not be null");
+        checkNotNull(offsets, "offsets must not be null");
+
+        return gateway.registerProducerOffsets(
+                        makeRegisterProducerOffsetsRequest(producerId, offsets))
+                .thenApply(
+                        response -> {
+                            int code =
+                                    response.hasResult()
+                                            ? response.getResult()
+                                            : RegisterResult.CREATED.getCode();
+                            return RegisterResult.fromCode(code);
+                        });
+    }
+
+    @Override
+    public CompletableFuture<ProducerOffsetsResult> getProducerOffsets(String producerId) {
+        checkNotNull(producerId, "producerId must not be null");
+
+        GetProducerOffsetsRequest request = new GetProducerOffsetsRequest();
+        request.setProducerId(producerId);
+
+        return gateway.getProducerOffsets(request)
+                .thenApply(ClientRpcMessageUtils::toProducerOffsetsResult);
+    }
+
+    @Override
+    public CompletableFuture<Void> deleteProducerOffsets(String producerId) {
+        checkNotNull(producerId, "producerId must not be null");
+
+        DeleteProducerOffsetsRequest request = new DeleteProducerOffsetsRequest();
+        request.setProducerId(producerId);
+
+        return gateway.deleteProducerOffsets(request).thenApply(r -> null);
     }
 
     @Override

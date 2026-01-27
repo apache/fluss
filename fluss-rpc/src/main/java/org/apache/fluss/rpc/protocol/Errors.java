@@ -36,6 +36,7 @@ import org.apache.fluss.exception.InvalidConfigException;
 import org.apache.fluss.exception.InvalidCoordinatorException;
 import org.apache.fluss.exception.InvalidDatabaseException;
 import org.apache.fluss.exception.InvalidPartitionException;
+import org.apache.fluss.exception.InvalidProducerIdException;
 import org.apache.fluss.exception.InvalidReplicationFactorException;
 import org.apache.fluss.exception.InvalidRequiredAcksException;
 import org.apache.fluss.exception.InvalidServerRackInfoException;
@@ -240,7 +241,11 @@ public enum Errors {
     SEVER_TAG_NOT_EXIST_EXCEPTION(60, "The server tag not exist.", ServerTagNotExistException::new),
     REBALANCE_FAILURE_EXCEPTION(61, "The rebalance task failure.", RebalanceFailureException::new),
     NO_REBALANCE_IN_PROGRESS_EXCEPTION(
-            62, "No rebalance task in progress.", NoRebalanceInProgressException::new);
+            62, "No rebalance task in progress.", NoRebalanceInProgressException::new),
+    INVALID_PRODUCER_ID_EXCEPTION(
+            63,
+            "The client has attempted to perform an operation with an invalid producer ID.",
+            InvalidProducerIdException::new);
 
     private static final Logger LOG = LoggerFactory.getLogger(Errors.class);
 

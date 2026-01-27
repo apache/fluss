@@ -18,6 +18,7 @@
 package org.apache.fluss.client.utils;
 
 import org.apache.fluss.client.admin.OffsetSpec;
+import org.apache.fluss.client.admin.ProducerOffsetsResult;
 import org.apache.fluss.client.lookup.LookupBatch;
 import org.apache.fluss.client.lookup.PrefixLookupBatch;
 import org.apache.fluss.client.metadata.KvSnapshotMetadata;
@@ -48,6 +49,7 @@ import org.apache.fluss.rpc.messages.GetFileSystemSecurityTokenResponse;
 import org.apache.fluss.rpc.messages.GetKvSnapshotMetadataResponse;
 import org.apache.fluss.rpc.messages.GetLatestKvSnapshotsResponse;
 import org.apache.fluss.rpc.messages.GetLatestLakeSnapshotResponse;
+import org.apache.fluss.rpc.messages.GetProducerOffsetsResponse;
 import org.apache.fluss.rpc.messages.ListOffsetsRequest;
 import org.apache.fluss.rpc.messages.ListPartitionInfosResponse;
 import org.apache.fluss.rpc.messages.ListRebalanceProgressResponse;
@@ -55,6 +57,7 @@ import org.apache.fluss.rpc.messages.LookupRequest;
 import org.apache.fluss.rpc.messages.MetadataRequest;
 import org.apache.fluss.rpc.messages.PbAddColumn;
 import org.apache.fluss.rpc.messages.PbAlterConfig;
+import org.apache.fluss.rpc.messages.PbBucketOffset;
 import org.apache.fluss.rpc.messages.PbDescribeConfig;
 import org.apache.fluss.rpc.messages.PbDropColumn;
 import org.apache.fluss.rpc.messages.PbKeyValue;
@@ -65,6 +68,7 @@ import org.apache.fluss.rpc.messages.PbModifyColumn;
 import org.apache.fluss.rpc.messages.PbPartitionSpec;
 import org.apache.fluss.rpc.messages.PbPrefixLookupReqForBucket;
 import org.apache.fluss.rpc.messages.PbProduceLogReqForBucket;
+import org.apache.fluss.rpc.messages.PbProducerTableOffsets;
 import org.apache.fluss.rpc.messages.PbPutKvReqForBucket;
 import org.apache.fluss.rpc.messages.PbRebalancePlanForBucket;
 import org.apache.fluss.rpc.messages.PbRebalanceProgressForBucket;
@@ -74,6 +78,7 @@ import org.apache.fluss.rpc.messages.PbRenameColumn;
 import org.apache.fluss.rpc.messages.PrefixLookupRequest;
 import org.apache.fluss.rpc.messages.ProduceLogRequest;
 import org.apache.fluss.rpc.messages.PutKvRequest;
+import org.apache.fluss.rpc.messages.RegisterProducerOffsetsRequest;
 import org.apache.fluss.utils.json.DataTypeJsonSerde;
 import org.apache.fluss.utils.json.JsonSerdeUtils;
 
@@ -541,5 +546,91 @@ public class ClientRpcMessageUtils {
                                         ConfigEntry.ConfigSource.valueOf(
                                                 pbDescribeConfig.getConfigSource())))
                 .collect(Collectors.toList());
+    }
+
+    /**
+     * Parses a PbProducerTableOffsets into a map of TableBucket to offset.
+     *
+     * @param pbTableOffsets the protobuf producer table offsets
+     * @return map of TableBucket to offset
+     */
+    public static Map<TableBucket, Long> toTableBucketOffsets(
+            PbProducerTableOffsets pbTableOffsets) {
+        Map<TableBucket, Long> bucketOffsets = new HashMap<>();
+        long tableId = pbTableOffsets.getTableId();
+
+        for (PbBucketOffset pbBucketOffset : pbTableOffsets.getBucketOffsetsList()) {
+            Long partitionId =
+                    pbBucketOffset.hasPartitionId() ? pbBucketOffset.getPartitionId() : null;
+            TableBucket bucket =
+                    new TableBucket(tableId, partitionId, pbBucketOffset.getBucketId());
+            bucketOffsets.put(bucket, pbBucketOffset.getLogEndOffset());
+        }
+
+        return bucketOffsets;
+    }
+
+    /**
+     * Creates a RegisterProducerOffsetsRequest from producer ID and offsets map.
+     *
+     * @param producerId the producer ID
+     * @param offsets map of TableBucket to offset
+     * @return the RegisterProducerOffsetsRequest
+     */
+    public static RegisterProducerOffsetsRequest makeRegisterProducerOffsetsRequest(
+            String producerId, Map<TableBucket, Long> offsets) {
+        RegisterProducerOffsetsRequest request = new RegisterProducerOffsetsRequest();
+        request.setProducerId(producerId);
+
+        // Group offsets by table ID
+        Map<Long, List<Map.Entry<TableBucket, Long>>> offsetsByTable = new HashMap<>();
+        for (Map.Entry<TableBucket, Long> entry : offsets.entrySet()) {
+            offsetsByTable
+                    .computeIfAbsent(entry.getKey().getTableId(), k -> new ArrayList<>())
+                    .add(entry);
+        }
+
+        // Build PbProducerTableOffsets for each table
+        for (Map.Entry<Long, List<Map.Entry<TableBucket, Long>>> tableEntry :
+                offsetsByTable.entrySet()) {
+            PbProducerTableOffsets pbTableOffsets =
+                    request.addTableOffset().setTableId(tableEntry.getKey());
+            for (Map.Entry<TableBucket, Long> bucketEntry : tableEntry.getValue()) {
+                TableBucket bucket = bucketEntry.getKey();
+                PbBucketOffset pbBucketOffset =
+                        pbTableOffsets
+                                .addBucketOffset()
+                                .setBucketId(bucket.getBucket())
+                                .setLogEndOffset(bucketEntry.getValue());
+                if (bucket.getPartitionId() != null) {
+                    pbBucketOffset.setPartitionId(bucket.getPartitionId());
+                }
+            }
+        }
+
+        return request;
+    }
+
+    /**
+     * Converts a GetProducerOffsetsResponse to ProducerOffsetsResult.
+     *
+     * @param response the GetProducerOffsetsResponse
+     * @return the ProducerOffsetsResult, or null if producer not found
+     */
+    @Nullable
+    public static ProducerOffsetsResult toProducerOffsetsResult(
+            GetProducerOffsetsResponse response) {
+        if (!response.hasProducerId()) {
+            return null;
+        }
+
+        Map<Long, Map<TableBucket, Long>> tableOffsets = new HashMap<>();
+        for (PbProducerTableOffsets pbTableOffsets : response.getTableOffsetsList()) {
+            long tableId = pbTableOffsets.getTableId();
+            tableOffsets.put(tableId, toTableBucketOffsets(pbTableOffsets));
+        }
+
+        long expirationTime = response.hasExpirationTime() ? response.getExpirationTime() : 0;
+        return new ProducerOffsetsResult(response.getProducerId(), tableOffsets, expirationTime);
     }
 }

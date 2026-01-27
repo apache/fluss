@@ -52,6 +52,8 @@ import org.apache.fluss.rpc.messages.CreateTableRequest;
 import org.apache.fluss.rpc.messages.CreateTableResponse;
 import org.apache.fluss.rpc.messages.DatabaseExistsRequest;
 import org.apache.fluss.rpc.messages.DatabaseExistsResponse;
+import org.apache.fluss.rpc.messages.DeleteProducerOffsetsRequest;
+import org.apache.fluss.rpc.messages.DeleteProducerOffsetsResponse;
 import org.apache.fluss.rpc.messages.DescribeClusterConfigsRequest;
 import org.apache.fluss.rpc.messages.DescribeClusterConfigsResponse;
 import org.apache.fluss.rpc.messages.DropAclsRequest;
@@ -72,6 +74,8 @@ import org.apache.fluss.rpc.messages.GetLatestKvSnapshotsRequest;
 import org.apache.fluss.rpc.messages.GetLatestKvSnapshotsResponse;
 import org.apache.fluss.rpc.messages.GetLatestLakeSnapshotRequest;
 import org.apache.fluss.rpc.messages.GetLatestLakeSnapshotResponse;
+import org.apache.fluss.rpc.messages.GetProducerOffsetsRequest;
+import org.apache.fluss.rpc.messages.GetProducerOffsetsResponse;
 import org.apache.fluss.rpc.messages.GetTableInfoRequest;
 import org.apache.fluss.rpc.messages.GetTableInfoResponse;
 import org.apache.fluss.rpc.messages.GetTableSchemaRequest;
@@ -94,6 +98,8 @@ import org.apache.fluss.rpc.messages.PrepareLakeTableSnapshotRequest;
 import org.apache.fluss.rpc.messages.PrepareLakeTableSnapshotResponse;
 import org.apache.fluss.rpc.messages.RebalanceRequest;
 import org.apache.fluss.rpc.messages.RebalanceResponse;
+import org.apache.fluss.rpc.messages.RegisterProducerOffsetsRequest;
+import org.apache.fluss.rpc.messages.RegisterProducerOffsetsResponse;
 import org.apache.fluss.rpc.messages.RemoveServerTagRequest;
 import org.apache.fluss.rpc.messages.RemoveServerTagResponse;
 import org.apache.fluss.rpc.messages.TableExistsRequest;
@@ -415,6 +421,24 @@ public class TestCoordinatorGateway implements CoordinatorGateway {
     @Override
     public CompletableFuture<DescribeClusterConfigsResponse> describeClusterConfigs(
             DescribeClusterConfigsRequest request) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public CompletableFuture<RegisterProducerOffsetsResponse> registerProducerOffsets(
+            RegisterProducerOffsetsRequest request) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public CompletableFuture<GetProducerOffsetsResponse> getProducerOffsets(
+            GetProducerOffsetsRequest request) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public CompletableFuture<DeleteProducerOffsetsResponse> deleteProducerOffsets(
+            DeleteProducerOffsetsRequest request) {
         throw new UnsupportedOperationException();
     }
 

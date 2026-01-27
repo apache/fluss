@@ -83,7 +83,9 @@ import java.time.Duration;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ExecutionException;
 
 import static org.apache.fluss.config.ConfigOptions.DATALAKE_FORMAT;
@@ -1018,6 +1020,86 @@ public class FlussAuthorizationITCase {
 
         // test cancelRebalance with WRITE permission should succeed
         guestAdmin.cancelRebalance(null).get();
+    }
+
+    // ------------------------------------------------------------------------
+    //  Producer Offsets Authorization Tests
+    // ------------------------------------------------------------------------
+
+    @Test
+    void testRegisterProducerOffsetsAuthorization() throws Exception {
+        String producerId = "test-producer-auth-" + System.currentTimeMillis();
+        TableInfo tableInfo = rootAdmin.getTableInfo(DATA1_TABLE_PATH_PK).get();
+        long tableId = tableInfo.getTableId();
+
+        Map<TableBucket, Long> offsets = new HashMap<>();
+        offsets.put(new TableBucket(tableId, 0), 100L);
+
+        // test registerProducerOffsets without WRITE permission on table resource
+        assertThatThrownBy(() -> guestAdmin.registerProducerOffsets(producerId, offsets).get())
+                .rootCause()
+                .isInstanceOf(AuthorizationException.class)
+                .hasMessageContaining(
+                        String.format(
+                                "Principal %s have no authorization to operate WRITE on resource Resource{type=TABLE, name='%s'}",
+                                guestPrincipal, DATA1_TABLE_PATH_PK));
+
+        // add WRITE permission to guest user on table resource
+        List<AclBinding> aclBindings =
+                Collections.singletonList(
+                        new AclBinding(
+                                Resource.table(DATA1_TABLE_PATH_PK),
+                                new AccessControlEntry(
+                                        guestPrincipal,
+                                        "*",
+                                        OperationType.WRITE,
+                                        PermissionType.ALLOW)));
+        rootAdmin.createAcls(aclBindings).all().get();
+        FLUSS_CLUSTER_EXTENSION.waitUntilAuthenticationSync(aclBindings, true);
+
+        // test registerProducerOffsets with WRITE permission should succeed
+        guestAdmin.registerProducerOffsets(producerId, offsets).get();
+
+        // cleanup
+        rootAdmin.deleteProducerOffsets(producerId).get();
+    }
+
+    @Test
+    void testDeleteProducerOffsetsAuthorization() throws Exception {
+        String producerId = "test-producer-delete-auth-" + System.currentTimeMillis();
+        TableInfo tableInfo = rootAdmin.getTableInfo(DATA1_TABLE_PATH_PK).get();
+        long tableId = tableInfo.getTableId();
+
+        Map<TableBucket, Long> offsets = new HashMap<>();
+        offsets.put(new TableBucket(tableId, 0), 100L);
+
+        // register offsets as root user first
+        rootAdmin.registerProducerOffsets(producerId, offsets).get();
+
+        // test deleteProducerOffsets without WRITE permission on table resource
+        assertThatThrownBy(() -> guestAdmin.deleteProducerOffsets(producerId).get())
+                .rootCause()
+                .isInstanceOf(AuthorizationException.class)
+                .hasMessageContaining(
+                        String.format(
+                                "Principal %s have no authorization to operate WRITE on resource Resource{type=TABLE, name='%s'}",
+                                guestPrincipal, DATA1_TABLE_PATH_PK));
+
+        // add WRITE permission to guest user on table resource
+        List<AclBinding> aclBindings =
+                Collections.singletonList(
+                        new AclBinding(
+                                Resource.table(DATA1_TABLE_PATH_PK),
+                                new AccessControlEntry(
+                                        guestPrincipal,
+                                        "*",
+                                        OperationType.WRITE,
+                                        PermissionType.ALLOW)));
+        rootAdmin.createAcls(aclBindings).all().get();
+        FLUSS_CLUSTER_EXTENSION.waitUntilAuthenticationSync(aclBindings, true);
+
+        // test deleteProducerOffsets with WRITE permission should succeed
+        guestAdmin.deleteProducerOffsets(producerId).get();
     }
 
     private static Configuration initConfig() {

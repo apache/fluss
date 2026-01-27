@@ -623,6 +623,41 @@ message CancelRebalanceRequest {
 message CancelRebalanceResponse {
 }
 
+// ------------------------------------------------------------------------------------------
+// Producer Offset Management
+// ------------------------------------------------------------------------------------------
+
+// Register producer offsets request and response
+message RegisterProducerOffsetsRequest {
+  required string producer_id = 1;
+  repeated PbProducerTableOffsets table_offsets = 2;
+  optional int64 ttl_ms = 3;
+}
+
+message RegisterProducerOffsetsResponse {
+  // Result of registration: 0 = CREATED (new snapshot), 1 = ALREADY_EXISTS (snapshot existed)
+  optional int32 result = 1;
+}
+
+// Get producer offsets request and response
+message GetProducerOffsetsRequest {
+  required string producer_id = 1;
+}
+
+message GetProducerOffsetsResponse {
+  optional string producer_id = 1;
+  optional int64 expiration_time = 2;
+  repeated PbProducerTableOffsets table_offsets = 3;
+}
+
+// Delete producer offsets request and response
+message DeleteProducerOffsetsRequest {
+  required string producer_id = 1;
+}
+
+message DeleteProducerOffsetsResponse {
+}
+
 
 
 // --------------- Inner classes ----------------
@@ -1068,4 +1103,10 @@ message PbBucketOffset {
   optional int64 partition_id = 1;
   required int32 bucket_id = 2;
   optional int64 log_end_offset = 4;
+}
+
+// Helper message for table offsets in producer offsets (without table_path)
+message PbProducerTableOffsets {
+  required int64 table_id = 1;
+  repeated PbBucketOffset bucket_offsets = 2;
 }
