@@ -131,7 +131,7 @@ class LakeTableTieringManagerTest {
         assertThatThrownBy(() -> tableTieringManager.reportTieringFail(tableId1, 1))
                 .isInstanceOf(TableNotExistException.class)
                 .hasMessage("The table %d doesn't exist.", tableId1);
-        assertThatThrownBy(() -> tableTieringManager.finishTableTiering(tableId1, 1))
+        assertThatThrownBy(() -> tableTieringManager.finishTableTiering(tableId1, 1, false))
                 .isInstanceOf(TableNotExistException.class)
                 .hasMessage("The table %d doesn't exist.", tableId1);
     }
@@ -152,7 +152,7 @@ class LakeTableTieringManagerTest {
         assertThat(tableTieringManager.requestTable()).isNull();
 
         // mock lake tiering finish one-round tiering
-        tableTieringManager.finishTableTiering(tableId1, tieredEpoch);
+        tableTieringManager.finishTableTiering(tableId1, tieredEpoch, false);
         // not advance time, request table should return null
         assertThat(tableTieringManager.requestTable()).isNull();
 
@@ -211,12 +211,12 @@ class LakeTableTieringManagerTest {
                 .hasMessage(
                         "The tiering epoch %d is not match current epoch %d in coordinator for table %d.",
                         1, 2, tableId1);
-        assertThatThrownBy(() -> tableTieringManager.finishTableTiering(tableId1, 1))
+        assertThatThrownBy(() -> tableTieringManager.finishTableTiering(tableId1, 1, false))
                 .isInstanceOf(FencedTieringEpochException.class)
                 .hasMessage(
                         "The tiering epoch %d is not match current epoch %d in coordinator for table %d.",
                         1, 2, tableId1);
-        assertThatThrownBy(() -> tableTieringManager.finishTableTiering(tableId1, 3))
+        assertThatThrownBy(() -> tableTieringManager.finishTableTiering(tableId1, 3, false))
                 .isInstanceOf(FencedTieringEpochException.class)
                 .hasMessage(
                         "The tiering epoch %d is not match current epoch %d in coordinator for table %d.",
@@ -236,6 +236,29 @@ class LakeTableTieringManagerTest {
         tableTieringManager.reportTieringFail(tableId1, 1);
         // we should get the table again
         assertRequestTable(tableId1, tablePath1, 2);
+    }
+
+    @Test
+    void testForceFinishTableTieringImmediatelyRePending() {
+        long tableId1 = 1L;
+        TablePath tablePath1 = TablePath.of("db", "table1");
+        TableInfo tableInfo1 = createTableInfo(tableId1, tablePath1, Duration.ofSeconds(10));
+        tableTieringManager.addNewLakeTable(tableInfo1);
+        manualClock.advanceTime(Duration.ofSeconds(10));
+        // check requested table
+        assertRequestTable(tableId1, tablePath1, 1);
+
+        // request table should return null since the table is tiering
+        assertThat(tableTieringManager.requestTable()).isNull();
+
+        // mock lake tiering force finish (e.g., due to exceeding tiering duration)
+        tableTieringManager.finishTableTiering(tableId1, 1, true);
+        // should immediately be re-pending and can be requested again without waiting
+        assertRequestTable(tableId1, tablePath1, 2);
+
+        // verify it can be requested again immediately after force finish
+        // request table should return null since the table is tiering
+        assertThat(tableTieringManager.requestTable()).isNull();
     }
 
     private TableInfo createTableInfo(long tableId, TablePath tablePath, Duration freshness) {

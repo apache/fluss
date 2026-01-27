@@ -22,6 +22,7 @@ import org.apache.fluss.client.Connection;
 import org.apache.fluss.client.ConnectionFactory;
 import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.client.table.Table;
+import org.apache.fluss.client.table.writer.AppendWriter;
 import org.apache.fluss.client.table.writer.TableWriter;
 import org.apache.fluss.client.table.writer.UpsertWriter;
 import org.apache.fluss.config.ConfigOptions;
@@ -37,6 +38,7 @@ import org.apache.fluss.server.replica.Replica;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 
 import org.apache.flink.api.common.RuntimeExecutionMode;
+import org.apache.flink.core.execution.JobClient;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -44,8 +46,11 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.extension.RegisterExtension;
 
 import java.time.Duration;
+import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 
+import static org.apache.fluss.flink.tiering.source.TieringSourceOptions.POLL_TIERING_TABLE_INTERVAL;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -69,7 +74,7 @@ class FlinkTieringTestBase {
         Configuration conf = new Configuration();
         conf.set(ConfigOptions.KV_MAX_RETAINED_SNAPSHOTS, Integer.MAX_VALUE);
 
-        // Configure the tiering sink to be Lance
+        // Configure the tiering sink to be Lance for testing purpose
         conf.set(ConfigOptions.DATALAKE_FORMAT, DataLakeFormat.LANCE);
         return conf;
     }
@@ -94,26 +99,33 @@ class FlinkTieringTestBase {
     }
 
     @BeforeEach
-    public void beforeEach() {
+    void beforeEach() {
         execEnv = StreamExecutionEnvironment.getExecutionEnvironment();
         execEnv.setRuntimeMode(RuntimeExecutionMode.STREAMING);
         execEnv.setParallelism(2);
+        execEnv.enableCheckpointing(500);
     }
 
-    protected long createPkTable(
-            TablePath tablePath, int bucketNum, boolean enableAutoCompaction, Schema schema)
+    protected long createTable(TablePath tablePath, Schema schema) throws Exception {
+        return createTable(tablePath, 1, Collections.emptyList(), schema, Collections.emptyMap());
+    }
+
+    protected long createTable(
+            TablePath tablePath,
+            int bucketNum,
+            List<String> bucketKeys,
+            Schema schema,
+            Map<String, String> customProperties)
             throws Exception {
-        TableDescriptor.Builder pkTableBuilder =
+        TableDescriptor.Builder tableBuilder =
                 TableDescriptor.builder()
                         .schema(schema)
-                        .distributedBy(bucketNum)
+                        .distributedBy(bucketNum, bucketKeys)
                         .property(ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "true")
-                        .property(ConfigOptions.TABLE_DATALAKE_FRESHNESS, Duration.ofMillis(500));
+                        .property(ConfigOptions.TABLE_DATALAKE_FRESHNESS, Duration.ofMillis(500))
+                        .customProperties(customProperties);
 
-        if (enableAutoCompaction) {
-            pkTableBuilder.property(ConfigOptions.TABLE_DATALAKE_AUTO_COMPACTION.key(), "true");
-        }
-        return createTable(tablePath, pkTableBuilder.build());
+        return createTable(tablePath, tableBuilder.build());
     }
 
     protected long createTable(TablePath tablePath, TableDescriptor tableDescriptor)
@@ -138,12 +150,21 @@ class FlinkTieringTestBase {
         return FLUSS_CLUSTER_EXTENSION.waitAndGetLeaderReplica(tableBucket);
     }
 
-    protected void writeRows(TablePath tablePath, List<InternalRow> rows) throws Exception {
+    protected void writeRows(TablePath tablePath, List<InternalRow> rows, boolean append)
+            throws Exception {
         try (Table table = conn.getTable(tablePath)) {
             TableWriter tableWriter;
-            tableWriter = table.newUpsert().createWriter();
+            if (append) {
+                tableWriter = table.newAppend().createWriter();
+            } else {
+                tableWriter = table.newUpsert().createWriter();
+            }
             for (InternalRow row : rows) {
-                ((UpsertWriter) tableWriter).upsert(row);
+                if (tableWriter instanceof AppendWriter) {
+                    ((AppendWriter) tableWriter).append(row);
+                } else {
+                    ((UpsertWriter) tableWriter).upsert(row);
+                }
             }
             tableWriter.flush();
         }
@@ -151,5 +172,23 @@ class FlinkTieringTestBase {
 
     public List<InternalRow> getValuesRecords(TablePath tablePath) {
         return TestingValuesLake.getResults(tablePath.toString());
+    }
+
+    protected JobClient buildTieringJob(StreamExecutionEnvironment execEnv) throws Exception {
+        return buildTieringJob(execEnv, new Configuration());
+    }
+
+    protected JobClient buildTieringJob(
+            StreamExecutionEnvironment execEnv, Configuration lakeTieringConfig) throws Exception {
+        Configuration flussConfig = new Configuration(clientConf);
+        flussConfig.set(POLL_TIERING_TABLE_INTERVAL, Duration.ofMillis(500L));
+
+        return LakeTieringJobBuilder.newBuilder(
+                        execEnv,
+                        flussConfig,
+                        new Configuration(),
+                        lakeTieringConfig,
+                        DataLakeFormat.LANCE.toString())
+                .build();
     }
 }

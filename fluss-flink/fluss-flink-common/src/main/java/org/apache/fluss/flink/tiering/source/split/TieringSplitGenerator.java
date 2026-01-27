@@ -56,9 +56,8 @@ public class TieringSplitGenerator {
         this.flussAdmin = flussAdmin;
     }
 
-    public List<TieringSplit> generateTableSplits(TablePath tablePath) throws Exception {
-
-        final TableInfo tableInfo = flussAdmin.getTableInfo(tablePath).get();
+    public List<TieringSplit> generateTableSplits(TableInfo tableInfo) throws Exception {
+        TablePath tablePath = tableInfo.getTablePath();
         final BucketOffsetsRetriever bucketOffsetsRetriever =
                 new BucketOffsetsRetrieverImpl(flussAdmin, tablePath);
 
@@ -287,7 +286,7 @@ public class TieringSplitGenerator {
                                 latestBucketOffset,
                                 0));
             } else {
-                LOG.info(
+                LOG.debug(
                         "The lastCommittedBucketOffset {} is equals or bigger than latestBucketOffset {}, skip generating split for bucket {}",
                         lastCommittedBucketOffset,
                         latestBucketOffset,
@@ -320,8 +319,7 @@ public class TieringSplitGenerator {
                             tableBucket,
                             partitionName,
                             EARLIEST_OFFSET,
-                            latestBucketOffset,
-                            0));
+                            latestBucketOffset));
         } else {
             // the bucket has been tiered, scan remain fluss log
             if (lastCommittedBucketOffset < latestBucketOffset) {
@@ -331,11 +329,10 @@ public class TieringSplitGenerator {
                                 tableBucket,
                                 partitionName,
                                 lastCommittedBucketOffset,
-                                latestBucketOffset,
-                                0));
+                                latestBucketOffset));
             }
         }
-        LOG.info(
+        LOG.debug(
                 "The lastCommittedBucketOffset {} is equals or bigger than latestBucketOffset {}, skip generating split for bucket {}",
                 lastCommittedBucketOffset,
                 latestBucketOffset,

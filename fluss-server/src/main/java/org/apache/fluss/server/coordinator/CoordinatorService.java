@@ -150,9 +150,11 @@ import java.io.UncheckedIOException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.function.Supplier;
@@ -738,6 +740,12 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
             }
         }
 
+        // process force finished tables
+        Set<Long> forceFinishedTableId = new HashSet<>();
+        for (long forceFinishTableId : request.getForceFinishedTables()) {
+            forceFinishedTableId.add(forceFinishTableId);
+        }
+
         // process finished tables
         for (PbHeartbeatReqForTable finishTable : request.getFinishedTablesList()) {
             PbHeartbeatRespForTable pbHeartbeatRespForTable =
@@ -745,7 +753,9 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
             try {
                 validateHeartbeatRequest(finishTable, currentCoordinatorEpoch);
                 lakeTableTieringManager.finishTableTiering(
-                        finishTable.getTableId(), finishTable.getTieringEpoch());
+                        finishTable.getTableId(),
+                        finishTable.getTieringEpoch(),
+                        forceFinishedTableId.contains(finishTable.getTableId()));
             } catch (Throwable e) {
                 pbHeartbeatRespForTable.setError(ApiError.fromThrowable(e).toErrorResponse());
             }

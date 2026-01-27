@@ -18,29 +18,46 @@
 
 package org.apache.fluss.lake.values.tiering;
 
+import org.apache.fluss.config.ConfigOption;
 import org.apache.fluss.lake.serializer.SimpleVersionedSerializer;
 import org.apache.fluss.lake.values.TestingValuesLake;
 import org.apache.fluss.lake.writer.LakeWriter;
+import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.utils.InstantiationUtils;
 
 import java.io.IOException;
 import java.io.Serializable;
+import java.time.Duration;
 import java.util.UUID;
+
+import static org.apache.fluss.config.ConfigBuilder.key;
 
 /** Implementation of {@link LakeWriter} for values lake. */
 public class TestingValuesLakeWriter
         implements LakeWriter<TestingValuesLakeWriter.TestingValuesWriteResult> {
     private final String tableId;
     private final String writerId;
+    static ConfigOption<Duration> writePauseOption =
+            key("write-pause").durationType().noDefaultValue();
+    private final Duration writePause;
 
-    public TestingValuesLakeWriter(String tableId) {
-        this.tableId = tableId;
+    public TestingValuesLakeWriter(TableInfo tableInfo) {
+        this.tableId = tableInfo.getTablePath().toString();
         this.writerId = UUID.randomUUID().toString();
+        this.writePause = tableInfo.getCustomProperties().get(writePauseOption);
     }
 
     @Override
     public void write(LogRecord record) throws IOException {
+        try {
+            if (writePause != null) {
+                Thread.sleep(writePause.toMillis());
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IOException("Interrupted while pausing before write", e);
+        }
         TestingValuesLake.writeRecord(tableId, writerId, record);
     }
 

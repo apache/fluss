@@ -540,6 +540,12 @@ message LakeTieringHeartbeatRequest {
   repeated PbHeartbeatReqForTable failed_tables = 3;
   // whether to request a table
   optional bool request_table = 4;
+  // Table IDs that were force finished due to reaching the maximum tiering duration.
+  // When a table's tiering operation exceeds the max duration (data lake freshness),
+  // it will be force finished to prevent it from blocking other tables' tiering operations.
+  // These table IDs must also appear in finished_tables. The coordinator uses this field to
+  // distinguish between normally finished tables and force finished tables.
+  repeated int64 force_finished_tables = 5;
 }
 
 message LakeTieringHeartbeatResponse {
