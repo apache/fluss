@@ -34,6 +34,8 @@ import scala.collection.JavaConverters._
 
 class SparkCatalogTest extends FlussSparkTestBase {
 
+  protected def lakeFormat: Option[DataLakeFormat] = None
+
   test("Catalog: namespaces") {
     // Always a default database 'fluss'.
     checkAnswer(sql("SHOW DATABASES"), Row(DEFAULT_DATABASE) :: Nil)
@@ -197,25 +199,28 @@ class SparkCatalogTest extends FlussSparkTestBase {
     checkAnswer(sql("SHOW DATABASES"), Row(DEFAULT_DATABASE) :: Nil)
   }
 
-  test("Catalog: set/remove table properties") {
+  protected def modifyTablePropertiesWithCheck(): Unit = {
     withTable("t") {
       sql(
         s"CREATE TABLE $DEFAULT_DATABASE.t (id int, name string) TBLPROPERTIES('key1' = 'value1', '${SparkConnectorOptions.BUCKET_NUMBER.key()}' = 3)")
       var flussTable = admin.getTableInfo(createTablePath("t")).get()
       assertResult(flussTable.getNumBuckets, "check bucket num")(3)
-      assertResult(
+      val expectTableProperties = if (lakeFormat.isDefined) {
         Map(
-          ConfigOptions.TABLE_REPLICATION_FACTOR.key() -> "1"),
-        "check table properties")(flussTable.getProperties.toMap.asScala)
+          ConfigOptions.TABLE_REPLICATION_FACTOR.key() -> "1",
+          ConfigOptions.TABLE_DATALAKE_FORMAT.key() -> lakeFormat.get.toString)
+      } else {
+        Map(ConfigOptions.TABLE_REPLICATION_FACTOR.key() -> "1")
+      }
+      assertResult(expectTableProperties, "check table properties")(
+        flussTable.getProperties.toMap.asScala)
       assert(
         flussTable.getCustomProperties.toMap.asScala.getOrElse("key1", "non-exists") == "value1")
 
       sql("ALTER TABLE t SET TBLPROPERTIES('key1' = 'value2', 'key2' = 'value2')")
       flussTable = admin.getTableInfo(createTablePath("t")).get()
-      assertResult(
-        Map(
-          ConfigOptions.TABLE_REPLICATION_FACTOR.key() -> "1"),
-        "check table properties")(flussTable.getProperties.toMap.asScala)
+      assertResult(expectTableProperties, "check table properties")(
+        flussTable.getProperties.toMap.asScala)
       assert(
         flussTable.getCustomProperties.toMap.asScala.getOrElse("key1", "non-exists") == "value2")
       assert(
@@ -235,6 +240,10 @@ class SparkCatalogTest extends FlussSparkTestBase {
           s"ALTER TABLE t SET TBLPROPERTIES('${ConfigOptions.TABLE_REPLICATION_FACTOR.key()}' = '2')")
       }.getCause.shouldBe(a[InvalidAlterTableException])
     }
+  }
+
+  test("Catalog: set/remove table properties") {
+    modifyTablePropertiesWithCheck()
   }
 
   test("Partition: show partitions") {

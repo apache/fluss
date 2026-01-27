@@ -38,10 +38,12 @@ class SparkLakePaimonCatalogTest extends SparkCatalogTest {
   private var paimonCatalog: org.apache.paimon.catalog.Catalog = _
   private var warehousePath: String = _
 
+  override protected def lakeFormat: Option[DataLakeFormat] = Some(DataLakeFormat.PAIMON)
+
   override def flussConf: Configuration = {
     val conf = super.flussConf
     conf.setInt(ConfigOptions.KV_MAX_RETAINED_SNAPSHOTS, Integer.MAX_VALUE)
-    conf.setString("datalake.format", "paimon")
+    conf.setString("datalake.format", lakeFormat.get.toString)
     conf.setString("datalake.paimon.metastore", "filesystem")
     conf.setString("datalake.paimon.cache-enabled", "false")
     try {
@@ -410,5 +412,4 @@ class SparkLakePaimonCatalogTest extends SparkCatalogTest {
       )
     }
   }
-
 }
