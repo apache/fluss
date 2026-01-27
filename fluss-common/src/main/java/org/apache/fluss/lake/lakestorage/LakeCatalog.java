@@ -35,8 +35,6 @@ import java.util.List;
 @PublicEvolving
 public interface LakeCatalog extends AutoCloseable {
 
-    Integer CURRENT_LAKE_STORAGE_VERSION = 2;
-
     /**
      * Create a new table in lake.
      *

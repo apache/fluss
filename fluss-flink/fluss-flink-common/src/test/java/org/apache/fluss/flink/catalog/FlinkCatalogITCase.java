@@ -897,7 +897,6 @@ abstract class FlinkCatalogITCase {
             Map<String, String> actualOptions, Map<String, String> expectedOptions) {
         actualOptions.remove(ConfigOptions.BOOTSTRAP_SERVERS.key());
         actualOptions.remove(ConfigOptions.TABLE_REPLICATION_FACTOR.key());
-        actualOptions.remove(ConfigOptions.TABLE_DATALAKE_STORAGE_VERSION.key());
         assertThat(actualOptions).isEqualTo(expectedOptions);
     }
 }

@@ -67,10 +67,8 @@ import javax.annotation.Nullable;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 
 import static org.apache.fluss.client.table.scanner.batch.BatchScanUtils.collectRows;
@@ -105,9 +103,6 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                 DATA1_TABLE_DESCRIPTOR_PK
                         .withReplicationFactor(3)
                         .withDataLakeFormat(DataLakeFormat.PAIMON);
-        Map<String, String> expectedProperties = new HashMap<>(expected.getProperties());
-        expectedProperties.put(ConfigOptions.TABLE_DATALAKE_STORAGE_VERSION.key(), "2");
-        expected = expected.withProperties(expectedProperties);
         assertThat(tableInfo.toTableDescriptor()).isEqualTo(expected);
     }
 

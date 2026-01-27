@@ -307,41 +307,21 @@ public class FlinkTableSource
             flussRowType = flussRowType.project(projectedFields);
         }
         OffsetsInitializer offsetsInitializer;
-        boolean enableLakeSource = lakeSource != null;
+        boolean enableLakeSource = false;
         switch (startupOptions.startupMode) {
             case EARLIEST:
                 offsetsInitializer = OffsetsInitializer.earliest();
                 break;
             case LATEST:
                 offsetsInitializer = OffsetsInitializer.latest();
-                // since it's scan from latest, don't consider lake data
-                enableLakeSource = false;
                 break;
             case FULL:
                 offsetsInitializer = OffsetsInitializer.full();
+                enableLakeSource = lakeSource != null;
                 break;
             case TIMESTAMP:
                 offsetsInitializer =
                         OffsetsInitializer.timestamp(startupOptions.startupTimestampMs);
-                if (lakeSource != null) {
-                    if (!tableOptions.containsKey(
-                            ConfigOptions.TABLE_DATALAKE_STORAGE_VERSION.key())) {
-                        enableLakeSource = handleLegacyV1LakeTable();
-                    } else {
-                        int lakeStorageVersion =
-                                Integer.parseInt(
-                                        tableOptions.get(
-                                                ConfigOptions.TABLE_DATALAKE_STORAGE_VERSION
-                                                        .key()));
-                        if (lakeStorageVersion < 2) {
-                            throw new IllegalArgumentException(
-                                    "Unsupported lake storage version: " + lakeStorageVersion);
-                        } else {
-                            // todo: support map to partition in issue
-                            enableLakeSource = false;
-                        }
-                    }
-                }
                 break;
             default:
                 throw new IllegalArgumentException(

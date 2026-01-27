@@ -17,15 +17,16 @@
 
 package org.apache.fluss.flink;
 
+import org.apache.fluss.config.FlussConfigUtils;
+import org.apache.fluss.flink.sink.shuffle.DistributionMode;
+import org.apache.fluss.flink.utils.FlinkConversions;
+
 import org.apache.flink.configuration.ConfigOption;
 import org.apache.flink.configuration.ConfigOptions;
 import org.apache.flink.configuration.DescribedEnum;
 import org.apache.flink.configuration.description.InlineElement;
 import org.apache.flink.table.catalog.CatalogMaterializedTable;
 import org.apache.flink.table.catalog.IntervalFreshness;
-import org.apache.fluss.config.FlussConfigUtils;
-import org.apache.fluss.flink.sink.shuffle.DistributionMode;
-import org.apache.fluss.flink.utils.FlinkConversions;
 
 import java.time.Duration;
 import java.util.Arrays;

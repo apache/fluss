@@ -18,7 +18,6 @@
 package org.apache.fluss.lake.paimon.utils;
 
 import org.apache.fluss.annotation.VisibleForTesting;
-import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.InvalidConfigException;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.lake.paimon.source.FlussRowAsPaimonRow;
@@ -28,7 +27,6 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.ChangeType;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
-
 import org.apache.paimon.CoreOptions;
 import org.apache.paimon.catalog.Identifier;
 import org.apache.paimon.options.Options;
@@ -43,10 +41,8 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.Set;
 
-import static org.apache.fluss.config.ConfigOptions.TABLE_DATALAKE_STORAGE_VERSION;
 import static org.apache.fluss.lake.paimon.PaimonLakeCatalog.SYSTEM_COLUMNS;
 import static org.apache.fluss.metadata.TableDescriptor.TIMESTAMP_COLUMN_NAME;
 
@@ -220,17 +216,6 @@ public class PaimonConversions {
                     columnName,
                     column.getDataType().accept(FlussDataTypeToPaimonDataType.INSTANCE),
                     column.getComment().orElse(null));
-        }
-
-        // add system metadata columns to schema only for legacy tables (storage-version not set)
-        Optional<Integer> storageVersion =
-                Configuration.fromMap(tableDescriptor.getProperties())
-                        .getOptional(TABLE_DATALAKE_STORAGE_VERSION);
-        if (!storageVersion.isPresent()) {
-            // Legacy table: add system columns
-            for (Map.Entry<String, DataType> systemColumn : SYSTEM_COLUMNS.entrySet()) {
-                schemaBuilder.column(systemColumn.getKey(), systemColumn.getValue());
-            }
         }
 
         // set pk

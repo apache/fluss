@@ -419,12 +419,7 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
         String tableName = "legacy_table";
         TablePath t1 = TablePath.of(DEFAULT_DB, tableName);
         long tableId = createSimplePkTable(t1, 3, false, true);
-        adjustToLegacyV1Table(
-                t1,
-                tableId,
-                admin.getTableInfo(t1).get().toTableDescriptor(),
-                paimonCatalog,
-                FLUSS_CLUSTER_EXTENSION.getZooKeeperClient());
+        adjustToLegacyV1Table(t1, paimonCatalog);
 
         JobClient jobClient = buildTieringJob(execEnv);
         List<InternalRow> rows = new ArrayList<>();

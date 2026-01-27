@@ -404,8 +404,8 @@ class LakeEnabledTableCreateITCase {
                 .isInstanceOf(LakeTableAlreadyExistException.class)
                 .hasMessage(
                         "The table `fluss`.`log_table_with_exist_lake_table` already exists in Paimon catalog, but the table schema is not compatible. "
-                                + "Existing schema: UpdateSchema{fields=[`c1` STRING, `c2` INT], partitionKeys=[], primaryKeys=[], options={bucket=-1, fluss.table.replication.factor=1, fluss.table.datalake.enabled=true, fluss.table.datalake.format=paimon, partition.legacy-name=false, file.format=parquet, fluss.k1=v1, fluss.table.datalake.storage-version=2}, comment=null}, "
-                                + "new schema: UpdateSchema{fields=[`c1` STRING, `c2` INT], partitionKeys=[], primaryKeys=[], options={bucket=3, fluss.table.replication.factor=1, fluss.table.datalake.enabled=true, fluss.table.datalake.format=paimon, partition.legacy-name=false, bucket-key=c1,c2, file.format=parquet, fluss.k1=v1, fluss.table.datalake.storage-version=2}, comment=null}. "
+                                + "Existing schema: UpdateSchema{fields=[`c1` STRING, `c2` INT], partitionKeys=[], primaryKeys=[], options={bucket=-1, fluss.table.replication.factor=1, fluss.table.datalake.enabled=true, fluss.table.datalake.format=paimon, partition.legacy-name=false, file.format=parquet, fluss.k1=v1}, comment=null}, "
+                                + "new schema: UpdateSchema{fields=[`c1` STRING, `c2` INT], partitionKeys=[], primaryKeys=[], options={bucket=3, fluss.table.replication.factor=1, fluss.table.datalake.enabled=true, fluss.table.datalake.format=paimon, partition.legacy-name=false, bucket-key=c1,c2, file.format=parquet, fluss.k1=v1}, comment=null}. "
                                 + "Please first drop the table in Paimon catalog or use a new table name.");
 
         // create log table with different fields will throw exception
@@ -423,8 +423,8 @@ class LakeEnabledTableCreateITCase {
                 .isInstanceOf(LakeTableAlreadyExistException.class)
                 .hasMessage(
                         "The table `fluss`.`log_table_with_exist_lake_table` already exists in Paimon catalog, but the table schema is not compatible. "
-                                + "Existing schema: UpdateSchema{fields=[`c1` STRING, `c2` INT], partitionKeys=[], primaryKeys=[], options={bucket=-1, fluss.table.replication.factor=1, fluss.table.datalake.enabled=true, fluss.table.datalake.format=paimon, partition.legacy-name=false, file.format=parquet, fluss.k1=v1, fluss.table.datalake.storage-version=2}, comment=null}, "
-                                + "new schema: UpdateSchema{fields=[`c1` STRING, `c2` INT, `c3` STRING], partitionKeys=[], primaryKeys=[], options={bucket=-1, fluss.table.replication.factor=1, fluss.table.datalake.enabled=true, fluss.table.datalake.format=paimon, partition.legacy-name=false, file.format=parquet, fluss.k1=v1, fluss.table.datalake.storage-version=2}, comment=null}. "
+                                + "Existing schema: UpdateSchema{fields=[`c1` STRING, `c2` INT], partitionKeys=[], primaryKeys=[], options={bucket=-1, fluss.table.replication.factor=1, fluss.table.datalake.enabled=true, fluss.table.datalake.format=paimon, partition.legacy-name=false, file.format=parquet, fluss.k1=v1}, comment=null}, "
+                                + "new schema: UpdateSchema{fields=[`c1` STRING, `c2` INT, `c3` STRING], partitionKeys=[], primaryKeys=[], options={bucket=-1, fluss.table.replication.factor=1, fluss.table.datalake.enabled=true, fluss.table.datalake.format=paimon, partition.legacy-name=false, file.format=parquet, fluss.k1=v1}, comment=null}. "
                                 + "Please first drop the table in Paimon catalog or use a new table name.");
 
         // add an insignificant option to Paimon table will be ok
@@ -837,12 +837,7 @@ class LakeEnabledTableCreateITCase {
         long tableId = tableInfo.getTableId();
 
         // alter to TIMESTAMP_WITH_LOCAL_TIME_ZONE to mock the legacy behavior
-        adjustToLegacyV1Table(
-                tablePath,
-                tableId,
-                tableInfo.toTableDescriptor(),
-                paimonCatalog,
-                FLUSS_CLUSTER_EXTENSION.getZooKeeperClient());
+        adjustToLegacyV1Table(tablePath, paimonCatalog);
 
         // disable data lake
         admin.alterTable(
