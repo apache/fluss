@@ -38,11 +38,9 @@ import static org.apache.fluss.metrics.registry.MetricRegistry.LOG;
 public class LakeTableHelper {
 
     private final ZooKeeperClient zkClient;
-    private final String remoteDataDir;
 
-    public LakeTableHelper(ZooKeeperClient zkClient, String remoteDataDir) {
+    public LakeTableHelper(ZooKeeperClient zkClient) {
         this.zkClient = zkClient;
-        this.remoteDataDir = remoteDataDir;
     }
 
     /**
@@ -109,7 +107,8 @@ public class LakeTableHelper {
     }
 
     public FsPath storeLakeTableOffsetsFile(
-            TablePath tablePath, TableBucketOffsets tableBucketOffsets) throws Exception {
+            String remoteDataDir, TablePath tablePath, TableBucketOffsets tableBucketOffsets)
+            throws Exception {
         // get the remote file path to store the lake table snapshot offset information
         long tableId = tableBucketOffsets.getTableId();
         FsPath remoteLakeTableSnapshotOffsetPath =

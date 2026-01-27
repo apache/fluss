@@ -241,8 +241,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
         this.internalListenerName = conf.getString(ConfigOptions.INTERNAL_LISTENER_NAME);
         this.rebalanceManager = new RebalanceManager(this, zooKeeperClient);
         this.ioExecutor = ioExecutor;
-        this.lakeTableHelper =
-                new LakeTableHelper(zooKeeperClient, conf.getString(ConfigOptions.REMOTE_DATA_DIR));
+        this.lakeTableHelper = new LakeTableHelper(zooKeeperClient);
     }
 
     public CoordinatorEventManager getCoordinatorEventManager() {
