@@ -124,6 +124,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                     .comment("test table")
                     .distributedBy(3, "id")
                     .property(ConfigOptions.TABLE_LOG_TTL, Duration.ofDays(1))
+                    .property(ConfigOptions.TABLE_DATALAKE_STORAGE_VERSION, 2)
                     .customProperty("connector", "fluss")
                     .build();
 
@@ -774,6 +775,14 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         try (Connection conn = ConnectionFactory.createConnection(clientConf);
                 Admin admin = conn.getAdmin()) {
             TableInfo tableInfo = admin.getTableInfo(DEFAULT_TABLE_PATH).get();
+            TableDescriptor expectedDescriptor =
+                    DEFAULT_TABLE_DESCRIPTOR.withReplicationFactor(3).withDataLakeFormat(PAIMON);
+            Map<String, String> expectedProperties =
+                    new HashMap<>(expectedDescriptor.getProperties());
+            expectedProperties.put(ConfigOptions.TABLE_DATALAKE_STORAGE_VERSION.key(), "2");
+            expectedDescriptor = expectedDescriptor.withProperties(expectedProperties);
+
+            assertThat(tableInfo.toTableDescriptor()).isEqualTo(expectedDescriptor);
             assertThat(tableInfo.toTableDescriptor())
                     .isEqualTo(
                             DEFAULT_TABLE_DESCRIPTOR

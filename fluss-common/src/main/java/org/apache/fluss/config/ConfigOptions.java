@@ -1436,6 +1436,14 @@ public class ConfigOptions {
                     .withDescription(
                             "If true, snapshot expiration will be triggered automatically when tiering service commits to the datalake. It is disabled by default.");
 
+    public static final ConfigOption<Integer> TABLE_DATALAKE_STORAGE_VERSION =
+            key("table.datalake.storage-version")
+                    .intType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The storage version of the datalake table. This option is automatically set by Fluss server "
+                                    + "and cannot be set by clients. Version 2 indicates a clean schema without system columns in datalake.");
+
     public static final ConfigOption<MergeEngineType> TABLE_MERGE_ENGINE =
             key("table.merge-engine")
                     .enumType(MergeEngineType.class)

@@ -106,6 +106,11 @@ public class TableConfig {
         return config.get(ConfigOptions.TABLE_DATALAKE_AUTO_EXPIRE_SNAPSHOT);
     }
 
+    /** Gets the data lake storage version of the table. Returns empty if not set (legacy table). */
+    public Optional<Integer> getDataLakeStorageVersion() {
+        return config.getOptional(ConfigOptions.TABLE_DATALAKE_STORAGE_VERSION);
+    }
+
     /** Gets the optional merge engine type of the table. */
     public Optional<MergeEngineType> getMergeEngineType() {
         return config.getOptional(ConfigOptions.TABLE_MERGE_ENGINE);

@@ -49,9 +49,11 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 
+import static org.apache.fluss.config.ConfigOptions.TABLE_DATALAKE_STORAGE_VERSION;
 import static org.apache.fluss.config.FlussConfigUtils.TABLE_OPTIONS;
 import static org.apache.fluss.config.FlussConfigUtils.isAlterableTableOption;
 import static org.apache.fluss.config.FlussConfigUtils.isTableStorageConfig;
+import static org.apache.fluss.lake.lakestorage.LakeCatalog.CURRENT_LAKE_STORAGE_VERSION;
 import static org.apache.fluss.metadata.TableDescriptor.BUCKET_COLUMN_NAME;
 import static org.apache.fluss.metadata.TableDescriptor.CHANGE_TYPE_COLUMN;
 import static org.apache.fluss.metadata.TableDescriptor.COMMIT_TIMESTAMP_COLUMN;
@@ -117,6 +119,7 @@ public class TableDescriptorValidation {
         checkTieredLog(tableConf);
         checkPartition(tableConf, tableDescriptor.getPartitionKeys(), schema.getRowType());
         checkSystemColumns(schema.getRowType());
+        checkLakeStorageVersion(tableConf);
     }
 
     public static void validateAlterTableProperties(
@@ -458,6 +461,18 @@ public class TableDescriptorValidation {
                     String.format(
                             "Invalid value for config '%s'. Reason: %s",
                             option.key(), t.getMessage()));
+        }
+    }
+
+    private static void checkLakeStorageVersion(Configuration tableConf) {
+        Optional<Integer> optDataLakeStorageVersion =
+                tableConf.getOptional(TABLE_DATALAKE_STORAGE_VERSION);
+        if (optDataLakeStorageVersion.isPresent()
+                && !optDataLakeStorageVersion.get().equals(CURRENT_LAKE_STORAGE_VERSION)) {
+            throw new IllegalArgumentException(
+                    String.format(
+                            "The option '%s' cannot be set to %d. It is automatically set by Fluss server.",
+                            TABLE_DATALAKE_STORAGE_VERSION.key(), optDataLakeStorageVersion.get()));
         }
     }
 }

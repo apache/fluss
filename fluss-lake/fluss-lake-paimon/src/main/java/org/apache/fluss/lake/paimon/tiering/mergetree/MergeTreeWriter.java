@@ -49,13 +49,15 @@ public class MergeTreeWriter extends RecordWriter<KeyValue> {
             FileStoreTable fileStoreTable,
             TableBucket tableBucket,
             @Nullable String partition,
-            List<String> partitionKeys) {
+            List<String> partitionKeys,
+            boolean paimonIncludingSystemColumns) {
         super(
                 createTableWrite(fileStoreTable),
                 fileStoreTable.rowType(),
                 tableBucket,
                 partition,
-                partitionKeys);
+                partitionKeys,
+                paimonIncludingSystemColumns);
         this.rowKeyExtractor = fileStoreTable.createRowKeyExtractor();
     }
 

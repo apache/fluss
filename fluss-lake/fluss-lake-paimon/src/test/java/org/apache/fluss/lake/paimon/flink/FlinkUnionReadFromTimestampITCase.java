@@ -23,6 +23,7 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.MemorySize;
 import org.apache.fluss.lake.paimon.testutils.FlinkPaimonTieringTestBase;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.server.replica.Replica;
@@ -47,6 +48,7 @@ import java.util.stream.Collectors;
 import static org.apache.flink.core.testutils.CommonTestUtils.waitUtil;
 import static org.apache.fluss.flink.FlinkConnectorOptions.BOOTSTRAP_SERVERS;
 import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.assertRowResultsIgnoreOrder;
+import static org.apache.fluss.lake.paimon.testutils.PaimonTestUtils.adjustToLegacyV1Table;
 import static org.apache.fluss.testutils.DataTestUtils.row;
 
 /** The ITCase for Flink union read from a timestamp. */
@@ -89,15 +91,24 @@ class FlinkUnionReadFromTimestampITCase extends FlinkPaimonTieringTestBase {
     }
 
     @Test
-    void testUnionReadFromTimestamp() throws Exception {
+    void testUnionReadFromTimestampWithLegacyVersion() throws Exception {
         // first of all, start tiering
-        JobClient jobClient = buildTieringJob(execEnv);
-        try {
-            String tableName = "logTable_read_timestamp";
-            TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
-            long tableId = createLogTable(tablePath, 1);
-            TableBucket t1Bucket = new TableBucket(tableId, 0);
+        String tableName = "logTable_read_timestamp";
+        TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
+        long tableId = createLogTable(tablePath, 1);
+        TableInfo tableInfo = admin.getTableInfo(tablePath).get();
 
+        // adjust to legacy version to verify the legacy version
+        adjustToLegacyV1Table(
+                tablePath,
+                tableId,
+                tableInfo.toTableDescriptor(),
+                paimonCatalog,
+                FLUSS_CLUSTER_EXTENSION.getZooKeeperClient());
+
+        JobClient jobClient = buildTieringJob(execEnv);
+        TableBucket t1Bucket = new TableBucket(tableId, 0);
+        try {
             List<Row> rows = new ArrayList<>();
             for (int i = 0; i < 10; i++) {
                 rows.addAll(writeRows(tablePath, 3));
