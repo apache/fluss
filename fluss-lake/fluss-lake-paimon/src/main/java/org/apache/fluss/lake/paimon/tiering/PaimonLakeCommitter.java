@@ -18,9 +18,12 @@
 package org.apache.fluss.lake.paimon.tiering;
 
 import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.config.Configuration;
 import org.apache.fluss.lake.committer.CommittedLakeSnapshot;
 import org.apache.fluss.lake.committer.CommitterInitContext;
+import org.apache.fluss.lake.committer.LakeCommitResult;
 import org.apache.fluss.lake.committer.LakeCommitter;
+import org.apache.fluss.lake.paimon.utils.DvTableReadableSnapshotRetriever;
 import org.apache.fluss.metadata.TablePath;
 
 import org.apache.paimon.CoreOptions;
@@ -34,6 +37,8 @@ import org.apache.paimon.table.FileStoreTable;
 import org.apache.paimon.table.sink.CommitCallback;
 import org.apache.paimon.table.sink.TableCommitImpl;
 import org.apache.paimon.utils.SnapshotManager;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
 
@@ -50,8 +55,13 @@ import static org.apache.paimon.table.sink.BatchWriteBuilder.COMMIT_IDENTIFIER;
 /** Implementation of {@link LakeCommitter} for Paimon. */
 public class PaimonLakeCommitter implements LakeCommitter<PaimonWriteResult, PaimonCommittable> {
 
+    private static final Logger LOG = LoggerFactory.getLogger(PaimonLakeCommitter.class);
+
     private final Catalog paimonCatalog;
     private final FileStoreTable fileStoreTable;
+    private final TablePath tablePath;
+    private final long tableId;
+    private final Configuration flussConfig;
     private TableCommitImpl tableCommit;
 
     private static final ThreadLocal<Long> currentCommitSnapshotId = new ThreadLocal<>();
@@ -60,6 +70,9 @@ public class PaimonLakeCommitter implements LakeCommitter<PaimonWriteResult, Pai
             PaimonCatalogProvider paimonCatalogProvider, CommitterInitContext committerInitContext)
             throws IOException {
         this.paimonCatalog = paimonCatalogProvider.get();
+        this.tablePath = committerInitContext.tablePath();
+        this.tableId = committerInitContext.tableInfo().getTableId();
+        this.flussConfig = committerInitContext.flussConfig();
         this.fileStoreTable =
                 getTable(
                         committerInitContext.tablePath(),
@@ -83,7 +96,8 @@ public class PaimonLakeCommitter implements LakeCommitter<PaimonWriteResult, Pai
     }
 
     @Override
-    public long commit(PaimonCommittable committable, Map<String, String> snapshotProperties)
+    public LakeCommitResult commit(
+            PaimonCommittable committable, Map<String, String> snapshotProperties)
             throws IOException {
         ManifestCommittable manifestCommittable = committable.manifestCommittable();
         snapshotProperties.forEach(manifestCommittable::addProperty);
@@ -92,10 +106,44 @@ public class PaimonLakeCommitter implements LakeCommitter<PaimonWriteResult, Pai
             tableCommit = fileStoreTable.newCommit(FLUSS_LAKE_TIERING_COMMIT_USER);
             tableCommit.commit(manifestCommittable);
 
-            Long commitSnapshotId = currentCommitSnapshotId.get();
+            long committedSnapshotId =
+                    checkNotNull(
+                            currentCommitSnapshotId.get(),
+                            "Paimon committed snapshot id must be non-null.");
             currentCommitSnapshotId.remove();
 
-            return checkNotNull(commitSnapshotId, "Paimon committed snapshot id must be non-null.");
+            // deletion vector is disabled, committed snapshot is readable
+            if (!fileStoreTable.coreOptions().deletionVectorsEnabled()) {
+                return LakeCommitResult.committedIsReadable(committedSnapshotId);
+            } else {
+                // retrive the readable snapshot during commit
+                try (DvTableReadableSnapshotRetriever retriever =
+                        new DvTableReadableSnapshotRetriever(
+                                tablePath, tableId, fileStoreTable, flussConfig)) {
+                    DvTableReadableSnapshotRetriever.ReadableSnapshotResult readableSnapshotResult =
+                            retriever.getReadableSnapshotAndOffsets(committedSnapshotId);
+                    if (readableSnapshotResult == null) {
+                        return LakeCommitResult.unknownReadableSnapshot(committedSnapshotId);
+                    } else {
+                        long earliestSnapshotIdToKeep =
+                                readableSnapshotResult.getEarliestSnapshotIdToKeep();
+                        if (earliestSnapshotIdToKeep >= 0) {
+                            LOG.info(
+                                    "earliest snapshot ID to keep for table {} is {}. "
+                                            + "Snapshots before this ID can be safely deleted from Fluss.",
+                                    tablePath,
+                                    earliestSnapshotIdToKeep);
+                        }
+                        return LakeCommitResult.withReadableSnapshot(
+                                committedSnapshotId,
+                                readableSnapshotResult.getReadableSnapshotId(),
+                                readableSnapshotResult.getTieredOffsets(),
+                                readableSnapshotResult.getReadableOffsets(),
+                                earliestSnapshotIdToKeep);
+                    }
+                }
+            }
+
         } catch (Throwable t) {
             if (tableCommit != null) {
                 // if any error happen while commit, abort the commit to clean committable

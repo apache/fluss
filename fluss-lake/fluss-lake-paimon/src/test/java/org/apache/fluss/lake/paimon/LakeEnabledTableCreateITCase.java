@@ -994,6 +994,29 @@ class LakeEnabledTableCreateITCase {
                 .isTrue();
     }
 
+    @Test
+    void testCreatePaimonDvTableWithNonStringPartitionColumn() throws Exception {
+        TablePath tablePath = TablePath.of(DATABASE, "invalid_dv_table");
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("c1", DataTypes.INT())
+                                        .column("c2", DataTypes.STRING())
+                                        .column("c3", DataTypes.INT())
+                                        .primaryKey("c1", "c3")
+                                        .build())
+                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
+                        .property("paimon.deletion-vectors.enabled", "true")
+                        .partitionedBy("c3")
+                        .build();
+
+        assertThatThrownBy(() -> admin.createTable(tablePath, tableDescriptor, false).get())
+                .rootCause()
+                .hasMessageContaining(
+                        "Only support String type as partitioned key when 'deletion-vectors.enabled' is set to true for paimon, found 'c3' is not String type.");
+    }
+
     private void verifyPaimonTable(
             Table paimonTable,
             TableDescriptor flussTable,
