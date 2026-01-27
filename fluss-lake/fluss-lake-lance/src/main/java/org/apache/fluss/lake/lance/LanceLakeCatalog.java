@@ -21,6 +21,7 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.lake.lakestorage.LakeCatalog;
+import org.apache.fluss.lake.lakestorage.LakeSnapshotInfo;
 import org.apache.fluss.lake.lance.utils.LanceArrowUtils;
 import org.apache.fluss.lake.lance.utils.LanceDatasetAdapter;
 import org.apache.fluss.metadata.TableChange;
@@ -33,6 +34,7 @@ import org.apache.arrow.vector.types.pojo.Schema;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 
 /** A Lance implementation of {@link LakeCatalog}. */
 public class LanceLakeCatalog implements LakeCatalog {
@@ -75,6 +77,11 @@ public class LanceLakeCatalog implements LakeCatalog {
             throws TableNotExistException {
         throw new UnsupportedOperationException(
                 "Alter table is not supported for Lance at the moment");
+    }
+
+    @Override
+    public Optional<LakeSnapshotInfo> getLatestSnapshotInfo(TablePath tablePath, Context context) {
+        return Optional.of(LakeSnapshotInfo.EMPTY);
     }
 
     @Override

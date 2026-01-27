@@ -493,24 +493,6 @@ class PaimonTieringITCase extends FlinkPaimonTieringTestBase {
                 partitionedTableDescriptor);
     }
 
-    private void checkDataInPaimonAppendOnlyTable(
-            TablePath tablePath, List<InternalRow> expectedRows, long startingOffset)
-            throws Exception {
-        Iterator<org.apache.paimon.data.InternalRow> paimonRowIterator =
-                getPaimonRowCloseableIterator(tablePath);
-        Iterator<InternalRow> flussRowIterator = expectedRows.iterator();
-        while (paimonRowIterator.hasNext()) {
-            org.apache.paimon.data.InternalRow row = paimonRowIterator.next();
-            InternalRow flussRow = flussRowIterator.next();
-            assertThat(row.getInt(0)).isEqualTo(flussRow.getInt(0));
-            assertThat(row.getString(1).toString()).isEqualTo(flussRow.getString(1).toString());
-            // system columns are always the last three: __bucket, __offset, __timestamp
-            int offsetIndex = row.getFieldCount() - 2;
-            assertThat(row.getLong(offsetIndex)).isEqualTo(startingOffset++);
-        }
-        assertThat(flussRowIterator.hasNext()).isFalse();
-    }
-
     private void checkDataInPaimonAppendOnlyPartitionedTable(
             TablePath tablePath,
             Map<String, String> partitionSpec,

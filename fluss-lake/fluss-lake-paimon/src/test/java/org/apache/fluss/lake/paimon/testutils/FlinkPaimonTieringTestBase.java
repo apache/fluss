@@ -72,6 +72,7 @@ import java.util.Set;
 
 import static org.apache.fluss.flink.tiering.source.TieringSourceOptions.POLL_TIERING_TABLE_INTERVAL;
 import static org.apache.fluss.lake.committer.LakeCommitter.FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY;
+import static org.apache.fluss.server.utils.LakeStorageUtils.extractLakeProperties;
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.apache.fluss.testutils.common.CommonTestUtils.waitUntil;
@@ -106,6 +107,10 @@ public abstract class FlinkPaimonTieringTestBase {
             throw new FlussRuntimeException("Failed to create warehouse path");
         }
         conf.setString("datalake.paimon.warehouse", warehousePath);
+        conf.setString("datalake.paimon.cache-enabled", "false");
+        paimonCatalog =
+                CatalogFactory.createCatalog(
+                        CatalogContext.create(Options.fromMap(extractLakeProperties(conf))));
         return conf;
     }
 
@@ -113,7 +118,6 @@ public abstract class FlinkPaimonTieringTestBase {
         clientConf = conf;
         conn = ConnectionFactory.createConnection(clientConf);
         admin = conn.getAdmin();
-        paimonCatalog = getPaimonCatalog();
     }
 
     @BeforeEach
@@ -459,12 +463,28 @@ public abstract class FlinkPaimonTieringTestBase {
         }
     }
 
+    protected void checkDataInPaimonAppendOnlyTable(
+            TablePath tablePath, List<InternalRow> expectedRows, long startingOffset)
+            throws Exception {
+        Iterator<org.apache.paimon.data.InternalRow> paimonRowIterator =
+                getPaimonRowCloseableIterator(tablePath);
+        Iterator<InternalRow> flussRowIterator = expectedRows.iterator();
+        while (paimonRowIterator.hasNext()) {
+            org.apache.paimon.data.InternalRow row = paimonRowIterator.next();
+            InternalRow flussRow = flussRowIterator.next();
+            assertThat(row.getInt(0)).isEqualTo(flussRow.getInt(0));
+            assertThat(row.getString(1).toString()).isEqualTo(flussRow.getString(1).toString());
+            // system columns are always the last three: __bucket, __offset, __timestamp
+            int offsetIndex = row.getFieldCount() - 2;
+            assertThat(row.getLong(offsetIndex)).isEqualTo(startingOffset++);
+        }
+        assertThat(flussRowIterator.hasNext()).isFalse();
+    }
+
     protected CloseableIterator<org.apache.paimon.data.InternalRow> getPaimonRowCloseableIterator(
             TablePath tablePath) throws Exception {
         Identifier tableIdentifier =
                 Identifier.create(tablePath.getDatabaseName(), tablePath.getTableName());
-
-        paimonCatalog = getPaimonCatalog();
 
         FileStoreTable table = (FileStoreTable) paimonCatalog.getTable(tableIdentifier);
 

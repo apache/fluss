@@ -21,11 +21,13 @@ package org.apache.fluss.lake.values;
 import org.apache.fluss.exception.TableAlreadyExistException;
 import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.lake.lakestorage.LakeCatalog;
+import org.apache.fluss.lake.lakestorage.LakeSnapshotInfo;
 import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
 
 import java.util.List;
+import java.util.Optional;
 
 /** Implementation of {@link LakeCatalog} for values lake. */
 public class TestingValuesLakeCatalog implements LakeCatalog {
@@ -39,5 +41,10 @@ public class TestingValuesLakeCatalog implements LakeCatalog {
     public void alterTable(TablePath tablePath, List<TableChange> tableChanges, Context context)
             throws TableNotExistException {
         throw new RuntimeException("Not impl.");
+    }
+
+    @Override
+    public Optional<LakeSnapshotInfo> getLatestSnapshotInfo(TablePath tablePath, Context context) {
+        return Optional.empty();
     }
 }

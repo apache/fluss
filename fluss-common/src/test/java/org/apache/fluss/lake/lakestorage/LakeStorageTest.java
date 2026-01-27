@@ -34,6 +34,7 @@ import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -153,5 +154,11 @@ class LakeStorageTest {
         @Override
         public void alterTable(TablePath tablePath, List<TableChange> tableChanges, Context context)
                 throws TableNotExistException {}
+
+        @Override
+        public Optional<LakeSnapshotInfo> getLatestSnapshotInfo(
+                TablePath tablePath, Context context) {
+            return Optional.empty();
+        }
     }
 }
