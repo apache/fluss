@@ -309,6 +309,50 @@ class PartitionUtilsTest {
         assertThat(toStringResult).isEqualTo("2025-05-31-03-42-35_428099988");
         String detectInvalid = detectInvalidName(toStringResult);
         assertThat(detectInvalid).isEqualTo(null);
+
+        // Zero nanos of millis
+        millis = 1748662955428L;
+        nanos = 0;
+        timeStampNTZValue = TimestampNtz.fromMillis(millis, nanos);
+        type = DataTypeRoot.TIMESTAMP_WITHOUT_TIME_ZONE;
+
+        toStringResult = convertValueOfType(timeStampNTZValue, type);
+        assertThat(toStringResult).isEqualTo("2025-05-31-03-42-35_428");
+        detectInvalid = detectInvalidName(toStringResult);
+        assertThat(detectInvalid).isEqualTo(null);
+
+        // Zero millis
+        millis = 1748662955000L;
+        nanos = 99988;
+        timeStampNTZValue = TimestampNtz.fromMillis(millis, nanos);
+        type = DataTypeRoot.TIMESTAMP_WITHOUT_TIME_ZONE;
+
+        toStringResult = convertValueOfType(timeStampNTZValue, type);
+        assertThat(toStringResult).isEqualTo("2025-05-31-03-42-35_000099988");
+        detectInvalid = detectInvalidName(toStringResult);
+        assertThat(detectInvalid).isEqualTo(null);
+
+        // Zero nanos and zero millis
+        millis = 1748662955000L;
+        nanos = 0;
+        timeStampNTZValue = TimestampNtz.fromMillis(millis, nanos);
+        type = DataTypeRoot.TIMESTAMP_WITHOUT_TIME_ZONE;
+
+        toStringResult = convertValueOfType(timeStampNTZValue, type);
+        assertThat(toStringResult).isEqualTo("2025-05-31-03-42-35_");
+        detectInvalid = detectInvalidName(toStringResult);
+        assertThat(detectInvalid).isEqualTo(null);
+
+        // Negative millis
+        millis = -1748662955428L;
+        nanos = 99988;
+        timeStampNTZValue = TimestampNtz.fromMillis(millis, nanos);
+        type = DataTypeRoot.TIMESTAMP_WITHOUT_TIME_ZONE;
+
+        toStringResult = convertValueOfType(timeStampNTZValue, type);
+        assertThat(toStringResult).isEqualTo("1914-08-03-20-17-24_572099988");
+        detectInvalid = detectInvalidName(toStringResult);
+        assertThat(detectInvalid).isEqualTo(null);
     }
 
     @Test
@@ -321,6 +365,50 @@ class PartitionUtilsTest {
         String toStringResult = convertValueOfType(timestampLTZ, type);
         assertThat(toStringResult).isEqualTo("2025-05-31-03-42-35_428099988");
         String detectInvalid = detectInvalidName(toStringResult);
+        assertThat(detectInvalid).isEqualTo(null);
+
+        // Zero nanos
+        millis = 1748662955428L;
+        nanos = 0;
+        timestampLTZ = TimestampLtz.fromEpochMillis(millis, nanos);
+        type = DataTypeRoot.TIMESTAMP_WITH_LOCAL_TIME_ZONE;
+
+        toStringResult = convertValueOfType(timestampLTZ, type);
+        assertThat(toStringResult).isEqualTo("2025-05-31-03-42-35_428");
+        detectInvalid = detectInvalidName(toStringResult);
+        assertThat(detectInvalid).isEqualTo(null);
+
+        // Zero millis
+        millis = 1748662955000L;
+        nanos = 99988;
+        timestampLTZ = TimestampLtz.fromEpochMillis(millis, nanos);
+        type = DataTypeRoot.TIMESTAMP_WITH_LOCAL_TIME_ZONE;
+
+        toStringResult = convertValueOfType(timestampLTZ, type);
+        assertThat(toStringResult).isEqualTo("2025-05-31-03-42-35_000099988");
+        detectInvalid = detectInvalidName(toStringResult);
+        assertThat(detectInvalid).isEqualTo(null);
+
+        // Zero nanos and zero millis
+        millis = 1748662955000L;
+        nanos = 0;
+        timestampLTZ = TimestampLtz.fromEpochMillis(millis, nanos);
+        type = DataTypeRoot.TIMESTAMP_WITH_LOCAL_TIME_ZONE;
+
+        toStringResult = convertValueOfType(timestampLTZ, type);
+        assertThat(toStringResult).isEqualTo("2025-05-31-03-42-35_");
+        detectInvalid = detectInvalidName(toStringResult);
+        assertThat(detectInvalid).isEqualTo(null);
+
+        // Negative millis
+        millis = -1748662955428L;
+        nanos = 99988;
+        timestampLTZ = TimestampLtz.fromEpochMillis(millis, nanos);
+        type = DataTypeRoot.TIMESTAMP_WITH_LOCAL_TIME_ZONE;
+
+        toStringResult = convertValueOfType(timestampLTZ, type);
+        assertThat(toStringResult).isEqualTo("1914-08-03-20-17-24_572099988");
+        detectInvalid = detectInvalidName(toStringResult);
         assertThat(detectInvalid).isEqualTo(null);
     }
 
