@@ -89,7 +89,7 @@ public class TieringTestBase extends AbstractTestBase {
                     .schema(DEFAULT_PK_TABLE_SCHEMA)
                     .distributedBy(DEFAULT_BUCKET_NUM, "id")
                     .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
-                    .property(ConfigOptions.TABLE_DATALAKE_FRESHNESS, Duration.ofMillis(200))
+                    .property(ConfigOptions.TABLE_DATALAKE_FRESHNESS, Duration.ofMillis(10))
                     .build();
 
     protected static final TableDescriptor DEFAULT_LOG_TABLE_DESCRIPTOR =
@@ -98,7 +98,7 @@ public class TieringTestBase extends AbstractTestBase {
                     .distributedBy(DEFAULT_BUCKET_NUM, "id")
                     .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
                     .property(ConfigOptions.TABLE_DATALAKE_FORMAT, DataLakeFormat.PAIMON)
-                    .property(ConfigOptions.TABLE_DATALAKE_FRESHNESS, Duration.ofMillis(200))
+                    .property(ConfigOptions.TABLE_DATALAKE_FRESHNESS, Duration.ofMillis(10))
                     .build();
 
     protected static final TableDescriptor DEFAULT_AUTO_PARTITIONED_LOG_TABLE_DESCRIPTOR =
@@ -117,7 +117,7 @@ public class TieringTestBase extends AbstractTestBase {
                             AutoPartitionTimeUnit.YEAR)
                     .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
                     .property(ConfigOptions.TABLE_DATALAKE_FORMAT, DataLakeFormat.PAIMON)
-                    .property(ConfigOptions.TABLE_DATALAKE_FRESHNESS, Duration.ofMillis(500))
+                    .property(ConfigOptions.TABLE_DATALAKE_FRESHNESS, Duration.ofMillis(10))
                     .build();
 
     protected static final TableDescriptor DEFAULT_AUTO_PARTITIONED_PK_TABLE_DESCRIPTOR =
@@ -137,7 +137,7 @@ public class TieringTestBase extends AbstractTestBase {
                             AutoPartitionTimeUnit.YEAR)
                     .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
                     .property(ConfigOptions.TABLE_DATALAKE_FORMAT, DataLakeFormat.PAIMON)
-                    .property(ConfigOptions.TABLE_DATALAKE_FRESHNESS, Duration.ofMillis(500))
+                    .property(ConfigOptions.TABLE_DATALAKE_FRESHNESS, Duration.ofMillis(10))
                     .build();
 
     protected static final String DEFAULT_DB = "test-tiering-db";
