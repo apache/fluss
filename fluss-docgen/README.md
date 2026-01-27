@@ -10,7 +10,7 @@ The `ConfigOptionsDocGenerator` scans the `ConfigOptions` class and generates an
 1. It uses reflection to find all `ConfigOption` fields in the `ConfigOptions` class.
 2. It groups options into sections based on the `@ConfigSection` annotation or key prefixes.
 3. It handles special default value formatting via `@ConfigOverrideDefault`.
-4. It outputs an MDX file (`_partial_config.mdx`) using React-compatible HTML table syntax.
+4. It outputs an MDX file (config_reference.mdx) using React-compatible HTML table syntax.
 
 ### Running the Generator
 
