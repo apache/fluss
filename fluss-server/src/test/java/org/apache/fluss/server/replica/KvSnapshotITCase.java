@@ -31,6 +31,7 @@ import org.apache.fluss.server.kv.snapshot.KvSnapshotManager;
 import org.apache.fluss.server.kv.snapshot.ZooKeeperCompletedSnapshotHandleStore;
 import org.apache.fluss.server.tablet.TabletServer;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
+import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.types.Tuple2;
 
@@ -41,6 +42,7 @@ import org.junit.jupiter.api.extension.RegisterExtension;
 import java.io.File;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -433,6 +435,187 @@ class KvSnapshotITCase {
 
         // verify standby snapshot size is updated
         assertThat(standbySnapshotManager.getStandbySnapshotSize()).isGreaterThan(0);
+    }
+
+    @Test
+    void testStandbyDemotionAndReStandby() throws Exception {
+        TablePath tablePath = TablePath.of("test_db", "test_table_standby_demotion");
+        long tableId = createTable(FLUSS_CLUSTER_EXTENSION, tablePath, DATA1_TABLE_DESCRIPTOR_PK);
+        TableBucket tb0 = new TableBucket(tableId, 0);
+
+        FLUSS_CLUSTER_EXTENSION.waitAndGetLeaderReplica(tb0);
+        int leaderServer = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(tb0);
+
+        // put some data and wait for snapshot
+        KvRecordBatch kvRecordBatch =
+                genKvRecordBatch(
+                        Tuple2.of("k1", new Object[] {1, "k1"}),
+                        Tuple2.of("k2", new Object[] {2, "k2"}));
+        PutKvRequest putKvRequest = newPutKvRequest(tableId, 0, -1, kvRecordBatch);
+        TabletServerGateway leaderGateway =
+                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leaderServer);
+        leaderGateway.putKv(putKvRequest).get();
+
+        // wait for snapshot
+        waitValue(
+                () -> completedSnapshotHandleStore.get(tb0, 0),
+                Duration.ofMinutes(2),
+                "Fail to wait for snapshot 0");
+
+        // verify standby replica has downloaded snapshot
+        int standbyServer = FLUSS_CLUSTER_EXTENSION.waitAndGetStandby(tb0);
+        TabletServer standbyTs = FLUSS_CLUSTER_EXTENSION.getTabletServerById(standbyServer);
+        Replica standbyReplica = standbyTs.getReplicaManager().getReplicaOrException(tb0);
+        assertThat(standbyReplica.isStandby()).isTrue();
+
+        KvSnapshotManager standbySnapshotManager = standbyReplica.getKvSnapshotManager();
+        retry(
+                Duration.ofMinutes(1),
+                () -> assertThat(standbySnapshotManager.getDownloadedSstFiles()).isNotEmpty());
+
+        // get current leader and isr
+        LeaderAndIsr leaderAndIsr = FLUSS_CLUSTER_EXTENSION.waitLeaderAndIsrReady(tb0);
+        List<Integer> replicas = new ArrayList<>(leaderAndIsr.isr());
+
+        // demote standby to regular follower by sending notifyLeaderAndIsr without standby
+        LeaderAndIsr newLeaderAndIsr =
+                new LeaderAndIsr(
+                        leaderAndIsr.leader(),
+                        leaderAndIsr.leaderEpoch() + 1,
+                        leaderAndIsr.isr(),
+                        Collections.emptyList(), // no standby replicas
+                        leaderAndIsr.coordinatorEpoch(),
+                        leaderAndIsr.bucketEpoch());
+
+        FLUSS_CLUSTER_EXTENSION.notifyLeaderAndIsr(
+                standbyServer, tablePath, tb0, newLeaderAndIsr, replicas);
+
+        // verify the replica is no longer standby
+        retry(
+                Duration.ofMinutes(1),
+                () -> {
+                    Replica replica = standbyTs.getReplicaManager().getReplicaOrException(tb0);
+                    assertThat(replica.isStandby()).isFalse();
+                    // verify kv tablet is dropped when demoted from standby
+                    assertThat(replica.getKvTablet()).isNull();
+                    // verify standby download cache is cleared
+                    KvSnapshotManager snapshotManager = replica.getKvSnapshotManager();
+                    assertThat(snapshotManager.getDownloadedSstFiles()).isNull();
+                    assertThat(snapshotManager.getDownloadedMiscFiles()).isNull();
+                    assertThat(snapshotManager.getStandbySnapshotSize()).isEqualTo(0);
+                });
+
+        // put more data and create another snapshot
+        kvRecordBatch =
+                genKvRecordBatch(
+                        Tuple2.of("k3", new Object[] {3, "k3"}),
+                        Tuple2.of("k4", new Object[] {4, "k4"}));
+        putKvRequest = newPutKvRequest(tableId, 0, 1, kvRecordBatch);
+        leaderGateway.putKv(putKvRequest).get();
+
+        waitValue(
+                () -> completedSnapshotHandleStore.get(tb0, 1),
+                Duration.ofMinutes(2),
+                "Fail to wait for snapshot 1");
+
+        // re-promote the replica back to standby by sending notifyLeaderAndIsr with standby
+        LeaderAndIsr reStandbyLeaderAndIsr =
+                new LeaderAndIsr(
+                        newLeaderAndIsr.leader(),
+                        newLeaderAndIsr.leaderEpoch() + 1,
+                        newLeaderAndIsr.isr(),
+                        Collections.singletonList(standbyServer),
+                        newLeaderAndIsr.coordinatorEpoch(),
+                        newLeaderAndIsr.bucketEpoch()); // re-add as standby
+
+        FLUSS_CLUSTER_EXTENSION.notifyLeaderAndIsr(
+                standbyServer, tablePath, tb0, reStandbyLeaderAndIsr, replicas);
+
+        // verify the replica is standby again and downloads the latest snapshot
+        retry(
+                Duration.ofMinutes(1),
+                () -> {
+                    Replica replica = standbyTs.getReplicaManager().getReplicaOrException(tb0);
+                    assertThat(replica.isStandby()).isTrue();
+                    KvSnapshotManager snapshotManager = replica.getKvSnapshotManager();
+                    assertThat(snapshotManager).isNotNull();
+                    assertThat(snapshotManager.getDownloadedSstFiles()).isNotEmpty();
+                    // verify it has the latest snapshot data
+                    assertThat(snapshotManager.getStandbySnapshotSize()).isGreaterThan(0);
+                });
+    }
+
+    @Test
+    void testStandbySnapshotDownloadFailureAndRecovery() throws Exception {
+        TablePath tablePath = TablePath.of("test_db", "test_table_download_failure");
+        long tableId = createTable(FLUSS_CLUSTER_EXTENSION, tablePath, DATA1_TABLE_DESCRIPTOR_PK);
+        TableBucket tb0 = new TableBucket(tableId, 0);
+
+        FLUSS_CLUSTER_EXTENSION.waitAndGetLeaderReplica(tb0);
+        int leaderServer = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(tb0);
+
+        // put data and create snapshot
+        KvRecordBatch kvRecordBatch =
+                genKvRecordBatch(
+                        Tuple2.of("k1", new Object[] {1, "k1"}),
+                        Tuple2.of("k2", new Object[] {2, "k2"}));
+        PutKvRequest putKvRequest = newPutKvRequest(tableId, 0, -1, kvRecordBatch);
+        TabletServerGateway leaderGateway =
+                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leaderServer);
+        leaderGateway.putKv(putKvRequest).get();
+
+        // wait for first snapshot
+        CompletedSnapshot snapshot0 =
+                waitValue(
+                                () -> completedSnapshotHandleStore.get(tb0, 0),
+                                Duration.ofMinutes(2),
+                                "Fail to wait for snapshot 0")
+                        .retrieveCompleteSnapshot();
+
+        // get standby server and verify it's marked as standby even if download fails initially
+        int standbyServer = FLUSS_CLUSTER_EXTENSION.waitAndGetStandby(tb0);
+        TabletServer standbyTs = FLUSS_CLUSTER_EXTENSION.getTabletServerById(standbyServer);
+        Replica standbyReplica = standbyTs.getReplicaManager().getReplicaOrException(tb0);
+
+        // verify replica is marked as standby (even if download might fail)
+        retry(Duration.ofMinutes(1), () -> assertThat(standbyReplica.isStandby()).isTrue());
+
+        // wait for standby to eventually download snapshot (may retry on failures)
+        KvSnapshotManager standbySnapshotManager = standbyReplica.getKvSnapshotManager();
+        assertThat(standbySnapshotManager).isNotNull();
+
+        // verify snapshot is eventually downloaded successfully
+        retry(
+                Duration.ofMinutes(1),
+                () -> {
+                    assertThat(standbySnapshotManager.getDownloadedSstFiles()).isNotEmpty();
+                    assertThat(standbySnapshotManager.getStandbySnapshotSize())
+                            .isEqualTo(snapshot0.getSnapshotSize());
+                });
+
+        // create another snapshot to verify recovery continues to work
+        kvRecordBatch =
+                genKvRecordBatch(
+                        Tuple2.of("k3", new Object[] {3, "k3"}),
+                        Tuple2.of("k4", new Object[] {4, "k4"}));
+        putKvRequest = newPutKvRequest(tableId, 0, 1, kvRecordBatch);
+        leaderGateway.putKv(putKvRequest).get();
+
+        CompletedSnapshot snapshot1 =
+                waitValue(
+                                () -> completedSnapshotHandleStore.get(tb0, 1),
+                                Duration.ofMinutes(2),
+                                "Fail to wait for snapshot 1")
+                        .retrieveCompleteSnapshot();
+
+        // verify standby continues to download new snapshots after recovery
+        retry(
+                Duration.ofMinutes(1),
+                () -> {
+                    assertThat(standbySnapshotManager.getDownloadedSstFiles()).isNotEmpty();
+                    assertThat(standbySnapshotManager.getStandbySnapshotSize())
+                            .isEqualTo(snapshot1.getSnapshotSize());
+                });
     }
 
     private void checkDirsDeleted(Set<File> bucketDirs, Map<Long, TablePath> tablePathMap) {

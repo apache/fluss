@@ -85,6 +85,7 @@ import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.ZkData;
 import org.apache.fluss.utils.CloseableRegistry;
+import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.IOUtils;
 import org.apache.fluss.utils.MapUtils;
@@ -98,6 +99,7 @@ import javax.annotation.Nullable;
 import javax.annotation.concurrent.ThreadSafe;
 
 import java.io.Closeable;
+import java.io.File;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -246,6 +248,9 @@ public final class Replica {
         this.closeableRegistry = new CloseableRegistry();
 
         if (kvManager != null) {
+            // Create KvSnapshotManager for all replicas (leader/follower/standby).
+            // The tablet directory is always created for KV tables,
+            // even if the replica is a follower with no KV data.
             this.kvSnapshotManager =
                     KvSnapshotManager.create(
                             tableBucket,
@@ -544,7 +549,18 @@ public final class Replica {
             registerLakeTieringMetrics();
         }
 
-        if (!isLeader() && isKvTable()) {
+        if (isKvTable()) {
+            // If kvTablet already exists (e.g., Leader -> Leader scenario),
+            // we need to close it first to release RocksDB lock before re-initializing.
+            // Set need drop as false to avoid deleting files.
+            if (kvTablet != null) {
+                LOG.info(
+                        "Closing existing kvTablet before re-initializing as leader for bucket {}",
+                        tableBucket);
+                kvManager.closeOrDropKv(tableBucket, false);
+                kvTablet = null;
+            }
+
             // 1. If there is no sst files in local, download the latest kv snapshot and apply log.
             // 2. If there is already sst files in local, check the diff with the latest snapshot
             // and download the diff and delete the deleted sst files. And then apply log.
@@ -578,12 +594,19 @@ public final class Replica {
             checkNotNull(kvSnapshotManager);
             if (isNowStandby) {
                 kvSnapshotManager.becomeStandby();
-                becomeStandby();
+                // Mark as standby immediately to ensure coordinator's state is consistent.
+                // The snapshot download is done asynchronously to avoid blocking makeFollower.
+                isStandbyReplica = true;
+                becomeStandbyAsync();
             } else {
                 // to be new follower.
                 kvSnapshotManager.becomeFollower();
                 if (wasStandby || wasLeader) {
-                    // standby -> leader or leader -> leader
+                    // standby -> follower or leader -> follower
+                    // Clear standby flag before dropKv() so logging is accurate
+                    if (wasStandby) {
+                        isStandbyReplica = false;
+                    }
                     dropKv();
                 }
 
@@ -627,24 +650,39 @@ public final class Replica {
                 isDataLakeEnabled);
     }
 
-    private void becomeStandby() {
-        try {
-            checkNotNull(kvSnapshotManager);
-            kvSnapshotManager.downloadLatestSnapshot();
-            isStandbyReplica = true;
-            LOG.info(
-                    "TabletServer {} becomes standby for bucket {}",
-                    localTabletServerId,
-                    tableBucket);
-        } catch (Exception e) {
-            // Mark as standby anyway to ensure coordinator's state is consistent.
-            // The snapshot download can be retried via NotifyKvSnapshotOffsetRequest.
-            isStandbyReplica = true;
-            LOG.warn(
-                    "Failed to download snapshot when becoming standby replica for bucket {}.",
-                    tableBucket,
-                    e);
-        }
+    /**
+     * Asynchronously download the latest snapshot for standby replica.
+     *
+     * <p>This method submits the snapshot download task to an async thread pool to avoid blocking
+     * the makeFollower operation. The download can be retried later via
+     * NotifyKvSnapshotOffsetRequest if it fails.
+     */
+    private void becomeStandbyAsync() {
+        checkNotNull(snapshotContext);
+        snapshotContext
+                .getAsyncOperationsThreadPool()
+                .execute(
+                        () -> {
+                            try {
+                                checkNotNull(kvSnapshotManager);
+                                kvSnapshotManager.downloadLatestSnapshot();
+                                LOG.info(
+                                        "TabletServer {} successfully downloaded snapshot and becomes standby for bucket {}",
+                                        localTabletServerId,
+                                        tableBucket);
+                            } catch (Exception e) {
+                                // The snapshot download can be retried via
+                                // NotifyKvSnapshotOffsetRequest.
+                                LOG.warn(
+                                        "Failed to download snapshot when becoming standby replica for bucket {}. Will retry later.",
+                                        tableBucket,
+                                        e);
+                            }
+                        });
+        LOG.info(
+                "TabletServer {} is becoming standby for bucket {}, snapshot download started asynchronously",
+                localTabletServerId,
+                tableBucket);
     }
 
     private void createKv() {
@@ -690,8 +728,29 @@ public final class Replica {
 
             // drop the kv tablet
             checkNotNull(kvManager);
-            kvManager.dropKv(tableBucket);
+            kvManager.closeOrDropKv(tableBucket, true);
             kvTablet = null;
+        } else {
+            // For standby replicas, kvTablet is null, so we need to manually delete the
+            // downloaded snapshot files and the tablet directory.
+            // For follower replicas, we need to delete the empty directory.
+            checkNotNull(kvSnapshotManager);
+            File tabletDir = kvSnapshotManager.getTabletDir();
+            try {
+                FileUtils.deleteDirectory(tabletDir);
+                LOG.info(
+                        "Deleted {} tablet directory {} for table bucket {}",
+                        isStandbyReplica ? "standby replica" : "follower",
+                        tabletDir,
+                        tableBucket);
+            } catch (IOException e) {
+                LOG.warn(
+                        "Failed to delete {} tablet directory {} for table bucket {}",
+                        isStandbyReplica ? "standby replica" : "follower",
+                        tabletDir,
+                        tableBucket,
+                        e);
+            }
         }
     }
 
@@ -729,11 +788,6 @@ public final class Replica {
                 checkNotNull(kvTablet, "kv tablet should not be null.");
                 restoreStartOffset = optCompletedSnapshot.get().getLogOffset();
             } else {
-                LOG.info(
-                        "No snapshot found for {} of {}, restore from log.",
-                        tableBucket,
-                        physicalPath);
-                kvManager.dropKv(tableBucket);
                 // actually, kv manager always create a kv tablet since we will drop the kv
                 // if it exists before init kv tablet
                 kvTablet =

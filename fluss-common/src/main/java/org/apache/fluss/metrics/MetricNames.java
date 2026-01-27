@@ -73,6 +73,13 @@ public class MetricNames {
     public static final String SERVER_LOGICAL_STORAGE_KV_SIZE = "kvSize";
     public static final String SERVER_PHYSICAL_STORAGE_LOCAL_SIZE = "localSize";
     public static final String SERVER_PHYSICAL_STORAGE_REMOTE_LOG_SIZE = "remoteLogSize";
+
+    /**
+     * Total physical storage size of standby replica snapshots on this tablet server.
+     *
+     * <p>Standby replicas maintain downloaded KV snapshots for fast leader failover. This metric
+     * tracks the total size of all KV snapshot data downloaded by standby replicas on this server.
+     */
     public static final String SERVER_PHYSICAL_STORAGE_STANDBY_SIZE = "standbySize";
 
     // --------------------------------------------------------------------------------------------

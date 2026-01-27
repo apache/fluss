@@ -788,35 +788,48 @@ public class ReplicaManager {
     public void notifyKvSnapshotOffset(
             NotifyKvSnapshotOffsetData notifyKvSnapshotOffsetData,
             Consumer<NotifyKvSnapshotOffsetResponse> responseCallback) {
-        inLock(
-                replicaStateChangeLock,
-                () -> {
-                    // check or apply coordinator epoch.
-                    validateAndApplyCoordinatorEpoch(
-                            notifyKvSnapshotOffsetData.getCoordinatorEpoch(),
-                            "notifyKvSnapshotOffset");
-                    // update the snapshot offset.
-                    TableBucket tb = notifyKvSnapshotOffsetData.getTableBucket();
-                    Replica replica = getReplicaOrException(tb);
-                    if (notifyKvSnapshotOffsetData.getSnapshotId() != null) {
-                        // try to download the snapshot for standby replica.
+        TableBucket tb = notifyKvSnapshotOffsetData.getTableBucket();
+        Long snapshotId = notifyKvSnapshotOffsetData.getSnapshotId();
+        long minRetainOffset = notifyKvSnapshotOffsetData.getMinRetainOffset();
+
+        // Validate and get replica under lock
+        Replica replica =
+                inLock(
+                        replicaStateChangeLock,
+                        () -> {
+                            // check or apply coordinator epoch.
+                            validateAndApplyCoordinatorEpoch(
+                                    notifyKvSnapshotOffsetData.getCoordinatorEpoch(),
+                                    "notifyKvSnapshotOffset");
+                            return getReplicaOrException(tb);
+                        });
+
+        // Respond immediately to avoid blocking coordinator
+        responseCallback.accept(new NotifyKvSnapshotOffsetResponse());
+
+        // Download snapshot asynchronously outside the lock to avoid blocking
+        // leader/follower transitions and other state changes
+        if (snapshotId != null) {
+            ioExecutor.execute(
+                    () -> {
                         try {
-                            replica.downloadSnapshot(notifyKvSnapshotOffsetData.getSnapshotId());
-                            updateMinRetainOffset(
-                                    replica, notifyKvSnapshotOffsetData.getMinRetainOffset());
+                            replica.downloadSnapshot(snapshotId);
+                            updateMinRetainOffset(replica, minRetainOffset);
+                            LOG.info(
+                                    "Successfully downloaded snapshot {} for standby replica {}.",
+                                    snapshotId,
+                                    tb);
                         } catch (Exception e) {
                             LOG.error(
                                     "Error downloading snapshot id {} for standby replica {}.",
-                                    notifyKvSnapshotOffsetData.getSnapshotId(),
+                                    snapshotId,
                                     tb,
                                     e);
                         }
-                    } else {
-                        updateMinRetainOffset(
-                                replica, notifyKvSnapshotOffsetData.getMinRetainOffset());
-                    }
-                    responseCallback.accept(new NotifyKvSnapshotOffsetResponse());
-                });
+                    });
+        } else {
+            updateMinRetainOffset(replica, minRetainOffset);
+        }
     }
 
     private void updateMinRetainOffset(Replica replica, long minRetainOffset) {

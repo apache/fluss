@@ -549,11 +549,9 @@ final class ReplicaTest extends ReplicaTestBase {
                         Tuple2.of("k2", new Object[] {2, "b"}));
         putRecordsToLeader(kvReplica, kvRecords);
 
-        makeKvReplicaAsFollower(kvReplica, 1);
-
         // make leader again with a new epoch, check the snapshot should use the new epoch
         immediateTriggeredScheduledExecutorService.reset();
-        int latestLeaderEpoch = 2;
+        int latestLeaderEpoch = 1;
         int snapshot = 0;
         makeKvReplicaAsLeader(kvReplica, latestLeaderEpoch);
         kvSnapshotStore.waitUntilSnapshotComplete(tableBucket, snapshot);
@@ -676,7 +674,8 @@ final class ReplicaTest extends ReplicaTestBase {
                 makeKvReplica(DATA1_PHYSICAL_TABLE_PATH_PK, tableBucket, testKvSnapshotContext);
         makeKvReplicaAsLeader(kvReplica);
         putRecordsToLeader(
-                kvReplica, genKvRecordBatch(new Object[] {1, "a"}, new Object[] {2, "b"}));
+                kvReplica,
+                DataTestUtils.genKvRecordBatch(new Object[] {1, "a"}, new Object[] {2, "b"}));
         makeKvReplicaAsFollower(kvReplica, 1);
 
         // make a kv replica again, should restore from log
@@ -696,7 +695,8 @@ final class ReplicaTest extends ReplicaTestBase {
 
         // write data again
         putRecordsToLeader(
-                kvReplica, genKvRecordBatch(new Object[] {2, "bbb"}, new Object[] {3, "c"}));
+                kvReplica,
+                DataTestUtils.genKvRecordBatch(new Object[] {2, "bbb"}, new Object[] {3, "c"}));
 
         // restore again
         makeKvReplicaAsLeader(kvReplica, 3);
@@ -797,9 +797,9 @@ final class ReplicaTest extends ReplicaTestBase {
                         new TableBucket(DATA1_TABLE_ID_PK, 1),
                         Collections.singletonList(TABLET_SERVER_ID),
                         new LeaderAndIsr(
-                                LEADER_ID_WHILE_MAKE_FOLLOWER,
+                                TABLET_SERVER_ID,
                                 leaderEpoch,
-                                Arrays.asList(LEADER_ID_WHILE_MAKE_FOLLOWER, TABLET_SERVER_ID),
+                                Collections.singletonList(TABLET_SERVER_ID),
                                 Collections.emptyList(),
                                 INITIAL_COORDINATOR_EPOCH,
                                 // we also use the leader epoch as bucket epoch

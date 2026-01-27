@@ -124,7 +124,6 @@ public class ReplicaTestBase {
             new AllCallbackWrapper<>(new ZooKeeperExtension());
 
     protected static final int TABLET_SERVER_ID = 1;
-    protected static final int LEADER_ID_WHILE_MAKE_FOLLOWER = 2;
     private static final String TABLET_SERVER_RACK = "rack1";
     protected static ZooKeeperClient zkClient;
 

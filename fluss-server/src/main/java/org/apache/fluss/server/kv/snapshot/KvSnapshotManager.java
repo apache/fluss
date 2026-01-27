@@ -40,8 +40,10 @@ import java.io.IOException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
@@ -133,14 +135,26 @@ public class KvSnapshotManager implements Closeable {
 
     public void becomeLeader() {
         isLeader = true;
+        // Clear standby download cache when leaving standby role
+        clearStandbyDownloadCache();
     }
 
     public void becomeFollower() {
         isLeader = false;
+        // Clear standby download cache when leaving standby role
+        clearStandbyDownloadCache();
     }
 
     public void becomeStandby() {
         isLeader = false;
+        // Clear standby download cache when new added to standby role
+        clearStandbyDownloadCache();
+
+        // make db dir.
+        Path kvDbPath = tabletDir.toPath().resolve(RocksDBKvBuilder.DB_INSTANCE_DIR_STRING);
+        if (!kvDbPath.toFile().exists()) {
+            kvDbPath.toFile().mkdirs();
+        }
     }
 
     @VisibleForTesting
@@ -151,6 +165,24 @@ public class KvSnapshotManager implements Closeable {
     @VisibleForTesting
     public @Nullable Set<Path> getDownloadedMiscFiles() {
         return downloadedMiscFiles;
+    }
+
+    /**
+     * Clear the standby download cache.
+     *
+     * <p>This method should be called when a replica leaves the standby role (becomes a regular
+     * follower or leader). It clears the cached state of downloaded SST files, misc files, and
+     * snapshot size. This ensures that if the replica becomes standby again later, it will perform
+     * a fresh download based on the actual local files, rather than reusing stale cache that
+     * references deleted files.
+     */
+    private void clearStandbyDownloadCache() {
+        downloadedSstFiles = null;
+        downloadedMiscFiles = null;
+        standbySnapshotSize = 0;
+        LOG.info(
+                "Cleared standby download cache for table bucket {}, will reload from local files on next standby promotion",
+                tableBucket);
     }
 
     /**
@@ -208,17 +240,18 @@ public class KvSnapshotManager implements Closeable {
                         completedSnapshot, downloadedSstFiles, sstFilesToDelete);
         CompletedSnapshot incrementalSnapshot =
                 completedSnapshot.getIncrementalSnapshot(incrementalKvSnapshotHandle);
-        downloadKvSnapshots(incrementalSnapshot, new CloseableRegistry());
 
         // delete the sst files that are not needed.
         for (Path sstFileToDelete : sstFilesToDelete) {
             FileUtils.deleteFileOrDirectory(sstFileToDelete.toFile());
         }
 
-        // delete the misc files that are not needed.
+        // delete all the misc files that are not needed.
         for (Path miscFileToDelete : downloadedMiscFiles) {
             FileUtils.deleteFileOrDirectory(miscFileToDelete.toFile());
         }
+
+        downloadKvSnapshots(incrementalSnapshot, new CloseableRegistry());
 
         KvSnapshotHandle kvSnapshotHandle = completedSnapshot.getKvSnapshotHandle();
         downloadedSstFiles =
@@ -463,7 +496,8 @@ public class KvSnapshotManager implements Closeable {
     private void loadKvLocalFiles(Set<Path> downloadedSstFiles, Set<Path> downloadedMiscFiles)
             throws Exception {
         if (tabletDir.exists()) {
-            Path[] files = FileUtils.listDirectory(tabletDir.toPath());
+            Path kvDbPath = tabletDir.toPath().resolve(RocksDBKvBuilder.DB_INSTANCE_DIR_STRING);
+            Path[] files = FileUtils.listDirectory(kvDbPath);
             for (Path filePath : files) {
                 final String fileName = filePath.getFileName().toString();
                 if (fileName.endsWith(SST_FILE_SUFFIX)) {
@@ -479,6 +513,12 @@ public class KvSnapshotManager implements Closeable {
             CompletedSnapshot completedSnapshot,
             Set<Path> downloadedSstFiles,
             Set<Path> sstFilesToDelete) {
+        // get downloaded sst files name to path.
+        Map<String, Path> downloadedSstFilesMap = new HashMap<>();
+        for (Path sstPath : downloadedSstFiles) {
+            downloadedSstFilesMap.put(sstPath.getFileName().toString(), sstPath);
+        }
+
         KvSnapshotHandle completedSnapshotHandler = completedSnapshot.getKvSnapshotHandle();
         List<KvFileHandleAndLocalPath> sstFileHandles =
                 completedSnapshotHandler.getSharedKvFileHandles();
@@ -486,20 +526,20 @@ public class KvSnapshotManager implements Closeable {
                 completedSnapshotHandler.getPrivateFileHandles();
 
         List<KvFileHandleAndLocalPath> incrementalSstFileHandles = new ArrayList<>();
+        Set<String> downloadedSstFileNames = downloadedSstFilesMap.keySet();
         for (KvFileHandleAndLocalPath sstFileHandle : sstFileHandles) {
-            Path sstPath = Paths.get(sstFileHandle.getLocalPath());
-            if (!downloadedSstFiles.contains(sstPath)) {
+            if (!downloadedSstFileNames.contains(sstFileHandle.getLocalPath())) {
                 incrementalSstFileHandles.add(sstFileHandle);
             }
         }
 
-        Set<Path> newSstFiles =
+        Set<String> newSstFileNames =
                 completedSnapshotHandler.getSharedKvFileHandles().stream()
-                        .map(handler -> Paths.get(handler.getLocalPath()))
+                        .map(KvFileHandleAndLocalPath::getLocalPath)
                         .collect(Collectors.toSet());
-        for (Path sstPath : downloadedSstFiles) {
-            if (!newSstFiles.contains(sstPath)) {
-                sstFilesToDelete.add(sstPath);
+        for (String sstFileName : downloadedSstFileNames) {
+            if (!newSstFileNames.contains(sstFileName)) {
+                sstFilesToDelete.add(downloadedSstFilesMap.get(sstFileName));
             }
         }
 
