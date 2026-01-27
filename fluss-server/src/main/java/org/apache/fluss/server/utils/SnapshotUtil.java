@@ -17,6 +17,7 @@
 
 package org.apache.fluss.server.utils;
 
+import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.server.kv.snapshot.KvFileHandle;
 import org.apache.fluss.utils.ExceptionUtils;
 import org.apache.fluss.utils.function.ThrowingConsumer;
@@ -40,16 +41,17 @@ public class SnapshotUtil {
      *     caught during iteration
      */
     public static void bestEffortDiscardAllKvFiles(
-            Iterable<? extends KvFileHandle> handlesToDiscard) throws Exception {
-        applyToAllWhileSuppressingExceptions(handlesToDiscard, KvFileHandle::discard);
+            FsPath remoteDir, Iterable<? extends KvFileHandle> handlesToDiscard) throws Exception {
+        applyToAllWhileSuppressingExceptions(
+                handlesToDiscard, kvFileHandle -> kvFileHandle.discard(remoteDir));
     }
 
-    public static void discardKvFileQuietly(KvFileHandle kvFileHandle) {
+    public static void discardKvFileQuietly(FsPath remoteDir, KvFileHandle kvFileHandle) {
         if (kvFileHandle == null) {
             return;
         }
         try {
-            kvFileHandle.discard();
+            kvFileHandle.discard(remoteDir);
         } catch (Exception exception) {
             LOG.warn("Discard {} exception.", kvFileHandle, exception);
         }

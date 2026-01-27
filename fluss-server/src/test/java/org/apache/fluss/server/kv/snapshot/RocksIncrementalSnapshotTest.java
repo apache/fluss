@@ -116,7 +116,8 @@ class RocksIncrementalSnapshotTest {
             // test restore from cp2
             Path dest1 = snapshotDownDir.resolve("restore1");
             try (RocksDBKv rocksDBKv =
-                    KvTestUtils.buildFromSnapshotHandle(kvSnapshotHandle2, dest1)) {
+                    KvTestUtils.buildFromSnapshotHandle(
+                            snapshotLocation, kvSnapshotHandle2, dest1)) {
                 assertThat(rocksDBKv.get("key1".getBytes())).isEqualTo("val1".getBytes());
                 assertThat(rocksDBKv.get("key2".getBytes())).isNull();
                 assertThat(rocksDBKv.get("key3".getBytes())).isNull();
@@ -124,7 +125,8 @@ class RocksIncrementalSnapshotTest {
             Path dest2 = snapshotDownDir.resolve("restore2");
             // test restore from cp4
             try (RocksDBKv rocksDBKv =
-                    KvTestUtils.buildFromSnapshotHandle(kvSnapshotHandle4, dest2)) {
+                    KvTestUtils.buildFromSnapshotHandle(
+                            snapshotLocation, kvSnapshotHandle4, dest2)) {
                 assertThat(rocksDBKv.get("key1".getBytes())).isEqualTo("val1".getBytes());
                 assertThat(rocksDBKv.get("key2".getBytes())).isEqualTo("val2".getBytes());
                 assertThat(rocksDBKv.get("key3".getBytes())).isEqualTo("val3".getBytes());
@@ -135,12 +137,13 @@ class RocksIncrementalSnapshotTest {
             KvSnapshotHandle kvSnapshotHandle5 =
                     snapshot(5L, incrementalSnapshot, snapshotLocation, closeableRegistry);
             // discard the snapshot handle
-            kvSnapshotHandle5.discard();
+            kvSnapshotHandle5.discard(testingTabletDir, 5L);
 
             // we can still restore from cp4
             Path dest3 = snapshotDownDir.resolve("restore3");
             try (RocksDBKv rocksDBKv =
-                    KvTestUtils.buildFromSnapshotHandle(kvSnapshotHandle4, dest3)) {
+                    KvTestUtils.buildFromSnapshotHandle(
+                            snapshotLocation, kvSnapshotHandle4, dest3)) {
                 assertThat(rocksDBKv.get("key1".getBytes())).isEqualTo("val1".getBytes());
                 assertThat(rocksDBKv.get("key2".getBytes())).isEqualTo("val2".getBytes());
                 assertThat(rocksDBKv.get("key3".getBytes())).isEqualTo("val3".getBytes());

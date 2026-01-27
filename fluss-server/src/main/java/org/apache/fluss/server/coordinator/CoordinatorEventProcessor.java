@@ -32,6 +32,7 @@ import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.IneligibleReplicaException;
 import org.apache.fluss.exception.InvalidCoordinatorException;
 import org.apache.fluss.exception.InvalidUpdateVersionException;
+import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.exception.RebalanceFailureException;
 import org.apache.fluss.exception.ServerNotExistException;
 import org.apache.fluss.exception.ServerTagAlreadyExistException;
@@ -118,6 +119,7 @@ import org.apache.fluss.server.zk.data.ZkData.TableIdsZNode;
 import org.apache.fluss.server.zk.data.lake.LakeTable;
 import org.apache.fluss.server.zk.data.lake.LakeTableHelper;
 import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
+import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.types.Tuple2;
 
 import org.slf4j.Logger;
@@ -234,7 +236,8 @@ public class CoordinatorEventProcessor implements EventProcessor {
                         conf.getInt(ConfigOptions.KV_MAX_RETAINED_SNAPSHOTS),
                         ioExecutor,
                         zooKeeperClient,
-                        coordinatorMetricGroup);
+                        coordinatorMetricGroup,
+                        FlussPaths.remoteKvDir(conf));
         this.autoPartitionManager = autoPartitionManager;
         this.lakeTableTieringManager = lakeTableTieringManager;
         this.coordinatorMetricGroup = coordinatorMetricGroup;
@@ -1738,9 +1741,29 @@ public class CoordinatorEventProcessor implements EventProcessor {
             callback.completeExceptionally(e);
             return;
         }
-        // commit the kv snapshot asynchronously
+
         TableBucket tb = event.getTableBucket();
-        TablePath tablePath = coordinatorContext.getTablePathById(tb.getTableId());
+
+        // get physical table path
+        PhysicalTablePath physicalTablePath;
+        if (tb.getPartitionId() == null) {
+            TablePath tablePath = coordinatorContext.getTablePathById(tb.getTableId());
+            physicalTablePath = PhysicalTablePath.of(tablePath);
+        } else {
+            Optional<PhysicalTablePath> physicalTablePathOp =
+                    coordinatorContext.getPhysicalTablePath(tb.getPartitionId());
+            if (!physicalTablePathOp.isPresent()) {
+                callback.completeExceptionally(
+                        new PartitionNotExistException(
+                                "PhysicalTablePath not found for partition "
+                                        + tb.getPartitionId()));
+                return;
+            } else {
+                physicalTablePath = physicalTablePathOp.get();
+            }
+        }
+
+        // commit the kv snapshot asynchronously
         ioExecutor.execute(
                 () -> {
                     try {
@@ -1749,7 +1772,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
                         // add completed snapshot
                         CompletedSnapshotStore completedSnapshotStore =
                                 completedSnapshotStoreManager.getOrCreateCompletedSnapshotStore(
-                                        tablePath, tb);
+                                        physicalTablePath, tb);
                         // this involves IO operation (ZK), so we do it in ioExecutor
                         completedSnapshotStore.add(completedSnapshot);
                         coordinatorEventManager.put(

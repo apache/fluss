@@ -72,19 +72,20 @@ class ZooKeeperCompletedSnapshotStoreTest {
     /** Tests that subsumed snapshots are discarded. */
     @Test
     void testDiscardingSubsumedSnapshots(@TempDir Path tmpDir) throws Exception {
-        SharedKvFileRegistry sharedKvFileRegistry = new SharedKvFileRegistry();
-        final CompletedSnapshotStore snapshotStore =
-                createZooKeeperSnapshotStore(zooKeeperClient, sharedKvFileRegistry);
-        TableBucket tableBucket = new TableBucket(1, 1);
         FsPath snapshotPath = FsPath.fromLocalFile(tmpDir.toFile());
+
+        SharedKvFileRegistry sharedKvFileRegistry = new SharedKvFileRegistry(snapshotPath);
+        final CompletedSnapshotStore snapshotStore =
+                createZooKeeperSnapshotStore(snapshotPath, zooKeeperClient, sharedKvFileRegistry);
+        TableBucket tableBucket = new TableBucket(1, 1);
         SnapshotsCleanerTest.TestCompletedSnapshot snapshot1 =
-                SnapshotsCleanerTest.createSnapshot(tableBucket, 0, snapshotPath);
+                SnapshotsCleanerTest.createSnapshot(tableBucket, 0);
 
         snapshotStore.add(snapshot1);
         assertThat(snapshotStore.getAllSnapshots()).containsExactly(snapshot1);
 
         final SnapshotsCleanerTest.TestCompletedSnapshot snapshot2 =
-                SnapshotsCleanerTest.createSnapshot(tableBucket, 1, snapshotPath);
+                SnapshotsCleanerTest.createSnapshot(tableBucket, 1);
         snapshotStore.add(snapshot2);
         final List<CompletedSnapshot> allSnapshots = snapshotStore.getAllSnapshots();
         assertThat(allSnapshots).containsExactly(snapshot2);
@@ -104,18 +105,19 @@ class ZooKeeperCompletedSnapshotStoreTest {
                 ConfigOptions.ZOOKEEPER_ADDRESS,
                 zooKeeperExtensionWrapper.getCustomExtension().getConnectString());
 
-        SharedKvFileRegistry sharedKvFileRegistry = new SharedKvFileRegistry();
+        FsPath snapshotPath = FsPath.fromLocalFile(tmpDir.toFile());
+        SharedKvFileRegistry sharedKvFileRegistry = new SharedKvFileRegistry(snapshotPath);
         TableBucket tableBucket = new TableBucket(1, 2);
         try (ZooKeeperClient zooKeeperClient =
                 ZooKeeperUtils.startZookeeperClient(configuration, NOPErrorHandler.INSTANCE)) {
             final CompletedSnapshotStore store =
-                    createZooKeeperSnapshotStore(zooKeeperClient, sharedKvFileRegistry);
+                    createZooKeeperSnapshotStore(
+                            snapshotPath, zooKeeperClient, sharedKvFileRegistry);
 
             CountDownLatch discardAttempted = new CountDownLatch(1);
             for (long i = 0; i < 2; ++i) {
-                FsPath snapshotPath = FsPath.fromLocalFile(tmpDir.toFile());
                 CompletedSnapshot snapshotToAdd =
-                        SnapshotsCleanerTest.createSnapshot(tableBucket, i, snapshotPath);
+                        SnapshotsCleanerTest.createSnapshot(tableBucket, i);
                 // shouldn't fail despite the exception
                 store.addSnapshotAndSubsumeOldestOne(
                         snapshotToAdd,
@@ -131,7 +133,9 @@ class ZooKeeperCompletedSnapshotStoreTest {
 
     @Nonnull
     private CompletedSnapshotStore createZooKeeperSnapshotStore(
-            ZooKeeperClient zooKeeperClient, SharedKvFileRegistry sharedKvFileRegistry) {
+            FsPath snapshotPath,
+            ZooKeeperClient zooKeeperClient,
+            SharedKvFileRegistry sharedKvFileRegistry) {
         ZooKeeperCompletedSnapshotHandleStore snapshotsInZooKeeper =
                 new ZooKeeperCompletedSnapshotHandleStore(zooKeeperClient);
         return new CompletedSnapshotStore(
@@ -139,6 +143,7 @@ class ZooKeeperCompletedSnapshotStoreTest {
                 sharedKvFileRegistry,
                 Collections.emptyList(),
                 snapshotsInZooKeeper,
-                Executors.directExecutor());
+                Executors.directExecutor(),
+                snapshotPath);
     }
 }

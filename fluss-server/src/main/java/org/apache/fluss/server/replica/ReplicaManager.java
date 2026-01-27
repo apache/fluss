@@ -1648,6 +1648,7 @@ public class ReplicaManager {
                                 fatalErrorHandler,
                                 bucketMetricGroup,
                                 tableInfo,
+                                FlussPaths.remoteDataDir(conf),
                                 clock);
                 allReplicas.put(tb, new OnlineReplica(replica));
                 replicaOpt = Optional.of(replica);

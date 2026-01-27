@@ -24,8 +24,6 @@ import org.apache.fluss.utils.concurrent.Executors;
 
 import org.junit.jupiter.api.Test;
 
-import javax.annotation.Nullable;
-
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -36,6 +34,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test for {@link org.apache.fluss.server.kv.snapshot.SnapshotsCleaner}. */
 class SnapshotsCleanerTest {
+
+    private static final FsPath REMOTE_KV_TABLET_DIR = new FsPath("testpath");
 
     @Test
     void testNotCleanSnapshotInUse() {
@@ -49,7 +49,11 @@ class SnapshotsCleanerTest {
         snapshotsCleaner.addSubsumedSnapshot(cp3);
 
         snapshotsCleaner.cleanSubsumedSnapshots(
-                3, Collections.singleton(1L), () -> {}, Executors.directExecutor());
+                REMOTE_KV_TABLET_DIR,
+                3,
+                Collections.singleton(1L),
+                () -> {},
+                Executors.directExecutor());
         // cp 1 is in use, shouldn't discard.
         assertThat(cp1.isDiscarded()).isFalse();
         assertThat(cp2.isDiscarded()).isTrue();
@@ -67,7 +71,11 @@ class SnapshotsCleanerTest {
         TestCompletedSnapshot cp3 = createSnapshot(tableBucket, 3);
         snapshotsCleaner.addSubsumedSnapshot(cp3);
         snapshotsCleaner.cleanSubsumedSnapshots(
-                2, Collections.emptySet(), () -> {}, Executors.directExecutor());
+                REMOTE_KV_TABLET_DIR,
+                2,
+                Collections.emptySet(),
+                () -> {},
+                Executors.directExecutor());
 
         assertThat(cp1.isDiscarded()).isTrue();
         // cp2 is the lowest snapshot that is still valid, shouldn't discard.
@@ -81,16 +89,13 @@ class SnapshotsCleanerTest {
         private boolean isDiscarded;
 
         public TestCompletedSnapshot(
-                TableBucket tableBucket,
-                long snapshotID,
-                FsPath snapshotLocation,
-                TestKvSnapshotHandle kvSnapshotHandle) {
-            super(tableBucket, snapshotID, snapshotLocation, kvSnapshotHandle);
+                TableBucket tableBucket, long snapshotID, TestKvSnapshotHandle kvSnapshotHandle) {
+            super(tableBucket, snapshotID, kvSnapshotHandle);
         }
 
-        public CompletableFuture<Void> discardAsync(Executor ioExecutor) {
+        public CompletableFuture<Void> discardAsync(FsPath remoteKvTabletDir, Executor ioExecutor) {
             CompletableFuture<Void> resultFuture = new CompletableFuture<>();
-            super.discardAsync(ioExecutor)
+            super.discardAsync(remoteKvTabletDir, ioExecutor)
                     .whenComplete(
                             (ignore, throwable) -> {
                                 if (throwable != null) {
@@ -122,7 +127,7 @@ class SnapshotsCleanerTest {
         }
 
         @Override
-        public void discard() {
+        public void discard(FsPath remoteKvTabletDir, long snapshotId) {
             isDiscarded = true;
         }
 
@@ -141,11 +146,6 @@ class SnapshotsCleanerTest {
     }
 
     public static TestCompletedSnapshot createSnapshot(TableBucket tableBucket, long snapshotId) {
-        return createSnapshot(tableBucket, snapshotId, new FsPath("testpath"));
-    }
-
-    public static TestCompletedSnapshot createSnapshot(
-            TableBucket tableBucket, long snapshotId, @Nullable FsPath snapshotPath) {
 
         List<KvFileHandleAndLocalPath> sharedFileHandles = new ArrayList<>();
         List<KvFileHandleAndLocalPath> privateFileHandles = new ArrayList<>();
@@ -160,6 +160,6 @@ class SnapshotsCleanerTest {
 
         TestKvSnapshotHandle kvSnapshotHandle =
                 new TestKvSnapshotHandle(sharedFileHandles, privateFileHandles);
-        return new TestCompletedSnapshot(tableBucket, snapshotId, snapshotPath, kvSnapshotHandle);
+        return new TestCompletedSnapshot(tableBucket, snapshotId, kvSnapshotHandle);
     }
 }

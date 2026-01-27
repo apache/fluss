@@ -61,6 +61,7 @@ import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.testutils.common.AllCallbackWrapper;
 import org.apache.fluss.testutils.common.ManuallyTriggeredScheduledExecutorService;
 import org.apache.fluss.utils.CloseableRegistry;
+import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.clock.ManualClock;
 import org.apache.fluss.utils.concurrent.FlussScheduler;
 import org.apache.fluss.utils.function.FunctionWithException;
@@ -481,6 +482,7 @@ public class ReplicaTestBase {
                 NOPErrorHandler.INSTANCE,
                 metricGroup,
                 DATA1_TABLE_INFO,
+                FlussPaths.remoteDataDir(conf),
                 manualClock);
     }
 
@@ -664,11 +666,12 @@ public class ReplicaTestBase {
         }
 
         @Override
-        public void handleSnapshotBroken(CompletedSnapshot snapshot) throws Exception {
+        public void handleSnapshotBroken(FsPath remoteKvTabletDir, CompletedSnapshot snapshot)
+                throws Exception {
             // Remove the broken snapshot from the snapshot store (simulating ZK metadata removal)
             testKvSnapshotStore.removeSnapshot(snapshot.getTableBucket(), snapshot.getSnapshotID());
             // Discard the snapshot files async (similar to DefaultSnapshotContext implementation)
-            snapshot.discardAsync(executorService);
+            snapshot.discardAsync(remoteKvTabletDir, executorService);
         }
     }
 }

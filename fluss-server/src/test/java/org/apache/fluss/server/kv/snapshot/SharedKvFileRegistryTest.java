@@ -17,7 +17,12 @@
 
 package org.apache.fluss.server.kv.snapshot;
 
+import org.apache.fluss.fs.FsPath;
+
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+
+import java.nio.file.Path;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -25,8 +30,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 class SharedKvFileRegistryTest {
 
     @Test
-    void testRegistryNormal() throws Exception {
-        SharedKvFileRegistry sharedKvFileRegistry = new SharedKvFileRegistry();
+    void testRegistryNormal(@TempDir Path tmpDir) throws Exception {
+        FsPath snapshotPath = FsPath.fromLocalFile(tmpDir.toFile());
+
+        SharedKvFileRegistry sharedKvFileRegistry = new SharedKvFileRegistry(snapshotPath);
 
         TestKvHandle firstHandle = new TestKvHandle("first");
 
@@ -51,7 +58,7 @@ class SharedKvFileRegistryTest {
 
         // now, we test the case register a handle again with a placeholder
         sharedKvFileRegistry.close();
-        sharedKvFileRegistry = new SharedKvFileRegistry();
+        sharedKvFileRegistry = new SharedKvFileRegistry(snapshotPath);
         TestKvHandle testKvHandle = new TestKvHandle("test");
         KvFileHandle handle =
                 sharedKvFileRegistry.registerReference(
@@ -71,8 +78,10 @@ class SharedKvFileRegistryTest {
 
     /** Validate that unregister a nonexistent snapshot will not throw exception. */
     @Test
-    void testUnregisterWithUnexistedKey() {
-        SharedKvFileRegistry sharedStateRegistry = new SharedKvFileRegistry();
+    void testUnregisterWithUnexistedKey(@TempDir Path tmpDir) {
+        FsPath snapshotPath = FsPath.fromLocalFile(tmpDir.toFile());
+
+        SharedKvFileRegistry sharedStateRegistry = new SharedKvFileRegistry(snapshotPath);
         sharedStateRegistry.unregisterUnusedKvFile(-1);
         sharedStateRegistry.unregisterUnusedKvFile(Long.MAX_VALUE);
     }
@@ -88,7 +97,7 @@ class SharedKvFileRegistryTest {
         }
 
         @Override
-        public void discard() throws Exception {
+        public void discard(FsPath remoteDir) throws Exception {
             this.discarded = true;
         }
     }

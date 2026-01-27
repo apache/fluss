@@ -17,6 +17,8 @@
 
 package org.apache.fluss.server.kv.snapshot;
 
+import org.apache.fluss.fs.FsPath;
+
 /**
  * A placeholder handle for shared kv files that will be replaced by an original that was created in
  * a previous snapshot. This class is used in the referenced kv files of {@link KvSnapshotHandle}.
@@ -30,7 +32,7 @@ public class PlaceholderKvFileHandler extends KvFileHandle {
     }
 
     @Override
-    public void discard() throws Exception {
+    public void discard(FsPath remoteDir) throws Exception {
         // do nothing
     }
 }
