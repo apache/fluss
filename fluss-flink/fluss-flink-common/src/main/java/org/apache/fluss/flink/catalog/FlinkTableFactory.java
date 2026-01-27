@@ -27,7 +27,6 @@ import org.apache.fluss.flink.sink.shuffle.DistributionMode;
 import org.apache.fluss.flink.source.ChangelogFlinkTableSource;
 import org.apache.fluss.flink.source.FlinkTableSource;
 import org.apache.fluss.flink.utils.FlinkConnectorOptionsUtils;
-import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.TablePath;
 
 import org.apache.flink.api.common.RuntimeExecutionMode;
@@ -55,14 +54,12 @@ import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.Set;
 
 import static org.apache.fluss.config.ConfigOptions.TABLE_DATALAKE_FORMAT;
 import static org.apache.fluss.config.ConfigOptions.TABLE_DELETE_BEHAVIOR;
 import static org.apache.fluss.config.FlussConfigUtils.CLIENT_PREFIX;
 import static org.apache.fluss.flink.catalog.FlinkCatalog.LAKE_TABLE_SPLITTER;
-import static org.apache.fluss.flink.utils.DataLakeUtils.getDatalakeFormat;
 import static org.apache.fluss.flink.utils.FlinkConnectorOptionsUtils.getBucketKeyIndexes;
 import static org.apache.fluss.flink.utils.FlinkConnectorOptionsUtils.getBucketKeys;
 import static org.apache.fluss.flink.utils.FlinkConversions.toFlinkOption;
@@ -98,7 +95,7 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
 
         FactoryUtil.TableFactoryHelper helper = FactoryUtil.createTableFactoryHelper(this, context);
         final ReadableConfig tableOptions = helper.getOptions();
-        validateSourceOptions(helper, tableOptions);
+        validateSourceOptions(tableOptions);
 
         boolean isStreamingMode =
                 context.getConfiguration().get(ExecutionOptions.RUNTIME_MODE)
@@ -161,12 +158,6 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
     public DynamicTableSink createDynamicTableSink(Context context) {
         FactoryUtil.TableFactoryHelper helper = FactoryUtil.createTableFactoryHelper(this, context);
         final ReadableConfig tableOptions = helper.getOptions();
-        Optional<DataLakeFormat> datalakeFormat = getDatalakeFormat(tableOptions);
-        if (datalakeFormat.isPresent()) {
-            helper.validateExcept("table.", "client.", "fields.", datalakeFormat.get() + ".");
-        } else {
-            helper.validateExcept("table.", "client.", "fields.");
-        }
 
         boolean isStreamingMode =
                 context.getConfiguration().get(ExecutionOptions.RUNTIME_MODE)
@@ -270,18 +261,11 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
     }
 
     /**
-     * Validates table source options using the standard validation pattern.
+     * Validates table source options explicitly recognized by Flink.
      *
-     * @param helper the factory helper for option validation
      * @param tableOptions the table options to validate
      */
-    private static void validateSourceOptions(
-            FactoryUtil.TableFactoryHelper helper, ReadableConfig tableOptions) {
-        Optional<DataLakeFormat> datalakeFormat = getDatalakeFormat(tableOptions);
-        List<String> prefixesToSkip =
-                new ArrayList<>(Arrays.asList("table.", "client.", "fields."));
-        datalakeFormat.ifPresent(dataLakeFormat -> prefixesToSkip.add(dataLakeFormat + "."));
-        helper.validateExcept(prefixesToSkip.toArray(new String[0]));
+    private static void validateSourceOptions(ReadableConfig tableOptions) {
         FlinkConnectorOptionsUtils.validateTableSourceOptions(tableOptions);
     }
 
@@ -312,7 +296,7 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
         Map<String, String> catalogTableOptions = context.getCatalogTable().getOptions();
         FactoryUtil.TableFactoryHelper helper = FactoryUtil.createTableFactoryHelper(this, context);
         final ReadableConfig tableOptions = helper.getOptions();
-        validateSourceOptions(helper, tableOptions);
+        validateSourceOptions(tableOptions);
 
         ZoneId timeZone =
                 FlinkConnectorOptionsUtils.getLocalTimeZone(
