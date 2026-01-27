@@ -78,7 +78,8 @@ public class RebalanceManagerTest {
         testCoordinatorChannelManager = new TestCoordinatorChannelManager();
         autoPartitionManager =
                 new AutoPartitionManager(serverMetadataCache, metadataManager, new Configuration());
-        lakeTableTieringManager = new LakeTableTieringManager();
+        lakeTableTieringManager =
+                new LakeTableTieringManager(TestingMetricGroups.LAKE_TIERING_METRICS);
         CoordinatorEventProcessor eventProcessor = buildCoordinatorEventProcessor();
         rebalanceManager = new RebalanceManager(eventProcessor, zookeeperClient);
         rebalanceManager.startup();
