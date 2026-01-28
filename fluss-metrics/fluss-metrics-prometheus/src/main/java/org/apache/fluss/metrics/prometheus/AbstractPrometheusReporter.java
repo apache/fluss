@@ -106,31 +106,13 @@ public abstract class AbstractPrometheusReporter implements MetricReporter {
      */
     @Override
     public void notifyOfAddedMetric(Metric metric, String metricName, MetricGroup group) {
-        notifyOfAddedMetric(metric, metricName, group, true);
-    }
-
-    /**
-     * Called when a new {@link Metric} was added.
-     *
-     * @param metric the metric that was added
-     * @param metricName the name of the metric
-     * @param group the group that contains the metric
-     * @param filterCharacters whether to filter invalid characters in dimension keys and values
-     */
-    protected void notifyOfAddedMetric(
-            Metric metric, String metricName, MetricGroup group, boolean filterCharacters) {
         List<String> dimensionKeys = new LinkedList<>();
         List<String> dimensionValues = new LinkedList<>();
         for (final Map.Entry<String, String> dimension : group.getAllVariables().entrySet()) {
             final String key = dimension.getKey();
             final String value = dimension.getValue();
-            if (filterCharacters) {
-                dimensionKeys.add(CHARACTER_FILTER.filterCharacters(key));
-                dimensionValues.add(CHARACTER_FILTER.filterCharacters(value));
-            } else {
-                dimensionKeys.add(key);
-                dimensionValues.add(value);
-            }
+            dimensionKeys.add(key);
+            dimensionValues.add(value);
         }
 
         final String scopedMetricName = getScopedName(metricName, group);
@@ -174,27 +156,10 @@ public abstract class AbstractPrometheusReporter implements MetricReporter {
      */
     @Override
     public void notifyOfRemovedMetric(Metric metric, String metricName, MetricGroup group) {
-        notifyOfRemovedMetric(metric, metricName, group, true);
-    }
-
-    /**
-     * Called when a {@link Metric} was removed.
-     *
-     * @param metric the metric that should be removed
-     * @param metricName the name of the metric
-     * @param group the group that contains the metric
-     * @param filterCharacters whether to filter invalid characters in dimension values
-     */
-    protected void notifyOfRemovedMetric(
-            Metric metric, String metricName, MetricGroup group, boolean filterCharacters) {
         List<String> dimensionValues = new LinkedList<>();
         for (final Map.Entry<String, String> dimension : group.getAllVariables().entrySet()) {
             final String value = dimension.getValue();
-            if (filterCharacters) {
-                dimensionValues.add(CHARACTER_FILTER.filterCharacters(value));
-            } else {
-                dimensionValues.add(value);
-            }
+            dimensionValues.add(value);
         }
 
         final String scopedMetricName = getScopedName(metricName, group);

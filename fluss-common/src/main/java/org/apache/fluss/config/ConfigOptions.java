@@ -1777,13 +1777,13 @@ public class ConfigOptions {
     //  ConfigOptions for prometheus push gateway reporter
     // ------------------------------------------------------------------------
     public static final ConfigOption<String> METRICS_REPORTER_PROMETHEUS_PUSHGATEWAY_HOST_URL =
-            key("metrics.reporter.prometheus-pushgateway.hostUrl")
+            key("metrics.reporter.prometheus-push.host-url")
                     .stringType()
                     .noDefaultValue()
                     .withDescription("The URL of the Prometheus PushGateway to push metrics to.");
 
     public static final ConfigOption<String> METRICS_REPORTER_PROMETHEUS_PUSHGATEWAY_JOB_NAME =
-            key("metrics.reporter.prometheus-pushgateway.jobName")
+            key("metrics.reporter.prometheus-push.job-name")
                     .stringType()
                     .noDefaultValue()
                     .withDescription(
@@ -1791,7 +1791,7 @@ public class ConfigOptions {
 
     public static final ConfigOption<Boolean>
             METRICS_REPORTER_PROMETHEUS_PUSHGATEWAY_RANDOM_JOB_NAME_SUFFIX =
-                    key("metrics.reporter.prometheus-pushgateway.randomJobNameSuffix")
+                    key("metrics.reporter.prometheus-push.random-job-name-suffix")
                             .booleanType()
                             .defaultValue(false)
                             .withDescription(
@@ -1801,28 +1801,27 @@ public class ConfigOptions {
 
     public static final ConfigOption<Boolean>
             METRICS_REPORTER_PROMETHEUS_PUSHGATEWAY_DELETE_ON_SHUTDOWN =
-                    key("metrics.reporter.prometheus-pushgateway.deleteOnShutdown")
+                    key("metrics.reporter.prometheus-push.delete-on-shutdown")
                             .booleanType()
                             .defaultValue(false)
                             .withDescription(
                                     "Whether to delete metrics from PushGateway on shutdown.");
 
-    public static final ConfigOption<Boolean>
-            METRICS_REPORTER_PROMETHEUS_PUSHGATEWAY_FILTER_LABEL_VALUE_CHARACTERS =
-                    key("metrics.reporter.prometheus-pushgateway.filterLabelValueCharacters")
-                            .booleanType()
-                            .defaultValue(true)
-                            .withDescription(
-                                    "Whether to filter characters in label values to conform to the "
-                                            + "Prometheus character set ([a-zA-Z0-9:_]).");
-
     public static final ConfigOption<String> METRICS_REPORTER_PROMETHEUS_PUSHGATEWAY_GROUPING_KEY =
-            key("metrics.reporter.prometheus-pushgateway.groupingKey")
+            key("metrics.reporter.prometheus-push.grouping-key")
                     .stringType()
                     .noDefaultValue()
                     .withDescription(
                             "The grouping key to use when pushing metrics to Prometheus PushGateway. "
                                     + "The format should be k1=v1;k2=v2.");
+
+    public static final ConfigOption<Duration>
+            METRICS_REPORTER_PROMETHEUS_PUSHGATEWAY_PUSH_INTERVAL =
+                    key("metrics.reporter.prometheus-push.push-interval")
+                            .durationType()
+                            .defaultValue(Duration.ofSeconds(10))
+                            .withDescription(
+                                    "The interval of pushing metrics to Prometheus PushGateway.");
 
     // ------------------------------------------------------------------------
     //  ConfigOptions for jmx reporter

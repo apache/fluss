@@ -17,9 +17,7 @@
 
 package org.apache.fluss.metrics.prometheus;
 
-import org.apache.fluss.config.Configuration;
 import org.apache.fluss.metrics.Metric;
-import org.apache.fluss.metrics.groups.MetricGroup;
 import org.apache.fluss.metrics.reporter.ScheduledMetricReporter;
 
 import io.prometheus.client.exporter.PushGateway;
@@ -27,15 +25,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.net.URL;
 import java.time.Duration;
-import java.util.Random;
-
-import static org.apache.fluss.config.ConfigOptions.METRICS_REPORTER_PROMETHEUS_PUSHGATEWAY_DELETE_ON_SHUTDOWN;
-import static org.apache.fluss.config.ConfigOptions.METRICS_REPORTER_PROMETHEUS_PUSHGATEWAY_FILTER_LABEL_VALUE_CHARACTERS;
-import static org.apache.fluss.config.ConfigOptions.METRICS_REPORTER_PROMETHEUS_PUSHGATEWAY_GROUPING_KEY;
-import static org.apache.fluss.config.ConfigOptions.METRICS_REPORTER_PROMETHEUS_PUSHGATEWAY_HOST_URL;
-import static org.apache.fluss.config.ConfigOptions.METRICS_REPORTER_PROMETHEUS_PUSHGATEWAY_JOB_NAME;
-import static org.apache.fluss.config.ConfigOptions.METRICS_REPORTER_PROMETHEUS_PUSHGATEWAY_RANDOM_JOB_NAME_SUFFIX;
+import java.util.Map;
 
 /** {@link ScheduledMetricReporter} that pushes {@link Metric Metrics} to Prometheus PushGateway. */
 public class PrometheusPushGatewayReporter extends AbstractPrometheusReporter
@@ -43,35 +35,23 @@ public class PrometheusPushGatewayReporter extends AbstractPrometheusReporter
 
     private static final Logger LOG = LoggerFactory.getLogger(PrometheusPushGatewayReporter.class);
 
-    private static final Random RANDOM = new Random();
+    private final PushGateway pushGateway;
+    private final String jobName;
+    private final Map<String, String> groupingKey;
+    private final boolean deleteOnShutdown;
+    private final Duration pushInterval;
 
-    private PushGateway pushGateway;
-    private String jobName;
-    private String groupingKey;
-    private boolean deleteOnShutdown;
-    private boolean filterLabelValueCharacters;
-
-    @Override
-    public void open(Configuration config) {
-        String hostUrl = config.getString(METRICS_REPORTER_PROMETHEUS_PUSHGATEWAY_HOST_URL);
-        this.jobName = config.getString(METRICS_REPORTER_PROMETHEUS_PUSHGATEWAY_JOB_NAME);
-        this.deleteOnShutdown =
-                config.getBoolean(METRICS_REPORTER_PROMETHEUS_PUSHGATEWAY_DELETE_ON_SHUTDOWN);
-        this.filterLabelValueCharacters =
-                config.getBoolean(
-                        METRICS_REPORTER_PROMETHEUS_PUSHGATEWAY_FILTER_LABEL_VALUE_CHARACTERS);
-
-        if (config.getBoolean(METRICS_REPORTER_PROMETHEUS_PUSHGATEWAY_RANDOM_JOB_NAME_SUFFIX)) {
-            this.jobName = jobName + "_" + RANDOM.nextLong();
-        }
-
-        String configuredGroupingKey =
-                config.getString(METRICS_REPORTER_PROMETHEUS_PUSHGATEWAY_GROUPING_KEY);
-        if (configuredGroupingKey != null) {
-            this.groupingKey = configuredGroupingKey;
-        }
-
+    public PrometheusPushGatewayReporter(
+            URL hostUrl,
+            String jobName,
+            Map<String, String> groupingKey,
+            final boolean deleteOnShutdown,
+            Duration pushInterval) {
         this.pushGateway = new PushGateway(hostUrl);
+        this.jobName = jobName;
+        this.groupingKey = groupingKey;
+        this.deleteOnShutdown = deleteOnShutdown;
+        this.pushInterval = pushInterval;
     }
 
     @Override
@@ -89,17 +69,7 @@ public class PrometheusPushGatewayReporter extends AbstractPrometheusReporter
 
     @Override
     public Duration scheduleInterval() {
-        return Duration.ofSeconds(60);
-    }
-
-    @Override
-    public void notifyOfAddedMetric(Metric metric, String metricName, MetricGroup group) {
-        notifyOfAddedMetric(metric, metricName, group, filterLabelValueCharacters);
-    }
-
-    @Override
-    public void notifyOfRemovedMetric(Metric metric, String metricName, MetricGroup group) {
-        notifyOfRemovedMetric(metric, metricName, group, filterLabelValueCharacters);
+        return pushInterval;
     }
 
     @Override
