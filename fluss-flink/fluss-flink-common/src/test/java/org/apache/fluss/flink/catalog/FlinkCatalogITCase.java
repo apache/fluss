@@ -757,20 +757,11 @@ abstract class FlinkCatalogITCase {
                 "create table test_table_other_unknown_options (a int, b int)"
                         + " with ('connector' = 'fluss', 'bootstrap.servers' = 'localhost:9092', 'other.unknown.option' = 'other-unknown-val')");
 
-        // test invalid table as source
-        assertThatThrownBy(() -> tEnv.explainSql("select * from test_table_other_unknown_options"))
-                .cause()
-                .isInstanceOf(ValidationException.class)
-                .hasMessageContaining("Unsupported options found for 'fluss'");
+        // test table with unknown option as source
+        tEnv.explainSql("select * from test_table_other_unknown_options");
 
-        // test invalid table as sink
-        assertThatThrownBy(
-                        () ->
-                                tEnv.explainSql(
-                                        "insert into test_table_other_unknown_options values (1, 2)"))
-                .cause()
-                .isInstanceOf(ValidationException.class)
-                .hasMessageContaining("Unsupported options found for 'fluss'");
+        // test table with unknown option as sink
+        tEnv.explainSql("insert into test_table_other_unknown_options values (1, 2)");
     }
 
     @Test

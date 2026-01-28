@@ -77,10 +77,8 @@ abstract class FlinkTableFactoryTest {
         Map<String, String> validProperties = getBasicOptions();
         validProperties.put("k1", "v1");
 
-        // test invalid options
-        assertThatThrownBy(() -> createTableSource(schema, validProperties))
-                .isInstanceOf(ValidationException.class)
-                .hasMessageContaining("Unsupported options:\n" + "\n" + "k1");
+        // test create table source with custom properties is ok
+        createTableSource(schema, validProperties);
 
         // test scan startup mode options
         Map<String, String> scanModeProperties = getBasicOptions();
@@ -178,6 +176,10 @@ abstract class FlinkTableFactoryTest {
         List<String> bucketKeys = tableSink.getBucketKeys();
         assertThat(bucketKeys)
                 .isEqualTo(Arrays.asList(properties.get(BUCKET_KEY.key()).split(",")));
+
+        // test create table sink with custom properties is ok
+        properties.put("k1", "v1");
+        createTableSink(schema, properties);
     }
 
     private ResolvedSchema createBasicSchema() {
