@@ -88,11 +88,11 @@ Type: push
 Parameters:
 
 - `metrics.reporter.prometheus-push.host-url` - The PushGateway server host URL including scheme, host name, and port.
-- `metrics.reporter.prometheus-push.job-name` - The job name under which metrics will be pushed"
+- `metrics.reporter.prometheus-push.job-name` - The job name under which metrics will be pushed.
 - `metrics.reporter.prometheus-push.push-interval` - (Optional) The interval of pushing metrics to Prometheus PushGateway, defaults to 10 SECONDS.
 - `metrics.reporter.prometheus-push.random-job-name-suffix` - (Optional) Specifies whether a random suffix should be appended to the job name, defaults to true. This is useful when multiple instances of the reporter are running on the same host. 
 - `metrics.reporter.prometheus-push.delete-on-shutdown` - (Optional) Specifies whether to delete metrics from the PushGateway on shutdown, defaults to true. Fluss will try its best to delete the metrics but this is not guaranteed.
-- `metrics.reporter.prometheus-push.grouping-key` - Specifies the grouping key which is the group and global labels of all metrics. The label name and value are separated by '=', and labels are separated by ';', e.g., k1=v1;k2=v2.
+- `metrics.reporter.prometheus-push.grouping-key` - Specifies the grouping key which is the group and global labels of all metrics. The label name and value are separated by `=`, and labels are separated by `;`, e.g., `k1=v1;k2=v2`.
 
 Example configuration:
 

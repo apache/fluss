@@ -56,17 +56,16 @@ public abstract class AbstractPrometheusReporter implements MetricReporter {
 
     private static final Logger LOG = LoggerFactory.getLogger(AbstractPrometheusReporter.class);
 
-    protected static final Pattern UNALLOWED_CHAR_PATTERN = Pattern.compile("[^a-zA-Z0-9:_]");
+    private static final Pattern UNALLOWED_CHAR_PATTERN = Pattern.compile("[^a-zA-Z0-9:_]");
 
-    @VisibleForTesting
-    protected static final CharacterFilter CHARACTER_FILTER =
+    private static final CharacterFilter CHARACTER_FILTER =
             AbstractPrometheusReporter::replaceInvalidChars;
 
     @VisibleForTesting protected static final char SCOPE_SEPARATOR = '_';
 
     @VisibleForTesting protected static final String SCOPE_PREFIX = "fluss" + SCOPE_SEPARATOR;
 
-    protected final Map<String, AbstractMap.SimpleImmutableEntry<Collector, Integer>>
+    private final Map<String, AbstractMap.SimpleImmutableEntry<Collector, Integer>>
             collectorsWithCountByMetricName = new HashMap<>();
 
     @VisibleForTesting protected final CollectorRegistry registry = new CollectorRegistry(true);
@@ -109,10 +108,8 @@ public abstract class AbstractPrometheusReporter implements MetricReporter {
         List<String> dimensionKeys = new LinkedList<>();
         List<String> dimensionValues = new LinkedList<>();
         for (final Map.Entry<String, String> dimension : group.getAllVariables().entrySet()) {
-            final String key = dimension.getKey();
-            final String value = dimension.getValue();
-            dimensionKeys.add(key);
-            dimensionValues.add(value);
+            dimensionKeys.add(CHARACTER_FILTER.filterCharacters(dimension.getKey()));
+            dimensionValues.add(CHARACTER_FILTER.filterCharacters(dimension.getValue()));
         }
 
         final String scopedMetricName = getScopedName(metricName, group);
@@ -158,8 +155,7 @@ public abstract class AbstractPrometheusReporter implements MetricReporter {
     public void notifyOfRemovedMetric(Metric metric, String metricName, MetricGroup group) {
         List<String> dimensionValues = new LinkedList<>();
         for (final Map.Entry<String, String> dimension : group.getAllVariables().entrySet()) {
-            final String value = dimension.getValue();
-            dimensionValues.add(value);
+            dimensionValues.add(CHARACTER_FILTER.filterCharacters(dimension.getValue()));
         }
 
         final String scopedMetricName = getScopedName(metricName, group);
