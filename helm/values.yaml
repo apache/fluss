@@ -47,9 +47,11 @@ persistence:
   size: 1Gi
   storageClass:
 
-# Tablet server only configuration options
-tabletServer:
-  count: 3
+tablet:
+  numberOfReplicas: 3
+
+coordinator:
+  numberOfReplicas: 1
 
 resources: {}
   # We usually recommend not to specify default resources and to leave this as a conscious

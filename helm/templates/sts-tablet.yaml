@@ -24,7 +24,7 @@ metadata:
   {{- include "fluss.labels" . | nindent 4 }}
 spec:
   serviceName: tablet-server-hs
-  replicas: {{ .Values.tabletServer.count }}
+  replicas: {{ .Values.tablet.numberOfReplicas }}
   selector:
     matchLabels:
       {{- include "fluss.selectorLabels" . | nindent 6 }}
