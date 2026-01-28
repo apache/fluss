@@ -24,6 +24,7 @@ import org.apache.fluss.exception.TableAlreadyExistException;
 import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.lake.iceberg.utils.IcebergCatalogUtils;
 import org.apache.fluss.lake.lakestorage.LakeCatalog;
+import org.apache.fluss.lake.lakestorage.LakeSnapshotInfo;
 import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
@@ -52,6 +53,7 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 
 import static org.apache.fluss.metadata.TableDescriptor.BUCKET_COLUMN_NAME;
@@ -160,6 +162,11 @@ public class IcebergLakeCatalog implements LakeCatalog {
         } catch (NoSuchTableException e) {
             throw new TableNotExistException("Table " + tablePath + " does not exist.");
         }
+    }
+
+    @Override
+    public Optional<LakeSnapshotInfo> getLatestSnapshotInfo(TablePath tablePath, Context context) {
+        return Optional.of(LakeSnapshotInfo.EMPTY);
     }
 
     private TableIdentifier toIcebergTableIdentifier(TablePath tablePath) {

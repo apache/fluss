@@ -25,6 +25,7 @@ import org.apache.fluss.lake.committer.CommittedLakeSnapshot;
 import org.apache.fluss.lake.committer.CommitterInitContext;
 import org.apache.fluss.lake.committer.LakeCommitter;
 import org.apache.fluss.lake.lakestorage.LakeCatalog;
+import org.apache.fluss.lake.lakestorage.LakeSnapshotInfo;
 import org.apache.fluss.lake.lakestorage.LakeStorage;
 import org.apache.fluss.lake.lakestorage.LakeStoragePlugin;
 import org.apache.fluss.lake.serializer.SimpleVersionedSerializer;
@@ -50,6 +51,7 @@ import java.time.Duration;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 import static org.apache.fluss.config.ConfigBuilder.key;
 
@@ -109,6 +111,12 @@ public class TestingPaimonStoragePlugin implements LakeStoragePlugin {
         public void alterTable(TablePath tablePath, List<TableChange> tableChanges, Context context)
                 throws TableNotExistException {
             // do nothing
+        }
+
+        @Override
+        public Optional<LakeSnapshotInfo> getLatestSnapshotInfo(
+                TablePath tablePath, Context context) {
+            return Optional.empty();
         }
 
         public TableDescriptor getTable(TablePath tablePath) {

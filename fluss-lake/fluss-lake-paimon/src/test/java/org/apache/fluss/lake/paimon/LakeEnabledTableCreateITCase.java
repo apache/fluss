@@ -17,29 +17,29 @@
 
 package org.apache.fluss.lake.paimon;
 
-import org.apache.fluss.client.Connection;
-import org.apache.fluss.client.ConnectionFactory;
-import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.config.ConfigOptions;
-import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.FlussRuntimeException;
+import org.apache.fluss.exception.InvalidAlterTableException;
 import org.apache.fluss.exception.InvalidConfigException;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.LakeTableAlreadyExistException;
+import org.apache.fluss.lake.paimon.testutils.FlinkPaimonTieringTestBase;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
+import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.server.replica.Replica;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.types.DataTypes;
+import org.apache.fluss.utils.clock.ManualClock;
 
+import org.apache.flink.core.execution.JobClient;
 import org.apache.paimon.CoreOptions;
 import org.apache.paimon.Snapshot;
 import org.apache.paimon.catalog.Catalog;
-import org.apache.paimon.catalog.CatalogContext;
-import org.apache.paimon.catalog.CatalogFactory;
 import org.apache.paimon.catalog.Identifier;
 import org.apache.paimon.data.BinaryString;
 import org.apache.paimon.data.GenericRow;
@@ -53,14 +53,12 @@ import org.apache.paimon.table.sink.BatchWriteBuilder;
 import org.apache.paimon.table.sink.CommitMessage;
 import org.apache.paimon.types.DataType;
 import org.apache.paimon.types.RowType;
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 
 import javax.annotation.Nullable;
 
-import java.nio.file.Files;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.Collections;
@@ -74,68 +72,36 @@ import static org.apache.fluss.lake.paimon.utils.PaimonConversions.PAIMON_UNSETT
 import static org.apache.fluss.metadata.TableDescriptor.BUCKET_COLUMN_NAME;
 import static org.apache.fluss.metadata.TableDescriptor.OFFSET_COLUMN_NAME;
 import static org.apache.fluss.metadata.TableDescriptor.TIMESTAMP_COLUMN_NAME;
-import static org.apache.fluss.server.utils.LakeStorageUtils.extractLakeProperties;
+import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** ITCase for create lake enabled table with paimon as lake storage. */
-class LakeEnabledTableCreateITCase {
+class LakeEnabledTableCreateITCase extends FlinkPaimonTieringTestBase {
+
+    private static final ManualClock MANUAL_CLOCK = new ManualClock(System.currentTimeMillis());
 
     @RegisterExtension
     public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION =
             FlussClusterExtension.builder()
                     .setNumOfTabletServers(3)
                     .setClusterConf(initConfig())
+                    .setClock(MANUAL_CLOCK)
                     .build();
 
     private static final String DATABASE = "fluss";
 
-    private static Catalog paimonCatalog;
     private static final int BUCKET_NUM = 3;
 
-    private Connection conn;
-    private Admin admin;
-
-    @BeforeEach
-    protected void setup() {
-        conn = ConnectionFactory.createConnection(FLUSS_CLUSTER_EXTENSION.getClientConfig());
-        admin = conn.getAdmin();
+    @BeforeAll
+    protected static void beforeAll() {
+        FlinkPaimonTieringTestBase.beforeAll(FLUSS_CLUSTER_EXTENSION.getClientConfig());
     }
 
-    @AfterEach
-    protected void teardown() throws Exception {
-        if (admin != null) {
-            admin.close();
-            admin = null;
-        }
-
-        if (conn != null) {
-            conn.close();
-            conn = null;
-        }
-    }
-
-    private static Configuration initConfig() {
-        Configuration conf = new Configuration();
-        conf.setString("datalake.format", "paimon");
-        conf.setString("datalake.paimon.metastore", "filesystem");
-        String warehousePath;
-        try {
-            warehousePath =
-                    Files.createTempDirectory("fluss-testing-datalake-enabled")
-                            .resolve("warehouse")
-                            .toString();
-        } catch (Exception e) {
-            throw new FlussRuntimeException("Failed to create warehouse path");
-        }
-        conf.setString("datalake.paimon.warehouse", warehousePath);
-        conf.setString("datalake.paimon.cache-enabled", "false");
-        paimonCatalog =
-                CatalogFactory.createCatalog(
-                        CatalogContext.create(Options.fromMap(extractLakeProperties(conf))));
-
-        return conf;
+    @Override
+    protected FlussClusterExtension getFlussClusterExtension() {
+        return FLUSS_CLUSTER_EXTENSION;
     }
 
     @Test
@@ -670,12 +636,12 @@ class LakeEnabledTableCreateITCase {
         verifyLogTabletDataLakeEnabled(tableId, false);
 
         // try to enable lake table again, the snapshot should not change
-        changes = Collections.singletonList(enableLake);
-        admin.alterTable(logTablePath, changes, false).get();
-        assertThat(paimonCatalog.getTable(paimonTablePath).latestSnapshot()).isEqualTo(snapshot);
-
-        // verify LogTablet datalake status is enabled
-        verifyLogTabletDataLakeEnabled(tableId, true);
+        List<TableChange> finalChanges = Collections.singletonList(enableLake);
+        assertThatThrownBy(() -> admin.alterTable(logTablePath, finalChanges, false).get())
+                .cause()
+                .isInstanceOf(InvalidAlterTableException.class)
+                .hasMessageContaining(
+                        "existing lake table has snapshots without 'fluss-offsets' property");
     }
 
     @Test
@@ -992,6 +958,161 @@ class LakeEnabledTableCreateITCase {
                 .get();
         assertThat(admin.getTableInfo(tablePath).get().getTableConfig().isDataLakeEnabled())
                 .isTrue();
+    }
+
+    @Test
+    void testEnableLakeTableWithManuallyCreatedLakeTable() throws Exception {
+        String tb = "test_enable_with_manual_lake_table";
+        TablePath tablePath = TablePath.of(DATABASE, tb);
+        Identifier paimonIdentifier = Identifier.create(DATABASE, tb);
+
+        // Step 1: Create a datalake-enabled table first to get the correct Paimon schema
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("a", DataTypes.INT())
+                                        .column("b", DataTypes.STRING())
+                                        .primaryKey("a")
+                                        .build())
+                        .distributedBy(3, "a")
+                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
+                        .build();
+        admin.createTable(tablePath, tableDescriptor, true).get();
+
+        // Step 2: Save the Paimon table schema for later recreation
+        Table originalPaimonTable = paimonCatalog.getTable(paimonIdentifier);
+        originalPaimonTable.options().remove(CoreOptions.PATH.key());
+        org.apache.paimon.schema.Schema originalSchema =
+                new org.apache.paimon.schema.Schema(
+                        originalPaimonTable.rowType().getFields(),
+                        originalPaimonTable.partitionKeys(),
+                        originalPaimonTable.primaryKeys(),
+                        originalPaimonTable.options(),
+                        originalPaimonTable.comment().orElse(null));
+
+        // Step 3: Disable datalake
+        admin.alterTable(
+                        tablePath,
+                        Collections.singletonList(
+                                TableChange.set(
+                                        ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "false")),
+                        false)
+                .get();
+
+        // Step 4: Drop the Paimon table and recreate with the same schema
+        paimonCatalog.dropTable(paimonIdentifier, false);
+        paimonCatalog.createTable(paimonIdentifier, originalSchema, false);
+
+        // Step 5: Write some data to paimon table without fluss-offsets property
+        // (simulating user directly writing to lake)
+        Table paimonTable = paimonCatalog.getTable(paimonIdentifier);
+        writeData(paimonTable);
+
+        // Step 6: Try to re-enable datalake, should fail because snapshot has no fluss-offsets
+        // property (data was written directly)
+        assertThatThrownBy(
+                        () ->
+                                admin.alterTable(
+                                                tablePath,
+                                                Collections.singletonList(
+                                                        TableChange.set(
+                                                                ConfigOptions.TABLE_DATALAKE_ENABLED
+                                                                        .key(),
+                                                                "true")),
+                                                false)
+                                        .get())
+                .cause()
+                .isInstanceOf(InvalidAlterTableException.class)
+                .hasMessageContaining("data was written directly into the lake table");
+    }
+
+    @Test
+    void testEnableLakeTableWithExpiredSnapshot() throws Exception {
+        TablePath tablePath = TablePath.of(DATABASE, "test_enable_with_expired_snapshot");
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("a", DataTypes.INT())
+                                        .column("b", DataTypes.STRING())
+                                        .build())
+                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
+                        .property(ConfigOptions.TABLE_DATALAKE_FRESHNESS, Duration.ofMillis(500))
+                        .property(ConfigOptions.TABLE_LOG_TTL, Duration.ofMinutes(10))
+                        .distributedBy(1, "a")
+                        .build();
+        admin.createTable(tablePath, tableDescriptor, false).get();
+
+        TableInfo tableInfo = admin.getTableInfo(tablePath).get();
+        long tableId = tableInfo.getTableId();
+
+        TableBucket t1Bucket = new TableBucket(tableId, 0);
+        // write records
+        List<InternalRow> rows = Arrays.asList(row(1, "v1"), row(2, "v2"), row(3, "v3"));
+        writeRows(tablePath, rows, true);
+
+        // then start tiering job
+        JobClient jobClient = buildTieringJob(execEnv);
+
+        try {
+            // check the status of replica after synced
+            assertReplicaStatus(t1Bucket, 3);
+            // check data in paimon
+            checkDataInPaimonPrimaryKeyTable(tablePath, rows);
+            checkFlussOffsetsInSnapshot(
+                    tablePath, Collections.singletonMap(new TableBucket(tableId, 0), 3L));
+
+            // disable and enable data lake should be ok
+            admin.alterTable(
+                            tablePath,
+                            Collections.singletonList(
+                                    TableChange.set(
+                                            ConfigOptions.TABLE_DATALAKE_ENABLED.key(),
+                                            Boolean.FALSE.toString())),
+                            false)
+                    .get();
+            admin.alterTable(
+                            tablePath,
+                            Collections.singletonList(
+                                    TableChange.set(
+                                            ConfigOptions.TABLE_DATALAKE_ENABLED.key(),
+                                            Boolean.TRUE.toString())),
+                            false)
+                    .get();
+
+            // disable data lake and advance the clock to expire the snapshot
+            admin.alterTable(
+                            tablePath,
+                            Collections.singletonList(
+                                    TableChange.set(
+                                            ConfigOptions.TABLE_DATALAKE_ENABLED.key(),
+                                            Boolean.FALSE.toString())),
+                            false)
+                    .get();
+            MANUAL_CLOCK.advanceTime(Duration.ofHours(1));
+
+            // enable data lake should fail because the latest lake snapshot is older than
+            // table.log.ttl
+            assertThatThrownBy(
+                            () ->
+                                    admin.alterTable(
+                                                    tablePath,
+                                                    Collections.singletonList(
+                                                            TableChange.set(
+                                                                    ConfigOptions
+                                                                            .TABLE_DATALAKE_ENABLED
+                                                                            .key(),
+                                                                    Boolean.TRUE.toString())),
+                                                    false)
+                                            .get())
+                    .cause()
+                    .isInstanceOf(InvalidAlterTableException.class)
+                    .hasMessageContaining(
+                            "because the latest lake snapshot is older than table.log.ttl");
+        } finally {
+            jobClient.cancel().get();
+        }
     }
 
     private void verifyPaimonTable(

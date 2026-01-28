@@ -261,7 +261,7 @@ public final class FlussClusterExtension
             conf.setString(ConfigOptions.ZOOKEEPER_ADDRESS, zooKeeperServer.getConnectString());
             conf.setString(ConfigOptions.BIND_LISTENERS, coordinatorServerListeners);
             setRemoteDataDir(conf);
-            coordinatorServer = new CoordinatorServer(conf);
+            coordinatorServer = new CoordinatorServer(conf, clock);
             coordinatorServer.start();
             coordinatorServerInfo =
                     // TODO, Currently, we use 0 as coordinator server id.

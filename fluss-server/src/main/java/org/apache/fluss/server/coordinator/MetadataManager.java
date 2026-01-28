@@ -52,6 +52,8 @@ import org.apache.fluss.server.zk.data.PartitionAssignment;
 import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException;
+import org.apache.fluss.utils.clock.Clock;
+import org.apache.fluss.utils.clock.SystemClock;
 import org.apache.fluss.utils.function.RunnableWithException;
 import org.apache.fluss.utils.function.ThrowingRunnable;
 
@@ -70,6 +72,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.Callable;
 
+import static org.apache.fluss.server.utils.LakeTableValidator.validateBeforeEnableDataLake;
 import static org.apache.fluss.server.utils.TableDescriptorValidation.validateAlterTableProperties;
 import static org.apache.fluss.server.utils.TableDescriptorValidation.validateTableDescriptor;
 
@@ -82,6 +85,7 @@ public class MetadataManager {
     private final int maxPartitionNum;
     private final int maxBucketNum;
     private final LakeCatalogDynamicLoader lakeCatalogDynamicLoader;
+    private final Clock clock;
 
     public static final Set<String> SENSITIVE_TABLE_OPTIONS = new HashSet<>();
 
@@ -91,20 +95,31 @@ public class MetadataManager {
         SENSITIVE_TABLE_OPTIONS.add("key");
     }
 
+    public MetadataManager(
+            ZooKeeperClient zookeeperClient,
+            Configuration conf,
+            LakeCatalogDynamicLoader lakeCatalogDynamicLoader) {
+        this(zookeeperClient, conf, lakeCatalogDynamicLoader, SystemClock.getInstance());
+    }
+
     /**
      * Creates a new metadata manager.
      *
      * @param zookeeperClient the zookeeper client
      * @param conf the cluster configuration
+     * @param lakeCatalogDynamicLoader the lake catalog dynamic loader
+     * @param clock the clock
      */
     public MetadataManager(
             ZooKeeperClient zookeeperClient,
             Configuration conf,
-            LakeCatalogDynamicLoader lakeCatalogDynamicLoader) {
+            LakeCatalogDynamicLoader lakeCatalogDynamicLoader,
+            Clock clock) {
         this.zookeeperClient = zookeeperClient;
         this.maxPartitionNum = conf.get(ConfigOptions.MAX_PARTITION_NUM);
         this.maxBucketNum = conf.get(ConfigOptions.MAX_BUCKET_NUM);
         this.lakeCatalogDynamicLoader = lakeCatalogDynamicLoader;
+        this.clock = clock;
     }
 
     public void createDatabase(
@@ -422,7 +437,7 @@ public class MetadataManager {
                 // pre alter table properties, e.g. create lake table in lake storage if it's to
                 // enable datalake for the table
                 preAlterTableProperties(
-                        tablePath,
+                        tableInfo,
                         tableDescriptor,
                         newDescriptor,
                         tableChanges,
@@ -452,7 +467,7 @@ public class MetadataManager {
     }
 
     private void preAlterTableProperties(
-            TablePath tablePath,
+            TableInfo tableInfo,
             TableDescriptor tableDescriptor,
             TableDescriptor newDescriptor,
             List<TableChange> tableChanges,
@@ -460,6 +475,7 @@ public class MetadataManager {
         LakeCatalog lakeCatalog =
                 lakeCatalogDynamicLoader.getLakeCatalogContainer().getLakeCatalog();
 
+        TablePath tablePath = tableInfo.getTablePath();
         if (isDataLakeEnabled(newDescriptor)) {
             if (lakeCatalog == null) {
                 throw new InvalidAlterTableException(
@@ -470,6 +486,18 @@ public class MetadataManager {
 
             // to enable lake table
             if (!isDataLakeEnabled(tableDescriptor)) {
+                // validate before enabling datalake on an existing table
+                try {
+                    validateBeforeEnableDataLake(
+                            tableInfo, lakeCatalog, lakeCatalogContext, zookeeperClient, clock);
+                } catch (Exception e) {
+                    if (e instanceof InvalidAlterTableException) {
+                        throw (InvalidAlterTableException) e;
+                    }
+                    throw new FlussRuntimeException(
+                            "Failed to validate enabling datalake for table " + tablePath, e);
+                }
+
                 // before create table in fluss, we may create in lake
                 try {
                     lakeCatalog.createTable(tablePath, newDescriptor, lakeCatalogContext);

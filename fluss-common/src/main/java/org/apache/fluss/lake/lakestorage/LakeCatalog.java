@@ -26,9 +26,10 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.security.acl.FlussPrincipal;
 
 import java.util.List;
+import java.util.Optional;
 
 /**
- * A catalog interface to modify metadata in external datalake.
+ * A catalog interface to modify or get metadata in external datalake.
  *
  * @since 0.7
  */
@@ -56,6 +57,17 @@ public interface LakeCatalog extends AutoCloseable {
      */
     void alterTable(TablePath tablePath, List<TableChange> tableChanges, Context context)
             throws TableNotExistException;
+
+    /**
+     * Get the latest snapshot info for the given table.
+     *
+     * @param tablePath path of the table to get the latest snapshot info
+     * @param context contextual information needed for get latest snapshot info
+     * @return the latest snapshot information for the given table, or empty if the table does not
+     *     exist or has no snapshots.
+     * @since 0.9
+     */
+    Optional<LakeSnapshotInfo> getLatestSnapshotInfo(TablePath tablePath, Context context);
 
     @Override
     default void close() throws Exception {

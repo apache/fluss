@@ -22,12 +22,15 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.InvalidAlterTableException;
 import org.apache.fluss.exception.TableAlreadyExistException;
 import org.apache.fluss.exception.TableNotExistException;
+import org.apache.fluss.lake.committer.LakeCommitter;
 import org.apache.fluss.lake.lakestorage.LakeCatalog;
+import org.apache.fluss.lake.lakestorage.LakeSnapshotInfo;
 import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.utils.IOUtils;
 
+import org.apache.paimon.Snapshot;
 import org.apache.paimon.catalog.Catalog;
 import org.apache.paimon.catalog.CatalogContext;
 import org.apache.paimon.catalog.CatalogFactory;
@@ -44,6 +47,7 @@ import org.slf4j.LoggerFactory;
 
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Optional;
 
 import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toPaimon;
 import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toPaimonSchema;
@@ -131,6 +135,36 @@ public class PaimonLakeCatalog implements LakeCatalog {
             // This shouldn't happen for AddColumn operations
             throw new InvalidAlterTableException(e.getMessage());
         }
+    }
+
+    @Override
+    public Optional<LakeSnapshotInfo> getLatestSnapshotInfo(TablePath tablePath, Context context) {
+        Identifier identifier =
+                Identifier.create(tablePath.getDatabaseName(), tablePath.getTableName());
+        Table paimonTable;
+        try {
+            paimonTable = paimonCatalog.getTable(identifier);
+        } catch (Catalog.TableNotExistException e) {
+            return Optional.empty();
+        }
+
+        FileStoreTable fileStoreTable = (FileStoreTable) paimonTable;
+        Snapshot snapshot = fileStoreTable.snapshotManager().latestSnapshot();
+        if (snapshot == null) {
+            return Optional.empty();
+        }
+
+        String flussOffsets =
+                Optional.ofNullable(snapshot.properties())
+                        .map(
+                                props ->
+                                        props.get(
+                                                LakeCommitter
+                                                        .FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY))
+                        .orElse(null);
+
+        return Optional.of(
+                new LakeSnapshotInfo(snapshot.id(), snapshot.timeMillis(), flussOffsets));
     }
 
     private boolean shouldAlterTable(TablePath tablePath, List<TableChange> tableChanges)
