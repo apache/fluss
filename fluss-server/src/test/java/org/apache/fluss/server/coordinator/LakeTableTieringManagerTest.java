@@ -26,8 +26,6 @@ import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.entity.LakeTieringTableInfo;
 import org.apache.fluss.server.utils.timer.DefaultTimer;
-import org.apache.fluss.server.utils.timer.Timer;
-import org.apache.fluss.server.utils.timer.TimerTask;
 import org.apache.fluss.testutils.common.ManuallyTriggeredScheduledExecutorService;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.utils.clock.ManualClock;
@@ -36,14 +34,10 @@ import org.apache.fluss.utils.types.Tuple2;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
-import java.lang.reflect.Field;
 import java.time.Duration;
-import java.util.ArrayDeque;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
-import java.util.Queue;
-import java.util.concurrent.TimeUnit;
 
 import static org.apache.fluss.server.coordinator.LakeTableTieringManager.TIERING_SERVICE_TIMEOUT_MS;
 import static org.apache.fluss.testutils.common.CommonTestUtils.waitValue;

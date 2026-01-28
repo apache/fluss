@@ -256,33 +256,15 @@ public class LakeTableTieringManager implements AutoCloseable {
         return inLock(
                 lock,
                 () -> {
-                    while (true) {
-                        Long tableId = pendingTieringTables.poll();
-                        // no any pending table, return directly
-                        if (tableId == null) {
-                            return null;
-                        }
-
-                        TablePath tablePath = tablePaths.get(tableId);
-                        // the table has been dropped, request again
-                        if (tablePath == null) {
-                            continue;
-                        }
-
-                        TieringState state = tieringStates.get(tableId);
-                        if (state != TieringState.Pending) {
-                            // stale queue entry, ignore
-                            LOG.debug(
-                                    "requestTable: skipping table {} because state is {}",
-                                    tableId,
-                                    state);
-                            continue;
-                        }
-
-                        doHandleStateChange(tableId, TieringState.Tiering);
-                        long tieringEpoch = tableTierEpoch.get(tableId);
-                        return new LakeTieringTableInfo(tableId, tablePath, tieringEpoch);
+                    Long tableId = pendingTieringTables.poll();
+                    TablePath tablePath = tablePaths.get(tableId);
+                    // the table has been dropped, request again
+                    if (tablePath == null) {
+                        return requestTable();
                     }
+                    doHandleStateChange(tableId, TieringState.Tiering);
+                    long tieringEpoch = tableTierEpoch.get(tableId);
+                    return new LakeTieringTableInfo(tableId, tablePath, tieringEpoch);
                 });
     }
 
@@ -388,7 +370,6 @@ public class LakeTableTieringManager implements AutoCloseable {
                     targetState);
             return;
         }
-
         switch (targetState) {
             case New:
             case Initialized:
