@@ -221,9 +221,6 @@ public class LakeTableTieringManager implements AutoCloseable {
                     tieringStates.remove(tableId);
                     liveTieringTableIds.remove(tableId);
                     tableTierEpoch.remove(tableId);
-                    // pendingTieringTables could potentially contain duplicates as
-                    // it's just a queue, so ensure we remove all entries
-                    while (pendingTieringTables.remove(tableId)) {}
                 });
     }
 
@@ -392,7 +389,6 @@ public class LakeTableTieringManager implements AutoCloseable {
             return;
         }
 
-        doStateChange(tableId, currentState, targetState);
         switch (targetState) {
             case New:
             case Initialized:
@@ -418,6 +414,7 @@ public class LakeTableTieringManager implements AutoCloseable {
                 // do nothing
                 break;
         }
+        doStateChange(tableId, currentState, targetState);
     }
 
     private boolean isValidStateTransition(
