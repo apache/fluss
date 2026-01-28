@@ -47,6 +47,7 @@ import org.apache.fluss.metadata.MergeEngineType;
 import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
@@ -389,7 +390,9 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                                 tablePath,
                                 tableDescriptor,
                                 new DefaultLakeCatalogContext(
-                                        true, currentSession().getPrincipal()));
+                                        true,
+                                        currentSession().getPrincipal(),
+                                        tableDescriptor.getSchema()));
             } catch (TableAlreadyExistException e) {
                 throw new LakeTableAlreadyExistException(e.getMessage(), e);
             }
@@ -428,7 +431,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                     tablePath,
                     alterSchemaChanges,
                     request.isIgnoreIfNotExists(),
-                    lakeCatalogContext);
+                    currentSession().getPrincipal());
         }
 
         if (!alterTableConfigChanges.isEmpty()) {
@@ -437,7 +440,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                     alterTableConfigChanges,
                     tablePropertyChanges,
                     request.isIgnoreIfNotExists(),
-                    lakeCatalogContext);
+                    currentSession().getPrincipal());
         }
 
         return CompletableFuture.completedFuture(new AlterTableResponse());
@@ -1011,11 +1014,13 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
 
         private final boolean isCreatingFlussTable;
         private final FlussPrincipal flussPrincipal;
+        private final Schema schema;
 
         public DefaultLakeCatalogContext(
-                boolean isCreatingFlussTable, FlussPrincipal flussPrincipal) {
+                boolean isCreatingFlussTable, FlussPrincipal flussPrincipal, Schema schema) {
             this.isCreatingFlussTable = isCreatingFlussTable;
             this.flussPrincipal = flussPrincipal;
+            this.schema = schema;
         }
 
         @Override
@@ -1026,6 +1031,11 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         @Override
         public FlussPrincipal getFlussPrincipal() {
             return flussPrincipal;
+        }
+
+        @Override
+        public Schema getFlussSchema() {
+            return schema;
         }
     }
 

@@ -45,6 +45,7 @@ import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.security.acl.FlussPrincipal;
 import org.apache.fluss.server.entity.TablePropertyChanges;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.DatabaseRegistration;
@@ -325,7 +326,7 @@ public class MetadataManager {
             TablePath tablePath,
             List<TableChange> schemaChanges,
             boolean ignoreIfNotExists,
-            LakeCatalog.Context lakeCatalogContext)
+            FlussPrincipal flussPrincipal)
             throws TableNotExistException, TableNotPartitionedException {
         try {
 
@@ -334,7 +335,9 @@ public class MetadataManager {
             // validate the table column changes
             if (!schemaChanges.isEmpty()) {
                 Schema newSchema = SchemaUpdate.applySchemaChanges(table, schemaChanges);
-
+                LakeCatalog.Context lakeCatalogContext =
+                        new CoordinatorService.DefaultLakeCatalogContext(
+                                false, flussPrincipal, table.getSchema());
                 // Lake First: sync to Lake before updating Fluss schema
                 syncSchemaChangesToLake(tablePath, table, schemaChanges, lakeCatalogContext);
 
@@ -396,7 +399,7 @@ public class MetadataManager {
             List<TableChange> tableChanges,
             TablePropertyChanges tablePropertyChanges,
             boolean ignoreIfNotExists,
-            LakeCatalog.Context lakeCatalogContext) {
+            FlussPrincipal flussPrincipal) {
         try {
             // it throws TableNotExistException if the table or database not exists
             TableRegistration tableReg = getTableRegistration(tablePath);
@@ -426,7 +429,7 @@ public class MetadataManager {
                         tableDescriptor,
                         newDescriptor,
                         tableChanges,
-                        lakeCatalogContext);
+                        flussPrincipal);
                 // update the table to zk
                 TableRegistration updatedTableRegistration =
                         tableReg.newProperties(
@@ -456,7 +459,10 @@ public class MetadataManager {
             TableDescriptor tableDescriptor,
             TableDescriptor newDescriptor,
             List<TableChange> tableChanges,
-            LakeCatalog.Context lakeCatalogContext) {
+            FlussPrincipal flussPrincipal) {
+        LakeCatalog.Context lakeCatalogContext =
+                new CoordinatorService.DefaultLakeCatalogContext(
+                        false, flussPrincipal, newDescriptor.getSchema());
         LakeCatalog lakeCatalog =
                 lakeCatalogDynamicLoader.getLakeCatalogContainer().getLakeCatalog();
 
