@@ -33,6 +33,16 @@ import java.util.Arrays;
 public class DataTypes {
 
     /**
+     * Parses a string and returns the corresponding {@link DataType}.
+     *
+     * @param typeString string to be parsed
+     * @return parsed data type
+     */
+    public static DataType parse(String typeString) {
+        return DataTypeParser.parse(typeString);
+    }
+
+    /**
      * Data type of a fixed-length binary string (=a sequence of bytes) {@code BINARY(n)} where
      * {@code n} is the number of bytes. {@code n} must have a value between 1 and {@link
      * Integer#MAX_VALUE} (both inclusive).
