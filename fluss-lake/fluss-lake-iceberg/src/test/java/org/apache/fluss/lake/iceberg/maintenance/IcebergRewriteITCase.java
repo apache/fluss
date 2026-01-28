@@ -37,6 +37,7 @@ import java.util.Collections;
 import java.util.Comparator;
 import java.util.Iterator;
 import java.util.List;
+import java.util.UUID;
 
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -167,7 +168,7 @@ class IcebergRewriteITCase extends FlinkIcebergTieringTestBase {
     void testLogTableCompaction() throws Exception {
         JobClient jobClient = buildTieringJob(execEnv);
         try {
-            TablePath t1 = TablePath.of(DEFAULT_DB, "log_table");
+            TablePath t1 = TablePath.of(DEFAULT_DB, "log_table_" + UUID.randomUUID());
             long t1Id = createLogTable(t1, 1, true, logSchema);
             TableBucket t1Bucket = new TableBucket(t1Id, 0);
 
@@ -210,6 +211,7 @@ class IcebergRewriteITCase extends FlinkIcebergTieringTestBase {
             List<InternalRow> rows)
             throws Exception {
         writeRows(tablePath, rows, append);
+        waitForIcebergSnapshotOffset(tablePath, tableBucket, expectedLogEndOffset);
         assertReplicaStatus(tableBucket, expectedLogEndOffset);
         return rows;
     }
