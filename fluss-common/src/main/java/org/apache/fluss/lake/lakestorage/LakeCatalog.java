@@ -25,6 +25,8 @@ import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.security.acl.FlussPrincipal;
 
+import javax.annotation.Nullable;
+
 import java.util.List;
 
 /**
@@ -88,9 +90,10 @@ public interface LakeCatalog extends AutoCloseable {
         /**
          * Get the current table info of fluss.
          *
-         * @return the current table info of fluss.
+         * @return the current table info of fluss. Null if the table does not exist.
          * @since 0.10
          */
+        @Nullable
         TableDescriptor getCurrentTable();
 
         /** Get the expected table info of fluss. */

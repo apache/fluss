@@ -1011,16 +1011,20 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
 
         private final boolean isCreatingFlussTable;
         private final FlussPrincipal flussPrincipal;
-        private final TableDescriptor currentTable;
+        @Nullable private final TableDescriptor currentTable;
         private final TableDescriptor expectedTable;
 
         public DefaultLakeCatalogContext(
                 boolean isCreatingFlussTable,
                 FlussPrincipal flussPrincipal,
-                TableDescriptor currentTable,
+                @Nullable TableDescriptor currentTable,
                 TableDescriptor expectedTable) {
             this.isCreatingFlussTable = isCreatingFlussTable;
             this.flussPrincipal = flussPrincipal;
+            if (!isCreatingFlussTable) {
+                checkNotNull(
+                        currentTable, "currentTable must be provided when altering a Fluss table.");
+            }
             this.currentTable = currentTable;
             this.expectedTable = expectedTable;
         }
@@ -1035,6 +1039,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
             return flussPrincipal;
         }
 
+        @Nullable
         @Override
         public TableDescriptor getCurrentTable() {
             return currentTable;

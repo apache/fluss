@@ -107,7 +107,7 @@ public class PaimonTableValidation {
                             systemTimestampField.description()));
         }
         existingSchema = existingSchema.copy(RowType.of(existingFields.toArray(new DataField[0])));
-        return existingSchema.equals(newSchema);
+        return equalIgnoreFieldId(existingSchema, newSchema);
     }
 
     private static boolean equalIgnoreFieldId(Schema existingSchema, Schema newSchema) {

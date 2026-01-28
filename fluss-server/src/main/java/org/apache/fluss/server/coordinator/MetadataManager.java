@@ -463,7 +463,7 @@ public class MetadataManager {
             FlussPrincipal flussPrincipal) {
         LakeCatalog.Context lakeCatalogContext =
                 new CoordinatorService.DefaultLakeCatalogContext(
-                        false, flussPrincipal, null, newDescriptor);
+                        false, flussPrincipal, tableDescriptor, newDescriptor);
         LakeCatalog lakeCatalog =
                 lakeCatalogDynamicLoader.getLakeCatalogContainer().getLakeCatalog();
 
