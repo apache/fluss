@@ -27,6 +27,7 @@ import org.apache.fluss.metrics.HistogramStatistics;
 import org.apache.fluss.metrics.Meter;
 import org.apache.fluss.metrics.Metric;
 import org.apache.fluss.metrics.groups.MetricGroup;
+import org.apache.fluss.metrics.reporter.MetricReporter;
 
 import io.prometheus.client.Collector;
 import io.prometheus.client.CollectorRegistry;
@@ -51,7 +52,7 @@ import java.util.regex.Pattern;
  * Base class for Prometheus metric reporters. Contains common logic for metric registration and
  * collector management.
  */
-public abstract class AbstractPrometheusReporter {
+public abstract class AbstractPrometheusReporter implements MetricReporter {
 
     private static final Logger LOG = LoggerFactory.getLogger(AbstractPrometheusReporter.class);
 
@@ -82,6 +83,7 @@ public abstract class AbstractPrometheusReporter {
      *
      * @param config the configuration
      */
+    @Override
     public void open(Configuration config) {
         // default no-op
     }
@@ -90,6 +92,7 @@ public abstract class AbstractPrometheusReporter {
      * Closes the reporter and clears the registry. Subclasses should override to add their own
      * cleanup logic and call super.close().
      */
+    @Override
     public void close() {
         registry.clear();
     }
@@ -101,6 +104,7 @@ public abstract class AbstractPrometheusReporter {
      * @param metricName the name of the metric
      * @param group the group that contains the metric
      */
+    @Override
     public void notifyOfAddedMetric(Metric metric, String metricName, MetricGroup group) {
         notifyOfAddedMetric(metric, metricName, group, true);
     }
@@ -168,6 +172,7 @@ public abstract class AbstractPrometheusReporter {
      * @param metricName the name of the metric
      * @param group the group that contains the metric
      */
+    @Override
     public void notifyOfRemovedMetric(Metric metric, String metricName, MetricGroup group) {
         notifyOfRemovedMetric(metric, metricName, group, true);
     }

@@ -17,8 +17,6 @@
 
 package org.apache.fluss.metrics.prometheus;
 
-import org.apache.fluss.metrics.reporter.MetricReporter;
-
 import io.prometheus.client.exporter.HTTPServer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -29,8 +27,11 @@ import java.util.Iterator;
 
 import static org.apache.fluss.utils.Preconditions.checkState;
 
-/** {@link MetricReporter} that exports {@link Metric Metrics} via Prometheus HTTP server. */
-public class PrometheusReporter extends AbstractPrometheusReporter implements MetricReporter {
+/**
+ * {@link PrometheusReporter} that exports {@link org.apache.fluss.metrics.Metric} via Prometheus
+ * HTTP server.
+ */
+public class PrometheusReporter extends AbstractPrometheusReporter {
 
     private static final Logger LOG = LoggerFactory.getLogger(PrometheusReporter.class);
 
