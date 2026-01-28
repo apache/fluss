@@ -64,3 +64,53 @@ Selector labels
 app.kubernetes.io/name: {{ include "fluss.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
+
+{{/*
+Generate JAAS configuration for SASL
+*/}}
+{{- define "fluss.sasl.jaasConfig" -}}
+{{- if .Values.sasl.jaasConfig }}
+{{- .Values.sasl.jaasConfig -}}
+{{- else }}
+FlussServer {
+   org.apache.fluss.security.auth.sasl.plain.PlainLoginModule required
+   {{- range .Values.sasl.users }}
+   user_{{ .username }}="{{ .password }}"
+   {{- end }};
+};
+{{- end }}
+{{- end }}
+
+{{/*
+Return true if SASL is configured in any of the listener protocols
+*/}}
+{{- define "fluss.isSaslEnabled" -}}
+{{- $ctx := . -}}
+{{- $res := "" -}}
+{{- $keys := keys .Values.listeners | sortAlpha -}}
+{{- range $keys }}
+  {{- $id := . -}}
+  {{- $l := index $ctx.Values.listeners $id -}}
+  {{- if regexFind "SASL" (upper $l.protocol) -}}
+    {{- $res = "true" -}}
+  {{- end -}}
+{{- end -}}
+{{- if $res -}}
+{{- true -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Generate ID:SECURITY list for listener protocols
+*/}}
+{{- define "fluss.listeners.protocolMap" -}}
+{{- $ctx := . -}}
+{{- $parts := list -}}
+{{- $keys := keys .Values.listeners | sortAlpha -}}
+{{- range $keys }}
+  {{- $id := . -}}
+  {{- $l := index $ctx.Values.listeners $id -}}
+  {{- $parts = append $parts (printf "%s:%s" (upper $id) (upper $l.protocol)) -}}
+{{- end -}}
+{{- join "," $parts -}}
+{{- end }}
