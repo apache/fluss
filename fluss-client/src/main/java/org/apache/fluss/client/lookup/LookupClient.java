@@ -80,8 +80,11 @@ public class LookupClient {
     }
 
     public CompletableFuture<byte[]> lookup(
-            TablePath tablePath, TableBucket tableBucket, byte[] keyBytes) {
-        LookupQuery lookup = new LookupQuery(tablePath, tableBucket, keyBytes);
+            TablePath tablePath,
+            TableBucket tableBucket,
+            byte[] keyBytes,
+            boolean insertIfNotExists) {
+        LookupQuery lookup = new LookupQuery(tablePath, tableBucket, keyBytes, insertIfNotExists);
         lookupQueue.appendLookup(lookup);
         return lookup.future();
     }
