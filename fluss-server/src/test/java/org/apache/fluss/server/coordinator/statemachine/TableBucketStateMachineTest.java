@@ -53,7 +53,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 
-import java.io.IOException;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.Collections;
@@ -87,6 +86,7 @@ class TableBucketStateMachineTest {
     private AutoPartitionManager autoPartitionManager;
     private LakeTableTieringManager lakeTableTieringManager;
     private CoordinatorMetadataCache serverMetadataCache;
+    private Configuration conf;
 
     @BeforeAll
     static void baseBeforeAll() {
@@ -97,8 +97,8 @@ class TableBucketStateMachineTest {
     }
 
     @BeforeEach
-    void beforeEach() throws IOException {
-        Configuration conf = new Configuration();
+    void beforeEach() {
+        conf = new Configuration();
         conf.setString(ConfigOptions.COORDINATOR_HOST, "localhost");
         conf.setString(ConfigOptions.REMOTE_DATA_DIR, "/tmp/fluss/remote-data");
         coordinatorContext = new CoordinatorContext();
@@ -264,7 +264,7 @@ class TableBucketStateMachineTest {
                         autoPartitionManager,
                         lakeTableTieringManager,
                         TestingMetricGroups.COORDINATOR_METRICS,
-                        new Configuration(),
+                        conf,
                         Executors.newFixedThreadPool(
                                 1, new ExecutorThreadFactory("test-coordinator-io")),
                         new MetadataManager(

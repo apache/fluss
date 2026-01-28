@@ -523,6 +523,9 @@ public class ServerRpcMessageUtils {
                 .setTablePath()
                 .setDatabaseName(tablePath.getDatabaseName())
                 .setTableName(tablePath.getTableName());
+        if (tableInfo.getRemoteDataDir().isPresent()) {
+            pbTableMetadata.setRemoteDataDir(tableInfo.getRemoteDataDir().get().getPath());
+        }
         pbTableMetadata.addAllBucketMetadatas(
                 toPbBucketMetadata(tableMetadata.getBucketMetadataList()));
         return pbTableMetadata;
@@ -574,6 +577,9 @@ public class ServerRpcMessageUtils {
                         tableId,
                         pbTableMetadata.getSchemaId(),
                         TableDescriptor.fromJsonBytes(pbTableMetadata.getTableJson()),
+                        pbTableMetadata.hasRemoteDataDir()
+                                ? pbTableMetadata.getRemoteDataDir()
+                                : null,
                         pbTableMetadata.getCreatedTime(),
                         pbTableMetadata.getModifiedTime());
 

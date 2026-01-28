@@ -87,7 +87,7 @@ public class RebalanceManagerTest {
                         new RemoteDirDynamicLoader(conf),
                         conf);
         lakeTableTieringManager = new LakeTableTieringManager();
-        CoordinatorEventProcessor eventProcessor = buildCoordinatorEventProcessor();
+        CoordinatorEventProcessor eventProcessor = buildCoordinatorEventProcessor(conf);
         rebalanceManager = new RebalanceManager(eventProcessor, zookeeperClient);
         rebalanceManager.startup();
     }
@@ -123,7 +123,7 @@ public class RebalanceManagerTest {
                 .hasValue(new RebalanceTask(rebalanceId, COMPLETED, new HashMap<>()));
     }
 
-    private CoordinatorEventProcessor buildCoordinatorEventProcessor() {
+    private CoordinatorEventProcessor buildCoordinatorEventProcessor(Configuration conf) {
         return new CoordinatorEventProcessor(
                 zookeeperClient,
                 serverMetadataCache,
@@ -132,7 +132,7 @@ public class RebalanceManagerTest {
                 autoPartitionManager,
                 lakeTableTieringManager,
                 TestingMetricGroups.COORDINATOR_METRICS,
-                new Configuration(),
+                conf,
                 Executors.newFixedThreadPool(1, new ExecutorThreadFactory("test-coordinator-io")),
                 metadataManager);
     }

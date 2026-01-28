@@ -29,6 +29,7 @@ import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.gateway.CoordinatorGateway;
+import org.apache.fluss.server.coordinator.remote.RemoteStorageCleaner;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.server.testutils.RpcMessageTestUtils;
 import org.apache.fluss.server.zk.ZooKeeperClient;
@@ -214,29 +215,29 @@ class RemoteStorageCleanerITCase {
                         physicalTablePath,
                         tablePartition);
         remoteLogPartitionDir.getFileSystem().mkdirs(remoteLogPartitionDir);
-        File remoteLogPartitionDirFile = new File(remoteLogPartitionDir.getPath());
-        assertThat(remoteLogPartitionDirFile.exists()).isTrue();
+        assertThat(remoteLogPartitionDir.getFileSystem().exists(remoteLogPartitionDir)).isTrue();
 
         // Mock remote kv dirs
-        File remoteKvPartitionDirFile = null;
+        FsPath remoteKvPartitionDir;
         if (isPkTable) {
-            FsPath remoteKvPartitionDir =
+            remoteKvPartitionDir =
                     FlussPaths.remotePartitionDir(
                             FlussPaths.remoteKvDir(partitionRemoteDataDir),
                             physicalTablePath,
                             tablePartition);
             remoteKvPartitionDir.getFileSystem().mkdirs(remoteKvPartitionDir);
-            remoteKvPartitionDirFile = new File(remoteKvPartitionDir.getPath());
-            assertThat(remoteKvPartitionDirFile.exists()).isTrue();
+            assertThat(remoteKvPartitionDir.getFileSystem().exists(remoteKvPartitionDir)).isTrue();
+        } else {
+            remoteKvPartitionDir = null;
         }
 
         // Mock remote lake dirs
         FsPath remoteLakeDir =
                 FlussPaths.remoteLakeTableSnapshotDir(
-                        remoteTableDataDir.getPath(), tablePath, tableId);
+                        remoteTableDataDir.toUri().toString(), tablePath, tableId);
         remoteLakeDir.getFileSystem().mkdirs(remoteLakeDir);
-        File remoteLakeDirFile = new File(remoteLakeDir.getPath());
-        assertThat(remoteLakeDirFile.exists()).isTrue();
+        System.out.println("lake file: " + remoteLakeDir);
+        assertThat(remoteLakeDir.getFileSystem().exists(remoteLakeDir)).isTrue();
 
         // Drop table
         coordinatorGateway
@@ -249,18 +250,26 @@ class RemoteStorageCleanerITCase {
         // Verify remote log partition dir is deleted
         retry(
                 Duration.ofMinutes(1),
-                () -> assertThat(remoteLogPartitionDirFile.exists()).isFalse());
+                () ->
+                        assertThat(remoteLogPartitionDir.getFileSystem().exists(remoteLakeDir))
+                                .isFalse());
 
         // Verify remote kv partition dir is deleted for PK table
         if (isPkTable) {
-            File finalRemoteKvPartitionDirFile = remoteKvPartitionDirFile;
             retry(
                     Duration.ofMinutes(1),
-                    () -> assertThat(finalRemoteKvPartitionDirFile.exists()).isFalse());
+                    () ->
+                            assertThat(
+                                            remoteKvPartitionDir
+                                                    .getFileSystem()
+                                                    .exists(remoteKvPartitionDir))
+                                    .isFalse());
         }
 
         // Verify remote lake dir is deleted
-        retry(Duration.ofSeconds(10), () -> assertThat(remoteLakeDirFile.exists()).isFalse());
+        retry(
+                Duration.ofMinutes(1),
+                () -> assertThat(remoteLakeDir.getFileSystem().exists(remoteLakeDir)).isFalse());
     }
 
     @ParameterizedTest

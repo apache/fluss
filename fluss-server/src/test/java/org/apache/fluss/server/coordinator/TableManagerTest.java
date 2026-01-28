@@ -19,6 +19,9 @@ package org.apache.fluss.server.coordinator;
 
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.fs.FsPath;
+import org.apache.fluss.metadata.PartitionInfo;
+import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableBucketReplica;
 import org.apache.fluss.metadata.TableInfo;
@@ -26,6 +29,7 @@ import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.server.coordinator.event.CoordinatorEvent;
 import org.apache.fluss.server.coordinator.event.DeleteReplicaResponseReceivedEvent;
 import org.apache.fluss.server.coordinator.event.TestingEventManager;
+import org.apache.fluss.server.coordinator.remote.RemoteStorageCleaner;
 import org.apache.fluss.server.coordinator.statemachine.ReplicaStateMachine;
 import org.apache.fluss.server.coordinator.statemachine.TableBucketStateMachine;
 import org.apache.fluss.server.entity.DeleteReplicaResultForBucket;
@@ -58,6 +62,7 @@ import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
+import static org.apache.fluss.record.TestData.DATA1_PARTITIONED_TABLE_DESCRIPTOR;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR_PK;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_ID;
@@ -83,6 +88,7 @@ class TableManagerTest {
     private TableManager tableManager;
     private TestingEventManager testingEventManager;
     private TestCoordinatorChannelManager testCoordinatorChannelManager;
+    private FsPath remoteDataDir;
 
     @BeforeAll
     static void baseBeforeAll() {
@@ -114,8 +120,9 @@ class TableManagerTest {
         testingEventManager = new TestingEventManager();
         coordinatorContext = new CoordinatorContext();
         testCoordinatorChannelManager = new TestCoordinatorChannelManager();
+        remoteDataDir = new FsPath("/tmp/fluss/remote-data");
         Configuration conf = new Configuration();
-        conf.setString(ConfigOptions.REMOTE_DATA_DIR, "/tmp/fluss/remote-data");
+        conf.setString(ConfigOptions.REMOTE_DATA_DIR, remoteDataDir.getPath());
         CoordinatorRequestBatch coordinatorRequestBatch =
                 new CoordinatorRequestBatch(
                         testCoordinatorChannelManager, testingEventManager, coordinatorContext);
@@ -283,8 +290,15 @@ class TableManagerTest {
                 partitionId, partitionName, partitionAssignment, null, DATA1_TABLE_PATH, tableId);
 
         // create partition
+        PartitionInfo partitionInfo =
+                new PartitionInfo(
+                        partitionId,
+                        ResolvedPartitionSpec.fromPartitionName(
+                                DATA1_PARTITIONED_TABLE_DESCRIPTOR.getPartitionKeys(),
+                                partitionName),
+                        remoteDataDir);
         tableManager.onCreateNewPartition(
-                DATA1_TABLE_PATH, tableId, partitionId, partitionName, partitionAssignment);
+                DATA1_TABLE_PATH, tableId, partitionInfo, partitionAssignment);
 
         // all replicas should be online
         checkReplicaOnline(tableId, partitionId, partitionAssignment);

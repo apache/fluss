@@ -1062,6 +1062,8 @@ class CoordinatorEventProcessorTest {
     }
 
     private CoordinatorEventProcessor buildCoordinatorEventProcessor() {
+        Configuration conf = new Configuration();
+        conf.set(ConfigOptions.REMOTE_DATA_DIR, remoteDataDir.getPath());
         return new CoordinatorEventProcessor(
                 zookeeperClient,
                 serverMetadataCache,
@@ -1070,7 +1072,7 @@ class CoordinatorEventProcessorTest {
                 autoPartitionManager,
                 lakeTableTieringManager,
                 TestingMetricGroups.COORDINATOR_METRICS,
-                new Configuration(),
+                conf,
                 Executors.newFixedThreadPool(1, new ExecutorThreadFactory("test-coordinator-io")),
                 metadataManager);
     }

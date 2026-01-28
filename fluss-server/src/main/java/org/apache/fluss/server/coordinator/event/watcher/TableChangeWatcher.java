@@ -250,7 +250,12 @@ public class TableChangeWatcher {
             }
             eventManager.put(
                     new CreatePartitionEvent(
-                            tablePath, tableId, partitionId, partitionName, partitionAssignment));
+                            tablePath,
+                            tableId,
+                            partitionId,
+                            partitionName,
+                            partitionAssignment,
+                            partition.getRemoteDataDir()));
         }
 
         private void processTableRegistrationChange(TablePath tablePath, ChildData newData) {

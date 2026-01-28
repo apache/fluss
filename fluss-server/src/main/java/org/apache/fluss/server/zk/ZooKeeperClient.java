@@ -658,10 +658,10 @@ public class ZooKeeperClient implements AutoCloseable {
         return partitions;
     }
 
-    /** Get the partition and the id for the partitions of tables in ZK. */
-    public Map<TablePath, Map<String, Long>> getPartitionNameAndIdsForTables(
-            List<TablePath> tablePaths) throws Exception {
-        Map<TablePath, Map<String, Long>> result = new HashMap<>();
+    /** Get the partition name and registrations for the partitions of tables in ZK. */
+    public Map<TablePath, Map<String, PartitionRegistration>>
+            getPartitionNameAndRegistrationsForTables(List<TablePath> tablePaths) throws Exception {
+        Map<TablePath, Map<String, PartitionRegistration>> result = new HashMap<>();
 
         Map<TablePath, List<String>> tablePath2Partitions = getPartitionsForTables(tablePaths);
 
@@ -684,9 +684,10 @@ public class ZooKeeperClient implements AutoCloseable {
                 String zkPath = response.getPath();
                 TablePath tablePath = zkPath2TablePath.get(zkPath);
                 String partitionName = zkPath2PartitionName.get(zkPath);
-                long partitionId = PartitionZNode.decode(response.getData()).getPartitionId();
+                PartitionRegistration partitionRegistration =
+                        PartitionZNode.decode(response.getData());
                 result.computeIfAbsent(tablePath, k -> new HashMap<>())
-                        .put(partitionName, partitionId);
+                        .put(partitionName, partitionRegistration);
             } else {
                 LOG.warn(
                         "Failed to get data for path {}: {}",

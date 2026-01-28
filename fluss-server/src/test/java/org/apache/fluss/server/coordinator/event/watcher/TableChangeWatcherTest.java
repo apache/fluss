@@ -151,6 +151,7 @@ class TableChangeWatcherTest {
                                     tableId,
                                     schemaInfo.getSchemaId(),
                                     TEST_TABLE,
+                                    remoteDataDir.getPath(),
                                     currentMillis,
                                     currentMillis),
                             tableAssignment));
@@ -215,6 +216,7 @@ class TableChangeWatcherTest {
                                 tableId,
                                 schemaInfo.getSchemaId(),
                                 partitionedTable,
+                                remoteDataDir.getPath(),
                                 currentMillis,
                                 currentMillis),
                         TableAssignment.builder().build()));
@@ -241,9 +243,11 @@ class TableChangeWatcherTest {
 
         // create partitions events
         expectedEvents.add(
-                new CreatePartitionEvent(tablePath, tableId, 1L, "2011", partitionAssignment));
+                new CreatePartitionEvent(
+                        tablePath, tableId, 1L, "2011", partitionAssignment, null));
         expectedEvents.add(
-                new CreatePartitionEvent(tablePath, tableId, 2L, "2022", partitionAssignment));
+                new CreatePartitionEvent(
+                        tablePath, tableId, 2L, "2022", partitionAssignment, null));
 
         retry(
                 Duration.ofMinutes(1),
@@ -293,6 +297,7 @@ class TableChangeWatcherTest {
                                     tableId,
                                     schemaInfo.getSchemaId(),
                                     TEST_TABLE,
+                                    remoteDataDir.getPath(),
                                     currentMillis,
                                     currentMillis),
                             tableAssignment));
@@ -369,6 +374,7 @@ class TableChangeWatcherTest {
                                 tableId,
                                 schemaInfo.getSchemaId(),
                                 TEST_TABLE,
+                                remoteDataDir.getPath(),
                                 currentMillis,
                                 currentMillis),
                         tableAssignment));

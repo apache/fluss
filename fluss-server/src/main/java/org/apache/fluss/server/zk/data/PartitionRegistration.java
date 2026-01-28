@@ -35,7 +35,10 @@ public class PartitionRegistration {
     private final long tableId;
     private final long partitionId;
 
-    /** Nullable for backward compatibility. Will be null for partitions created before 0.9 */
+    /**
+     * The remote data directory of the partition. It is null if and only if it is deserialized from
+     * an existing node produced by an older version that does not support multiple remote paths.
+     */
     private final @Nullable FsPath remoteDataDir;
 
     public PartitionRegistration(long tableId, long partitionId, @Nullable FsPath remoteDataDir) {

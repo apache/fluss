@@ -1,0 +1,110 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
+ *
+ *    http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package org.apache.fluss.server.coordinator.remote;
+
+import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.fs.FileSystem;
+import org.apache.fluss.fs.FsPath;
+import org.apache.fluss.metadata.PhysicalTablePath;
+import org.apache.fluss.metadata.TablePartition;
+import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.utils.FlussPaths;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import javax.annotation.Nullable;
+
+import java.io.IOException;
+import java.util.concurrent.ExecutorService;
+
+/** A cleaner for cleaning kv snapshots, log segments files and lake metadata of table. */
+public class RemoteStorageCleaner {
+
+    private static final Logger LOG = LoggerFactory.getLogger(RemoteStorageCleaner.class);
+
+    private final FsPath defaultRemoteDataDir;
+
+    private final ExecutorService ioExecutor;
+
+    public RemoteStorageCleaner(Configuration configuration, ExecutorService ioExecutor) {
+        this.defaultRemoteDataDir =
+                new FsPath(configuration.getString(ConfigOptions.REMOTE_DATA_DIR));
+        this.ioExecutor = ioExecutor;
+    }
+
+    public void asyncDeleteTableRemoteDir(
+            @Nullable FsPath remoteDataDir, TablePath tablePath, boolean isKvTable, long tableId) {
+        if (remoteDataDir == null) {
+            remoteDataDir = defaultRemoteDataDir;
+        }
+
+        if (isKvTable) {
+            FsPath remoteKvDir = FlussPaths.remoteKvDir(remoteDataDir);
+            asyncDeleteDir(FlussPaths.remoteTableDir(remoteKvDir, tablePath, tableId));
+        }
+
+        FsPath remoteLogDir = FlussPaths.remoteLogDir(remoteDataDir);
+        asyncDeleteDir(FlussPaths.remoteTableDir(remoteLogDir, tablePath, tableId));
+
+        // Always delete lake snapshot metadata directory, regardless of isLakeEnabled flag.
+        // This is because if a table was enabled datalake but turned off later, and then the table
+        // was deleted, we may leave the lake snapshot metadata files behind if we only delete when
+        // isLakeEnabled is true. By always deleting, we ensure cleanup of any existing metadata
+        // files.
+        asyncDeleteDir(
+                FlussPaths.remoteLakeTableSnapshotDir(
+                        remoteDataDir.toUri().toString(), tablePath, tableId));
+    }
+
+    public void asyncDeletePartitionRemoteDir(
+            @Nullable FsPath remoteDataDir,
+            PhysicalTablePath physicalTablePath,
+            boolean isKvTable,
+            TablePartition tablePartition) {
+        if (remoteDataDir == null) {
+            remoteDataDir = defaultRemoteDataDir;
+        }
+
+        if (isKvTable) {
+            FsPath remoteKvDir = FlussPaths.remoteKvDir(remoteDataDir);
+            asyncDeleteDir(
+                    FlussPaths.remotePartitionDir(remoteKvDir, physicalTablePath, tablePartition));
+        }
+
+        FsPath remoteLogDir = FlussPaths.remoteLogDir(remoteDataDir);
+        asyncDeleteDir(
+                FlussPaths.remotePartitionDir(remoteLogDir, physicalTablePath, tablePartition));
+    }
+
+    private void asyncDeleteDir(FsPath fsPath) {
+        ioExecutor.submit(
+                () -> {
+                    try {
+                        FileSystem remoteFileSystem = fsPath.getFileSystem();
+                        if (remoteFileSystem.exists(fsPath)) {
+                            System.out.println("Deleting " + fsPath);
+                            remoteFileSystem.delete(fsPath, true);
+                        }
+                    } catch (IOException e) {
+                        LOG.error("Delete remote data dir {} failed.", fsPath, e);
+                    }
+                });
+    }
+}
