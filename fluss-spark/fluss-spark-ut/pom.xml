@@ -81,6 +81,20 @@
             <artifactId>fluss-test-utils</artifactId>
         </dependency>
 
+        <dependency>
+            <groupId>org.apache.fluss</groupId>
+            <artifactId>fluss-lake-paimon</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>org.apache.paimon</groupId>
+            <artifactId>paimon-bundle</artifactId>
+            <version>${paimon.version}</version>
+            <scope>test</scope>
+        </dependency>
+
         <!-- for curator TestingServer  -->
         <dependency>
             <groupId>org.apache.curator</groupId>
