@@ -25,7 +25,6 @@ import org.apache.fluss.config.{ConfigOptions, Configuration}
 import org.apache.fluss.metadata.{DataLakeFormat, TableDescriptor, TablePath}
 import org.apache.fluss.row.InternalRow
 import org.apache.fluss.server.testutils.FlussClusterExtension
-import org.apache.fluss.spark.FlussSparkSessionExtensions
 
 import org.apache.spark.sql.QueryTest
 import org.apache.spark.sql.test.SharedSparkSession
@@ -48,17 +47,6 @@ class FlussSparkTestBase extends QueryTest with SharedSparkSession {
       .setNumOfTabletServers(3)
       .build
 
-  override protected def sparkConf: SparkConf = {
-    super.sparkConf
-      .set(s"spark.sql.catalog.$DEFAULT_CATALOG", classOf[SparkCatalog].getName)
-      .set(s"spark.sql.catalog.$DEFAULT_CATALOG.bootstrap.servers", bootstrapServers)
-      .set("spark.sql.defaultCatalog", DEFAULT_CATALOG)
-      // Enable read optimized by default temporarily.
-      // TODO: remove this when https://github.com/apache/fluss/issues/2427 is done.
-      .set("spark.sql.fluss.readOptimized", "true")
-      .set("spark.sql.extensions", classOf[FlussSparkSessionExtensions].getName)
-  }
-
   override protected def beforeAll(): Unit = {
     super.beforeAll()
     flussServer.start()
@@ -73,6 +61,7 @@ class FlussSparkTestBase extends QueryTest with SharedSparkSession {
     // Enable read optimized by default temporarily.
     // TODO: remove this when https://github.com/apache/fluss/issues/2427 is done.
     spark.conf.set("spark.sql.fluss.readOptimized", "true")
+    spark.conf.set("spark.sql.extensions", classOf[FlussSparkSessionExtensions].getName)
 
     sql(s"USE $DEFAULT_DATABASE")
   }
