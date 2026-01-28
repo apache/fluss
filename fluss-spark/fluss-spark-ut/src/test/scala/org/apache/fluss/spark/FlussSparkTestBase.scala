@@ -26,6 +26,7 @@ import org.apache.fluss.metadata.{DataLakeFormat, TableDescriptor, TablePath}
 import org.apache.fluss.row.InternalRow
 import org.apache.fluss.server.testutils.FlussClusterExtension
 
+import org.apache.spark.SparkConf
 import org.apache.spark.sql.QueryTest
 import org.apache.spark.sql.test.SharedSparkSession
 
@@ -34,6 +35,11 @@ import java.time.Duration
 import scala.collection.JavaConverters._
 
 class FlussSparkTestBase extends QueryTest with SharedSparkSession {
+
+  override def sparkConf: SparkConf = {
+    super.sparkConf
+      .set("spark.sql.extensions", classOf[FlussSparkSessionExtensions].getName)
+  }
 
   protected val DEFAULT_CATALOG = "fluss_catalog"
   protected val DEFAULT_DATABASE = "fluss"
@@ -61,7 +67,6 @@ class FlussSparkTestBase extends QueryTest with SharedSparkSession {
     // Enable read optimized by default temporarily.
     // TODO: remove this when https://github.com/apache/fluss/issues/2427 is done.
     spark.conf.set("spark.sql.fluss.readOptimized", "true")
-    spark.conf.set("spark.sql.extensions", classOf[FlussSparkSessionExtensions].getName)
 
     sql(s"USE $DEFAULT_DATABASE")
   }
