@@ -394,7 +394,14 @@ abstract class ChangelogVirtualTableITCase extends AbstractTestBase {
                 break;
             }
         }
-        int id = Integer.parseInt(latestResults.getFirst().replaceAll(".*\\[(\\d+)]", "$1"));
+        // Newly inserted records after the query subscription.
+        assertThat(latestResults.getFirst()).startsWith("+I[");
+        String row = latestResults.getFirst();
+        // Extract the id from the changelog row representation.
+        String rowIdInBracketsPattern = ".*\\[(\\d+)]";
+        assertThat(row).matches(rowIdInBracketsPattern);
+        int id = Integer.parseInt(row.replaceAll(rowIdInBracketsPattern, "$1"));
+        // Verify that only records written after subscription (id > 5) are read
         assertThat(id).isGreaterThan(5);
     }
 
