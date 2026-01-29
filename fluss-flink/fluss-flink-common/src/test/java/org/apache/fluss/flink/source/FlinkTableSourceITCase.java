@@ -645,8 +645,15 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
                 writeRowsToPartition(conn, tablePath, partitionNameById.values());
         FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshot(tablePath);
 
+        // This test requires dynamically discovering newly created partitions, so
+        // 'scan.partition.discovery.interval' needs to be set to 2s (default is 1 minute),
+        // otherwise the test may hang for 1 minute.
         org.apache.flink.util.CloseableIterator<Row> rowIter =
-                tEnv.executeSql(String.format("select * from %s", tableName)).collect();
+                tEnv.executeSql(
+                                String.format(
+                                        "select * from %s /*+ OPTIONS('scan.partition.discovery.interval' = '2s') */",
+                                        tableName))
+                        .collect();
         assertResultsIgnoreOrder(rowIter, expectedRowValues, false);
 
         // then create some new partitions, and write rows to the new partitions
