@@ -69,6 +69,8 @@ import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
 import org.apache.fluss.server.kv.snapshot.KvSnapshotHandle;
+import org.apache.fluss.server.log.LogTablet;
+import org.apache.fluss.server.replica.Replica;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.ServerTags;
 import org.apache.fluss.types.DataTypeChecks;
@@ -1593,5 +1595,77 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                 .hasMessageContaining(
                         "Server tag PERMANENT_OFFLINE not exists for server 2, the current "
                                 + "server tag of this server is TEMPORARY_OFFLINE.");
+    }
+
+    @Test
+    void testAlterTableTieredLogLocalSegments() throws Exception {
+        // 1. Create table with default config = 2
+        TablePath tablePath = TablePath.of("test_db", "test_alter_tiered_segments");
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(DEFAULT_SCHEMA)
+                        .comment("test table for tiered log segments")
+                        .distributedBy(3)
+                        .build();
+
+        admin.createTable(tablePath, tableDescriptor, false).get();
+
+        // 2. Verify initial config (metadata level)
+        TableInfo tableInfo = admin.getTableInfo(tablePath).get();
+        assertThat(tableInfo.getTableConfig().getTieredLogLocalSegments()).isEqualTo(2);
+
+        // 3. Get LogTablet from TabletServer and verify initial state
+        long tableId = tableInfo.getTableId();
+        TableBucket tableBucket = new TableBucket(tableId, 0); // Get first bucket
+
+        // Wait and get leader replica
+        Replica replica = FLUSS_CLUSTER_EXTENSION.waitAndGetLeaderReplica(tableBucket);
+        LogTablet logTablet = replica.getLogTablet();
+
+        // Verify initial LogTablet internal state
+        assertThat(logTablet.getTieredLogLocalSegments()).isEqualTo(2);
+
+        // 4. Modify to 5 via Admin API
+        List<TableChange> tableChanges = new ArrayList<>();
+        tableChanges.add(TableChange.set(ConfigOptions.TABLE_TIERED_LOG_LOCAL_SEGMENTS.key(), "5"));
+        admin.alterTable(tablePath, tableChanges, false).get();
+
+        // 5. Verify metadata has been updated
+        tableInfo = admin.getTableInfo(tablePath).get();
+        assertThat(tableInfo.getTableConfig().getTieredLogLocalSegments()).isEqualTo(5);
+
+        // 6. Wait for config to propagate to TabletServer (via UpdateMetadataRequest)
+        // Use retry mechanism to ensure config has propagated
+        waitUntil(
+                () -> logTablet.getTieredLogLocalSegments() == 5,
+                Duration.ofSeconds(30),
+                "Waiting for config to propagate to TabletServer");
+
+        // 7. Verify LogTablet internal state has been updated
+        assertThat(logTablet.getTieredLogLocalSegments()).isEqualTo(5);
+
+        // 8. Reset to default value
+        tableChanges.clear();
+        tableChanges.add(TableChange.reset(ConfigOptions.TABLE_TIERED_LOG_LOCAL_SEGMENTS.key()));
+        admin.alterTable(tablePath, tableChanges, false).get();
+
+        // 9. Verify metadata reset success (config should be removed, using default value 2)
+        tableInfo = admin.getTableInfo(tablePath).get();
+        TableDescriptor td = tableInfo.toTableDescriptor();
+        assertThat(
+                        td.getProperties()
+                                .containsKey(ConfigOptions.TABLE_TIERED_LOG_LOCAL_SEGMENTS.key()))
+                .isFalse();
+
+        // 10. Wait for config reset to propagate, verify LogTablet uses default value 2
+        waitUntil(
+                () -> logTablet.getTieredLogLocalSegments() == 2,
+                Duration.ofSeconds(30),
+                "Waiting for config reset to propagate to TabletServer");
+
+        assertThat(logTablet.getTieredLogLocalSegments()).isEqualTo(2);
+
+        // 11. Cleanup
+        admin.dropTable(tablePath, false).get();
     }
 }
