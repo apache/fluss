@@ -307,33 +307,21 @@ public class FlinkTableSource
             flussRowType = flussRowType.project(projectedFields);
         }
         OffsetsInitializer offsetsInitializer;
-        boolean enableLakeSource = lakeSource != null;
+        boolean enableLakeSource = false;
         switch (startupOptions.startupMode) {
             case EARLIEST:
                 offsetsInitializer = OffsetsInitializer.earliest();
                 break;
             case LATEST:
                 offsetsInitializer = OffsetsInitializer.latest();
-                // since it's scan from latest, don't consider lake data
-                enableLakeSource = false;
                 break;
             case FULL:
                 offsetsInitializer = OffsetsInitializer.full();
+                enableLakeSource = lakeSource != null;
                 break;
             case TIMESTAMP:
                 offsetsInitializer =
                         OffsetsInitializer.timestamp(startupOptions.startupTimestampMs);
-                if (hasPrimaryKey()) {
-                    // Currently, for primary key tables, we do not consider lake data
-                    // when reading from a given timestamp. This is because we will need
-                    // to read the change log of primary key table.
-                    // TODO: consider support it using paimon change log data?
-                    enableLakeSource = false;
-                } else {
-                    if (enableLakeSource) {
-                        enableLakeSource = pushTimeStampFilterToLakeSource(lakeSource);
-                    }
-                }
                 break;
             default:
                 throw new IllegalArgumentException(
@@ -381,6 +369,18 @@ public class FlinkTableSource
             };
         } else {
             return SourceProvider.of(source);
+        }
+    }
+
+    private boolean handleLegacyV1LakeTable() {
+        if (hasPrimaryKey()) {
+            // Currently, for primary key tables, we do not consider lake data
+            // when reading from a given timestamp. This is because we will need
+            // to read the change log of primary key table.
+            // TODO: consider support it using paimon change log data?
+            return false;
+        } else {
+            return pushTimeStampFilterToLakeSource(lakeSource);
         }
     }
 

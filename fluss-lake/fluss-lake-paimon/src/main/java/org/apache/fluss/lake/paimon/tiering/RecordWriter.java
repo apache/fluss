@@ -46,7 +46,8 @@ public abstract class RecordWriter<T> implements AutoCloseable {
             RowType tableRowType,
             TableBucket tableBucket,
             @Nullable String partition,
-            List<String> partitionKeys) {
+            List<String> partitionKeys,
+            boolean paimonIncludingSystemColumns) {
         this.tableWrite = tableWrite;
         this.tableRowType = tableRowType;
         this.bucket = tableBucket.getBucket();
@@ -56,7 +57,8 @@ public abstract class RecordWriter<T> implements AutoCloseable {
             this.partition = BinaryRow.EMPTY_ROW;
         }
         this.flussRecordAsPaimonRow =
-                new FlussRecordAsPaimonRow(tableBucket.getBucket(), tableRowType);
+                new FlussRecordAsPaimonRow(
+                        tableBucket.getBucket(), tableRowType, paimonIncludingSystemColumns);
     }
 
     public abstract void write(LogRecord record) throws Exception;

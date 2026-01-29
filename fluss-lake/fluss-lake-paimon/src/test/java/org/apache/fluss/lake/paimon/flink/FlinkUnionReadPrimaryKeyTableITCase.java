@@ -68,6 +68,7 @@ import java.util.stream.Collectors;
 import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.assertResultsExactOrder;
 import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.assertRowResultsIgnoreOrder;
 import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.collectRowsWithTimeout;
+import static org.apache.fluss.lake.paimon.testutils.PaimonTestUtils.adjustToLegacyV1Table;
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -110,31 +111,19 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
         // will read paimon snapshot, won't merge log since it's empty
         List<String> resultEmptyLog =
                 toSortedRows(batchTEnv.executeSql("select * from " + tableName));
-        String expetedResultFromPaimon = buildExpectedResult(isPartitioned, partitions, 0, 1);
-        assertThat(resultEmptyLog.toString().replace("+U", "+I"))
-                .isEqualTo(expetedResultFromPaimon);
+        List<String> expetedResultFromPaimon = buildExpectedResult(isPartitioned, partitions, 0, 1);
+        assertThat(resultEmptyLog).containsExactlyInAnyOrderElementsOf(expetedResultFromPaimon);
 
         // read paimon directly using $lake
         TableResult tableResult =
                 batchTEnv.executeSql(String.format("select * from %s$lake", tableName));
-        List<String> paimonSnapshotRows =
-                CollectionUtil.iteratorToList(tableResult.collect()).stream()
-                        .map(
-                                row -> {
-                                    int userColumnCount = row.getArity() - 3;
-                                    Object[] fields = new Object[userColumnCount];
-                                    for (int i = 0; i < userColumnCount; i++) {
-                                        fields[i] = row.getField(i);
-                                    }
-                                    return Row.of(fields);
-                                })
-                        .map(Row::toString)
-                        .sorted()
-                        .collect(Collectors.toList());
         // paimon's source will emit +U[0, v0, xx] instead of +I[0, v0, xx], so
         // replace +U with +I to make it equal
-        assertThat(paimonSnapshotRows.toString().replace("+U", "+I"))
-                .isEqualTo(expetedResultFromPaimon);
+        List<String> paimonSnapshotRows =
+                CollectionUtil.iteratorToList(tableResult.collect()).stream()
+                        .map(row -> row.toString().replace("+U", "+I"))
+                        .collect(Collectors.toList());
+        assertThat(paimonSnapshotRows).containsExactlyInAnyOrderElementsOf(expetedResultFromPaimon);
 
         // test point query with fluss
         String queryFilterStr = "c4 = 30";
@@ -273,15 +262,6 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
                                                         tableName, queryFilterStr))
                                         .collect())
                         .stream()
-                        .map(
-                                row -> {
-                                    int columnCount = row.getArity() - 3;
-                                    Object[] fields = new Object[columnCount];
-                                    for (int i = 0; i < columnCount; i++) {
-                                        fields[i] = row.getField(i);
-                                    }
-                                    return Row.of(fields);
-                                })
                         .map(Row::toString)
                         .sorted()
                         .collect(Collectors.toList());
@@ -405,7 +385,11 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
 
         // now, query the result, it must be the union result of lake snapshot and log
         List<String> result = toSortedRows(batchTEnv.executeSql("select * from " + tableName));
-        String expectedResult = buildExpectedResult(isPartitioned, partitions, 0, 2);
+        String expectedResult =
+                buildExpectedResult(isPartitioned, partitions, 0, 2).stream()
+                        .sorted()
+                        .collect(Collectors.toList())
+                        .toString();
         assertThat(result.toString().replace("+U", "+I")).isEqualTo(expectedResult);
 
         // query with project push down
@@ -428,6 +412,41 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
                         .map(row -> Row.of(row.getField(2))) // c3
                         .collect(Collectors.toList());
         assertThat(projectRows2.toString()).isEqualTo(sortedRows(expectedProjectRows2).toString());
+    }
+
+    @Test
+    void testUnionReadLegacyTable() throws Exception {
+        String tableName = "legacy_table";
+        TablePath t1 = TablePath.of(DEFAULT_DB, tableName);
+        long tableId = createSimplePkTable(t1, 3, false, true);
+        adjustToLegacyV1Table(t1, paimonCatalog);
+
+        JobClient jobClient = buildTieringJob(execEnv);
+        List<InternalRow> rows = new ArrayList<>();
+        Map<TableBucket, Long> bucketLogEndOffset = new HashMap<>();
+        for (int i = 0; i < 3; i++) {
+            rows.add(
+                    GenericRow.of(
+                            i, BinaryString.fromString("v1_1"), BinaryString.fromString("v1_2")));
+            bucketLogEndOffset.put(new TableBucket(tableId, i), 1L);
+        }
+        writeRows(t1, rows, false);
+        assertReplicaStatus(bucketLogEndOffset);
+
+        // cancel tiering job
+        jobClient.cancel().get();
+
+        rows.clear();
+        for (int i = 0; i < 3; i++) {
+            rows.add(
+                    GenericRow.of(
+                            i, BinaryString.fromString("v2_1"), BinaryString.fromString("v2_2")));
+        }
+        writeRows(t1, rows, false);
+
+        List<String> result = toSortedRows(batchTEnv.executeSql("select * from " + tableName));
+        assertThat(result.toString())
+                .isEqualTo("[+I[0, v2_1, v2_2], +I[1, v2_1, v2_2], +I[2, v2_1, v2_2]]");
     }
 
     @Test
@@ -1132,7 +1151,7 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
         return bucketLogEndOffsets;
     }
 
-    private String buildExpectedResult(
+    private List<String> buildExpectedResult(
             boolean isPartitioned, List<String> partitions, int record1, int record2) {
         List<String> records = new ArrayList<>();
         records.add(
@@ -1158,15 +1177,13 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
                         + "[5, 6, 7, 8], [2.1, 2.2, 2.3], +I[300, nested_value_3, 9.99], {key5=5, key6=6}, %s]");
 
         if (isPartitioned) {
-            return String.format(
-                    "[%s, %s, %s, %s]",
+            return Arrays.asList(
                     String.format(records.get(record1), partitions.get(0)),
                     String.format(records.get(record1), partitions.get(1)),
                     String.format(records.get(record2), partitions.get(0)),
                     String.format(records.get(record2), partitions.get(1)));
         } else {
-            return String.format(
-                    "[%s, %s]",
+            return Arrays.asList(
                     String.format(records.get(record1), "null"),
                     String.format(records.get(record2), "null"));
         }

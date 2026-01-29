@@ -31,6 +31,7 @@ import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toRowKind;
 /** To wrap Fluss {@link LogRecord} as paimon {@link InternalRow}. */
 public class FlussRecordAsPaimonRow extends FlussRowAsPaimonRow {
 
+    private final boolean paimonIncludingSystemColumns;
     private final int bucket;
     private LogRecord logRecord;
     private int originRowFieldCount;
@@ -39,13 +40,23 @@ public class FlussRecordAsPaimonRow extends FlussRowAsPaimonRow {
     private final int offsetFieldIndex;
     private final int timestampFieldIndex;
 
-    public FlussRecordAsPaimonRow(int bucket, RowType tableTowType) {
+    public FlussRecordAsPaimonRow(
+            int bucket, RowType tableTowType, boolean paimonIncludingSystemColumns) {
         super(tableTowType);
         this.bucket = bucket;
-        this.businessFieldCount = tableRowType.getFieldCount() - SYSTEM_COLUMNS.size();
+        this.businessFieldCount =
+                tableRowType.getFieldCount()
+                        - (paimonIncludingSystemColumns ? SYSTEM_COLUMNS.size() : 0);
+        this.paimonIncludingSystemColumns = paimonIncludingSystemColumns;
+
+        // only valid when paimon including system columns
         this.bucketFieldIndex = businessFieldCount;
         this.offsetFieldIndex = businessFieldCount + 1;
         this.timestampFieldIndex = businessFieldCount + 2;
+    }
+
+    public FlussRecordAsPaimonRow(int bucket, RowType tablerowType) {
+        this(bucket, tablerowType, false);
     }
 
     public void setFlussRecord(LogRecord logRecord) {
@@ -86,13 +97,21 @@ public class FlussRecordAsPaimonRow extends FlussRowAsPaimonRow {
             // Padding NULL for missing business fields when Paimon schema is wider than Fluss
             return true;
         }
-        // is the last three system fields: bucket, offset, timestamp which are never null
-        return false;
+
+        if (paimonIncludingSystemColumns && pos < businessFieldCount + SYSTEM_COLUMNS.size()) {
+            // is the last three system fields: bucket, offset, timestamp which are never null
+            return false;
+        }
+
+        // shouldn't happen in normal cases.
+        throw new IllegalStateException(
+                String.format(
+                        "Field %s is NULL because Paimon schema is wider than Fluss record.", pos));
     }
 
     @Override
     public int getInt(int pos) {
-        if (pos == bucketFieldIndex) {
+        if (pos == bucketFieldIndex && paimonIncludingSystemColumns) {
             // bucket system column
             return bucket;
         }
@@ -107,12 +126,14 @@ public class FlussRecordAsPaimonRow extends FlussRowAsPaimonRow {
 
     @Override
     public long getLong(int pos) {
-        if (pos == offsetFieldIndex) {
-            //  offset system column
-            return logRecord.logOffset();
-        } else if (pos == timestampFieldIndex) {
-            //  timestamp system column
-            return logRecord.timestamp();
+        if (paimonIncludingSystemColumns) {
+            if (pos == offsetFieldIndex) {
+                //  offset system column
+                return logRecord.logOffset();
+            } else if (pos == timestampFieldIndex) {
+                //  timestamp system column
+                return logRecord.timestamp();
+            }
         }
         if (pos >= originRowFieldCount) {
             throw new IllegalStateException(
@@ -126,8 +147,8 @@ public class FlussRecordAsPaimonRow extends FlussRowAsPaimonRow {
 
     @Override
     public Timestamp getTimestamp(int pos, int precision) {
-        // it's timestamp system column
-        if (pos == timestampFieldIndex) {
+        if (paimonIncludingSystemColumns && pos == timestampFieldIndex) {
+            // it's timestamp system column
             return Timestamp.fromEpochMillis(logRecord.timestamp());
         }
         if (pos >= originRowFieldCount) {

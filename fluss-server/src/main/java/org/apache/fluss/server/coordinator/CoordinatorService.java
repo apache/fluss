@@ -504,9 +504,13 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         }
 
         // override the datalake format if the table hasn't set it and the cluster configured
-        if (dataLakeFormat != null
-                && !properties.containsKey(ConfigOptions.TABLE_DATALAKE_FORMAT.key())) {
-            newDescriptor = newDescriptor.withDataLakeFormat(dataLakeFormat);
+        if (dataLakeFormat != null) {
+            Map<String, String> newProperties = new HashMap<>(newDescriptor.getProperties());
+            if (!properties.containsKey(ConfigOptions.TABLE_DATALAKE_FORMAT.key())) {
+                newProperties.put(
+                        ConfigOptions.TABLE_DATALAKE_FORMAT.key(), dataLakeFormat.toString());
+            }
+            newDescriptor = newDescriptor.withProperties(newProperties);
         }
 
         // lake table can only be enabled when the cluster configures datalake format

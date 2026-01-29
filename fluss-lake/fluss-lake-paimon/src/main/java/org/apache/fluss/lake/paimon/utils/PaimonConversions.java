@@ -27,12 +27,12 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.ChangeType;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
-
 import org.apache.paimon.CoreOptions;
 import org.apache.paimon.catalog.Identifier;
 import org.apache.paimon.options.Options;
 import org.apache.paimon.schema.Schema;
 import org.apache.paimon.schema.SchemaChange;
+import org.apache.paimon.table.Table;
 import org.apache.paimon.types.DataType;
 import org.apache.paimon.types.RowKind;
 import org.apache.paimon.types.RowType;
@@ -44,6 +44,7 @@ import java.util.Map;
 import java.util.Set;
 
 import static org.apache.fluss.lake.paimon.PaimonLakeCatalog.SYSTEM_COLUMNS;
+import static org.apache.fluss.metadata.TableDescriptor.TIMESTAMP_COLUMN_NAME;
 
 /** Utils for conversion between Paimon and Fluss. */
 public class PaimonConversions {
@@ -113,7 +114,8 @@ public class PaimonConversions {
                 .getFieldOrNull(flussRowAsPaimonRow);
     }
 
-    public static List<SchemaChange> toPaimonSchemaChanges(List<TableChange> tableChanges) {
+    public static List<SchemaChange> toPaimonSchemaChanges(
+            Table paimonTable, List<TableChange> tableChanges) {
         List<SchemaChange> schemaChanges = new ArrayList<>(tableChanges.size());
 
         for (TableChange tableChange : tableChanges) {
@@ -145,14 +147,24 @@ public class PaimonConversions {
                 org.apache.paimon.types.DataType paimonDataType =
                         flussDataType.accept(FlussDataTypeToPaimonDataType.INSTANCE);
 
-                String firstSystemColumnName = SYSTEM_COLUMNS.keySet().iterator().next();
-                schemaChanges.add(
-                        SchemaChange.addColumn(
-                                addColumn.getName(),
-                                paimonDataType,
-                                addColumn.getComment(),
-                                SchemaChange.Move.before(
-                                        addColumn.getName(), firstSystemColumnName)));
+                if (paimonTable.rowType().getFieldIndex(TIMESTAMP_COLUMN_NAME) >= 0) {
+                    // must be legacy v1 table with system columns
+                    String firstSystemColumnName = SYSTEM_COLUMNS.keySet().iterator().next();
+                    schemaChanges.add(
+                            SchemaChange.addColumn(
+                                    addColumn.getName(),
+                                    paimonDataType,
+                                    addColumn.getComment(),
+                                    SchemaChange.Move.before(
+                                            addColumn.getName(), firstSystemColumnName)));
+                } else {
+                    schemaChanges.add(
+                            SchemaChange.addColumn(
+                                    addColumn.getName(),
+                                    paimonDataType,
+                                    addColumn.getComment(),
+                                    SchemaChange.Move.last(addColumn.getName())));
+                }
             } else {
                 throw new UnsupportedOperationException(
                         "Unsupported table change: " + tableChange.getClass());
@@ -204,11 +216,6 @@ public class PaimonConversions {
                     columnName,
                     column.getDataType().accept(FlussDataTypeToPaimonDataType.INSTANCE),
                     column.getComment().orElse(null));
-        }
-
-        // add system metadata columns to schema
-        for (Map.Entry<String, DataType> systemColumn : SYSTEM_COLUMNS.entrySet()) {
-            schemaBuilder.column(systemColumn.getKey(), systemColumn.getValue());
         }
 
         // set pk

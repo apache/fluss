@@ -634,6 +634,7 @@ abstract class FlinkCatalogITCase {
             Map<String, String> expectedTableProperties = new HashMap<>();
             expectedTableProperties.put("table.datalake.format", "paimon");
             expectedTableProperties.put("table.replication.factor", "1");
+            expectedTableProperties.put("table.datalake.storage-version", "2");
             assertThat(tableInfo.getProperties().toMap()).isEqualTo(expectedTableProperties);
 
             Map<String, String> expectedCustomProperties = new HashMap<>();

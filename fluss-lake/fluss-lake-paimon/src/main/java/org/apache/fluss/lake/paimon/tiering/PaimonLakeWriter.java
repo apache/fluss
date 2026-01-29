@@ -35,6 +35,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toPaimon;
+import static org.apache.fluss.metadata.TableDescriptor.TIMESTAMP_COLUMN_NAME;
 
 /** Implementation of {@link LakeWriter} for Paimon. */
 public class PaimonLakeWriter implements LakeWriter<PaimonWriteResult> {
@@ -53,18 +54,27 @@ public class PaimonLakeWriter implements LakeWriter<PaimonWriteResult> {
 
         List<String> partitionKeys = fileStoreTable.partitionKeys();
 
+        // Detect legacy mode by inspecting the Paimon table schema:
+        // If the lake table contains the __timestamp system column, it's a legacy table
+        // and we should include system columns in the data stream (Legacy Behavior).
+        // Otherwise, project only user-defined columns (New Behavior).
+        boolean paimonIncludeSystemColumns =
+                fileStoreTable.rowType().getFieldIndex(TIMESTAMP_COLUMN_NAME) >= 0;
+
         this.recordWriter =
                 fileStoreTable.primaryKeys().isEmpty()
                         ? new AppendOnlyWriter(
                                 fileStoreTable,
                                 writerInitContext.tableBucket(),
                                 writerInitContext.partition(),
-                                partitionKeys)
+                                partitionKeys,
+                                paimonIncludeSystemColumns)
                         : new MergeTreeWriter(
                                 fileStoreTable,
                                 writerInitContext.tableBucket(),
                                 writerInitContext.partition(),
-                                partitionKeys);
+                                partitionKeys,
+                                paimonIncludeSystemColumns);
     }
 
     @Override

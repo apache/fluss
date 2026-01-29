@@ -41,7 +41,8 @@ public class AppendOnlyWriter extends RecordWriter<InternalRow> {
             FileStoreTable fileStoreTable,
             TableBucket tableBucket,
             @Nullable String partition,
-            List<String> partitionKeys) {
+            List<String> partitionKeys,
+            boolean paimonIncludingSystemColumns) {
         //noinspection unchecked
         super(
                 (TableWriteImpl<InternalRow>)
@@ -50,7 +51,8 @@ public class AppendOnlyWriter extends RecordWriter<InternalRow> {
                 fileStoreTable.rowType(),
                 tableBucket,
                 partition,
-                partitionKeys); // Pass to parent
+                partitionKeys,
+                paimonIncludingSystemColumns); // Pass to parent
         this.fileStoreTable = fileStoreTable;
     }
 

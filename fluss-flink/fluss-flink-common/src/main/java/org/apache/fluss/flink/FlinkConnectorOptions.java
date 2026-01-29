@@ -260,7 +260,14 @@ public class FlinkConnectorOptions {
                                 + "materializes all changes on the table.")),
         EARLIEST("earliest", text("Start reading logs from the earliest offset.")),
         LATEST("latest", text("Start reading logs from the latest offset.")),
-        TIMESTAMP("timestamp", text("Start reading logs from user-supplied timestamp."));
+        TIMESTAMP("timestamp", text("Start reading logs from user-supplied timestamp.")),
+        PARTITION_TIMESTAMP(
+                "partition-timestamp",
+                text(
+                        "Starts reading from a partition timestamp. It maps the starting timestamp "
+                                + " to a partition filter (e.g., dt >= 'target_partition') and performs "
+                                + " partition-level pruning to optimize the data scan.)")),
+        ;
 
         private final String value;
         private final InlineElement description;
