@@ -137,6 +137,12 @@ public class KvSnapshotManager implements Closeable {
         isLeader = true;
         // Clear standby download cache when leaving standby role
         clearStandbyDownloadCache();
+
+        // make db dir.
+        Path kvDbPath = tabletDir.toPath().resolve(RocksDBKvBuilder.DB_INSTANCE_DIR_STRING);
+        if (!kvDbPath.toFile().exists()) {
+            kvDbPath.toFile().mkdirs();
+        }
     }
 
     public void becomeFollower() {
