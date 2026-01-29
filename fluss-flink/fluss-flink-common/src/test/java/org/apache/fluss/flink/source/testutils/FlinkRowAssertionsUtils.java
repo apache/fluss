@@ -94,6 +94,11 @@ public class FlinkRowAssertionsUtils {
     }
 
     public static List<String> collectRowsWithTimeout(
+            CloseableIterator<Row> iterator, int expectedCount, Duration maxWaitTime) {
+        return collectRowsWithTimeout(iterator, expectedCount, true, maxWaitTime);
+    }
+
+    public static List<String> collectRowsWithTimeout(
             CloseableIterator<Row> iterator, int expectedCount, boolean closeIterator) {
         if (expectedCount < 0) {
             throw new IllegalArgumentException(
