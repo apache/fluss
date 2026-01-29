@@ -7,6 +7,8 @@ sidebar_class_name: hidden
 
 These upgrade notes discuss important aspects, such as configuration, behavior, or dependencies, that changed between Fluss 0.7 and Fluss 0.8. Please read these notes carefully if you are planning to upgrade your Fluss version to 0.8.
 
+Previous versions can be found in the [archive of upgrade notes](upgrade-notes-archive.md).
+
 ## Deprecation / End of Support
 
 ### Java 8 is Deprecated

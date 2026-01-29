@@ -7,6 +7,8 @@ sidebar_position: 4
 
 These upgrade notes discuss important aspects, such as configuration, behavior, or dependencies, that changed between Fluss 0.8 and Fluss 0.9. Please read these notes carefully if you are planning to upgrade your Fluss version to 0.9.
 
+Previous versions can be found in the [archive of upgrade notes](upgrade-notes-archive.md).
+
 ## Adding Columns
 
 Fluss storage format was designed with schema evolution protocols from day one. Therefore, tables created in v0.8 or earlier can immediately benefit from the `ADD COLUMN` feature after upgrading to v0.9 without dropping and re-creating table.
@@ -16,6 +18,42 @@ Therefore, it is crucial to ensure that all Fluss servers and all clients intera
 :::warning
 Attempting to add columns while older clients (v0.8 or below) are still actively reading from the table will lead to Schema Inconsistency and may crash your streaming pipelines.
 :::
+
+## Primary Key Encoding Change
+
+:::info
+This section only applies to primary key tables created on clusters with `datalake.format` configured (e.g., Paimon). If your cluster does not have `datalake.format` configured, you can skip this section.
+:::
+
+### Prefix Lookup Issue in Older Versions
+
+In versions **0.8 and earlier**, tables may encounter incorrect or incomplete results during prefix lookups when **both** of the following conditions are met:
+
+1. The table is created on a cluster where `datalake.format` is configured (e.g., Paimon), resulting in the table property `table.datalake.format` being set.
+2. The table uses a **bucket key that differs from its primary key** (pattern commonly used for Flink Delta Join).
+
+Under these circumstances, Fluss incorrectly uses the datalake’s encoder (e.g., Paimon’s) to serialize the **primary key**.
+However, this encoding does not support prefix-based scanning, leading to malformed or incomplete query results.
+
+### What is Changed in the New Version
+
+- **New tables (version 2)**: Tables created in v0.9+ use Fluss's default encoder for primary key encoding when bucket key differs from primary key. This ensures proper prefix lookup support.
+- **Legacy tables (version 1)**: Tables created before v0.9 are treated as version 1 and continue using datalake's encoder (e.g., Paimon/Iceberg) for both primary key and bucket key encoding.
+
+### How to Resolve This Issue After Upgrading
+
+For legacy tables that require prefix lookup support:
+
+1. **Recreate the table**: Drop and recreate the table after upgrading to v0.9.
+
+2. **Upgrade client and connector**: Make sure to upgrade your Fluss client and Flink connector to v0.9 to use the new encoding format.
+
+### Compatibility Note
+
+After upgrading to **v0.9**, ensure that **all clients** interacting with the Fluss cluster are also upgraded to **v0.9 or later**.
+
+Mixing client versions can cause compatibility issues. Specifically, primary key tables created on v0.9 clusters use **KV format version 2**, which older clients cannot recognize. This may result in exceptions during lookup or write operations.
+
 
 ## Deprecation / End of Support
 
@@ -51,31 +89,3 @@ The following options are deprecated and will be removed in a future version:
 - **Better Resource Management**: Unified thread pool allows better resource sharing across different IO operations
 - **Consistent Behavior**: All IO operations (remote log, KV snapshot, etc.) now use the same thread pool configuration
 
-## Primary Key Encoding Change for Clusters with `datalake.format` Configured
-
-:::info
-This section only applies to primary key tables created on clusters with `datalake.format` configured (e.g., Paimon). If your cluster does not have `datalake.format` configured, you can skip this section.
-:::
-
-### What Changed
-
-- **New tables (version 2)**: Tables created in v0.9+ use Fluss's default encoder for primary key encoding when bucket key differs from primary key. This ensures proper prefix lookup support.
-- **Legacy tables (version 1)**: Tables created before v0.9 are treated as version 1 and continue using datalake's encoder (e.g., Paimon/Iceberg) for both primary key and bucket key encoding.
-
-### Prefix Lookup Limitation with Legacy Tables
-
-Legacy tables (version 1) may not support prefix lookup properly when:
-1. The cluster has `datalake.format` configured as `paimon`
-2. The table has a bucket key that differs from the primary key
-
-:::warning
-If you have legacy tables with bucket key different from primary key and need prefix lookup functionality, the prefix lookup results may be incorrect or incomplete.
-:::
-
-### How to Address This Issue
-
-For legacy tables that require prefix lookup support:
-
-1. **Recreate the table**: Drop and recreate the table after upgrading to v0.9.
-
-2. **Upgrade client and connector**: Make sure to upgrade your Fluss client and Flink connector to v0.9 to use the new encoding format.

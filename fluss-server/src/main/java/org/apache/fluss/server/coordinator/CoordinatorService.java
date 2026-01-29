@@ -28,6 +28,7 @@ import org.apache.fluss.config.cluster.AlterConfig;
 import org.apache.fluss.config.cluster.AlterConfigOpType;
 import org.apache.fluss.exception.ApiException;
 import org.apache.fluss.exception.InvalidAlterTableException;
+import org.apache.fluss.exception.InvalidConfigException;
 import org.apache.fluss.exception.InvalidCoordinatorException;
 import org.apache.fluss.exception.InvalidDatabaseException;
 import org.apache.fluss.exception.InvalidTableException;
@@ -548,7 +549,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                 newDescriptor = newDescriptor.withProperties(newProperties);
             } else {
                 if (formatVersion > CURRENT_KV_FORMAT_VERSION) {
-                    throw new IllegalArgumentException(
+                    throw new InvalidConfigException(
                             String.format(
                                     "Unsupported kv format version %d. "
                                             + "The maximum supported version is %d.",
