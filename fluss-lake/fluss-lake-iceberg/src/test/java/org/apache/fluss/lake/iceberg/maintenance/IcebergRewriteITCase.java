@@ -126,7 +126,7 @@ class IcebergRewriteITCase extends FlinkIcebergTieringTestBase {
     }
 
     @Test
-    void testPkTableCompactionWithConflict() throws Exception {
+    void testPkTableCompactionWithDeletedFiles() throws Exception {
         JobClient jobClient = buildTieringJob(execEnv);
         try {
             TablePath t1 = TablePath.of(DEFAULT_DB, "pk_table_2");
@@ -147,17 +147,17 @@ class IcebergRewriteITCase extends FlinkIcebergTieringTestBase {
             // add pos-delete and trigger compaction
             rows = Arrays.asList(row(4, "v1"), row(4, "v2"));
             flussRows.add(writeIcebergTableRecords(t1, t1Bucket, 6, false, rows).get(1));
-            // rewritten files should fail to commit due to conflict, add check here
             checkRecords(getIcebergRecords(t1), flussRows);
-            // 4 data file and 1 delete file
-            checkFileStatusInIcebergTable(t1, 4, true);
+            checkFileStatusInIcebergTable(t1, 2, true);
 
-            // previous compaction conflicts won't prevent further compaction, and check iceberg
-            // records
+            // previous compaction conflicts won't prevent further compaction, and
+            // check iceberg records
             rows = Collections.singletonList(row(5, "v1"));
             flussRows.addAll(writeIcebergTableRecords(t1, t1Bucket, 7, false, rows));
             checkRecords(getIcebergRecords(t1), flussRows);
-            checkFileStatusInIcebergTable(t1, 2, false);
+            // check that the correct number of files (2 from compaction + 1 new)
+            // exist and that a deletion file is present
+            checkFileStatusInIcebergTable(t1, 3, true);
         } finally {
             jobClient.cancel().get();
         }
