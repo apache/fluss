@@ -25,6 +25,7 @@ import org.apache.fluss.cluster.rebalance.RebalanceStatus;
 import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.exception.NoRebalanceInProgressException;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableBucketReplica;
 import org.apache.fluss.server.coordinator.CoordinatorContext;
 import org.apache.fluss.server.coordinator.CoordinatorEventProcessor;
 import org.apache.fluss.server.coordinator.rebalance.goal.Goal;
@@ -44,7 +45,9 @@ import org.slf4j.LoggerFactory;
 import javax.annotation.Nullable;
 
 import java.util.ArrayDeque;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -83,6 +86,11 @@ public class RebalanceManager {
     /** A mapping from table bucket to rebalance status of failed or completed tasks. */
     private final Map<TableBucket, RebalanceResultForBucket> finishedRebalanceTasks =
             MapUtils.newConcurrentHashMap();
+    /**
+     * A mapping from table bucket to replicas that are pending deletion. The rebalance task for a
+     * bucket cannot finish until these replicas are confirmed deleted.
+     */
+    private final Map<TableBucket, Set<Integer>> pendingDeletions = MapUtils.newConcurrentHashMap();
 
     private final GoalOptimizer goalOptimizer;
     private volatile long registerTime;
@@ -132,7 +140,7 @@ public class RebalanceManager {
         inProgressRebalanceTasks.clear();
         inProgressRebalanceTasksQueue.clear();
         finishedRebalanceTasks.clear();
-
+        pendingDeletions.clear();
         currentRebalanceId = rebalanceId;
         if (rebalancePlan.isEmpty()) {
             completeRebalance();
@@ -161,6 +169,10 @@ public class RebalanceManager {
         }
     }
 
+    public void addPendingDeletions(TableBucket tableBucket, Set<Integer> replicas) {
+        pendingDeletions.put(tableBucket, Collections.synchronizedSet(new HashSet<>(replicas)));
+    }
+
     public void finishRebalanceTask(TableBucket tableBucket, RebalanceStatus statusForBucket) {
         checkNotClosed();
         if (inProgressRebalanceTasksQueue.contains(tableBucket)) {
@@ -182,6 +194,28 @@ public class RebalanceManager {
             } else {
                 // Trigger one rebalance task to execute.
                 processNewRebalanceTask();
+            }
+        }
+    }
+
+    public void onReplicasDeleted(Set<TableBucketReplica> deletedReplicas) {
+        if (pendingDeletions.isEmpty()) {
+            return;
+        }
+        for (TableBucketReplica replica : deletedReplicas) {
+            TableBucket bucket = replica.getTableBucket();
+            Set<Integer> pending = pendingDeletions.get(bucket);
+            if (pending != null) {
+                pending.remove(replica.getReplica());
+                // Check if the set is empty after removal
+                if (pending.isEmpty()) {
+                    pendingDeletions.remove(bucket);
+                    // If no more pending deletions for this bucket, we can mark it as COMPLETED
+                    // provided it was an in-progress rebalance task.
+                    if (inProgressRebalanceTasks.containsKey(bucket)) {
+                        finishRebalanceTask(bucket, RebalanceStatus.COMPLETED);
+                    }
+                }
             }
         }
     }
@@ -250,6 +284,7 @@ public class RebalanceManager {
         rebalanceStatus = CANCELED;
         inProgressRebalanceTasksQueue.clear();
         inProgressRebalanceTasks.clear();
+        pendingDeletions.clear();
         // Here, it will not clear finishedRebalanceTasks, because it will be used by
         // listRebalanceProgress. It will be cleared when next register.
 
@@ -332,6 +367,8 @@ public class RebalanceManager {
         inProgressRebalanceTasks.clear();
         inProgressRebalanceTasksQueue.clear();
 
+        pendingDeletions.clear();
+
         // Here, it will not clear finishedRebalanceTasks, because it will be used by
         // listRebalanceProgress. It will be cleared when next register.
 
@@ -362,7 +399,12 @@ public class RebalanceManager {
             List<Integer> assignment = coordinatorContext.getAssignment(tableBucket);
             Optional<LeaderAndIsr> bucketLeaderAndIsrOpt =
                     coordinatorContext.getBucketLeaderAndIsr(tableBucket);
-            checkArgument(bucketLeaderAndIsrOpt.isPresent(), "Bucket leader and isr is empty.");
+            if (!bucketLeaderAndIsrOpt.isPresent()) {
+                LOG.warn(
+                        "Skipping bucket {} from cluster model as it has no leader/ISR info yet.",
+                        tableBucket);
+                continue;
+            }
             LeaderAndIsr isr = bucketLeaderAndIsrOpt.get();
             int leader = isr.leader();
             // Skip the bucket if it is in a transient state (e.g., during table creation)
