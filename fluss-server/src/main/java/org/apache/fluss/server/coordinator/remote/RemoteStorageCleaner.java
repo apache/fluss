@@ -15,11 +15,10 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.server.coordinator;
+package org.apache.fluss.server.coordinator.remote;
 
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
-import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.PhysicalTablePath;
@@ -30,41 +29,38 @@ import org.apache.fluss.utils.FlussPaths;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.annotation.Nullable;
+
 import java.io.IOException;
 import java.util.concurrent.ExecutorService;
 
-/** A cleaner for cleaning kv snapshots and log segments files of table. */
+/** A cleaner for cleaning kv snapshots, log segments files and lake metadata of table. */
 public class RemoteStorageCleaner {
 
     private static final Logger LOG = LoggerFactory.getLogger(RemoteStorageCleaner.class);
 
-    private final FsPath remoteKvDir;
-
-    private final FsPath remoteLogDir;
-
-    private final String remoteDataDir;
-
-    private final FileSystem remoteFileSystem;
+    private final FsPath defaultRemoteDataDir;
 
     private final ExecutorService ioExecutor;
 
     public RemoteStorageCleaner(Configuration configuration, ExecutorService ioExecutor) {
-        this.remoteKvDir = FlussPaths.remoteKvDir(configuration);
-        this.remoteLogDir = FlussPaths.remoteLogDir(configuration);
-        this.remoteDataDir = configuration.getString(ConfigOptions.REMOTE_DATA_DIR);
+        this.defaultRemoteDataDir =
+                new FsPath(configuration.getString(ConfigOptions.REMOTE_DATA_DIR));
         this.ioExecutor = ioExecutor;
-        try {
-            this.remoteFileSystem = remoteKvDir.getFileSystem();
-        } catch (IOException e) {
-            throw new FlussRuntimeException(
-                    "Fail to get remote file system for path " + remoteKvDir, e);
-        }
     }
 
-    public void asyncDeleteTableRemoteDir(TablePath tablePath, boolean isKvTable, long tableId) {
+    public void asyncDeleteTableRemoteDir(
+            @Nullable FsPath remoteDataDir, TablePath tablePath, boolean isKvTable, long tableId) {
+        if (remoteDataDir == null) {
+            remoteDataDir = defaultRemoteDataDir;
+        }
+
         if (isKvTable) {
+            FsPath remoteKvDir = FlussPaths.remoteKvDir(remoteDataDir);
             asyncDeleteDir(FlussPaths.remoteTableDir(remoteKvDir, tablePath, tableId));
         }
+
+        FsPath remoteLogDir = FlussPaths.remoteLogDir(remoteDataDir);
         asyncDeleteDir(FlussPaths.remoteTableDir(remoteLogDir, tablePath, tableId));
 
         // Always delete lake snapshot metadata directory, regardless of isLakeEnabled flag.
@@ -72,15 +68,27 @@ public class RemoteStorageCleaner {
         // was deleted, we may leave the lake snapshot metadata files behind if we only delete when
         // isLakeEnabled is true. By always deleting, we ensure cleanup of any existing metadata
         // files.
-        asyncDeleteDir(FlussPaths.remoteLakeTableSnapshotDir(remoteDataDir, tablePath, tableId));
+        asyncDeleteDir(
+                FlussPaths.remoteLakeTableSnapshotDir(
+                        remoteDataDir.toUri().toString(), tablePath, tableId));
     }
 
     public void asyncDeletePartitionRemoteDir(
-            PhysicalTablePath physicalTablePath, boolean isKvTable, TablePartition tablePartition) {
+            @Nullable FsPath remoteDataDir,
+            PhysicalTablePath physicalTablePath,
+            boolean isKvTable,
+            TablePartition tablePartition) {
+        if (remoteDataDir == null) {
+            remoteDataDir = defaultRemoteDataDir;
+        }
+
         if (isKvTable) {
+            FsPath remoteKvDir = FlussPaths.remoteKvDir(remoteDataDir);
             asyncDeleteDir(
                     FlussPaths.remotePartitionDir(remoteKvDir, physicalTablePath, tablePartition));
         }
+
+        FsPath remoteLogDir = FlussPaths.remoteLogDir(remoteDataDir);
         asyncDeleteDir(
                 FlussPaths.remotePartitionDir(remoteLogDir, physicalTablePath, tablePartition));
     }
@@ -89,7 +97,9 @@ public class RemoteStorageCleaner {
         ioExecutor.submit(
                 () -> {
                     try {
+                        FileSystem remoteFileSystem = fsPath.getFileSystem();
                         if (remoteFileSystem.exists(fsPath)) {
+                            System.out.println("Deleting " + fsPath);
                             remoteFileSystem.delete(fsPath, true);
                         }
                     } catch (IOException e) {

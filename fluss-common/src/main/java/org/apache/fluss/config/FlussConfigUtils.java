@@ -19,12 +19,14 @@ package org.apache.fluss.config;
 
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.annotation.VisibleForTesting;
+import org.apache.fluss.exception.IllegalConfigurationException;
 
 import java.lang.reflect.Field;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 /** Utilities of Fluss {@link ConfigOptions}. */
 @Internal
@@ -75,5 +77,98 @@ public class FlussConfigUtils {
             }
         }
         return options;
+    }
+
+    public static void validateCoordinatorConfigs(Configuration conf) {
+        validServerConfigs(conf);
+
+        if (conf.get(ConfigOptions.DEFAULT_REPLICATION_FACTOR) < 1) {
+            throw new IllegalConfigurationException(
+                    String.format(
+                            "Invalid configuration for %s, it must be greater than or equal 1.",
+                            ConfigOptions.DEFAULT_REPLICATION_FACTOR.key()));
+        }
+
+        if (conf.get(ConfigOptions.KV_MAX_RETAINED_SNAPSHOTS) < 1) {
+            throw new IllegalConfigurationException(
+                    String.format(
+                            "Invalid configuration for %s, it must be greater than or equal 1.",
+                            ConfigOptions.KV_MAX_RETAINED_SNAPSHOTS.key()));
+        }
+
+        if (conf.get(ConfigOptions.SERVER_IO_POOL_SIZE) < 1) {
+            throw new IllegalConfigurationException(
+                    String.format(
+                            "Invalid configuration for %s, it must be greater than or equal 1.",
+                            ConfigOptions.SERVER_IO_POOL_SIZE.key()));
+        }
+
+        // validate remote.data.dirs
+        List<String> remoteDataDirs = conf.get(ConfigOptions.REMOTE_DATA_DIRS);
+        ConfigOptions.RemoteDataDirStrategy remoteDataDirStrategy =
+                conf.get(ConfigOptions.REMOTE_DATA_DIRS_STRATEGY);
+        if (remoteDataDirStrategy == ConfigOptions.RemoteDataDirStrategy.WEIGHTED_ROUND_ROBIN) {
+            List<Integer> weights = conf.get(ConfigOptions.REMOTE_DATA_DIRS_WEIGHTS);
+            if (!remoteDataDirs.isEmpty() && !weights.isEmpty()) {
+                if (remoteDataDirs.size() != weights.size()) {
+                    throw new IllegalConfigurationException(
+                            String.format(
+                                    "The size of '%s' (%d) must match the size of '%s' (%d) when using WEIGHTED_ROUND_ROBIN strategy.",
+                                    ConfigOptions.REMOTE_DATA_DIRS.key(),
+                                    remoteDataDirs.size(),
+                                    ConfigOptions.REMOTE_DATA_DIRS_WEIGHTS.key(),
+                                    weights.size()));
+                }
+                // validate all weights are positive
+                for (int i = 0; i < weights.size(); i++) {
+                    if (weights.get(i) < 0) {
+                        throw new IllegalConfigurationException(
+                                String.format(
+                                        "All weights in '%s' must be no less than 0, but found %d at index %d.",
+                                        ConfigOptions.REMOTE_DATA_DIRS_WEIGHTS.key(),
+                                        weights.get(i),
+                                        i));
+                    }
+                }
+            }
+        }
+    }
+
+    public static void validateTabletConfigs(Configuration conf) {
+        validServerConfigs(conf);
+
+        Optional<Integer> serverId = conf.getOptional(ConfigOptions.TABLET_SERVER_ID);
+        if (!serverId.isPresent()) {
+            throw new IllegalConfigurationException(
+                    String.format("Configuration %s must be set.", ConfigOptions.TABLET_SERVER_ID));
+        }
+
+        if (serverId.get() < 0) {
+            throw new IllegalConfigurationException(
+                    String.format(
+                            "Invalid configuration for %s, it must be greater than or equal 0.",
+                            ConfigOptions.TABLET_SERVER_ID.key()));
+        }
+
+        if (conf.get(ConfigOptions.BACKGROUND_THREADS) < 1) {
+            throw new IllegalConfigurationException(
+                    String.format(
+                            "Invalid configuration for %s, it must be greater than or equal 1.",
+                            ConfigOptions.BACKGROUND_THREADS.key()));
+        }
+
+        if (conf.get(ConfigOptions.LOG_SEGMENT_FILE_SIZE).getBytes() > Integer.MAX_VALUE) {
+            throw new IllegalConfigurationException(
+                    String.format(
+                            "Invalid configuration for %s, it must be less than or equal %d bytes.",
+                            ConfigOptions.LOG_SEGMENT_FILE_SIZE.key(), Integer.MAX_VALUE));
+        }
+    }
+
+    private static void validServerConfigs(Configuration conf) {
+        if (conf.get(ConfigOptions.REMOTE_DATA_DIR) == null) {
+            throw new IllegalConfigurationException(
+                    String.format("Configuration %s must be set.", ConfigOptions.REMOTE_DATA_DIR));
+        }
     }
 }

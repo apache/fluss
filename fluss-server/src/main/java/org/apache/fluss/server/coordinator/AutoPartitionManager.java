@@ -26,9 +26,11 @@ import org.apache.fluss.exception.PartitionAlreadyExistsException;
 import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.exception.TooManyBucketsException;
 import org.apache.fluss.exception.TooManyPartitionsException;
+import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.server.coordinator.remote.RemoteDirDynamicLoader;
 import org.apache.fluss.server.metadata.ServerMetadataCache;
 import org.apache.fluss.server.zk.data.BucketAssignment;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
@@ -85,6 +87,7 @@ public class AutoPartitionManager implements AutoCloseable {
 
     private final ServerMetadataCache metadataCache;
     private final MetadataManager metadataManager;
+    private final RemoteDirDynamicLoader remoteDirDynamicLoader;
     private final Clock clock;
 
     private final long periodicInterval;
@@ -108,10 +111,12 @@ public class AutoPartitionManager implements AutoCloseable {
     public AutoPartitionManager(
             ServerMetadataCache metadataCache,
             MetadataManager metadataManager,
+            RemoteDirDynamicLoader remoteDirDynamicLoader,
             Configuration conf) {
         this(
                 metadataCache,
                 metadataManager,
+                remoteDirDynamicLoader,
                 conf,
                 SystemClock.getInstance(),
                 Executors.newScheduledThreadPool(
@@ -122,11 +127,13 @@ public class AutoPartitionManager implements AutoCloseable {
     AutoPartitionManager(
             ServerMetadataCache metadataCache,
             MetadataManager metadataManager,
+            RemoteDirDynamicLoader remoteDirDynamicLoader,
             Configuration conf,
             Clock clock,
             ScheduledExecutorService periodicExecutor) {
         this.metadataCache = metadataCache;
         this.metadataManager = metadataManager;
+        this.remoteDirDynamicLoader = remoteDirDynamicLoader;
         this.clock = clock;
         this.periodicExecutor = periodicExecutor;
         this.periodicInterval = conf.get(ConfigOptions.AUTO_PARTITION_CHECK_INTERVAL).toMillis();
@@ -349,8 +356,11 @@ public class AutoPartitionManager implements AutoCloseable {
                 PartitionAssignment partitionAssignment =
                         new PartitionAssignment(tableInfo.getTableId(), bucketAssignments);
 
+                // select a remote data dir for the partition
+                FsPath remoteDataDir =
+                        remoteDirDynamicLoader.getRemoteDataDirContainer().nextDataDir();
                 metadataManager.createPartition(
-                        tablePath, tableId, partitionAssignment, partition, false);
+                        tablePath, tableId, remoteDataDir, partitionAssignment, partition, false);
                 // only single partition key table supports automatic creation of partitions
                 currentPartitions.put(partition.getPartitionName(), null);
                 LOG.info(
