@@ -19,27 +19,22 @@
 package org.apache.fluss.server.kv.autoinc;
 
 import org.apache.fluss.record.BinaryValue;
+import org.apache.fluss.row.BinaryRow;
+import org.apache.fluss.row.InternalRow;
 
-/** A updater to auto increment column . */
+/** Handles auto-increment column assignment during row writes. */
 public interface AutoIncrementUpdater {
 
     /**
-     * Updates the auto-increment column in the given row by replacing its value with a new sequence
-     * number.
-     *
-     * <p>This method may return a new {@link BinaryValue} instance or the same instance if no
-     * update is needed (e.g., in a no-op implementation).
-     *
-     * @param rowValue the input row in binary form, must not be {@code null}
-     * @return a {@link BinaryValue} representing the updated row; never {@code null}
+     * Applies auto-increment to a BinaryValue, returning a new value with the auto-increment column
+     * filled. For no-op implementations, returns the input unchanged.
      */
-    BinaryValue updateAutoIncrementColumns(BinaryValue rowValue);
+    BinaryValue applyAutoIncrement(BinaryValue rowValue);
 
-    /**
-     * Returns whether this updater actually performs auto-increment logic.
-     *
-     * @return {@code true} if auto-increment is active; {@code false} otherwise.
-     */
+    /** Encodes an InternalRow to BinaryRow, applying auto-increment if configured. */
+    BinaryRow encodeRow(InternalRow row);
+
+    /** Returns true if this updater performs auto-increment logic. */
     default boolean hasAutoIncrement() {
         return false;
     }

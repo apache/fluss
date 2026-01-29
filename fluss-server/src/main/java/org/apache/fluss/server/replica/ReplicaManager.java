@@ -105,6 +105,7 @@ import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.MapUtils;
 import org.apache.fluss.utils.clock.Clock;
 import org.apache.fluss.utils.concurrent.Scheduler;
+import org.apache.fluss.utils.types.Tuple2;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -128,11 +129,13 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import static org.apache.fluss.server.TabletManagerBase.getTableInfo;
 import static org.apache.fluss.utils.FileUtils.isDirectoryEmpty;
+import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkState;
 import static org.apache.fluss.utils.concurrent.LockUtils.inLock;
 
@@ -554,21 +557,171 @@ public class ReplicaManager {
             Map<TableBucket, KvRecordBatch> entriesPerBucket,
             @Nullable int[] targetColumns,
             Consumer<List<PutKvResultForBucket>> responseCallback) {
+        writeToKv(
+                timeoutMs,
+                requiredAcks,
+                entriesPerBucket.size(),
+                "put",
+                () -> putToLocalKv(entriesPerBucket, targetColumns, requiredAcks),
+                responseCallback);
+    }
+
+    /** Context for missing keys that need to be inserted. */
+    public static class MissingKeysContext {
+        final LookupResultForBucket lookupResult;
+        final List<Integer> missingIndexes;
+        final List<byte[]> missingKeys;
+
+        MissingKeysContext(
+                LookupResultForBucket lookupResult,
+                List<Integer> missingIndexes,
+                List<byte[]> missingKeys) {
+            this.lookupResult = lookupResult;
+            this.missingIndexes = missingIndexes;
+            this.missingKeys = missingKeys;
+        }
+    }
+
+    /**
+     * Lookup or put records to kv tablets.
+     *
+     * <p>When a record to be put, it'll first put to kv tablet and then write cdc log to log
+     * tablet. If required acks is -1, we'll wait for cdc log to be replicated to all follower
+     * replicas before completing the request.
+     */
+    public void lookupOrPutRecordsToKv(
+            int timeoutMs,
+            int requiredAcks,
+            Map<TableBucket, MissingKeysContext> entriesPerBucket,
+            Map<TableBucket, LookupResultForBucket> allLookupResults,
+            Consumer<Map<TableBucket, LookupResultForBucket>> responseCallback) {
+        writeToKv(
+                timeoutMs,
+                requiredAcks,
+                entriesPerBucket.size(),
+                "lookup or put",
+                () -> lookupOrPutToLocalKv(entriesPerBucket, requiredAcks),
+                results ->
+                        responseCallback.accept(propagateInsertErrors(results, allLookupResults)));
+    }
+
+    /**
+     * Common template for KV write operations with delayed write support.
+     *
+     * @param timeoutMs timeout for the operation
+     * @param requiredAcks required acknowledgments for replication
+     * @param bucketCount number of buckets being written to
+     * @param operationName name of the operation for logging
+     * @param localKvOperation the local KV operation to execute
+     * @param responseCallback callback to invoke with results
+     */
+    private void writeToKv(
+            int timeoutMs,
+            int requiredAcks,
+            int bucketCount,
+            String operationName,
+            Supplier<Map<TableBucket, PutKvResultForBucket>> localKvOperation,
+            Consumer<List<PutKvResultForBucket>> responseCallback) {
         if (isRequiredAcksInvalid(requiredAcks)) {
             throw new InvalidRequiredAcksException("Invalid required acks: " + requiredAcks);
         }
 
         long startTime = System.currentTimeMillis();
-        Map<TableBucket, PutKvResultForBucket> kvPutResult =
-                putToLocalKv(entriesPerBucket, targetColumns, requiredAcks);
+        Map<TableBucket, PutKvResultForBucket> kvResult = localKvOperation.get();
         LOG.debug(
-                "Put records to local kv storage and wait generate cdc log in {} ms",
+                "{} records to local kv storage and wait generate cdc log in {} ms",
+                operationName,
                 System.currentTimeMillis() - startTime);
 
-        // maybe do delay write operation to write cdc log to be replicated to other follower
-        // replicas.
-        maybeAddDelayedWrite(
-                timeoutMs, requiredAcks, entriesPerBucket.size(), kvPutResult, responseCallback);
+        maybeAddDelayedWrite(timeoutMs, requiredAcks, bucketCount, kvResult, responseCallback);
+    }
+
+    /**
+     * Propagate insert errors to lookup results.
+     *
+     * <p>Updates lookup results with errors from failed insert operations. Buckets where all keys
+     * already existed retain their original lookup results.
+     */
+    private Map<TableBucket, LookupResultForBucket> propagateInsertErrors(
+            List<PutKvResultForBucket> insertResults,
+            Map<TableBucket, LookupResultForBucket> originalResults) {
+        Map<TableBucket, LookupResultForBucket> result = new HashMap<>(originalResults);
+        for (PutKvResultForBucket insertResult : insertResults) {
+            if (insertResult.failed()) {
+                result.put(
+                        insertResult.getTableBucket(),
+                        new LookupResultForBucket(
+                                insertResult.getTableBucket(), insertResult.getError()));
+            }
+        }
+        return result;
+    }
+
+    private Map<TableBucket, PutKvResultForBucket> lookupOrPutToLocalKv(
+            Map<TableBucket, MissingKeysContext> entriesPerBucket, int requiredAcks) {
+        return processLocalKvWrite(
+                entriesPerBucket.entrySet(),
+                (replica, entry) -> {
+                    MissingKeysContext context = entry.getValue();
+                    Tuple2<LogAppendInfo, List<byte[]>> result =
+                            replica.lookupOrPutRecordsToLeader(context.missingKeys, requiredAcks);
+                    updateLookupValuesWithResult(context, result);
+                    return result.f0;
+                },
+                (appendInfo) -> appendInfo.lastOffset(),
+                (tableMetrics, entry, appendInfo) ->
+                        updateKvAndLogMetrics(
+                                tableMetrics, entry.getValue().missingKeys, appendInfo),
+                "lookup or put");
+    }
+
+    /** Update lookup result values with the put result. */
+    private void updateLookupValuesWithResult(
+            MissingKeysContext context, Tuple2<LogAppendInfo, List<byte[]>> result) {
+        List<byte[]> resultValues = result.f1;
+        for (int i = 0; i < resultValues.size(); i++) {
+            context.lookupResult
+                    .lookupValues()
+                    .set(context.missingIndexes.get(i), resultValues.get(i));
+        }
+    }
+
+    /** Update metrics for KV operations and CDC log. */
+    private void updateKvAndLogMetrics(
+            TableMetricGroup tableMetrics, List<byte[]> keys, LogAppendInfo appendInfo) {
+        // metric for kv
+        tableMetrics.incKvMessageIn(keys.size());
+        tableMetrics.incKvBytesIn(keys.stream().mapToLong(b -> b.length).sum());
+        // metric for cdc log of kv
+        tableMetrics.incLogBytesIn(appendInfo.validBytes());
+        tableMetrics.incLogMessageIn(appendInfo.numMessages());
+    }
+
+    /** Collect missing keys from lookup results for insertion. */
+    private Map<TableBucket, MissingKeysContext> collectMissingKeysForInsert(
+            Map<TableBucket, List<byte[]>> entriesPerBucket,
+            Map<TableBucket, LookupResultForBucket> lookupResults) {
+        Map<TableBucket, MissingKeysContext> result = new HashMap<>();
+        for (Map.Entry<TableBucket, List<byte[]>> entry : entriesPerBucket.entrySet()) {
+            List<Integer> missingIndexes = new ArrayList<>();
+            List<byte[]> missingKeys = new ArrayList<>();
+            LookupResultForBucket lookupResult = lookupResults.get(entry.getKey());
+            List<byte[]> requestedKeys = entry.getValue();
+
+            for (int i = 0; i < requestedKeys.size(); i++) {
+                if (!lookupResult.failed() && lookupResult.lookupValues().get(i) == null) {
+                    missingKeys.add(requestedKeys.get(i));
+                    missingIndexes.add(i);
+                }
+            }
+            // Only add to result if there are missing keys
+            if (!missingKeys.isEmpty()) {
+                result.put(
+                        entry.getKey(),
+                        new MissingKeysContext(lookupResult, missingIndexes, missingKeys));
+            }
+        }
+        return result;
     }
 
     /** Lookup a single key value. */
@@ -588,8 +741,43 @@ public class ReplicaManager {
                 });
     }
 
+    /** Lookup a single key value. */
+    @VisibleForTesting
+    protected void lookup(
+            boolean insertIfNotExists,
+            @Nullable Integer timeoutMs,
+            @Nullable Integer requiredAcks,
+            TableBucket tableBucket,
+            byte[] key,
+            Consumer<byte[]> responseCallback) {
+        lookups(
+                insertIfNotExists,
+                timeoutMs,
+                requiredAcks,
+                Collections.singletonMap(tableBucket, Collections.singletonList(key)),
+                multiLookupResponseCallBack -> {
+                    LookupResultForBucket result = multiLookupResponseCallBack.get(tableBucket);
+                    List<byte[]> values = result.lookupValues();
+                    checkState(
+                            values.size() == 1,
+                            "The result value for single lookup should be with size 1, "
+                                    + "but the result size is {}",
+                            values.size());
+                    responseCallback.accept(values.get(0));
+                });
+    }
+
+    public void lookups(
+            Map<TableBucket, List<byte[]>> entriesPerBucket,
+            Consumer<Map<TableBucket, LookupResultForBucket>> responseCallback) {
+        lookups(false, null, null, entriesPerBucket, responseCallback);
+    }
+
     /** Lookup with multi key from leader replica of the buckets. */
     public void lookups(
+            boolean insertIfNotExists,
+            @Nullable Integer timeoutMs,
+            @Nullable Integer requiredAcks,
             Map<TableBucket, List<byte[]>> entriesPerBucket,
             Consumer<Map<TableBucket, LookupResultForBucket>> responseCallback) {
         Map<TableBucket, LookupResultForBucket> lookupResultForBucketMap = new HashMap<>();
@@ -617,8 +805,28 @@ public class ReplicaManager {
                         tb, new LookupResultForBucket(tb, ApiError.fromThrowable(e)));
             }
         }
+
+        if (insertIfNotExists) {
+            checkArgument(
+                    timeoutMs != null && requiredAcks != null,
+                    "timeoutMs and requiredAcks must be set");
+            Map<TableBucket, MissingKeysContext> entriesPerBucketToInsert =
+                    collectMissingKeysForInsert(entriesPerBucket, lookupResultForBucketMap);
+            if (!entriesPerBucketToInsert.isEmpty()) {
+                lookupOrPutRecordsToKv(
+                        timeoutMs,
+                        requiredAcks,
+                        entriesPerBucketToInsert,
+                        lookupResultForBucketMap,
+                        responseCallback);
+            } else {
+                // All keys exist, directly return lookup results
+                responseCallback.accept(lookupResultForBucketMap);
+            }
+        } else {
+            responseCallback.accept(lookupResultForBucketMap);
+        }
         LOG.debug("Lookup from local kv in {}ms", System.currentTimeMillis() - startTime);
-        responseCallback.accept(lookupResultForBucketMap);
     }
 
     /** Lookup multi prefixKeys by prefix scan on kv store. */
@@ -1028,47 +1236,77 @@ public class ReplicaManager {
             Map<TableBucket, KvRecordBatch> entriesPerBucket,
             @Nullable int[] targetColumns,
             int requiredAcks) {
-        Map<TableBucket, PutKvResultForBucket> putResultForBucketMap = new HashMap<>();
-        for (Map.Entry<TableBucket, KvRecordBatch> entry : entriesPerBucket.entrySet()) {
+        return processLocalKvWrite(
+                entriesPerBucket.entrySet(),
+                (replica, entry) ->
+                        replica.putRecordsToLeader(entry.getValue(), targetColumns, requiredAcks),
+                (appendInfo) -> appendInfo.lastOffset() + 1,
+                (tableMetrics, entry, appendInfo) -> {
+                    KvRecordBatch batch = entry.getValue();
+                    tableMetrics.incKvMessageIn(batch.getRecordCount());
+                    tableMetrics.incKvBytesIn(batch.sizeInBytes());
+                    tableMetrics.incLogBytesIn(appendInfo.validBytes());
+                    tableMetrics.incLogMessageIn(appendInfo.numMessages());
+                },
+                "put");
+    }
+
+    /**
+     * Common template for local KV write operations.
+     *
+     * @param entries entries to process
+     * @param replicaOperation operation to execute on replica
+     * @param offsetExtractor extracts result offset from LogAppendInfo
+     * @param metricsUpdater updates metrics after successful write
+     * @param operationName name for logging
+     * @return map of results per bucket
+     */
+    private <E> Map<TableBucket, PutKvResultForBucket> processLocalKvWrite(
+            Set<Map.Entry<TableBucket, E>> entries,
+            ReplicaKvOperation<E> replicaOperation,
+            java.util.function.ToLongFunction<LogAppendInfo> offsetExtractor,
+            MetricsUpdater<E> metricsUpdater,
+            String operationName) {
+        Map<TableBucket, PutKvResultForBucket> results = new HashMap<>();
+        for (Map.Entry<TableBucket, E> entry : entries) {
             TableBucket tb = entry.getKey();
             TableMetricGroup tableMetrics = null;
             try {
-                LOG.trace("Put records to local kv tablet for table bucket {}", tb);
+                LOG.trace("{} records to local kv tablet for {}", operationName, tb);
                 Replica replica = getReplicaOrException(tb);
                 tableMetrics = replica.tableMetrics();
                 tableMetrics.totalPutKvRequests().inc();
-                LogAppendInfo appendInfo =
-                        replica.putRecordsToLeader(entry.getValue(), targetColumns, requiredAcks);
+
+                LogAppendInfo appendInfo = replicaOperation.apply(replica, entry);
                 LOG.trace(
-                        "Written to local kv for {}, and the cdc log beginning at offset {} and ending at offset {}",
+                        "Written to local kv for {}, cdc log offset {} to {}",
                         tb,
                         appendInfo.firstOffset(),
                         appendInfo.lastOffset());
-                putResultForBucketMap.put(
-                        tb, new PutKvResultForBucket(tb, appendInfo.lastOffset() + 1));
-
-                // metric for kv
-                tableMetrics.incKvMessageIn(entry.getValue().getRecordCount());
-                tableMetrics.incKvBytesIn(entry.getValue().sizeInBytes());
-                // metric for cdc log of kv
-                tableMetrics.incLogBytesIn(appendInfo.validBytes());
-                tableMetrics.incLogMessageIn(appendInfo.numMessages());
+                results.put(
+                        tb, new PutKvResultForBucket(tb, offsetExtractor.applyAsLong(appendInfo)));
+                metricsUpdater.update(tableMetrics, entry, appendInfo);
             } catch (Exception e) {
                 if (isUnexpectedException(e)) {
-                    LOG.error("Error put records to local kv on replica {}", tb, e);
-                    // NOTE: Failed put requests metric is not incremented for known exceptions
-                    // since it is supposed to indicate un-expected failure of a server in
-                    // handling a put request
+                    LOG.error("Error {} records to local kv on replica {}", operationName, tb, e);
                     if (tableMetrics != null) {
                         tableMetrics.failedPutKvRequests().inc();
                     }
                 }
-                putResultForBucketMap.put(
-                        tb, new PutKvResultForBucket(tb, ApiError.fromThrowable(e)));
+                results.put(tb, new PutKvResultForBucket(tb, ApiError.fromThrowable(e)));
             }
         }
+        return results;
+    }
 
-        return putResultForBucketMap;
+    @FunctionalInterface
+    private interface ReplicaKvOperation<E> {
+        LogAppendInfo apply(Replica replica, Map.Entry<TableBucket, E> entry) throws Exception;
+    }
+
+    @FunctionalInterface
+    private interface MetricsUpdater<E> {
+        void update(TableMetricGroup metrics, Map.Entry<TableBucket, E> entry, LogAppendInfo info);
     }
 
     public void limitScan(

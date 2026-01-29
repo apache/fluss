@@ -41,9 +41,11 @@ import org.apache.fluss.record.KvRecord;
 import org.apache.fluss.record.KvRecordBatch;
 import org.apache.fluss.record.KvRecordReadContext;
 import org.apache.fluss.row.BinaryRow;
+import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.PaddingRow;
 import org.apache.fluss.row.arrow.ArrowWriterPool;
 import org.apache.fluss.row.arrow.ArrowWriterProvider;
+import org.apache.fluss.row.decode.KeyDecoder;
 import org.apache.fluss.row.encode.ValueDecoder;
 import org.apache.fluss.server.kv.autoinc.AutoIncrementManager;
 import org.apache.fluss.server.kv.autoinc.AutoIncrementUpdater;
@@ -70,6 +72,7 @@ import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.BytesUtils;
 import org.apache.fluss.utils.FileUtils;
+import org.apache.fluss.utils.types.Tuple2;
 
 import org.rocksdb.RateLimiter;
 import org.slf4j.Logger;
@@ -81,6 +84,7 @@ import javax.annotation.concurrent.ThreadSafe;
 
 import java.io.File;
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
@@ -367,6 +371,58 @@ public final class KvTablet {
                 });
     }
 
+    /**
+     * Lookup or put the KvRecordBatch into the kv storage, if the key exists, return the value;
+     * otherwise, put the record and return the put value.
+     *
+     * @param keys the keys to lookup or put
+     */
+    public Tuple2<LogAppendInfo, List<byte[]>> lookupOrPutAsLeader(List<byte[]> keys)
+            throws Exception {
+        return inWriteLock(
+                kvLock,
+                () -> {
+                    rocksDBKv.checkIfRocksDBClosed();
+
+                    SchemaInfo schemaInfo = schemaGetter.getLatestSchemaInfo();
+                    Schema latestSchema = schemaInfo.getSchema();
+                    short latestSchemaId = (short) schemaInfo.getSchemaId();
+
+                    AutoIncrementUpdater currentAutoIncrementUpdater =
+                            autoIncrementManager.getUpdaterForSchema(kvFormat, latestSchemaId);
+
+                    RowType latestRowType = latestSchema.getRowType();
+                    WalBuilder walBuilder = createWalBuilder(latestSchemaId, latestRowType);
+                    PaddingRow latestSchemaRow = new PaddingRow(latestRowType.getFieldCount());
+                    long logEndOffsetOfPrevBatch = logTablet.localLogEndOffset();
+
+                    try {
+                        Tuple2<List<byte[]>, Integer> result =
+                                processLookupOrPutRecords(
+                                        keys,
+                                        currentAutoIncrementUpdater,
+                                        walBuilder,
+                                        latestSchemaRow,
+                                        logEndOffsetOfPrevBatch);
+
+                        LogAppendInfo logAppendInfo = logTablet.appendAsLeader(walBuilder.build());
+
+                        // if the batch is duplicated, we should truncate the kvPreWriteBuffer
+                        // already written.
+                        if (logAppendInfo.duplicated()) {
+                            kvPreWriteBuffer.truncateTo(
+                                    logEndOffsetOfPrevBatch, TruncateReason.DUPLICATED);
+                        }
+                        return Tuple2.of(logAppendInfo, result.f0);
+                    } catch (Throwable t) {
+                        kvPreWriteBuffer.truncateTo(logEndOffsetOfPrevBatch, TruncateReason.ERROR);
+                        throw t;
+                    } finally {
+                        walBuilder.deallocate();
+                    }
+                });
+    }
+
     private void validateSchemaId(short schemaIdOfNewData, short latestSchemaId) {
         if (schemaIdOfNewData > latestSchemaId || schemaIdOfNewData < 0) {
             throw new SchemaNotExistException(
@@ -421,6 +477,49 @@ public final class KvTablet {
                                 logOffset);
             }
         }
+    }
+
+    private Tuple2<List<byte[]>, Integer> processLookupOrPutRecords(
+            List<byte[]> keys,
+            AutoIncrementUpdater autoIncrementUpdater,
+            WalBuilder walBuilder,
+            PaddingRow latestSchemaRow,
+            long startLogOffset)
+            throws Exception {
+        long logOffset = startLogOffset;
+        List<byte[]> values = new ArrayList<>();
+        int insertedCount = 0;
+
+        SchemaInfo schemaInfo = schemaGetter.getLatestSchemaInfo();
+        KeyDecoder keyDecoder =
+                KeyDecoder.of(
+                        schemaInfo.getSchema().getRowType(),
+                        schemaInfo.getSchema().getPrimaryKeyColumnNames());
+
+        for (byte[] keyBytes : keys) {
+            InternalRow keyRow = keyDecoder.decodeKey(keyBytes);
+            KvPreWriteBuffer.Key key = KvPreWriteBuffer.Key.of(keyBytes);
+
+            byte[] oldValueBytes = getFromBufferOrKv(key);
+            if (oldValueBytes != null) {
+                values.add(oldValueBytes);
+            } else {
+                // If not found, we insert the new record.
+                // Use unified encodeRow() that handles both auto-increment and non-auto-increment
+                BinaryRow binaryRow =
+                        autoIncrementUpdater.encodeRow(latestSchemaRow.replaceRow(keyRow));
+
+                BinaryValue newValue = new BinaryValue((short) schemaInfo.getSchemaId(), binaryRow);
+                byte[] newValueBytes = newValue.encodeValue();
+                values.add(newValueBytes);
+
+                walBuilder.append(ChangeType.INSERT, newValue.row);
+                kvPreWriteBuffer.put(key, newValueBytes, logOffset);
+                logOffset++;
+                insertedCount++;
+            }
+        }
+        return Tuple2.of(values, insertedCount);
     }
 
     private long processDeletion(
@@ -522,7 +621,7 @@ public final class KvTablet {
             long logOffset,
             AutoIncrementUpdater autoIncrementUpdater)
             throws Exception {
-        BinaryValue newValue = autoIncrementUpdater.updateAutoIncrementColumns(currentValue);
+        BinaryValue newValue = autoIncrementUpdater.applyAutoIncrement(currentValue);
         walBuilder.append(ChangeType.INSERT, latestSchemaRow.replaceRow(newValue.row));
         kvPreWriteBuffer.put(key, newValue.encodeValue(), logOffset);
         return logOffset + 1;

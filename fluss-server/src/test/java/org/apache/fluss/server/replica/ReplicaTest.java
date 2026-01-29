@@ -32,6 +32,7 @@ import org.apache.fluss.record.LogRecordBatch;
 import org.apache.fluss.record.LogRecords;
 import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.record.ProjectionPushdownCache;
+import org.apache.fluss.row.encode.CompactedKeyEncoder;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
 import org.apache.fluss.server.kv.KvTablet;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
@@ -88,6 +89,7 @@ import static org.apache.fluss.testutils.DataTestUtils.genKvRecords;
 import static org.apache.fluss.testutils.DataTestUtils.genMemoryLogRecordsByObject;
 import static org.apache.fluss.testutils.DataTestUtils.genMemoryLogRecordsWithWriterId;
 import static org.apache.fluss.testutils.DataTestUtils.getKeyValuePairs;
+import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.apache.fluss.testutils.LogRecordsAssert.assertThatLogRecords;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -425,6 +427,69 @@ final class ReplicaTest extends ReplicaTestBase {
                 .withSchema(DATA2_ROW_TYPE)
                 .withSchemaGetter(schemaGetter)
                 .isEqualTo(expected);
+    }
+
+    @Test
+    void testLookupOrPutRecordsToLeader() throws Exception {
+        Replica kvReplica =
+                makeKvReplica(DATA1_PHYSICAL_TABLE_PATH_PK, new TableBucket(DATA1_TABLE_ID_PK, 1));
+        makeKvReplicaAsLeader(kvReplica);
+        KvTablet kvTablet = kvReplica.getKvTablet();
+        assertThat(kvTablet).isNotNull();
+
+        CompactedKeyEncoder keyEncoder = new CompactedKeyEncoder(DATA1_ROW_TYPE, new int[] {0});
+
+        // Scenario 1: All keys don't exist - should insert default values and return
+        List<byte[]> keys1 =
+                Arrays.asList(
+                        keyEncoder.encodeKey(row(new Object[] {100})),
+                        keyEncoder.encodeKey(row(new Object[] {200})));
+
+        Tuple2<LogAppendInfo, List<byte[]>> result1 =
+                kvReplica.lookupOrPutRecordsToLeader(keys1, 1);
+
+        assertThat(result1.f1).hasSize(2);
+        assertThat(result1.f1.get(0)).isNotNull();
+        assertThat(result1.f1.get(1)).isNotNull();
+        assertThat(result1.f0).isNotNull();
+        assertThat(result1.f0.lastOffset()).isGreaterThan(-1);
+
+        // Verify keys have been inserted
+        List<byte[]> lookupResult1 = kvTablet.multiGet(keys1);
+        assertThat(lookupResult1.get(0)).isEqualTo(result1.f1.get(0));
+        assertThat(lookupResult1.get(1)).isEqualTo(result1.f1.get(1));
+
+        // Scenario 2: All keys already exist - should return existing values without writing CDC
+        // log
+        List<byte[]> keys2 = keys1; // Reuse existing keys
+        long offsetBeforeSecondLookup = result1.f0.lastOffset();
+
+        Tuple2<LogAppendInfo, List<byte[]>> result2 =
+                kvReplica.lookupOrPutRecordsToLeader(keys2, 1);
+        assertThat(result2.f1).hasSize(2);
+        assertThat(result2.f1.get(0)).isEqualTo(result1.f1.get(0));
+        assertThat(result2.f1.get(1)).isEqualTo(result1.f1.get(1));
+        // All keys exist, CDC log should not be written, log offset should not increase
+        assertThat(result2.f0.lastOffset()).isEqualTo(offsetBeforeSecondLookup);
+
+        // Scenario 3: Mixed scenario - some keys exist, some don't
+        List<byte[]> keys3 =
+                Arrays.asList(
+                        keys1.get(0), // Exists
+                        keyEncoder.encodeKey(row(new Object[] {300})) // Doesn't exist
+                        );
+
+        Tuple2<LogAppendInfo, List<byte[]>> result3 =
+                kvReplica.lookupOrPutRecordsToLeader(keys3, 1);
+        assertThat(result3.f1).hasSize(2);
+        assertThat(result3.f1.get(0)).isEqualTo(result1.f1.get(0)); // Existing value
+        assertThat(result3.f1.get(1)).isNotNull(); // Newly inserted value
+        // New key inserted, log offset should increase
+        assertThat(result3.f0.lastOffset()).isGreaterThan(offsetBeforeSecondLookup);
+
+        // Verify new key has been inserted
+        List<byte[]> lookupResult3 = kvTablet.multiGet(Collections.singletonList(keys3.get(1)));
+        assertThat(lookupResult3.get(0)).isEqualTo(result3.f1.get(1));
     }
 
     @Test

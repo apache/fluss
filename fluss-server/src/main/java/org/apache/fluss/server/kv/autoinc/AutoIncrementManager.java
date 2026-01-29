@@ -23,6 +23,7 @@ import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.types.DataType;
 
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
@@ -40,8 +41,6 @@ import static org.apache.fluss.utils.Preconditions.checkState;
  */
 @NotThreadSafe
 public class AutoIncrementManager {
-    // No-op implementation that returns the input unchanged.
-    public static final AutoIncrementUpdater NO_OP_UPDATER = rowValue -> rowValue;
 
     private final SchemaGetter schemaGetter;
     private final Cache<Integer, AutoIncrementUpdater> autoIncrementUpdaterCache;
@@ -89,6 +88,7 @@ public class AutoIncrementManager {
 
     private AutoIncrementUpdater createAutoIncrementUpdater(KvFormat kvFormat, int schemaId) {
         Schema schema = schemaGetter.getSchema(schemaId);
+        DataType[] fieldDataTypes = schema.getRowType().getChildren().toArray(new DataType[0]);
         int[] autoIncrementColumnIds = schema.getAutoIncrementColumnIds();
         if (autoIncrementColumnId == -1) {
             checkState(
@@ -108,7 +108,7 @@ public class AutoIncrementManager {
                     autoIncrementColumnIds[0],
                     sequenceGenerator);
         } else {
-            return NO_OP_UPDATER;
+            return new NoOpAutoIncrementUpdater(kvFormat, fieldDataTypes);
         }
     }
 }

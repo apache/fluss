@@ -92,6 +92,7 @@ import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.IOUtils;
 import org.apache.fluss.utils.MapUtils;
 import org.apache.fluss.utils.clock.Clock;
+import org.apache.fluss.utils.function.FunctionWithException;
 import org.apache.fluss.utils.types.Tuple2;
 
 import org.slf4j.Logger;
@@ -942,6 +943,29 @@ public final class Replica {
     public LogAppendInfo putRecordsToLeader(
             KvRecordBatch kvRecords, @Nullable int[] targetColumns, int requiredAcks)
             throws Exception {
+        return executeOnLeaderKv(
+                requiredAcks, "putting records", kv -> kv.putAsLeader(kvRecords, targetColumns));
+    }
+
+    public Tuple2<LogAppendInfo, List<byte[]>> lookupOrPutRecordsToLeader(
+            List<byte[]> keys, int requiredAcks) throws Exception {
+        return executeOnLeaderKv(
+                requiredAcks, "lookup or putting records", kv -> kv.lookupOrPutAsLeader(keys));
+    }
+
+    /**
+     * Executes a KV operation on the leader replica with proper validation and error handling.
+     *
+     * @param requiredAcks the required number of acknowledgments
+     * @param operationName description of the operation for error messages
+     * @param operation the KV operation to execute
+     * @return the result of the operation
+     */
+    private <T> T executeOnLeaderKv(
+            int requiredAcks,
+            String operationName,
+            FunctionWithException<KvTablet, T, Exception> operation)
+            throws Exception {
         return inReadLock(
                 leaderIsrUpdateLock,
                 () -> {
@@ -951,23 +975,21 @@ public final class Replica {
                                         "Leader not local for bucket %s on tabletServer %d",
                                         tableBucket, localTabletServerId));
                     }
-
                     validateInSyncReplicaSize(requiredAcks);
                     KvTablet kv = this.kvTablet;
                     checkNotNull(
                             kv, "KvTablet for the replica to put kv records shouldn't be null.");
-                    LogAppendInfo logAppendInfo;
+                    T result;
                     try {
-                        logAppendInfo = kv.putAsLeader(kvRecords, targetColumns);
+                        result = operation.apply(kv);
                     } catch (IOException e) {
-                        LOG.error("Error while putting records to {}", tableBucket, e);
+                        LOG.error("Error while {} to {}", operationName, tableBucket, e);
                         fatalErrorHandler.onFatalError(e);
                         throw new KvStorageException(
-                                "Error while putting records to " + tableBucket, e);
+                                "Error while " + operationName + " to " + tableBucket, e);
                     }
-                    // we may need to increment high watermark.
                     maybeIncrementLeaderHW(logTablet, clock.milliseconds());
-                    return logAppendInfo;
+                    return result;
                 });
     }
 
