@@ -77,7 +77,7 @@ ps aux | grep flink
 ```
 - **Start a SQL Client**
 
-To quickly start the sql client, you can use the provided script:
+To quickly start the SQL client, you can use the provided script:
 ```shell
 <FLINK_HOME>/bin/sql-client.sh
 ```
