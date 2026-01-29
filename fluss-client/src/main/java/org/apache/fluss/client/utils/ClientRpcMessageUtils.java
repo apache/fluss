@@ -79,6 +79,7 @@ import org.apache.fluss.rpc.messages.PrefixLookupRequest;
 import org.apache.fluss.rpc.messages.ProduceLogRequest;
 import org.apache.fluss.rpc.messages.PutKvRequest;
 import org.apache.fluss.rpc.messages.RegisterProducerOffsetsRequest;
+import org.apache.fluss.rpc.protocol.AggMode;
 import org.apache.fluss.utils.json.DataTypeJsonSerde;
 import org.apache.fluss.utils.json.JsonSerdeUtils;
 
@@ -138,11 +139,12 @@ public class ClientRpcMessageUtils {
                         .setTimeoutMs(maxRequestTimeoutMs);
         // check the target columns in the batch list should be the same. If not same,
         // we throw exception directly currently.
-        int[] targetColumns =
-                ((KvWriteBatch) readyWriteBatches.get(0).writeBatch()).getTargetColumns();
+        KvWriteBatch firstBatch = (KvWriteBatch) readyWriteBatches.get(0).writeBatch();
+        int[] targetColumns = firstBatch.getTargetColumns();
+        AggMode aggMode = firstBatch.getAggMode();
         for (int i = 1; i < readyWriteBatches.size(); i++) {
-            int[] currentBatchTargetColumns =
-                    ((KvWriteBatch) readyWriteBatches.get(i).writeBatch()).getTargetColumns();
+            KvWriteBatch currentBatch = (KvWriteBatch) readyWriteBatches.get(i).writeBatch();
+            int[] currentBatchTargetColumns = currentBatch.getTargetColumns();
             if (!Arrays.equals(targetColumns, currentBatchTargetColumns)) {
                 throw new IllegalStateException(
                         String.format(
@@ -151,10 +153,21 @@ public class ClientRpcMessageUtils {
                                 Arrays.toString(targetColumns),
                                 Arrays.toString(currentBatchTargetColumns)));
             }
+            // Validate aggMode consistency across batches
+            if (currentBatch.getAggMode() != aggMode) {
+                throw new IllegalStateException(
+                        String.format(
+                                "All the write batches to make put kv request should have the same aggMode, "
+                                        + "but got %s and %s.",
+                                aggMode, currentBatch.getAggMode()));
+            }
         }
         if (targetColumns != null) {
             request.setTargetColumns(targetColumns);
         }
+        // Set aggMode in the request - this is the proper way to pass aggMode to server
+        request.setAggMode(aggMode.getProtoValue());
+
         readyWriteBatches.forEach(
                 readyBatch -> {
                     TableBucket tableBucket = readyBatch.tableBucket();

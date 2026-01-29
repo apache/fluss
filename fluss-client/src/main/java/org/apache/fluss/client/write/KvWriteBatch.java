@@ -28,6 +28,7 @@ import org.apache.fluss.record.bytesview.BytesView;
 import org.apache.fluss.row.BinaryRow;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.rpc.messages.PutKvRequest;
+import org.apache.fluss.rpc.protocol.AggMode;
 
 import javax.annotation.Nullable;
 import javax.annotation.concurrent.NotThreadSafe;
@@ -51,6 +52,7 @@ public class KvWriteBatch extends WriteBatch {
     private final KvRecordBatchBuilder recordsBuilder;
     private final @Nullable int[] targetColumns;
     private final int schemaId;
+    private final AggMode aggMode;
 
     public KvWriteBatch(
             int bucketId,
@@ -60,6 +62,7 @@ public class KvWriteBatch extends WriteBatch {
             int writeLimit,
             AbstractPagedOutputView outputView,
             @Nullable int[] targetColumns,
+            AggMode aggMode,
             long createdMs) {
         super(bucketId, physicalTablePath, createdMs);
         this.outputView = outputView;
@@ -67,6 +70,7 @@ public class KvWriteBatch extends WriteBatch {
                 KvRecordBatchBuilder.builder(schemaId, writeLimit, outputView, kvFormat);
         this.targetColumns = targetColumns;
         this.schemaId = schemaId;
+        this.aggMode = aggMode;
     }
 
     @Override
@@ -94,6 +98,15 @@ public class KvWriteBatch extends WriteBatch {
                             Arrays.toString(targetColumns)));
         }
 
+        // Validate aggMode consistency - records with different aggMode cannot be batched together
+        if (writeRecord.getAggMode() != this.aggMode) {
+            throw new IllegalStateException(
+                    String.format(
+                            "Cannot mix records with different aggMode in the same batch. "
+                                    + "Batch aggMode: %s, Record aggMode: %s",
+                            this.aggMode, writeRecord.getAggMode()));
+        }
+
         byte[] key = writeRecord.getKey();
         checkNotNull(key, "key must be not null for kv record");
         checkNotNull(callback, "write callback must be not null");
@@ -111,6 +124,11 @@ public class KvWriteBatch extends WriteBatch {
     @Nullable
     public int[] getTargetColumns() {
         return targetColumns;
+    }
+
+    @Override
+    public AggMode getAggMode() {
+        return aggMode;
     }
 
     @Override
@@ -163,6 +181,7 @@ public class KvWriteBatch extends WriteBatch {
         recordsBuilder.abort();
     }
 
+    @Override
     public void resetWriterState(long writerId, int batchSequence) {
         super.resetWriterState(writerId, batchSequence);
         recordsBuilder.resetWriterState(writerId, batchSequence);

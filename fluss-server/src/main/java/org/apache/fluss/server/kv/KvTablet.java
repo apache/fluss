@@ -45,6 +45,7 @@ import org.apache.fluss.row.PaddingRow;
 import org.apache.fluss.row.arrow.ArrowWriterPool;
 import org.apache.fluss.row.arrow.ArrowWriterProvider;
 import org.apache.fluss.row.encode.ValueDecoder;
+import org.apache.fluss.rpc.protocol.AggMode;
 import org.apache.fluss.server.kv.autoinc.AutoIncrementManager;
 import org.apache.fluss.server.kv.autoinc.AutoIncrementUpdater;
 import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer;
@@ -115,6 +116,9 @@ public final class KvTablet {
     private final KvFormat kvFormat;
     // defines how to merge rows on the same primary key
     private final RowMerger rowMerger;
+    // Pre-created DefaultRowMerger for OVERWRITE mode (undo recovery scenarios)
+    // This avoids creating a new instance on every putAsLeader call
+    private final RowMerger overwriteRowMerger;
     private final ArrowCompressionInfo arrowCompressionInfo;
     private final AutoIncrementManager autoIncrementManager;
 
@@ -166,6 +170,9 @@ public final class KvTablet {
         this.memorySegmentPool = memorySegmentPool;
         this.kvFormat = kvFormat;
         this.rowMerger = rowMerger;
+        // Pre-create DefaultRowMerger for OVERWRITE mode to avoid creating new instances
+        // on every putAsLeader call. Used for undo recovery scenarios.
+        this.overwriteRowMerger = new DefaultRowMerger(kvFormat, DeleteBehavior.ALLOW);
         this.arrowCompressionInfo = arrowCompressionInfo;
         this.schemaGetter = schemaGetter;
         this.changelogImage = changelogImage;
@@ -274,6 +281,20 @@ public final class KvTablet {
     }
 
     /**
+     * Put the KvRecordBatch into the kv storage with default AGGREGATE mode.
+     *
+     * <p>This is a convenience method that calls {@link #putAsLeader(KvRecordBatch, int[],
+     * AggMode)} with {@link AggMode#AGGREGATE}.
+     *
+     * @param kvRecords the kv records to put into
+     * @param targetColumns the target columns to put, null if put all columns
+     */
+    public LogAppendInfo putAsLeader(KvRecordBatch kvRecords, @Nullable int[] targetColumns)
+            throws Exception {
+        return putAsLeader(kvRecords, targetColumns, AggMode.AGGREGATE);
+    }
+
+    /**
      * Put the KvRecordBatch into the kv storage, and return the appended wal log info.
      *
      * <p>Schema Evolution Handling:
@@ -292,8 +313,10 @@ public final class KvTablet {
      *
      * @param kvRecords the kv records to put into
      * @param targetColumns the target columns to put, null if put all columns
+     * @param aggMode the aggregation mode (AGGREGATE or OVERWRITE)
      */
-    public LogAppendInfo putAsLeader(KvRecordBatch kvRecords, @Nullable int[] targetColumns)
+    public LogAppendInfo putAsLeader(
+            KvRecordBatch kvRecords, @Nullable int[] targetColumns, AggMode aggMode)
             throws Exception {
         return inWriteLock(
                 kvLock,
@@ -305,10 +328,17 @@ public final class KvTablet {
                     short latestSchemaId = (short) schemaInfo.getSchemaId();
                     validateSchemaId(kvRecords.schemaId(), latestSchemaId);
 
-                    // we only support ADD COLUMN, so targetColumns is fine to be used directly
+                    // Determine the row merger based on aggMode:
+                    // - AGGREGATE: Use the configured merge engine (rowMerger)
+                    // - OVERWRITE: Bypass merge engine, use pre-created overwriteRowMerger
+                    //   to directly replace values (for undo recovery scenarios)
+                    // We only support ADD COLUMN, so targetColumns is fine to be used directly.
                     RowMerger currentMerger =
-                            rowMerger.configureTargetColumns(
-                                    targetColumns, latestSchemaId, latestSchema);
+                            (aggMode == AggMode.OVERWRITE)
+                                    ? overwriteRowMerger.configureTargetColumns(
+                                            targetColumns, latestSchemaId, latestSchema)
+                                    : rowMerger.configureTargetColumns(
+                                            targetColumns, latestSchemaId, latestSchema);
                     AutoIncrementUpdater currentAutoIncrementUpdater =
                             autoIncrementManager.getUpdaterForSchema(kvFormat, latestSchemaId);
 

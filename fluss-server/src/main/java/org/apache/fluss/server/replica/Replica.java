@@ -44,6 +44,7 @@ import org.apache.fluss.record.DefaultValueRecordBatch;
 import org.apache.fluss.record.KvRecordBatch;
 import org.apache.fluss.record.LogRecords;
 import org.apache.fluss.record.MemoryLogRecords;
+import org.apache.fluss.rpc.protocol.AggMode;
 import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.server.SequenceIDCounter;
 import org.apache.fluss.server.coordinator.CoordinatorContext;
@@ -940,7 +941,10 @@ public final class Replica {
     }
 
     public LogAppendInfo putRecordsToLeader(
-            KvRecordBatch kvRecords, @Nullable int[] targetColumns, int requiredAcks)
+            KvRecordBatch kvRecords,
+            @Nullable int[] targetColumns,
+            AggMode aggMode,
+            int requiredAcks)
             throws Exception {
         return inReadLock(
                 leaderIsrUpdateLock,
@@ -958,7 +962,7 @@ public final class Replica {
                             kv, "KvTablet for the replica to put kv records shouldn't be null.");
                     LogAppendInfo logAppendInfo;
                     try {
-                        logAppendInfo = kv.putAsLeader(kvRecords, targetColumns);
+                        logAppendInfo = kv.putAsLeader(kvRecords, targetColumns, aggMode);
                     } catch (IOException e) {
                         LOG.error("Error while putting records to {}", tableBucket, e);
                         fatalErrorHandler.onFatalError(e);

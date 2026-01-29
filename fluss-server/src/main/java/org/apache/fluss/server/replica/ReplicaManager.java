@@ -55,6 +55,7 @@ import org.apache.fluss.rpc.gateway.CoordinatorGateway;
 import org.apache.fluss.rpc.messages.NotifyKvSnapshotOffsetResponse;
 import org.apache.fluss.rpc.messages.NotifyLakeTableOffsetResponse;
 import org.apache.fluss.rpc.messages.NotifyRemoteLogOffsetsResponse;
+import org.apache.fluss.rpc.protocol.AggMode;
 import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.server.coordinator.CoordinatorContext;
@@ -545,6 +546,27 @@ public class ReplicaManager {
     }
 
     /**
+     * Put kv records to leader replicas of the buckets with default AGGREGATE mode.
+     *
+     * <p>This is a convenience method that calls {@link #putRecordsToKv(int, int, Map, int[],
+     * AggMode, Consumer)} with {@link AggMode#AGGREGATE}.
+     */
+    public void putRecordsToKv(
+            int timeoutMs,
+            int requiredAcks,
+            Map<TableBucket, KvRecordBatch> entriesPerBucket,
+            @Nullable int[] targetColumns,
+            Consumer<List<PutKvResultForBucket>> responseCallback) {
+        putRecordsToKv(
+                timeoutMs,
+                requiredAcks,
+                entriesPerBucket,
+                targetColumns,
+                AggMode.AGGREGATE,
+                responseCallback);
+    }
+
+    /**
      * Put kv records to leader replicas of the buckets, the kv data will write to kv tablet and the
      * response callback need to wait for the cdc log to be replicated to other replicas if needed.
      */
@@ -553,6 +575,7 @@ public class ReplicaManager {
             int requiredAcks,
             Map<TableBucket, KvRecordBatch> entriesPerBucket,
             @Nullable int[] targetColumns,
+            AggMode aggMode,
             Consumer<List<PutKvResultForBucket>> responseCallback) {
         if (isRequiredAcksInvalid(requiredAcks)) {
             throw new InvalidRequiredAcksException("Invalid required acks: " + requiredAcks);
@@ -560,7 +583,7 @@ public class ReplicaManager {
 
         long startTime = System.currentTimeMillis();
         Map<TableBucket, PutKvResultForBucket> kvPutResult =
-                putToLocalKv(entriesPerBucket, targetColumns, requiredAcks);
+                putToLocalKv(entriesPerBucket, targetColumns, aggMode, requiredAcks);
         LOG.debug(
                 "Put records to local kv storage and wait generate cdc log in {} ms",
                 System.currentTimeMillis() - startTime);
@@ -1027,6 +1050,7 @@ public class ReplicaManager {
     private Map<TableBucket, PutKvResultForBucket> putToLocalKv(
             Map<TableBucket, KvRecordBatch> entriesPerBucket,
             @Nullable int[] targetColumns,
+            AggMode aggMode,
             int requiredAcks) {
         Map<TableBucket, PutKvResultForBucket> putResultForBucketMap = new HashMap<>();
         for (Map.Entry<TableBucket, KvRecordBatch> entry : entriesPerBucket.entrySet()) {
@@ -1038,7 +1062,8 @@ public class ReplicaManager {
                 tableMetrics = replica.tableMetrics();
                 tableMetrics.totalPutKvRequests().inc();
                 LogAppendInfo appendInfo =
-                        replica.putRecordsToLeader(entry.getValue(), targetColumns, requiredAcks);
+                        replica.putRecordsToLeader(
+                                entry.getValue(), targetColumns, aggMode, requiredAcks);
                 LOG.trace(
                         "Written to local kv for {}, and the cdc log beginning at offset {} and ending at offset {}",
                         tb,

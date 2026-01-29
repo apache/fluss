@@ -32,6 +32,7 @@ import org.apache.fluss.record.LogRecordBatch;
 import org.apache.fluss.record.LogRecords;
 import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.record.ProjectionPushdownCache;
+import org.apache.fluss.rpc.protocol.AggMode;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
 import org.apache.fluss.server.kv.KvTablet;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
@@ -868,7 +869,9 @@ final class ReplicaTest extends ReplicaTestBase {
 
     private LogAppendInfo putRecordsToLeader(
             Replica replica, KvRecordBatch kvRecords, int[] targetColumns) throws Exception {
-        LogAppendInfo logAppendInfo = replica.putRecordsToLeader(kvRecords, targetColumns, 0);
+        // Use AGGREGATE mode as default for tests
+        LogAppendInfo logAppendInfo =
+                replica.putRecordsToLeader(kvRecords, targetColumns, AggMode.AGGREGATE, 0);
         KvTablet kvTablet = checkNotNull(replica.getKvTablet());
         // flush to make data visible
         kvTablet.flush(replica.getLocalLogEndOffset(), NOPErrorHandler.INSTANCE);

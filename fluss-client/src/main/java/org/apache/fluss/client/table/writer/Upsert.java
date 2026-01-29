@@ -18,6 +18,7 @@
 package org.apache.fluss.client.table.writer;
 
 import org.apache.fluss.annotation.PublicEvolving;
+import org.apache.fluss.rpc.protocol.AggMode;
 
 import javax.annotation.Nullable;
 
@@ -26,7 +27,8 @@ import javax.annotation.Nullable;
  * Table.
  *
  * <p>{@link Upsert} objects are immutable and can be shared between threads. Refinement methods,
- * like {@link #partialUpdate}, create new Upsert instances.
+ * like {@link #partialUpdate(int[])} and {@link #aggregationMode(AggMode)}, create new Upsert
+ * instances.
  *
  * @since 0.6
  */
@@ -57,8 +59,43 @@ public interface Upsert {
     Upsert partialUpdate(String... targetColumnNames);
 
     /**
+     * Specify aggregation mode for the UpsertWriter and returns a new Upsert instance.
+     *
+     * <p>This method controls how the created UpsertWriter handles data aggregation:
+     *
+     * <ul>
+     *   <li>{@link AggMode#AGGREGATE} (default): Data is aggregated through server-side merge
+     *       engine
+     *   <li>{@link AggMode#OVERWRITE}: Data directly overwrites values, bypassing merge engine (for
+     *       undo recovery)
+     *   <li>{@link AggMode#LOCAL_AGGREGATE}: Client-side pre-aggregation before server-side
+     *       aggregation (reserved for future implementation, not yet supported)
+     * </ul>
+     *
+     * <p>Example usage:
+     *
+     * <pre>{@code
+     * // Normal aggregation mode (default)
+     * UpsertWriter normalWriter = table.newUpsert()
+     *     .aggregationMode(AggMode.AGGREGATE)
+     *     .createWriter();
+     *
+     * // Overwrite mode for undo recovery
+     * UpsertWriter undoWriter = table.newUpsert()
+     *     .aggregationMode(AggMode.OVERWRITE)
+     *     .createWriter();
+     * }</pre>
+     *
+     * @param mode the aggregation mode
+     * @return a new Upsert instance with the specified aggregation mode
+     * @since 0.9
+     */
+    Upsert aggregationMode(AggMode mode);
+
+    /**
      * Create a new {@link UpsertWriter} using {@code InternalRow} with the optional {@link
-     * #partialUpdate(String...)} information to upsert and delete data to a Primary Key Table.
+     * #partialUpdate(String...)} and {@link #aggregationMode(AggMode)} information to upsert and
+     * delete data to a Primary Key Table.
      */
     UpsertWriter createWriter();
 

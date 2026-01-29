@@ -219,6 +219,11 @@ message FetchLogResponse {
   repeated PbFetchLogRespForTable tables_resp = 1;
 }
 
+// Aggregation mode constants for write operations (using int32 instead of enum for proto3 compatibility)
+// AGG_MODE_AGGREGATE = 0: Data is aggregated through server-side merge engine (default)
+// AGG_MODE_OVERWRITE = 1: Bypass merge engine, directly replace values (for undo recovery)
+// AGG_MODE_LOCAL_AGGREGATE = 2: Client-side local aggregation (reserved for future implementation)
+
 // put kv request and response
 message PutKvRequest {
   required int32 acks = 1;
@@ -228,6 +233,9 @@ message PutKvRequest {
   // if empty, means write all columns
   repeated int32 target_columns = 4 [packed = true];
   repeated PbPutKvReqForBucket buckets_req = 5;
+  // Aggregation mode for this request (see AGG_MODE_* constants above)
+  // 0 = AGGREGATE (default), 1 = OVERWRITE, 2 = LOCAL_AGGREGATE (not yet supported)
+  optional int32 agg_mode = 6;
 }
 
 message PutKvResponse {

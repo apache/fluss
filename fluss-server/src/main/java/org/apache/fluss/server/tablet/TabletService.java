@@ -60,6 +60,7 @@ import org.apache.fluss.rpc.messages.StopReplicaRequest;
 import org.apache.fluss.rpc.messages.StopReplicaResponse;
 import org.apache.fluss.rpc.messages.UpdateMetadataRequest;
 import org.apache.fluss.rpc.messages.UpdateMetadataResponse;
+import org.apache.fluss.rpc.protocol.AggMode;
 import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.security.acl.OperationType;
@@ -224,12 +225,16 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
         authorizeTable(WRITE, request.getTableId());
 
         Map<TableBucket, KvRecordBatch> putKvData = getPutKvData(request);
+        // Get aggMode from request, default to AGGREGATE if not set
+        AggMode aggMode =
+                request.hasAggMode() ? AggMode.fromValue(request.getAggMode()) : AggMode.AGGREGATE;
         CompletableFuture<PutKvResponse> response = new CompletableFuture<>();
         replicaManager.putRecordsToKv(
                 request.getTimeoutMs(),
                 request.getAcks(),
                 putKvData,
                 getTargetColumns(request),
+                aggMode,
                 bucketResponse -> response.complete(makePutKvResponse(bucketResponse)));
         return response;
     }

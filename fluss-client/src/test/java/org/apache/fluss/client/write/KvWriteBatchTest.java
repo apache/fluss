@@ -33,6 +33,7 @@ import org.apache.fluss.record.KvRecordReadContext;
 import org.apache.fluss.record.TestingSchemaGetter;
 import org.apache.fluss.row.BinaryRow;
 import org.apache.fluss.row.encode.CompactedKeyEncoder;
+import org.apache.fluss.rpc.protocol.AggMode;
 import org.apache.fluss.types.DataType;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -227,6 +228,7 @@ class KvWriteBatchTest {
                 writeLimit,
                 outputView,
                 null,
+                AggMode.AGGREGATE,
                 System.currentTimeMillis());
     }
 
@@ -253,5 +255,85 @@ class KvWriteBatchTest {
         KvRecord kvRecord = iterator.next();
         assertThat(toArray(kvRecord.getKey())).isEqualTo(key);
         assertThat(kvRecord.getRow()).isEqualTo(row);
+    }
+
+    // ==================== AggMode Tests ====================
+
+    @Test
+    void testAggModeConsistencyValidation() throws Exception {
+        // Create batch with AGGREGATE mode
+        KvWriteBatch aggregateBatch =
+                createKvWriteBatchWithAggMode(
+                        new TableBucket(DATA1_TABLE_ID_PK, 0), AggMode.AGGREGATE);
+
+        // Append record with AGGREGATE mode should succeed
+        WriteRecord aggregateRecord = createWriteRecordWithAggMode(AggMode.AGGREGATE);
+        assertThat(aggregateBatch.tryAppend(aggregateRecord, newWriteCallback())).isTrue();
+
+        // Append record with OVERWRITE mode should fail
+        WriteRecord overwriteRecord = createWriteRecordWithAggMode(AggMode.OVERWRITE);
+        assertThatThrownBy(() -> aggregateBatch.tryAppend(overwriteRecord, newWriteCallback()))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("Cannot mix records with different aggMode in the same batch")
+                .hasMessageContaining("Batch aggMode: AGGREGATE")
+                .hasMessageContaining("Record aggMode: OVERWRITE");
+    }
+
+    @Test
+    void testOverwriteModeBatch() throws Exception {
+        // Create batch with OVERWRITE mode
+        KvWriteBatch overwriteBatch =
+                createKvWriteBatchWithAggMode(
+                        new TableBucket(DATA1_TABLE_ID_PK, 0), AggMode.OVERWRITE);
+
+        // Verify batch has correct aggMode
+        assertThat(overwriteBatch.getAggMode()).isEqualTo(AggMode.OVERWRITE);
+
+        // Append record with OVERWRITE mode should succeed
+        WriteRecord overwriteRecord = createWriteRecordWithAggMode(AggMode.OVERWRITE);
+        assertThat(overwriteBatch.tryAppend(overwriteRecord, newWriteCallback())).isTrue();
+
+        // Append record with AGGREGATE mode should fail
+        WriteRecord aggregateRecord = createWriteRecordWithAggMode(AggMode.AGGREGATE);
+        assertThatThrownBy(() -> overwriteBatch.tryAppend(aggregateRecord, newWriteCallback()))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("Cannot mix records with different aggMode in the same batch")
+                .hasMessageContaining("Batch aggMode: OVERWRITE")
+                .hasMessageContaining("Record aggMode: AGGREGATE");
+    }
+
+    @Test
+    void testDefaultAggModeIsAggregate() throws Exception {
+        KvWriteBatch batch = createKvWriteBatch(new TableBucket(DATA1_TABLE_ID_PK, 0));
+        assertThat(batch.getAggMode()).isEqualTo(AggMode.AGGREGATE);
+    }
+
+    private KvWriteBatch createKvWriteBatchWithAggMode(TableBucket tb, AggMode aggMode)
+            throws Exception {
+        PreAllocatedPagedOutputView outputView =
+                new PreAllocatedPagedOutputView(
+                        Collections.singletonList(memoryPool.nextSegment()));
+        return new KvWriteBatch(
+                tb.getBucket(),
+                PhysicalTablePath.of(DATA1_TABLE_PATH_PK),
+                DATA1_TABLE_INFO_PK.getSchemaId(),
+                KvFormat.COMPACTED,
+                Integer.MAX_VALUE,
+                outputView,
+                null,
+                aggMode,
+                System.currentTimeMillis());
+    }
+
+    private WriteRecord createWriteRecordWithAggMode(AggMode aggMode) {
+        return WriteRecord.forUpsert(
+                DATA1_TABLE_INFO_PK,
+                PhysicalTablePath.of(DATA1_TABLE_PATH_PK),
+                row,
+                key,
+                key,
+                WriteFormat.COMPACTED_KV,
+                null,
+                aggMode);
     }
 }
