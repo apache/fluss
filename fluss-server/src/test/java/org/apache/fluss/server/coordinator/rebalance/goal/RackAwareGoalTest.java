@@ -21,6 +21,7 @@ import org.apache.fluss.cluster.rebalance.RebalancePlanForBucket;
 import org.apache.fluss.exception.RebalanceFailureException;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.server.coordinator.rebalance.model.ClusterModel;
+import org.apache.fluss.server.coordinator.rebalance.model.ReplicaModel;
 import org.apache.fluss.server.coordinator.rebalance.model.ServerModel;
 
 import org.junit.jupiter.api.Test;
@@ -100,14 +101,13 @@ public class RackAwareGoalTest {
         // balanced across servers.
         ClusterModel clusterModel = generateUnbalancedReplicaAcrossServerAndRack();
         RackAwareGoal rackAwareGoal = new RackAwareGoal();
-        ReplicaDistributionGoal replicaDistributionGoal = new ReplicaDistributionGoal();
+        ReplicaDistributionGoal replicaDistributionGoal = new TestReplicaDistributionGoal();
         GoalOptimizer goalOptimizer = new GoalOptimizer();
         List<RebalancePlanForBucket> rebalancePlanForBuckets =
                 goalOptimizer.doOptimizeOnce(
                         clusterModel, Arrays.asList(rackAwareGoal, replicaDistributionGoal));
-        // Realance result(ReplicaNum) from server side: server0: 3, server1: 1, server2: 3,
-        // server3: 1, server4: 1, server5: 1
-        assertThat(rebalancePlanForBuckets).hasSize(1);
+        // Realance result(ReplicaNum) from server side are all 2.
+        assertThat(rebalancePlanForBuckets).hasSize(2);
         assertThat(rebalancePlanForBuckets.get(0))
                 .isEqualTo(
                         new RebalancePlanForBucket(
@@ -116,6 +116,46 @@ public class RackAwareGoalTest {
                                 1,
                                 Arrays.asList(0, 3, 5),
                                 Arrays.asList(1, 3, 5)));
+        assertThat(rebalancePlanForBuckets.get(1))
+                .isEqualTo(
+                        new RebalancePlanForBucket(
+                                new TableBucket(1, 1),
+                                0,
+                                1,
+                                Arrays.asList(0, 2, 5),
+                                Arrays.asList(1, 3, 5)));
+    }
+
+    @Test
+    void testMoveActionWithSameRackWillNotBeAccepted() {
+        SortedSet<ServerModel> servers = new TreeSet<>();
+        servers.add(new ServerModel(0, "rack0", false));
+        servers.add(new ServerModel(1, "rack1", false));
+        servers.add(new ServerModel(2, "rack2", false));
+        ServerModel server3 = new ServerModel(3, "rack0", false);
+        servers.add(server3);
+        ServerModel server4 = new ServerModel(4, "rack3", false);
+        servers.add(server4);
+        ClusterModel clusterModel = new ClusterModel(servers);
+        TableBucket t1b0 = new TableBucket(1, 0);
+        addBucket(clusterModel, t1b0, Arrays.asList(0, 1, 2));
+
+        RackAwareGoal rackAwareGoal = new RackAwareGoal();
+        ReplicaModel sourceReplica = new ReplicaModel(t1b0, clusterModel.server(2), false);
+
+        // server3 is in the same rack with leader replica in t1b0 bucket model, so the move action
+        // will be rejected.
+        assertThat(
+                        rackAwareGoal.doesReplicaMoveViolateActionAcceptance(
+                                clusterModel, sourceReplica, server3))
+                .isTrue();
+
+        // server4 is in the different rack with all the replicas in t1b0 bucket model, so the move
+        // action will be accepted.
+        assertThat(
+                        rackAwareGoal.doesReplicaMoveViolateActionAcceptance(
+                                clusterModel, sourceReplica, server4))
+                .isFalse();
     }
 
     private ClusterModel generateUnbalancedReplicaAcrossServerAndRack() {
@@ -147,5 +187,13 @@ public class RackAwareGoalTest {
         TableBucket t1b3 = new TableBucket(1, 3);
         addBucket(clusterModel, t1b3, Arrays.asList(0, 3, 5));
         return clusterModel;
+    }
+
+    private static final class TestReplicaDistributionGoal extends ReplicaDistributionGoal {
+
+        @Override
+        protected double balancePercentage() {
+            return 1.0d;
+        }
     }
 }

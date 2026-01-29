@@ -25,7 +25,6 @@ import org.apache.fluss.server.coordinator.rebalance.model.ReplicaModel;
 import org.apache.fluss.server.coordinator.rebalance.model.ServerModel;
 
 import java.util.Comparator;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.SortedSet;
@@ -88,24 +87,7 @@ public class RackAwareGoal extends RackAwareAbstractGoal {
      */
     @Override
     protected void updateGoalState(ClusterModel clusterModel) throws RebalanceFailureException {
-        // One pass is sufficient to satisfy or alert impossibility of this goal.
-        // Sanity check to confirm that the final distribution is rack aware.
-        ensureRackAware(clusterModel);
         finish();
-    }
-
-    /**
-     * Rack-awareness violations can be resolved with replica movements.
-     *
-     * @param server Server to be rebalanced.
-     * @param clusterModel The state of the cluster.
-     * @param optimizedGoals Optimized goals.
-     */
-    @Override
-    protected void rebalanceForServer(
-            ServerModel server, ClusterModel clusterModel, Set<Goal> optimizedGoals)
-            throws RebalanceFailureException {
-        rebalanceForServer(server, clusterModel, optimizedGoals, true);
     }
 
     /**
@@ -156,26 +138,5 @@ public class RackAwareGoal extends RackAwareAbstractGoal {
             }
         }
         return true;
-    }
-
-    private void ensureRackAware(ClusterModel clusterModel) throws RebalanceFailureException {
-        for (ReplicaModel leader : clusterModel.leaderReplicas()) {
-            Set<String> replicaServersRackIds = new HashSet<>();
-            BucketModel bucket = clusterModel.bucket(leader.tableBucket());
-            checkNotNull(bucket, "Bucket for replica " + leader + " is not found");
-            Set<ServerModel> followerServers = new HashSet<>(bucket.followerServers());
-
-            // Add rackId of replicas.
-            for (ServerModel followerServer : followerServers) {
-                replicaServersRackIds.add(followerServer.rack());
-            }
-            replicaServersRackIds.add(leader.server().rack());
-            if (replicaServersRackIds.size() != (followerServers.size() + 1)) {
-                throw new RebalanceFailureException(
-                        String.format(
-                                "[%s] Bucket %s is not rack-aware. Leader (%s) and follower server (%s).",
-                                name(), leader.tableBucket(), leader.server(), followerServers));
-            }
-        }
     }
 }

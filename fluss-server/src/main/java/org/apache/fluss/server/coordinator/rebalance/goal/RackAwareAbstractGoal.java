@@ -105,17 +105,9 @@ public abstract class RackAwareAbstractGoal extends AbstractGoal {
      * @param serverModel Server to be balanced.
      * @param clusterModel The state of the cluster.
      * @param optimizedGoals Optimized goals.
-     * @param throwExceptionIfCannotMove {@code true} to throw an {@link RebalanceFailureException}
-     *     in case a required balancing action for a replica fails for all rack-aware eligible
-     *     servers, {@code false} to just log the failure and return. This parameter enables
-     *     selected goals fail early in case the un-satisfiability of a goal can be determined
-     *     early.
      */
     protected void rebalanceForServer(
-            ServerModel serverModel,
-            ClusterModel clusterModel,
-            Set<Goal> optimizedGoals,
-            boolean throwExceptionIfCannotMove)
+            ServerModel serverModel, ClusterModel clusterModel, Set<Goal> optimizedGoals)
             throws RebalanceFailureException {
         // TODO maybe use a sorted replicas set
         for (ReplicaModel replica : serverModel.replicas()) {
@@ -134,12 +126,6 @@ public abstract class RackAwareAbstractGoal extends AbstractGoal {
                             ActionType.REPLICA_MOVEMENT,
                             optimizedGoals)
                     == null) {
-                if (throwExceptionIfCannotMove) {
-                    throw new RebalanceFailureException(
-                            String.format(
-                                    "[%s] Cannot move %s to %s.",
-                                    name(), replica, eligibleServers));
-                }
                 LOG.debug(
                         "Cannot move replica {} to any serverModel in {}",
                         replica,
@@ -162,8 +148,8 @@ public abstract class RackAwareAbstractGoal extends AbstractGoal {
             ReplicaModel replica, ClusterModel clusterModel);
 
     /**
-     * Get a list of eligible brokers for moving the given replica in the given cluster to satisfy
-     * the specific requirements of the custom rack aware goal.
+     * Get a list of eligible servers for moving the given replica in the given cluster to satisfy
+     * the specific requirements of the rack aware goal.
      *
      * @param replica Replica for which a set of rack aware eligible servers are requested.
      * @param clusterModel The state of the cluster.
