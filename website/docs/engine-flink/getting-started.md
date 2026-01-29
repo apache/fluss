@@ -77,9 +77,15 @@ ps aux | grep flink
 ```
 - **Start a SQL Client**
 
-To quickly stop the cluster and all running components, you can use the provided script:
+To quickly start the sql client, you can use the provided script:
 ```shell
 <FLINK_HOME>/bin/sql-client.sh
+```
+- **Stop the cluster**
+
+To quickly stop the cluster and all running components, you can use the provided script:
+```shell
+<FLINK_HOME>/bin/stop-cluster.sh
 ```
 
 
