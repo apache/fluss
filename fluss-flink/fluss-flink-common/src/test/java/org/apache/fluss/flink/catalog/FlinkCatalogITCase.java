@@ -27,6 +27,7 @@ import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.InvalidAlterTableException;
 import org.apache.fluss.exception.InvalidConfigException;
 import org.apache.fluss.exception.InvalidTableException;
+import org.apache.fluss.flink.FlinkConnectorOptions;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
@@ -933,6 +934,65 @@ abstract class FlinkCatalogITCase {
                         .build();
 
         assertThat(logChangelogTable.getUnresolvedSchema()).isEqualTo(expectedLogSchema);
+    }
+
+    @Test
+    void testGetBinlogVirtualTable() throws Exception {
+        // Create a primary key table with partition
+        tEnv.executeSql(
+                "CREATE TABLE pk_table_for_binlog ("
+                        + "  id INT NOT NULL,"
+                        + "  name STRING NOT NULL,"
+                        + "  amount BIGINT,"
+                        + "  PRIMARY KEY (id, name) NOT ENFORCED"
+                        + ") PARTITIONED BY (name) "
+                        + "WITH ('bucket.num' = '1')");
+
+        // Get the $binlog virtual table via catalog API
+        CatalogTable binlogTable =
+                (CatalogTable)
+                        catalog.getTable(new ObjectPath(DEFAULT_DB, "pk_table_for_binlog$binlog"));
+
+        // Verify binlog schema has 5 columns: _change_type, _log_offset, _commit_timestamp,
+        // before, after
+        Schema binlogSchema = binlogTable.getUnresolvedSchema();
+        List<String> columnNames =
+                binlogSchema.getColumns().stream()
+                        .map(Schema.UnresolvedColumn::getName)
+                        .collect(Collectors.toList());
+        assertThat(columnNames)
+                .containsExactly(
+                        "_change_type", "_log_offset", "_commit_timestamp", "before", "after");
+
+        // Verify before and after columns are ROW types containing the original columns
+        String schemaString = binlogSchema.toString();
+        assertThat(schemaString).contains("before");
+        assertThat(schemaString).contains("after");
+        assertThat(schemaString).contains("ROW<");
+        // Verify nested columns exist in the ROW type
+        assertThat(schemaString).contains("id INT NOT NULL");
+        assertThat(schemaString).contains("name STRING NOT NULL");
+        assertThat(schemaString).contains("amount BIGINT");
+
+        // Binlog virtual tables have empty partition keys (columns are nested)
+        assertThat(binlogTable.getPartitionKeys()).isEmpty();
+
+        // Partition info is stored in the binlog.partition-keys option instead
+        assertThat(binlogTable.getOptions())
+                .containsEntry(FlinkConnectorOptions.BINLOG_PARTITION_KEYS.key(), "name");
+
+        // Verify options are inherited from base table
+        assertThat(binlogTable.getOptions()).containsEntry("bucket.num", "1");
+
+        // Verify $binlog is NOT supported for log tables (no primary key)
+        tEnv.executeSql("CREATE TABLE log_table_for_binlog (id INT, name STRING)");
+
+        assertThatThrownBy(
+                        () ->
+                                catalog.getTable(
+                                        new ObjectPath(DEFAULT_DB, "log_table_for_binlog$binlog")))
+                .isInstanceOf(UnsupportedOperationException.class)
+                .hasMessageContaining("only supported for primary key tables");
     }
 
     /**
