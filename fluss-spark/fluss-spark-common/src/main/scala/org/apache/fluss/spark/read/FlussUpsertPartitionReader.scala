@@ -21,6 +21,7 @@ import org.apache.fluss.client.table.scanner.{ScanRecord, SortMergeReader}
 import org.apache.fluss.client.table.scanner.batch.BatchScanner
 import org.apache.fluss.client.table.scanner.log.LogScanner
 import org.apache.fluss.config.Configuration
+import org.apache.fluss.memory.MemorySegment
 import org.apache.fluss.metadata.{TableBucket, TablePath}
 import org.apache.fluss.record.LogRecord
 import org.apache.fluss.row.{encode, InternalRow, KeyValueRow}
@@ -106,7 +107,7 @@ class FlussUpsertPartitionReader(
       override def compare(o1: InternalRow, o2: InternalRow): Int = {
         val key1 = keyEncoder.encodeKey(o1)
         val key2 = keyEncoder.encodeKey(o2)
-        java.util.Arrays.compareUnsigned(key1, key2)
+        MemorySegment.wrap(key1).compare(MemorySegment.wrap(key2), 0, 0, key1.length)
       }
     }
 
