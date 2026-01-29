@@ -284,6 +284,27 @@ public class RpcMessageTestUtils {
         return lookupRequest;
     }
 
+    public static LookupRequest newLookupRequest(
+            long tableId,
+            int bucketId,
+            boolean insertIfNotExists,
+            int timeoutMs,
+            int acks,
+            byte[]... keys) {
+        LookupRequest lookupRequest =
+                new LookupRequest()
+                        .setTableId(tableId)
+                        .setInsertIfNotExists(insertIfNotExists)
+                        .setTimeoutMs(timeoutMs)
+                        .setAcks(acks);
+        PbLookupReqForBucket pbLookupReqForBucket = lookupRequest.addBucketsReq();
+        pbLookupReqForBucket.setBucketId(bucketId);
+        for (byte[] key : keys) {
+            pbLookupReqForBucket.addKey(key);
+        }
+        return lookupRequest;
+    }
+
     public static PrefixLookupRequest newPrefixLookupRequest(
             long tableId, int bucketId, List<byte[]> prefixKeys) {
         PrefixLookupRequest prefixLookupRequest = new PrefixLookupRequest().setTableId(tableId);

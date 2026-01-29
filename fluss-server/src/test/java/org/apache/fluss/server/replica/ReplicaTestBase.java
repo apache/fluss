@@ -106,6 +106,10 @@ import static org.apache.fluss.record.TestData.DATA2_SCHEMA;
 import static org.apache.fluss.record.TestData.DATA2_TABLE_DESCRIPTOR;
 import static org.apache.fluss.record.TestData.DATA2_TABLE_ID;
 import static org.apache.fluss.record.TestData.DATA2_TABLE_PATH;
+import static org.apache.fluss.record.TestData.DATA3_SCHEMA_PK_AUTO_INC;
+import static org.apache.fluss.record.TestData.DATA3_TABLE_DESCRIPTOR_PK_AUTO_INC;
+import static org.apache.fluss.record.TestData.DATA3_TABLE_ID_PK_AUTO_INC;
+import static org.apache.fluss.record.TestData.DATA3_TABLE_PATH_PK_AUTO_INC;
 import static org.apache.fluss.server.coordinator.CoordinatorContext.INITIAL_COORDINATOR_EPOCH;
 import static org.apache.fluss.server.replica.ReplicaManager.HIGH_WATERMARK_CHECKPOINT_FILE_NAME;
 import static org.apache.fluss.server.zk.data.LeaderAndIsr.INITIAL_BUCKET_EPOCH;
@@ -266,6 +270,12 @@ public class ReplicaTestBase {
                 DATA2_TABLE_PATH,
                 TableRegistration.newTable(DATA2_TABLE_ID, DATA2_TABLE_DESCRIPTOR));
         zkClient.registerFirstSchema(DATA2_TABLE_PATH, DATA2_SCHEMA);
+
+        zkClient.registerTable(
+                DATA3_TABLE_PATH_PK_AUTO_INC,
+                TableRegistration.newTable(
+                        DATA3_TABLE_ID_PK_AUTO_INC, DATA3_TABLE_DESCRIPTOR_PK_AUTO_INC));
+        zkClient.registerFirstSchema(DATA3_TABLE_PATH_PK_AUTO_INC, DATA3_SCHEMA_PK_AUTO_INC);
     }
 
     protected long registerTableInZkClient(

@@ -246,6 +246,9 @@ message PutKvResponse {
 message LookupRequest {
   required int64 table_id = 1;
   repeated PbLookupReqForBucket buckets_req = 2;
+  optional bool insert_if_not_exists = 3;
+  optional int32 acks = 4;
+  optional int32 timeout_ms = 5;
 }
 
 message LookupResponse {
