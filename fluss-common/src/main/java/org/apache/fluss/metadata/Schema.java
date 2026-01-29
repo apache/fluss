@@ -151,6 +151,17 @@ public final class Schema implements Serializable {
                 .orElseGet(() -> new int[0]);
     }
 
+    /**
+     * Returns column indexes excluding auto-increment columns, used for partial update operations.
+     */
+    public @Nullable int[] getNonAutoIncrementColumnIndexes() {
+        if (autoIncrementColumnNames.isEmpty()) {
+            return null;
+        }
+        int autoIncIdx = getColumnIndexes(autoIncrementColumnNames)[0];
+        return IntStream.range(0, columns.size()).filter(i -> i != autoIncIdx).toArray();
+    }
+
     /** Returns the auto-increment columnIds, if any, otherwise returns an empty array. */
     public int[] getAutoIncrementColumnIds() {
         if (autoIncrementColumnNames.isEmpty()) {

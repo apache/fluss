@@ -18,6 +18,7 @@
 package org.apache.fluss.record;
 
 import org.apache.fluss.annotation.PublicEvolving;
+import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.row.decode.RowDecoder;
 
 /**
@@ -106,6 +107,9 @@ public interface KvRecordBatch {
 
     /** The read context of a {@link KvRecordBatch} to read records. */
     interface ReadContext {
+
+        /** Gets the schema getter to retrieve schema for decoding record bytes. */
+        SchemaGetter getSchemaGetter();
 
         /**
          * Gets the row decoder for the given schema to decode bytes read from {@link

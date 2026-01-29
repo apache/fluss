@@ -227,6 +227,7 @@ class PaimonBinaryRowWriter {
                 segment.putLong(cursor, value.getEpochMillisecond());
                 setOffsetAndSize(pos, cursor, value.getNanoOfMillisecond());
             }
+            cursor += 8;
         }
     }
 

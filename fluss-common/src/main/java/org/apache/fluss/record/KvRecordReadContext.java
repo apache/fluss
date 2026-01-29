@@ -45,6 +45,11 @@ public class KvRecordReadContext implements KvRecordBatch.ReadContext {
     }
 
     @Override
+    public SchemaGetter getSchemaGetter() {
+        return schemaGetter;
+    }
+
+    @Override
     public RowDecoder getRowDecoder(int schemaId) {
         return rowDecoderCache.computeIfAbsent(
                 schemaId,

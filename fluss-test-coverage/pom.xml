@@ -337,6 +337,7 @@
                                         <exclude>
                                             org.apache.fluss.row.columnar.BytesColumnVector.Bytes
                                         </exclude>
+                                        <exclude>org.apache.fluss.row.decode.KeyDecoder</exclude>
                                         <exclude>org.apache.fluss.row.encode.RowEncoder</exclude>
                                         <exclude>org.apache.fluss.row.encode.KeyEncoder</exclude>
                                         <exclude>org.apache.fluss.table.*</exclude>

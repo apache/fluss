@@ -26,6 +26,7 @@ import org.apache.fluss.exception.InvalidRequiredAcksException;
 import org.apache.fluss.exception.NotLeaderOrFollowerException;
 import org.apache.fluss.exception.UnknownTableOrBucketException;
 import org.apache.fluss.metadata.DataLakeFormat;
+import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.SchemaGetter;
@@ -41,7 +42,10 @@ import org.apache.fluss.record.LogRecordBatch;
 import org.apache.fluss.record.LogRecordReadContext;
 import org.apache.fluss.record.LogRecords;
 import org.apache.fluss.record.MemoryLogRecords;
+import org.apache.fluss.record.TestingSchemaGetter;
+import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.encode.CompactedKeyEncoder;
+import org.apache.fluss.row.encode.ValueDecoder;
 import org.apache.fluss.row.encode.ValueEncoder;
 import org.apache.fluss.rpc.entity.FetchLogResultForBucket;
 import org.apache.fluss.rpc.entity.LimitScanResultForBucket;
@@ -92,8 +96,12 @@ import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
 import static org.apache.fluss.config.ConfigOptions.KV_FORMAT_VERSION_2;
@@ -110,6 +118,10 @@ import static org.apache.fluss.record.TestData.DATA1_TABLE_ID;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_ID_PK;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH_PK;
+import static org.apache.fluss.record.TestData.DATA3_ROW_TYPE;
+import static org.apache.fluss.record.TestData.DATA3_SCHEMA_PK_AUTO_INC;
+import static org.apache.fluss.record.TestData.DATA3_TABLE_ID_PK_AUTO_INC;
+import static org.apache.fluss.record.TestData.DATA3_TABLE_PATH_PK_AUTO_INC;
 import static org.apache.fluss.record.TestData.DATA_1_WITH_KEY_AND_VALUE;
 import static org.apache.fluss.record.TestData.DEFAULT_SCHEMA_ID;
 import static org.apache.fluss.record.TestData.EXPECTED_LOG_RESULTS_FOR_DATA_1_WITH_PK;
@@ -791,6 +803,294 @@ class ReplicaManagerTest extends ReplicaTestBase {
                     assertThat(apiError.message())
                             .isEqualTo("the primary key table not exists for %s", tb2);
                 });
+    }
+
+    @Test
+    void testLookupWithInsertIfNotExists() throws Exception {
+        TableBucket tb = new TableBucket(DATA1_TABLE_ID_PK, 1);
+        makeKvTableAsLeader(DATA1_TABLE_ID_PK, DATA1_TABLE_PATH_PK, tb.getBucket());
+
+        CompactedKeyEncoder keyEncoder = new CompactedKeyEncoder(DATA1_ROW_TYPE, new int[] {0});
+
+        // Scenario 1: All keys missing - should insert and return new values
+        byte[] key100 = keyEncoder.encodeKey(row(new Object[] {100}));
+        byte[] key200 = keyEncoder.encodeKey(row(new Object[] {200}));
+
+        List<byte[]> inserted = lookupWithInsert(tb, Arrays.asList(key100, key200)).lookupValues();
+        assertThat(inserted).hasSize(2).allMatch(Objects::nonNull);
+        verifyLookup(tb, key100, inserted.get(0));
+        verifyLookup(tb, key200, inserted.get(1));
+
+        // Verify that corresponding 2 log records were created
+        FetchLogResultForBucket logResult = fetchLog(tb, 0L);
+        assertThat(logResult.getHighWatermark()).isEqualTo(2L);
+        LogRecords records = logResult.records();
+        TestingSchemaGetter schemaGetter =
+                new TestingSchemaGetter(DEFAULT_SCHEMA_ID, DATA1_SCHEMA_PK);
+        List<Object[]> expected = Arrays.asList(new Object[] {100, null}, new Object[] {200, null});
+        assertLogRecordsEquals(DATA1_ROW_TYPE, records, expected, ChangeType.INSERT, schemaGetter);
+
+        // Scenario 2: All keys exist - should return existing values without modification
+        List<byte[]> existing = lookupWithInsert(tb, Arrays.asList(key100, key200)).lookupValues();
+        assertThat(existing).containsExactlyElementsOf(inserted);
+
+        // Verify that no new log records were created
+        logResult = fetchLog(tb, 0L);
+        assertThat(logResult.getHighWatermark()).isEqualTo(2L);
+
+        // Scenario 3: Mixed - key100 exists, key300 missing
+        byte[] key300 = keyEncoder.encodeKey(row(new Object[] {300}));
+        List<byte[]> mixed = lookupWithInsert(tb, Arrays.asList(key100, key300)).lookupValues();
+        assertThat(mixed.get(0)).isEqualTo(inserted.get(0)); // existing
+        assertThat(mixed.get(1)).isNotNull(); // newly inserted
+        verifyLookup(tb, key300, mixed.get(1));
+
+        // Verify that only one new log record was created for key300
+        logResult = fetchLog(tb, 2L);
+        assertThat(logResult.getHighWatermark()).isEqualTo(3L);
+        records = logResult.records();
+        expected = Collections.singletonList(new Object[] {300, null});
+        assertLogRecordsEquals(DATA1_ROW_TYPE, records, expected, ChangeType.INSERT, schemaGetter);
+    }
+
+    @Test
+    void testLookupWithInsertIfNotExistsAutoIncrement() throws Exception {
+        TableBucket tb = new TableBucket(DATA3_TABLE_ID_PK_AUTO_INC, 1);
+        makeKvTableAsLeader(
+                DATA3_TABLE_ID_PK_AUTO_INC, DATA3_TABLE_PATH_PK_AUTO_INC, tb.getBucket());
+
+        // Encode only the key field 'a' (index 0) - decoder returns only key fields, not full row
+        CompactedKeyEncoder keyEncoder = new CompactedKeyEncoder(DATA3_ROW_TYPE, new int[] {0});
+
+        // Lookup missing keys - should insert with auto-generated values for column 'c'
+        byte[] key1 = keyEncoder.encodeKey(row(new Object[] {100}));
+        byte[] key2 = keyEncoder.encodeKey(row(new Object[] {200}));
+
+        List<byte[]> inserted = lookupWithInsert(tb, Arrays.asList(key1, key2)).lookupValues();
+        assertThat(inserted).hasSize(2).allMatch(Objects::nonNull);
+
+        // Decode values to verify auto-increment column values
+        TestingSchemaGetter schemaGetter =
+                new TestingSchemaGetter(DEFAULT_SCHEMA_ID, DATA3_SCHEMA_PK_AUTO_INC);
+        ValueDecoder valueDecoder = new ValueDecoder(schemaGetter, KvFormat.COMPACTED);
+
+        InternalRow row1 = valueDecoder.decodeValue(inserted.get(0)).row;
+        InternalRow row2 = valueDecoder.decodeValue(inserted.get(1)).row;
+
+        // Auto-increment values should be sequential
+        assertThat(row1.getLong(2)).isEqualTo(1L);
+        assertThat(row2.getLong(2)).isEqualTo(2L);
+
+        // Lookup existing keys - should return same values without modification
+        List<byte[]> existing = lookupWithInsert(tb, Arrays.asList(key1, key2)).lookupValues();
+        assertThat(existing).containsExactlyElementsOf(inserted);
+
+        // Mixed scenario - key1 exists, key3 missing
+        byte[] key3 = keyEncoder.encodeKey(row(new Object[] {300}));
+        List<byte[]> mixed = lookupWithInsert(tb, Arrays.asList(key1, key3)).lookupValues();
+        assertThat(mixed.get(0)).isEqualTo(inserted.get(0)); // existing unchanged
+
+        InternalRow row3 = valueDecoder.decodeValue(mixed.get(1)).row;
+        assertThat(row3.getLong(2)).isEqualTo(3L); // continues sequence
+
+        FetchLogResultForBucket logResult = fetchLog(tb, 0L);
+        assertThat(logResult.getHighWatermark()).isEqualTo(3L);
+        LogRecords records = logResult.records();
+        List<Object[]> expected =
+                Arrays.asList(
+                        new Object[] {100, null, 1L},
+                        new Object[] {200, null, 2L},
+                        new Object[] {300, null, 3L});
+        TestingSchemaGetter schemaGetter2 =
+                new TestingSchemaGetter(DEFAULT_SCHEMA_ID, DATA3_SCHEMA_PK_AUTO_INC);
+        assertLogRecordsEquals(DATA3_ROW_TYPE, records, expected, ChangeType.INSERT, schemaGetter2);
+    }
+
+    // Fixme
+    @Test
+    void testConcurrentLookupWithInsertIfNotExistsAutoIncrement() throws Exception {
+        TableBucket tb = new TableBucket(DATA3_TABLE_ID_PK_AUTO_INC, 1);
+        makeKvTableAsLeader(
+                DATA3_TABLE_ID_PK_AUTO_INC, DATA3_TABLE_PATH_PK_AUTO_INC, tb.getBucket());
+
+        CompactedKeyEncoder keyEncoder = new CompactedKeyEncoder(DATA3_ROW_TYPE, new int[] {0});
+
+        // Create keys that all threads will look up
+        byte[] key100 = keyEncoder.encodeKey(row(new Object[] {100}));
+        byte[] key200 = keyEncoder.encodeKey(row(new Object[] {200}));
+        byte[] key300 = keyEncoder.encodeKey(row(new Object[] {300}));
+        List<byte[]> keys = Arrays.asList(key100, key200, key300);
+
+        int numThreads = 3;
+        ExecutorService executor = Executors.newFixedThreadPool(numThreads);
+        CountDownLatch startLatch = new CountDownLatch(1);
+        CountDownLatch doneLatch = new CountDownLatch(numThreads);
+
+        // Store results from each thread
+        @SuppressWarnings("unchecked")
+        List<byte[]>[] threadResults = new List[numThreads];
+
+        for (int i = 0; i < numThreads; i++) {
+            final int threadIndex = i;
+            executor.submit(
+                    () -> {
+                        try {
+                            // Wait for all threads to be ready
+                            startLatch.await();
+                            // Perform concurrent lookupWithInsert
+                            LookupResultForBucket result = lookupWithInsert(tb, keys);
+                            threadResults[threadIndex] = result.lookupValues();
+                        } catch (Exception e) {
+                            throw new RuntimeException(e);
+                        } finally {
+                            doneLatch.countDown();
+                        }
+                    });
+        }
+
+        // Start all threads simultaneously
+        startLatch.countDown();
+        // Wait for all threads to complete
+        assertThat(doneLatch.await(30, TimeUnit.SECONDS)).isTrue();
+        executor.shutdown();
+
+        // Verify all threads received non-null values
+        for (int i = 0; i < numThreads; i++) {
+            assertThat(threadResults[i])
+                    .as("Thread %d results should not be null", i)
+                    .isNotNull()
+                    .hasSize(3)
+                    .allMatch(Objects::nonNull);
+        }
+
+        // Verify all threads received the same values for each key (consistency check)
+        for (int keyIndex = 0; keyIndex < 3; keyIndex++) {
+            byte[] referenceValue = threadResults[0].get(keyIndex);
+            for (int threadIndex = 1; threadIndex < numThreads; threadIndex++) {
+                assertThat(threadResults[threadIndex].get(keyIndex))
+                        .as(
+                                "Thread %d should have same value as thread 0 for key index %d",
+                                threadIndex, keyIndex)
+                        .isEqualTo(referenceValue);
+            }
+        }
+
+        // Verify auto-increment values are sequential and unique
+        TestingSchemaGetter schemaGetter =
+                new TestingSchemaGetter(DEFAULT_SCHEMA_ID, DATA3_SCHEMA_PK_AUTO_INC);
+        ValueDecoder valueDecoder = new ValueDecoder(schemaGetter, KvFormat.COMPACTED);
+
+        Set<Long> autoIncrementValues = new HashSet<>();
+        for (byte[] value : threadResults[0]) {
+            InternalRow row = valueDecoder.decodeValue(value).row;
+            autoIncrementValues.add(row.getLong(2));
+        }
+
+        // Should have exactly 3 unique auto-increment values
+        assertThat(autoIncrementValues).hasSize(3);
+
+        // Values should be 1, 2, 3 (in any order due to concurrency)
+        assertThat(autoIncrementValues).containsExactlyInAnyOrder(1L, 2L, 3L);
+
+        // Verify WAL: 3 INSERTs minimum, up to 15 if all concurrent updates execute
+        FetchLogResultForBucket logResult = fetchLog(tb, 0L);
+        assertThat(logResult.getHighWatermark()).isBetween(3L, 15L);
+
+        // Decode all WAL records
+        LogRecords records = logResult.records();
+        LogRecordReadContext readContext =
+                LogRecordReadContext.createArrowReadContext(
+                        DATA3_ROW_TYPE,
+                        DEFAULT_SCHEMA_ID,
+                        new TestingSchemaGetter(DEFAULT_SCHEMA_ID, DATA3_SCHEMA_PK_AUTO_INC));
+
+        List<Tuple2<ChangeType, Long>> recordsWithAutoInc = new ArrayList<>();
+        for (LogRecordBatch batch : records.batches()) {
+            try (CloseableIterator<LogRecord> iterator = batch.records(readContext)) {
+                while (iterator.hasNext()) {
+                    LogRecord record = iterator.next();
+                    recordsWithAutoInc.add(
+                            Tuple2.of(record.getChangeType(), record.getRow().getLong(2)));
+                }
+            }
+        }
+
+        // First 3 must be INSERTs with unique auto-increment values (1, 2, 3)
+        assertThat(recordsWithAutoInc).hasSizeGreaterThanOrEqualTo(3);
+        Set<Long> insertAutoIncs = new HashSet<>();
+        for (int i = 0; i < 3; i++) {
+            assertThat(recordsWithAutoInc.get(i).f0).isEqualTo(ChangeType.INSERT);
+            insertAutoIncs.add(recordsWithAutoInc.get(i).f1);
+        }
+        assertThat(insertAutoIncs).containsExactlyInAnyOrder(1L, 2L, 3L);
+
+        // Remaining 12 must be UPDATE pairs (UPDATE_BEFORE + UPDATE_AFTER) preserving
+        // auto-increment
+        for (int i = 3; i < recordsWithAutoInc.size(); i++) {
+            Tuple2<ChangeType, Long> record = recordsWithAutoInc.get(i);
+            assertThat(record.f0).isIn(ChangeType.UPDATE_BEFORE, ChangeType.UPDATE_AFTER);
+            assertThat(record.f1).isIn(1L, 2L, 3L);
+        }
+    }
+
+    @Test
+    void testLookupWithInsertIfNotExistsMultiBucket() throws Exception {
+        TableBucket tb0 = new TableBucket(DATA1_TABLE_ID_PK, 0);
+        TableBucket tb1 = new TableBucket(DATA1_TABLE_ID_PK, 1);
+        makeKvTableAsLeader(DATA1_TABLE_ID_PK, DATA1_TABLE_PATH_PK, tb0.getBucket());
+        makeKvTableAsLeader(DATA1_TABLE_ID_PK, DATA1_TABLE_PATH_PK, tb1.getBucket());
+
+        CompactedKeyEncoder keyEncoder = new CompactedKeyEncoder(DATA1_ROW_TYPE, new int[] {0});
+        byte[] key0 = keyEncoder.encodeKey(row(new Object[] {0}));
+        byte[] key1 = keyEncoder.encodeKey(row(new Object[] {1}));
+
+        verifyLookup(tb0, key0, null);
+        verifyLookup(tb1, key1, null);
+
+        Map<TableBucket, List<byte[]>> requestMap = new HashMap<>();
+        requestMap.put(tb0, Collections.singletonList(key0));
+        requestMap.put(tb1, Collections.singletonList(key1));
+
+        // Insert missing keys across buckets
+        CompletableFuture<Map<TableBucket, LookupResultForBucket>> future =
+                new CompletableFuture<>();
+        replicaManager.lookups(true, 20000, 1, requestMap, LOOKUP_KV_VERSION, future::complete);
+        Map<TableBucket, LookupResultForBucket> inserted = future.get(5, TimeUnit.SECONDS);
+
+        byte[] value0 = inserted.get(tb0).lookupValues().get(0);
+        byte[] value1 = inserted.get(tb1).lookupValues().get(0);
+
+        // Verify inserted values via lookup
+        verifyLookup(tb0, key0, value0);
+        verifyLookup(tb1, key1, value1);
+    }
+
+    private LookupResultForBucket lookupWithInsert(TableBucket tb, List<byte[]> keys)
+            throws Exception {
+        CompletableFuture<Map<TableBucket, LookupResultForBucket>> future =
+                new CompletableFuture<>();
+        replicaManager.lookups(
+                true,
+                20000,
+                1,
+                Collections.singletonMap(tb, keys),
+                LOOKUP_KV_VERSION,
+                future::complete);
+        LookupResultForBucket result = future.get(5, TimeUnit.SECONDS).get(tb);
+        assertThat(result.failed()).isFalse();
+        return result;
+    }
+
+    private FetchLogResultForBucket fetchLog(TableBucket tb, long fetchOffset) throws Exception {
+        CompletableFuture<Map<TableBucket, FetchLogResultForBucket>> future =
+                new CompletableFuture<>();
+        replicaManager.fetchLogRecords(
+                buildFetchParams(-1, Integer.MAX_VALUE),
+                Collections.singletonMap(
+                        tb, new FetchReqInfo(tb.getTableId(), fetchOffset, Integer.MAX_VALUE)),
+                null,
+                future::complete);
+        return future.get().get(tb);
     }
 
     @Test
