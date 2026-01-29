@@ -188,8 +188,11 @@ class ZooKeeperClientTest {
         assertThat(zookeeperClient.getLeaderAndIsr(tableBucket2)).isEmpty();
 
         // try to register bucket leaderAndIsr
-        LeaderAndIsr leaderAndIsr1 = new LeaderAndIsr(1, 10, Arrays.asList(1, 2, 3), 100, 1000);
-        LeaderAndIsr leaderAndIsr2 = new LeaderAndIsr(2, 10, Arrays.asList(4, 5, 6), 100, 1000);
+        LeaderAndIsr leaderAndIsr1 =
+                new LeaderAndIsr(
+                        1, 10, Arrays.asList(1, 2, 3), Collections.singletonList(2), 100, 1000);
+        LeaderAndIsr leaderAndIsr2 =
+                new LeaderAndIsr(2, 10, Arrays.asList(4, 5, 6), Collections.emptyList(), 100, 1000);
 
         zookeeperClient.registerLeaderAndIsr(tableBucket1, leaderAndIsr1);
         zookeeperClient.registerLeaderAndIsr(tableBucket2, leaderAndIsr2);
@@ -199,7 +202,9 @@ class ZooKeeperClientTest {
                 .containsValues(leaderAndIsr1, leaderAndIsr2);
 
         // test update
-        leaderAndIsr1 = new LeaderAndIsr(2, 20, Collections.emptyList(), 200, 2000);
+        leaderAndIsr1 =
+                new LeaderAndIsr(
+                        2, 20, Collections.emptyList(), Collections.singletonList(3), 200, 2000);
         zookeeperClient.updateLeaderAndIsr(tableBucket1, leaderAndIsr1);
         assertThat(zookeeperClient.getLeaderAndIsr(tableBucket1)).hasValue(leaderAndIsr1);
 
@@ -217,7 +222,13 @@ class ZooKeeperClientTest {
             TableBucket tableBucket =
                     isPartitionTable ? new TableBucket(1, 2L, i) : new TableBucket(1, i);
             LeaderAndIsr leaderAndIsr =
-                    new LeaderAndIsr(i, 10, Arrays.asList(i + 1, i + 2, i + 3), 100, 1000);
+                    new LeaderAndIsr(
+                            i,
+                            10,
+                            Arrays.asList(i + 1, i + 2, i + 3),
+                            Collections.emptyList(),
+                            100,
+                            1000);
             leaderAndIsrList.add(leaderAndIsr);
             RegisterTableBucketLeadAndIsrInfo info =
                     isPartitionTable
@@ -253,7 +264,8 @@ class ZooKeeperClientTest {
                             LeaderAndIsr adjustLeaderAndIsr =
                                     originalLeaderAndIsr.newLeaderAndIsr(
                                             LeaderAndIsr.NO_LEADER,
-                                            originalLeaderAndIsr.isr().subList(0, 1));
+                                            originalLeaderAndIsr.isr().subList(0, 1),
+                                            Collections.emptyList());
                             leaderAndIsrUpdateList.add(adjustLeaderAndIsr);
                             entry.setValue(adjustLeaderAndIsr);
                         });
@@ -277,7 +289,13 @@ class ZooKeeperClientTest {
         for (int i = 0; i < totalCount; i++) {
             TableBucket tableBucket = new TableBucket(1, i);
             LeaderAndIsr leaderAndIsr =
-                    new LeaderAndIsr(i, 10, Arrays.asList(i + 1, i + 2, i + 3), 100, 1000);
+                    new LeaderAndIsr(
+                            i,
+                            10,
+                            Arrays.asList(i + 1, i + 2, i + 3),
+                            Collections.emptyList(),
+                            100,
+                            1000);
             leaderAndIsrList.put(tableBucket, leaderAndIsr);
             zookeeperClient.registerLeaderAndIsr(tableBucket, leaderAndIsr);
         }
@@ -294,6 +312,7 @@ class ZooKeeperClientTest {
                                                     old.leader() + 1,
                                                     old.leaderEpoch() + 1,
                                                     old.isr(),
+                                                    Collections.emptyList(),
                                                     old.coordinatorEpoch() + 1,
                                                     old.bucketEpoch() + 1);
                                         }));

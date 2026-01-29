@@ -335,6 +335,7 @@ message NotifyKvSnapshotOffsetRequest {
   required int32 bucket_id = 3;
   required int32 coordinator_epoch = 4;
   required int64 min_retain_offset = 5;
+  optional int64 snapshot_id = 6;
 }
 
 message NotifyKvSnapshotOffsetResponse {
@@ -837,6 +838,7 @@ message PbAdjustIsrReqForBucket {
   repeated int32 new_isr = 4 [packed = true];
   required int32 coordinator_epoch = 5;
   required int32 bucket_epoch = 6;
+  repeated int32 standby_replicas = 7 [packed = true];
 }
 
 message PbAdjustIsrRespForTable {
@@ -854,6 +856,7 @@ message PbAdjustIsrRespForBucket {
   repeated int32 isr = 7 [packed = true];
   optional int32 bucket_epoch = 8;
   optional int32 coordinator_epoch = 9;
+  repeated int32 standby_replicas = 10 [packed = true];
 }
 
 message PbListOffsetsRespForBucket {
@@ -874,6 +877,7 @@ message PbNotifyLeaderAndIsrReqForBucket {
   repeated int32 replicas = 5 [packed = true];
   repeated int32 isr = 6 [packed = true];
   required int32 bucket_epoch = 7;
+  repeated int32 standby_replicas = 8 [packed = true];
 }
 
 message PbNotifyLeaderAndIsrRespForBucket {

@@ -24,10 +24,9 @@ import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.server.SequenceIDCounter;
+import org.apache.fluss.server.kv.KvSnapshotResource;
 import org.apache.fluss.server.kv.rocksdb.RocksDBExtension;
 import org.apache.fluss.server.kv.rocksdb.RocksDBKv;
-import org.apache.fluss.server.metrics.group.TestingMetricGroups;
-import org.apache.fluss.server.testutils.KvTestUtils;
 import org.apache.fluss.server.utils.ResourceGuard;
 import org.apache.fluss.server.zk.CuratorFrameworkWithUnhandledErrorListener;
 import org.apache.fluss.server.zk.NOPErrorHandler;
@@ -39,6 +38,7 @@ import org.apache.fluss.testutils.common.AllCallbackWrapper;
 import org.apache.fluss.testutils.common.ManuallyTriggeredScheduledExecutorService;
 import org.apache.fluss.utils.CloseableRegistry;
 import org.apache.fluss.utils.FlussPaths;
+import org.apache.fluss.utils.clock.ManualClock;
 import org.apache.fluss.utils.concurrent.Executors;
 
 import org.junit.jupiter.api.AfterEach;
@@ -68,14 +68,15 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Supplier;
 
+import static org.apache.fluss.server.testutils.KvTestUtils.buildFromSnapshotHandle;
 import static org.apache.fluss.server.zk.ZooKeeperUtils.startZookeeperClient;
 import static org.apache.fluss.shaded.curator5.org.apache.curator.framework.CuratorFrameworkFactory.Builder;
 import static org.apache.fluss.shaded.curator5.org.apache.curator.framework.CuratorFrameworkFactory.builder;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
 
-/** Test for {@link KvTabletSnapshotTarget}. */
-class KvTabletSnapshotTargetTest {
+/** Test for {@link KvTabletUploadSnapshotTarget}. */
+class KvTabletUploadSnapshotTargetTest {
 
     @RegisterExtension
     public static final AllCallbackWrapper<ZooKeeperExtension> ZOO_KEEPER_EXTENSION_WRAPPER =
@@ -86,12 +87,16 @@ class KvTabletSnapshotTargetTest {
     private static final TableBucket tableBucket = new TableBucket(1, 1);
     private static final long periodicMaterializeDelay = 10_000L;
     private ManuallyTriggeredScheduledExecutorService scheduledExecutorService;
-    private PeriodicSnapshotManager periodicSnapshotManager;
+    private ExecutorService asyncOperationsThreadPool;
+
+    private KvSnapshotManager kvSnapshotManager;
     private final CloseableRegistry closeableRegistry = new CloseableRegistry();
 
     private AtomicLong snapshotIdGenerator;
     private AtomicLong logOffsetGenerator;
     private AtomicLong updateMinRetainOffsetConsumer;
+    private ManualClock manualClock;
+    private @TempDir File tmpKvDir;
 
     static ZooKeeperClient zooKeeperClient;
 
@@ -114,13 +119,15 @@ class KvTabletSnapshotTargetTest {
         logOffsetGenerator = new AtomicLong(1);
         updateMinRetainOffsetConsumer = new AtomicLong(Long.MAX_VALUE);
         scheduledExecutorService = new ManuallyTriggeredScheduledExecutorService();
+        asyncOperationsThreadPool = java.util.concurrent.Executors.newFixedThreadPool(1);
+        manualClock = new ManualClock(System.currentTimeMillis());
     }
 
     @AfterEach
     void afterEach() throws Exception {
         closeableRegistry.close();
-        if (periodicSnapshotManager != null) {
-            periodicSnapshotManager.close();
+        if (kvSnapshotManager != null) {
+            kvSnapshotManager.close();
         }
         ZOO_KEEPER_EXTENSION_WRAPPER.getCustomExtension().cleanupRoot();
     }
@@ -132,15 +139,15 @@ class KvTabletSnapshotTargetTest {
                 new ZooKeeperCompletedSnapshotHandleStore(zooKeeperClient);
 
         FsPath remoteKvTabletDir = FsPath.fromLocalFile(kvTabletDir.toFile());
-        KvTabletSnapshotTarget kvTabletSnapshotTarget =
+        KvTabletUploadSnapshotTarget kvTabletSnapshotTarget =
                 createSnapshotTarget(remoteKvTabletDir, completedSnapshotHandleStore);
 
-        periodicSnapshotManager = createSnapshotManager(kvTabletSnapshotTarget);
-        periodicSnapshotManager.start();
+        kvSnapshotManager = createSnapshotManager(true);
+        startPeriodicUploadSnapshot(kvTabletSnapshotTarget);
 
         RocksDB rocksDB = rocksDBExtension.getRocksDb();
         rocksDB.put("key1".getBytes(), "val1".getBytes());
-        periodicSnapshotManager.triggerSnapshot();
+        triggerUploadSnapshot();
 
         long snapshotId1 = 1;
         TestRocksIncrementalSnapshot rocksIncrementalSnapshot =
@@ -162,7 +169,7 @@ class KvTabletSnapshotTargetTest {
                 .isEqualTo(CompletedSnapshot.getMetadataFilePath(snapshot.getSnapshotLocation()));
         // rebuild from snapshot, and the check the rebuilt rocksdb
         try (RocksDBKv rocksDBKv =
-                KvTestUtils.buildFromSnapshotHandle(
+                buildFromSnapshotHandle(
                         snapshot.getKvSnapshotHandle(), temoRebuildPath.resolve("restore1"))) {
             assertThat(rocksDBKv.get("key1".getBytes())).isEqualTo("val1".getBytes());
         }
@@ -171,7 +178,7 @@ class KvTabletSnapshotTargetTest {
         long snapshotId2 = 2;
         // update log offset to do snapshot
         logOffsetGenerator.set(5);
-        periodicSnapshotManager.triggerSnapshot();
+        triggerUploadSnapshot();
         retry(
                 Duration.ofMinutes(1),
                 () ->
@@ -187,7 +194,7 @@ class KvTabletSnapshotTargetTest {
         assertThat(snapshot.getSnapshotID()).isEqualTo(snapshotId2);
         assertThat(updateMinRetainOffsetConsumer.get()).isEqualTo(5);
         try (RocksDBKv rocksDBKv =
-                KvTestUtils.buildFromSnapshotHandle(
+                buildFromSnapshotHandle(
                         snapshot.getKvSnapshotHandle(), temoRebuildPath.resolve("restore2"))) {
             assertThat(rocksDBKv.get("key1".getBytes())).isEqualTo("val1".getBytes());
             assertThat(rocksDBKv.get("key2".getBytes())).isEqualTo("val2".getBytes());
@@ -200,16 +207,16 @@ class KvTabletSnapshotTargetTest {
                 TestCompletedSnapshotHandleStore.newBuilder().build();
         FsPath remoteKvTabletDir = FsPath.fromLocalFile(kvTabletDir.toFile());
         // test fail in the sync phase of snapshot
-        KvTabletSnapshotTarget kvTabletSnapshotTarget =
+        KvTabletUploadSnapshotTarget kvTabletSnapshotTarget =
                 createSnapshotTarget(
                         remoteKvTabletDir,
                         completedSnapshotHandleStore,
                         SnapshotFailType.SYNC_PHASE);
         long snapshotId1 = 1;
 
-        periodicSnapshotManager = createSnapshotManager(kvTabletSnapshotTarget);
-        periodicSnapshotManager.start();
-        periodicSnapshotManager.triggerSnapshot();
+        kvSnapshotManager = createSnapshotManager(true);
+        startPeriodicUploadSnapshot(kvTabletSnapshotTarget);
+        triggerUploadSnapshot();
 
         // the snapshot dir should be discarded
         FsPath snapshotPath1 = FlussPaths.remoteKvSnapshotDir(remoteKvTabletDir, snapshotId1);
@@ -221,9 +228,9 @@ class KvTabletSnapshotTargetTest {
                         remoteKvTabletDir,
                         completedSnapshotHandleStore,
                         SnapshotFailType.ASYNC_PHASE);
-        periodicSnapshotManager = createSnapshotManager(kvTabletSnapshotTarget);
-        periodicSnapshotManager.start();
-        periodicSnapshotManager.triggerSnapshot();
+        kvSnapshotManager = createSnapshotManager(true);
+        startPeriodicUploadSnapshot(kvTabletSnapshotTarget);
+        triggerUploadSnapshot();
         final long snapshotId2 = 2;
 
         TestRocksIncrementalSnapshot rocksIncrementalSnapshot =
@@ -259,15 +266,15 @@ class KvTabletSnapshotTargetTest {
                                 })
                         .build();
         FsPath remoteKvTabletDir = FsPath.fromLocalFile(kvTabletDir.toFile());
-        KvTabletSnapshotTarget kvTabletSnapshotTarget =
+        KvTabletUploadSnapshotTarget kvTabletSnapshotTarget =
                 createSnapshotTarget(remoteKvTabletDir, completedSnapshotHandleStore);
 
-        periodicSnapshotManager = createSnapshotManager(kvTabletSnapshotTarget);
-        periodicSnapshotManager.start();
+        kvSnapshotManager = createSnapshotManager(true);
+        startPeriodicUploadSnapshot(kvTabletSnapshotTarget);
 
         RocksDB rocksDB = rocksDBExtension.getRocksDb();
         rocksDB.put("key".getBytes(), "val".getBytes());
-        periodicSnapshotManager.triggerSnapshot();
+        triggerUploadSnapshot();
         long snapshotId1 = 1;
         FsPath snapshotPath1 = FlussPaths.remoteKvSnapshotDir(remoteKvTabletDir, snapshotId1);
 
@@ -290,7 +297,7 @@ class KvTabletSnapshotTargetTest {
         shouldFail.set(false);
         long snapshotId2 = 2;
         // trigger a snapshot again, it'll be success
-        periodicSnapshotManager.triggerSnapshot();
+        triggerUploadSnapshot();
         retry(
                 Duration.ofMinutes(1),
                 () ->
@@ -329,18 +336,18 @@ class KvTabletSnapshotTargetTest {
                     throw new FlussException("Coordinator failover after ZK commit");
                 };
 
-        KvTabletSnapshotTarget kvTabletSnapshotTarget =
+        KvTabletUploadSnapshotTarget kvTabletSnapshotTarget =
                 createSnapshotTargetWithCustomCommitter(
                         remoteKvTabletDir, failingAfterZkCommitCommitter);
 
-        periodicSnapshotManager = createSnapshotManager(kvTabletSnapshotTarget);
-        periodicSnapshotManager.start();
+        kvSnapshotManager = createSnapshotManager(true);
+        startPeriodicUploadSnapshot(kvTabletSnapshotTarget);
 
         RocksDB rocksDB = rocksDBExtension.getRocksDb();
         rocksDB.put("key1".getBytes(), "val1".getBytes());
 
         // Trigger snapshot - will commit to ZK but throw exception
-        periodicSnapshotManager.triggerSnapshot();
+        triggerUploadSnapshot();
         long snapshotId1 = 1;
 
         TestRocksIncrementalSnapshot rocksIncrementalSnapshot =
@@ -373,15 +380,15 @@ class KvTabletSnapshotTargetTest {
                             "Genuine coordinator failure - snapshot not committed to ZK");
                 };
 
-        KvTabletSnapshotTarget kvTabletSnapshotTarget =
+        KvTabletUploadSnapshotTarget kvTabletSnapshotTarget =
                 createSnapshotTargetWithCustomCommitter(remoteKvTabletDir, alwaysFailingCommitter);
 
-        periodicSnapshotManager = createSnapshotManager(kvTabletSnapshotTarget);
-        periodicSnapshotManager.start();
+        kvSnapshotManager = createSnapshotManager(true);
+        startPeriodicUploadSnapshot(kvTabletSnapshotTarget);
 
         RocksDB rocksDB = rocksDBExtension.getRocksDb();
         rocksDB.put("key1".getBytes(), "val1".getBytes());
-        periodicSnapshotManager.triggerSnapshot();
+        triggerUploadSnapshot();
 
         long snapshotId1 = 1;
         TestRocksIncrementalSnapshot rocksIncrementalSnapshot =
@@ -411,16 +418,16 @@ class KvTabletSnapshotTargetTest {
                     throw new FlussException("Commit failed");
                 };
 
-        KvTabletSnapshotTarget kvTabletSnapshotTarget =
+        KvTabletUploadSnapshotTarget kvTabletSnapshotTarget =
                 createSnapshotTargetWithCustomZkAndCommitter(
                         remoteKvTabletDir, failingZkClient, failingCommitter);
 
-        periodicSnapshotManager = createSnapshotManager(kvTabletSnapshotTarget);
-        periodicSnapshotManager.start();
+        kvSnapshotManager = createSnapshotManager(true);
+        startPeriodicUploadSnapshot(kvTabletSnapshotTarget);
 
         RocksDB rocksDB = rocksDBExtension.getRocksDb();
         rocksDB.put("key1".getBytes(), "val1".getBytes());
-        periodicSnapshotManager.triggerSnapshot();
+        triggerUploadSnapshot();
 
         long snapshotId1 = 1;
         TestRocksIncrementalSnapshot rocksIncrementalSnapshot =
@@ -448,24 +455,51 @@ class KvTabletSnapshotTargetTest {
         assertThat(updateMinRetainOffsetConsumer.get()).isEqualTo(Long.MAX_VALUE);
     }
 
-    private PeriodicSnapshotManager createSnapshotManager(
-            PeriodicSnapshotManager.SnapshotTarget target) {
-        return new PeriodicSnapshotManager(
-                tableBucket,
-                target,
-                periodicMaterializeDelay,
-                java.util.concurrent.Executors.newFixedThreadPool(1),
-                scheduledExecutorService,
-                TestingMetricGroups.BUCKET_METRICS);
+    private KvSnapshotManager createSnapshotManager(boolean isLeader) {
+        Configuration conf = new Configuration();
+        conf.set(ConfigOptions.KV_SNAPSHOT_INTERVAL, Duration.ofMillis(periodicMaterializeDelay));
+
+        ExecutorService dataTransferThreadPool =
+                java.util.concurrent.Executors.newFixedThreadPool(1);
+        KvSnapshotResource kvSnapshotResource =
+                new KvSnapshotResource(
+                        scheduledExecutorService,
+                        new KvSnapshotDataUploader(dataTransferThreadPool),
+                        new KvSnapshotDataDownloader(dataTransferThreadPool),
+                        asyncOperationsThreadPool);
+        KvSnapshotManager kvSnapshotManager =
+                new KvSnapshotManager(
+                        tableBucket,
+                        tmpKvDir,
+                        DefaultSnapshotContext.create(
+                                zooKeeperClient,
+                                new TestingCompletedKvSnapshotCommitter(),
+                                kvSnapshotResource,
+                                conf),
+                        manualClock);
+        if (isLeader) {
+            kvSnapshotManager.becomeLeader();
+        }
+        return kvSnapshotManager;
     }
 
-    private KvTabletSnapshotTarget createSnapshotTarget(
+    private void startPeriodicUploadSnapshot(
+            KvSnapshotManager.UploadSnapshotTarget uploadSnapshotTarget) {
+        kvSnapshotManager.startPeriodicUploadSnapshot(
+                Executors.directExecutor(), uploadSnapshotTarget);
+    }
+
+    private void triggerUploadSnapshot() {
+        kvSnapshotManager.triggerUploadSnapshot(Executors.directExecutor());
+    }
+
+    private KvTabletUploadSnapshotTarget createSnapshotTarget(
             FsPath remoteKvTabletDir, CompletedSnapshotHandleStore snapshotHandleStore)
             throws IOException {
         return createSnapshotTarget(remoteKvTabletDir, snapshotHandleStore, SnapshotFailType.NONE);
     }
 
-    private KvTabletSnapshotTarget createSnapshotTarget(
+    private KvTabletUploadSnapshotTarget createSnapshotTarget(
             FsPath remoteKvTabletDir,
             CompletedSnapshotHandleStore snapshotHandleStore,
             SnapshotFailType snapshotFailType)
@@ -491,7 +525,7 @@ class KvTabletSnapshotTargetTest {
         Supplier<Integer> bucketLeaderEpochSupplier = () -> 0;
         Supplier<Integer> coordinatorEpochSupplier = () -> 0;
 
-        return new KvTabletSnapshotTarget(
+        return new KvTabletUploadSnapshotTarget(
                 tableBucket,
                 new TestingStoreCompletedKvSnapshotCommitter(completedSnapshotStore),
                 zooKeeperClient,
@@ -508,14 +542,14 @@ class KvTabletSnapshotTargetTest {
                 0L);
     }
 
-    private KvTabletSnapshotTarget createSnapshotTargetWithCustomCommitter(
+    private KvTabletUploadSnapshotTarget createSnapshotTargetWithCustomCommitter(
             FsPath remoteKvTabletDir, CompletedKvSnapshotCommitter customCommitter)
             throws IOException {
         return createSnapshotTargetWithCustomZkAndCommitter(
                 remoteKvTabletDir, zooKeeperClient, customCommitter);
     }
 
-    private KvTabletSnapshotTarget createSnapshotTargetWithCustomZkAndCommitter(
+    private KvTabletUploadSnapshotTarget createSnapshotTargetWithCustomZkAndCommitter(
             FsPath remoteKvTabletDir,
             ZooKeeperClient zkClient,
             CompletedKvSnapshotCommitter customCommitter)
@@ -529,7 +563,7 @@ class KvTabletSnapshotTargetTest {
         Supplier<Integer> bucketLeaderEpochSupplier = () -> 0;
         Supplier<Integer> coordinatorEpochSupplier = () -> 0;
 
-        return new KvTabletSnapshotTarget(
+        return new KvTabletUploadSnapshotTarget(
                 tableBucket,
                 customCommitter,
                 zkClient,

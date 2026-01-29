@@ -439,7 +439,12 @@ public class TableBucketStateMachine {
         // servers as inSyncReplica set.
         Optional<ElectionResult> resultOpt =
                 initReplicaLeaderElection(
-                        assignedServers, liveServers, coordinatorContext.getCoordinatorEpoch());
+                        assignedServers,
+                        liveServers,
+                        coordinatorContext.getCoordinatorEpoch(),
+                        coordinatorContext
+                                .getTableInfoById(tableBucket.getTableId())
+                                .hasPrimaryKey());
         if (!resultOpt.isPresent()) {
             LOG.error(
                     "The leader election for table bucket {} is empty.",
@@ -613,10 +618,12 @@ public class TableBucketStateMachine {
         }
 
         Optional<ElectionResult> resultOpt = Optional.empty();
+        boolean isPkTable =
+                coordinatorContext.getTableInfoById(tableBucket.getTableId()).hasPrimaryKey();
         if (electionStrategy instanceof DefaultLeaderElection) {
             resultOpt =
                     ((DefaultLeaderElection) electionStrategy)
-                            .leaderElection(assignment, liveReplicas, leaderAndIsr);
+                            .leaderElection(assignment, liveReplicas, leaderAndIsr, isPkTable);
         } else if (electionStrategy instanceof ControlledShutdownLeaderElection) {
             Set<Integer> shuttingDownTabletServers = coordinatorContext.shuttingDownTabletServers();
             resultOpt =
@@ -625,11 +632,12 @@ public class TableBucketStateMachine {
                                     assignment,
                                     liveReplicas,
                                     leaderAndIsr,
-                                    shuttingDownTabletServers);
+                                    shuttingDownTabletServers,
+                                    isPkTable);
         } else if (electionStrategy instanceof ReassignmentLeaderElection) {
             resultOpt =
                     ((ReassignmentLeaderElection) electionStrategy)
-                            .leaderElection(liveReplicas, leaderAndIsr);
+                            .leaderElection(liveReplicas, leaderAndIsr, isPkTable);
         }
 
         if (!resultOpt.isPresent()) {
@@ -670,23 +678,40 @@ public class TableBucketStateMachine {
      * @param assignments the assignments
      * @param aliveReplicas the alive replicas
      * @param coordinatorEpoch the coordinator epoch
+     * @param isPrimaryKeyTable whether this table bucket is primary key table
      * @return the election result
      */
     @VisibleForTesting
     public static Optional<ElectionResult> initReplicaLeaderElection(
-            List<Integer> assignments, List<Integer> aliveReplicas, int coordinatorEpoch) {
-        // currently, we always use the first replica in assignment, which also in aliveReplicas and
-        // isr as the leader replica.
-        for (int assignment : assignments) {
-            if (aliveReplicas.contains(assignment)) {
-                return Optional.of(
-                        new ElectionResult(
-                                aliveReplicas,
-                                new LeaderAndIsr(
-                                        assignment, 0, aliveReplicas, coordinatorEpoch, 0)));
+            List<Integer> assignments,
+            List<Integer> aliveReplicas,
+            int coordinatorEpoch,
+            boolean isPrimaryKeyTable) {
+        // First we will filter out the assignment list to only contain the alive replicas.
+        List<Integer> availableReplicas =
+                assignments.stream().filter(aliveReplicas::contains).collect(Collectors.toList());
+
+        // If the assignment list is empty, we return empty.
+        if (availableReplicas.isEmpty()) {
+            return Optional.empty();
+        }
+
+        //  Then we will use the first replica in assignment as the leader replica.
+        int leader = availableReplicas.get(0);
+
+        // If this table is primaryKey table, we will use the second replica in assignment as the
+        // standby if exists.
+        List<Integer> standbyReplica = new ArrayList<>();
+        if (isPrimaryKeyTable) {
+            if (availableReplicas.size() > 1) {
+                standbyReplica.add(availableReplicas.get(1));
             }
         }
 
-        return Optional.empty();
+        return Optional.of(
+                new ElectionResult(
+                        aliveReplicas,
+                        new LeaderAndIsr(
+                                leader, 0, aliveReplicas, standbyReplica, coordinatorEpoch, 0)));
     }
 }
