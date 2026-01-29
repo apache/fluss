@@ -21,6 +21,7 @@ import org.apache.fluss.flink.tiering.TestingWriteResult;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
 
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
@@ -60,6 +61,8 @@ class TableBucketWriteResultSerializerTest {
         assertThat(deserializedWriteResult.getWriteResult())
                 .isEqualTo(testingWriteResult.getWriteResult());
         assertThat(deserialized.numberOfWriteResults()).isEqualTo(20);
+        assertThat(deserialized.isFailedMarker()).isFalse();
+        assertThat(deserialized.failReason()).isNull();
 
         // verify when writeResult is null
         tableBucketWriteResult =
@@ -74,5 +77,48 @@ class TableBucketWriteResultSerializerTest {
         assertThat(deserialized.partitionName()).isEqualTo(partitionName);
         assertThat(deserialized.writeResult()).isNull();
         assertThat(deserialized.numberOfWriteResults()).isEqualTo(30);
+        assertThat(deserialized.isFailedMarker()).isFalse();
+    }
+
+    @Test
+    void testSerializeAndDeserializeFailedMarker() throws Exception {
+        long tableId = 12345L;
+        String failReason = "Test failure reason";
+
+        TableBucketWriteResult<TestingWriteResult> failedMarker =
+                TableBucketWriteResult.failedMarker(tableId, failReason);
+
+        // test serialize and deserialize
+        byte[] serialized = tableBucketWriteResultSerializer.serialize(failedMarker);
+        TableBucketWriteResult<TestingWriteResult> deserialized =
+                tableBucketWriteResultSerializer.deserialize(
+                        tableBucketWriteResultSerializer.getVersion(), serialized);
+
+        assertThat(deserialized.isFailedMarker()).isTrue();
+        assertThat(deserialized.tableBucket().getTableId()).isEqualTo(tableId);
+        assertThat(deserialized.failReason()).isEqualTo(failReason);
+
+        // verify other fields are set to expected values for failed markers
+        assertThat(deserialized.tablePath()).isNull();
+        assertThat(deserialized.writeResult()).isNull();
+        assertThat(deserialized.tableBucket().getBucket()).isEqualTo(-1);
+    }
+
+    @Test
+    void testSerializeAndDeserializeFailedMarkerWithNullReason() throws Exception {
+        long tableId = 67890L;
+
+        TableBucketWriteResult<TestingWriteResult> failedMarker =
+                TableBucketWriteResult.failedMarker(tableId, null);
+
+        // test serialize and deserialize
+        byte[] serialized = tableBucketWriteResultSerializer.serialize(failedMarker);
+        TableBucketWriteResult<TestingWriteResult> deserialized =
+                tableBucketWriteResultSerializer.deserialize(
+                        tableBucketWriteResultSerializer.getVersion(), serialized);
+
+        assertThat(deserialized.isFailedMarker()).isTrue();
+        assertThat(deserialized.tableBucket().getTableId()).isEqualTo(tableId);
+        assertThat(deserialized.failReason()).isNull();
     }
 }

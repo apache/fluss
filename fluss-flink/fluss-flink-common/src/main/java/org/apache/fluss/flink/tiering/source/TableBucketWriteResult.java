@@ -43,6 +43,7 @@ public class TableBucketWriteResult<WriteResult> implements Serializable {
     @Nullable private final String partitionName;
 
     // will be null when no any data write, such as for tiering an empty log split
+    // or when this is a failure marker
     @Nullable private final WriteResult writeResult;
 
     // the end offset of tiering, should be the last tiered record's offset + 1
@@ -57,6 +58,12 @@ public class TableBucketWriteResult<WriteResult> implements Serializable {
     // for the round of tiering is finished
     private final int numberOfWriteResults;
 
+    // indicates whether this is a failure marker rather than an actual write result
+    private final boolean failedMarker;
+
+    // the reason for failure when this is a failure marker
+    @Nullable private final String failReason;
+
     public TableBucketWriteResult(
             TablePath tablePath,
             TableBucket tableBucket,
@@ -65,6 +72,28 @@ public class TableBucketWriteResult<WriteResult> implements Serializable {
             long logEndOffset,
             long maxTimestamp,
             int numberOfWriteResults) {
+        this(
+                tablePath,
+                tableBucket,
+                partitionName,
+                writeResult,
+                logEndOffset,
+                maxTimestamp,
+                numberOfWriteResults,
+                false,
+                null);
+    }
+
+    private TableBucketWriteResult(
+            TablePath tablePath,
+            TableBucket tableBucket,
+            @Nullable String partitionName,
+            @Nullable WriteResult writeResult,
+            long logEndOffset,
+            long maxTimestamp,
+            int numberOfWriteResults,
+            boolean failedMarker,
+            @Nullable String failReason) {
         this.tablePath = tablePath;
         this.tableBucket = tableBucket;
         this.partitionName = partitionName;
@@ -72,6 +101,24 @@ public class TableBucketWriteResult<WriteResult> implements Serializable {
         this.logEndOffset = logEndOffset;
         this.maxTimestamp = maxTimestamp;
         this.numberOfWriteResults = numberOfWriteResults;
+        this.failedMarker = failedMarker;
+        this.failReason = failReason;
+    }
+
+    /**
+     * Creates a failure marker result that indicates tiering for a table has failed.
+     *
+     * @param tableId the ID of the failed table
+     * @param failReason the reason for the failure
+     * @param <WriteResult> the type of write result
+     * @return a failure marker TableBucketWriteResult
+     */
+    public static <WriteResult> TableBucketWriteResult<WriteResult> failedMarker(
+            long tableId, String failReason) {
+        // Use a dummy TableBucket with only tableId for the failure marker
+        TableBucket dummyBucket = new TableBucket(tableId, -1);
+        return new TableBucketWriteResult<>(
+                null, dummyBucket, null, null, -1, -1, -1, true, failReason);
     }
 
     public TablePath tablePath() {
@@ -102,5 +149,14 @@ public class TableBucketWriteResult<WriteResult> implements Serializable {
 
     public long maxTimestamp() {
         return maxTimestamp;
+    }
+
+    public boolean isFailedMarker() {
+        return failedMarker;
+    }
+
+    @Nullable
+    public String failReason() {
+        return failReason;
     }
 }
