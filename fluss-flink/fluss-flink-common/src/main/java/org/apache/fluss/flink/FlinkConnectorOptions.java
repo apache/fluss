@@ -245,7 +245,16 @@ public class FlinkConnectorOptions {
                     .withDescription(
                             "The serialized base64 bytes of refresh handler of materialized table.");
 
-    // ------------------------------------------------------------------------------------------
+    /**
+     * Internal option used to pass the base table's partition key column names to the binlog table
+     * source. The value is a comma-separated list of column names.
+     */
+    public static final ConfigOption<String> BINLOG_PARTITION_KEYS =
+            ConfigOptions.key("binlog.partition-keys")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "Internal option: comma-separated list of partition key column names for $binlog virtual tables.");
 
     /** Startup mode for the fluss scanner, see {@link #SCAN_STARTUP_MODE}. */
     public enum ScanStartupMode implements DescribedEnum {
