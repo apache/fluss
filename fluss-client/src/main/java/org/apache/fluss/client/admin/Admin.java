@@ -55,6 +55,7 @@ import org.apache.fluss.exception.TooManyBucketsException;
 import org.apache.fluss.exception.TooManyPartitionsException;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.DatabaseInfo;
+import org.apache.fluss.metadata.DatabaseSummary;
 import org.apache.fluss.metadata.PartitionInfo;
 import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
@@ -178,6 +179,9 @@ public interface Admin extends AutoCloseable {
 
     /** List all databases in fluss cluster asynchronously. */
     CompletableFuture<List<String>> listDatabases();
+
+    /** List all databases' summary information in fluss cluster asynchronously. */
+    CompletableFuture<List<DatabaseSummary>> listDatabases(ListDatabaseOption option);
 
     /**
      * Create a new table asynchronously.

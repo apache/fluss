@@ -21,6 +21,7 @@ import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.metadata.DatabaseSummary;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.Schema;
@@ -485,6 +486,20 @@ public class ZooKeeperClient implements AutoCloseable {
 
     public List<String> listDatabases() throws Exception {
         return getChildren(DatabasesZNode.path());
+    }
+
+    public Optional<DatabaseSummary> getDatabaseSummary(String databaseName) throws Exception {
+        Stat stat = getStat(DatabaseZNode.path(databaseName));
+        if (stat == null) {
+            return Optional.empty();
+        }
+        return Optional.of(
+                new DatabaseSummary(
+                        databaseName,
+                        // To decrease the cost, use zk node creation time as the database creation
+                        // time rather than create_time in node data.
+                        stat.getCtime(),
+                        stat.getNumChildren()));
     }
 
     public List<String> listTables(String databaseName) throws Exception {
@@ -1275,13 +1290,8 @@ public class ZooKeeperClient implements AutoCloseable {
     }
 
     /** Gets the data and stat of a given zk node path. */
-    public Optional<Stat> getStat(String path) throws Exception {
-        try {
-            Stat stat = zkClient.checkExists().forPath(path);
-            return Optional.ofNullable(stat);
-        } catch (KeeperException.NoNodeException e) {
-            return Optional.empty();
-        }
+    public Stat getStat(String path) throws Exception {
+        return zkClient.checkExists().forPath(path);
     }
 
     /** delete a path. */

@@ -20,6 +20,7 @@ package org.apache.fluss.server;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.config.cluster.ConfigEntry;
+import org.apache.fluss.exception.DatabaseNotExistException;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.KvSnapshotNotExistException;
 import org.apache.fluss.exception.LakeTableSnapshotNotExistException;
@@ -31,6 +32,7 @@ import org.apache.fluss.exception.TableNotPartitionedException;
 import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.fs.token.ObtainedSecurityToken;
 import org.apache.fluss.metadata.DatabaseInfo;
+import org.apache.fluss.metadata.DatabaseSummary;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.SchemaInfo;
@@ -217,7 +219,27 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
                     authorizedDatabase.stream().map(Resource::getName).collect(Collectors.toList());
         }
 
-        response.addAllDatabaseNames(databaseNames);
+        if (request.hasDatabaseNameOnly() && !request.isDatabaseNameOnly()) {
+            databaseNames.forEach(
+                    databaseName -> {
+                        DatabaseSummary databaseSummary =
+                                metadataManager
+                                        .getDatabaseSummary(databaseName)
+                                        .orElseThrow(
+                                                () ->
+                                                        new DatabaseNotExistException(
+                                                                "Database "
+                                                                        + databaseName
+                                                                        + " does not exist."));
+                        response.addDatabaseSummary()
+                                .setDatabaseName(databaseName)
+                                .setCreatedTime(databaseSummary.getCreatedTime().orElse(0L))
+                                .setTableCount(databaseSummary.getTableCount().orElse(0));
+                    });
+        } else {
+            response.addAllDatabaseNames(databaseNames);
+        }
+
         return CompletableFuture.completedFuture(response);
     }
 

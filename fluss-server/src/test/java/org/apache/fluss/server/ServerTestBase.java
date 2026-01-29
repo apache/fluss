@@ -36,7 +36,6 @@ import org.junit.jupiter.api.extension.RegisterExtension;
 
 import java.time.Duration;
 import java.util.List;
-import java.util.Optional;
 
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -98,15 +97,13 @@ public abstract class ServerTestBase {
                         ? CoordinatorZNode.path()
                         : ServerIdZNode.path(server.conf.getInt(ConfigOptions.TABLET_SERVER_ID));
 
-        long oldNodeCtime = zookeeperClient.getStat(path).get().getCtime();
+        long oldNodeCtime = zookeeperClient.getStat(path).getCtime();
         // let's restart zk to mock zk client re-init session
         ZOO_KEEPER_EXTENSION_WRAPPER.getCustomExtension().restart();
         retry(
                 Duration.ofMinutes(2),
                 () -> {
-                    Optional<Stat> optionalStat = zookeeperClient.getStat(path);
-                    assertThat(optionalStat).isPresent();
-                    Stat stat = optionalStat.get();
+                    Stat stat = zookeeperClient.getStat(path);
                     assertThat(stat.getCtime()).isGreaterThan(oldNodeCtime);
                 });
     }

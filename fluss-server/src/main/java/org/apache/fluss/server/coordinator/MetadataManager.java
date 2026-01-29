@@ -37,6 +37,7 @@ import org.apache.fluss.exception.TooManyPartitionsException;
 import org.apache.fluss.lake.lakestorage.LakeCatalog;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.DatabaseInfo;
+import org.apache.fluss.metadata.DatabaseSummary;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.SchemaInfo;
@@ -165,6 +166,12 @@ public class MetadataManager {
 
     public List<String> listDatabases() {
         return uncheck(zookeeperClient::listDatabases, "Fail to list database");
+    }
+
+    public Optional<DatabaseSummary> getDatabaseSummary(String databaseName) {
+        return uncheck(
+                () -> zookeeperClient.getDatabaseSummary(databaseName),
+                "Fail to get database summary for " + databaseName);
     }
 
     public List<String> listTables(String databaseName) throws DatabaseNotExistException {

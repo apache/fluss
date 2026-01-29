@@ -36,6 +36,7 @@ import org.apache.fluss.config.cluster.ConfigEntry;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.fs.FsPathAndFileName;
 import org.apache.fluss.fs.token.ObtainedSecurityToken;
+import org.apache.fluss.metadata.DatabaseSummary;
 import org.apache.fluss.metadata.PartitionInfo;
 import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.PhysicalTablePath;
@@ -50,6 +51,7 @@ import org.apache.fluss.rpc.messages.GetKvSnapshotMetadataResponse;
 import org.apache.fluss.rpc.messages.GetLatestKvSnapshotsResponse;
 import org.apache.fluss.rpc.messages.GetLatestLakeSnapshotResponse;
 import org.apache.fluss.rpc.messages.GetProducerOffsetsResponse;
+import org.apache.fluss.rpc.messages.ListDatabasesResponse;
 import org.apache.fluss.rpc.messages.ListOffsetsRequest;
 import org.apache.fluss.rpc.messages.ListPartitionInfosResponse;
 import org.apache.fluss.rpc.messages.ListRebalanceProgressResponse;
@@ -58,6 +60,7 @@ import org.apache.fluss.rpc.messages.MetadataRequest;
 import org.apache.fluss.rpc.messages.PbAddColumn;
 import org.apache.fluss.rpc.messages.PbAlterConfig;
 import org.apache.fluss.rpc.messages.PbBucketOffset;
+import org.apache.fluss.rpc.messages.PbDatabaseSummary;
 import org.apache.fluss.rpc.messages.PbDescribeConfig;
 import org.apache.fluss.rpc.messages.PbDropColumn;
 import org.apache.fluss.rpc.messages.PbKeyValue;
@@ -632,5 +635,22 @@ public class ClientRpcMessageUtils {
 
         long expirationTime = response.hasExpirationTime() ? response.getExpirationTime() : 0;
         return new ProducerOffsetsResult(response.getProducerId(), tableOffsets, expirationTime);
+    }
+
+    public static List<DatabaseSummary> toDatabaseSummaries(ListDatabasesResponse response) {
+        List<DatabaseSummary> databaseSummaries = new ArrayList<>();
+        for (String databaseName : response.getDatabaseNamesList()) {
+            databaseSummaries.add(new DatabaseSummary(databaseName, null, null));
+        }
+
+        for (PbDatabaseSummary pbDatabaseSummary : response.getDatabaseSummariesList()) {
+            databaseSummaries.add(
+                    new DatabaseSummary(
+                            pbDatabaseSummary.getDatabaseName(),
+                            pbDatabaseSummary.getCreatedTime(),
+                            pbDatabaseSummary.getTableCount()));
+        }
+
+        return databaseSummaries;
     }
 }

@@ -93,9 +93,12 @@ message DatabaseExistsResponse {
 
 // list databases request and response
 message ListDatabasesRequest {
+  optional bool database_name_only = 1;
 }
+
 message ListDatabasesResponse {
   repeated string database_name = 1;
+  repeated PbDatabaseSummary database_summary = 2;
 }
 
 // create table request and response
@@ -1109,4 +1112,10 @@ message PbBucketOffset {
 message PbProducerTableOffsets {
   required int64 table_id = 1;
   repeated PbBucketOffset bucket_offsets = 2;
+}
+
+message PbDatabaseSummary {
+  required string database_name = 1;
+  required int64 created_time = 2;
+  required int32 table_count = 3;
 }

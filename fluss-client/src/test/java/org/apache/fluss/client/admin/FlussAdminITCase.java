@@ -55,6 +55,7 @@ import org.apache.fluss.fs.FsPathAndFileName;
 import org.apache.fluss.metadata.AggFunctions;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.DatabaseInfo;
+import org.apache.fluss.metadata.DatabaseSummary;
 import org.apache.fluss.metadata.DeleteBehavior;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.LogFormat;
@@ -865,11 +866,34 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         admin.createDatabase("db3", DatabaseDescriptor.EMPTY, true).get();
         assertThat(admin.listDatabases().get())
                 .containsExactlyInAnyOrder("test_db", "db1", "db2", "db3", "fluss");
+        assertThat(admin.listDatabases(ListDatabaseOption.create(true)).get())
+                .containsExactlyInAnyOrder(
+                        new DatabaseSummary("test_db", null, null),
+                        new DatabaseSummary("db1", null, null),
+                        new DatabaseSummary("db2", null, null),
+                        new DatabaseSummary("db3", null, null),
+                        new DatabaseSummary("fluss", null, null));
+        Map<String, Integer> databaseSummaries =
+                admin.listDatabases(ListDatabaseOption.create(false)).get().stream()
+                        .collect(
+                                Collectors.toMap(
+                                        DatabaseSummary::getDatabaseName,
+                                        summary -> summary.getTableCount().orElse(-1)));
+        assertThat(databaseSummaries.get("db1")).isEqualTo(0);
+        assertThat(databaseSummaries.get("db2")).isEqualTo(0);
 
         admin.createTable(TablePath.of("db1", "table1"), DEFAULT_TABLE_DESCRIPTOR, true).get();
         admin.createTable(TablePath.of("db1", "table2"), DEFAULT_TABLE_DESCRIPTOR, true).get();
         assertThat(admin.listTables("db1").get()).containsExactlyInAnyOrder("table1", "table2");
         assertThat(admin.listTables("db2").get()).isEmpty();
+        databaseSummaries =
+                admin.listDatabases(ListDatabaseOption.create(false)).get().stream()
+                        .collect(
+                                Collectors.toMap(
+                                        DatabaseSummary::getDatabaseName,
+                                        summary -> summary.getTableCount().orElse(-1)));
+        assertThat(databaseSummaries.get("db1")).isEqualTo(1);
+        assertThat(databaseSummaries.get("db2")).isEqualTo(0);
 
         assertThatThrownBy(() -> admin.listTables("unknown_db").get())
                 .cause()

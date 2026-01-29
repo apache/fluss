@@ -105,14 +105,14 @@ public class ZkNodeChangeNotificationWatcherTest {
         for (String node : nodesBeforeStart) {
             maxCtimeBeforeStart =
                     Math.max(
-                            zookeeperClient.getStat(seqNodeRoot + "/" + node).get().getCtime(),
+                            zookeeperClient.getStat(seqNodeRoot + "/" + node).getCtime(),
                             maxCtimeBeforeStart);
         }
         // Advance the clock to make the initial notifications obsolete
         clock.advanceTime(
                 maxCtimeBeforeStart - startTime + Duration.ofMinutes(5).toMillis(),
                 TimeUnit.MILLISECONDS);
-        // Insert a new notification to trigger the purging of obsolete notificatios.
+        // Insert a new notification to trigger the purging of obsolete notifications.
         zookeeperClient.insertAclChangeNotification(newNoticedResource);
         retry(
                 Duration.ofMinutes(1),
