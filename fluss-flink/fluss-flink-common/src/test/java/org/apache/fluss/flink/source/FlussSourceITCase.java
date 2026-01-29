@@ -45,6 +45,7 @@ import org.apache.flink.types.RowKind;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.time.Duration;
 import java.util.Arrays;
 import java.util.List;
 import java.util.stream.Collectors;
@@ -91,6 +92,8 @@ public class FlussSourceITCase extends FlinkTestBase {
                         .setTable(pkTableName)
                         .setStartingOffsets(OffsetsInitializer.earliest())
                         .setScanPartitionDiscoveryIntervalMs(1000L)
+                        .setKvSnapshotLeaseId("test-lease-1vd7j9")
+                        .setKvSnapshotLeaseDurationMs(Duration.ofDays(1).toMillis())
                         .setDeserializationSchema(new MockDataUtils.OrderDeserializationSchema())
                         .build();
 
@@ -123,6 +126,8 @@ public class FlussSourceITCase extends FlinkTestBase {
                         .setTable(pkTableName)
                         .setStartingOffsets(OffsetsInitializer.earliest())
                         .setScanPartitionDiscoveryIntervalMs(1000L)
+                        .setKvSnapshotLeaseId("test-lease-kj232df")
+                        .setKvSnapshotLeaseDurationMs(Duration.ofDays(1).toMillis())
                         .setDeserializationSchema(new OrderPartialDeserializationSchema())
                         .setProjectedFields("orderId", "amount")
                         .build();
@@ -151,6 +156,8 @@ public class FlussSourceITCase extends FlinkTestBase {
                         .setTable(pkTableName)
                         .setStartingOffsets(OffsetsInitializer.earliest())
                         .setScanPartitionDiscoveryIntervalMs(1000L)
+                        .setKvSnapshotLeaseId("test-lease-sdafa3")
+                        .setKvSnapshotLeaseDurationMs(Duration.ofDays(1).toMillis())
                         .setDeserializationSchema(new RowDataDeserializationSchema())
                         .build();
 
