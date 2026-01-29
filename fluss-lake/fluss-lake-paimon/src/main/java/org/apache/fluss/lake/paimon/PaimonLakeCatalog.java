@@ -147,7 +147,7 @@ public class PaimonLakeCatalog implements LakeCatalog {
             }
 
             if (!paimonSchemaChanges.isEmpty()) {
-                alterTable(tablePath, paimonSchemaChanges);
+                paimonCatalog.alterTable(toPaimon(tablePath), paimonSchemaChanges, false);
             }
         } catch (Catalog.ColumnAlreadyExistException | Catalog.ColumnNotExistException e) {
             // This shouldn't happen for AddColumn operations
@@ -199,15 +199,6 @@ public class PaimonLakeCatalog implements LakeCatalog {
             paimonCatalog.createDatabase(databaseName, true);
         } catch (Catalog.DatabaseAlreadyExistException e) {
             // do nothing, shouldn't throw since ignoreIfExists
-        }
-    }
-
-    private void alterTable(TablePath tablePath, List<SchemaChange> tableChanges)
-            throws Catalog.ColumnAlreadyExistException, Catalog.ColumnNotExistException {
-        try {
-            paimonCatalog.alterTable(toPaimon(tablePath), tableChanges, false);
-        } catch (Catalog.TableNotExistException e) {
-            throw new TableNotExistException("Table " + tablePath + " does not exist.");
         }
     }
 

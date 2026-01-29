@@ -31,6 +31,7 @@ import org.apache.fluss.types.DataTypes;
 import org.apache.paimon.catalog.Identifier;
 import org.apache.paimon.table.FileStoreTable;
 import org.apache.paimon.table.Table;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -63,10 +64,16 @@ class PaimonLakeCatalogTest {
     private PaimonLakeCatalog flussPaimonCatalog;
 
     @BeforeEach
-    public void setUp() {
+    void setUp() {
         Configuration configuration = new Configuration();
         configuration.setString("warehouse", tempWarehouseDir.toURI().toString());
         flussPaimonCatalog = new PaimonLakeCatalog(configuration);
+    }
+
+    @AfterEach
+    void cleanup() {
+        flussPaimonCatalog.close();
+        setUp();
     }
 
     @Test
