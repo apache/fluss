@@ -40,6 +40,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 
 import java.io.File;
+import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -471,7 +472,11 @@ class KvSnapshotITCase {
         KvSnapshotManager standbySnapshotManager = standbyReplica.getKvSnapshotManager();
         retry(
                 Duration.ofMinutes(1),
-                () -> assertThat(standbySnapshotManager.getDownloadedSstFiles()).isNotEmpty());
+                () -> {
+                    Set<Path> downloadedSstFiles = standbySnapshotManager.getDownloadedSstFiles();
+                    assertThat(downloadedSstFiles).isNotNull();
+                    assertThat(downloadedSstFiles.size()).isEqualTo(1);
+                });
 
         // get current leader and isr
         LeaderAndIsr leaderAndIsr = FLUSS_CLUSTER_EXTENSION.waitLeaderAndIsrReady(tb0);

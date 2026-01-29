@@ -24,6 +24,7 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.server.kv.rocksdb.RocksDBKvBuilder;
 import org.apache.fluss.utils.CloseableRegistry;
 import org.apache.fluss.utils.FileUtils;
+import org.apache.fluss.utils.IOUtils;
 import org.apache.fluss.utils.MathUtils;
 import org.apache.fluss.utils.clock.Clock;
 import org.apache.fluss.utils.concurrent.FutureUtils;
@@ -37,8 +38,11 @@ import javax.annotation.concurrent.NotThreadSafe;
 import java.io.Closeable;
 import java.io.File;
 import java.io.IOException;
+import java.nio.file.AtomicMoveNotSupportedException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -137,6 +141,12 @@ public class KvSnapshotManager implements Closeable {
         isLeader = true;
         // Clear standby download cache when leaving standby role
         clearStandbyDownloadCache();
+
+        // make db dir.
+        Path kvDbPath = tabletDir.toPath().resolve(RocksDBKvBuilder.DB_INSTANCE_DIR_STRING);
+        if (!kvDbPath.toFile().exists()) {
+            kvDbPath.toFile().mkdirs();
+        }
     }
 
     public void becomeFollower() {
@@ -221,7 +231,9 @@ public class KvSnapshotManager implements Closeable {
         // download the latest snapshot.
         Optional<CompletedSnapshot> latestSnapshot = getLatestSnapshot();
         if (latestSnapshot.isPresent()) {
-            incrementalDownloadSnapshot(latestSnapshot.get());
+            CompletedSnapshot completedSnapshot = latestSnapshot.get();
+            incrementalDownloadSnapshot(completedSnapshot);
+            standbySnapshotSize = completedSnapshot.getSnapshotSize();
         }
         return latestSnapshot;
     }
@@ -241,17 +253,8 @@ public class KvSnapshotManager implements Closeable {
         CompletedSnapshot incrementalSnapshot =
                 completedSnapshot.getIncrementalSnapshot(incrementalKvSnapshotHandle);
 
-        // delete the sst files that are not needed.
-        for (Path sstFileToDelete : sstFilesToDelete) {
-            FileUtils.deleteFileOrDirectory(sstFileToDelete.toFile());
-        }
-
-        // delete all the misc files that are not needed.
-        for (Path miscFileToDelete : downloadedMiscFiles) {
-            FileUtils.deleteFileOrDirectory(miscFileToDelete.toFile());
-        }
-
-        downloadKvSnapshots(incrementalSnapshot, new CloseableRegistry());
+        // Use atomic download: download to temp dir first, then atomically move to final location
+        atomicDownloadSnapshot(incrementalSnapshot, sstFilesToDelete);
 
         KvSnapshotHandle kvSnapshotHandle = completedSnapshot.getKvSnapshotHandle();
         downloadedSstFiles =
@@ -288,38 +291,6 @@ public class KvSnapshotManager implements Closeable {
             LOG.warn("Get latest completed snapshot for {}  failed.", tableBucket, e);
         }
         return Optional.empty();
-    }
-
-    /** Download the snapshot to target tablet dir. */
-    public void downloadKvSnapshots(
-            CompletedSnapshot completedSnapshot, CloseableRegistry closeableRegistry)
-            throws IOException {
-        Path kvTabletDir = tabletDir.toPath();
-        Path kvDbPath = kvTabletDir.resolve(RocksDBKvBuilder.DB_INSTANCE_DIR_STRING);
-        KvSnapshotDownloadSpec downloadSpec =
-                new KvSnapshotDownloadSpec(completedSnapshot.getKvSnapshotHandle(), kvDbPath);
-        long start = clock.milliseconds();
-        LOG.info("Start to download kv snapshot {} to directory {}.", completedSnapshot, kvDbPath);
-        KvSnapshotDataDownloader kvSnapshotDataDownloader =
-                snapshotContext.getSnapshotDataDownloader();
-        try {
-            kvSnapshotDataDownloader.transferAllDataToDirectory(downloadSpec, closeableRegistry);
-        } catch (Exception e) {
-            if (e.getMessage().contains(CompletedSnapshot.SNAPSHOT_DATA_NOT_EXISTS_ERROR_MESSAGE)) {
-                try {
-                    snapshotContext.handleSnapshotBroken(completedSnapshot);
-                } catch (Exception t) {
-                    LOG.error("Handle broken snapshot {} failed.", completedSnapshot, t);
-                }
-            }
-            throw new IOException("Fail to download kv snapshot.", e);
-        }
-        long end = clock.milliseconds();
-        LOG.info(
-                "Download kv snapshot {} to directory {} finish, cost {} ms.",
-                completedSnapshot,
-                kvDbPath,
-                end - start);
     }
 
     // schedule thread and asyncOperationsThreadPool can access this method
@@ -545,7 +516,7 @@ public class KvSnapshotManager implements Closeable {
 
         long incrementalSnapshotSize =
                 Math.max(completedSnapshotHandler.getSnapshotSize() - standbySnapshotSize, 0L);
-        LOG.info(
+        LOG.debug(
                 "Build incremental snapshot handler for table-bucket {}: {} sst files in remote, "
                         + "{} sst files to download, and {} sst files to delete, incremental download size: {}",
                 tableBucket,
@@ -555,6 +526,268 @@ public class KvSnapshotManager implements Closeable {
                 incrementalSnapshotSize);
         return new KvSnapshotHandle(
                 incrementalSstFileHandles, privateFileHandles, incrementalSnapshotSize);
+    }
+
+    /**
+     * Atomically download snapshot files to ensure consistency.
+     *
+     * <p>This method implements atomic snapshot download by:
+     *
+     * <ol>
+     *   <li>Downloading all files to a temporary directory
+     *   <li>Verifying the download completeness
+     *   <li>Deleting obsolete files from the final directory
+     *   <li>Atomically moving new files from temp to final directory
+     *   <li>Cleaning up the temp directory
+     * </ol>
+     *
+     * <p>If any step fails, the final directory remains in its original consistent state, ensuring
+     * that RocksDB never sees a partially downloaded snapshot.
+     *
+     * @param incrementalSnapshot the incremental snapshot to download
+     * @param sstFilesToDelete SST files that should be deleted from the final directory
+     * @throws IOException if download or file operations fail
+     */
+    private void atomicDownloadSnapshot(
+            CompletedSnapshot incrementalSnapshot, Set<Path> sstFilesToDelete) throws IOException {
+        Path kvTabletDir = tabletDir.toPath();
+        Path kvDbPath = kvTabletDir.resolve(RocksDBKvBuilder.DB_INSTANCE_DIR_STRING);
+        Path tempDownloadDir =
+                kvTabletDir.resolve(".tmp_snapshot_" + incrementalSnapshot.getSnapshotID());
+
+        boolean downloadSuccessful = false;
+        CloseableRegistry closeableRegistry = new CloseableRegistry();
+        try {
+            // Step 1: Create temporary download directory
+            Files.createDirectories(tempDownloadDir);
+            LOG.debug(
+                    "Created temporary snapshot download directory {} for bucket {}",
+                    tempDownloadDir,
+                    tableBucket);
+
+            // Step 2: Download all snapshot files to temporary directory
+            KvSnapshotDownloadSpec downloadSpec =
+                    new KvSnapshotDownloadSpec(
+                            incrementalSnapshot.getKvSnapshotHandle(), tempDownloadDir);
+            long start = clock.milliseconds();
+            LOG.info(
+                    "Start to download kv snapshot {} to temporary directory {}.",
+                    incrementalSnapshot,
+                    tempDownloadDir);
+
+            KvSnapshotDataDownloader kvSnapshotDataDownloader =
+                    snapshotContext.getSnapshotDataDownloader();
+            try {
+                kvSnapshotDataDownloader.transferAllDataToDirectory(
+                        downloadSpec, closeableRegistry);
+            } catch (Exception e) {
+                if (e.getMessage()
+                        .contains(CompletedSnapshot.SNAPSHOT_DATA_NOT_EXISTS_ERROR_MESSAGE)) {
+                    try {
+                        snapshotContext.handleSnapshotBroken(incrementalSnapshot);
+                    } catch (Exception t) {
+                        LOG.error("Handle broken snapshot {} failed.", incrementalSnapshot, t);
+                    }
+                }
+                throw new IOException("Fail to download kv snapshot to temporary directory.", e);
+            }
+
+            long downloadTime = clock.milliseconds() - start;
+            LOG.debug(
+                    "Downloaded kv snapshot {} to temporary directory {} in {} ms.",
+                    incrementalSnapshot,
+                    tempDownloadDir,
+                    downloadTime);
+
+            // Step 3: Verify download completeness
+            verifySnapshotCompleteness(incrementalSnapshot, tempDownloadDir);
+
+            downloadSuccessful = true;
+
+            // Step 4: Delete obsolete SST files from final directory
+            for (Path sstFileToDelete : sstFilesToDelete) {
+                try {
+                    FileUtils.deleteFileOrDirectory(sstFileToDelete.toFile());
+                    LOG.debug(
+                            "Deleted obsolete SST file {} for bucket {}",
+                            sstFileToDelete,
+                            tableBucket);
+                } catch (IOException e) {
+                    LOG.warn(
+                            "Failed to delete obsolete SST file {} for bucket {}",
+                            sstFileToDelete,
+                            tableBucket,
+                            e);
+                    // Continue deletion even if one file fails
+                }
+            }
+
+            // Step 5: Delete obsolete misc files from final directory
+            checkNotNull(downloadedMiscFiles, "downloadedMiscFiles is null");
+            for (Path miscFileToDelete : downloadedMiscFiles) {
+                try {
+                    FileUtils.deleteFileOrDirectory(miscFileToDelete.toFile());
+                    LOG.debug(
+                            "Deleted obsolete misc file {} for bucket {}",
+                            miscFileToDelete,
+                            tableBucket);
+                } catch (IOException e) {
+                    LOG.warn(
+                            "Failed to delete obsolete misc file {} for bucket {}",
+                            miscFileToDelete,
+                            tableBucket,
+                            e);
+                    // Continue deletion even if one file fails
+                }
+            }
+
+            // Step 6: Atomically move downloaded files from temp to final directory
+            moveSnapshotFilesToFinalDirectory(tempDownloadDir, kvDbPath);
+
+            long totalTime = clock.milliseconds() - start;
+            LOG.debug(
+                    "Atomically applied kv snapshot {} to directory {} in {} ms (download: {} ms, move: {} ms).",
+                    incrementalSnapshot,
+                    kvDbPath,
+                    totalTime,
+                    downloadTime,
+                    totalTime - downloadTime);
+
+        } finally {
+            // Step 7: Clean up closeable registry
+            IOUtils.closeQuietly(closeableRegistry);
+
+            // Step 8: Clean up temporary directory
+            if (tempDownloadDir.toFile().exists()) {
+                try {
+                    FileUtils.deleteDirectory(tempDownloadDir.toFile());
+                    if (downloadSuccessful) {
+                        LOG.debug(
+                                "Cleaned up temporary snapshot directory {} for bucket {}",
+                                tempDownloadDir,
+                                tableBucket);
+                    } else {
+                        LOG.warn(
+                                "Cleaned up temporary snapshot directory {} after failed download for bucket {}",
+                                tempDownloadDir,
+                                tableBucket);
+                    }
+                } catch (IOException e) {
+                    LOG.warn(
+                            "Failed to clean up temporary snapshot directory {} for bucket {}",
+                            tempDownloadDir,
+                            tableBucket,
+                            e);
+                }
+            }
+        }
+    }
+
+    /**
+     * Verify that all expected snapshot files have been downloaded to the temporary directory.
+     *
+     * @param snapshot the snapshot being verified
+     * @param tempDir the temporary directory containing downloaded files
+     * @throws IOException if verification fails
+     */
+    private void verifySnapshotCompleteness(CompletedSnapshot snapshot, Path tempDir)
+            throws IOException {
+        KvSnapshotHandle handle = snapshot.getKvSnapshotHandle();
+        List<KvFileHandleAndLocalPath> allFiles = new ArrayList<>();
+        allFiles.addAll(handle.getSharedKvFileHandles());
+        allFiles.addAll(handle.getPrivateFileHandles());
+
+        for (KvFileHandleAndLocalPath fileHandle : allFiles) {
+            String fileName = Paths.get(fileHandle.getLocalPath()).getFileName().toString();
+            Path expectedFile = tempDir.resolve(fileName);
+
+            if (!Files.exists(expectedFile)) {
+                throw new IOException(
+                        String.format(
+                                "Snapshot verification failed for bucket %s: expected file %s not found in temp directory %s",
+                                tableBucket, fileName, tempDir));
+            }
+
+            long expectedSize = fileHandle.getKvFileHandle().getSize();
+            long actualSize = Files.size(expectedFile);
+            if (expectedSize != actualSize) {
+                throw new IOException(
+                        String.format(
+                                "Snapshot verification failed for bucket %s: file %s size mismatch (expected: %d, actual: %d)",
+                                tableBucket, fileName, expectedSize, actualSize));
+            }
+        }
+
+        LOG.info(
+                "Verified completeness of snapshot {} for bucket {}: {} files, total size {} bytes",
+                snapshot.getSnapshotID(),
+                tableBucket,
+                allFiles.size(),
+                allFiles.stream().mapToLong(f -> f.getKvFileHandle().getSize()).sum());
+    }
+
+    /**
+     * Move snapshot files from temporary directory to final RocksDB directory.
+     *
+     * <p>This method attempts atomic moves when possible (same filesystem), falling back to
+     * copy-then-delete if atomic move is not supported.
+     *
+     * @param tempDir the temporary directory containing downloaded files
+     * @param finalDir the final RocksDB db directory
+     * @throws IOException if file move operations fail
+     */
+    private void moveSnapshotFilesToFinalDirectory(Path tempDir, Path finalDir) throws IOException {
+        File[] files = tempDir.toFile().listFiles();
+        if (files == null || files.length == 0) {
+            LOG.debug(
+                    "No files to move from temp directory {} to final directory {} for bucket {}",
+                    tempDir,
+                    finalDir,
+                    tableBucket);
+            return;
+        }
+
+        int movedCount = 0;
+        for (File file : files) {
+            Path sourcePath = file.toPath();
+            Path targetPath = finalDir.resolve(file.getName());
+
+            try {
+                // Try atomic move first (rename on same filesystem)
+                Files.move(
+                        sourcePath,
+                        targetPath,
+                        StandardCopyOption.REPLACE_EXISTING,
+                        StandardCopyOption.ATOMIC_MOVE);
+                movedCount++;
+                LOG.debug(
+                        "Atomically moved file {} to {} for bucket {}",
+                        sourcePath.getFileName(),
+                        targetPath,
+                        tableBucket);
+            } catch (AtomicMoveNotSupportedException e) {
+                // Fallback to copy + delete if atomic move not supported
+                LOG.debug(
+                        "Atomic move not supported for {}, using copy+delete",
+                        sourcePath.getFileName());
+                Files.copy(sourcePath, targetPath, StandardCopyOption.REPLACE_EXISTING);
+                Files.delete(sourcePath);
+                movedCount++;
+            } catch (IOException e) {
+                throw new IOException(
+                        String.format(
+                                "Failed to move file %s to final directory %s for bucket %s",
+                                sourcePath.getFileName(), finalDir, tableBucket),
+                        e);
+            }
+        }
+
+        LOG.debug(
+                "Moved {} files from temp directory {} to final directory {} for bucket {}",
+                movedCount,
+                tempDir,
+                finalDir,
+                tableBucket);
     }
 
     /** {@link SnapshotRunnable} provider and consumer. */

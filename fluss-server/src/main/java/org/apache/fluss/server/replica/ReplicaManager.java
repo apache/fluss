@@ -815,7 +815,7 @@ public class ReplicaManager {
                         try {
                             replica.downloadSnapshot(snapshotId);
                             updateMinRetainOffset(replica, minRetainOffset);
-                            LOG.info(
+                            LOG.debug(
                                     "Successfully downloaded snapshot {} for standby replica {}.",
                                     snapshotId,
                                     tb);
