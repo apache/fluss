@@ -23,6 +23,7 @@ import org.apache.fluss.client.table.scanner.ScanRecord;
 import org.apache.fluss.client.table.writer.AppendWriter;
 import org.apache.fluss.client.table.writer.UpsertWriter;
 import org.apache.fluss.client.write.HashBucketAssigner;
+import org.apache.fluss.flink.source.event.BacklogFinishEvent;
 import org.apache.fluss.flink.source.metrics.FlinkSourceReaderMetrics;
 import org.apache.fluss.flink.source.split.HybridSnapshotLogSplit;
 import org.apache.fluss.flink.source.split.LogSplit;
@@ -41,10 +42,13 @@ import org.apache.fluss.types.RowType;
 import org.apache.flink.connector.base.source.reader.RecordsWithSplitIds;
 import org.apache.flink.connector.base.source.reader.splitreader.SplitsAddition;
 import org.apache.flink.connector.base.source.reader.splitreader.SplitsChange;
+import org.apache.flink.connector.testutils.source.reader.TestingReaderContext;
 import org.apache.flink.metrics.testutils.MetricListener;
 import org.apache.flink.runtime.metrics.groups.InternalSourceReaderMetricGroup;
 import org.apache.flink.table.api.ValidationException;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -174,10 +178,12 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
                                                                     null,
                                                                     0)))))
                     .hasMessageContaining(
-                            "Table ID mismatch: expected 0, but split contains 1 for table 'test-flink-db.test-only-snapshot-table'. "
-                                    + "This usually happens when a table with the same name was dropped and recreated between job runs, "
-                                    + "causing metadata inconsistency. To resolve this, please restart the job **without** using "
-                                    + "the previous savepoint or checkpoint.");
+                            String.format(
+                                    "Table ID mismatch: expected %d, but split contains %d for table 'test-flink-db.test-only-snapshot-table'. "
+                                            + "This usually happens when a table with the same name was dropped and recreated between job runs, "
+                                            + "causing metadata inconsistency. To resolve this, please restart the job **without** using "
+                                            + "the previous savepoint or checkpoint.",
+                                    tableId, tableId + 1));
         }
     }
 
@@ -352,6 +358,82 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
             // finished splits should be split1,split2
             assertThat(records.finishedSplits())
                     .containsExactlyInAnyOrder(split1.splitId(), split2.splitId());
+        }
+    }
+
+    @Test
+    void testSendBacklogFinishEventForHybridSnapshotLogSplit() throws Exception {
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "test-backlog-finish-event-hybrid-split");
+        Schema schema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("name", DataTypes.STRING())
+                        .build();
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder().schema(schema).distributedBy(1).build();
+        long tableId = createTable(tablePath, tableDescriptor);
+
+        TestingReaderContext readerContext = new TestingReaderContext();
+        try (FlinkSourceSplitReader splitReader =
+                new FlinkSourceSplitReader(
+                        readerContext,
+                        clientConf,
+                        tablePath,
+                        schema.getRowType(),
+                        null,
+                        createMockSourceReaderMetrics(),
+                        null)) {
+            TableBucket tableBucket = new TableBucket(tableId, 0);
+            HybridSnapshotLogSplit split =
+                    new HybridSnapshotLogSplit(tableBucket, null, 0L, 0L, true, 0L, 0L);
+            splitReader.handleSplitsChanges(new SplitsAddition<>(Collections.singletonList(split)));
+
+            splitReader.fetch();
+
+            assertThat(readerContext.getSentEvents())
+                    .containsExactly(new BacklogFinishEvent(tableBucket));
+        }
+    }
+
+    @ParameterizedTest(name = "tableName={0}, backlogMarkedOffset={1}")
+    @CsvSource({"test-backlog-finish-event, 0", "test-backlog-finish-event-log-backlog-marked, 1"})
+    void testSendBacklogFinishEventForLogSplit(String tableName, long backlogMarkedOffset)
+            throws Exception {
+        TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
+        Schema schema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("name", DataTypes.STRING())
+                        .build();
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder().schema(schema).distributedBy(1).build();
+        long tableId = createTable(tablePath, tableDescriptor);
+
+        TestingReaderContext readerContext = new TestingReaderContext();
+        try (FlinkSourceSplitReader splitReader =
+                new FlinkSourceSplitReader(
+                        readerContext,
+                        clientConf,
+                        tablePath,
+                        schema.getRowType(),
+                        null,
+                        createMockSourceReaderMetrics(),
+                        null)) {
+            appendRows(tablePath, 1);
+            TableBucket tableBucket = new TableBucket(tableId, 0);
+            LogSplit split =
+                    new LogSplit(
+                            tableBucket,
+                            null,
+                            0L,
+                            LogSplit.NO_STOPPING_OFFSET,
+                            backlogMarkedOffset);
+            splitReader.handleSplitsChanges(new SplitsAddition<>(Collections.singletonList(split)));
+
+            splitReader.fetch();
+
+            assertThat(readerContext.getSentEvents())
+                    .containsExactly(new BacklogFinishEvent(tableBucket));
         }
     }
 

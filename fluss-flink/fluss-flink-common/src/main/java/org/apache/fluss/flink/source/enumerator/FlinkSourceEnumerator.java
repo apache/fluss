@@ -20,6 +20,8 @@ package org.apache.fluss.flink.source.enumerator;
 import org.apache.fluss.client.Connection;
 import org.apache.fluss.client.ConnectionFactory;
 import org.apache.fluss.client.admin.Admin;
+import org.apache.fluss.client.admin.ListOffsetsResult;
+import org.apache.fluss.client.admin.OffsetSpec;
 import org.apache.fluss.client.initializer.BucketOffsetsRetrieverImpl;
 import org.apache.fluss.client.initializer.NoStoppingOffsetsInitializer;
 import org.apache.fluss.client.initializer.OffsetsInitializer;
@@ -31,6 +33,7 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.lake.LakeSplitGenerator;
 import org.apache.fluss.flink.lake.split.LakeSnapshotAndFlussLogSplit;
 import org.apache.fluss.flink.lake.split.LakeSnapshotSplit;
+import org.apache.fluss.flink.source.event.BacklogFinishEvent;
 import org.apache.fluss.flink.source.event.PartitionBucketsUnsubscribedEvent;
 import org.apache.fluss.flink.source.event.PartitionsRemovedEvent;
 import org.apache.fluss.flink.source.split.HybridSnapshotLogSplit;
@@ -75,7 +78,9 @@ import java.util.Objects;
 import java.util.OptionalLong;
 import java.util.Set;
 import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 
+import static org.apache.fluss.flink.source.split.LogSplit.NO_STOPPING_OFFSET;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 import static org.apache.fluss.utils.Preconditions.checkState;
 
@@ -149,6 +154,8 @@ public class FlinkSourceEnumerator
     @Nullable private final Predicate partitionFilters;
 
     @Nullable private final LakeSource<LakeSplit> lakeSource;
+
+    private final Map<TableBucket, Long> hasBacklogTbls;
 
     public FlinkSourceEnumerator(
             TablePath tablePath,
@@ -243,6 +250,7 @@ public class FlinkSourceEnumerator
                 streaming ? new NoStoppingOffsetsInitializer() : OffsetsInitializer.latest();
         this.lakeSource = lakeSource;
         this.workerExecutor = workerExecutor;
+        this.hasBacklogTbls = new HashMap<>();
     }
 
     @Override
@@ -259,7 +267,7 @@ public class FlinkSourceEnumerator
                     String.format("Failed to get table info for %s", tablePath),
                     ExceptionUtils.stripCompletionException(e));
         }
-
+        initializeBacklog();
         if (isPartitioned) {
             if (streaming) {
                 if (lakeSource != null) {
@@ -304,6 +312,18 @@ public class FlinkSourceEnumerator
             } else {
                 startInBatchMode();
             }
+        }
+    }
+
+    private void initializeBacklog() {
+        context.setIsProcessingBacklog(true);
+        hasBacklogTbls.clear();
+        try {
+            recordBacklogBoundaryOffsets();
+        } catch (Exception e) {
+            throw new FlinkRuntimeException(
+                    String.format("Failed to record initial end offsets for table: %s", tablePath),
+                    ExceptionUtils.stripCompletionException(e));
         }
     }
 
@@ -570,7 +590,11 @@ public class FlinkSourceEnumerator
                         "Log offset should be present if snapshot id is present.");
                 splits.add(
                         new HybridSnapshotLogSplit(
-                                tb, partitionName, snapshotId.getAsLong(), logOffset.getAsLong()));
+                                tb,
+                                partitionName,
+                                snapshotId.getAsLong(),
+                                logOffset.getAsLong(),
+                                hasBacklogTbls.getOrDefault(tb, NO_STOPPING_OFFSET)));
             } else {
                 bucketsNeedInitOffset.add(bucketId);
             }
@@ -580,12 +604,18 @@ public class FlinkSourceEnumerator
             startingOffsetsInitializer
                     .getBucketOffsets(partitionName, bucketsNeedInitOffset, bucketOffsetsRetriever)
                     .forEach(
-                            (bucketId, startingOffset) ->
-                                    splits.add(
-                                            new LogSplit(
-                                                    new TableBucket(tableId, partitionId, bucketId),
-                                                    partitionName,
-                                                    startingOffset)));
+                            (bucketId, startingOffset) -> {
+                                TableBucket bucket =
+                                        new TableBucket(tableId, partitionId, bucketId);
+                                splits.add(
+                                        new LogSplit(
+                                                bucket,
+                                                partitionName,
+                                                startingOffset,
+                                                NO_STOPPING_OFFSET,
+                                                hasBacklogTbls.getOrDefault(
+                                                        bucket, NO_STOPPING_OFFSET)));
+                            });
         }
 
         return splits;
@@ -889,6 +919,16 @@ public class FlinkSourceEnumerator
             for (Long partitionToRemove : partitionsPendingRemove) {
                 assignedPartitions.remove(partitionToRemove);
             }
+        } else if (sourceEvent instanceof BacklogFinishEvent) {
+            final BacklogFinishEvent event = (BacklogFinishEvent) sourceEvent;
+            final TableBucket bucket = event.getTableBucket();
+            hasBacklogTbls.remove(bucket);
+            if (hasBacklogTbls.isEmpty()) {
+                context.setIsProcessingBacklog(false);
+                LOG.info(
+                        "Table {} finished reading backlog data and isProcessingBacklog set to false.",
+                        tablePath);
+            }
         }
     }
 
@@ -999,6 +1039,76 @@ public class FlinkSourceEnumerator
         @Override
         public String toString() {
             return "Partition{" + "id=" + partitionId + ", name='" + partitionName + '\'' + '}';
+        }
+    }
+
+    /**
+     * Record the backlog boundary offsets for all buckets when source starts. These offsets
+     * represent the boundary between backlog data and fresh data.
+     */
+    private void recordBacklogBoundaryOffsets() throws Exception {
+        if (!hasBacklogTbls.isEmpty()) {
+            LOG.warn(
+                    "backlogBoundaryOffsets for tracking the backlog state of table {} has initialized",
+                    tablePath);
+            return;
+        }
+
+        int numBuckets = tableInfo.getNumBuckets();
+        List<Integer> buckets = IntStream.range(0, numBuckets).boxed().collect(Collectors.toList());
+
+        if (tableInfo.isPartitioned()) {
+            recordPartitionedBacklogBoundaryOffsets(buckets);
+        } else {
+            recordNonPartitionedBacklogBoundaryOffsets(buckets);
+        }
+        LOG.info(
+                "Record backlog boundary offsets for table {} completed with {} buckets",
+                tablePath,
+                hasBacklogTbls.size());
+    }
+
+    private void recordPartitionedBacklogBoundaryOffsets(List<Integer> buckets) throws Exception {
+        Set<PartitionInfo> partitions = listPartitions();
+        for (PartitionInfo partition : partitions) {
+            Map<Integer, Long> latestOffsets =
+                    getLatestOffsets(partition.getPartitionName(), buckets);
+            putBacklogOffsets(latestOffsets, partition.getPartitionId());
+        }
+    }
+
+    private void recordNonPartitionedBacklogBoundaryOffsets(List<Integer> buckets)
+            throws Exception {
+        Map<Integer, Long> latestOffsets = getLatestOffsets(null, buckets);
+        putBacklogOffsets(latestOffsets, null);
+    }
+
+    private Map<Integer, Long> getLatestOffsets(
+            @Nullable String partitionName, List<Integer> buckets) throws Exception {
+        ListOffsetsResult result;
+        if (partitionName == null) {
+            result = flussAdmin.listOffsets(tablePath, buckets, new OffsetSpec.LatestSpec());
+        } else {
+            result =
+                    flussAdmin.listOffsets(
+                            tablePath, partitionName, buckets, new OffsetSpec.LatestSpec());
+        }
+        return result.all().get();
+    }
+
+    private void putBacklogOffsets(Map<Integer, Long> latestOffsets, @Nullable Long partitionId) {
+        for (Map.Entry<Integer, Long> entry : latestOffsets.entrySet()) {
+            long offset = entry.getValue();
+            if (offset > 0) {
+                TableBucket tableBucket;
+                if (partitionId == null) {
+                    tableBucket = new TableBucket(tableInfo.getTableId(), entry.getKey());
+                } else {
+                    tableBucket =
+                            new TableBucket(tableInfo.getTableId(), partitionId, entry.getKey());
+                }
+                hasBacklogTbls.put(tableBucket, offset);
+            }
         }
     }
 }

@@ -30,6 +30,7 @@ import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.flink.lake.LakeSplitReaderGenerator;
 import org.apache.fluss.flink.lake.split.LakeSnapshotAndFlussLogSplit;
 import org.apache.fluss.flink.metrics.FlinkMetricRegistry;
+import org.apache.fluss.flink.source.event.BacklogFinishEvent;
 import org.apache.fluss.flink.source.metrics.FlinkSourceReaderMetrics;
 import org.apache.fluss.flink.source.split.HybridSnapshotLogSplit;
 import org.apache.fluss.flink.source.split.LogSplit;
@@ -43,6 +44,7 @@ import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.CloseableIterator;
 import org.apache.fluss.utils.ExceptionUtils;
 
+import org.apache.flink.api.connector.source.SourceReaderContext;
 import org.apache.flink.connector.base.source.reader.RecordsWithSplitIds;
 import org.apache.flink.connector.base.source.reader.splitreader.SplitReader;
 import org.apache.flink.connector.base.source.reader.splitreader.SplitsAddition;
@@ -109,6 +111,10 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
     private final Map<TableBucket, Long> stoppingOffsets;
     private LakeSplitReaderGenerator lakeSplitReaderGenerator;
 
+    private final SourceReaderContext context;
+    private final Map<TableBucket, Long> backlogMarkedOffsets;
+    private final Set<TableBucket> onlySnapshotBuckets;
+    private final Set<TableBucket> backlogEventSentTbls = new HashSet<>();
     private final Set<String> emptyLogSplits;
     // track split IDs corresponding to removed partitions
     private final Set<String> removedSplits = new HashSet<>();
@@ -122,6 +128,25 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
             @Nullable int[] projectedFields,
             FlinkSourceReaderMetrics flinkSourceReaderMetrics,
             @Nullable LakeSource<LakeSplit> lakeSource) {
+        this(
+                null,
+                flussConf,
+                tablePath,
+                sourceOutputType,
+                projectedFields,
+                flinkSourceReaderMetrics,
+                lakeSource);
+    }
+
+    public FlinkSourceSplitReader(
+            SourceReaderContext context,
+            Configuration flussConf,
+            TablePath tablePath,
+            RowType sourceOutputType,
+            @Nullable int[] projectedFields,
+            FlinkSourceReaderMetrics flinkSourceReaderMetrics,
+            @Nullable LakeSource<LakeSplit> lakeSource) {
+        this.context = context;
         this.flinkMetricRegistry =
                 new FlinkMetricRegistry(flinkSourceReaderMetrics.getSourceReaderMetricGroup());
         this.connection = ConnectionFactory.createConnection(flussConf, flinkMetricRegistry);
@@ -136,6 +161,8 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
         sanityCheck(table.getTableInfo().getRowType(), projectedFields);
         this.logScanner = table.newScan().project(projectedFields).createLogScanner();
         this.stoppingOffsets = new HashMap<>();
+        this.backlogMarkedOffsets = new HashMap<>();
+        this.onlySnapshotBuckets = new HashSet<>();
         this.emptyLogSplits = new HashSet<>();
         this.lakeSource = lakeSource;
     }
@@ -159,12 +186,14 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
                 return forBoundedSplitRecords(currentBoundedSplit, recordIterator);
             }
         } else {
+            sendBacklogFinishedEvent(onlySnapshotBuckets);
             // may need to finish empty log splits
             if (!emptyLogSplits.isEmpty()) {
                 FlinkRecordsWithSplitIds records =
                         new FlinkRecordsWithSplitIds(
                                 new HashSet<>(emptyLogSplits), flinkSourceReaderMetrics);
                 emptyLogSplits.clear();
+                sendBacklogFinishedEvent(subscribedBuckets.keySet());
                 return records;
             } else {
                 // if not subscribe any buckets, just return empty records
@@ -246,6 +275,13 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
         if (split instanceof LogSplit) {
             LogSplit logSplit = split.asLogSplit();
             Optional<Long> stoppingOffsetOpt = logSplit.getStoppingOffset();
+            Optional<Long> backlogMarkedOffsetOpt = logSplit.getBacklogMarkedOffset();
+            if (backlogMarkedOffsetOpt.isPresent()) {
+                Long backlogMarkedOffset = backlogMarkedOffsetOpt.get();
+                if (backlogMarkedOffset >= 0) {
+                    backlogMarkedOffsets.put(tableBucket, backlogMarkedOffset);
+                }
+            }
             if (stoppingOffsetOpt.isPresent()) {
                 Long stoppingOffset = stoppingOffsetOpt.get();
                 if (startingOffset >= stoppingOffset) {
@@ -299,6 +335,23 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
             } else {
                 // If no partition id, subscribe by bucket only.
                 logScanner.subscribe(bucket, startingOffset);
+            }
+
+            if (split instanceof HybridSnapshotLogSplit) {
+                HybridSnapshotLogSplit hybridSplit = split.asHybridSnapshotLogSplit();
+                Optional<Long> backlogMarkedOffsetOpt =
+                        hybridSplit.getBacklogMarkedStoppingOffset();
+                if (backlogMarkedOffsetOpt.isPresent()) {
+                    Long backlogMarkedOffset = backlogMarkedOffsetOpt.get();
+                    long logStartingOffset = hybridSplit.getLogStartingOffset();
+                    if (backlogMarkedOffset >= 0) {
+                        if (logStartingOffset < backlogMarkedOffset) {
+                            backlogMarkedOffsets.put(tableBucket, backlogMarkedOffset);
+                        } else {
+                            onlySnapshotBuckets.add(tableBucket);
+                        }
+                    }
+                }
             }
 
             LOG.info(
@@ -423,11 +476,13 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
 
         Map<String, CloseableIterator<RecordAndPos>> splitRecords = new HashMap<>();
         Map<TableBucket, Long> stoppingOffsets = new HashMap<>();
+        Set<TableBucket> backlogFinishedTbl = new HashSet<>();
         Set<String> finishedSplits = new HashSet<>();
         Map<TableBucket, String> splitIdByTableBucket = new HashMap<>();
         List<TableBucket> tableScanBuckets = new ArrayList<>(scanRecords.buckets().size());
         for (TableBucket scanBucket : scanRecords.buckets()) {
             long stoppingOffset = getStoppingOffset(scanBucket);
+            long backlogMarkedOffset = getBacklogMarkedOffset(scanBucket);
             String splitId = subscribedBuckets.get(scanBucket);
             // can't find the split id for the bucket, the bucket should be unsubscribed
             if (splitId == null) {
@@ -448,6 +503,10 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
                 if (lastRecord.logOffset() >= stoppingOffset - 1) {
                     stoppingOffsets.put(scanBucket, stoppingOffset);
                     finishedSplits.add(splitId);
+                }
+                if (!backlogEventSentTbls.contains(scanBucket)
+                        && lastRecord.logOffset() >= backlogMarkedOffset - 1) {
+                    backlogFinishedTbl.add(scanBucket);
                 }
             }
             splitRecords.put(splitId, toRecordAndPos(bucketScanRecords.iterator()));
@@ -483,6 +542,11 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
                         finishedSplits,
                         flinkSourceReaderMetrics);
         stoppingOffsets.forEach(recordsWithSplitIds::setTableBucketStoppingOffset);
+        if (scanRecords.isEmpty()) {
+            sendBacklogFinishedEvent(subscribedBuckets.keySet());
+        } else {
+            sendBacklogFinishedEvent(backlogFinishedTbl);
+        }
         return recordsWithSplitIds;
     }
 
@@ -517,8 +581,32 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
                 flinkSourceReaderMetrics);
     }
 
+    private void sendBacklogFinishedEvent(Set<TableBucket> backlogFinishedTbls) {
+        if (backlogFinishedTbls.isEmpty() || context == null) {
+            String msg =
+                    backlogFinishedTbls.isEmpty()
+                            ? String.format(
+                                    "No table bucket finished backlog phase for tableId = %s",
+                                    table.getTableInfo().getTableId())
+                            : "context is null then no operator event could be sent ";
+            LOG.warn(msg);
+            return;
+        }
+        backlogFinishedTbls.forEach(
+                tbl -> {
+                    if (!backlogEventSentTbls.contains(tbl)) {
+                        context.sendSourceEventToCoordinator(new BacklogFinishEvent(tbl));
+                        backlogEventSentTbls.add(tbl);
+                    }
+                });
+    }
+
     private long getStoppingOffset(TableBucket tableBucket) {
         return stoppingOffsets.getOrDefault(tableBucket, Long.MAX_VALUE);
+    }
+
+    private long getBacklogMarkedOffset(TableBucket tableBucket) {
+        return backlogMarkedOffsets.getOrDefault(tableBucket, Long.MAX_VALUE);
     }
 
     private FlinkRecordsWithSplitIds finishCurrentBoundedSplit() throws IOException {
