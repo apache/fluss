@@ -21,8 +21,8 @@ package org.apache.fluss.server.kv.autoinc;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.record.BinaryValue;
+import org.apache.fluss.row.BinaryRow;
 import org.apache.fluss.row.InternalRow;
-import org.apache.fluss.row.encode.RowEncoder;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypeRoot;
 
@@ -37,14 +37,16 @@ import javax.annotation.concurrent.NotThreadSafe;
  * context.
  */
 @NotThreadSafe
-public class PerSchemaAutoIncrementUpdater implements AutoIncrementUpdater {
-    private final InternalRow.FieldGetter[] flussFieldGetters;
-    private final RowEncoder rowEncoder;
-    private final int fieldLength;
+public class PerSchemaAutoIncrementUpdater
+        implements AutoIncrementUpdater, ValueRowEncoder.FieldOverrideProvider {
+    private final ValueRowEncoder rowEncoder;
     private final int targetColumnIdx;
     private final SequenceGenerator sequenceGenerator;
     private final short schemaId;
     private final boolean requireInteger;
+
+    // Cached auto-increment value for current encoding operation
+    private long currentAutoIncrementValue;
 
     public PerSchemaAutoIncrementUpdater(
             KvFormat kvFormat,
@@ -54,12 +56,6 @@ public class PerSchemaAutoIncrementUpdater implements AutoIncrementUpdater {
             SequenceGenerator sequenceGenerator) {
         DataType[] fieldDataTypes = schema.getRowType().getChildren().toArray(new DataType[0]);
 
-        fieldLength = fieldDataTypes.length;
-        // getter for the fields in row
-        InternalRow.FieldGetter[] flussFieldGetters = new InternalRow.FieldGetter[fieldLength];
-        for (int i = 0; i < fieldLength; i++) {
-            flussFieldGetters[i] = InternalRow.createFieldGetter(fieldDataTypes[i], i);
-        }
         this.sequenceGenerator = sequenceGenerator;
         this.schemaId = schemaId;
         this.targetColumnIdx = schema.getColumnIds().indexOf(autoIncrementColumnId);
@@ -70,31 +66,37 @@ public class PerSchemaAutoIncrementUpdater implements AutoIncrementUpdater {
                             autoIncrementColumnId, schema.getColumnIds()));
         }
         this.requireInteger = fieldDataTypes[targetColumnIdx].is(DataTypeRoot.INTEGER);
-        this.rowEncoder = RowEncoder.create(kvFormat, fieldDataTypes);
-        this.flussFieldGetters = flussFieldGetters;
+        this.rowEncoder = new ValueRowEncoder(kvFormat, fieldDataTypes);
     }
 
-    public BinaryValue updateAutoIncrementColumns(BinaryValue rowValue) {
-        rowEncoder.startNewRow();
-        for (int i = 0; i < fieldLength; i++) {
-            if (targetColumnIdx == i) {
-                long seq = sequenceGenerator.nextVal();
-                // cast to integer if needed
-                if (requireInteger) {
-                    rowEncoder.encodeField(i, (int) seq);
-                } else {
-                    rowEncoder.encodeField(i, seq);
-                }
-            } else {
-                // use the row value
-                rowEncoder.encodeField(i, flussFieldGetters[i].getFieldOrNull(rowValue.row));
-            }
-        }
-        return new BinaryValue(schemaId, rowEncoder.finishRow());
+    @Override
+    public BinaryValue applyAutoIncrement(BinaryValue rowValue) {
+        return new BinaryValue(schemaId, encodeRow(rowValue.row));
+    }
+
+    @Override
+    public BinaryRow encodeRow(InternalRow row) {
+        // Generate new auto-increment value for this encoding
+        currentAutoIncrementValue = sequenceGenerator.nextVal();
+        return rowEncoder.encode(row, this);
     }
 
     @Override
     public boolean hasAutoIncrement() {
         return true;
+    }
+
+    // FieldOverrideProvider implementation
+    @Override
+    public boolean hasOverride(int fieldIndex) {
+        return fieldIndex == targetColumnIdx;
+    }
+
+    @Override
+    public Object getOverrideValue(int fieldIndex) {
+        if (fieldIndex == targetColumnIdx) {
+            return requireInteger ? (int) currentAutoIncrementValue : currentAutoIncrementValue;
+        }
+        throw new IllegalArgumentException("No override value for field index: " + fieldIndex);
     }
 }

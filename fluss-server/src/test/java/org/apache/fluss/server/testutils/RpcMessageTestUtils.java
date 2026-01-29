@@ -284,6 +284,50 @@ public class RpcMessageTestUtils {
         return lookupRequest;
     }
 
+    public static LookupRequest newLookupRequest(
+            long tableId,
+            int bucketId,
+            boolean insertIfNotExists,
+            int timeoutMs,
+            int acks,
+            byte[]... keys) {
+        LookupRequest lookupRequest =
+                new LookupRequest()
+                        .setTableId(tableId)
+                        .setInsertIfNotExists(insertIfNotExists)
+                        .setTimeoutMs(timeoutMs)
+                        .setAcks(acks);
+        PbLookupReqForBucket pbLookupReqForBucket = lookupRequest.addBucketsReq();
+        pbLookupReqForBucket.setBucketId(bucketId);
+        for (byte[] key : keys) {
+            pbLookupReqForBucket.addKey(key);
+        }
+        return lookupRequest;
+    }
+
+    /** Creates a multi-bucket lookup request with insertIfNotExists. */
+    public static LookupRequest newMultiBucketLookupRequest(
+            long tableId,
+            boolean insertIfNotExists,
+            int timeoutMs,
+            int acks,
+            Map<Integer, List<byte[]>> keysPerBucket) {
+        LookupRequest lookupRequest =
+                new LookupRequest()
+                        .setTableId(tableId)
+                        .setInsertIfNotExists(insertIfNotExists)
+                        .setTimeoutMs(timeoutMs)
+                        .setAcks(acks);
+        for (Map.Entry<Integer, List<byte[]>> entry : keysPerBucket.entrySet()) {
+            PbLookupReqForBucket pbLookupReqForBucket = lookupRequest.addBucketsReq();
+            pbLookupReqForBucket.setBucketId(entry.getKey());
+            for (byte[] key : entry.getValue()) {
+                pbLookupReqForBucket.addKey(key);
+            }
+        }
+        return lookupRequest;
+    }
+
     public static PrefixLookupRequest newPrefixLookupRequest(
             long tableId, int bucketId, List<byte[]> prefixKeys) {
         PrefixLookupRequest prefixLookupRequest = new PrefixLookupRequest().setTableId(tableId);
