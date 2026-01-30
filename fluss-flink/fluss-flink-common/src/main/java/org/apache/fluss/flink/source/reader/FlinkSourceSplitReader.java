@@ -193,7 +193,16 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
                         new FlinkRecordsWithSplitIds(
                                 new HashSet<>(emptyLogSplits), flinkSourceReaderMetrics);
                 emptyLogSplits.clear();
-                sendBacklogFinishedEvent(subscribedBuckets.keySet());
+                // Only send backlog finish events for buckets that either don't have a
+                // backlog marked offset or have already sent their backlog finish event.
+                Set<TableBucket> bucketsToNotify = new HashSet<>(subscribedBuckets.keySet());
+                bucketsToNotify.removeIf(
+                        bucket ->
+                                backlogMarkedOffsets.containsKey(bucket)
+                                        && !backlogEventSentTbls.contains(bucket));
+                if (!bucketsToNotify.isEmpty()) {
+                    sendBacklogFinishedEvent(bucketsToNotify);
+                }
                 return records;
             } else {
                 // if not subscribe any buckets, just return empty records
@@ -543,7 +552,15 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
                         flinkSourceReaderMetrics);
         stoppingOffsets.forEach(recordsWithSplitIds::setTableBucketStoppingOffset);
         if (scanRecords.isEmpty()) {
-            sendBacklogFinishedEvent(subscribedBuckets.keySet());
+            // Only send backlog finished events for buckets that do not have a tracked
+            // backlog offset. Buckets with tracked backlog offsets should only send
+            // backlog finished events when they reach their backlog boundary through
+            // the normal path (see handling around backlogFinishedTbl).
+            Set<TableBucket> bucketsWithoutBacklogMark = new HashSet<>(subscribedBuckets.keySet());
+            bucketsWithoutBacklogMark.removeAll(backlogMarkedOffsets.keySet());
+            if (!bucketsWithoutBacklogMark.isEmpty()) {
+                sendBacklogFinishedEvent(bucketsWithoutBacklogMark);
+            }
         } else {
             sendBacklogFinishedEvent(backlogFinishedTbl);
         }
@@ -582,14 +599,16 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
     }
 
     private void sendBacklogFinishedEvent(Set<TableBucket> backlogFinishedTbls) {
-        if (backlogFinishedTbls.isEmpty() || context == null) {
-            String msg =
-                    backlogFinishedTbls.isEmpty()
-                            ? String.format(
-                                    "No table bucket finished backlog phase for tableId = %s",
-                                    table.getTableInfo().getTableId())
-                            : "context is null then no operator event could be sent ";
-            LOG.warn(msg);
+        if (context == null) {
+            LOG.warn("context is null then no operator event could be sent ");
+            return;
+        }
+        if (backlogFinishedTbls.isEmpty()) {
+            if (LOG.isDebugEnabled()) {
+                LOG.debug(
+                        "No table bucket finished backlog phase for tableId = {}",
+                        table.getTableInfo().getTableId());
+            }
             return;
         }
         backlogFinishedTbls.forEach(

@@ -370,6 +370,9 @@ public class FlinkSourceEnumerator
                     String.format("Failed to record initial end offsets for table: %s", tablePath),
                     ExceptionUtils.stripCompletionException(e));
         }
+        if (hasBacklogTbls.isEmpty()) {
+            SplitEnumeratorContextAdapter.setIsProcessingBacklog(context, false);
+        }
     }
 
     private void startInBatchMode() {
