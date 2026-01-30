@@ -92,11 +92,11 @@ spec:
         - name: fluss-conf
           configMap:
             name: fluss-conf-file
-        {{- if not .Values.persistence.enabled }}
+        {{- if not .Values.tablet.storage.enabled }}
         - name: data
           emptyDir: {}
         {{- end }}
-  {{- if .Values.persistence.enabled }}
+  {{- if .Values.tablet.storage.enabled }}
   volumeClaimTemplates:
     - metadata:
         name: data
@@ -104,6 +104,6 @@ spec:
         accessModes: [ "ReadWriteOnce" ]
         resources:
           requests:
-            storage: {{ .Values.persistence.size }}
-        storageClassName: {{ .Values.persistence.storageClass }}
+            storage: {{ .Values.tablet.storage.size }}
+        storageClassName: {{ .Values.tablet.storage.storageClass }}
   {{- end}}

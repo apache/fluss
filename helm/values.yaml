@@ -42,16 +42,19 @@ configurationOverrides:
   data.dir: /tmp/fluss/data
   internal.listener.name: INTERNAL
 
-persistence:
-  enabled: false
-  size: 1Gi
-  storageClass:
-
 tablet:
   numberOfReplicas: 3
+  storage:
+    enabled: false
+    size: 1Gi
+    storageClass:
 
 coordinator:
   numberOfReplicas: 1
+  storage:
+    enabled: false
+    size: 1Gi
+    storageClass:
 
 resources: {}
   # We usually recommend not to specify default resources and to leave this as a conscious
