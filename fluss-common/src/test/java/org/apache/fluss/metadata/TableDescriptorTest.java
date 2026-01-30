@@ -321,7 +321,7 @@ class TableDescriptorTest {
     @Test
     void testInvalidListaggParameterEmptyDelimiter() {
         // LISTAGG with empty delimiter - should fail
-        assertThatThrownBy(() -> AggFunctions.LISTAGG("").validate())
+        assertThatThrownBy(() -> AggFunctions.LISTAGG("").validateParameters())
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("must be a non-empty string");
     }
@@ -332,7 +332,8 @@ class TableDescriptorTest {
         Map<String, String> params = new HashMap<>();
         params.put("unknown_param", "value");
 
-        assertThatThrownBy(() -> AggFunctions.of(AggFunctionType.LISTAGG, params).validate())
+        assertThatThrownBy(
+                        () -> AggFunctions.of(AggFunctionType.LISTAGG, params).validateParameters())
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("unknown_param")
                 .hasMessageContaining("not supported");
@@ -344,7 +345,7 @@ class TableDescriptorTest {
         Map<String, String> params = new HashMap<>();
         params.put("some_param", "value");
 
-        assertThatThrownBy(() -> AggFunctions.of(AggFunctionType.SUM, params).validate())
+        assertThatThrownBy(() -> AggFunctions.of(AggFunctionType.SUM, params).validateParameters())
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("some_param")
                 .hasMessageContaining("not supported");

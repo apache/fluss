@@ -18,10 +18,16 @@
 package org.apache.fluss.metadata;
 
 import org.apache.fluss.annotation.PublicEvolving;
+import org.apache.fluss.types.BooleanType;
+import org.apache.fluss.types.DataType;
+import org.apache.fluss.types.DataTypeFamily;
 
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.Locale;
 import java.util.Set;
+
+import static org.apache.fluss.utils.Preconditions.checkArgument;
 
 /**
  * Aggregation function type for aggregate merge engine.
@@ -112,6 +118,60 @@ public enum AggFunctionType {
             default:
                 // No validation needed for other functions (they don't have parameters)
                 break;
+        }
+    }
+
+    /**
+     * Validates a data type for this aggregation function.
+     *
+     * @param fieldType the field data type
+     * @throws IllegalArgumentException if the data type is invalid
+     */
+    public void validateDataType(DataType fieldType) {
+        switch (this) {
+                // The bool_and and bool_or don't have specific DataFamily, validate them by
+                // dataType directly.
+            case BOOL_AND:
+            case BOOL_OR:
+                checkArgument(
+                        fieldType instanceof BooleanType,
+                        "Data type for %s column must be 'BooleanType' but was '%s'.",
+                        toString(),
+                        fieldType);
+                break;
+            default:
+                DataTypeFamily[] dataTypeFamilies = getSupportedDataFamilies();
+                checkArgument(
+                        fieldType.isAnyOf(dataTypeFamilies),
+                        "Data type for %s column must be part of %s but was '%s'.",
+                        toString(),
+                        Arrays.deepToString(dataTypeFamilies),
+                        fieldType);
+                break;
+        }
+    }
+
+    private DataTypeFamily[] getSupportedDataFamilies() {
+        switch (this) {
+            case SUM:
+            case PRODUCT:
+                return new DataTypeFamily[] {DataTypeFamily.NUMERIC};
+            case MAX:
+            case MIN:
+                return new DataTypeFamily[] {
+                    DataTypeFamily.CHARACTER_STRING, DataTypeFamily.NUMERIC, DataTypeFamily.DATETIME
+                };
+            case LAST_VALUE:
+            case LAST_VALUE_IGNORE_NULLS:
+            case FIRST_VALUE:
+            case FIRST_VALUE_IGNORE_NULLS:
+                return DataTypeFamily.values();
+            case LISTAGG:
+            case STRING_AGG:
+                return new DataTypeFamily[] {DataTypeFamily.CHARACTER_STRING};
+            default:
+                throw new IllegalArgumentException(
+                        String.format("%s doesn't support any data type", this));
         }
     }
 
