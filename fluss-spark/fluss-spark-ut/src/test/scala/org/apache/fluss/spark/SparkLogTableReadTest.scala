@@ -35,6 +35,7 @@ class SparkLogTableReadTest extends FlussSparkTestBase {
              |(1000L, 25L, 605, "addr5")
              |""".stripMargin)
 
+      spark.sparkContext.setLogLevel("INFO")
       checkAnswer(
         sql(s"SELECT * FROM $DEFAULT_DATABASE.t ORDER BY orderId"),
         Row(600L, 21L, 601, "addr1") ::
