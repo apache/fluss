@@ -24,7 +24,7 @@ metadata:
   {{- include "fluss.labels" . | nindent 4 }}
 spec:
   serviceName: coordinator-server-hs
-  replicas: 1 # can only be 1 for now
+  replicas: {{ .Values.coordinator.numberOfReplicas }}
   selector:
     matchLabels:
       {{- include "fluss.selectorLabels" . | nindent 6 }}
@@ -44,16 +44,16 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           env:
             - name: POD_NAME
-              valueFrom: 
-                fieldRef: 
-                  fieldPath: metadata.name 
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
             - name: POD_IP
-              valueFrom: 
-                fieldRef: 
+              valueFrom:
+                fieldRef:
                   fieldPath: status.podIP
             - name: POD_NAMESPACE
-              valueFrom: 
-                fieldRef: 
+              valueFrom:
+                fieldRef:
                   fieldPath: metadata.namespace
             - name: NODE_IP
               valueFrom:
@@ -96,11 +96,11 @@ spec:
         - name: fluss-conf
           configMap:
             name: fluss-conf-file
-        {{- if not .Values.persistence.enabled }}
+        {{- if not .Values.coordinator.storage.enabled }}
         - name: data
           emptyDir: {}
         {{- end }}
-  {{- if .Values.persistence.enabled }}
+  {{- if .Values.coordinator.storage.enabled }}
   volumeClaimTemplates:
     - metadata:
         name: data
@@ -108,6 +108,6 @@ spec:
         accessModes: [ "ReadWriteOnce" ]
         resources:
           requests:
-            storage: {{ .Values.persistence.size }}
-        storageClassName: {{ .Values.persistence.storageClass }}
+            storage: {{ .Values.coordinator.storage.size }}
+        storageClassName: {{ .Values.coordinator.storage.storageClass }}
   {{- end}}

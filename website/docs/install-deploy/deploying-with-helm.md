@@ -141,10 +141,6 @@ The Fluss Helm chart deploys the following Kubernetes resources:
 - **ConfigMap**: Configuration management for `server.yaml` settings
 - **Services**: Headless services providing stable pod DNS names
 
-### Optional Components
-- **PersistentVolumes**: Data persistence when `persistence.enabled=true`
-
-
 ### Step 3: Verify Installation
 
 ```bash
@@ -199,13 +195,22 @@ The following table lists the configurable parameters of the Fluss chart and the
 | `configurationOverrides.data.dir` | Local data directory | `/tmp/fluss/data` |
 | `configurationOverrides.internal.listener.name` | Internal listener name | `INTERNAL` |
 
-### Persistence Parameters
+### Tablet Server Parameters
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
-| `persistence.enabled` | Enable persistent volume claims | `false` |
-| `persistence.size` | Persistent volume size | `1Gi` |
-| `persistence.storageClass` | Storage class name | `nil` (uses default) |
+| `tablet.numberOfReplicas` | Number of TabletServer replicas to deploy | `3` |
+
+### Storage Parameters
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `coordinator.storage.enabled` | Enable persistent volume claims for CoordinatorServer | `false` |
+| `coordinator.storage.size` | Coordinator persistent volume size | `1Gi` |
+| `coordinator.storage.storageClass` | Coordinator storage class name | `nil` (uses default) |
+| `tablet.storage.enabled` | Enable persistent volume claims for TabletServer | `false` |
+| `tablet.storage.size` | Tablet persistent volume size | `1Gi` |
+| `tablet.storage.storageClass` | Tablet storage class name | `nil` (uses default) |
 
 ### Resource Parameters
 
@@ -254,7 +259,23 @@ configurationOverrides:
 
 ### Storage Configuration
 
-Configure different storage backends:
+Configure different storage volumes for coordinator or tablet pods:
+
+```yaml
+coordinator:
+  storage:
+    enabled: true
+    size: 5Gi
+    storageClass: fast-ssd
+
+tablet:
+  storage:
+    enabled: true
+    size: 20Gi
+    storageClass: fast-ssd
+```
+
+Configure remote storage:
 
 ```yaml
 configurationOverrides:
@@ -405,4 +426,3 @@ kubectl get configmap fluss-conf-file -o yaml
 # Get detailed pod information
 kubectl get pods -o wide -l app.kubernetes.io/name=fluss
 ```
-
