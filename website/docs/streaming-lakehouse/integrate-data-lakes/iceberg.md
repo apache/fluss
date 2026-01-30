@@ -482,27 +482,27 @@ SELECT * FROM iceberg_catalog.fluss.orders WHERE __bucket = 1 AND __offset >= 10
 
 When integrating with Iceberg, Fluss automatically converts between Fluss data types and Iceberg data types:
 
-| Fluss Data Type               | Iceberg Data Type             | Notes               |
-|-------------------------------|-------------------------------|---------------------|
-| BOOLEAN                       | BOOLEAN                       |                     |
-| TINYINT                       | INTEGER                       | Promoted to INT     |
-| SMALLINT                      | INTEGER                       | Promoted to INT     |
-| INT                           | INTEGER                       |                     |
-| BIGINT                        | LONG                          |                     |
-| FLOAT                         | FLOAT                         |                     |
-| DOUBLE                        | DOUBLE                        |                     |
-| DECIMAL                       | DECIMAL                       |                     |
-| STRING                        | STRING                        |                     |
-| CHAR                          | STRING                        | Converted to STRING |
-| DATE                          | DATE                          |                     |
-| TIME                          | TIME                          |                     |
-| TIMESTAMP                     | TIMESTAMP (without timezone)  |                     |
-| TIMESTAMP WITH LOCAL TIMEZONE | TIMESTAMP (with timezone)     |                     |
-| BINARY                        | BINARY                        |                     |
-| BYTES                         | BINARY                        | Converted to BINARY |
-| ARRAY                         | LIST                          |                     |
-| ROW                           | STRUCT                        |                     |
-
+| Fluss Data Type               | Iceberg Data Type            | Notes               |
+|-------------------------------|------------------------------|---------------------|
+| BOOLEAN                       | BOOLEAN                      |                     |
+| TINYINT                       | INTEGER                      | Promoted to INT     |
+| SMALLINT                      | INTEGER                      | Promoted to INT     |
+| INT                           | INTEGER                      |                     |
+| BIGINT                        | LONG                         |                     |
+| FLOAT                         | FLOAT                        |                     |
+| DOUBLE                        | DOUBLE                       |                     |
+| DECIMAL                       | DECIMAL                      |                     |
+| STRING                        | STRING                       |                     |
+| CHAR                          | STRING                       | Converted to STRING |
+| DATE                          | DATE                         |                     |
+| TIME                          | TIME                         |                     |
+| TIMESTAMP                     | TIMESTAMP (without timezone) |                     |
+| TIMESTAMP WITH LOCAL TIMEZONE | TIMESTAMP (with timezone)    |                     |
+| BINARY                        | BINARY                       |                     |
+| BYTES                         | BINARY                       | Converted to BINARY |
+| ARRAY                         | LIST                         |                     |
+| MAP                           | MAP                          |                     |
+| ROW                           | STRUCT                       |                     |
 
 ## Maintenance and Optimization
 
@@ -582,5 +582,4 @@ For partitioned tables, the metadata structure includes partition information:
 
 ## Current Limitations
 
-- **Complex Types**: Map type is not supported
 - **Multiple bucket keys**: Not supported until Iceberg implements multi-argument partition transforms

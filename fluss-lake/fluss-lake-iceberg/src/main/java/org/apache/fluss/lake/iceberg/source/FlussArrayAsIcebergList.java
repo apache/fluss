@@ -18,6 +18,7 @@
 package org.apache.fluss.lake.iceberg.source;
 
 import org.apache.fluss.row.InternalArray;
+import org.apache.fluss.row.InternalMap;
 import org.apache.fluss.types.ArrayType;
 import org.apache.fluss.types.BigIntType;
 import org.apache.fluss.types.BinaryType;
@@ -31,6 +32,7 @@ import org.apache.fluss.types.DoubleType;
 import org.apache.fluss.types.FloatType;
 import org.apache.fluss.types.IntType;
 import org.apache.fluss.types.LocalZonedTimestampType;
+import org.apache.fluss.types.MapType;
 import org.apache.fluss.types.SmallIntType;
 import org.apache.fluss.types.StringType;
 import org.apache.fluss.types.TimeType;
@@ -104,6 +106,13 @@ public class FlussArrayAsIcebergList extends AbstractList<Object> {
                     ? null
                     : new FlussArrayAsIcebergList(
                             innerArray, ((ArrayType) elementType).getElementType());
+        } else if (elementType instanceof MapType) {
+            MapType mapType = (MapType) elementType;
+            InternalMap internalMap = flussArray.getMap(index);
+            return internalMap == null
+                    ? null
+                    : new FlussMapAsIcebergMap(
+                            internalMap, mapType.getKeyType(), mapType.getValueType());
         } else {
             throw new UnsupportedOperationException(
                     "Unsupported array element type conversion for Fluss type: "

@@ -167,7 +167,19 @@ public class FlussDataTypeToIcebergDataType implements DataTypeVisitor<Type> {
 
     @Override
     public Type visit(MapType mapType) {
-        throw new UnsupportedOperationException("Unsupported map type");
+        // According to the Iceberg spec,
+        // the key and value fields of a map should have consecutive IDs
+        int keyFieldId = getNextId();
+        int valueFieldId = getNextId();
+
+        Type keyType = mapType.getKeyType().accept(this);
+        Type valueType = mapType.getValueType().accept(this);
+
+        if (mapType.getValueType().isNullable()) {
+            return Types.MapType.ofOptional(keyFieldId, valueFieldId, keyType, valueType);
+        } else {
+            return Types.MapType.ofRequired(keyFieldId, valueFieldId, keyType, valueType);
+        }
     }
 
     @Override

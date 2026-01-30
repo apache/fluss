@@ -29,6 +29,8 @@ import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Unit tests for {@link IcebergBinaryRowWriter}. */
 class IcebergBinaryRowWriterTest {
@@ -217,5 +219,62 @@ class IcebergBinaryRowWriterTest {
         writer.writeDecimal(value, true);
         byte[] writerBytesWithoutPrefix = writer.toBytes();
         assertThat(writerBytesWithoutPrefix).isEqualTo(expectedBytes);
+    }
+
+    @Test
+    void testCreateFieldWriterRejectsMapType() {
+        org.apache.fluss.types.MapType mapType =
+                org.apache.fluss.types.DataTypes.MAP(
+                        org.apache.fluss.types.DataTypes.STRING(),
+                        org.apache.fluss.types.DataTypes.INT());
+
+        assertThatThrownBy(() -> IcebergBinaryRowWriter.createFieldWriter(mapType))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Map types cannot be used as bucket keys")
+                .hasMessageContaining("Bucket keys must be scalar types");
+    }
+
+    @Test
+    void testCreateFieldWriterRejectsArrayType() {
+        org.apache.fluss.types.ArrayType arrayType =
+                org.apache.fluss.types.DataTypes.ARRAY(org.apache.fluss.types.DataTypes.INT());
+
+        assertThatThrownBy(() -> IcebergBinaryRowWriter.createFieldWriter(arrayType))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Array types cannot be used as bucket keys")
+                .hasMessageContaining("Bucket keys must be scalar types");
+    }
+
+    @Test
+    void testCreateFieldWriterWithValidScalarTypes() {
+        assertThatCode(
+                        () ->
+                                IcebergBinaryRowWriter.createFieldWriter(
+                                        org.apache.fluss.types.DataTypes.STRING()))
+                .doesNotThrowAnyException();
+
+        assertThatCode(
+                        () ->
+                                IcebergBinaryRowWriter.createFieldWriter(
+                                        org.apache.fluss.types.DataTypes.INT()))
+                .doesNotThrowAnyException();
+
+        assertThatCode(
+                        () ->
+                                IcebergBinaryRowWriter.createFieldWriter(
+                                        org.apache.fluss.types.DataTypes.BIGINT()))
+                .doesNotThrowAnyException();
+
+        assertThatCode(
+                        () ->
+                                IcebergBinaryRowWriter.createFieldWriter(
+                                        org.apache.fluss.types.DataTypes.DOUBLE()))
+                .doesNotThrowAnyException();
+
+        assertThatCode(
+                        () ->
+                                IcebergBinaryRowWriter.createFieldWriter(
+                                        org.apache.fluss.types.DataTypes.DECIMAL(10, 2)))
+                .doesNotThrowAnyException();
     }
 }
