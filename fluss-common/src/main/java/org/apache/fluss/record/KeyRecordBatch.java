@@ -109,7 +109,7 @@ public class KeyRecordBatch implements KvRecordBatch {
 
     @Override
     public short schemaId() {
-        return 0;
+        return schemaId;
     }
 
     @Override
