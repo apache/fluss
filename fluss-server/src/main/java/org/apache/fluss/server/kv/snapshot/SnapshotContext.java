@@ -75,7 +75,8 @@ public interface SnapshotContext {
      * @param snapshot The broken snapshot to handle
      * @throws Exception if recovery handling fails
      */
-    void handleSnapshotBroken(CompletedSnapshot snapshot) throws Exception;
+    void handleSnapshotBroken(FsPath remoteKvTabletDir, CompletedSnapshot snapshot)
+            throws Exception;
 
     /**
      * Get the max fetch size for fetching log to apply kv during recovering kv. The kv may apply

@@ -17,6 +17,8 @@
 
 package org.apache.fluss.server.kv.snapshot;
 
+import org.apache.fluss.fs.FsPath;
+
 import java.io.IOException;
 
 /**
@@ -29,13 +31,13 @@ public class TestingCompletedSnapshotHandle extends CompletedSnapshotHandle {
 
     private final boolean shouldFailWhenRetrieve;
 
-    public TestingCompletedSnapshotHandle(CompletedSnapshot snapshot) {
-        this(snapshot, false);
+    public TestingCompletedSnapshotHandle(CompletedSnapshot snapshot, FsPath metaDataFilePath) {
+        this(snapshot, metaDataFilePath, false);
     }
 
     public TestingCompletedSnapshotHandle(
-            CompletedSnapshot snapshot, boolean shouldFailWhenRetrieve) {
-        super(snapshot.getSnapshotID(), snapshot.getSnapshotLocation(), snapshot.getLogOffset());
+            CompletedSnapshot snapshot, FsPath metaDataFilePath, boolean shouldFailWhenRetrieve) {
+        super(snapshot.getSnapshotID(), metaDataFilePath, snapshot.getLogOffset());
         this.snapshot = snapshot;
         this.shouldFailWhenRetrieve = shouldFailWhenRetrieve;
     }

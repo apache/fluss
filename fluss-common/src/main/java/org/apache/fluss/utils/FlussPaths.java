@@ -411,6 +411,10 @@ public class FlussPaths {
     // Remote Log Paths
     // ----------------------------------------------------------------------------------------
 
+    public static FsPath remoteDataDir(Configuration conf) {
+        return new FsPath(conf.get(ConfigOptions.REMOTE_DATA_DIR));
+    }
+
     /**
      * Returns the remote root directory path for storing log files.
      *
@@ -588,6 +592,10 @@ public class FlussPaths {
      */
     public static FsPath remoteKvDir(Configuration conf) {
         return new FsPath(conf.get(ConfigOptions.REMOTE_DATA_DIR) + "/" + REMOTE_KV_DIR_NAME);
+    }
+
+    public static FsPath remoteKvDir(FsPath remoteDataDir) {
+        return new FsPath(remoteDataDir, REMOTE_KV_DIR_NAME);
     }
 
     /**

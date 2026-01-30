@@ -59,12 +59,14 @@ class CompletedSnapshotStoreTest {
     private TestCompletedSnapshotHandleStore.Builder builder;
     private TestCompletedSnapshotHandleStore defaultHandleStore;
     private @TempDir Path tempDir;
+    private FsPath remoteKvTabletDir;
 
     @BeforeEach
     void setup() {
         builder = TestCompletedSnapshotHandleStore.newBuilder();
         defaultHandleStore = builder.build();
         executorService = Executors.newFixedThreadPool(2, new ExecutorThreadFactory("IO-Executor"));
+        remoteKvTabletDir = FsPath.fromLocalFile(tempDir.toFile());
     }
 
     @AfterEach
@@ -525,7 +527,6 @@ class CompletedSnapshotStoreTest {
         return new CompletedSnapshot(
                 tableBucket,
                 id,
-                new FsPath(tempDir.toString(), "test_snapshot"),
                 new KvSnapshotHandle(Collections.emptyList(), Collections.emptyList(), 0));
     }
 
@@ -551,13 +552,14 @@ class CompletedSnapshotStoreTest {
             CompletedSnapshotHandleStore snapshotHandleStore,
             Collection<CompletedSnapshot> completedSnapshots) {
 
-        SharedKvFileRegistry sharedKvFileRegistry = new SharedKvFileRegistry();
+        SharedKvFileRegistry sharedKvFileRegistry = new SharedKvFileRegistry(remoteKvTabletDir);
         return new CompletedSnapshotStore(
                 numToRetain,
                 sharedKvFileRegistry,
                 completedSnapshots,
                 snapshotHandleStore,
-                executorService);
+                executorService,
+                remoteKvTabletDir);
     }
 
     private List<Tuple2<CompletedSnapshotHandle, String>> createSnapshotHandles(int num) {
@@ -572,12 +574,13 @@ class CompletedSnapshotStoreTest {
                     new CompletedSnapshot(
                             new TableBucket(1, 1),
                             i,
-                            new FsPath("test_snapshot"),
                             new KvSnapshotHandle(
                                     Collections.emptyList(), Collections.emptyList(), -1));
             final CompletedSnapshotHandle snapshotStateHandle =
                     new TestingCompletedSnapshotHandle(
-                            completedSnapshot, failSnapshots.contains(num));
+                            completedSnapshot,
+                            new FsPath("test_snapshot"),
+                            failSnapshots.contains(num));
             stateHandles.add(new Tuple2<>(snapshotStateHandle, String.valueOf(i)));
         }
         return stateHandles;

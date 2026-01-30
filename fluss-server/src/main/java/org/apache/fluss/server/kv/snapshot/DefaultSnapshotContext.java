@@ -157,8 +157,9 @@ public class DefaultSnapshotContext implements SnapshotContext {
     }
 
     @Override
-    public void handleSnapshotBroken(CompletedSnapshot snapshot) throws Exception {
+    public void handleSnapshotBroken(FsPath remoteKvTabletDir, CompletedSnapshot snapshot)
+            throws Exception {
         completedSnapshotHandleStore.remove(snapshot.getTableBucket(), snapshot.getSnapshotID());
-        snapshot.discardAsync(asyncOperationsThreadPool);
+        snapshot.discardAsync(remoteKvTabletDir, asyncOperationsThreadPool);
     }
 }

@@ -17,6 +17,8 @@
 
 package org.apache.fluss.server.kv.snapshot;
 
+import org.apache.fluss.fs.FsPath;
+
 import java.nio.file.Path;
 
 /**
@@ -25,15 +27,35 @@ import java.nio.file.Path;
  */
 public class KvSnapshotDownloadSpec {
 
+    /** The directory for exclusive snapshot data. */
+    private final FsPath snapshotDirectory;
+
+    /** The directory for shared snapshot data. */
+    private final FsPath sharedSnapshotDirectory;
+
     /** The handle to download . */
     private final KvSnapshotHandle kvSnapshotHandle;
 
     /** The path to which the content of the snapshot handle shall be downloaded. */
     private final Path downloadDestination;
 
-    public KvSnapshotDownloadSpec(KvSnapshotHandle kvSnapshotHandle, Path downloadDestination) {
+    public KvSnapshotDownloadSpec(
+            FsPath snapshotDirectory,
+            FsPath sharedSnapshotDirectory,
+            KvSnapshotHandle kvSnapshotHandle,
+            Path downloadDestination) {
+        this.snapshotDirectory = snapshotDirectory;
+        this.sharedSnapshotDirectory = sharedSnapshotDirectory;
         this.kvSnapshotHandle = kvSnapshotHandle;
         this.downloadDestination = downloadDestination;
+    }
+
+    public FsPath getSnapshotDirectory() {
+        return snapshotDirectory;
+    }
+
+    public FsPath getSharedSnapshotDirectory() {
+        return sharedSnapshotDirectory;
     }
 
     public KvSnapshotHandle getKvSnapshotHandle() {
