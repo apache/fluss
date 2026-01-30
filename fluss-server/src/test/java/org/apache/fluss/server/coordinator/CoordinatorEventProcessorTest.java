@@ -755,6 +755,7 @@ class CoordinatorEventProcessorTest {
                                     leader,
                                     leaderAndIsr.leaderEpoch(),
                                     newIsr,
+                                    Collections.emptyList(),
                                     coordinatorEpoch,
                                     bucketLeaderEpoch));
                     return null;
@@ -1013,7 +1014,9 @@ class CoordinatorEventProcessorTest {
         CompletableFuture<AdjustIsrResponse> respCallback = new CompletableFuture<>();
 
         // This isr list equals originReplicas + addingReplicas. the bucket epoch is 1.
-        leaderAndIsrMap.put(tb0, new LeaderAndIsr(0, 0, Arrays.asList(0, 1, 2, 3), 0, 1));
+        leaderAndIsrMap.put(
+                tb0,
+                new LeaderAndIsr(0, 0, Arrays.asList(0, 1, 2, 3), Collections.emptyList(), 0, 1));
         eventProcessor
                 .getCoordinatorEventManager()
                 .put(new AdjustIsrReceivedEvent(leaderAndIsrMap, respCallback));

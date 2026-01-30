@@ -43,7 +43,7 @@ import java.util.function.Consumer;
 import java.util.function.Supplier;
 
 /**
- * A {@link PeriodicSnapshotManager.SnapshotTarget} for a kv tablet. It'll first initiate a
+ * A {@link KvSnapshotManager.UploadSnapshotTarget} for a kv tablet. It'll first initiate a
  * snapshot, then handle the snapshot result or failure.
  *
  * <p>Note: it's not thread safe, {@link #initSnapshot()}}, {@link #handleSnapshotResult(long, int,
@@ -51,9 +51,9 @@ import java.util.function.Supplier;
  * Throwable)} may be called by different threads.
  */
 @NotThreadSafe
-public class KvTabletSnapshotTarget implements PeriodicSnapshotManager.SnapshotTarget {
+public class KvTabletUploadSnapshotTarget implements KvSnapshotManager.UploadSnapshotTarget {
 
-    private static final Logger LOG = LoggerFactory.getLogger(KvTabletSnapshotTarget.class);
+    private static final Logger LOG = LoggerFactory.getLogger(KvTabletUploadSnapshotTarget.class);
 
     private final TableBucket tableBucket;
 
@@ -85,7 +85,7 @@ public class KvTabletSnapshotTarget implements PeriodicSnapshotManager.SnapshotT
     private volatile long snapshotSize;
 
     @VisibleForTesting
-    KvTabletSnapshotTarget(
+    KvTabletUploadSnapshotTarget(
             TableBucket tableBucket,
             CompletedKvSnapshotCommitter completedKvSnapshotCommitter,
             ZooKeeperClient zooKeeperClient,
@@ -119,7 +119,7 @@ public class KvTabletSnapshotTarget implements PeriodicSnapshotManager.SnapshotT
                 snapshotSize);
     }
 
-    public KvTabletSnapshotTarget(
+    public KvTabletUploadSnapshotTarget(
             TableBucket tableBucket,
             CompletedKvSnapshotCommitter completedKvSnapshotCommitter,
             @Nonnull ZooKeeperClient zooKeeperClient,
@@ -167,7 +167,7 @@ public class KvTabletSnapshotTarget implements PeriodicSnapshotManager.SnapshotT
     }
 
     @Override
-    public Optional<PeriodicSnapshotManager.SnapshotRunnable> initSnapshot() throws Exception {
+    public Optional<KvSnapshotManager.SnapshotRunnable> initSnapshot() throws Exception {
         long logOffset = logOffsetSupplier.get();
         if (logOffset <= logOffsetOfLatestSnapshot) {
             LOG.debug(
@@ -185,8 +185,8 @@ public class KvTabletSnapshotTarget implements PeriodicSnapshotManager.SnapshotT
         int coordinatorEpoch = coordinatorEpochSupplier.get();
         SnapshotLocation snapshotLocation = initSnapshotLocation(currentSnapshotId);
         try {
-            PeriodicSnapshotManager.SnapshotRunnable snapshotRunnable =
-                    new PeriodicSnapshotManager.SnapshotRunnable(
+            KvSnapshotManager.SnapshotRunnable snapshotRunnable =
+                    new KvSnapshotManager.SnapshotRunnable(
                             snapshotRunner.snapshot(currentSnapshotId, logOffset, snapshotLocation),
                             currentSnapshotId,
                             coordinatorEpoch,
