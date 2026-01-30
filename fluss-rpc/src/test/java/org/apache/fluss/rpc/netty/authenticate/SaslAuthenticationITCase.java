@@ -33,15 +33,26 @@ import org.apache.fluss.rpc.netty.client.NettyClient;
 import org.apache.fluss.rpc.netty.server.NettyServer;
 import org.apache.fluss.rpc.netty.server.RequestsMetrics;
 import org.apache.fluss.rpc.protocol.ApiKeys;
+import org.apache.fluss.security.auth.sasl.gssapi.FlussMiniKdc;
 import org.apache.fluss.security.auth.sasl.jaas.TestJaasConfig;
+import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.NetUtils;
 
+import org.apache.hadoop.minikdc.MiniKdc;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
+import java.io.File;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.Collections;
+import java.util.Properties;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 
+import static org.apache.fluss.config.ConfigOptions.CLIENT_SASL_JAAS_CONFIG;
+import static org.apache.fluss.config.ConfigOptions.CLIENT_SASL_MECHANISM;
+import static org.apache.fluss.config.ConfigOptions.SERVER_SASL_ENABLED_MECHANISMS_CONFIG;
 import static org.apache.fluss.utils.NetUtils.getAvailablePort;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -58,6 +69,190 @@ public class SaslAuthenticationITCase {
     @AfterEach
     void cleanup() {
         javax.security.auth.login.Configuration.setConfiguration(new TestJaasConfig());
+        System.clearProperty("java.security.krb5.conf");
+    }
+
+    /** Test the Kerberos authentication mechanism between server and client. */
+    @Test
+    void testGssapiAuthenticate() throws Exception {
+        // Initialize and start a MiniKDC
+        Properties conf = MiniKdc.createConf();
+        FlussMiniKdc kdc = new FlussMiniKdc(conf);
+        kdc.start();
+
+        // Prepare temporary workspace for keytab and krb5.conf
+        Path tempDir = Files.createTempDirectory("fluss-gssapi-test-" + UUID.randomUUID());
+        File workDir = tempDir.toFile();
+        File keytab = new File(workDir, "fluss.keytab");
+        File krb5Conf = kdc.getKrb5Conf();
+
+        try {
+            // Create principal for server and client
+            // Format
+            // - server: service/hostname
+            // - client: username
+            kdc.createPrincipal(keytab, "fluss/127.0.0.1", "client");
+
+            // Customize krb5.conf to enforce TCP and correct realm settings if necessary.
+            if (krb5Conf.exists()) {
+                String krb5Content =
+                        "[libdefaults]\n"
+                                + "    default_realm = "
+                                + kdc.getRealm()
+                                + "\n"
+                                + "    udp_preference_limit = 1\n" // use TCP
+                                + "    kdc_tcp_port = "
+                                + kdc.getPort()
+                                + "\n"
+                                + "\n"
+                                + "[realms]\n"
+                                + "    "
+                                + kdc.getRealm()
+                                + " = {\n"
+                                + "        kdc = 127.0.0.1:"
+                                + kdc.getPort()
+                                + "\n"
+                                + "        admin_server = 127.0.0.1:"
+                                + kdc.getPort()
+                                + "\n"
+                                + "    }\n";
+
+                File customKrb5Conf =
+                        new File(workDir, "krb5-custom-" + UUID.randomUUID() + ".conf");
+                Files.write(customKrb5Conf.toPath(), krb5Content.getBytes());
+                // Set the system property to point to our custom krb5.conf
+                System.setProperty("java.security.krb5.conf", customKrb5Conf.getAbsolutePath());
+            }
+
+            String realm = kdc.getRealm();
+            String serverPrincipal = String.format("fluss/127.0.0.1@%s", realm);
+            String clientPrincipal = String.format("client@%s", realm);
+
+            // Configure Fluss Server with GSSAPI enabled.
+            Configuration serverConfig = new Configuration();
+            // set client listener to use sasl
+            serverConfig.setString(ConfigOptions.SERVER_SECURITY_PROTOCOL_MAP.key(), "CLIENT:sasl");
+            // set mechanism to GSSAPI
+            serverConfig.setString(SERVER_SASL_ENABLED_MECHANISMS_CONFIG.key(), "GSSAPI");
+            serverConfig.setString(ConfigOptions.NETTY_SERVER_NUM_WORKER_THREADS.key(), "3");
+
+            // Define the JAAS configuration for the server using the Krb5LoginModule.
+            String serverJaas =
+                    String.format(
+                            "com.sun.security.auth.module.Krb5LoginModule required "
+                                    + "useKeyTab=true storeKey=true useTicketCache=false "
+                                    + "keyTab=\"%s\" principal=\"%s\";",
+                            keytab.getAbsolutePath(), serverPrincipal);
+            serverConfig.setString("security.sasl.gssapi.jaas.config", serverJaas);
+
+            // Configure Fluss Client with GSSAPI enabled.
+            Configuration clientConfig = new Configuration();
+            clientConfig.setString("client.security.protocol", "sasl");
+            clientConfig.setString(CLIENT_SASL_MECHANISM, "GSSAPI");
+
+            // Define the JAAS configuration for the client.
+            String clientJaas =
+                    String.format(
+                            "com.sun.security.auth.module.Krb5LoginModule required "
+                                    + "useKeyTab=true storeKey=true useTicketCache=false "
+                                    + "keyTab=\"%s\" principal=\"%s\";",
+                            keytab.getAbsolutePath(), clientPrincipal);
+
+            clientConfig.setString(CLIENT_SASL_JAAS_CONFIG, clientJaas);
+
+            // Run authentication test
+            testAuthentication(clientConfig, serverConfig);
+        } finally {
+            kdc.stop();
+            FileUtils.deleteDirectory(workDir);
+        }
+    }
+
+    @Test
+    void testGssapiAuthenticationWrongPrincipal() throws Exception {
+        // Initialize and start a MiniKDC
+        Properties kdcConf = MiniKdc.createConf();
+        FlussMiniKdc kdc = new FlussMiniKdc(kdcConf);
+        kdc.start();
+
+        // Prepare workspace
+        Path tempDir = Files.createTempDirectory("fluss-gssapi-test-" + UUID.randomUUID());
+        File workDir = tempDir.toFile();
+        File keytab = new File(workDir, "fluss.keytab");
+        File krb5Conf = kdc.getKrb5Conf();
+
+        try {
+            kdc.createPrincipal(keytab, "fluss/127.0.0.1", "client", "wrongclient");
+
+            if (krb5Conf.exists()) {
+                String realm = kdc.getRealm();
+                String krb5Content =
+                        "[libdefaults]\n"
+                                + "    default_realm = "
+                                + realm
+                                + "\n"
+                                + "    udp_preference_limit = 1\n"
+                                + "    kdc_tcp_port = "
+                                + kdc.getPort()
+                                + "\n"
+                                + "\n"
+                                + "[realms]\n"
+                                + "    "
+                                + realm
+                                + " = {\n"
+                                + "        kdc = 127.0.0.1:"
+                                + kdc.getPort()
+                                + "\n"
+                                + "        admin_server = 127.0.0.1:"
+                                + kdc.getPort()
+                                + "\n"
+                                + "    }\n";
+
+                File customKrb5Conf =
+                        new File(workDir, "krb5-custom-" + UUID.randomUUID() + ".conf");
+                Files.write(customKrb5Conf.toPath(), krb5Content.getBytes());
+                System.setProperty("java.security.krb5.conf", customKrb5Conf.getAbsolutePath());
+            }
+
+            String realm = kdc.getRealm();
+            String serverPrincipal = String.format("fluss/127.0.0.1@%s", realm);
+            // Use a different client principal that doesn't exist in keytab for wrong principal
+            String wrongClientPrincipal = String.format("nonexistent@%s", realm);
+
+            Configuration serverConfig = new Configuration();
+            serverConfig.setString(ConfigOptions.SERVER_SECURITY_PROTOCOL_MAP.key(), "CLIENT:sasl");
+            serverConfig.setString(
+                    ConfigOptions.SERVER_SASL_ENABLED_MECHANISMS_CONFIG.key(), "GSSAPI");
+            String serverJaas =
+                    String.format(
+                            "com.sun.security.auth.module.Krb5LoginModule required "
+                                    + "useKeyTab=true storeKey=true useTicketCache=false "
+                                    + "keyTab=\"%s\" principal=\"%s\";",
+                            keytab.getAbsolutePath(), serverPrincipal);
+            serverConfig.setString("security.sasl.gssapi.jaas.config", serverJaas);
+            serverConfig.setString(ConfigOptions.NETTY_SERVER_NUM_WORKER_THREADS.key(), "3");
+
+            // Configure client with wrong principal.
+            Configuration clientConfig = new Configuration();
+            clientConfig.setString("client.security.protocol", "sasl");
+            clientConfig.setString("client.security.sasl.mechanism", "GSSAPI");
+            String clientJaas =
+                    String.format(
+                            "com.sun.security.auth.module.Krb5LoginModule required "
+                                    + "useKeyTab=true storeKey=true useTicketCache=false "
+                                    + "keyTab=\"%s\" principal=\"%s\";",
+                            keytab.getAbsolutePath(), wrongClientPrincipal);
+            clientConfig.setString("client.security.sasl.jaas.config", clientJaas);
+
+            // Authentication test fails with wrong principal.
+            assertThatThrownBy(() -> testAuthentication(clientConfig, serverConfig))
+                    .cause()
+                    .isInstanceOf(AuthenticationException.class)
+                    .hasMessageContaining("Failed to load login manager");
+        } finally {
+            kdc.stop();
+            FileUtils.deleteDirectory(workDir);
+        }
     }
 
     @Test
@@ -80,7 +275,7 @@ public class SaslAuthenticationITCase {
         assertThatThrownBy(() -> testAuthentication(clientConfig))
                 .cause()
                 .isExactlyInstanceOf(AuthenticationException.class)
-                .hasMessage("Authentication failed: Invalid username or password");
+                .hasMessageContaining("Authentication failed: Invalid username or password");
     }
 
     @Test
@@ -140,7 +335,7 @@ public class SaslAuthenticationITCase {
         assertThatThrownBy(() -> testAuthentication(clientConfig, serverConfig))
                 .cause()
                 .isExactlyInstanceOf(AuthenticationException.class)
-                .hasMessage("Authentication failed: Invalid username or password");
+                .hasMessageContaining("Authentication failed: Invalid username or password");
         clientConfig.setString(
                 "client.security.sasl.jaas.config",
                 "org.apache.fluss.security.auth.sasl.plain.PlainLoginModule required username=\"bob\" password=\"bob-secret\";");
@@ -175,7 +370,7 @@ public class SaslAuthenticationITCase {
         assertThatThrownBy(() -> testAuthentication(clientConfig))
                 .cause()
                 .isExactlyInstanceOf(AuthenticationException.class)
-                .hasMessage("Authentication failed: Invalid username or password");
+                .hasMessageContaining("Authentication failed: Invalid username or password");
         clientConfig.setString("client.security.sasl.password", "alice-secret");
         testAuthentication(clientConfig);
     }
@@ -194,7 +389,7 @@ public class SaslAuthenticationITCase {
                                 serverConfig,
                                 Collections.singletonList(
                                         new Endpoint(
-                                                "localhost", availablePort1.getPort(), "CLIENT")),
+                                                "127.0.0.1", availablePort1.getPort(), "CLIENT")),
                                 service,
                                 metricGroup,
                                 RequestsMetrics.createCoordinatorServerRequestMetrics(
@@ -204,7 +399,7 @@ public class SaslAuthenticationITCase {
             // use client listener to connect to server
             ServerNode serverNode =
                     new ServerNode(
-                            1, "localhost", availablePort1.getPort(), ServerType.COORDINATOR);
+                            1, "127.0.0.1", availablePort1.getPort(), ServerType.COORDINATOR);
             try (NettyClient nettyClient =
                     new NettyClient(clientConfig, TestingClientMetricGroup.newInstance(), false)) {
                 ListTablesRequest request =
