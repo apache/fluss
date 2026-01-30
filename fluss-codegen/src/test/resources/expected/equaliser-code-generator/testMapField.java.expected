@@ -1,0 +1,67 @@
+public final class MapFieldEqualiser$10 implements org.apache.fluss.codegen.types.RecordEqualiser {
+  private boolean mapEq$11(org.apache.fluss.row.InternalMap left, org.apache.fluss.row.InternalMap right) {
+    if (left.size() != right.size()) {
+      return false;
+    }
+    org.apache.fluss.row.InternalArray lk = left.keyArray();
+    org.apache.fluss.row.InternalArray lv = left.valueArray();
+    org.apache.fluss.row.InternalArray rk = right.keyArray();
+    org.apache.fluss.row.InternalArray rv = right.valueArray();
+    for (int i = 0; i < left.size(); i++) {
+      org.apache.fluss.row.BinaryString lKey = lk.getString(i);
+      boolean found = false;
+      for (int j = 0; j < right.size(); j++) {
+        org.apache.fluss.row.BinaryString rKey = rk.getString(j);
+        if (lKey.equals(rKey)) {
+          if (lv.isNullAt(i) && rv.isNullAt(j)) {
+            found = true;
+            break;
+          }
+          if (lv.isNullAt(i) || rv.isNullAt(j)) {
+            return false;
+          }
+          int lVal = lv.getInt(i);
+          int rVal = rv.getInt(j);
+          if (lVal != rVal) {
+            return false;
+          }
+          found = true;
+          break;
+        }
+      }
+      if (!found) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+
+  public MapFieldEqualiser$10(java.lang.Object[] references) throws Exception {
+  }
+
+  @Override
+  public boolean equals(org.apache.fluss.row.InternalRow left, org.apache.fluss.row.InternalRow right) {
+    if (left instanceof org.apache.fluss.row.BinaryRow && right instanceof org.apache.fluss.row.BinaryRow) {
+      return left.equals(right);
+    }
+    boolean result = true;
+    result = result && equalsField0(left, right);
+    return result;
+  }
+
+  private boolean equalsField0(org.apache.fluss.row.InternalRow left, org.apache.fluss.row.InternalRow right) {
+    boolean leftNull = left.isNullAt(0);
+    boolean rightNull = right.isNullAt(0);
+    if (leftNull && rightNull) {
+      return true;
+    }
+    if (leftNull || rightNull) {
+      return false;
+    }
+    org.apache.fluss.row.InternalMap leftVal = left.getMap(0);
+    org.apache.fluss.row.InternalMap rightVal = right.getMap(0);
+    return mapEq$11(leftVal, rightVal);
+  }
+
+}

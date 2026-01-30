@@ -1,0 +1,29 @@
+public final class BinaryFieldEqualiser$19 implements org.apache.fluss.codegen.types.RecordEqualiser {
+  public BinaryFieldEqualiser$19(java.lang.Object[] references) throws Exception {
+  }
+
+  @Override
+  public boolean equals(org.apache.fluss.row.InternalRow left, org.apache.fluss.row.InternalRow right) {
+    if (left instanceof org.apache.fluss.row.BinaryRow && right instanceof org.apache.fluss.row.BinaryRow) {
+      return left.equals(right);
+    }
+    boolean result = true;
+    result = result && equalsField0(left, right);
+    return result;
+  }
+
+  private boolean equalsField0(org.apache.fluss.row.InternalRow left, org.apache.fluss.row.InternalRow right) {
+    boolean leftNull = left.isNullAt(0);
+    boolean rightNull = right.isNullAt(0);
+    if (leftNull && rightNull) {
+      return true;
+    }
+    if (leftNull || rightNull) {
+      return false;
+    }
+    byte[] leftVal = left.getBinary(0, 5);
+    byte[] rightVal = right.getBinary(0, 5);
+    return java.util.Arrays.equals(leftVal, rightVal);
+  }
+
+}
