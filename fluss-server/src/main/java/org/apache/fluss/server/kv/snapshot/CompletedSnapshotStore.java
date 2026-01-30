@@ -21,6 +21,7 @@ import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.fs.FSDataOutputStream;
 import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.fs.FsPath;
+import org.apache.fluss.metadata.KvSnapshotLeaseForBucket;
 import org.apache.fluss.metadata.TableBucket;
 
 import org.slf4j.Logger;
@@ -66,6 +67,7 @@ public class CompletedSnapshotStore {
 
     private final Executor ioExecutor;
     private final SnapshotsCleaner snapshotsCleaner;
+    private final SubsumptionChecker subsumptionChecker;
 
     private final ReentrantLock lock = new ReentrantLock();
 
@@ -80,12 +82,14 @@ public class CompletedSnapshotStore {
             SharedKvFileRegistry sharedKvFileRegistry,
             Collection<CompletedSnapshot> completedSnapshots,
             CompletedSnapshotHandleStore completedSnapshotHandleStore,
-            Executor executor) {
+            Executor executor,
+            SubsumptionChecker subsumptionChecker) {
         this.maxNumberOfSnapshotsToRetain = maxNumberOfSnapshotsToRetain;
         this.sharedKvFileRegistry = sharedKvFileRegistry;
         this.completedSnapshots = new ArrayDeque<>();
         this.completedSnapshots.addAll(completedSnapshots);
         this.completedSnapshotHandleStore = completedSnapshotHandleStore;
+        this.subsumptionChecker = subsumptionChecker;
         this.ioExecutor = executor;
         this.snapshotsCleaner = new SnapshotsCleaner();
     }
@@ -144,7 +148,8 @@ public class CompletedSnapshotStore {
                                                 completedSnapshot.getTableBucket(),
                                                 completedSnapshot.getSnapshotID());
                                         snapshotsCleaner.addSubsumedSnapshot(completedSnapshot);
-                                    });
+                                    },
+                                    subsumptionChecker);
 
                     findLowest(completedSnapshots)
                             .ifPresent(
@@ -168,7 +173,10 @@ public class CompletedSnapshotStore {
     }
 
     private static Optional<CompletedSnapshot> subsume(
-            Deque<CompletedSnapshot> snapshots, int numRetain, SubsumeAction subsumeAction) {
+            Deque<CompletedSnapshot> snapshots,
+            int numRetain,
+            SubsumeAction subsumeAction,
+            SubsumptionChecker subsumptionChecker) {
         if (snapshots.isEmpty()) {
             return Optional.empty();
         }
@@ -178,7 +186,7 @@ public class CompletedSnapshotStore {
         Iterator<CompletedSnapshot> iterator = snapshots.iterator();
         while (snapshots.size() > numRetain && iterator.hasNext()) {
             CompletedSnapshot next = iterator.next();
-            if (canSubsume(next, latest)) {
+            if (canSubsume(next, latest, subsumptionChecker)) {
                 // always return the subsumed snapshot with larger snapshot id.
                 if (!lastSubsumedSnapshot.isPresent()
                         || next.getSnapshotID() > lastSubsumedSnapshot.get().getSnapshotID()) {
@@ -200,14 +208,23 @@ public class CompletedSnapshotStore {
         void subsume(CompletedSnapshot snapshot) throws Exception;
     }
 
-    private static boolean canSubsume(CompletedSnapshot next, CompletedSnapshot latest) {
+    /** A function to check whether a snapshot can be subsumed. */
+    @FunctionalInterface
+    public interface SubsumptionChecker {
+        boolean canSubsume(KvSnapshotLeaseForBucket bucket);
+    }
+
+    private static boolean canSubsume(
+            CompletedSnapshot next,
+            CompletedSnapshot latest,
+            SubsumptionChecker subsumptionChecker) {
         // if the snapshot is equal to the latest snapshot, it means it can't be subsumed
         if (next == latest) {
             return false;
         }
-        // else, we always subsume it as we will only keep single one snapshot currently
-        // todo: consider some client are pining this snapshot in FLUSS-54730210
-        return true;
+
+        return subsumptionChecker.canSubsume(
+                new KvSnapshotLeaseForBucket(next.getTableBucket(), next.getSnapshotID()));
     }
 
     /**

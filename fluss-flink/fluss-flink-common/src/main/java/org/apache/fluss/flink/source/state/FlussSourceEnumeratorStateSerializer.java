@@ -18,6 +18,7 @@
 package org.apache.fluss.flink.source.state;
 
 import org.apache.fluss.annotation.VisibleForTesting;
+import org.apache.fluss.flink.source.reader.LeaseContext;
 import org.apache.fluss.flink.source.split.SourceSplitBase;
 import org.apache.fluss.flink.source.split.SourceSplitSerializer;
 import org.apache.fluss.lake.source.LakeSource;
@@ -68,11 +69,12 @@ public class FlussSourceEnumeratorStateSerializer
 
     private static final int VERSION_0 = 0;
     private static final int VERSION_1 = 1;
+    private static final int VERSION_2 = 2;
 
     private static final ThreadLocal<DataOutputSerializer> SERIALIZER_CACHE =
             ThreadLocal.withInitial(() -> new DataOutputSerializer(64));
 
-    private static final int CURRENT_VERSION = VERSION_1;
+    private static final int CURRENT_VERSION = VERSION_2;
 
     public FlussSourceEnumeratorStateSerializer(LakeSource<LakeSplit> lakeSource) {
         this.lakeSource = lakeSource;
@@ -93,6 +95,9 @@ public class FlussSourceEnumeratorStateSerializer
 
         // serialize remain hybrid lake splits
         serializeRemainingHybridLakeFlussSplits(out, state);
+
+        // write lease context
+        serializeLeaseContext(out, state);
 
         final byte[] result = out.getCopyOfBuffer();
         out.clear();
@@ -164,6 +169,8 @@ public class FlussSourceEnumeratorStateSerializer
     @Override
     public SourceEnumeratorState deserialize(int version, byte[] serialized) throws IOException {
         switch (version) {
+            case VERSION_2:
+                return deserializeV2(serialized);
             case VERSION_1:
                 return deserializeV1(serialized);
             case VERSION_0:
@@ -187,10 +194,12 @@ public class FlussSourceEnumeratorStateSerializer
         if (lakeSource != null) {
             remainingHybridLakeFlussSplits = deserializeRemainingHybridLakeFlussSplits(in);
         }
+
         return new SourceEnumeratorState(
                 assignBucketAndPartitions.f0,
                 assignBucketAndPartitions.f1,
-                remainingHybridLakeFlussSplits);
+                remainingHybridLakeFlussSplits,
+                new LeaseContext(null, null));
     }
 
     private SourceEnumeratorState deserializeV1(byte[] serialized) throws IOException {
@@ -203,10 +212,28 @@ public class FlussSourceEnumeratorStateSerializer
         // splits. The serialized state encodes their presence via a boolean flag, so
         // this logic no longer depends on the lakeSource flag. This unconditional
         // deserialization is the intended behavior change compared to VERSION_0.
+
         return new SourceEnumeratorState(
                 assignBucketAndPartitions.f0,
                 assignBucketAndPartitions.f1,
-                remainingHybridLakeFlussSplits);
+                remainingHybridLakeFlussSplits,
+                new LeaseContext(null, null));
+    }
+
+    private SourceEnumeratorState deserializeV2(byte[] serialized) throws IOException {
+        DataInputDeserializer in = new DataInputDeserializer(serialized);
+        Tuple2<Set<TableBucket>, Map<Long, String>> assignBucketAndPartitions =
+                deserializeAssignBucketAndPartitions(in);
+        List<SourceSplitBase> remainingHybridLakeFlussSplits =
+                deserializeRemainingHybridLakeFlussSplits(in);
+
+        // deserialize lease context
+        LeaseContext leaseContext = deserializeLeaseContext(in);
+        return new SourceEnumeratorState(
+                assignBucketAndPartitions.f0,
+                assignBucketAndPartitions.f1,
+                remainingHybridLakeFlussSplits,
+                leaseContext);
     }
 
     private Tuple2<Set<TableBucket>, Map<Long, String>> deserializeAssignBucketAndPartitions(
@@ -258,6 +285,41 @@ public class FlussSourceEnumeratorStateSerializer
             return splits;
         } else {
             return null;
+        }
+    }
+
+    private void serializeLeaseContext(final DataOutputSerializer out, SourceEnumeratorState state)
+            throws IOException {
+        LeaseContext leaseContext = state.getLeaseContext();
+        String kvSnapshotLeaseId = leaseContext.getKvSnapshotLeaseId();
+        if (kvSnapshotLeaseId != null) {
+            out.writeBoolean(true);
+            out.writeUTF(kvSnapshotLeaseId);
+        } else {
+            out.writeBoolean(false);
+        }
+
+        Long kvSnapshotLeaseDurationMs = leaseContext.getKvSnapshotLeaseDurationMs();
+        if (kvSnapshotLeaseDurationMs != null) {
+            out.writeBoolean(true);
+            out.writeLong(kvSnapshotLeaseDurationMs);
+        } else {
+            out.writeBoolean(false);
+        }
+    }
+
+    private LeaseContext deserializeLeaseContext(final DataInputDeserializer in)
+            throws IOException {
+        if (in.readBoolean()) {
+            String kvSnapshotLeaseId = in.readUTF();
+            if (in.readBoolean()) {
+                Long kvSnapshotLeaseDurationMs = in.readLong();
+                return new LeaseContext(kvSnapshotLeaseId, kvSnapshotLeaseDurationMs);
+            } else {
+                return new LeaseContext(kvSnapshotLeaseId, null);
+            }
+        } else {
+            return new LeaseContext(null, null);
         }
     }
 }
