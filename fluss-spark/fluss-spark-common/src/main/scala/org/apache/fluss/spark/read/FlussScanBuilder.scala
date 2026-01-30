@@ -17,10 +17,8 @@
 
 package org.apache.fluss.spark.read
 
-import org.apache.fluss.client.initializer.OffsetsInitializer
 import org.apache.fluss.config.{Configuration => FlussConfiguration}
 import org.apache.fluss.metadata.{TableInfo, TablePath}
-import org.apache.fluss.spark.SparkConnectorOptions
 
 import org.apache.spark.sql.connector.read.{Scan, ScanBuilder, SupportsPushDownRequiredColumns}
 import org.apache.spark.sql.types.StructType
@@ -34,24 +32,6 @@ trait FlussScanBuilder extends ScanBuilder with SupportsPushDownRequiredColumns 
   override def pruneColumns(requiredSchema: StructType): Unit = {
     this.requiredSchema = Some(requiredSchema)
   }
-
-  def startOffsetsInitializer(options: CaseInsensitiveStringMap): OffsetsInitializer = {
-    SparkConnectorOptions.StartUpMode.withName(
-      options.getOrDefault(
-        SparkConnectorOptions.SCAN_START_UP_MODE.key(),
-        SparkConnectorOptions.StartUpMode.EARLIEST.toString)) match {
-      case SparkConnectorOptions.StartUpMode.EARLIEST => OffsetsInitializer.earliest()
-      // TODO Support full start up mode.
-      case _ =>
-        throw new IllegalArgumentException(
-          s"Unsupported scan start up mode: ${options.get(SparkConnectorOptions.SCAN_START_UP_MODE.key())}")
-    }
-  }
-
-  def stoppingOffsetsInitializer(options: CaseInsensitiveStringMap): OffsetsInitializer = {
-    // TODO add support for stream read
-    OffsetsInitializer.latest()
-  }
 }
 
 /** Fluss Append Scan Builder. */
@@ -63,14 +43,7 @@ class FlussAppendScanBuilder(
   extends FlussScanBuilder {
 
   override def build(): Scan = {
-    FlussAppendScan(
-      tablePath,
-      tableInfo,
-      requiredSchema,
-      startOffsetsInitializer(options),
-      stoppingOffsetsInitializer(options),
-      options,
-      flussConfig)
+    FlussAppendScan(tablePath, tableInfo, requiredSchema, options, flussConfig)
   }
 }
 
@@ -83,13 +56,6 @@ class FlussUpsertScanBuilder(
   extends FlussScanBuilder {
 
   override def build(): Scan = {
-    FlussUpsertScan(
-      tablePath,
-      tableInfo,
-      requiredSchema,
-      startOffsetsInitializer(options),
-      stoppingOffsetsInitializer(options),
-      options,
-      flussConfig)
+    FlussUpsertScan(tablePath, tableInfo, requiredSchema, options, flussConfig)
   }
 }
