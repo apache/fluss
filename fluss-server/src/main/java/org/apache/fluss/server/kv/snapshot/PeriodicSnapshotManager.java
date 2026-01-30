@@ -244,9 +244,10 @@ public class PeriodicSnapshotManager implements Closeable {
                                             snapshotLocation,
                                             snapshotResult);
                                     LOG.info(
-                                            "TableBucket {} snapshot {} finished successfully, cost {} ms.",
+                                            "TableBucket {} snapshot {} finished successfully, size: {}, cost: {} ms.",
                                             tableBucket,
                                             snapshotId,
+                                            target.getSnapshotSize(),
                                             System.currentTimeMillis() - triggerTime);
                                 } catch (Throwable t) {
                                     LOG.warn(
