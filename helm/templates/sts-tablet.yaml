@@ -24,7 +24,7 @@ metadata:
   {{- include "fluss.labels" . | nindent 4 }}
 spec:
   serviceName: tablet-server-hs
-  replicas: 3
+  replicas: {{ .Values.tabletServer.replicas }}
   selector:
     matchLabels:
       {{- include "fluss.selectorLabels" . | nindent 6 }}
@@ -68,19 +68,19 @@ spec:
               echo "advertised.listeners: CLIENT://${POD_NAME}.tablet-server-hs.${POD_NAMESPACE}.svc.cluster.local:{{ .Values.appConfig.externalPort }}" >> $FLUSS_HOME/conf/server.yaml && \
               bin/tablet-server.sh start-foreground
           livenessProbe:
-            failureThreshold: 100
-            timeoutSeconds: 1
-            initialDelaySeconds: 10
-            periodSeconds: 3
+            failureThreshold: {{ .Values.tabletServer.livenessProbe.failureThreshold }}
+            timeoutSeconds: {{ .Values.tabletServer.livenessProbe.timeoutSeconds }}
+            initialDelaySeconds: {{ .Values.tabletServer.livenessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.tabletServer.livenessProbe.periodSeconds }}
             tcpSocket:
-              port: {{.Values.appConfig.externalPort}}
+              port: {{ .Values.appConfig.externalPort }}
           readinessProbe:
-            failureThreshold: 100
-            timeoutSeconds: 1
-            initialDelaySeconds: 10
-            periodSeconds: 3
+            failureThreshold: {{ .Values.tabletServer.readinessProbe.failureThreshold }}
+            timeoutSeconds: {{ .Values.tabletServer.readinessProbe.timeoutSeconds }}
+            initialDelaySeconds: {{ .Values.tabletServer.readinessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.tabletServer.readinessProbe.periodSeconds }}
             tcpSocket:
-              port: {{.Values.appConfig.externalPort}}
+              port: {{ .Values.appConfig.externalPort }}
           resources:
             {{- toYaml .Values.resources.tabletServer | nindent 12 }}
           volumeMounts:
