@@ -20,7 +20,7 @@ package org.apache.fluss.spark.read
 import org.apache.fluss.client.initializer.OffsetsInitializer
 import org.apache.fluss.config.Configuration
 import org.apache.fluss.metadata.{TableInfo, TablePath}
-import org.apache.fluss.spark.SparkConversions
+import org.apache.fluss.spark.{SparkConnectorOptions, SparkConversions}
 
 import org.apache.spark.sql.connector.read.{Batch, Scan}
 import org.apache.spark.sql.types.StructType
@@ -35,11 +35,31 @@ trait FlussScan extends Scan {
   override def readSchema(): StructType = {
     requiredSchema.getOrElse(SparkConversions.toSparkDataType(tableInfo.getRowType))
   }
+}
 
-  def startOffsetsInitializer: OffsetsInitializer
+object FlussScan {
+  def startOffsetsInitializer(options: CaseInsensitiveStringMap): OffsetsInitializer = {
+    SparkConnectorOptions.StartUpMode.withName(
+      options.getOrDefault(
+        SparkConnectorOptions.SCAN_START_UP_MODE.key(),
+        SparkConnectorOptions.StartUpMode.EARLIEST.toString)) match {
+      case SparkConnectorOptions.StartUpMode.EARLIEST => OffsetsInitializer.earliest()
+      // TODO Support full start up mode.
+      case _ =>
+        throw new IllegalArgumentException(
+          s"Unsupported scan start up mode: ${options.get(SparkConnectorOptions.SCAN_START_UP_MODE.key())}")
+    }
+  }
 
-  def stoppingOffsetsInitializer: OffsetsInitializer
-
+  def stoppingOffsetsInitializer(
+      isBatch: Boolean,
+      options: CaseInsensitiveStringMap): OffsetsInitializer = {
+    if (isBatch) {
+      OffsetsInitializer.latest()
+    } else {
+      throw new UnsupportedOperationException("Stream read is not supported yet.")
+    }
+  }
 }
 
 /** Fluss Append Scan. */
@@ -47,13 +67,13 @@ case class FlussAppendScan(
     tablePath: TablePath,
     tableInfo: TableInfo,
     requiredSchema: Option[StructType],
-    startOffsetsInitializer: OffsetsInitializer,
-    stoppingOffsetsInitializer: OffsetsInitializer,
     options: CaseInsensitiveStringMap,
     flussConfig: Configuration)
   extends FlussScan {
 
   override def toBatch: Batch = {
+    val startOffsetsInitializer = FlussScan.startOffsetsInitializer(options)
+    val stoppingOffsetsInitializer = FlussScan.stoppingOffsetsInitializer(true, options)
     new FlussAppendBatch(
       tablePath,
       tableInfo,
@@ -70,13 +90,20 @@ case class FlussUpsertScan(
     tablePath: TablePath,
     tableInfo: TableInfo,
     requiredSchema: Option[StructType],
-    startOffsetsInitializer: OffsetsInitializer,
-    stoppingOffsetsInitializer: OffsetsInitializer,
     options: CaseInsensitiveStringMap,
     flussConfig: Configuration)
   extends FlussScan {
 
   override def toBatch: Batch = {
-    new FlussUpsertBatch(tablePath, tableInfo, readSchema, options, flussConfig)
+    val startOffsetsInitializer = FlussScan.startOffsetsInitializer(options)
+    val stoppingOffsetsInitializer = FlussScan.stoppingOffsetsInitializer(true, options)
+    new FlussUpsertBatch(
+      tablePath,
+      tableInfo,
+      readSchema,
+      startOffsetsInitializer,
+      stoppingOffsetsInitializer,
+      options,
+      flussConfig)
   }
 }

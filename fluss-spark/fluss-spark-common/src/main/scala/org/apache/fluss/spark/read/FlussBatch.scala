@@ -155,11 +155,12 @@ class FlussUpsertBatch(
     tablePath: TablePath,
     tableInfo: TableInfo,
     readSchema: StructType,
+    startOffsetsInitializer: OffsetsInitializer,
+    stoppingOffsetsInitializer: OffsetsInitializer,
     options: CaseInsensitiveStringMap,
     flussConfig: Configuration)
   extends FlussBatch(tablePath, tableInfo, readSchema, flussConfig) {
 
-  private val latestOffsetsInitializer = OffsetsInitializer.latest()
   private val bucketOffsetsRetriever = new BucketOffsetsRetrieverImpl(admin, tablePath)
 
   override def planInputPartitions(): Array[InputPartition] = {
@@ -168,7 +169,10 @@ class FlussUpsertBatch(
       val partitionId = kvSnapshots.getPartitionId
       val bucketIds = kvSnapshots.getBucketIds
       val bucketIdToLogOffset =
-        latestOffsetsInitializer.getBucketOffsets(partitionName, bucketIds, bucketOffsetsRetriever)
+        stoppingOffsetsInitializer.getBucketOffsets(
+          partitionName,
+          bucketIds,
+          bucketOffsetsRetriever)
       bucketIds.asScala
         .map {
           bucketId =>
