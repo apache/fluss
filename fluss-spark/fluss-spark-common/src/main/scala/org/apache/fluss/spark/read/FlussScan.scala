@@ -17,6 +17,7 @@
 
 package org.apache.fluss.spark.read
 
+import org.apache.fluss.client.initializer.OffsetsInitializer
 import org.apache.fluss.config.Configuration
 import org.apache.fluss.metadata.{TableInfo, TablePath}
 import org.apache.fluss.spark.SparkConversions
@@ -34,6 +35,11 @@ trait FlussScan extends Scan {
   override def readSchema(): StructType = {
     requiredSchema.getOrElse(SparkConversions.toSparkDataType(tableInfo.getRowType))
   }
+
+  def startOffsetsInitializer: OffsetsInitializer
+
+  def stoppingOffsetsInitializer: OffsetsInitializer
+
 }
 
 /** Fluss Append Scan. */
@@ -41,12 +47,21 @@ case class FlussAppendScan(
     tablePath: TablePath,
     tableInfo: TableInfo,
     requiredSchema: Option[StructType],
+    startOffsetsInitializer: OffsetsInitializer,
+    stoppingOffsetsInitializer: OffsetsInitializer,
     options: CaseInsensitiveStringMap,
     flussConfig: Configuration)
   extends FlussScan {
 
   override def toBatch: Batch = {
-    new FlussAppendBatch(tablePath, tableInfo, readSchema, options, flussConfig)
+    new FlussAppendBatch(
+      tablePath,
+      tableInfo,
+      readSchema,
+      startOffsetsInitializer,
+      stoppingOffsetsInitializer,
+      options,
+      flussConfig)
   }
 }
 
@@ -55,6 +70,8 @@ case class FlussUpsertScan(
     tablePath: TablePath,
     tableInfo: TableInfo,
     requiredSchema: Option[StructType],
+    startOffsetsInitializer: OffsetsInitializer,
+    stoppingOffsetsInitializer: OffsetsInitializer,
     options: CaseInsensitiveStringMap,
     flussConfig: Configuration)
   extends FlussScan {

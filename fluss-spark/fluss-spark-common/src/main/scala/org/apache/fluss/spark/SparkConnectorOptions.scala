@@ -58,4 +58,15 @@ object SparkConnectorOptions {
 
   val SPARK_TABLE_OPTIONS: Seq[String] =
     Seq(PRIMARY_KEY, BUCKET_KEY, BUCKET_NUMBER, COMMENT).map(_.key)
+
+  object StartUpMode extends Enumeration {
+    val FULL, EARLIEST, LATEST, TIMESTAMP = Value
+  }
+
+  val SCAN_START_UP_MODE: ConfigOption[String] =
+    ConfigBuilder
+      .key("scan.startup.mode")
+      .stringType()
+      .defaultValue(StartUpMode.LATEST.toString)
+      .withDescription("The start up mode when read Fluss table.")
 }

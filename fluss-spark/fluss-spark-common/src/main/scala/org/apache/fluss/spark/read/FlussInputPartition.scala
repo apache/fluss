@@ -36,7 +36,8 @@ trait FlussInputPartition extends InputPartition {
  * @param tableBucket
  *   the table bucket to read from
  */
-case class FlussAppendInputPartition(tableBucket: TableBucket) extends FlussInputPartition
+case class FlussAppendInputPartition(tableBucket: TableBucket, startOffset: Long, stopOffset: Long)
+  extends FlussInputPartition
 
 /**
  * Represents an input partition for reading data from a primary key table bucket. This partition
