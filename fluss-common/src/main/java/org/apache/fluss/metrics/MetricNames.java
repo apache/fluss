@@ -39,6 +39,7 @@ public class MetricNames {
     public static final String ACTIVE_TABLET_SERVER_COUNT = "activeTabletServerCount";
     public static final String OFFLINE_BUCKET_COUNT = "offlineBucketCount";
     public static final String TABLE_COUNT = "tableCount";
+    public static final String LAKE_TABLE_COUNT = "lakeTableCount";
     public static final String BUCKET_COUNT = "bucketCount";
     public static final String PARTITION_COUNT = "partitionCount";
     public static final String REPLICAS_TO_DELETE_COUNT = "replicasToDeleteCount";
