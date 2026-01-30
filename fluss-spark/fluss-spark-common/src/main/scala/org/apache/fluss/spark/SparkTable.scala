@@ -54,10 +54,14 @@ class SparkTable(
     if (tableInfo.getPrimaryKeys.isEmpty) {
       new FlussAppendScanBuilder(tablePath, tableInfo, options, flussConfig)
     } else {
-      if (conf.getConf(SparkFlussConf.READ_OPTIMIZED, false)) {
-        flussConfig.setBoolean(SparkFlussConf.READ_OPTIMIZED_OPTION.key(), true)
+      val newFlussConfig = if (conf.getConf(SparkFlussConf.READ_OPTIMIZED, false)) {
+        val newFlussConfig_ = new FlussConfiguration(flussConfig)
+        newFlussConfig_.setBoolean(SparkFlussConf.READ_OPTIMIZED_OPTION.key(), true)
+        newFlussConfig_
+      } else {
+        flussConfig
       }
-      new FlussUpsertScanBuilder(tablePath, tableInfo, options, flussConfig)
+      new FlussUpsertScanBuilder(tablePath, tableInfo, options, newFlussConfig)
     }
   }
 }
