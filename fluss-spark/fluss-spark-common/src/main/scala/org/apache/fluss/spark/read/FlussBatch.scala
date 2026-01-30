@@ -72,30 +72,75 @@ class FlussAppendBatch(
     tablePath: TablePath,
     tableInfo: TableInfo,
     readSchema: StructType,
+    startOffsetsInitializer: OffsetsInitializer,
+    stoppingOffsetsInitializer: OffsetsInitializer,
     options: CaseInsensitiveStringMap,
     flussConfig: Configuration)
   extends FlussBatch(tablePath, tableInfo, readSchema, flussConfig) {
 
   override def planInputPartitions(): Array[InputPartition] = {
-    def createPartitions(partitionId: Option[Long]): Array[InputPartition] = {
-      (0 until tableInfo.getNumBuckets).map {
+    val bucketOffsetsRetrieverImpl = new BucketOffsetsRetrieverImpl(admin, tablePath)
+    val buckets = (0 until tableInfo.getNumBuckets).toSeq
+
+    def createPartitions(
+        partitionId: Option[Long],
+        startBucketOffsets: Map[Integer, Long],
+        stoppingBucketOffsets: Map[Integer, Long]): Array[InputPartition] = {
+      buckets.map {
         bucketId =>
-          val tableBucket = partitionId match {
+          val (startBucketOffset, stoppingBucketOffset) =
+            (startBucketOffsets(bucketId), stoppingBucketOffsets(bucketId))
+          partitionId match {
             case Some(partitionId) =>
-              new TableBucket(tableInfo.getTableId, partitionId, bucketId)
+              val tableBucket = new TableBucket(tableInfo.getTableId, partitionId, bucketId)
+              FlussAppendInputPartition(tableBucket, startBucketOffset, stoppingBucketOffset)
+                .asInstanceOf[InputPartition]
             case None =>
-              new TableBucket(tableInfo.getTableId, bucketId)
+              val tableBucket = new TableBucket(tableInfo.getTableId, bucketId)
+              FlussAppendInputPartition(tableBucket, startBucketOffset, stoppingBucketOffset)
+                .asInstanceOf[InputPartition]
           }
-          FlussAppendInputPartition(tableBucket).asInstanceOf[InputPartition]
       }.toArray
     }
 
     if (tableInfo.isPartitioned) {
-      partitionInfos.asScala.flatMap {
-        partitionInfo => createPartitions(Some(partitionInfo.getPartitionId))
-      }.toArray
+      partitionInfos.asScala
+        .map {
+          partitionInfo =>
+            val startBucketOffsets = startOffsetsInitializer.getBucketOffsets(
+              partitionInfo.getPartitionName,
+              buckets.map(Integer.valueOf).asJava,
+              bucketOffsetsRetrieverImpl)
+            val stoppingBucketOffsets = stoppingOffsetsInitializer.getBucketOffsets(
+              partitionInfo.getPartitionName,
+              buckets.map(Integer.valueOf).asJava,
+              bucketOffsetsRetrieverImpl)
+            (
+              partitionInfo.getPartitionId,
+              startBucketOffsets.asScala.map(e => (e._1, Long2long(e._2))),
+              stoppingBucketOffsets.asScala.map(e => (e._1, Long2long(e._2))))
+        }
+        .flatMap {
+          case (partitionId, startBucketOffsets, stoppingBucketOffsets) =>
+            createPartitions(
+              Some(partitionId),
+              startBucketOffsets.toMap,
+              stoppingBucketOffsets.toMap)
+        }
+        .toArray
     } else {
-      createPartitions(None)
+      val startBucketOffsets = startOffsetsInitializer.getBucketOffsets(
+        null,
+        buckets.map(Integer.valueOf).asJava,
+        bucketOffsetsRetrieverImpl)
+      val stoppingBucketOffsets = stoppingOffsetsInitializer.getBucketOffsets(
+        null,
+        buckets.map(Integer.valueOf).asJava,
+        bucketOffsetsRetrieverImpl)
+      createPartitions(
+        None,
+        startBucketOffsets.asScala.map(e => (e._1, Long2long(e._2))).toMap,
+        stoppingBucketOffsets.asScala.map(e => (e._1, Long2long(e._2))).toMap)
     }
   }
 

@@ -18,7 +18,6 @@
 package org.apache.fluss.spark.read
 
 import org.apache.fluss.client.table.scanner.ScanRecord
-import org.apache.fluss.client.table.scanner.log.ScanRecords
 import org.apache.fluss.config.Configuration
 import org.apache.fluss.metadata.{TableBucket, TablePath}
 
@@ -36,41 +35,41 @@ class FlussAppendPartitionReader(
   private val logScanner = table.newScan().project(projection).createLogScanner()
 
   // Iterator for current batch of records
-  private var currentRecords: java.util.Iterator[ScanRecord] = _
+  private var currentRecords: java.util.Iterator[ScanRecord] = java.util.Collections.emptyIterator()
+
+  // The latest offset of fluss is -2
+  private var currentOffset: Long = flussPartition.startOffset.max(0L)
 
   // initialize log scanner
   initialize()
 
+  private def pollMoreRecords(): Unit = {
+    val scanRecords = logScanner.poll(POLL_TIMEOUT)
+    if ((scanRecords == null || scanRecords.isEmpty) && currentOffset < flussPartition.stopOffset) {
+      throw new IllegalStateException(s"No more data from fluss server," +
+        s" but current offset $currentOffset not reach the stop offset ${flussPartition.stopOffset}")
+    }
+    currentRecords = scanRecords.records(tableBucket).iterator()
+  }
+
   override def next(): Boolean = {
-    if (closed) {
+    if (closed || currentOffset >= flussPartition.stopOffset) {
       return false
+    }
+
+    if (!currentRecords.hasNext) {
+      pollMoreRecords()
     }
 
     // If we have records in current batch, return next one
-    if (currentRecords != null && currentRecords.hasNext) {
-      val scanRecord = currentRecords.next()
-      currentRow = convertToSparkRow(scanRecord)
-      return true
-    }
-
-    // Poll for more records
-    val scanRecords = logScanner.poll(POLL_TIMEOUT)
-
-    if (scanRecords == null || scanRecords.isEmpty) {
-      return false
-    }
-
-    // Get records for our bucket
-    val bucketRecords = scanRecords.records(tableBucket)
-    if (bucketRecords.isEmpty) {
-      return false
-    }
-
-    currentRecords = bucketRecords.iterator()
     if (currentRecords.hasNext) {
       val scanRecord = currentRecords.next()
       currentRow = convertToSparkRow(scanRecord)
+      currentOffset += 1
       true
+    } else if (currentOffset < flussPartition.stopOffset) {
+      throw new IllegalStateException(s"No more data from fluss server," +
+        s" but current offset $currentOffset not reach the stop offset ${flussPartition.stopOffset}")
     } else {
       false
     }
@@ -83,10 +82,13 @@ class FlussAppendPartitionReader(
   }
 
   private def initialize(): Unit = {
+    logInfo(s"Prepare read table $tablePath partition $partitionId bucket $bucketId" +
+      s" with start offset ${flussPartition.startOffset} stop offset ${flussPartition.stopOffset}")
     if (partitionId != null) {
-      logScanner.subscribeFromBeginning(partitionId, bucketId)
+      logScanner.subscribe(partitionId, bucketId, flussPartition.startOffset)
     } else {
-      logScanner.subscribeFromBeginning(bucketId)
+      logScanner.subscribe(bucketId, flussPartition.startOffset)
     }
+    pollMoreRecords()
   }
 }
