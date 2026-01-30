@@ -17,10 +17,25 @@
 
 package org.apache.fluss.spark
 
-import org.apache.spark.sql.execution.streaming.MemoryStream
-import org.apache.spark.sql.streaming.StreamTest
+import org.apache.fluss.client.initializer.{BucketOffsetsRetrieverImpl, OffsetsInitializer}
+import org.apache.fluss.client.table.Table
+import org.apache.fluss.spark.read.{FlussMicroBatchStream, FlussSourceOffset}
+import org.apache.fluss.spark.write.{FlussAppendDataWriter, FlussUpsertDataWriter}
+import org.apache.fluss.utils.json.TableBucketOffsets
+
+import org.apache.spark.sql.Row
+import org.apache.spark.sql.catalyst.InternalRow
+import org.apache.spark.sql.connector.read.streaming.{Offset, SparkDataStream}
+import org.apache.spark.sql.execution.datasources.v2.StreamingDataSourceV2Relation
+import org.apache.spark.sql.execution.streaming.{MemoryStream, StreamExecution}
+import org.apache.spark.sql.streaming.{StreamTest, Trigger}
+import org.apache.spark.sql.streaming.util.StreamManualClock
+import org.apache.spark.sql.types.{IntegerType, StringType, StructField, StructType}
+import org.apache.spark.unsafe.types.UTF8String
 
 import java.io.File
+
+import scala.collection.JavaConverters._
 
 class SparkStreamingTest extends FlussSparkTestBase with StreamTest {
   import testImplicits._
@@ -130,6 +145,268 @@ class SparkStreamingTest extends FlussSparkTestBase with StreamTest {
         ("+I", 5L, "e"),
         ("+I", 6L, "f"))
       runTestWithStream("t", input1, input2, expect1, expect2)
+    }
+  }
+
+  test("read: log table") {
+    val tableName = "t"
+    withTable(tableName) {
+      sql("CREATE TABLE t (id int, data string)")
+      sql("INSERT INTO t VALUES (1, 'a'), (2, 'b'), (3, 'c')")
+
+      val schema = StructType(Seq(StructField("id", IntegerType), StructField("data", StringType)))
+
+      // Test with ProcessAllAvailable
+      testStream(spark.readStream.options(Map("scan.startup.mode" -> "latest")).table(tableName))(
+        ProcessAllAvailable(),
+        CheckLastBatch(),
+        StopStream,
+        StartStream(),
+        AddFlussData(tableName, schema, Seq(Row(4, "data4"), Row(5, "data5"))),
+        ProcessAllAvailable(),
+        CheckLastBatch(Row(4, "data4"), Row(5, "data5")),
+        CheckAnswer(Row(4, "data4"), Row(5, "data5"))
+      )
+
+      // Test with timed trigger
+      val clock = new StreamManualClock
+      testStream(spark.readStream.options(Map("scan.startup.mode" -> "latest")).table(tableName))(
+        StartStream(trigger = Trigger.ProcessingTime(500), clock),
+        AdvanceManualClock(500),
+        CheckNewAnswer(),
+        AddFlussData(tableName, schema, Seq(Row(4, "data4"), Row(5, "data5"))),
+        AdvanceManualClock(500),
+        CheckLastBatch(Row(4, "data4"), Row(5, "data5")),
+        CheckAnswer(Row(4, "data4"), Row(5, "data5")),
+        AddFlussData(tableName, schema, Seq(Row(6, "data6"), Row(7, "data7"))),
+        AdvanceManualClock(500),
+        CheckLastBatch(Row(6, "data6"), Row(7, "data7")),
+        CheckAnswer(Row(4, "data4"), Row(5, "data5"), Row(6, "data6"), Row(7, "data7"))
+      )
+    }
+  }
+
+  test("read: log partition table") {
+    val tableName = "t"
+    withTable(tableName) {
+      sql("CREATE TABLE t (id int, data string, pt string) PARTITIONED BY (pt)")
+      sql("INSERT INTO t VALUES (1, 'a', '11'), (2, 'b', '11'), (3, 'c', '22')")
+
+      val schema = StructType(
+        Seq(
+          StructField("id", IntegerType),
+          StructField("data", StringType),
+          StructField("pt", StringType)))
+
+      // Test with ProcessAllAvailable
+      testStream(spark.readStream.options(Map("scan.startup.mode" -> "latest")).table(tableName))(
+        ProcessAllAvailable(),
+        CheckLastBatch(),
+        StopStream,
+        StartStream(),
+        AddFlussData(tableName, schema, Seq(Row(4, "data4", "22"), Row(5, "data5", "11"))),
+        ProcessAllAvailable(),
+        CheckLastBatch(Row(4, "data4", "22"), Row(5, "data5", "11")),
+        CheckAnswer(Row(4, "data4", "22"), Row(5, "data5", "11"))
+      )
+
+      // Test with timed trigger
+      val clock = new StreamManualClock
+      testStream(spark.readStream.options(Map("scan.startup.mode" -> "latest")).table(tableName))(
+        StartStream(trigger = Trigger.ProcessingTime(500), clock),
+        AdvanceManualClock(500),
+        CheckNewAnswer(),
+        AddFlussData(tableName, schema, Seq(Row(4, "data4", "22"), Row(5, "data5", "11"))),
+        AdvanceManualClock(500),
+        CheckLastBatch(Row(4, "data4", "22"), Row(5, "data5", "11")),
+        CheckAnswer(Row(4, "data4", "22"), Row(5, "data5", "11")),
+        AddFlussData(tableName, schema, Seq(Row(6, "data6", "22"), Row(7, "data7", "11"))),
+        AdvanceManualClock(500),
+        CheckLastBatch(Row(6, "data6", "22"), Row(7, "data7", "11")),
+        CheckAnswer(
+          Row(4, "data4", "22"),
+          Row(5, "data5", "11"),
+          Row(6, "data6", "22"),
+          Row(7, "data7", "11"))
+      )
+    }
+  }
+
+  test("read: primary key table") {
+    val tableName = "t"
+    withTable(tableName) {
+      sql(
+        "CREATE TABLE t (pk1 int, pk2 string, id int, data string) TBLPROPERTIES('primary.key' = 'pk1, pk2',  'bucket.num' = 1)")
+      sql("INSERT INTO t VALUES (1, 'a', 11, 'aa'), (2, 'b', 22, 'bb'), (3, 'c', 33, 'cc')")
+
+      val schema = StructType(
+        Seq(
+          StructField("pk1", IntegerType),
+          StructField("pk2", StringType),
+          StructField("id", IntegerType),
+          StructField("data", StringType)))
+
+      // Test with ProcessAllAvailable
+      testStream(spark.readStream.options(Map("scan.startup.mode" -> "latest")).table(tableName))(
+        ProcessAllAvailable(),
+        CheckLastBatch(),
+        StopStream,
+        StartStream(),
+        AddFlussData(tableName, schema, Seq(Row(4, "data4", 44, "dd"), Row(5, "data5", 55, "ee"))),
+        ProcessAllAvailable(),
+        CheckLastBatch(Row(4, "data4", 44, "dd"), Row(5, "data5", 55, "ee")),
+        CheckAnswer(Row(4, "data4", 44, "dd"), Row(5, "data5", 55, "ee"))
+      )
+
+      // Test with timed trigger
+      val clock = new StreamManualClock
+      testStream(spark.readStream.options(Map("scan.startup.mode" -> "latest")).table(tableName))(
+        StartStream(trigger = Trigger.ProcessingTime(500), clock),
+        AdvanceManualClock(500),
+        CheckNewAnswer(),
+        AddFlussData(tableName, schema, Seq(Row(4, "data4", 44, "dd"), Row(5, "data5", 55, "ee"))),
+        AdvanceManualClock(500),
+        CheckLastBatch(Row(4, "data4", 44, "dd"), Row(5, "data5", 55, "ee")),
+        CheckAnswer(Row(4, "data4", 44, "dd"), Row(5, "data5", 55, "ee")),
+        AddFlussData(tableName, schema, Seq(Row(6, "data6", 66, "ff"), Row(7, "data7", 77, "gg"))),
+        AdvanceManualClock(500),
+        CheckLastBatch(Row(6, "data6", 66, "ff"), Row(7, "data7", 77, "gg")),
+        CheckAnswer(
+          Row(4, "data4", 44, "dd"),
+          Row(5, "data5", 55, "ee"),
+          Row(6, "data6", 66, "ff"),
+          Row(7, "data7", 77, "gg"))
+      )
+    }
+  }
+
+  test("read: primary key partition table") {
+    val tableName = "t"
+    withTable(tableName) {
+      sql(
+        "CREATE TABLE t (pk1 int, pk2 string, id int, data string, dt string) PARTITIONED BY(dt) TBLPROPERTIES('primary.key' = 'pk1, pk2, dt',  'bucket.num' = 1)")
+      sql(
+        "INSERT INTO t VALUES (1, 'a', 11, 'aa', 'a'), (2, 'b', 22, 'bb', 'b'), (3, 'c', 33, 'cc', 'b')")
+
+      val schema = StructType(
+        Seq(
+          StructField("pk1", IntegerType),
+          StructField("pk2", StringType),
+          StructField("id", IntegerType),
+          StructField("data", StringType),
+          StructField("dt", StringType)
+        ))
+
+      // Test with ProcessAllAvailable
+      testStream(spark.readStream.options(Map("scan.startup.mode" -> "latest")).table(tableName))(
+        ProcessAllAvailable(),
+        CheckLastBatch(),
+        StopStream,
+        StartStream(),
+        AddFlussData(
+          tableName,
+          schema,
+          Seq(Row(4, "data4", 44, "dd", "a"), Row(5, "data5", 55, "ee", "b"))),
+        ProcessAllAvailable(),
+        CheckLastBatch(Row(4, "data4", 44, "dd", "a"), Row(5, "data5", 55, "ee", "b")),
+        CheckAnswer(Row(4, "data4", 44, "dd", "a"), Row(5, "data5", 55, "ee", "b"))
+      )
+
+      // Test with timed trigger
+      val clock = new StreamManualClock
+      testStream(spark.readStream.options(Map("scan.startup.mode" -> "latest")).table(tableName))(
+        StartStream(trigger = Trigger.ProcessingTime(500), clock),
+        AdvanceManualClock(500),
+        CheckNewAnswer(),
+        AddFlussData(
+          tableName,
+          schema,
+          Seq(Row(4, "data4", 44, "dd", "a"), Row(5, "data5", 55, "ee", "b"))),
+        AdvanceManualClock(500),
+        CheckLastBatch(Row(4, "data4", 44, "dd", "a"), Row(5, "data5", 55, "ee", "b")),
+        CheckAnswer(Row(4, "data4", 44, "dd", "a"), Row(5, "data5", 55, "ee", "b")),
+        AddFlussData(
+          tableName,
+          schema,
+          Seq(Row(6, "data6", 66, "ff", "b"), Row(7, "data7", 77, "gg", "a"))),
+        AdvanceManualClock(500),
+        CheckLastBatch(Row(6, "data6", 66, "ff", "b"), Row(7, "data7", 77, "gg", "a")),
+        CheckAnswer(
+          Row(4, "data4", 44, "dd", "a"),
+          Row(5, "data5", 55, "ee", "b"),
+          Row(6, "data6", 66, "ff", "b"),
+          Row(7, "data7", 77, "gg", "a"))
+      )
+    }
+  }
+
+  private def writeToLogTable(table: Table, schema: StructType, dataArr: Seq[Row]): Unit = {
+    val writer = if (table.getTableInfo.hasPrimaryKey) {
+      FlussUpsertDataWriter(table.getTableInfo.getTablePath, schema, conn.getConfiguration)
+    } else {
+      FlussAppendDataWriter(table.getTableInfo.getTablePath, schema, conn.getConfiguration)
+    }
+    val rows = dataArr.map {
+      row =>
+        val internalRow = InternalRow.fromSeq(row.toSeq.map {
+          case v: String => UTF8String.fromString(v)
+          case v => v
+        })
+        internalRow
+    }
+    rows.foreach(internalRow => writer.write(internalRow))
+    writer.commit()
+  }
+
+  case class AddFlussData[T](tableName: String, schema: StructType, dataArr: Seq[Row])
+    extends AddData {
+    override def addData(query: Option[StreamExecution]): (SparkDataStream, Offset) = {
+      require(
+        query.nonEmpty,
+        "Cannot add data when there is no query for finding the active fluss stream source")
+      val sources: Seq[FlussMicroBatchStream] = {
+        query.get.logicalPlan.collect {
+          case r: StreamingDataSourceV2Relation if r.stream.isInstanceOf[FlussMicroBatchStream] =>
+            r.stream
+        }
+      }.distinct.map(_.asInstanceOf[FlussMicroBatchStream])
+      if (!sources.exists(s => s.tablePath.equals(createTablePath(tableName)))) {
+        throw new IllegalArgumentException(
+          s"Could not find fluss stream source for table $tableName")
+      }
+
+      val flussTable = loadFlussTable(createTablePath(tableName))
+      writeToLogTable(flussTable, schema, dataArr)
+
+      val flussSource = sources.filter(s => s.tablePath.equals(createTablePath(tableName))).head
+      val buckets = (0 until flussTable.getTableInfo.getNumBuckets).toSeq
+
+      val offsetsInitializer = OffsetsInitializer.latest()
+      val tableBucketOffsets = if (flussTable.getTableInfo.isPartitioned) {
+        val partitionInfos = admin.listPartitionInfos(flussTable.getTableInfo.getTablePath).get()
+        val partitionOffsets = partitionInfos.asScala.map(
+          partitionInfo =>
+            FlussMicroBatchStream.getLatestOffsets(
+              flussTable.getTableInfo,
+              offsetsInitializer,
+              new BucketOffsetsRetrieverImpl(admin, flussTable.getTableInfo.getTablePath),
+              buckets,
+              Some(partitionInfo)))
+        val mergedOffsets = partitionOffsets
+          .map(_.getOffsets)
+          .reduce((l, r) => (l.asScala ++ r.asScala).asJava)
+        new TableBucketOffsets(flussTable.getTableInfo.getTableId, mergedOffsets)
+      } else {
+        FlussMicroBatchStream.getLatestOffsets(
+          flussTable.getTableInfo,
+          offsetsInitializer,
+          new BucketOffsetsRetrieverImpl(admin, flussTable.getTableInfo.getTablePath),
+          buckets,
+          None)
+      }
+
+      val offset = FlussSourceOffset(tableBucketOffsets)
+      (flussSource, offset)
     }
   }
 }

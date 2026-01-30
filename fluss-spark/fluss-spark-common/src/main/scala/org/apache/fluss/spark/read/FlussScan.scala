@@ -22,6 +22,7 @@ import org.apache.fluss.metadata.{TableInfo, TablePath}
 import org.apache.fluss.spark.SparkConversions
 
 import org.apache.spark.sql.connector.read.{Batch, Scan}
+import org.apache.spark.sql.connector.read.streaming.MicroBatchStream
 import org.apache.spark.sql.types.StructType
 import org.apache.spark.sql.util.CaseInsensitiveStringMap
 
@@ -48,6 +49,20 @@ case class FlussAppendScan(
   override def toBatch: Batch = {
     new FlussAppendBatch(tablePath, tableInfo, readSchema, options, flussConfig)
   }
+
+  override def toMicroBatchStream(checkpointLocation: String): MicroBatchStream = {
+    val startOffsetsInitializer = FlussOffsetInitializers.startOffsetsInitializer(options, flussConfig)
+    val stoppingOffsetsInitializer = FlussOffsetInitializers.stoppingOffsetsInitializer(false, options, flussConfig)
+    new FlussAppendMicroBatchStream(
+      tablePath,
+      tableInfo,
+      readSchema,
+      options,
+      flussConfig,
+      checkpointLocation,
+      startOffsetsInitializer,
+      stoppingOffsetsInitializer)
+  }
 }
 
 /** Fluss Upsert Scan. */
@@ -61,5 +76,19 @@ case class FlussUpsertScan(
 
   override def toBatch: Batch = {
     new FlussUpsertBatch(tablePath, tableInfo, readSchema, options, flussConfig)
+  }
+
+  override def toMicroBatchStream(checkpointLocation: String): MicroBatchStream = {
+    val startOffsetsInitializer = FlussOffsetInitializers.startOffsetsInitializer(options, flussConfig)
+    val stoppingOffsetsInitializer = FlussOffsetInitializers.stoppingOffsetsInitializer(false, options, flussConfig)
+    new FlussUpsertMicroBatchStream(
+      tablePath,
+      tableInfo,
+      readSchema,
+      options,
+      flussConfig,
+      checkpointLocation,
+      startOffsetsInitializer,
+      stoppingOffsetsInitializer)
   }
 }

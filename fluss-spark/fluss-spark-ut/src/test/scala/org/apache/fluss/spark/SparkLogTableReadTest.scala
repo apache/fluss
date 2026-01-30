@@ -80,6 +80,65 @@ class SparkLogTableReadTest extends FlussSparkTestBase {
     }
   }
 
+  test("Spark Read: primary key table") {
+    withTable("t") {
+      sql(s"""
+             |CREATE TABLE $DEFAULT_DATABASE.t (orderId BIGINT, itemId BIGINT, amount INT, address STRING)
+             |TBLPROPERTIES("primary.key" = "orderId")
+             |""".stripMargin)
+
+      sql(s"""
+             |INSERT INTO $DEFAULT_DATABASE.t VALUES
+             |(600L, 21L, 601, "addr1"), (700L, 22L, 602, "addr2"),
+             |(800L, 23L, 603, "addr3"), (900L, 24L, 604, "addr4"),
+             |(1000L, 25L, 605, "addr5")
+             |""".stripMargin)
+
+      checkAnswer(
+        sql(s"SELECT * FROM $DEFAULT_DATABASE.t ORDER BY orderId"),
+        Row(600L, 21L, 601, "addr1") ::
+          Row(700L, 22L, 602, "addr2") ::
+          Row(800L, 23L, 603, "addr3") ::
+          Row(900L, 24L, 604, "addr4") ::
+          Row(1000L, 25L, 605, "addr5") :: Nil
+      )
+
+      sql(s"""
+             |INSERT INTO $DEFAULT_DATABASE.t VALUES
+             |(700L, 220L, 602, "addr2"),
+             |(900L, 240L, 604, "addr4"),
+             |(1100L, 260L, 606, "addr6")
+             |""".stripMargin)
+
+      checkAnswer(
+        sql(s"""
+               |SELECT orderId, itemId, address FROM $DEFAULT_DATABASE.t
+               |WHERE amount <= 603 ORDER BY orderId""".stripMargin),
+        Row(600L, 21L, "addr1") ::
+          Row(700L, 220L, "addr2") ::
+          Row(800L, 23L, "addr3") ::
+          Nil
+      )
+    }
+  }
+
+  test("Fluss Write: log partition table") {
+    withTable("t") {
+      sql(
+        s"""
+           |CREATE TABLE $DEFAULT_DATABASE.t (id INT, pt STRING)
+           |PARTITIONED BY (pt)
+           |""".stripMargin
+      )
+      sql(
+        s"""
+           |INSERT INTO $DEFAULT_DATABASE.t values(1, "a")
+           |""".stripMargin)
+      spark.sparkContext.setLogLevel("INFO")
+      checkAnswer(sql(s"SELECT * from $DEFAULT_DATABASE.t"), Seq(Row(1, "a")))
+    }
+  }
+
   test("Spark Read: partitioned log table") {
     withTable("t") {
       sql(
