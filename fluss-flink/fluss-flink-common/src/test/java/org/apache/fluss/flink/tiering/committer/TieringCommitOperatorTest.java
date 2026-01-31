@@ -376,6 +376,90 @@ class TieringCommitOperatorTest extends FlinkTestBase {
                         mockMissingCommittedLakeSnapshot));
     }
 
+    @Test
+    void testFailedMarkerCleansUpCollectedWriteResults() throws Exception {
+        TablePath tablePath = TablePath.of("fluss", "test_failed_marker");
+        long tableId = createTable(tablePath, DEFAULT_PK_TABLE_DESCRIPTOR);
+        int numberOfWriteResults = 3;
+
+        // Send partial write results for the table
+        TableBucket t1b0 = new TableBucket(tableId, 0);
+        committerOperator.processElement(
+                createTableBucketWriteResultStreamRecord(
+                        tablePath, t1b0, 1, 11, 21L, numberOfWriteResults));
+
+        TableBucket t1b1 = new TableBucket(tableId, 1);
+        committerOperator.processElement(
+                createTableBucketWriteResultStreamRecord(
+                        tablePath, t1b1, 2, 12, 22L, numberOfWriteResults));
+
+        // Verify no lake snapshot yet (not all write results received)
+        verifyNoLakeSnapshot(tablePath);
+
+        // Now send a failure marker for the table
+        StreamRecord<TableBucketWriteResult<TestingWriteResult>> failedMarkerRecord =
+                new StreamRecord<>(TableBucketWriteResult.failedMarker(tableId, "Test failure"));
+        committerOperator.processElement(failedMarkerRecord);
+
+        // Verify no lake snapshot after failure marker (state should be cleaned)
+        verifyNoLakeSnapshot(tablePath);
+
+        // Now send new write results for a fresh tiering round
+        // This verifies that the old partial state was cleaned up and doesn't interfere
+        for (int bucket = 0; bucket < 3; bucket++) {
+            TableBucket tableBucket = new TableBucket(tableId, bucket);
+            committerOperator.processElement(
+                    createTableBucketWriteResultStreamRecord(
+                            tablePath, tableBucket, bucket + 10, bucket + 100, bucket + 1000L, 3));
+        }
+
+        // Verify lake snapshot was created with the new write results
+        Map<TableBucket, Long> expectedLogEndOffsets = new HashMap<>();
+        expectedLogEndOffsets.put(new TableBucket(tableId, 0), 100L);
+        expectedLogEndOffsets.put(new TableBucket(tableId, 1), 101L);
+        expectedLogEndOffsets.put(new TableBucket(tableId, 2), 102L);
+        verifyLakeSnapshot(tablePath, tableId, 1, expectedLogEndOffsets);
+    }
+
+    @Test
+    void testFailedMarkerForNonExistentTableDoesNothing() throws Exception {
+        // Create a table
+        TablePath tablePath = TablePath.of("fluss", "test_failed_marker_nonexistent");
+        long tableId = createTable(tablePath, DEFAULT_PK_TABLE_DESCRIPTOR);
+
+        // Send a failure marker for a non-existent table (no collected state)
+        long nonExistentTableId = tableId + 9999;
+        StreamRecord<TableBucketWriteResult<TestingWriteResult>> failedMarkerRecord =
+                new StreamRecord<>(
+                        TableBucketWriteResult.failedMarker(
+                                nonExistentTableId, "Test failure for non-existent table"));
+
+        // This should not throw an exception
+        committerOperator.processElement(failedMarkerRecord);
+
+        // The operator should continue working normally
+        // Send write results for the actual table
+        int numberOfWriteResults = 3;
+        for (int bucket = 0; bucket < 3; bucket++) {
+            TableBucket tableBucket = new TableBucket(tableId, bucket);
+            committerOperator.processElement(
+                    createTableBucketWriteResultStreamRecord(
+                            tablePath,
+                            tableBucket,
+                            bucket,
+                            bucket,
+                            (long) bucket,
+                            numberOfWriteResults));
+        }
+
+        // Verify lake snapshot was created
+        Map<TableBucket, Long> expectedLogEndOffsets = new HashMap<>();
+        expectedLogEndOffsets.put(new TableBucket(tableId, 0), 0L);
+        expectedLogEndOffsets.put(new TableBucket(tableId, 1), 1L);
+        expectedLogEndOffsets.put(new TableBucket(tableId, 2), 2L);
+        verifyLakeSnapshot(tablePath, tableId, 1, expectedLogEndOffsets);
+    }
+
     private StreamRecord<TableBucketWriteResult<TestingWriteResult>>
             createTableBucketWriteResultStreamRecord(
                     TablePath tablePath,

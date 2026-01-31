@@ -21,16 +21,19 @@ import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.client.Connection;
 import org.apache.fluss.flink.adapter.SingleThreadMultiplexSourceReaderBaseAdapter;
+import org.apache.fluss.flink.tiering.event.FailedTieringEvent;
 import org.apache.fluss.flink.tiering.event.TieringReachMaxDurationEvent;
 import org.apache.fluss.flink.tiering.source.split.TieringSplit;
 import org.apache.fluss.flink.tiering.source.state.TieringSplitState;
 import org.apache.fluss.lake.writer.LakeTieringFactory;
 
+import org.apache.flink.api.connector.source.ReaderOutput;
 import org.apache.flink.api.connector.source.SourceEvent;
 import org.apache.flink.api.connector.source.SourceReader;
 import org.apache.flink.api.connector.source.SourceReaderContext;
 import org.apache.flink.connector.base.source.reader.RecordsWithSplitIds;
 import org.apache.flink.connector.base.source.reader.synchronization.FutureCompletingBlockingQueue;
+import org.apache.flink.core.io.InputStatus;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -38,6 +41,8 @@ import java.time.Duration;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Queue;
+import java.util.concurrent.ConcurrentLinkedQueue;
 
 import static org.apache.fluss.flink.tiering.source.TieringSplitReader.DEFAULT_POLL_TIMEOUT;
 
@@ -53,6 +58,10 @@ public final class TieringSourceReader<WriteResult>
     private static final Logger LOG = LoggerFactory.getLogger(TieringSourceReader.class);
 
     private final Connection connection;
+
+    // Queue to store failure markers that need to be sent to downstream Committer
+    // These markers are generated when receiving FailedTieringEvent from Enumerator
+    private final Queue<TableBucketWriteResult<WriteResult>> failedMarkersForCommitter;
 
     public TieringSourceReader(
             FutureCompletingBlockingQueue<RecordsWithSplitIds<TableBucketWriteResult<WriteResult>>>
@@ -82,6 +91,7 @@ public final class TieringSourceReader<WriteResult>
                 context.getConfiguration(),
                 context);
         this.connection = connection;
+        this.failedMarkersForCommitter = new ConcurrentLinkedQueue<>();
     }
 
     @Override
@@ -89,6 +99,49 @@ public final class TieringSourceReader<WriteResult>
         // we request a split only if we did not get splits during the checkpoint restore
         if (getNumberOfCurrentlyAssignedSplits() == 0) {
             context.sendSplitRequest();
+        }
+    }
+
+    @Override
+    public InputStatus pollNext(ReaderOutput<TableBucketWriteResult<WriteResult>> output)
+            throws Exception {
+        // Check for failed tables and send events to Enumerator
+        processFailedTables();
+
+        // Emit any pending failure markers to the downstream Committer
+        emitFailedMarkersToCommitter(output);
+
+        return super.pollNext(output);
+    }
+
+    /**
+     * Processes any failed tables detected from the SplitReader and sends FailedTieringEvent to the
+     * Enumerator.
+     */
+    private void processFailedTables() {
+        ((TieringSourceFetcherManager<WriteResult>) splitFetcherManager)
+                .pollFailedTableInfos(
+                        failedTable -> {
+                            LOG.info(
+                                    "Detected table {} tiering failure, sending FailedTieringEvent "
+                                            + "to Enumerator. Reason: {}",
+                                    failedTable.getTableId(),
+                                    failedTable.getFailReason());
+                            context.sendSourceEventToCoordinator(
+                                    new FailedTieringEvent(
+                                            failedTable.getTableId(), failedTable.getFailReason()));
+                        });
+    }
+
+    /** Emits any pending failure markers to the downstream Committer. */
+    private void emitFailedMarkersToCommitter(
+            ReaderOutput<TableBucketWriteResult<WriteResult>> output) {
+        TableBucketWriteResult<WriteResult> failedMarker;
+        while ((failedMarker = failedMarkersForCommitter.poll()) != null) {
+            LOG.info(
+                    "Emitting failure marker for table {} to downstream Committer.",
+                    failedMarker.tableBucket().getTableId());
+            output.collect(failedMarker);
         }
     }
 
@@ -128,6 +181,29 @@ public final class TieringSourceReader<WriteResult>
             LOG.info("Received reach max duration for table {}", tableId);
             ((TieringSourceFetcherManager<WriteResult>) splitFetcherManager)
                     .markTableReachTieringMaxDuration(tableId);
+        } else if (sourceEvent instanceof FailedTieringEvent) {
+            FailedTieringEvent failedEvent = (FailedTieringEvent) sourceEvent;
+            long failedTableId = failedEvent.getTableId();
+            String failReason = failedEvent.failReason();
+
+            LOG.info(
+                    "Received FailedTieringEvent from Enumerator for table {}. Reason: {}",
+                    failedTableId,
+                    failReason);
+
+            // Notify the SplitReader to clean up state for the failed table
+            ((TieringSourceFetcherManager<WriteResult>) splitFetcherManager)
+                    .notifyTableTieringFailed(failedTableId);
+
+            // Create a failure marker and queue it for sending to downstream Committer
+            TableBucketWriteResult<WriteResult> failedMarker =
+                    TableBucketWriteResult.failedMarker(failedTableId, failReason);
+            failedMarkersForCommitter.offer(failedMarker);
+            LOG.info(
+                    "Queued failure marker for table {} to be sent to downstream Committer.",
+                    failedTableId);
+        } else {
+            super.handleSourceEvents(sourceEvent);
         }
     }
 
