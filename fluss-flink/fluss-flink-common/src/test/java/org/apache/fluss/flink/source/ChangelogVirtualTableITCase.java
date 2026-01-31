@@ -377,6 +377,32 @@ abstract class ChangelogVirtualTableITCase extends AbstractTestBase {
                 .containsExactlyInAnyOrder(
                         "+I[+I, 3, 1970-01-01T00:00:00.200Z, 4, v4]",
                         "+I[+I, 4, 1970-01-01T00:00:00.200Z, 5, v5]");
+
+        // 3. Test scan.startup.mode='latest' - should only read new records after subscription
+        String optionsLatest = " /*+ OPTIONS('scan.startup.mode' = 'latest') */";
+        String queryLatest = "SELECT id FROM startup_mode_test$changelog" + optionsLatest;
+        CloseableIterator<Row> rowIterLatest = tEnv.executeSql(queryLatest).collect();
+        List<String> latestResults = new ArrayList<>();
+        for (int attempt = 0; attempt < 10; attempt++) {
+            // Write a new record (with id larger than 5)
+            int rowId = 6 + attempt;
+            writeRows(conn, tablePath, Arrays.asList(row(rowId, "v" + rowId)), false);
+
+            // Try to fetch one record with a 5-second timeout
+            latestResults = collectRowsWithTimeout(rowIterLatest, 1, Duration.ofSeconds(5));
+            if (!latestResults.isEmpty()) {
+                break;
+            }
+        }
+        // Newly inserted records after the query subscription.
+        assertThat(latestResults.getFirst()).startsWith("+I[");
+        String row = latestResults.getFirst();
+        // Extract the id from the changelog row representation.
+        String rowIdInBracketsPattern = ".*\\[(\\d+)]";
+        assertThat(row).matches(rowIdInBracketsPattern);
+        int id = Integer.parseInt(row.replaceAll(rowIdInBracketsPattern, "$1"));
+        // Verify that only records written after subscription (id > 5) are read
+        assertThat(id).isGreaterThan(5);
     }
 
     @Test
