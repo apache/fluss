@@ -103,6 +103,7 @@ import static org.apache.fluss.server.zk.ZooKeeperTestUtils.createZooKeeperClien
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.apache.fluss.testutils.common.CommonTestUtils.waitUntil;
 import static org.apache.fluss.testutils.common.CommonTestUtils.waitValue;
+import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.function.FunctionUtils.uncheckedFunction;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.fail;
@@ -134,6 +135,7 @@ public final class FlussClusterExtension
     private final Map<Integer, ServerInfo> tabletServerInfos;
     private final Configuration clusterConf;
     private final Clock clock;
+    private final String[] racks;
 
     /** Creates a new {@link Builder} for {@link FlussClusterExtension}. */
     public static Builder builder() {
@@ -145,7 +147,8 @@ public final class FlussClusterExtension
             String coordinatorServerListeners,
             String tabletServerListeners,
             Configuration clusterConf,
-            Clock clock) {
+            Clock clock,
+            String[] racks) {
         this.initialNumOfTabletServers = numOfTabletServers;
         this.tabletServers = new HashMap<>(numOfTabletServers);
         this.coordinatorServerListeners = coordinatorServerListeners;
@@ -153,6 +156,10 @@ public final class FlussClusterExtension
         this.tabletServerInfos = new HashMap<>();
         this.clusterConf = clusterConf;
         this.clock = clock;
+        checkArgument(
+                racks != null && racks.length == numOfTabletServers,
+                "racks must be not null and have the same length as numOfTabletServers");
+        this.racks = racks;
     }
 
     @Override
@@ -310,10 +317,17 @@ public final class FlussClusterExtension
 
     private void startTabletServer(int serverId, @Nullable Configuration overwriteConfig)
             throws Exception {
+        String rackName;
+        if (racks.length <= serverId) {
+            rackName = "rack-" + serverId;
+        } else {
+            rackName = racks[serverId];
+        }
+
         String dataDir = getDataDir(serverId);
         Configuration tabletServerConf = new Configuration(clusterConf);
         tabletServerConf.set(ConfigOptions.TABLET_SERVER_ID, serverId);
-        tabletServerConf.set(ConfigOptions.TABLET_SERVER_RACK, "rack" + serverId);
+        tabletServerConf.set(ConfigOptions.TABLET_SERVER_RACK, rackName);
         tabletServerConf.set(ConfigOptions.DATA_DIR, dataDir);
         tabletServerConf.setString(
                 ConfigOptions.ZOOKEEPER_ADDRESS, zooKeeperServer.getConnectString());
@@ -329,7 +343,7 @@ public final class FlussClusterExtension
         ServerInfo serverInfo =
                 new ServerInfo(
                         serverId,
-                        "rack" + serverId,
+                        rackName,
                         tabletServer.getRpcServer().getBindEndpoints(),
                         ServerType.TABLET_SERVER);
 
@@ -932,6 +946,7 @@ public final class FlussClusterExtension
         private String tabletServerListeners = DEFAULT_LISTENERS;
         private String coordinatorServerListeners = DEFAULT_LISTENERS;
         private Clock clock = SystemClock.getInstance();
+        private String[] racks = new String[] {"rack-0"};
 
         private final Configuration clusterConf = new Configuration();
 
@@ -971,13 +986,28 @@ public final class FlussClusterExtension
             return this;
         }
 
+        /** Sets the racks of tablet servers. */
+        public Builder setRacks(String[] racks) {
+            this.racks = racks;
+            return this;
+        }
+
         public FlussClusterExtension build() {
+            if (numOfTabletServers > 1 && racks.length == 1) {
+                String[] racks = new String[numOfTabletServers];
+                for (int i = 0; i < numOfTabletServers; i++) {
+                    racks[i] = "rack-" + i;
+                }
+                this.racks = racks;
+            }
+
             return new FlussClusterExtension(
                     numOfTabletServers,
                     coordinatorServerListeners,
                     tabletServerListeners,
                     clusterConf,
-                    clock);
+                    clock,
+                    racks);
         }
     }
 }

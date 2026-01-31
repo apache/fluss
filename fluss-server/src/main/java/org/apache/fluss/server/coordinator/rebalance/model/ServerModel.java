@@ -190,7 +190,7 @@ public class ServerModel implements Comparable<ServerModel> {
     @Override
     public String toString() {
         return String.format(
-                "ServerModel[id=%s,rack=%s,isAlive=%s,replicaCount=%s]",
+                "ServerModel[id=%s,rack=%s,isOfflineTagged=%s,replicaCount=%s]",
                 serverId, rack, isOfflineTagged, replicas.size());
     }
 
