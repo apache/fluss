@@ -1,6 +1,6 @@
 ---
 title: "Rust Client"
-sidebar_position: 3
+sidebar_position: 4
 ---
 
 # Fluss Rust Client
@@ -13,7 +13,7 @@ The client provides two main APIs:
 * **Table API**: For high-performance data reading and writing.
 
 ## Installation
-The Fluss Rust client is currently available via the official Git repository. Add it to your `Cargo.toml`:
+The Fluss Rust client is currently available via the official Git repository. To use it, add the following to your `Cargo.toml`:
 
 ```toml
 [dependencies]
