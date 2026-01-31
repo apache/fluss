@@ -134,6 +134,7 @@ public final class FlussClusterExtension
     private final Map<Integer, ServerInfo> tabletServerInfos;
     private final Configuration clusterConf;
     private final Clock clock;
+    private final List<String> remoteDirNames;
 
     /** Creates a new {@link Builder} for {@link FlussClusterExtension}. */
     public static Builder builder() {
@@ -145,7 +146,8 @@ public final class FlussClusterExtension
             String coordinatorServerListeners,
             String tabletServerListeners,
             Configuration clusterConf,
-            Clock clock) {
+            Clock clock,
+            List<String> remoteDirNames) {
         this.initialNumOfTabletServers = numOfTabletServers;
         this.tabletServers = new HashMap<>(numOfTabletServers);
         this.coordinatorServerListeners = coordinatorServerListeners;
@@ -153,6 +155,7 @@ public final class FlussClusterExtension
         this.tabletServerInfos = new HashMap<>();
         this.clusterConf = clusterConf;
         this.clock = clock;
+        this.remoteDirNames = remoteDirNames;
     }
 
     @Override
@@ -203,15 +206,19 @@ public final class FlussClusterExtension
 
     public void start() throws Exception {
         tempDir = Files.createTempDirectory("fluss-testing-cluster").toFile();
+        Configuration conf = new Configuration();
+        setRemoteDataDir(conf);
+        setRemoteDataDirs(conf);
         zooKeeperServer = ZooKeeperTestUtils.createAndStartZookeeperTestingServer();
         zooKeeperClient =
-                createZooKeeperClient(zooKeeperServer.getConnectString(), NOPErrorHandler.INSTANCE);
+                createZooKeeperClient(
+                        conf, zooKeeperServer.getConnectString(), NOPErrorHandler.INSTANCE);
         metadataManager =
                 new MetadataManager(
                         zooKeeperClient,
                         clusterConf,
                         new LakeCatalogDynamicLoader(clusterConf, null, true));
-        Configuration conf = new Configuration();
+
         rpcClient =
                 RpcClient.create(
                         conf,
@@ -261,6 +268,7 @@ public final class FlussClusterExtension
             conf.setString(ConfigOptions.ZOOKEEPER_ADDRESS, zooKeeperServer.getConnectString());
             conf.setString(ConfigOptions.BIND_LISTENERS, coordinatorServerListeners);
             setRemoteDataDir(conf);
+            setRemoteDataDirs(conf);
             coordinatorServer = new CoordinatorServer(conf);
             coordinatorServer.start();
             coordinatorServerInfo =
@@ -364,12 +372,26 @@ public final class FlussClusterExtension
         conf.set(ConfigOptions.REMOTE_DATA_DIR, getRemoteDataDir());
     }
 
+    private void setRemoteDataDirs(Configuration conf) {
+        if (!remoteDirNames.isEmpty()) {
+            List<String> remoteDataDirs =
+                    remoteDirNames.stream()
+                            .map(this::getRemoteDataDir)
+                            .collect(Collectors.toList());
+            conf.set(ConfigOptions.REMOTE_DATA_DIRS, remoteDataDirs);
+        }
+    }
+
     public String getRemoteDataDir() {
+        return getRemoteDataDir("remote-data-dir");
+    }
+
+    public String getRemoteDataDir(String dirName) {
         return LocalFileSystem.getLocalFsURI().getScheme()
                 + "://"
                 + tempDir.getAbsolutePath()
                 + File.separator
-                + "remote-data-dir";
+                + dirName;
     }
 
     /** Stop a tablet server. */
@@ -767,7 +789,7 @@ public final class FlussClusterExtension
         }
     }
 
-    private CompletedSnapshot waitUntilSnapshotFinished(TableBucket tableBucket, long snapshotId) {
+    public CompletedSnapshot waitUntilSnapshotFinished(TableBucket tableBucket, long snapshotId) {
         ZooKeeperClient zkClient = getZooKeeperClient();
         return waitValue(
                 () -> {
@@ -932,6 +954,7 @@ public final class FlussClusterExtension
         private String tabletServerListeners = DEFAULT_LISTENERS;
         private String coordinatorServerListeners = DEFAULT_LISTENERS;
         private Clock clock = SystemClock.getInstance();
+        private List<String> remoteDirNames = Collections.emptyList();
 
         private final Configuration clusterConf = new Configuration();
 
@@ -971,13 +994,19 @@ public final class FlussClusterExtension
             return this;
         }
 
+        public Builder setRemoteDirNames(List<String> remoteDirNames) {
+            this.remoteDirNames = remoteDirNames;
+            return this;
+        }
+
         public FlussClusterExtension build() {
             return new FlussClusterExtension(
                     numOfTabletServers,
                     coordinatorServerListeners,
                     tabletServerListeners,
                     clusterConf,
-                    clock);
+                    clock,
+                    remoteDirNames);
         }
     }
 }

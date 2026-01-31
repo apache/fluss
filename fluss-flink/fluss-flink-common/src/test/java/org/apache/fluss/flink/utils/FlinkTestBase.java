@@ -28,6 +28,7 @@ import org.apache.fluss.cluster.TabletServerInfo;
 import org.apache.fluss.config.AutoPartitionTimeUnit;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableDescriptor;
@@ -47,7 +48,9 @@ import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.extension.RegisterExtension;
+import org.junit.jupiter.api.io.TempDir;
 
+import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -146,12 +149,16 @@ public class FlinkTestBase extends AbstractTestBase {
     protected static Configuration clientConf;
     protected static String bootstrapServers;
 
+    protected static @TempDir Path tempDir;
+    protected static FsPath remoteDataDir;
+
     @BeforeAll
     protected static void beforeAll() {
         clientConf = FLUSS_CLUSTER_EXTENSION.getClientConfig();
         bootstrapServers = FLUSS_CLUSTER_EXTENSION.getBootstrapServers();
         conn = ConnectionFactory.createConnection(clientConf);
         admin = conn.getAdmin();
+        remoteDataDir = new FsPath(tempDir.toAbsolutePath().toString());
     }
 
     @BeforeEach
@@ -237,6 +244,7 @@ public class FlinkTestBase extends AbstractTestBase {
                     partition,
                     new PartitionAssignment(
                             tableInfo.getTableId(), assignment.getBucketAssignments()),
+                    remoteDataDir,
                     tablePath,
                     tableInfo.getTableId());
         }

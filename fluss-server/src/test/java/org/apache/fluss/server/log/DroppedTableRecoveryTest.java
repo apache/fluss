@@ -20,6 +20,7 @@ package org.apache.fluss.server.log;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.TableConfig;
+import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
@@ -71,6 +72,7 @@ final class DroppedTableRecoveryTest extends LogTestBase {
     private TableBucket tableBucket;
     private LogManager logManager;
     private KvManager kvManager;
+    private FsPath remoteDataDir;
 
     @BeforeAll
     static void baseBeforeAll() {
@@ -103,12 +105,15 @@ final class DroppedTableRecoveryTest extends LogTestBase {
                 KvManager.create(
                         conf, zkClient, logManager, TestingMetricGroups.TABLET_SERVER_METRICS);
         kvManager.startup();
+
+        remoteDataDir = new FsPath(tempDir.getAbsolutePath() + "/remote_dir");
     }
 
     private void registerTableInZkClient() throws Exception {
         ZOO_KEEPER_EXTENSION_WRAPPER.getCustomExtension().cleanupRoot();
         zkClient.registerTable(
-                tablePath, TableRegistration.newTable(DATA1_TABLE_ID, DATA1_TABLE_DESCRIPTOR));
+                tablePath,
+                TableRegistration.newTable(DATA1_TABLE_ID, remoteDataDir, DATA1_TABLE_DESCRIPTOR));
         zkClient.registerFirstSchema(tablePath, DATA1_SCHEMA);
     }
 

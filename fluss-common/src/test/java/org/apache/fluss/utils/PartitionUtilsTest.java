@@ -20,6 +20,7 @@ package org.apache.fluss.utils;
 import org.apache.fluss.config.AutoPartitionTimeUnit;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.exception.InvalidPartitionException;
+import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.TableDescriptor;
@@ -29,8 +30,11 @@ import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
 import org.apache.fluss.types.DataTypeRoot;
 
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
+import java.nio.file.Path;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
@@ -50,6 +54,14 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link PartitionUtils}. */
 class PartitionUtilsTest {
+
+    private static @TempDir Path tempDir;
+    private static FsPath remoteDataDir;
+
+    @BeforeAll
+    static void beforeAll() {
+        remoteDataDir = FsPath.fromLocalFile(tempDir.toFile());
+    }
 
     @Test
     void testValidatePartitionValues() {
@@ -84,7 +96,8 @@ class PartitionUtilsTest {
                                 ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT,
                                 AutoPartitionTimeUnit.YEAR)
                         .build();
-        TableInfo tableInfo = TableInfo.of(DATA1_TABLE_PATH, 1L, 1, descriptor, 1L, 1L);
+        TableInfo tableInfo =
+                TableInfo.of(DATA1_TABLE_PATH, 1L, 1, descriptor, remoteDataDir, 1L, 1L);
         assertThatThrownBy(
                         () ->
                                 validatePartitionSpec(

@@ -17,8 +17,11 @@
 
 package org.apache.fluss.server.coordinator.event;
 
+import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
+
+import javax.annotation.Nullable;
 
 import java.util.Objects;
 
@@ -31,18 +34,21 @@ public class CreatePartitionEvent implements CoordinatorEvent {
     private final String partitionName;
     private final long partitionId;
     private final PartitionAssignment partitionAssignment;
+    private final @Nullable FsPath remoteDataDir;
 
     public CreatePartitionEvent(
             TablePath tablePath,
             long tableId,
             long partitionId,
             String partitionName,
-            PartitionAssignment partitionAssignment) {
+            PartitionAssignment partitionAssignment,
+            @Nullable FsPath remoteDataDir) {
         this.tablePath = tablePath;
         this.tableId = tableId;
         this.partitionId = partitionId;
         this.partitionName = partitionName;
         this.partitionAssignment = partitionAssignment;
+        this.remoteDataDir = remoteDataDir;
     }
 
     public TablePath getTablePath() {
@@ -65,6 +71,11 @@ public class CreatePartitionEvent implements CoordinatorEvent {
         return partitionAssignment;
     }
 
+    @Nullable
+    public FsPath getRemoteDataDir() {
+        return remoteDataDir;
+    }
+
     @Override
     public boolean equals(Object o) {
         if (this == o) {
@@ -78,12 +89,14 @@ public class CreatePartitionEvent implements CoordinatorEvent {
                 && partitionId == that.partitionId
                 && Objects.equals(tablePath, that.tablePath)
                 && Objects.equals(partitionName, that.partitionName)
-                && Objects.equals(partitionAssignment, that.partitionAssignment);
+                && Objects.equals(partitionAssignment, that.partitionAssignment)
+                && Objects.equals(remoteDataDir, that.remoteDataDir);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(tablePath, tableId, partitionName, partitionId, partitionAssignment);
+        return Objects.hash(
+                tablePath, tableId, partitionName, partitionId, partitionAssignment, remoteDataDir);
     }
 
     @Override
@@ -100,6 +113,8 @@ public class CreatePartitionEvent implements CoordinatorEvent {
                 + partitionId
                 + ", partitionAssignment="
                 + partitionAssignment
+                + ", remoteDataDir="
+                + remoteDataDir
                 + '}';
     }
 }

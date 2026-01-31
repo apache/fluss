@@ -17,14 +17,19 @@
 
 package org.apache.fluss.server.log.remote;
 
+import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.remote.RemoteLogSegment;
 import org.apache.fluss.utils.json.JsonSerdeTestBase;
 
+import org.junit.jupiter.api.Test;
+
 import java.util.Arrays;
 import java.util.UUID;
+
+import static org.assertj.core.api.Assertions.assertThat;
 
 /** Tests of {@link org.apache.fluss.server.log.remote.RemoteLogManifestJsonSerde}. */
 class RemoteLogManifestJsonSerdeTest extends JsonSerdeTestBase<RemoteLogManifest> {
@@ -35,6 +40,8 @@ class RemoteLogManifestJsonSerdeTest extends JsonSerdeTestBase<RemoteLogManifest
     private static final PhysicalTablePath TABLE_PATH2 =
             PhysicalTablePath.of(TablePath.of("db", "myPartitionTable"), "20240904");
     private static final TableBucket TABLE_BUCKET2 = new TableBucket(1002, (long) 0, 1);
+
+    private static final FsPath REMOTE_LOG_DIR = new FsPath("/remote_data_dir/log");
 
     private static final RemoteLogManifest MANIFEST_SNAPSHOT1 =
             new RemoteLogManifest(
@@ -50,6 +57,7 @@ class RemoteLogManifestJsonSerdeTest extends JsonSerdeTestBase<RemoteLogManifest
                                     .remoteLogEndOffset(9)
                                     .maxTimestamp(1722225103853L)
                                     .segmentSizeInBytes(2850)
+                                    .remoteLogDir(REMOTE_LOG_DIR)
                                     .build(),
                             RemoteLogSegment.Builder.builder()
                                     .physicalTablePath(TABLE_PATH1)
@@ -60,11 +68,13 @@ class RemoteLogManifestJsonSerdeTest extends JsonSerdeTestBase<RemoteLogManifest
                                     .remoteLogEndOffset(Long.MAX_VALUE)
                                     .maxTimestamp(Long.MAX_VALUE)
                                     .segmentSizeInBytes(Integer.MAX_VALUE)
-                                    .build()));
+                                    .remoteLogDir(REMOTE_LOG_DIR)
+                                    .build()),
+                    REMOTE_LOG_DIR);
     private static final String EXPECTED_JSON1 =
             "{\"version\":1,\"database\":\"db\",\"table\":\"mytable\",\"table_id\":1001,\"bucket_id\":1,\"remote_log_segments\":["
-                    + "{\"segment_id\":\"a4421366-4a1d-4c3b-a0f8-0be2e77b1368\",\"start_offset\":0,\"end_offset\":9,\"max_timestamp\":1722225103853,\"size_in_bytes\":2850},"
-                    + "{\"segment_id\":\"dbfd0ade-23d9-411a-ac05-81e5fe1cabd5\",\"start_offset\":100023,\"end_offset\":9223372036854775807,\"max_timestamp\":9223372036854775807,\"size_in_bytes\":2147483647}]}";
+                    + "{\"segment_id\":\"a4421366-4a1d-4c3b-a0f8-0be2e77b1368\",\"start_offset\":0,\"end_offset\":9,\"max_timestamp\":1722225103853,\"size_in_bytes\":2850,\"remote_log_dir\":\"/remote_data_dir/log\"},"
+                    + "{\"segment_id\":\"dbfd0ade-23d9-411a-ac05-81e5fe1cabd5\",\"start_offset\":100023,\"end_offset\":9223372036854775807,\"max_timestamp\":9223372036854775807,\"size_in_bytes\":2147483647,\"remote_log_dir\":\"/remote_data_dir/log\"}],\"remote_log_dir\":\"/remote_data_dir/log\"}";
 
     private static final RemoteLogManifest MANIFEST_SNAPSHOT2 =
             new RemoteLogManifest(
@@ -80,6 +90,7 @@ class RemoteLogManifestJsonSerdeTest extends JsonSerdeTestBase<RemoteLogManifest
                                     .remoteLogEndOffset(20)
                                     .maxTimestamp(1722225103853L)
                                     .segmentSizeInBytes(2850)
+                                    .remoteLogDir(REMOTE_LOG_DIR)
                                     .build(),
                             RemoteLogSegment.Builder.builder()
                                     .physicalTablePath(TABLE_PATH2)
@@ -90,14 +101,16 @@ class RemoteLogManifestJsonSerdeTest extends JsonSerdeTestBase<RemoteLogManifest
                                     .remoteLogEndOffset(Long.MAX_VALUE)
                                     .maxTimestamp(Long.MAX_VALUE)
                                     .segmentSizeInBytes(Integer.MAX_VALUE)
-                                    .build()));
+                                    .remoteLogDir(REMOTE_LOG_DIR)
+                                    .build()),
+                    REMOTE_LOG_DIR);
 
     private static final String EXPECTED_JSON2 =
             "{\"version\":1,\"database\":\"db\",\"table\":\"myPartitionTable\",\"partition_name\":\"20240904\","
                     + "\"table_id\":1002,\"partition_id\":0,\"bucket_id\":1,\"remote_log_segments\":[{\"segment_id\":\"6e94fbd1-c056-446e-859c-77345dddcd96\","
-                    + "\"start_offset\":10,\"end_offset\":20,\"max_timestamp\":1722225103853,\"size_in_bytes\":2850},"
+                    + "\"start_offset\":10,\"end_offset\":20,\"max_timestamp\":1722225103853,\"size_in_bytes\":2850,\"remote_log_dir\":\"/remote_data_dir/log\"},"
                     + "{\"segment_id\":\"22901b01-250f-4114-9b01-1a840dd28f4f\",\"start_offset\":200023,\"end_offset\":9223372036854775807,"
-                    + "\"max_timestamp\":9223372036854775807,\"size_in_bytes\":2147483647}]}";
+                    + "\"max_timestamp\":9223372036854775807,\"size_in_bytes\":2147483647,\"remote_log_dir\":\"/remote_data_dir/log\"}],\"remote_log_dir\":\"/remote_data_dir/log\"}";
 
     protected RemoteLogManifestJsonSerdeTest() {
         super(RemoteLogManifestJsonSerde.INSTANCE);
@@ -111,5 +124,27 @@ class RemoteLogManifestJsonSerdeTest extends JsonSerdeTestBase<RemoteLogManifest
     @Override
     protected String[] expectedJsons() {
         return new String[] {EXPECTED_JSON1, EXPECTED_JSON2};
+    }
+
+    @Test
+    void testDeserializeWithoutRemoteLogDir() {
+        // JSON without remote_log_dir field for backward compatibility
+        String jsonWithoutRemoteLogDir =
+                "{\"version\":1,\"database\":\"db\",\"table\":\"mytable\",\"table_id\":1001,\"bucket_id\":1,\"remote_log_segments\":["
+                        + "{\"segment_id\":\"a4421366-4a1d-4c3b-a0f8-0be2e77b1368\",\"start_offset\":0,\"end_offset\":9,\"max_timestamp\":1722225103853,\"size_in_bytes\":2850},"
+                        + "{\"segment_id\":\"dbfd0ade-23d9-411a-ac05-81e5fe1cabd5\",\"start_offset\":100023,\"end_offset\":9223372036854775807,\"max_timestamp\":9223372036854775807,\"size_in_bytes\":2147483647}]}";
+
+        RemoteLogManifest manifest =
+                RemoteLogManifestJsonSerde.fromJson(jsonWithoutRemoteLogDir.getBytes());
+
+        assertThat(manifest.getPhysicalTablePath()).isEqualTo(TABLE_PATH1);
+        assertThat(manifest.getTableBucket()).isEqualTo(TABLE_BUCKET1);
+        assertThat(manifest.getRemoteLogDir()).isNull();
+        assertThat(manifest.getRemoteLogSegmentList()).hasSize(2);
+
+        // Verify segments also have null remoteLogDir
+        for (RemoteLogSegment segment : manifest.getRemoteLogSegmentList()) {
+            assertThat(segment.remoteLogDir()).isNull();
+        }
     }
 }
