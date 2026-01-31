@@ -32,6 +32,7 @@ import java.nio.ByteBuffer;
 import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
 import java.util.List;
+import java.util.Map;
 
 /** Adapter for Iceberg List as Fluss InternalArray. */
 public class IcebergArrayAsFlussArray implements InternalArray {
@@ -139,7 +140,8 @@ public class IcebergArrayAsFlussArray implements InternalArray {
 
     @Override
     public InternalMap getMap(int pos) {
-        throw new UnsupportedOperationException();
+        Map<?, ?> nestedMap = (Map<?, ?>) icebergList.get(pos);
+        return nestedMap == null ? null : new IcebergMapAsFlussMap(nestedMap);
     }
 
     @Override

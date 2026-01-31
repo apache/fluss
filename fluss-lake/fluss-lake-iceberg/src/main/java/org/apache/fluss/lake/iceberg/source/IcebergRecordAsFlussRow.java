@@ -34,6 +34,7 @@ import java.nio.ByteBuffer;
 import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
 import java.util.List;
+import java.util.Map;
 
 import static org.apache.fluss.lake.iceberg.IcebergLakeCatalog.SYSTEM_COLUMNS;
 
@@ -167,8 +168,12 @@ public class IcebergRecordAsFlussRow implements InternalRow {
 
     @Override
     public InternalMap getMap(int pos) {
-        // TODO: Support Map type conversion from Iceberg to Fluss
-        throw new UnsupportedOperationException();
+        Object value = icebergRecord.get(pos);
+        if (value == null) {
+            return null;
+        }
+        Map<?, ?> icebergMap = (Map<?, ?>) value;
+        return new IcebergMapAsFlussMap(icebergMap);
     }
 
     @Override

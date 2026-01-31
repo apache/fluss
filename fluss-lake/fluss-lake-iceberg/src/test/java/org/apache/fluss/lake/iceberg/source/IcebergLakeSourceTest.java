@@ -24,6 +24,7 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.predicate.Predicate;
 import org.apache.fluss.predicate.PredicateBuilder;
 import org.apache.fluss.record.LogRecord;
+import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.IntType;
 import org.apache.fluss.types.RowType;
@@ -111,8 +112,7 @@ class IcebergLakeSourceTest extends IcebergSourceTestBase {
         // test all filter can be accepted
         Predicate filter1 = FLUSS_BUILDER.greaterOrEqual(0, 2);
         Predicate filter2 = FLUSS_BUILDER.lessOrEqual(0, 3);
-        Predicate filter3 =
-                FLUSS_BUILDER.startsWith(1, org.apache.fluss.row.BinaryString.fromString("name"));
+        Predicate filter3 = FLUSS_BUILDER.startsWith(1, BinaryString.fromString("name"));
         List<Predicate> allFilters = Arrays.asList(filter1, filter2, filter3);
 
         LakeSource<IcebergSplit> lakeSource = lakeStorage.createLakeSource(tablePath);
@@ -141,8 +141,7 @@ class IcebergLakeSourceTest extends IcebergSourceTestBase {
         assertThat(actual.toString()).isEqualTo("[+I[2, name2], +I[3, name3]]");
 
         // test mix one unaccepted filter
-        Predicate nonConvertibleFilter =
-                FLUSS_BUILDER.endsWith(1, org.apache.fluss.row.BinaryString.fromString("name"));
+        Predicate nonConvertibleFilter = FLUSS_BUILDER.endsWith(1, BinaryString.fromString("name"));
         allFilters = Arrays.asList(nonConvertibleFilter, filter1, filter2);
 
         filterPushDownResult = lakeSource.withFilters(allFilters);
