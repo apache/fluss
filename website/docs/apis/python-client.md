@@ -1,6 +1,6 @@
 ---
 title: "Python Client"
-sidebar_position: 2
+sidebar_position: 3
 ---
 
 # Fluss Python Client
@@ -13,13 +13,16 @@ The client provides two main APIs:
 * **Table API**: For reading from and writing to Fluss tables.
 
 ## Installation
-The Fluss Python client is provided as bindings within the Rust client repository. To install it from source:
+The Fluss Python client is currently provided as bindings within the Rust client repository. To install it from source:
 
 ```bash
 git clone https://github.com/apache/fluss-rust.git
 cd fluss-rust/bindings/python
 pip install .
 ```
+:::note 
+After installation, ensure you run your Python scripts or interpreter from a directory other than the fluss-rust/bindings/python source folder. This prevents Python from attempting to import the local source package instead of the installed binary. 
+:::
 
 ## Initialization
 
