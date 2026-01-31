@@ -935,7 +935,23 @@ public class CoordinatorEventProcessor implements EventProcessor {
                 });
         // transmit to deletion successful for success deleted replicas
         replicaStateMachine.handleStateChanges(newSuccessDeleteReplicas, ReplicaDeletionSuccessful);
-        // if any success deletion, we can resume
+        // transmit to nonexistent replica to actually remove it from memory
+        Set<TableBucketReplica> rebalanceRelatedReplicas = new HashSet<>();
+        for (TableBucketReplica replica : newSuccessDeleteReplicas) {
+            if (!coordinatorContext.isToBeDeleted(replica.getTableBucket())) {
+                rebalanceRelatedReplicas.add(replica);
+            }
+        }
+
+        // Only move rebalance-related replicas to NonExistentReplica to clean them up from memory.
+        // Replicas for tables/partitions being dropped must stay in ReplicaDeletionSuccessful
+        // so that TableManager can detect they are finished and complete the deletion metadata
+        // cleanup.
+        replicaStateMachine.handleStateChanges(rebalanceRelatedReplicas, NonExistentReplica);
+        // notify the rebalance manager so that replicas are deleted so that it can check pending
+        // tasks
+        rebalanceManager.onReplicasDeleted(
+                rebalanceRelatedReplicas); // if any success deletion, we can resume
         if (!successDeletedReplicas.isEmpty()) {
             tableManager.resumeDeletions();
         }
@@ -1127,6 +1143,10 @@ public class CoordinatorEventProcessor implements EventProcessor {
         // trigger OfflineReplica state change for those newly offline replicas
         replicaStateMachine.handleStateChanges(replicas, OfflineReplica);
 
+        // If the tablet server is dead, we cannot expect a DeleteReplica response.
+        // we notify the rebalance manager to clear any pending deletions for this server
+        // so the rebalance task can complete and nnot hang forever
+        rebalanceManager.onReplicasDeleted(replicas);
         // update tabletServer metadata cache by send updateMetadata request.
         updateTabletServerMetadataCache(serverInfos, null, null, bucketsWithOfflineLeader);
     }
@@ -1509,7 +1529,16 @@ public class CoordinatorEventProcessor implements EventProcessor {
                     null,
                     Collections.singleton(tableBucket));
             // B8. Mark the ongoing rebalance task to finish.
-            rebalanceManager.finishRebalanceTask(tableBucket, RebalanceStatus.COMPLETED);
+            if (removingReplicas.isEmpty()) {
+                // no pyhical data movement needed (leader switch only), finish immediately
+                rebalanceManager.finishRebalanceTask(tableBucket, RebalanceStatus.COMPLETED);
+            } else {
+                // if there are reolicas to be removed,  we must waiut for the deletion to complete
+                // via DeleteReplicaResponseReceivedEvent before marking the task completed
+                // this prevents the race condition where client sees completed while old leader is
+                // still active
+                rebalanceManager.addPendingDeletions(tableBucket, new HashSet<>(removingReplicas));
+            }
         }
     }
 
@@ -1555,18 +1584,28 @@ public class CoordinatorEventProcessor implements EventProcessor {
         }
     }
 
+    private void stopReplicasForDeletedBuckets(
+            Set<TableBucketReplica> replicasToBeDeleted, boolean waitForDeletionConfirmation) {
+        if (replicasToBeDeleted.isEmpty()) {
+            return;
+        }
+        replicaStateMachine.handleStateChanges(replicasToBeDeleted, OfflineReplica);
+        replicaStateMachine.handleStateChanges(replicasToBeDeleted, ReplicaDeletionStarted);
+
+        if (!waitForDeletionConfirmation) {
+            replicaStateMachine.handleStateChanges(replicasToBeDeleted, ReplicaDeletionSuccessful);
+            replicaStateMachine.handleStateChanges(replicasToBeDeleted, NonExistentReplica);
+        }
+        // For rebalance (waitForDeletionConfirmation=true), wait for
+        // DeleteReplicaResponseReceivedEvent
+    }
+
     private void stopRemovedReplicasOfReassignedBucket(
             TableBucket tableBucket, List<Integer> removingReplicas) {
         Set<TableBucketReplica> replicasToBeDeleted = new HashSet<>();
         removingReplicas.forEach(
                 replica -> replicasToBeDeleted.add(new TableBucketReplica(tableBucket, replica)));
-        replicaStateMachine.handleStateChanges(replicasToBeDeleted, OfflineReplica);
-        // send stop replica command to the old replicas.
-        replicaStateMachine.handleStateChanges(replicasToBeDeleted, ReplicaDeletionStarted);
-        // TODO: Eventually bucket reassignment could use a callback that does retries if deletion
-        // failed
-        replicaStateMachine.handleStateChanges(replicasToBeDeleted, ReplicaDeletionSuccessful);
-        replicaStateMachine.handleStateChanges(replicasToBeDeleted, NonExistentReplica);
+        stopReplicasForDeletedBuckets(replicasToBeDeleted, true);
     }
 
     private void updateReplicaAssignmentForBucket(
