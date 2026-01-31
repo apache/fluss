@@ -43,7 +43,21 @@ public interface KeyDecoder {
             @Nullable DataLakeFormat lakeFormat,
             boolean isDefaultBucketKey) {
         if (kvFormatVersion == 1 || (kvFormatVersion == 2 && isDefaultBucketKey)) {
-            return of(rowType, keyFields, lakeFormat);
+            if (lakeFormat == null || lakeFormat == DataLakeFormat.LANCE) {
+                return CompactedKeyDecoder.createKeyDecoder(rowType, keyFields);
+            }
+            if (lakeFormat == DataLakeFormat.PAIMON) {
+                // TODO: Implement key decoding support for Paimon lake format
+                throw new UnsupportedOperationException(
+                        "Paimon lake format does not support key decoding");
+            }
+            if (lakeFormat == DataLakeFormat.ICEBERG) {
+                // TODO: Implement key decoding support for Iceberg lake format
+                throw new UnsupportedOperationException(
+                        "Iceberg lake format does not support key decoding");
+            }
+            throw new UnsupportedOperationException(
+                    "Unsupported datalake format for key decoding: " + lakeFormat);
         }
         if (kvFormatVersion == 2) {
             // use CompactedKeyEncoder to support prefix look up
@@ -51,30 +65,5 @@ public interface KeyDecoder {
         }
         throw new UnsupportedOperationException(
                 "Unsupported kv format version: " + kvFormatVersion);
-    }
-
-    /**
-     * Create a key decoder to decode the key array bytes of the input row.
-     *
-     * @param rowType the row type of the input row
-     * @param keyFields the key fields to decode
-     */
-    static KeyDecoder of(
-            RowType rowType, List<String> keyFields, @Nullable DataLakeFormat lakeFormat) {
-        if (lakeFormat == null || lakeFormat == DataLakeFormat.LANCE) {
-            return CompactedKeyDecoder.createKeyDecoder(rowType, keyFields);
-        }
-        if (lakeFormat == DataLakeFormat.PAIMON) {
-            // TODO: Implement key decoding support for Paimon lake format
-            throw new UnsupportedOperationException(
-                    "Paimon lake format does not support key decoding");
-        }
-        if (lakeFormat == DataLakeFormat.ICEBERG) {
-            // TODO: Implement key decoding support for Iceberg lake format
-            throw new UnsupportedOperationException(
-                    "Iceberg lake format does not support key decoding");
-        }
-        throw new UnsupportedOperationException(
-                "Unsupported datalake format for key decoding: " + lakeFormat);
     }
 }

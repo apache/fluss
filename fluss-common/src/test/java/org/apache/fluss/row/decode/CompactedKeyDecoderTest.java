@@ -19,7 +19,10 @@
 package org.apache.fluss.row.decode;
 
 import org.apache.fluss.row.BinaryString;
+import org.apache.fluss.row.Decimal;
 import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.row.TimestampLtz;
+import org.apache.fluss.row.TimestampNtz;
 import org.apache.fluss.row.encode.CompactedKeyEncoder;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypes;
@@ -181,6 +184,117 @@ class CompactedKeyDecoderTest {
                                         rowType, Collections.singletonList("invalidField")))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("invalidField not found in row type");
+    }
+
+    @Test
+    void testAllSupportedPrimaryKeyTypes() {
+        // Test all supported primary key data types
+        RowType rowType =
+                RowType.of(
+                        new DataType[] {
+                            DataTypes.BOOLEAN(),
+                            DataTypes.TINYINT(),
+                            DataTypes.SMALLINT(),
+                            DataTypes.INT(),
+                            DataTypes.BIGINT(),
+                            DataTypes.FLOAT(),
+                            DataTypes.DOUBLE(),
+                            DataTypes.STRING(),
+                            DataTypes.CHAR(10),
+                            DataTypes.BINARY(5),
+                            DataTypes.BYTES(),
+                            DataTypes.DATE(),
+                            DataTypes.TIME(),
+                            DataTypes.TIMESTAMP(),
+                            DataTypes.TIMESTAMP_LTZ(),
+                            DataTypes.DECIMAL(10, 2)
+                        },
+                        new String[] {
+                            "f_boolean",
+                            "f_tinyint",
+                            "f_smallint",
+                            "f_int",
+                            "f_bigint",
+                            "f_float",
+                            "f_double",
+                            "f_string",
+                            "f_char",
+                            "f_binary",
+                            "f_bytes",
+                            "f_date",
+                            "f_time",
+                            "f_timestamp",
+                            "f_timestamp_ltz",
+                            "f_decimal"
+                        });
+
+        List<String> allPrimaryKeys =
+                Arrays.asList(
+                        "f_boolean",
+                        "f_tinyint",
+                        "f_smallint",
+                        "f_int",
+                        "f_bigint",
+                        "f_float",
+                        "f_double",
+                        "f_string",
+                        "f_char",
+                        "f_binary",
+                        "f_bytes",
+                        "f_date",
+                        "f_time",
+                        "f_timestamp",
+                        "f_timestamp_ltz",
+                        "f_decimal");
+
+        // Test data values
+        InternalRow testRow =
+                row(
+                        true, // BOOLEAN
+                        (byte) 127, // TINYINT
+                        (short) 32767, // SMALLINT
+                        2147483647, // INT
+                        9223372036854775807L, // BIGINT
+                        3.14f, // FLOAT
+                        2.718281828, // DOUBLE
+                        BinaryString.fromString("test_string"), // STRING
+                        BinaryString.fromString("test_char"), // CHAR
+                        new byte[] {1, 2, 3, 4, 5}, // BINARY
+                        new byte[] {10, 20, 30}, // BYTES
+                        18000, // DATE (days since epoch)
+                        3600000, // TIME (milliseconds since midnight)
+                        TimestampNtz.fromMillis(1609459200000L), // TIMESTAMP
+                        TimestampLtz.fromEpochMillis(1609459200000L), // TIMESTAMP_LTZ
+                        Decimal.fromBigDecimal(
+                                new java.math.BigDecimal("12345678.90"), 10, 2) // DECIMAL
+                        );
+
+        verifyDecode(
+                rowType,
+                allPrimaryKeys,
+                testRow,
+                (decoded, original) -> {
+                    assertThat(decoded.getFieldCount()).isEqualTo(16);
+                    assertThat(decoded.getBoolean(0)).isEqualTo(true);
+                    assertThat(decoded.getByte(1)).isEqualTo((byte) 127);
+                    assertThat(decoded.getShort(2)).isEqualTo((short) 32767);
+                    assertThat(decoded.getInt(3)).isEqualTo(2147483647);
+                    assertThat(decoded.getLong(4)).isEqualTo(9223372036854775807L);
+                    assertThat(decoded.getFloat(5)).isEqualTo(3.14f);
+                    assertThat(decoded.getDouble(6)).isEqualTo(2.718281828);
+                    assertThat(decoded.getString(7).toString()).isEqualTo("test_string");
+                    assertThat(decoded.getChar(8, 10).toString()).isEqualTo("test_char");
+                    assertThat(decoded.getBinary(9, 5)).isEqualTo(new byte[] {1, 2, 3, 4, 5});
+                    assertThat(decoded.getBytes(10)).isEqualTo(new byte[] {10, 20, 30});
+                    assertThat(decoded.getInt(11)).isEqualTo(18000);
+                    assertThat(decoded.getInt(12)).isEqualTo(3600000);
+                    assertThat(decoded.getTimestampNtz(13, 6).getMillisecond())
+                            .isEqualTo(1609459200000L);
+                    assertThat(decoded.getTimestampLtz(14, 6).getEpochMillisecond())
+                            .isEqualTo(1609459200000L);
+                    assertThat(decoded.getDecimal(15, 10, 2).toBigDecimal())
+                            .isEqualTo(new java.math.BigDecimal("12345678.90"));
+                });
     }
 
     private void verifyDecode(
