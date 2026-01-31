@@ -33,10 +33,10 @@
             <unpack>false</unpack>
             <useProjectArtifact>false</useProjectArtifact>
             <useProjectAttachments>false</useProjectAttachments>
-            <useTransitiveDependencies>true</useTransitiveDependencies>
-            <useTransitiveFiltering>true</useTransitiveFiltering>
+            <useTransitiveDependencies>false</useTransitiveDependencies>
             <includes>
                 <include>org.apache.flink:flink-shaded-hadoop-2-uber</include>
+                <include>org.apache.paimon:paimon-bundle</include>
             </includes>
         </dependencySet>
     </dependencySets>

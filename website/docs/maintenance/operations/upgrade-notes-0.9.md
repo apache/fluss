@@ -54,6 +54,25 @@ After upgrading to **v0.9**, ensure that **all clients** interacting with the Fl
 
 Mixing client versions can cause compatibility issues. Specifically, primary key tables created on v0.9 clusters use **KV format version 2**, which older clients cannot recognize. This may result in exceptions during lookup or write operations.
 
+## Paimon Integration
+
+### Manual Paimon Bundle Dependency Required
+
+Starting from Fluss 0.9, the `fluss-lake-paimon` JAR no longer bundles `paimon-bundle`. Previously, including `paimon-bundle` inside `fluss-lake-paimon` caused class conflicts during union reads when users had a different version of Paimon in their environment.
+
+🔧 **Action Required**: Manually add a compatible `paimon-bundle` JAR to your Flink `lib` directory.
+
+#### Migration Steps
+
+Choose a compatible version of `paimon-bundle` JAR from the [Apache Paimon Downloads](https://paimon.apache.org/docs/1.3/project/download/) page 
+and place it in `$FLINK_HOME/lib/`.
+
+#### Tested Paimon Versions
+
+| Use Case        | Required/Tested Versions                          |
+|-----------------|---------------------------------------------------|
+| Tiering Service | Paimon **1.3** (required)                         |
+| Union Read      | Paimon 1.1, 1.2, 1.3 (tested and verified to work)|
 
 ## Deprecation / End of Support
 
