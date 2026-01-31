@@ -100,7 +100,12 @@ class FlussUpsertPartitionReader(
 
   private def createSortMergeReader(): SortMergeReader = {
     // Create key encoder for primary keys
-    val keyEncoder = encode.KeyEncoder.of(rowType, tableInfo.getPhysicalPrimaryKeys, null)
+    val keyEncoder =
+      encode.KeyEncoder.ofPrimaryKeyEncoder(
+        rowType,
+        tableInfo.getPhysicalPrimaryKeys,
+        tableInfo.getTableConfig,
+        tableInfo.isDefaultBucketKey)
 
     // Create comparators based on primary key
     val comparator = new Comparator[InternalRow] {

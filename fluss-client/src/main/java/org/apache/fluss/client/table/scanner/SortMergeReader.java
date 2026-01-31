@@ -35,11 +35,14 @@ import java.util.NoSuchElementException;
 import java.util.PriorityQueue;
 import java.util.function.Function;
 
-/** A sort merge reader to merge lakehouse snapshot record and fluss change log. */
+/**
+ * A sort merge reader to merge snapshot record and change log. Both of them should have the same
+ * primary key encoding when comparing the keys.
+ */
 public class SortMergeReader {
 
     private final ProjectedRow snapshotProjectedPkRow;
-    private final CloseableIterator<LogRecord> lakeRecordIterator;
+    private final CloseableIterator<LogRecord> snapshotRecordIterator;
     private final Comparator<InternalRow> userKeyComparator;
     private CloseableIterator<KeyValueRow> changeLogIterator;
 
@@ -51,15 +54,15 @@ public class SortMergeReader {
     public SortMergeReader(
             @Nullable int[] projectedFields,
             int[] pkIndexes,
-            @Nullable CloseableIterator<LogRecord> lakeRecordIterator,
+            @Nullable CloseableIterator<LogRecord> snapshotRecordIterator,
             Comparator<InternalRow> userKeyComparator,
             CloseableIterator<KeyValueRow> changeLogIterator) {
         this(
                 projectedFields,
                 pkIndexes,
-                lakeRecordIterator == null
+                snapshotRecordIterator == null
                         ? Collections.emptyList()
-                        : Collections.singletonList(lakeRecordIterator),
+                        : Collections.singletonList(snapshotRecordIterator),
                 userKeyComparator,
                 changeLogIterator);
     }
@@ -67,13 +70,13 @@ public class SortMergeReader {
     public SortMergeReader(
             @Nullable int[] projectedFields,
             int[] pkIndexes,
-            List<CloseableIterator<LogRecord>> lakeRecordIterators,
+            List<CloseableIterator<LogRecord>> snapshotRecordIterators,
             Comparator<InternalRow> userKeyComparator,
             CloseableIterator<KeyValueRow> changeLogIterator) {
         this.userKeyComparator = userKeyComparator;
         this.snapshotProjectedPkRow = ProjectedRow.from(pkIndexes);
-        this.lakeRecordIterator =
-                ConcatRecordIterator.wrap(lakeRecordIterators, userKeyComparator, pkIndexes);
+        this.snapshotRecordIterator =
+                ConcatRecordIterator.wrap(snapshotRecordIterators, userKeyComparator, pkIndexes);
         this.changeLogIterator = changeLogIterator;
         this.changeLogIteratorWrapper = new ChangeLogIteratorWrapper();
         this.snapshotMergedRowIteratorWrapper = new SnapshotMergedRowIteratorWrapper();
@@ -83,13 +86,13 @@ public class SortMergeReader {
 
     @Nullable
     public CloseableIterator<InternalRow> readBatch() {
-        if (!lakeRecordIterator.hasNext()) {
+        if (!snapshotRecordIterator.hasNext()) {
             return changeLogIterator.hasNext()
                     ? changeLogIteratorWrapper.replace(changeLogIterator)
                     : null;
         } else {
             CloseableIterator<SortMergeRows> mergedRecordIterator =
-                    transform(lakeRecordIterator, this::sortMergeWithChangeLog);
+                    transform(snapshotRecordIterator, this::sortMergeWithChangeLog);
 
             return snapshotMergedRowIteratorWrapper.replace(mergedRecordIterator);
         }
