@@ -253,7 +253,7 @@ public class ArrowLogWriteBatchTest {
             CompletableFuture<Void> future = new CompletableFuture<>();
             arrowLogWriteBatch.tryAppend(
                     createWriteRecord(row(i, "a" + i)),
-                    exception -> {
+                    (bucket, offset, exception) -> {
                         if (exception != null) {
                             future.completeExceptionally(exception);
                         } else {
@@ -314,7 +314,7 @@ public class ArrowLogWriteBatchTest {
     }
 
     private WriteCallback newWriteCallback() {
-        return exception -> {
+        return (bucket, offset, exception) -> {
             if (exception != null) {
                 throw new RuntimeException(exception);
             }

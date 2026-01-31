@@ -167,7 +167,7 @@ public class IndexedLogWriteBatchTest {
             CompletableFuture<Void> future = new CompletableFuture<>();
             logProducerBatch.tryAppend(
                     createWriteRecord(),
-                    exception -> {
+                    (bucket, offset, exception) -> {
                         if (exception != null) {
                             future.completeExceptionally(exception);
                         } else {
@@ -240,7 +240,7 @@ public class IndexedLogWriteBatchTest {
     }
 
     private WriteCallback newWriteCallback() {
-        return exception -> {
+        return (bucket, offset, exception) -> {
             if (exception != null) {
                 throw new RuntimeException(exception);
             }

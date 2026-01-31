@@ -121,7 +121,7 @@ class RecordAccumulatorTest {
                     DATA1_PHYSICAL_TABLE_PATH, DATA1_TABLE_ID, 3, node2.id(), serverNodes);
 
     private final WriteCallback writeCallback =
-            exception -> {
+            (bucket, offset, exception) -> {
                 if (exception != null) {
                     throw new RuntimeException(exception);
                 }

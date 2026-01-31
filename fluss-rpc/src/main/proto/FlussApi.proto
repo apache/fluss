@@ -787,6 +787,9 @@ message PbPutKvRespForBucket {
   required int32 bucket_id = 2;
   optional int32 error_code = 3;
   optional string error_message = 4;
+  // the log end offset (LEO) of the changelog after this write
+  // this is the offset of the next record to be written, used for exactly-once semantics
+  optional int64 log_end_offset = 5;
 }
 
 message PbLookupReqForBucket {

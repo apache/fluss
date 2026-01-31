@@ -21,6 +21,7 @@ import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.memory.MemorySegmentPool;
 import org.apache.fluss.metadata.PhysicalTablePath;
+import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.record.bytesview.BytesView;
 
 import org.slf4j.Logger;
@@ -53,6 +54,12 @@ public abstract class WriteBatch {
     protected boolean reopened;
     protected int recordCount;
     private long drainedMs;
+
+    /** Result bucket for callbacks (set when batch completes with result info). */
+    @Nullable private TableBucket resultBucket;
+
+    /** Result log end offset for callbacks (set when batch completes with result info). */
+    private long resultLogEndOffset = -1;
 
     public WriteBatch(int bucketId, PhysicalTablePath physicalTablePath, long createdMs) {
         this.physicalTablePath = physicalTablePath;
@@ -176,8 +183,15 @@ public abstract class WriteBatch {
         return drainedMs - createdMs;
     }
 
-    /** Complete the batch successfully. */
+    /** Complete the batch successfully (for log batches without offset tracking). */
     public boolean complete() {
+        return done(null);
+    }
+
+    /** Complete the batch successfully with bucket and log end offset info (for KV batches). */
+    public boolean complete(TableBucket bucket, long logEndOffset) {
+        this.resultBucket = bucket;
+        this.resultLogEndOffset = logEndOffset;
         return done(null);
     }
 
@@ -191,11 +205,11 @@ public abstract class WriteBatch {
     }
 
     private void completeFutureAndFireCallbacks(@Nullable Exception exception) {
-        // execute callbacks.
+        // execute callbacks with result info (for KV batches that track log end offsets)
         callbacks.forEach(
                 callback -> {
                     try {
-                        callback.onCompletion(exception);
+                        callback.onCompletion(resultBucket, resultLogEndOffset, exception);
                     } catch (Exception e) {
                         LOG.error(
                                 "Error executing user-provided callback on message for table path '{}'",

@@ -41,9 +41,8 @@ import java.util.concurrent.CompletableFuture;
 
 /** The writer to write data to the primary key table. */
 class UpsertWriterImpl extends AbstractTableWriter implements UpsertWriter {
-    private static final UpsertResult UPSERT_SUCCESS = new UpsertResult();
-    private static final DeleteResult DELETE_SUCCESS = new DeleteResult();
 
+    private final TableInfo tableInfo;
     private final KeyEncoder primaryKeyEncoder;
     private final @Nullable int[] targetColumns;
 
@@ -54,7 +53,6 @@ class UpsertWriterImpl extends AbstractTableWriter implements UpsertWriter {
     private final WriteFormat writeFormat;
     private final RowEncoder rowEncoder;
     private final FieldGetter[] fieldGetters;
-    private final TableInfo tableInfo;
 
     /** The merge mode for this writer. This controls how the server handles data merging. */
     private final MergeMode mergeMode;
@@ -173,8 +171,9 @@ class UpsertWriterImpl extends AbstractTableWriter implements UpsertWriter {
      * Inserts row into Fluss table if they do not already exist, or updates them if they do exist.
      *
      * @param row the row to upsert.
-     * @return A {@link CompletableFuture} that always returns null when complete normally.
+     * @return A {@link CompletableFuture} that returns upsert result with bucket and offset info.
      */
+    @Override
     public CompletableFuture<UpsertResult> upsert(InternalRow row) {
         checkFieldCount(row);
         byte[] key = primaryKeyEncoder.encodeKey(row);
@@ -190,7 +189,7 @@ class UpsertWriterImpl extends AbstractTableWriter implements UpsertWriter {
                         writeFormat,
                         targetColumns,
                         mergeMode);
-        return send(record).thenApply(ignored -> UPSERT_SUCCESS);
+        return sendWithResult(record, UpsertResult::new);
     }
 
     /**
@@ -198,8 +197,9 @@ class UpsertWriterImpl extends AbstractTableWriter implements UpsertWriter {
      * key.
      *
      * @param row the row to delete.
-     * @return A {@link CompletableFuture} that always returns null when complete normally.
+     * @return A {@link CompletableFuture} that returns delete result with bucket and offset info.
      */
+    @Override
     public CompletableFuture<DeleteResult> delete(InternalRow row) {
         checkFieldCount(row);
         byte[] key = primaryKeyEncoder.encodeKey(row);
@@ -214,7 +214,7 @@ class UpsertWriterImpl extends AbstractTableWriter implements UpsertWriter {
                         writeFormat,
                         targetColumns,
                         mergeMode);
-        return send(record).thenApply(ignored -> DELETE_SUCCESS);
+        return sendWithResult(record, DeleteResult::new);
     }
 
     private BinaryRow encodeRow(InternalRow row) {
