@@ -26,6 +26,7 @@ import org.apache.fluss.exception.InvalidRequiredAcksException;
 import org.apache.fluss.exception.NotLeaderOrFollowerException;
 import org.apache.fluss.exception.UnknownTableOrBucketException;
 import org.apache.fluss.metadata.DataLakeFormat;
+import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.SchemaGetter;
@@ -41,7 +42,10 @@ import org.apache.fluss.record.LogRecordBatch;
 import org.apache.fluss.record.LogRecordReadContext;
 import org.apache.fluss.record.LogRecords;
 import org.apache.fluss.record.MemoryLogRecords;
+import org.apache.fluss.record.TestingSchemaGetter;
+import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.encode.CompactedKeyEncoder;
+import org.apache.fluss.row.encode.ValueDecoder;
 import org.apache.fluss.row.encode.ValueEncoder;
 import org.apache.fluss.rpc.entity.FetchLogResultForBucket;
 import org.apache.fluss.rpc.entity.LimitScanResultForBucket;
@@ -92,6 +96,7 @@ import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
@@ -110,6 +115,10 @@ import static org.apache.fluss.record.TestData.DATA1_TABLE_ID;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_ID_PK;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH_PK;
+import static org.apache.fluss.record.TestData.DATA3_ROW_TYPE;
+import static org.apache.fluss.record.TestData.DATA3_SCHEMA_PK_AUTO_INC;
+import static org.apache.fluss.record.TestData.DATA3_TABLE_ID_PK_AUTO_INC;
+import static org.apache.fluss.record.TestData.DATA3_TABLE_PATH_PK_AUTO_INC;
 import static org.apache.fluss.record.TestData.DATA_1_WITH_KEY_AND_VALUE;
 import static org.apache.fluss.record.TestData.DEFAULT_SCHEMA_ID;
 import static org.apache.fluss.record.TestData.EXPECTED_LOG_RESULTS_FOR_DATA_1_WITH_PK;
@@ -791,6 +800,123 @@ class ReplicaManagerTest extends ReplicaTestBase {
                     assertThat(apiError.message())
                             .isEqualTo("the primary key table not exists for %s", tb2);
                 });
+    }
+
+    @Test
+    void testLookupWithInsertIfNotExists() throws Exception {
+        TableBucket tb = new TableBucket(DATA1_TABLE_ID_PK, 1);
+        makeKvTableAsLeader(DATA1_TABLE_ID_PK, DATA1_TABLE_PATH_PK, tb.getBucket());
+
+        CompactedKeyEncoder keyEncoder = new CompactedKeyEncoder(DATA1_ROW_TYPE, new int[] {0});
+
+        // Scenario 1: All keys missing - should insert and return new values
+        byte[] key100 = keyEncoder.encodeKey(row(new Object[] {100}));
+        byte[] key200 = keyEncoder.encodeKey(row(new Object[] {200}));
+
+        List<byte[]> inserted = lookupWithInsert(tb, Arrays.asList(key100, key200)).lookupValues();
+        assertThat(inserted).hasSize(2).allMatch(Objects::nonNull);
+        verifyLookup(tb, key100, inserted.get(0));
+        verifyLookup(tb, key200, inserted.get(1));
+
+        // Scenario 2: All keys exist - should return existing values without modification
+        List<byte[]> existing = lookupWithInsert(tb, Arrays.asList(key100, key200)).lookupValues();
+        assertThat(existing).containsExactlyElementsOf(inserted);
+
+        // Scenario 3: Mixed - key100 exists, key300 missing
+        byte[] key300 = keyEncoder.encodeKey(row(new Object[] {300}));
+        List<byte[]> mixed = lookupWithInsert(tb, Arrays.asList(key100, key300)).lookupValues();
+        assertThat(mixed.get(0)).isEqualTo(inserted.get(0)); // existing
+        assertThat(mixed.get(1)).isNotNull(); // newly inserted
+        verifyLookup(tb, key300, mixed.get(1));
+    }
+
+    @Test
+    void testLookupWithInsertIfNotExistsAutoIncrement() throws Exception {
+        TableBucket tb = new TableBucket(DATA3_TABLE_ID_PK_AUTO_INC, 1);
+        makeKvTableAsLeader(
+                DATA3_TABLE_ID_PK_AUTO_INC, DATA3_TABLE_PATH_PK_AUTO_INC, tb.getBucket());
+
+        // Encode only the key field 'a' (index 0) - decoder returns only key fields, not full row
+        CompactedKeyEncoder keyEncoder = new CompactedKeyEncoder(DATA3_ROW_TYPE, new int[] {0});
+
+        // Lookup missing keys - should insert with auto-generated values for column 'c'
+        byte[] key1 = keyEncoder.encodeKey(row(new Object[] {100}));
+        byte[] key2 = keyEncoder.encodeKey(row(new Object[] {200}));
+
+        List<byte[]> inserted = lookupWithInsert(tb, Arrays.asList(key1, key2)).lookupValues();
+        assertThat(inserted).hasSize(2).allMatch(Objects::nonNull);
+
+        // Decode values to verify auto-increment column values
+        TestingSchemaGetter schemaGetter =
+                new TestingSchemaGetter(DEFAULT_SCHEMA_ID, DATA3_SCHEMA_PK_AUTO_INC);
+        ValueDecoder valueDecoder = new ValueDecoder(schemaGetter, KvFormat.COMPACTED);
+
+        InternalRow row1 = valueDecoder.decodeValue(inserted.get(0)).row;
+        InternalRow row2 = valueDecoder.decodeValue(inserted.get(1)).row;
+
+        // Auto-increment values should be sequential
+        assertThat(row1.getLong(2)).isEqualTo(1L);
+        assertThat(row2.getLong(2)).isEqualTo(2L);
+
+        // Lookup existing keys - should return same values without modification
+        List<byte[]> existing = lookupWithInsert(tb, Arrays.asList(key1, key2)).lookupValues();
+        assertThat(existing).containsExactlyElementsOf(inserted);
+
+        // Mixed scenario - key1 exists, key3 missing
+        byte[] key3 = keyEncoder.encodeKey(row(new Object[] {300}));
+        List<byte[]> mixed = lookupWithInsert(tb, Arrays.asList(key1, key3)).lookupValues();
+        assertThat(mixed.get(0)).isEqualTo(inserted.get(0)); // existing unchanged
+
+        InternalRow row3 = valueDecoder.decodeValue(mixed.get(1)).row;
+        assertThat(row3.getLong(2)).isEqualTo(3L); // continues sequence
+    }
+
+    @Test
+    void testLookupWithInsertIfNotExistsMultiBucket() throws Exception {
+        TableBucket tb0 = new TableBucket(DATA1_TABLE_ID_PK, 0);
+        TableBucket tb1 = new TableBucket(DATA1_TABLE_ID_PK, 1);
+        makeKvTableAsLeader(DATA1_TABLE_ID_PK, DATA1_TABLE_PATH_PK, tb0.getBucket());
+        makeKvTableAsLeader(DATA1_TABLE_ID_PK, DATA1_TABLE_PATH_PK, tb1.getBucket());
+
+        CompactedKeyEncoder keyEncoder = new CompactedKeyEncoder(DATA1_ROW_TYPE, new int[] {0});
+        byte[] key0 = keyEncoder.encodeKey(row(new Object[] {0}));
+        byte[] key1 = keyEncoder.encodeKey(row(new Object[] {1}));
+
+        verifyLookup(tb0, key0, null);
+        verifyLookup(tb1, key1, null);
+
+        Map<TableBucket, List<byte[]>> requestMap = new HashMap<>();
+        requestMap.put(tb0, Collections.singletonList(key0));
+        requestMap.put(tb1, Collections.singletonList(key1));
+
+        // Insert missing keys across buckets
+        CompletableFuture<Map<TableBucket, LookupResultForBucket>> future =
+                new CompletableFuture<>();
+        replicaManager.lookups(true, 20000, 1, requestMap, LOOKUP_KV_VERSION, future::complete);
+        Map<TableBucket, LookupResultForBucket> inserted = future.get(5, TimeUnit.SECONDS);
+
+        byte[] value0 = inserted.get(tb0).lookupValues().get(0);
+        byte[] value1 = inserted.get(tb1).lookupValues().get(0);
+
+        // Verify inserted values via lookup
+        verifyLookup(tb0, key0, value0);
+        verifyLookup(tb1, key1, value1);
+    }
+
+    private LookupResultForBucket lookupWithInsert(TableBucket tb, List<byte[]> keys)
+            throws Exception {
+        CompletableFuture<Map<TableBucket, LookupResultForBucket>> future =
+                new CompletableFuture<>();
+        replicaManager.lookups(
+                true,
+                20000,
+                1,
+                Collections.singletonMap(tb, keys),
+                LOOKUP_KV_VERSION,
+                future::complete);
+        LookupResultForBucket result = future.get(5, TimeUnit.SECONDS).get(tb);
+        assertThat(result.failed()).isFalse();
+        return result;
     }
 
     @Test

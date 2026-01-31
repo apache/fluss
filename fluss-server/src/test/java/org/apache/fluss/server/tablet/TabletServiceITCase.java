@@ -20,6 +20,7 @@ package org.apache.fluss.server.tablet;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.InvalidRequiredAcksException;
+import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.Schema;
@@ -30,7 +31,9 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.DefaultKvRecordBatch;
 import org.apache.fluss.record.DefaultValueRecordBatch;
 import org.apache.fluss.record.TestingSchemaGetter;
+import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.encode.CompactedKeyEncoder;
+import org.apache.fluss.row.encode.ValueDecoder;
 import org.apache.fluss.row.encode.ValueEncoder;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.FetchLogResponse;
@@ -972,5 +975,101 @@ public class TabletServiceITCase {
                                 physicalTablePath, tableBucket, leaderAndIsr.isr(), leaderAndIsr));
         return ServerRpcMessageUtils.makeNotifyLeaderAndIsrRequest(
                 0, Collections.singletonList(reqForBucket));
+    }
+
+    @Test
+    void testLookupWithInsertIfNotExists() throws Exception {
+        long tableId =
+                createTable(
+                        FLUSS_CLUSTER_EXTENSION, DATA1_TABLE_PATH_PK, DATA1_TABLE_DESCRIPTOR_PK);
+        TableBucket tb = new TableBucket(tableId, 0);
+        FLUSS_CLUSTER_EXTENSION.waitUntilAllReplicaReady(tb);
+
+        int leader = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(tb);
+        TabletServerGateway gateway = FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leader);
+        CompactedKeyEncoder keyEncoder = new CompactedKeyEncoder(DATA1_ROW_TYPE, new int[] {0});
+
+        byte[] key1 = keyEncoder.encodeKey(row(new Object[] {100}));
+        byte[] key2 = keyEncoder.encodeKey(row(new Object[] {200}));
+        byte[] key3 = keyEncoder.encodeKey(row(new Object[] {300}));
+
+        // Insert missing keys
+        PbLookupRespForBucket resp1 =
+                gateway.lookup(newLookupRequest(tableId, 0, true, 20000, 1, key1, key2))
+                        .get()
+                        .getBucketsRespAt(0);
+        assertThat(resp1.hasErrorCode()).isFalse();
+        byte[] value1 = resp1.getValuesList().get(0).getValues();
+        byte[] value2 = resp1.getValuesList().get(1).getValues();
+        assertThat(value1).isNotNull();
+        assertThat(value2).isNotNull();
+
+        // Existing keys return same values
+        PbLookupRespForBucket resp2 =
+                gateway.lookup(newLookupRequest(tableId, 0, true, 20000, 1, key1, key2))
+                        .get()
+                        .getBucketsRespAt(0);
+        assertThat(resp2.getValuesList().get(0).getValues()).isEqualTo(value1);
+        assertThat(resp2.getValuesList().get(1).getValues()).isEqualTo(value2);
+
+        // Mixed: key1 exists, key3 missing
+        PbLookupRespForBucket resp3 =
+                gateway.lookup(newLookupRequest(tableId, 0, true, 20000, 1, key1, key3))
+                        .get()
+                        .getBucketsRespAt(0);
+        assertThat(resp3.getValuesList().get(0).getValues()).isEqualTo(value1);
+        assertThat(resp3.getValuesList().get(1).getValues()).isNotNull();
+    }
+
+    @Test
+    void testLookupWithInsertIfNotExistsAutoIncrement() throws Exception {
+        TablePath tablePath = TablePath.of("test_db_1", "test_auto_increment_t1");
+        Schema schema =
+                Schema.newBuilder()
+                        .column("a", DataTypes.INT())
+                        .column("b", DataTypes.BIGINT())
+                        .withComment("auto increment column")
+                        .column("c", DataTypes.STRING())
+                        .enableAutoIncrement("b")
+                        .primaryKey("a")
+                        .build();
+        RowType rowType = schema.getRowType();
+        TableDescriptor descriptor =
+                TableDescriptor.builder().schema(schema).distributedBy(1, "a").build();
+        long tableId = createTable(FLUSS_CLUSTER_EXTENSION, tablePath, descriptor);
+        TableBucket tb = new TableBucket(tableId, 0);
+        FLUSS_CLUSTER_EXTENSION.waitUntilAllReplicaReady(tb);
+
+        int leader = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(tb);
+        TabletServerGateway gateway = FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leader);
+        CompactedKeyEncoder keyEncoder = new CompactedKeyEncoder(rowType, new int[] {0});
+        TestingSchemaGetter schemaGetter = new TestingSchemaGetter(DEFAULT_SCHEMA_ID, schema);
+        ValueDecoder valueDecoder = new ValueDecoder(schemaGetter, KvFormat.COMPACTED);
+
+        byte[] key1 = keyEncoder.encodeKey(row(new Object[] {100}));
+        byte[] key2 = keyEncoder.encodeKey(row(new Object[] {200}));
+        byte[] key3 = keyEncoder.encodeKey(row(new Object[] {300}));
+
+        // Insert key1, key2 - auto-increment: 1, 2
+        PbLookupRespForBucket resp1 =
+                gateway.lookup(newLookupRequest(tableId, 0, true, 20000, 1, key1, key2))
+                        .get()
+                        .getBucketsRespAt(0);
+        assertThat(resp1.hasErrorCode()).isFalse();
+        InternalRow row1 = valueDecoder.decodeValue(resp1.getValuesList().get(0).getValues()).row;
+        InternalRow row2 = valueDecoder.decodeValue(resp1.getValuesList().get(1).getValues()).row;
+        assertThat(row1.getLong(1)).isEqualTo(1L);
+        assertThat(row2.getLong(1)).isEqualTo(2L);
+
+        // Mixed: key1 exists (unchanged), key3 missing (gets 3)
+        PbLookupRespForBucket resp2 =
+                gateway.lookup(newLookupRequest(tableId, 0, true, 20000, 1, key1, key3))
+                        .get()
+                        .getBucketsRespAt(0);
+        InternalRow existingRow =
+                valueDecoder.decodeValue(resp2.getValuesList().get(0).getValues()).row;
+        InternalRow newRow = valueDecoder.decodeValue(resp2.getValuesList().get(1).getValues()).row;
+        assertThat(existingRow.getLong(1)).isEqualTo(1L);
+        assertThat(newRow.getLong(1)).isEqualTo(3L);
     }
 }

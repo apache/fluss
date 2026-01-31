@@ -39,6 +39,7 @@ import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.metrics.MetricNames;
 import org.apache.fluss.metrics.groups.MetricGroup;
+import org.apache.fluss.record.KeyRecordBatch;
 import org.apache.fluss.record.KvRecordBatch;
 import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.record.ProjectionPushdownCache;
@@ -123,6 +124,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -138,6 +140,7 @@ import java.util.stream.Stream;
 import static org.apache.fluss.config.ConfigOptions.KV_FORMAT_VERSION_2;
 import static org.apache.fluss.server.TabletManagerBase.getTableInfo;
 import static org.apache.fluss.utils.FileUtils.isDirectoryEmpty;
+import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkState;
 import static org.apache.fluss.utils.concurrent.LockUtils.inLock;
 
@@ -580,6 +583,53 @@ public class ReplicaManager {
                 timeoutMs, requiredAcks, entriesPerBucket.size(), kvPutResult, responseCallback);
     }
 
+    /** Context for tracking missing keys that need to be inserted. */
+    public static class MissingKeysContext {
+        final List<Integer> missingIndexes;
+        final List<byte[]> missingKeys;
+
+        MissingKeysContext(List<Integer> missingIndexes, List<byte[]> missingKeys) {
+            this.missingIndexes = missingIndexes;
+            this.missingKeys = missingKeys;
+        }
+    }
+
+    /**
+     * Collect missing keys from lookup results for insertion, populating both context and batch
+     * maps.
+     */
+    private void collectMissingKeysForInsert(
+            Map<TableBucket, List<byte[]>> entriesPerBucket,
+            Map<TableBucket, LookupResultForBucket> lookupResults,
+            Map<TableBucket, MissingKeysContext> missingKeysContextMap,
+            Map<TableBucket, KvRecordBatch> kvRecordBatchMap) {
+        for (Map.Entry<TableBucket, List<byte[]>> entry : entriesPerBucket.entrySet()) {
+            TableBucket tb = entry.getKey();
+            LookupResultForBucket lookupResult = lookupResults.get(tb);
+            if (lookupResult.failed()) {
+                continue;
+            }
+            List<Integer> missingIndexes = new ArrayList<>();
+            List<byte[]> missingKeys = new ArrayList<>();
+            List<byte[]> requestedKeys = entry.getValue();
+            List<byte[]> lookupValues = lookupResult.lookupValues();
+
+            for (int i = 0; i < requestedKeys.size(); i++) {
+                if (lookupValues.get(i) == null) {
+                    missingKeys.add(requestedKeys.get(i));
+                    missingIndexes.add(i);
+                }
+            }
+            if (!missingKeys.isEmpty()) {
+                missingKeysContextMap.put(tb, new MissingKeysContext(missingIndexes, missingKeys));
+                kvRecordBatchMap.put(
+                        tb,
+                        KeyRecordBatch.create(
+                                missingKeys, getReplicaOrException(tb).getTableInfo()));
+            }
+        }
+    }
+
     /** Lookup a single key value. */
     @VisibleForTesting
     protected void lookup(TableBucket tableBucket, byte[] key, Consumer<byte[]> responseCallback) {
@@ -598,12 +648,22 @@ public class ReplicaManager {
                 });
     }
 
+    public void lookups(
+            Map<TableBucket, List<byte[]>> entriesPerBucket,
+            short apiVersion,
+            Consumer<Map<TableBucket, LookupResultForBucket>> responseCallback) {
+        lookups(false, null, null, entriesPerBucket, apiVersion, responseCallback);
+    }
+
     /**
      * Lookup with multi key from leader replica of the buckets.
      *
      * @param apiVersion the client API version for backward compatibility validation
      */
     public void lookups(
+            boolean insertIfNotExists,
+            @Nullable Integer timeoutMs,
+            @Nullable Integer requiredAcks,
             Map<TableBucket, List<byte[]>> entriesPerBucket,
             short apiVersion,
             Consumer<Map<TableBucket, LookupResultForBucket>> responseCallback) {
@@ -633,8 +693,84 @@ public class ReplicaManager {
                         tb, new LookupResultForBucket(tb, ApiError.fromThrowable(e)));
             }
         }
+
+        if (insertIfNotExists) {
+            checkArgument(
+                    timeoutMs != null && requiredAcks != null,
+                    "timeoutMs and requiredAcks must be set");
+            Map<TableBucket, MissingKeysContext> entriesPerBucketToInsert = new HashMap<>();
+            Map<TableBucket, KvRecordBatch> produceEntryData = new HashMap<>();
+            collectMissingKeysForInsert(
+                    entriesPerBucket,
+                    lookupResultForBucketMap,
+                    entriesPerBucketToInsert,
+                    produceEntryData);
+            if (!produceEntryData.isEmpty()) {
+                // TODO: Performance optimization: during lookup-with-insert-if-not-exists flow,
+                // the original key bytes are wrapped in KeyRecordBatch, then during putRecordsToKv
+                // they are decoded to rows and immediately re-encoded back to key bytes, causing
+                // redundant encode/decode overhead.
+                putRecordsToKv(
+                        timeoutMs,
+                        requiredAcks,
+                        produceEntryData,
+                        null,
+                        MergeMode.DEFAULT,
+                        apiVersion,
+                        (result) ->
+                                responseCallback.accept(
+                                        reLookupAndMerge(
+                                                result,
+                                                entriesPerBucketToInsert,
+                                                lookupResultForBucketMap)));
+            } else {
+                // All keys exist, directly return lookup results
+                responseCallback.accept(lookupResultForBucketMap);
+            }
+        } else {
+            responseCallback.accept(lookupResultForBucketMap);
+        }
         LOG.debug("Lookup from local kv in {}ms", System.currentTimeMillis() - startTime);
-        responseCallback.accept(lookupResultForBucketMap);
+    }
+
+    /**
+     * Re-lookup missing keys after insert and merge results back into the original lookup result
+     * map.
+     */
+    private Map<TableBucket, LookupResultForBucket> reLookupAndMerge(
+            List<PutKvResultForBucket> putKvResultForBucketList,
+            Map<TableBucket, MissingKeysContext> entriesPerBucketToInsert,
+            Map<TableBucket, LookupResultForBucket> lookupResultForBucketMap) {
+        // Collect failed buckets first to avoid unnecessary re-lookup
+        Set<TableBucket> failedBuckets = new HashSet<>();
+        for (PutKvResultForBucket putKvResultForBucket : putKvResultForBucketList) {
+            if (putKvResultForBucket.failed()) {
+                TableBucket tb = putKvResultForBucket.getTableBucket();
+                failedBuckets.add(tb);
+                lookupResultForBucketMap.put(
+                        tb, new LookupResultForBucket(tb, putKvResultForBucket.getError()));
+            }
+        }
+
+        // Re-lookup only for successful inserts
+        for (Map.Entry<TableBucket, MissingKeysContext> entry :
+                entriesPerBucketToInsert.entrySet()) {
+            TableBucket tb = entry.getKey();
+            if (failedBuckets.contains(tb)) {
+                continue; // Skip buckets that failed during insert
+            }
+            MissingKeysContext missingKeysContext = entry.getValue();
+            List<byte[]> results =
+                    getReplicaOrException(tb).lookups(missingKeysContext.missingKeys);
+            LookupResultForBucket lookupResult = lookupResultForBucketMap.get(tb);
+            for (int i = 0; i < missingKeysContext.missingIndexes.size(); i++) {
+                lookupResult
+                        .lookupValues()
+                        .set(missingKeysContext.missingIndexes.get(i), results.get(i));
+            }
+        }
+
+        return lookupResultForBucketMap;
     }
 
     /**

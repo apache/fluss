@@ -246,18 +246,29 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
     public CompletableFuture<LookupResponse> lookup(LookupRequest request) {
         Map<TableBucket, List<byte[]>> lookupData = toLookupData(request);
         Map<TableBucket, LookupResultForBucket> errorResponseMap = new HashMap<>();
-        Map<TableBucket, List<byte[]>> interesting =
-                authorizeRequestData(
-                        READ, lookupData, errorResponseMap, LookupResultForBucket::new);
-        if (interesting.isEmpty()) {
-            return CompletableFuture.completedFuture(makeLookupResponse(errorResponseMap));
-        }
-
         CompletableFuture<LookupResponse> response = new CompletableFuture<>();
-        replicaManager.lookups(
-                lookupData,
-                currentSession().getApiVersion(),
-                value -> response.complete(makeLookupResponse(value, errorResponseMap)));
+
+        if (request.hasInsertIfNotExists() && request.isInsertIfNotExists()) {
+            authorizeTable(WRITE, request.getTableId());
+            replicaManager.lookups(
+                    request.isInsertIfNotExists(),
+                    request.getTimeoutMs(),
+                    request.getAcks(),
+                    lookupData,
+                    currentSession().getApiVersion(),
+                    value -> response.complete(makeLookupResponse(value, errorResponseMap)));
+        } else {
+            Map<TableBucket, List<byte[]>> interesting =
+                    authorizeRequestData(
+                            READ, lookupData, errorResponseMap, LookupResultForBucket::new);
+            if (interesting.isEmpty()) {
+                return CompletableFuture.completedFuture(makeLookupResponse(errorResponseMap));
+            }
+            replicaManager.lookups(
+                    lookupData,
+                    currentSession().getApiVersion(),
+                    value -> response.complete(makeLookupResponse(value, errorResponseMap)));
+        }
         return response;
     }
 
