@@ -33,6 +33,7 @@ import org.apache.fluss.config.cluster.ConfigEntry;
 import org.apache.fluss.exception.LeaderNotAvailableException;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.DatabaseInfo;
+import org.apache.fluss.metadata.DatabaseSummary;
 import org.apache.fluss.metadata.PartitionInfo;
 import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.PhysicalTablePath;
@@ -243,6 +244,18 @@ public class FlussAdmin implements Admin {
         return readOnlyGateway
                 .listDatabases(request)
                 .thenApply(ListDatabasesResponse::getDatabaseNamesList);
+    }
+
+    @Override
+    public CompletableFuture<List<DatabaseSummary>> listDatabases(ListDatabaseOption option) {
+        ListDatabasesRequest request = new ListDatabasesRequest();
+        if (!option.isDatabaseNameOnly()) {
+            request.setDatabaseNameOnly(false);
+        }
+
+        return readOnlyGateway
+                .listDatabases(request)
+                .thenApply(ClientRpcMessageUtils::toDatabaseSummaries);
     }
 
     @Override
