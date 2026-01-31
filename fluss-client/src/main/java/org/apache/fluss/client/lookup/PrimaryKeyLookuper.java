@@ -52,6 +52,7 @@ class PrimaryKeyLookuper extends AbstractLookuper implements Lookuper {
 
     private final BucketingFunction bucketingFunction;
     private final int numBuckets;
+    private final boolean insertIfNotExists;
 
     /** a getter to extract partition from lookup key row, null when it's not a partitioned. */
     private @Nullable final PartitionGetter partitionGetter;
@@ -60,13 +61,15 @@ class PrimaryKeyLookuper extends AbstractLookuper implements Lookuper {
             TableInfo tableInfo,
             SchemaGetter schemaGetter,
             MetadataUpdater metadataUpdater,
-            LookupClient lookupClient) {
+            LookupClient lookupClient,
+            boolean insertIfNotExists) {
         super(tableInfo, metadataUpdater, lookupClient, schemaGetter);
         checkArgument(
                 tableInfo.hasPrimaryKey(),
                 "Log table %s doesn't support lookup",
                 tableInfo.getTablePath());
         this.numBuckets = tableInfo.getNumBuckets();
+        this.insertIfNotExists = insertIfNotExists;
 
         // the row type of the input lookup row
         RowType lookupRowType = tableInfo.getRowType().project(tableInfo.getPrimaryKeys());
@@ -118,7 +121,7 @@ class PrimaryKeyLookuper extends AbstractLookuper implements Lookuper {
         TableBucket tableBucket = new TableBucket(tableInfo.getTableId(), partitionId, bucketId);
         CompletableFuture<LookupResult> lookupFuture = new CompletableFuture<>();
         lookupClient
-                .lookup(tableInfo.getTablePath(), tableBucket, pkBytes)
+                .lookup(tableInfo.getTablePath(), tableBucket, pkBytes, insertIfNotExists)
                 .whenComplete(
                         (result, error) -> {
                             if (error != null) {

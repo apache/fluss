@@ -111,4 +111,12 @@ public interface Lookup {
      * @return the typed lookuper
      */
     <T> TypedLookuper<T> createTypedLookuper(Class<T> pojoClass);
+
+    /**
+     * Enables insert-if-not-exists behavior for the lookup operation. When enabled, if a lookup
+     * does not find a matching row, a new row will be inserted with the lookup key values.
+     *
+     * @return a new Lookup instance with insert-if-not-exists enabled
+     */
+    Lookup enableInsertIfNotExists();
 }

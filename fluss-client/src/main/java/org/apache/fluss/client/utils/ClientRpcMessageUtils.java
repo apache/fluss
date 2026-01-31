@@ -194,6 +194,11 @@ public class ClientRpcMessageUtils {
                         pbLookupReqForBucket.setPartitionId(tb.getPartitionId());
                     }
                     batch.lookups().forEach(get -> pbLookupReqForBucket.addKey(get.key()));
+                    batch.lookups()
+                            .forEach(
+                                    get ->
+                                            pbLookupReqForBucket.setInsertIfNotExists(
+                                                    get.insertIfNotExists()));
                 });
         return request;
     }

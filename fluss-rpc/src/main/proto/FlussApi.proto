@@ -793,6 +793,7 @@ message PbLookupReqForBucket {
   optional int64 partition_id = 1;
   required int32 bucket_id = 2;
   repeated bytes keys = 3;
+  optional bool insert_if_not_exists = 4;
 }
 
 message PbLookupRespForBucket {
