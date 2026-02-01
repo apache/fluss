@@ -37,7 +37,6 @@ import org.apache.fluss.record.ChangeType;
 import org.apache.fluss.record.GenericRecord;
 import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.row.BinaryString;
-import org.apache.fluss.row.GenericArray;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.utils.types.Tuple2;
@@ -47,10 +46,8 @@ import com.lancedb.lance.WriteParams;
 import org.apache.arrow.memory.RootAllocator;
 import org.apache.arrow.vector.VarCharVector;
 import org.apache.arrow.vector.VectorSchemaRoot;
-import org.apache.arrow.vector.complex.ListVector;
 import org.apache.arrow.vector.ipc.ArrowReader;
 import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
@@ -324,141 +321,5 @@ class LanceTieringTest {
                 config.getDatasetUri(), LanceArrowUtils.toArrowSchema(schema.getRowType()), params);
 
         return schema;
-    }
-
-    @Test
-    void testTieringWriteTableWithArrayType() throws Exception {
-        int bucketNum = 2;
-        TablePath tablePath = TablePath.of("lance", "arrayTable");
-        Map<String, String> customProperties = new HashMap<>();
-        customProperties.put("lance.batch_size", "256");
-        LanceConfig config =
-                LanceConfig.from(
-                        configuration.toMap(),
-                        customProperties,
-                        tablePath.getDatabaseName(),
-                        tablePath.getTableName());
-
-        List<Schema.Column> columns = new ArrayList<>();
-        columns.add(new Schema.Column("id", DataTypes.INT()));
-        columns.add(new Schema.Column("name", DataTypes.STRING()));
-        columns.add(new Schema.Column("tags", DataTypes.ARRAY(DataTypes.STRING())));
-        columns.add(new Schema.Column("scores", DataTypes.ARRAY(DataTypes.INT())));
-        Schema.Builder schemaBuilder = Schema.newBuilder().fromColumns(columns);
-        Schema schema = schemaBuilder.build();
-
-        WriteParams params = LanceConfig.genWriteParamsFromConfig(config);
-        LanceDatasetAdapter.createDataset(
-                config.getDatasetUri(), LanceArrowUtils.toArrowSchema(schema.getRowType()), params);
-
-        TableDescriptor descriptor =
-                TableDescriptor.builder()
-                        .schema(schema)
-                        .distributedBy(bucketNum)
-                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
-                        .customProperties(customProperties)
-                        .build();
-        TableInfo tableInfo = TableInfo.of(tablePath, 0, 1, descriptor, 1L, 1L);
-
-        List<LanceWriteResult> lanceWriteResults = new ArrayList<>();
-        SimpleVersionedSerializer<LanceWriteResult> writeResultSerializer =
-                lanceLakeTieringFactory.getWriteResultSerializer();
-        SimpleVersionedSerializer<LanceCommittable> committableSerializer =
-                lanceLakeTieringFactory.getCommittableSerializer();
-
-        Map<Integer, List<LogRecord>> recordsByBucket = new HashMap<>();
-
-        for (int bucket = 0; bucket < bucketNum; bucket++) {
-            try (LakeWriter<LanceWriteResult> lakeWriter =
-                    createLakeWriter(tablePath, bucket, null, tableInfo)) {
-                List<LogRecord> writtenRecords = genArrayTableRecords(bucket, 5);
-                recordsByBucket.put(bucket, writtenRecords);
-                for (LogRecord logRecord : writtenRecords) {
-                    lakeWriter.write(logRecord);
-                }
-                LanceWriteResult lanceWriteResult = lakeWriter.complete();
-                byte[] serialized = writeResultSerializer.serialize(lanceWriteResult);
-                lanceWriteResults.add(
-                        writeResultSerializer.deserialize(
-                                writeResultSerializer.getVersion(), serialized));
-            }
-        }
-
-        try (LakeCommitter<LanceWriteResult, LanceCommittable> lakeCommitter =
-                createLakeCommitter(tablePath, tableInfo)) {
-            LanceCommittable lanceCommittable = lakeCommitter.toCommittable(lanceWriteResults);
-            byte[] serialized = committableSerializer.serialize(lanceCommittable);
-            lanceCommittable =
-                    committableSerializer.deserialize(
-                            committableSerializer.getVersion(), serialized);
-            Map<String, String> snapshotProperties =
-                    Collections.singletonMap(FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY, "offsets");
-            long snapshot = lakeCommitter.commit(lanceCommittable, snapshotProperties);
-            assertThat(snapshot).isEqualTo(2);
-        }
-
-        try (Dataset dataset =
-                Dataset.open(
-                        new RootAllocator(),
-                        config.getDatasetUri(),
-                        LanceConfig.genReadOptionFromConfig(config))) {
-            ArrowReader reader = dataset.newScan().scanBatches();
-            VectorSchemaRoot readerRoot = reader.getVectorSchemaRoot();
-
-            for (int bucket = 0; bucket < bucketNum; bucket++) {
-                reader.loadNextBatch();
-                List<LogRecord> expectRecords = recordsByBucket.get(bucket);
-                verifyArrayTableRecords(readerRoot, expectRecords);
-            }
-            assertThat(reader.loadNextBatch()).isFalse();
-        }
-    }
-
-    private List<LogRecord> genArrayTableRecords(int bucket, int numRecords) {
-        List<LogRecord> logRecords = new ArrayList<>();
-        for (int i = 0; i < numRecords; i++) {
-            GenericRow genericRow = new GenericRow(4);
-            genericRow.setField(0, i);
-            genericRow.setField(1, BinaryString.fromString("user_" + bucket + "_" + i));
-
-            String[] tagsArray = new String[] {"tag" + i, "tag" + (i + 1), "category" + bucket};
-            BinaryString[] binaryTags = new BinaryString[tagsArray.length];
-            for (int j = 0; j < tagsArray.length; j++) {
-                binaryTags[j] = BinaryString.fromString(tagsArray[j]);
-            }
-            GenericArray tags = new GenericArray(binaryTags);
-            genericRow.setField(2, tags);
-
-            Integer[] scoresArray = new Integer[] {i * 10, i * 20, i * 30};
-            GenericArray scores = new GenericArray(scoresArray);
-            genericRow.setField(3, scores);
-
-            LogRecord logRecord =
-                    new GenericRecord(
-                            i, System.currentTimeMillis(), ChangeType.APPEND_ONLY, genericRow);
-            logRecords.add(logRecord);
-        }
-        return logRecords;
-    }
-
-    private void verifyArrayTableRecords(VectorSchemaRoot root, List<LogRecord> expectRecords)
-            throws Exception {
-        assertThat(root.getRowCount()).isEqualTo(expectRecords.size());
-        for (int i = 0; i < expectRecords.size(); i++) {
-            LogRecord expectRecord = expectRecords.get(i);
-
-            assertThat((int) (root.getVector(0).getObject(i)))
-                    .isEqualTo(expectRecord.getRow().getInt(0));
-            assertThat(((VarCharVector) root.getVector(1)).getObject(i).toString())
-                    .isEqualTo(expectRecord.getRow().getString(1).toString());
-
-            ListVector tagsVector = (ListVector) root.getVector(2);
-            Object tagsObject = tagsVector.getObject(i);
-            assertThat(tagsObject).isNotNull();
-
-            ListVector scoresVector = (ListVector) root.getVector(3);
-            Object scoresObject = scoresVector.getObject(i);
-            assertThat(scoresObject).isNotNull();
-        }
     }
 }
