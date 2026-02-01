@@ -17,6 +17,7 @@
 
 package org.apache.fluss.lake.lance.utils;
 
+import org.apache.fluss.types.ArrayType;
 import org.apache.fluss.types.BigIntType;
 import org.apache.fluss.types.BinaryType;
 import org.apache.fluss.types.BooleanType;
@@ -44,6 +45,7 @@ import org.apache.arrow.vector.types.pojo.Field;
 import org.apache.arrow.vector.types.pojo.FieldType;
 import org.apache.arrow.vector.types.pojo.Schema;
 
+import java.util.Collections;
 import java.util.List;
 import java.util.stream.Collectors;
 
@@ -65,7 +67,13 @@ public class LanceArrowUtils {
     private static Field toArrowField(String fieldName, DataType logicalType) {
         FieldType fieldType =
                 new FieldType(logicalType.isNullable(), toArrowType(logicalType), null);
-        return new Field(fieldName, fieldType, null);
+        List<Field> children = null;
+        if (logicalType instanceof ArrayType) {
+            children =
+                    Collections.singletonList(
+                            toArrowField("element", ((ArrayType) logicalType).getElementType()));
+        }
+        return new Field(fieldName, fieldType, children);
     }
 
     private static ArrowType toArrowType(DataType dataType) {
@@ -129,6 +137,8 @@ public class LanceArrowUtils {
             } else {
                 return new ArrowType.Timestamp(TimeUnit.NANOSECOND, null);
             }
+        } else if (dataType instanceof ArrayType) {
+            return ArrowType.List.INSTANCE;
         } else {
             throw new UnsupportedOperationException(
                     String.format(
