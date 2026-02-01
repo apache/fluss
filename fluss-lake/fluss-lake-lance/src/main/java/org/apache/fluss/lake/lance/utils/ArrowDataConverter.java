@@ -108,9 +108,17 @@ public class ArrowDataConverter {
             org.apache.fluss.shaded.arrow.org.apache.arrow.vector.complex.ListVector
                     shadedListVector,
             ListVector nonShadedListVector) {
-        int valueCount = shadedListVector.getValueCount();
-        nonShadedListVector.setValueCount(valueCount);
 
+        // First, recursively copy the child data vector
+        org.apache.fluss.shaded.arrow.org.apache.arrow.vector.FieldVector shadedDataVector =
+                shadedListVector.getDataVector();
+        FieldVector nonShadedDataVector = nonShadedListVector.getDataVector();
+
+        if (shadedDataVector != null && nonShadedDataVector != null) {
+            copyVectorData(shadedDataVector, nonShadedDataVector);
+        }
+
+        // Copy the ListVector's own buffers (validity and offset buffers)
         List<org.apache.fluss.shaded.arrow.org.apache.arrow.memory.ArrowBuf> shadedBuffers =
                 shadedListVector.getFieldBuffers();
         List<ArrowBuf> nonShadedBuffers = nonShadedListVector.getFieldBuffers();
@@ -129,12 +137,10 @@ public class ArrowDataConverter {
             }
         }
 
-        org.apache.fluss.shaded.arrow.org.apache.arrow.vector.FieldVector shadedDataVector =
-                shadedListVector.getDataVector();
-        FieldVector nonShadedDataVector = nonShadedListVector.getDataVector();
-
-        if (shadedDataVector != null && nonShadedDataVector != null) {
-            copyVectorData(shadedDataVector, nonShadedDataVector);
-        }
+        // Set value count WITHOUT calling setValueCount() which would overwrite offset buffer
+        // Instead, directly set the internal value count field
+        int valueCount = shadedListVector.getValueCount();
+        // For ListVector, we need to manually set lastSet to avoid offset buffer recalculation
+        nonShadedListVector.setLastSet(valueCount - 1);
     }
 }

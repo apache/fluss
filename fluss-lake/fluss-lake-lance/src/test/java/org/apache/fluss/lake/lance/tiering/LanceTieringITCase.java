@@ -23,6 +23,7 @@ import org.apache.fluss.lake.lance.LanceConfig;
 import org.apache.fluss.lake.lance.testutils.FlinkLanceTieringTestBase;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.row.GenericArray;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.server.zk.data.lake.LakeTable;
 
@@ -67,8 +68,42 @@ class LanceTieringITCase extends FlinkLanceTieringTestBase {
 
     @Test
     void testTiering() throws Exception {
-        // create log table with array columns
+        // create log table
         TablePath t1 = TablePath.of(DEFAULT_DB, "logTable");
+        long t1Id = createLogTable(t1);
+        TableBucket t1Bucket = new TableBucket(t1Id, 0);
+        List<InternalRow> flussRows = new ArrayList<>();
+        // write records
+        for (int i = 0; i < 10; i++) {
+            List<InternalRow> rows = Arrays.asList(row(1, "v1"), row(2, "v2"), row(3, "v3"));
+            flussRows.addAll(rows);
+            writeRows(t1, rows, true);
+        }
+
+        // then start tiering job
+        JobClient jobClient = buildTieringJob(execEnv);
+
+        // check the status of replica after synced
+        assertReplicaStatus(t1Bucket, 30);
+
+        LanceConfig config =
+                LanceConfig.from(
+                        lanceConf.toMap(),
+                        Collections.emptyMap(),
+                        t1.getDatabaseName(),
+                        t1.getTableName());
+
+        // check data in lance
+        checkDataInLanceAppendOnlyTable(config, flussRows);
+        checkSnapshotPropertyInLance(config, Collections.singletonMap(t1Bucket, 30L));
+
+        jobClient.cancel().get();
+    }
+
+    @Test
+    void testTieringWithArrayColumns() throws Exception {
+        // create log table with array columns
+        TablePath t1 = TablePath.of(DEFAULT_DB, "logTableWithArrays");
         long t1Id = createLogTableWithArrayColumns(t1);
         TableBucket t1Bucket = new TableBucket(t1Id, 0);
         List<InternalRow> flussRows = new ArrayList<>();
@@ -80,7 +115,6 @@ class LanceTieringITCase extends FlinkLanceTieringTestBase {
                             row(2, "v2", new String[] {"tag3"}, new int[] {30, 40, 50}),
                             row(3, "v3", new String[] {"tag4", "tag5", "tag6"}, new int[] {60}));
             flussRows.addAll(rows);
-            // write records
             writeRows(t1, rows, true);
         }
 
@@ -115,9 +149,9 @@ class LanceTieringITCase extends FlinkLanceTieringTestBase {
         for (int i = 0; i < 10; i++) {
             List<InternalRow> rows =
                     Arrays.asList(
-                            row(1, "doc1", new float[] {0.1f, 0.2f, 0.3f, 0.4f}),
-                            row(2, "doc2", new float[] {0.5f, 0.6f, 0.7f, 0.8f}),
-                            row(3, "doc3", new float[] {0.9f, 1.0f, 1.1f, 1.2f}));
+                            row(1, "doc1", new GenericArray(new float[] {0.1f, 0.2f, 0.3f, 0.4f})),
+                            row(2, "doc2", new GenericArray(new float[] {0.5f, 0.6f, 0.7f, 0.8f})),
+                            row(3, "doc3", new GenericArray(new float[] {0.9f, 1.0f, 1.1f, 1.2f})));
             flussRows.addAll(rows);
             writeRows(t1, rows, true);
         }
