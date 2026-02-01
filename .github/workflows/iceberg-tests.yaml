@@ -244,24 +244,48 @@ jobs:
       - name: Start Fluss cluster
         run: |
           cd docker/e2e-tests
-          FLUSS_IMAGE=fluss/fluss:e2e-test docker-compose up -d
-          # Wait for services to be healthy
-          echo "Waiting for Fluss cluster to be ready..."
-          sleep 60
+          export FLUSS_IMAGE=fluss/fluss:e2e-test
+          docker-compose up -d
+
+          echo "Waiting for ZooKeeper..."
+          sleep 15
+
+          echo "Waiting for MinIO..."
+          for i in {1..30}; do
+            if curl -sf http://localhost:9000/minio/health/live; then
+              echo "MinIO is ready"
+              break
+            fi
+            sleep 2
+          done
+
+          echo "Waiting for Fluss services..."
+          sleep 45
+
           docker-compose ps
 
       - name: Verify cluster health
         run: |
-          # Check ZooKeeper
-          docker exec fluss-zookeeper zkServer.sh status
-          # Check MinIO
-          curl -sf http://localhost:9000/minio/health/live || echo "MinIO health check"
-          # List running containers
-          docker ps
+          echo "=== Cluster Status ==="
+          docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+
+          echo ""
+          echo "=== ZooKeeper Status ==="
+          docker exec fluss-zookeeper zkServer.sh status || true
+
+          echo ""
+          echo "=== MinIO Health ==="
+          curl -sf http://localhost:9000/minio/health/live && echo "MinIO: Healthy" || echo "MinIO: Not ready"
+
+          echo ""
+          echo "=== Container Logs (last 10 lines) ==="
+          echo "--- Coordinator ---"
+          docker logs fluss-coordinator --tail 10 2>&1 || true
+          echo "--- Tablet Server 1 ---"
+          docker logs fluss-tablet-1 --tail 10 2>&1 || true
 
       - name: Run E2E tests against containerized cluster
         run: |
-          # Set environment for tests to connect to containerized cluster
           export FLUSS_BOOTSTRAP_SERVERS=localhost:9123
           export ICEBERG_WAREHOUSE=s3://iceberg-warehouse/
           export AWS_ACCESS_KEY_ID=minioadmin
@@ -270,10 +294,10 @@ jobs:
 
           mvn -B test \
             -pl fluss-lake/fluss-lake-iceberg \
-            -Dtest=IcebergV3TieringITCase \
-            -DfailIfNoTests=false \
-            -Dfluss.test.cluster.external=true
-        continue-on-error: true
+            -Dtest=IcebergV3E2ETest \
+            -DfailIfNoTests=false
+        env:
+          MAVEN_OPTS: -Xmx4096m
 
       - name: Collect container logs
         if: always()
