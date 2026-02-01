@@ -27,12 +27,16 @@ on:
     paths:
       - 'fluss-lake/fluss-lake-iceberg/**'
       - 'fluss-common/src/main/java/org/apache/fluss/types/**'
+      - 'docker/e2e-tests/**'
       - '.github/workflows/iceberg-tests.yaml'
   pull_request:
     paths:
       - 'fluss-lake/fluss-lake-iceberg/**'
       - 'fluss-common/src/main/java/org/apache/fluss/types/**'
+      - 'docker/e2e-tests/**'
       - '.github/workflows/iceberg-tests.yaml'
+  # Allow manual trigger
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.number || github.run_id }}
@@ -42,55 +46,96 @@ env:
   MAVEN_OPTS: -Xmx4096m
 
 jobs:
-  # Stage 1: Compile and basic validation
+  # ==========================================================================
+  # Stage 1: Compile and build artifacts
+  # ==========================================================================
   compile:
     name: "Compile"
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
       - name: Set up JDK 11
         uses: actions/setup-java@v4
         with:
           java-version: '11'
           distribution: 'temurin'
           cache: 'maven'
-      - name: Compile
-        run: |
-          mvn -T 1C -B clean install -DskipTests \
-            -pl fluss-common,fluss-lake/fluss-lake-iceberg \
-            -am
 
-  # Stage 2: Unit tests for type system and conversions
+      - name: Compile all modules
+        run: mvn -T 1C -B clean install -DskipTests
+
+      - name: Upload compiled artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: compiled-artifacts
+          path: |
+            **/target/*.jar
+            !**/target/*-sources.jar
+            !**/target/*-javadoc.jar
+          retention-days: 1
+
+  # ==========================================================================
+  # Stage 2: Unit tests - All Iceberg-related unit tests
+  # ==========================================================================
   unit-tests:
     name: "Unit Tests"
     needs: compile
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group:
+          - name: "Type System"
+            tests: "DataTypesTest,DataTypeParserTest"
+            module: "fluss-common"
+          - name: "Iceberg Conversions"
+            tests: "IcebergConversionsTest,FlussDataTypeToIcebergV3TypesTest"
+            module: "fluss-lake/fluss-lake-iceberg"
+          - name: "Iceberg Catalog"
+            tests: "IcebergLakeCatalogTest,IcebergConfigurationTest"
+            module: "fluss-lake/fluss-lake-iceberg"
+          - name: "Iceberg Source"
+            tests: "IcebergLakeSourceTest,IcebergRecordReaderTest,IcebergSplitPlannerTest"
+            module: "fluss-lake/fluss-lake-iceberg"
+          - name: "Iceberg Writers"
+            tests: "IcebergWriteResultSerializerTest,IcebergBinaryRowWriterTest"
+            module: "fluss-lake/fluss-lake-iceberg"
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
       - name: Set up JDK 11
         uses: actions/setup-java@v4
         with:
           java-version: '11'
           distribution: 'temurin'
           cache: 'maven'
-      - name: Build dependencies
-        run: |
-          mvn -T 1C -B clean install -DskipTests -am \
-            -pl fluss-common,fluss-lake/fluss-lake-iceberg
-      - name: Run type system tests
-        run: |
-          mvn -B test \
-            -pl fluss-common \
-            -Dtest=DataTypesTest
-      - name: Run Iceberg conversion tests
-        run: |
-          mvn -B test \
-            -pl fluss-lake/fluss-lake-iceberg \
-            -Dtest=IcebergConversionsTest,FlussDataTypeToIcebergV3TypesTest
 
-  # Stage 3: V3 specification validation
+      - name: Download compiled artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: compiled-artifacts
+
+      - name: Run ${{ matrix.test-group.name }} tests
+        run: |
+          mvn -B test \
+            -pl ${{ matrix.test-group.module }} \
+            -Dtest=${{ matrix.test-group.tests }} \
+            -DfailIfNoTests=false
+        continue-on-error: false
+
+      - name: Upload test reports
+        uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: unit-test-reports-${{ matrix.test-group.name }}
+          path: '**/target/surefire-reports/'
+
+  # ==========================================================================
+  # Stage 3: V3 Specification Tests
+  # ==========================================================================
   v3-spec-tests:
     name: "V3 Spec Tests"
     needs: compile
@@ -98,87 +143,183 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
       - name: Set up JDK 11
         uses: actions/setup-java@v4
         with:
           java-version: '11'
           distribution: 'temurin'
           cache: 'maven'
-      - name: Build dependencies
-        run: |
-          mvn -T 1C -B clean install -DskipTests -am \
-            -pl fluss-lake/fluss-lake-iceberg
-      - name: Run V3 type conversion tests
+
+      - name: Download compiled artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: compiled-artifacts
+
+      - name: Run V3 nanosecond timestamp type tests
         run: |
           mvn -B test \
             -pl fluss-lake/fluss-lake-iceberg \
             -Dtest=FlussDataTypeToIcebergV3TypesTest
-      # Future V3 tests will be added here:
-      # - Deletion vector tests
-      # - Default value tests
-      # - Row lineage tests
 
-  # Stage 4: E2E tests with embedded Fluss cluster
-  e2e-tests:
-    name: "E2E Tests"
+      # Future V3 tests will be added here:
+      # - name: Run V3 deletion vector tests
+      #   run: mvn -B test -pl fluss-lake/fluss-lake-iceberg -Dtest=DeletionVectorTest
+      # - name: Run V3 default values tests
+      #   run: mvn -B test -pl fluss-lake/fluss-lake-iceberg -Dtest=DefaultValuesTest
+      # - name: Run V3 row lineage tests
+      #   run: mvn -B test -pl fluss-lake/fluss-lake-iceberg -Dtest=RowLineageTest
+
+  # ==========================================================================
+  # Stage 4: E2E Tests with Embedded Fluss Cluster
+  # ==========================================================================
+  e2e-embedded-tests:
+    name: "E2E Embedded Tests"
     needs: [unit-tests, v3-spec-tests]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
       - name: Set up JDK 11
         uses: actions/setup-java@v4
         with:
           java-version: '11'
           distribution: 'temurin'
           cache: 'maven'
+
       - name: Build all modules
-        run: |
-          mvn -T 1C -B clean install -DskipTests
-      - name: Run Iceberg tiering tests
-        run: |
-          mvn -B verify \
-            -pl fluss-lake/fluss-lake-iceberg \
-            -Dtest=IcebergTieringTest \
-            -DfailIfNoTests=false
-        env:
-          MAVEN_OPTS: -Xmx4096m
-      - name: Run Iceberg tiering IT tests
+        run: mvn -T 1C -B clean install -DskipTests
+
+      - name: Run Iceberg tiering integration tests
         run: |
           mvn -B verify \
             -pl fluss-lake/fluss-lake-iceberg \
-            -Dtest=IcebergTieringITCase \
+            -Dtest=IcebergTieringTest,IcebergTieringITCase,IcebergV3TieringITCase \
             -DfailIfNoTests=false
         env:
           MAVEN_OPTS: -Xmx4096m
+
       - name: Upload logs on failure
         uses: actions/upload-artifact@v4
         if: failure()
         with:
-          name: e2e-test-logs-${{ github.run_number }}
+          name: e2e-embedded-test-logs
           path: |
             **/target/surefire-reports/
             **/target/failsafe-reports/
 
-  # Stage 5: Full integration test suite
-  integration-tests:
-    name: "Integration Tests"
-    needs: e2e-tests
+  # ==========================================================================
+  # Stage 5: E2E Tests with Containerized Fluss Cluster
+  # ==========================================================================
+  e2e-container-tests:
+    name: "E2E Container Tests"
+    needs: [unit-tests, v3-spec-tests]
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
       - name: Set up JDK 11
         uses: actions/setup-java@v4
         with:
           java-version: '11'
           distribution: 'temurin'
           cache: 'maven'
-      - name: Build all modules
+
+      - name: Build Fluss distribution
         run: |
-          mvn -T 1C -B clean install -DskipTests
+          mvn -T 1C -B clean package -DskipTests -Pdist
+          # Prepare Docker build
+          mkdir -p docker/fluss/build-target
+          tar -xzf fluss-dist/target/fluss-*.tgz -C docker/fluss/build-target --strip-components=1
+
+      - name: Build Fluss Docker image
+        run: |
+          cd docker/fluss
+          docker build -t fluss/fluss:e2e-test .
+
+      - name: Start Fluss cluster
+        run: |
+          cd docker/e2e-tests
+          FLUSS_IMAGE=fluss/fluss:e2e-test docker-compose up -d
+          # Wait for services to be healthy
+          echo "Waiting for Fluss cluster to be ready..."
+          sleep 60
+          docker-compose ps
+
+      - name: Verify cluster health
+        run: |
+          # Check ZooKeeper
+          docker exec fluss-zookeeper zkServer.sh status
+          # Check MinIO
+          curl -sf http://localhost:9000/minio/health/live || echo "MinIO health check"
+          # List running containers
+          docker ps
+
+      - name: Run E2E tests against containerized cluster
+        run: |
+          # Set environment for tests to connect to containerized cluster
+          export FLUSS_BOOTSTRAP_SERVERS=localhost:9123
+          export ICEBERG_WAREHOUSE=s3://iceberg-warehouse/
+          export AWS_ACCESS_KEY_ID=minioadmin
+          export AWS_SECRET_ACCESS_KEY=minioadmin
+          export AWS_ENDPOINT=http://localhost:9000
+
+          mvn -B test \
+            -pl fluss-lake/fluss-lake-iceberg \
+            -Dtest=IcebergV3TieringITCase \
+            -DfailIfNoTests=false \
+            -Dfluss.test.cluster.external=true
+        continue-on-error: true
+
+      - name: Collect container logs
+        if: always()
+        run: |
+          mkdir -p container-logs
+          docker logs fluss-coordinator > container-logs/coordinator.log 2>&1 || true
+          docker logs fluss-tablet-1 > container-logs/tablet-1.log 2>&1 || true
+          docker logs fluss-tablet-2 > container-logs/tablet-2.log 2>&1 || true
+          docker logs fluss-zookeeper > container-logs/zookeeper.log 2>&1 || true
+          docker logs fluss-minio > container-logs/minio.log 2>&1 || true
+
+      - name: Upload container logs
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: e2e-container-logs
+          path: container-logs/
+
+      - name: Stop Fluss cluster
+        if: always()
+        run: |
+          cd docker/e2e-tests
+          docker-compose down -v
+
+  # ==========================================================================
+  # Stage 6: Full Integration Test Suite
+  # ==========================================================================
+  full-integration-tests:
+    name: "Full Integration Tests"
+    needs: [e2e-embedded-tests]
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 11
+        uses: actions/setup-java@v4
+        with:
+          java-version: '11'
+          distribution: 'temurin'
+          cache: 'maven'
+
+      - name: Build all modules
+        run: mvn -T 1C -B clean install -DskipTests
+
       - name: Run all Iceberg tests
         run: |
           mvn -B verify \
@@ -186,11 +327,40 @@ jobs:
             -DfailIfNoTests=false
         env:
           MAVEN_OPTS: -Xmx4096m
-      - name: Upload logs on failure
+
+      - name: Upload test reports
         uses: actions/upload-artifact@v4
         if: failure()
         with:
-          name: integration-test-logs-${{ github.run_number }}
+          name: full-integration-test-reports
           path: |
             **/target/surefire-reports/
             **/target/failsafe-reports/
+
+  # ==========================================================================
+  # Summary job
+  # ==========================================================================
+  test-summary:
+    name: "Test Summary"
+    needs: [unit-tests, v3-spec-tests, e2e-embedded-tests, e2e-container-tests, full-integration-tests]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Check test results
+        run: |
+          echo "=== Iceberg Tests Summary ==="
+          echo "Unit Tests: ${{ needs.unit-tests.result }}"
+          echo "V3 Spec Tests: ${{ needs.v3-spec-tests.result }}"
+          echo "E2E Embedded Tests: ${{ needs.e2e-embedded-tests.result }}"
+          echo "E2E Container Tests: ${{ needs.e2e-container-tests.result }}"
+          echo "Full Integration Tests: ${{ needs.full-integration-tests.result }}"
+
+          # Fail if any required job failed
+          if [[ "${{ needs.unit-tests.result }}" == "failure" ]] || \
+             [[ "${{ needs.v3-spec-tests.result }}" == "failure" ]] || \
+             [[ "${{ needs.e2e-embedded-tests.result }}" == "failure" ]] || \
+             [[ "${{ needs.full-integration-tests.result }}" == "failure" ]]; then
+            echo "Some tests failed!"
+            exit 1
+          fi
+          echo "All required tests passed!"
