@@ -1,0 +1,196 @@
+################################################################################
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+################################################################################
+
+name: Iceberg Tests
+
+on:
+  push:
+    branches:
+      - main
+      - release-**
+      - feature/iceberg-**
+    paths:
+      - 'fluss-lake/fluss-lake-iceberg/**'
+      - 'fluss-common/src/main/java/org/apache/fluss/types/**'
+      - '.github/workflows/iceberg-tests.yaml'
+  pull_request:
+    paths:
+      - 'fluss-lake/fluss-lake-iceberg/**'
+      - 'fluss-common/src/main/java/org/apache/fluss/types/**'
+      - '.github/workflows/iceberg-tests.yaml'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.number || github.run_id }}
+  cancel-in-progress: true
+
+env:
+  MAVEN_OPTS: -Xmx4096m
+
+jobs:
+  # Stage 1: Compile and basic validation
+  compile:
+    name: "Compile"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Set up JDK 11
+        uses: actions/setup-java@v4
+        with:
+          java-version: '11'
+          distribution: 'temurin'
+          cache: 'maven'
+      - name: Compile
+        run: |
+          mvn -T 1C -B clean install -DskipTests \
+            -pl fluss-common,fluss-lake/fluss-lake-iceberg \
+            -am
+
+  # Stage 2: Unit tests for type system and conversions
+  unit-tests:
+    name: "Unit Tests"
+    needs: compile
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Set up JDK 11
+        uses: actions/setup-java@v4
+        with:
+          java-version: '11'
+          distribution: 'temurin'
+          cache: 'maven'
+      - name: Build dependencies
+        run: |
+          mvn -T 1C -B clean install -DskipTests -am \
+            -pl fluss-common,fluss-lake/fluss-lake-iceberg
+      - name: Run type system tests
+        run: |
+          mvn -B test \
+            -pl fluss-common \
+            -Dtest=DataTypesTest
+      - name: Run Iceberg conversion tests
+        run: |
+          mvn -B test \
+            -pl fluss-lake/fluss-lake-iceberg \
+            -Dtest=IcebergConversionsTest,FlussDataTypeToIcebergV3TypesTest
+
+  # Stage 3: V3 specification validation
+  v3-spec-tests:
+    name: "V3 Spec Tests"
+    needs: compile
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Set up JDK 11
+        uses: actions/setup-java@v4
+        with:
+          java-version: '11'
+          distribution: 'temurin'
+          cache: 'maven'
+      - name: Build dependencies
+        run: |
+          mvn -T 1C -B clean install -DskipTests -am \
+            -pl fluss-lake/fluss-lake-iceberg
+      - name: Run V3 type conversion tests
+        run: |
+          mvn -B test \
+            -pl fluss-lake/fluss-lake-iceberg \
+            -Dtest=FlussDataTypeToIcebergV3TypesTest
+      # Future V3 tests will be added here:
+      # - Deletion vector tests
+      # - Default value tests
+      # - Row lineage tests
+
+  # Stage 4: E2E tests with embedded Fluss cluster
+  e2e-tests:
+    name: "E2E Tests"
+    needs: [unit-tests, v3-spec-tests]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Set up JDK 11
+        uses: actions/setup-java@v4
+        with:
+          java-version: '11'
+          distribution: 'temurin'
+          cache: 'maven'
+      - name: Build all modules
+        run: |
+          mvn -T 1C -B clean install -DskipTests
+      - name: Run Iceberg tiering tests
+        run: |
+          mvn -B verify \
+            -pl fluss-lake/fluss-lake-iceberg \
+            -Dtest=IcebergTieringTest \
+            -DfailIfNoTests=false
+        env:
+          MAVEN_OPTS: -Xmx4096m
+      - name: Run Iceberg tiering IT tests
+        run: |
+          mvn -B verify \
+            -pl fluss-lake/fluss-lake-iceberg \
+            -Dtest=IcebergTieringITCase \
+            -DfailIfNoTests=false
+        env:
+          MAVEN_OPTS: -Xmx4096m
+      - name: Upload logs on failure
+        uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: e2e-test-logs-${{ github.run_number }}
+          path: |
+            **/target/surefire-reports/
+            **/target/failsafe-reports/
+
+  # Stage 5: Full integration test suite
+  integration-tests:
+    name: "Integration Tests"
+    needs: e2e-tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Set up JDK 11
+        uses: actions/setup-java@v4
+        with:
+          java-version: '11'
+          distribution: 'temurin'
+          cache: 'maven'
+      - name: Build all modules
+        run: |
+          mvn -T 1C -B clean install -DskipTests
+      - name: Run all Iceberg tests
+        run: |
+          mvn -B verify \
+            -pl fluss-lake/fluss-lake-iceberg \
+            -DfailIfNoTests=false
+        env:
+          MAVEN_OPTS: -Xmx4096m
+      - name: Upload logs on failure
+        uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: integration-test-logs-${{ github.run_number }}
+          path: |
+            **/target/surefire-reports/
+            **/target/failsafe-reports/
