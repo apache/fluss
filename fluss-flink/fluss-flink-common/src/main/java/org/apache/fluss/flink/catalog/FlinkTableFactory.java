@@ -350,13 +350,10 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
         // ROW<...>]
         RowType tableOutputType = (RowType) context.getPhysicalRowDataType().getLogicalType();
 
-        // Extract data columns type from the 'before' nested ROW field (index 3)
-        RowType dataColumnsType = (RowType) tableOutputType.getTypeAt(3);
-
         Map<String, String> catalogTableOptions = context.getCatalogTable().getOptions();
         FactoryUtil.TableFactoryHelper helper = FactoryUtil.createTableFactoryHelper(this, context);
         final ReadableConfig tableOptions = helper.getOptions();
-        validateSourceOptions(helper, tableOptions);
+        validateSourceOptions(tableOptions);
 
         ZoneId timeZone =
                 FlinkConnectorOptionsUtils.getLocalTimeZone(
@@ -364,22 +361,11 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
         final FlinkConnectorOptionsUtils.StartupOptions startupOptions =
                 FlinkConnectorOptionsUtils.getStartupOptions(tableOptions, timeZone);
 
-        // Get partition keys from the internal option (since binlog schema has nested columns,
-        // the catalog table's partition keys list is empty to avoid Flink validation errors).
-        String partitionKeysOption =
-                context.getCatalogTable()
-                        .getOptions()
-                        .get(FlinkConnectorOptions.BINLOG_PARTITION_KEYS.key());
-        int[] partitionKeyIndexes;
-        if (partitionKeysOption != null && !partitionKeysOption.isEmpty()) {
-            String[] partitionKeyNames = partitionKeysOption.split(",");
-            partitionKeyIndexes = new int[partitionKeyNames.length];
-            for (int i = 0; i < partitionKeyNames.length; i++) {
-                partitionKeyIndexes[i] = dataColumnsType.getFieldIndex(partitionKeyNames[i]);
-            }
-        } else {
-            partitionKeyIndexes = new int[0];
-        }
+        // Check if the table is partitioned from the internal option
+        boolean isPartitioned =
+                Boolean.parseBoolean(
+                        catalogTableOptions.get(
+                                FlinkConnectorOptions.INTERNAL_BINLOG_IS_PARTITIONED.key()));
 
         long partitionDiscoveryIntervalMs =
                 tableOptions
@@ -390,7 +376,7 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
                 TablePath.of(tableIdentifier.getDatabaseName(), baseTableName),
                 toFlussClientConfig(catalogTableOptions, context.getConfiguration()),
                 tableOutputType,
-                partitionKeyIndexes,
+                isPartitioned,
                 isStreamingMode,
                 startupOptions,
                 partitionDiscoveryIntervalMs,

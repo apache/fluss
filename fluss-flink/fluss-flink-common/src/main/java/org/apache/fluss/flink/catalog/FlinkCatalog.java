@@ -1008,14 +1008,11 @@ public class FlinkCatalog extends AbstractCatalog {
             newOptions.put(BOOTSTRAP_SERVERS.key(), bootstrapServers);
             newOptions.putAll(securityConfigs);
 
-            // Store partition key names for the table source to use.
+            // Store whether the base table is partitioned for the table source to use.
             // Since binlog schema has nested columns, we can't use Flink's partition key mechanism.
-            List<String> partitionKeys = baseTable.getPartitionKeys();
-            if (!partitionKeys.isEmpty()) {
-                newOptions.put(
-                        FlinkConnectorOptions.BINLOG_PARTITION_KEYS.key(),
-                        String.join(",", partitionKeys));
-            }
+            newOptions.put(
+                    FlinkConnectorOptions.INTERNAL_BINLOG_IS_PARTITIONED.key(),
+                    String.valueOf(!baseTable.getPartitionKeys().isEmpty()));
 
             // Create a new CatalogTable with the binlog schema
             // Binlog virtual tables don't have partition keys at the top level

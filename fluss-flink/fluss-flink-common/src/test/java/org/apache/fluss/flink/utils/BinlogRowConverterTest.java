@@ -29,6 +29,7 @@ import org.apache.fluss.types.RowType;
 
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.data.StringData;
+import org.apache.flink.table.data.TimestampData;
 import org.apache.flink.types.RowKind;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -66,9 +67,9 @@ class BinlogRowConverterTest {
         assertThat(result.getRowKind()).isEqualTo(RowKind.INSERT);
 
         // Verify metadata columns
-        assertThat(result.getString(0)).isEqualTo(StringData.fromString("I"));
+        assertThat(result.getString(0)).isEqualTo(StringData.fromString("insert"));
         assertThat(result.getLong(1)).isEqualTo(100L); // log offset
-        assertThat(result.getTimestamp(2, 3)).isNotNull(); // commit timestamp
+        assertThat(result.getTimestamp(2, 3)).isEqualTo(TimestampData.fromEpochMillis(1000L));
 
         // Verify before is null for INSERT
         assertThat(result.isNullAt(3)).isTrue();
@@ -98,9 +99,10 @@ class BinlogRowConverterTest {
         assertThat(result.getRowKind()).isEqualTo(RowKind.INSERT);
 
         // Verify metadata columns
-        assertThat(result.getString(0)).isEqualTo(StringData.fromString("U"));
-        // Offset should be from the -U record (first entry of update pair)
+        assertThat(result.getString(0)).isEqualTo(StringData.fromString("update"));
+        // Offset and timestamp should be from the -U record (first entry of update pair)
         assertThat(result.getLong(1)).isEqualTo(200L);
+        assertThat(result.getTimestamp(2, 3)).isEqualTo(TimestampData.fromEpochMillis(2000L));
 
         // Verify before contains old data
         RowData beforeRow = result.getRow(3, 3);
@@ -127,8 +129,9 @@ class BinlogRowConverterTest {
         assertThat(result.getRowKind()).isEqualTo(RowKind.INSERT);
 
         // Verify metadata columns
-        assertThat(result.getString(0)).isEqualTo(StringData.fromString("D"));
+        assertThat(result.getString(0)).isEqualTo(StringData.fromString("delete"));
         assertThat(result.getLong(1)).isEqualTo(300L);
+        assertThat(result.getTimestamp(2, 3)).isEqualTo(TimestampData.fromEpochMillis(3000L));
 
         // Verify before contains the deleted row data
         RowData beforeRow = result.getRow(3, 3);
@@ -214,7 +217,7 @@ class BinlogRowConverterTest {
                 converter.convert(
                         createLogRecord(ChangeType.UPDATE_AFTER, 11L, 1000L, 1, "B", 200L));
         assertThat(result1).isNotNull();
-        assertThat(result1.getString(0)).isEqualTo(StringData.fromString("U"));
+        assertThat(result1.getString(0)).isEqualTo(StringData.fromString("update"));
 
         // Second update pair (converter state should be clean after first merge)
         converter.convert(createLogRecord(ChangeType.UPDATE_BEFORE, 20L, 2000L, 1, "B", 200L));
@@ -222,7 +225,7 @@ class BinlogRowConverterTest {
                 converter.convert(
                         createLogRecord(ChangeType.UPDATE_AFTER, 21L, 2000L, 1, "C", 300L));
         assertThat(result2).isNotNull();
-        assertThat(result2.getString(0)).isEqualTo(StringData.fromString("U"));
+        assertThat(result2.getString(0)).isEqualTo(StringData.fromString("update"));
         assertThat(result2.getLong(1)).isEqualTo(20L); // offset from second -U
     }
 

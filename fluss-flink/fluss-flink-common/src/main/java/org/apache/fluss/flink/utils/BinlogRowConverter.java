@@ -65,7 +65,7 @@ public class BinlogRowConverter implements RecordToFlinkRowConverter {
         switch (changeType) {
             case INSERT:
                 return buildBinlogRow(
-                        "I",
+                        "insert",
                         record.logOffset(),
                         record.timestamp(),
                         null,
@@ -90,11 +90,11 @@ public class BinlogRowConverter implements RecordToFlinkRowConverter {
                 long offset = pendingUpdateBefore.logOffset();
                 long timestamp = pendingUpdateBefore.timestamp();
                 pendingUpdateBefore = null;
-                return buildBinlogRow("U", offset, timestamp, beforeRow, afterRow);
+                return buildBinlogRow("update", offset, timestamp, beforeRow, afterRow);
 
             case DELETE:
                 return buildBinlogRow(
-                        "D",
+                        "delete",
                         record.logOffset(),
                         record.timestamp(),
                         baseConverter.toFlinkRowData(record.getRow()),
@@ -150,7 +150,7 @@ public class BinlogRowConverter implements RecordToFlinkRowConverter {
         // Add metadata columns
         fields.add(
                 new org.apache.flink.table.types.logical.RowType.RowField(
-                        TableDescriptor.CHANGE_TYPE_COLUMN, new VarCharType(false, 1)));
+                        TableDescriptor.CHANGE_TYPE_COLUMN, new VarCharType(false, 6)));
         fields.add(
                 new org.apache.flink.table.types.logical.RowType.RowField(
                         TableDescriptor.LOG_OFFSET_COLUMN, new BigIntType(false)));

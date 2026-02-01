@@ -65,7 +65,7 @@ public final class TableDescriptor implements Serializable {
     public static final String LOG_OFFSET_COLUMN = "_log_offset";
     public static final String COMMIT_TIMESTAMP_COLUMN = "_commit_timestamp";
 
-    // Reserved column names for $binlog virtual table nested row fields
+    // column names for $binlog virtual table nested row fields
     public static final String BEFORE_COLUMN = "before";
     public static final String AFTER_COLUMN = "after";
 

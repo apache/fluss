@@ -99,7 +99,7 @@ abstract class BinlogVirtualTableITCase extends AbstractTestBase {
                         "create catalog %s with ('type' = 'fluss', '%s' = '%s')",
                         CATALOG_NAME, BOOTSTRAP_SERVERS.key(), bootstrapServers));
         tEnv.executeSql("use catalog " + CATALOG_NAME);
-        tEnv.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 2);
+        tEnv.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 1);
         tEnv.executeSql("create database " + DEFAULT_DB);
         tEnv.useDatabase(DEFAULT_DB);
         // reset clock before each test
@@ -213,8 +213,10 @@ abstract class BinlogVirtualTableITCase extends AbstractTestBase {
         // INSERT: before=null, after=row data
         // Format: +I[_change_type, _log_offset, before.id, before.name, before.amount,
         //            after.id, after.name, after.amount]
-        assertThat(insertResults.get(0)).isEqualTo("+I[I, 0, null, null, null, 1, Item-1, 100]");
-        assertThat(insertResults.get(1)).isEqualTo("+I[I, 1, null, null, null, 2, Item-2, 200]");
+        assertThat(insertResults.get(0))
+                .isEqualTo("+I[insert, 0, null, null, null, 1, Item-1, 100]");
+        assertThat(insertResults.get(1))
+                .isEqualTo("+I[insert, 1, null, null, null, 2, Item-2, 200]");
 
         // Test UPDATE - should merge -U and +U into single binlog row
         CLOCK.advanceTime(Duration.ofMillis(1000));
@@ -226,7 +228,7 @@ abstract class BinlogVirtualTableITCase extends AbstractTestBase {
 
         // UPDATE: before=old row, after=new row, offset=from -U record
         assertThat(updateResults.get(0))
-                .isEqualTo("+I[U, 2, 1, Item-1, 100, 1, Item-1-Updated, 150]");
+                .isEqualTo("+I[update, 2, 1, Item-1, 100, 1, Item-1-Updated, 150]");
 
         // Test DELETE
         CLOCK.advanceTime(Duration.ofMillis(1000));
@@ -237,7 +239,8 @@ abstract class BinlogVirtualTableITCase extends AbstractTestBase {
         assertThat(deleteResults).hasSize(1);
 
         // DELETE: before=row data, after=null
-        assertThat(deleteResults.get(0)).isEqualTo("+I[D, 4, 2, Item-2, 200, null, null, null]");
+        assertThat(deleteResults.get(0))
+                .isEqualTo("+I[delete, 4, 2, Item-2, 200, null, null, null]");
     }
 
     @Test
@@ -264,8 +267,8 @@ abstract class BinlogVirtualTableITCase extends AbstractTestBase {
 
         // SELECT * returns: _change_type, _log_offset, _commit_timestamp, before, after
         // before is null for INSERT, after contains the row
-        assertThat(results.get(0)).startsWith("+I[I, 0, ");
-        assertThat(results.get(0)).contains("null, +I[1, Alice]");
+        assertThat(results.get(0))
+                .isEqualTo("+I[insert, 0, 1970-01-01T00:00:01Z, null, +I[1, Alice]]");
     }
 
     @Test
@@ -297,7 +300,7 @@ abstract class BinlogVirtualTableITCase extends AbstractTestBase {
         // Sort results for deterministic assertion (partitions may return in any order)
         Collections.sort(results);
         assertThat(results)
-                .isEqualTo(Arrays.asList("+I[I, 1, Item-1, us]", "+I[I, 2, Item-2, eu]"));
+                .isEqualTo(Arrays.asList("+I[insert, 1, Item-1, us]", "+I[insert, 2, Item-2, eu]"));
 
         // Update a record in a specific partition
         CLOCK.advanceTime(Duration.ofMillis(100));
@@ -306,7 +309,7 @@ abstract class BinlogVirtualTableITCase extends AbstractTestBase {
 
         List<String> updateResults = collectRowsWithTimeout(rowIter, 1, true);
         assertThat(updateResults).hasSize(1);
-        assertThat(updateResults.get(0)).isEqualTo("+I[U, 1, Item-1-Updated, us]");
+        assertThat(updateResults.get(0)).isEqualTo("+I[update, 1, Item-1-Updated, us]");
     }
 
     @Test
@@ -336,11 +339,16 @@ abstract class BinlogVirtualTableITCase extends AbstractTestBase {
                         + optionsEarliest;
         CloseableIterator<Row> rowIterEarliest = tEnv.executeSql(queryEarliest).collect();
         List<String> earliestResults = collectRowsWithTimeout(rowIterEarliest, 5, true);
-        assertThat(earliestResults).hasSize(5);
-        // All should be INSERT change types
-        for (String result : earliestResults) {
-            assertThat(result).startsWith("+I[I,");
-        }
+        // Sort results for deterministic assertion
+        Collections.sort(earliestResults);
+        assertThat(earliestResults)
+                .isEqualTo(
+                        Arrays.asList(
+                                "+I[insert, 1, v1]",
+                                "+I[insert, 2, v2]",
+                                "+I[insert, 3, v3]",
+                                "+I[insert, 4, v4]",
+                                "+I[insert, 5, v5]"));
 
         // Test scan.startup.mode='timestamp' - should read from specific timestamp
         String optionsTimestamp =
@@ -350,10 +358,8 @@ abstract class BinlogVirtualTableITCase extends AbstractTestBase {
                         + optionsTimestamp;
         CloseableIterator<Row> rowIterTimestamp = tEnv.executeSql(queryTimestamp).collect();
         List<String> timestampResults = collectRowsWithTimeout(rowIterTimestamp, 2, true);
-        assertThat(timestampResults).hasSize(2);
-        // Sort results for deterministic assertion
         Collections.sort(timestampResults);
-        // Should contain records from batch2 only
-        assertThat(timestampResults).isEqualTo(Arrays.asList("+I[I, 4, v4]", "+I[I, 5, v5]"));
+        assertThat(timestampResults)
+                .isEqualTo(Arrays.asList("+I[insert, 4, v4]", "+I[insert, 5, v5]"));
     }
 }

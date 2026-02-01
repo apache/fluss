@@ -915,7 +915,7 @@ abstract class FlinkCatalogITCase {
         // Verify options are inherited from base table
         assertThat(changelogTable.getOptions()).containsEntry("bucket.num", "1");
 
-        // Verify $changelog log tables (append-only with +A change type)
+        // Verify $changelog log tables (append-only with insert change type)
         tEnv.executeSql("CREATE TABLE log_table_for_changelog (id INT, name STRING)");
 
         CatalogTable logChangelogTable =
@@ -953,33 +953,30 @@ abstract class FlinkCatalogITCase {
                 (CatalogTable)
                         catalog.getTable(new ObjectPath(DEFAULT_DB, "pk_table_for_binlog$binlog"));
 
-        // Verify binlog schema has 5 columns: _change_type, _log_offset, _commit_timestamp,
-        // before, after
-        Schema binlogSchema = binlogTable.getUnresolvedSchema();
-        List<String> columnNames =
-                binlogSchema.getColumns().stream()
-                        .map(Schema.UnresolvedColumn::getName)
-                        .collect(Collectors.toList());
-        assertThat(columnNames)
-                .containsExactly(
-                        "_change_type", "_log_offset", "_commit_timestamp", "before", "after");
+        // Build expected schema: metadata columns + nested before/after ROW columns
+        org.apache.flink.table.api.DataTypes.Field[] nestedFields =
+                new org.apache.flink.table.api.DataTypes.Field[] {
+                    DataTypes.FIELD("id", DataTypes.INT().notNull()),
+                    DataTypes.FIELD("name", DataTypes.STRING().notNull()),
+                    DataTypes.FIELD("amount", DataTypes.BIGINT())
+                };
+        Schema expectedSchema =
+                Schema.newBuilder()
+                        .column("_change_type", DataTypes.STRING().notNull())
+                        .column("_log_offset", DataTypes.BIGINT().notNull())
+                        .column("_commit_timestamp", DataTypes.TIMESTAMP_LTZ(3).notNull())
+                        .column("before", DataTypes.ROW(nestedFields))
+                        .column("after", DataTypes.ROW(nestedFields))
+                        .build();
 
-        // Verify before and after columns are ROW types containing the original columns
-        String schemaString = binlogSchema.toString();
-        assertThat(schemaString).contains("before");
-        assertThat(schemaString).contains("after");
-        assertThat(schemaString).contains("ROW<");
-        // Verify nested columns exist in the ROW type
-        assertThat(schemaString).contains("id INT NOT NULL");
-        assertThat(schemaString).contains("name STRING NOT NULL");
-        assertThat(schemaString).contains("amount BIGINT");
+        assertThat(binlogTable.getUnresolvedSchema()).isEqualTo(expectedSchema);
 
         // Binlog virtual tables have empty partition keys (columns are nested)
         assertThat(binlogTable.getPartitionKeys()).isEmpty();
 
-        // Partition info is stored in the binlog.partition-keys option instead
+        // Partition info is stored as an internal boolean flag
         assertThat(binlogTable.getOptions())
-                .containsEntry(FlinkConnectorOptions.BINLOG_PARTITION_KEYS.key(), "name");
+                .containsEntry(FlinkConnectorOptions.INTERNAL_BINLOG_IS_PARTITIONED.key(), "true");
 
         // Verify options are inherited from base table
         assertThat(binlogTable.getOptions()).containsEntry("bucket.num", "1");

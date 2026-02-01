@@ -26,7 +26,6 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.predicate.Predicate;
 import org.apache.fluss.types.RowType;
 
-import org.apache.flink.api.connector.source.Source;
 import org.apache.flink.table.connector.ChangelogMode;
 import org.apache.flink.table.connector.source.DynamicTableSource;
 import org.apache.flink.table.connector.source.ScanTableSource;
@@ -47,7 +46,7 @@ public class BinlogFlinkTableSource implements ScanTableSource {
     private final org.apache.flink.table.types.logical.RowType binlogOutputType;
     // The data columns type extracted from the 'before' nested ROW
     private final org.apache.flink.table.types.logical.RowType dataColumnsType;
-    private final int[] partitionKeyIndexes;
+    private final boolean isPartitioned;
     private final boolean streaming;
     private final FlinkConnectorOptionsUtils.StartupOptions startupOptions;
     private final long scanPartitionDiscoveryIntervalMs;
@@ -63,7 +62,7 @@ public class BinlogFlinkTableSource implements ScanTableSource {
             TablePath tablePath,
             Configuration flussConfig,
             org.apache.flink.table.types.logical.RowType binlogOutputType,
-            int[] partitionKeyIndexes,
+            boolean isPartitioned,
             boolean streaming,
             FlinkConnectorOptionsUtils.StartupOptions startupOptions,
             long scanPartitionDiscoveryIntervalMs,
@@ -71,7 +70,7 @@ public class BinlogFlinkTableSource implements ScanTableSource {
         this.tablePath = tablePath;
         this.flussConfig = flussConfig;
         this.binlogOutputType = binlogOutputType;
-        this.partitionKeyIndexes = partitionKeyIndexes;
+        this.isPartitioned = isPartitioned;
         this.streaming = streaming;
         this.startupOptions = startupOptions;
         this.scanPartitionDiscoveryIntervalMs = scanPartitionDiscoveryIntervalMs;
@@ -123,7 +122,7 @@ public class BinlogFlinkTableSource implements ScanTableSource {
                         flussConfig,
                         tablePath,
                         false,
-                        isPartitioned(),
+                        isPartitioned,
                         flussRowType,
                         projectedFields,
                         offsetsInitializer,
@@ -133,22 +132,7 @@ public class BinlogFlinkTableSource implements ScanTableSource {
                         partitionFilters,
                         null);
 
-        if (!streaming) {
-            // Batch mode - binlog virtual tables read from log, not data lake
-            return new SourceProvider() {
-                @Override
-                public boolean isBounded() {
-                    return true;
-                }
-
-                @Override
-                public Source<RowData, ?, ?> createSource() {
-                    return source;
-                }
-            };
-        } else {
-            return SourceProvider.of(source);
-        }
+        return SourceProvider.of(source);
     }
 
     @Override
@@ -158,7 +142,7 @@ public class BinlogFlinkTableSource implements ScanTableSource {
                         tablePath,
                         flussConfig,
                         binlogOutputType,
-                        partitionKeyIndexes,
+                        isPartitioned,
                         streaming,
                         startupOptions,
                         scanPartitionDiscoveryIntervalMs,
@@ -176,8 +160,4 @@ public class BinlogFlinkTableSource implements ScanTableSource {
 
     // TODO: Implement projection pushdown handling for nested before/after columns
     // TODO: Implement filter pushdown
-
-    private boolean isPartitioned() {
-        return partitionKeyIndexes.length > 0;
-    }
 }

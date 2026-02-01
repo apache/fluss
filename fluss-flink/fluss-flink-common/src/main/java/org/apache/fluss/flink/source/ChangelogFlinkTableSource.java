@@ -27,7 +27,6 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.predicate.Predicate;
 import org.apache.fluss.types.RowType;
 
-import org.apache.flink.api.connector.source.Source;
 import org.apache.flink.table.connector.ChangelogMode;
 import org.apache.flink.table.connector.source.DynamicTableSource;
 import org.apache.flink.table.connector.source.ScanTableSource;
@@ -170,22 +169,7 @@ public class ChangelogFlinkTableSource implements ScanTableSource {
                         partitionFilters,
                         null); // Lake source not supported
 
-        if (!streaming) {
-            // Batch mode - changelog virtual tables read from log, not data lake
-            return new SourceProvider() {
-                @Override
-                public boolean isBounded() {
-                    return true;
-                }
-
-                @Override
-                public Source<RowData, ?, ?> createSource() {
-                    return source;
-                }
-            };
-        } else {
-            return SourceProvider.of(source);
-        }
+        return SourceProvider.of(source);
     }
 
     @Override
