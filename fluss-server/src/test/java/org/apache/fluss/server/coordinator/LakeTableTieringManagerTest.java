@@ -20,6 +20,7 @@ package org.apache.fluss.server.coordinator;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.exception.FencedTieringEpochException;
 import org.apache.fluss.exception.TableNotExistException;
+import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
@@ -33,7 +34,9 @@ import org.apache.fluss.utils.types.Tuple2;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
+import java.io.File;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.List;
@@ -51,11 +54,15 @@ class LakeTableTieringManagerTest {
     private ManualClock manualClock;
     private ManuallyTriggeredScheduledExecutorService lakeTieringServiceTimeoutChecker;
 
+    private @TempDir File tempDir;
+    private FsPath remoteDataDir;
+
     @BeforeEach
     void beforeEach() {
         manualClock = new ManualClock();
         lakeTieringServiceTimeoutChecker = new ManuallyTriggeredScheduledExecutorService();
         tableTieringManager = createLakeTableTieringManager();
+        remoteDataDir = FsPath.fromLocalFile(tempDir);
     }
 
     private LakeTableTieringManager createLakeTableTieringManager() {
@@ -275,6 +282,7 @@ class LakeTableTieringManagerTest {
                 tableId,
                 1,
                 tableDescriptor,
+                remoteDataDir,
                 System.currentTimeMillis(),
                 System.currentTimeMillis());
     }

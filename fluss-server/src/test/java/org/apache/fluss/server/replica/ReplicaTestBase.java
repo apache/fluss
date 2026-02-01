@@ -57,10 +57,12 @@ import org.apache.fluss.server.zk.NOPErrorHandler;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperExtension;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
+import org.apache.fluss.server.zk.data.PartitionAssignment;
 import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.testutils.common.AllCallbackWrapper;
 import org.apache.fluss.testutils.common.ManuallyTriggeredScheduledExecutorService;
 import org.apache.fluss.utils.CloseableRegistry;
+import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.clock.ManualClock;
 import org.apache.fluss.utils.concurrent.FlussScheduler;
 import org.apache.fluss.utils.function.FunctionWithException;
@@ -126,6 +128,7 @@ public class ReplicaTestBase {
     protected static final int TABLET_SERVER_ID = 1;
     private static final String TABLET_SERVER_RACK = "rack1";
     protected static ZooKeeperClient zkClient;
+    protected static FsPath remoteDataDir;
 
     // to register all should be closed after each test
     private final CloseableRegistry closeableRegistry = new CloseableRegistry();
@@ -160,6 +163,7 @@ public class ReplicaTestBase {
                 ZOO_KEEPER_EXTENSION_WRAPPER
                         .getCustomExtension()
                         .getZooKeeperClient(NOPErrorHandler.INSTANCE);
+        remoteDataDir = zkClient.getDefaultRemoteDataDir();
     }
 
     @BeforeEach
@@ -167,7 +171,7 @@ public class ReplicaTestBase {
         conf = getServerConf();
         conf.setString(ConfigOptions.DATA_DIR, tempDir.getAbsolutePath());
         conf.setString(ConfigOptions.COORDINATOR_HOST, "localhost");
-        conf.set(ConfigOptions.REMOTE_DATA_DIR, tempDir.getAbsolutePath() + "/remote_data_dir");
+        conf.set(ConfigOptions.REMOTE_DATA_DIR, remoteDataDir.toString());
         conf.set(ConfigOptions.SERVER_IO_POOL_SIZE, 2);
         // set snapshot interval to 1 seconds for test purpose
         conf.set(ConfigOptions.KV_SNAPSHOT_INTERVAL, Duration.ofSeconds(1));
@@ -255,16 +259,21 @@ public class ReplicaTestBase {
                 TableDescriptor.builder().schema(DATA1_SCHEMA).distributedBy(3).build();
         zkClient.registerTable(
                 DATA1_TABLE_PATH,
-                TableRegistration.newTable(DATA1_TABLE_ID, data1NonPkTableDescriptor));
+                TableRegistration.newTable(
+                        DATA1_TABLE_ID, FlussPaths.remoteDataDir(conf), data1NonPkTableDescriptor));
         zkClient.registerFirstSchema(DATA1_TABLE_PATH, DATA1_SCHEMA);
         zkClient.registerTable(
                 DATA1_TABLE_PATH_PK,
-                TableRegistration.newTable(DATA1_TABLE_ID_PK, DATA1_TABLE_DESCRIPTOR_PK));
+                TableRegistration.newTable(
+                        DATA1_TABLE_ID_PK,
+                        FlussPaths.remoteDataDir(conf),
+                        DATA1_TABLE_DESCRIPTOR_PK));
         zkClient.registerFirstSchema(DATA1_TABLE_PATH_PK, DATA1_SCHEMA_PK);
 
         zkClient.registerTable(
                 DATA2_TABLE_PATH,
-                TableRegistration.newTable(DATA2_TABLE_ID, DATA2_TABLE_DESCRIPTOR));
+                TableRegistration.newTable(
+                        DATA2_TABLE_ID, FlussPaths.remoteDataDir(conf), DATA2_TABLE_DESCRIPTOR));
         zkClient.registerFirstSchema(DATA2_TABLE_PATH, DATA2_SCHEMA);
     }
 
@@ -283,7 +292,10 @@ public class ReplicaTestBase {
         if (zkClient.tableExist(tablePath)) {
             zkClient.deleteTable(tablePath);
         }
-        zkClient.registerTable(tablePath, TableRegistration.newTable(tableId, tableDescriptor));
+        zkClient.registerTable(
+                tablePath,
+                TableRegistration.newTable(
+                        tableId, FlussPaths.remoteDataDir(conf), tableDescriptor));
         zkClient.registerFirstSchema(tablePath, schema);
         return tableId;
     }
@@ -481,6 +493,7 @@ public class ReplicaTestBase {
                 NOPErrorHandler.INSTANCE,
                 metricGroup,
                 DATA1_TABLE_INFO,
+                ((TestSnapshotContext) snapshotContext).getRemoteKvDir().getParent(),
                 manualClock);
     }
 
@@ -554,6 +567,50 @@ public class ReplicaTestBase {
                 .map(f -> f.getPath().getName())
                 .filter(f -> !f.equals("metadata"))
                 .collect(Collectors.toSet());
+    }
+
+    protected TableBucket makeTableBucket(boolean partitionTable) throws Exception {
+        return makeTableBucket(DATA1_TABLE_ID, partitionTable);
+    }
+
+    protected TableBucket makeTableBucket(boolean partitionTable, boolean kvTable)
+            throws Exception {
+        long tableId = kvTable ? DATA1_TABLE_ID_PK : DATA1_TABLE_ID;
+        Long partitionId = partitionTable ? 0L : null;
+        return makeTableBucket(tableId, partitionId, kvTable);
+    }
+
+    protected TableBucket makeTableBucket(long tableId, boolean partitionTable) throws Exception {
+        Long partitionId = partitionTable ? 0L : null;
+        return makeTableBucket(tableId, partitionId, false);
+    }
+
+    protected TableBucket makeTableBucket(long tableId, Long partitionId, boolean kvTable)
+            throws Exception {
+        int bucketId = 0;
+        boolean partitionTable = partitionId != null;
+        if (partitionTable) {
+            if (kvTable) {
+                zkClient.registerPartitionAssignmentAndMetadata(
+                        partitionId,
+                        DATA1_PHYSICAL_TABLE_PATH_PK_PA_2024.getPartitionName(),
+                        new PartitionAssignment(tableId, Collections.emptyMap()),
+                        FlussPaths.remoteDataDir(conf),
+                        DATA1_TABLE_PATH_PK,
+                        tableId);
+            } else {
+                zkClient.registerPartitionAssignmentAndMetadata(
+                        partitionId,
+                        DATA1_PHYSICAL_TABLE_PATH_PA_2024.getPartitionName(),
+                        new PartitionAssignment(tableId, Collections.emptyMap()),
+                        FlussPaths.remoteDataDir(conf),
+                        DATA1_TABLE_PATH,
+                        tableId);
+            }
+            return new TableBucket(tableId, partitionId, bucketId);
+        } else {
+            return new TableBucket(tableId, bucketId);
+        }
     }
 
     /** An implementation of {@link SnapshotContext} for test purpose. */
@@ -643,7 +700,6 @@ public class ReplicaTestBase {
             return 1024;
         }
 
-        @Override
         public FsPath getRemoteKvDir() {
             return remoteKvTabletDir;
         }

@@ -34,6 +34,7 @@ import org.apache.fluss.exception.UnsupportedVersionException;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
+import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
@@ -103,6 +104,8 @@ import org.apache.fluss.server.replica.fetcher.InitialFetchStatus;
 import org.apache.fluss.server.replica.fetcher.ReplicaFetcherManager;
 import org.apache.fluss.server.utils.FatalErrorHandler;
 import org.apache.fluss.server.zk.ZooKeeperClient;
+import org.apache.fluss.server.zk.data.PartitionRegistration;
+import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
 import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.FlussPaths;
@@ -136,7 +139,9 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import static org.apache.fluss.config.ConfigOptions.KV_FORMAT_VERSION_2;
-import static org.apache.fluss.server.TabletManagerBase.getTableInfo;
+import static org.apache.fluss.server.TabletManagerBase.getPartitionRegistration;
+import static org.apache.fluss.server.TabletManagerBase.getSchemaInfo;
+import static org.apache.fluss.server.TabletManagerBase.getTableRegistration;
 import static org.apache.fluss.utils.FileUtils.isDirectoryEmpty;
 import static org.apache.fluss.utils.Preconditions.checkState;
 import static org.apache.fluss.utils.concurrent.LockUtils.inLock;
@@ -1271,11 +1276,10 @@ public class ReplicaManager {
                     remoteLogManager.lookupPositionForOffset(
                             remoteLogSegmentList.get(0), fetchOffset);
             PhysicalTablePath physicalTablePath = replica.getPhysicalTablePath();
+            FsPath remoteLogDir = FlussPaths.remoteLogDir(replica.getRemoteDataDir());
             FsPath remoteLogTabletDir =
                     FlussPaths.remoteLogTabletDir(
-                            remoteLogManager.remoteLogDir(),
-                            physicalTablePath,
-                            replica.getTableBucket());
+                            remoteLogDir, physicalTablePath, replica.getTableBucket());
             return new RemoteLogFetchInfo(
                     remoteLogTabletDir.toString(),
                     physicalTablePath.getPartitionName(),
@@ -1590,7 +1594,9 @@ public class ReplicaManager {
             remoteLogManager.stopReplica(replicaToDelete, delete && replicaToDelete.isLeader());
             if (delete && replicaToDelete.isLeader()) {
                 kvManager.deleteRemoteKvSnapshot(
-                        replicaToDelete.getPhysicalTablePath(), replicaToDelete.getTableBucket());
+                        replicaToDelete.getRemoteDataDir(),
+                        replicaToDelete.getPhysicalTablePath(),
+                        replicaToDelete.getTableBucket());
             }
         }
 
@@ -1641,6 +1647,23 @@ public class ReplicaManager {
         }
     }
 
+    private FsPath getRemoteDataDir(
+            TableBucket tb,
+            PhysicalTablePath physicalTablePath,
+            TableRegistration tableRegistration)
+            throws Exception {
+        if (tb.getPartitionId() != null) {
+            PartitionRegistration partitionRegistration =
+                    getPartitionRegistration(zkClient, physicalTablePath);
+            if (partitionRegistration.getRemoteDataDir() != null) {
+                return partitionRegistration.getRemoteDataDir();
+            }
+        } else if (tableRegistration.remoteDataDir != null) {
+            return tableRegistration.remoteDataDir;
+        }
+        return new FsPath(conf.get(ConfigOptions.REMOTE_DATA_DIR));
+    }
+
     protected Optional<Replica> maybeCreateReplica(NotifyLeaderAndIsrData data) {
         Optional<Replica> replicaOpt = Optional.empty();
         try {
@@ -1649,7 +1672,12 @@ public class ReplicaManager {
             if (hostedReplica instanceof NoneReplica) {
                 PhysicalTablePath physicalTablePath = data.getPhysicalTablePath();
                 TablePath tablePath = physicalTablePath.getTablePath();
-                TableInfo tableInfo = getTableInfo(zkClient, tablePath);
+
+                TableRegistration tableRegistration = getTableRegistration(zkClient, tablePath);
+                SchemaInfo schemaInfo = getSchemaInfo(zkClient, tablePath);
+                TableInfo tableInfo = tableRegistration.toTableInfo(tablePath, schemaInfo);
+
+                FsPath remoteDataDir = getRemoteDataDir(tb, physicalTablePath, tableRegistration);
 
                 boolean isKvTable = tableInfo.hasPrimaryKey();
                 BucketMetricGroup bucketMetricGroup =
@@ -1674,6 +1702,7 @@ public class ReplicaManager {
                                 fatalErrorHandler,
                                 bucketMetricGroup,
                                 tableInfo,
+                                remoteDataDir,
                                 clock);
                 allReplicas.put(tb, new OnlineReplica(replica));
                 replicaOpt = Optional.of(replica);
