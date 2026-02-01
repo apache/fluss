@@ -30,12 +30,14 @@ import org.apache.fluss.types.DecimalType;
 import org.apache.fluss.types.DoubleType;
 import org.apache.fluss.types.FloatType;
 import org.apache.fluss.types.IntType;
+import org.apache.fluss.types.LocalZonedTimestampNanoType;
 import org.apache.fluss.types.LocalZonedTimestampType;
 import org.apache.fluss.types.MapType;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.types.SmallIntType;
 import org.apache.fluss.types.StringType;
 import org.apache.fluss.types.TimeType;
+import org.apache.fluss.types.TimestampNanoType;
 import org.apache.fluss.types.TimestampType;
 import org.apache.fluss.types.TinyIntType;
 
@@ -163,6 +165,16 @@ public class FlussDataTypeToIcebergDataType implements DataTypeVisitor<Type> {
         } else {
             return Types.ListType.ofRequired(getNextId(), elementType);
         }
+    }
+
+    @Override
+    public Type visit(TimestampNanoType timestampNanoType) {
+        return Types.TimestampNanoType.withoutZone();
+    }
+
+    @Override
+    public Type visit(LocalZonedTimestampNanoType localZonedTimestampNanoType) {
+        return Types.TimestampNanoType.withZone();
     }
 
     @Override
