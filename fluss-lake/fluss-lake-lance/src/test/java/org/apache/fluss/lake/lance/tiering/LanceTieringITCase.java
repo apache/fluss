@@ -102,18 +102,33 @@ class LanceTieringITCase extends FlinkLanceTieringTestBase {
 
     @Test
     void testTieringWithArrayColumns() throws Exception {
-        // create log table with array columns
+        // create log table with multiple array type columns to test ARRAY support comprehensively
         TablePath t1 = TablePath.of(DEFAULT_DB, "logTableWithArrays");
-        long t1Id = createLogTableWithArrayColumns(t1);
+        long t1Id = createLogTableWithAllArrayTypes(t1);
         TableBucket t1Bucket = new TableBucket(t1Id, 0);
         List<InternalRow> flussRows = new ArrayList<>();
-        // write records with array data
+        // write records with various array types: STRING, INT, and FLOAT (for vector embeddings)
         for (int i = 0; i < 10; i++) {
             List<InternalRow> rows =
                     Arrays.asList(
-                            row(1, "v1", new String[] {"tag1", "tag2"}, new int[] {10, 20}),
-                            row(2, "v2", new String[] {"tag3"}, new int[] {30, 40, 50}),
-                            row(3, "v3", new String[] {"tag4", "tag5", "tag6"}, new int[] {60}));
+                            row(
+                                    1,
+                                    "v1",
+                                    new String[] {"tag1", "tag2"},
+                                    new int[] {10, 20},
+                                    new GenericArray(new float[] {0.1f, 0.2f, 0.3f, 0.4f})),
+                            row(
+                                    2,
+                                    "v2",
+                                    new String[] {"tag3"},
+                                    new int[] {30, 40, 50},
+                                    new GenericArray(new float[] {0.5f, 0.6f, 0.7f, 0.8f})),
+                            row(
+                                    3,
+                                    "v3",
+                                    new String[] {"tag4", "tag5", "tag6"},
+                                    new int[] {60},
+                                    new GenericArray(new float[] {0.9f, 1.0f, 1.1f, 1.2f})));
             flussRows.addAll(rows);
             writeRows(t1, rows, true);
         }
@@ -131,46 +146,8 @@ class LanceTieringITCase extends FlinkLanceTieringTestBase {
                         t1.getDatabaseName(),
                         t1.getTableName());
 
-        // check data in lance, including array columns
-        checkDataInLanceAppendOnlyTableWithArrays(config, flussRows);
-        checkSnapshotPropertyInLance(config, Collections.singletonMap(t1Bucket, 30L));
-
-        jobClient.cancel().get();
-    }
-
-    @Test
-    void testTieringWithFloatArrayForVectorEmbeddings() throws Exception {
-        // create log table with float array column for vector embeddings
-        TablePath t1 = TablePath.of(DEFAULT_DB, "vectorTable");
-        long t1Id = createLogTableWithVectorColumn(t1);
-        TableBucket t1Bucket = new TableBucket(t1Id, 0);
-        List<InternalRow> flussRows = new ArrayList<>();
-        // write records with float array data representing vector embeddings
-        for (int i = 0; i < 10; i++) {
-            List<InternalRow> rows =
-                    Arrays.asList(
-                            row(1, "doc1", new GenericArray(new float[] {0.1f, 0.2f, 0.3f, 0.4f})),
-                            row(2, "doc2", new GenericArray(new float[] {0.5f, 0.6f, 0.7f, 0.8f})),
-                            row(3, "doc3", new GenericArray(new float[] {0.9f, 1.0f, 1.1f, 1.2f})));
-            flussRows.addAll(rows);
-            writeRows(t1, rows, true);
-        }
-
-        // then start tiering job
-        JobClient jobClient = buildTieringJob(execEnv);
-
-        // check the status of replica after synced
-        assertReplicaStatus(t1Bucket, 30);
-
-        LanceConfig config =
-                LanceConfig.from(
-                        lanceConf.toMap(),
-                        Collections.emptyMap(),
-                        t1.getDatabaseName(),
-                        t1.getTableName());
-
-        // check vector data in lance
-        checkVectorDataInLance(config, flussRows);
+        // check data in lance, including all array types
+        checkDataInLanceWithAllArrayTypes(config, flussRows);
         checkSnapshotPropertyInLance(config, Collections.singletonMap(t1Bucket, 30L));
 
         jobClient.cancel().get();
@@ -220,7 +197,7 @@ class LanceTieringITCase extends FlinkLanceTieringTestBase {
         }
     }
 
-    private void checkDataInLanceAppendOnlyTableWithArrays(
+    private void checkDataInLanceWithAllArrayTypes(
             LanceConfig config, List<InternalRow> expectedRows) throws Exception {
         try (Dataset dataset =
                 Dataset.open(
@@ -234,54 +211,35 @@ class LanceTieringITCase extends FlinkLanceTieringTestBase {
             int rowCount = readerRoot.getRowCount();
             for (int i = 0; i < rowCount; i++) {
                 InternalRow flussRow = flussRowIterator.next();
+
+                // Check basic columns
                 assertThat((int) (readerRoot.getVector(0).getObject(i)))
                         .isEqualTo(flussRow.getInt(0));
                 assertThat(((VarCharVector) readerRoot.getVector(1)).getObject(i).toString())
                         .isEqualTo(flussRow.getString(1).toString());
 
+                // Check ARRAY<STRING> column
                 org.apache.arrow.vector.complex.ListVector tagsVector =
                         (org.apache.arrow.vector.complex.ListVector) readerRoot.getVector(2);
                 java.util.List<?> tagsFromLance = (java.util.List<?>) tagsVector.getObject(i);
                 assertThat(tagsFromLance).isNotNull();
                 assertThat(tagsFromLance.size()).isEqualTo(flussRow.getArray(2).size());
 
+                // Check ARRAY<INT> column
                 org.apache.arrow.vector.complex.ListVector scoresVector =
                         (org.apache.arrow.vector.complex.ListVector) readerRoot.getVector(3);
                 java.util.List<?> scoresFromLance = (java.util.List<?>) scoresVector.getObject(i);
                 assertThat(scoresFromLance).isNotNull();
                 assertThat(scoresFromLance.size()).isEqualTo(flussRow.getArray(3).size());
-            }
-            assertThat(reader.loadNextBatch()).isFalse();
-            assertThat(flussRowIterator.hasNext()).isFalse();
-        }
-    }
 
-    private void checkVectorDataInLance(LanceConfig config, List<InternalRow> expectedRows)
-            throws Exception {
-        try (Dataset dataset =
-                Dataset.open(
-                        allocator,
-                        config.getDatasetUri(),
-                        LanceConfig.genReadOptionFromConfig(config))) {
-            ArrowReader reader = dataset.newScan().scanBatches();
-            VectorSchemaRoot readerRoot = reader.getVectorSchemaRoot();
-            reader.loadNextBatch();
-            Iterator<InternalRow> flussRowIterator = expectedRows.iterator();
-            int rowCount = readerRoot.getRowCount();
-            for (int i = 0; i < rowCount; i++) {
-                InternalRow flussRow = flussRowIterator.next();
-                assertThat((int) (readerRoot.getVector(0).getObject(i)))
-                        .isEqualTo(flussRow.getInt(0));
-                assertThat(((VarCharVector) readerRoot.getVector(1)).getObject(i).toString())
-                        .isEqualTo(flussRow.getString(1).toString());
-
+                // Check ARRAY<FLOAT> column (vector embeddings)
                 org.apache.arrow.vector.complex.ListVector embeddingVector =
-                        (org.apache.arrow.vector.complex.ListVector) readerRoot.getVector(2);
+                        (org.apache.arrow.vector.complex.ListVector) readerRoot.getVector(4);
                 java.util.List<?> embeddingFromLance =
                         (java.util.List<?>) embeddingVector.getObject(i);
                 assertThat(embeddingFromLance).isNotNull();
 
-                float[] expectedEmbedding = flussRow.getArray(2).toFloatArray();
+                float[] expectedEmbedding = flussRow.getArray(4).toFloatArray();
                 assertThat(embeddingFromLance.size()).isEqualTo(expectedEmbedding.length);
 
                 for (int j = 0; j < expectedEmbedding.length; j++) {
