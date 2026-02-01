@@ -36,6 +36,7 @@ import org.junit.jupiter.api.io.TempDir;
 
 import javax.annotation.Nonnull;
 
+import java.io.File;
 import java.nio.file.Path;
 import java.util.Collections;
 import java.util.List;
@@ -50,6 +51,7 @@ class ZooKeeperCompletedSnapshotStoreTest {
     public static AllCallbackWrapper<ZooKeeperExtension> zooKeeperExtensionWrapper =
             new AllCallbackWrapper<>(new ZooKeeperExtension());
 
+    static @TempDir File tempDir;
     static ZooKeeperClient zooKeeperClient;
 
     @BeforeAll
@@ -58,6 +60,7 @@ class ZooKeeperCompletedSnapshotStoreTest {
         configuration.setString(
                 ConfigOptions.ZOOKEEPER_ADDRESS,
                 zooKeeperExtensionWrapper.getCustomExtension().getConnectString());
+        configuration.set(ConfigOptions.REMOTE_DATA_DIR, tempDir.getAbsolutePath());
         zooKeeperClient =
                 ZooKeeperUtils.startZookeeperClient(configuration, NOPErrorHandler.INSTANCE);
     }
@@ -103,6 +106,7 @@ class ZooKeeperCompletedSnapshotStoreTest {
         configuration.setString(
                 ConfigOptions.ZOOKEEPER_ADDRESS,
                 zooKeeperExtensionWrapper.getCustomExtension().getConnectString());
+        configuration.set(ConfigOptions.REMOTE_DATA_DIR, tmpDir.toFile().getAbsolutePath());
 
         SharedKvFileRegistry sharedKvFileRegistry = new SharedKvFileRegistry();
         TableBucket tableBucket = new TableBucket(1, 2);

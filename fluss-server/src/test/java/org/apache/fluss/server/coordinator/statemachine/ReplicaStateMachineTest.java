@@ -20,6 +20,7 @@ package org.apache.fluss.server.coordinator.statemachine;
 import org.apache.fluss.cluster.Endpoint;
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableBucketReplica;
 import org.apache.fluss.metadata.TableInfo;
@@ -42,7 +43,9 @@ import org.apache.fluss.testutils.common.AllCallbackWrapper;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
+import org.junit.jupiter.api.io.TempDir;
 
+import java.io.File;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -69,12 +72,16 @@ class ReplicaStateMachineTest {
 
     private static ZooKeeperClient zookeeperClient;
 
+    private static @TempDir File tempDir;
+    private static FsPath remoteDataDir;
+
     @BeforeAll
     static void baseBeforeAll() {
         zookeeperClient =
                 ZOO_KEEPER_EXTENSION_WRAPPER
                         .getCustomExtension()
                         .getZooKeeperClient(NOPErrorHandler.INSTANCE);
+        remoteDataDir = FsPath.fromLocalFile(tempDir);
     }
 
     @Test
@@ -202,6 +209,7 @@ class ReplicaStateMachineTest {
                         tableId,
                         0,
                         DATA1_TABLE_DESCRIPTOR,
+                        remoteDataDir,
                         System.currentTimeMillis(),
                         System.currentTimeMillis()));
         coordinatorContext.putTablePath(tableId, DATA1_TABLE_PATH);
@@ -240,6 +248,7 @@ class ReplicaStateMachineTest {
                         tableId,
                         0,
                         DATA1_TABLE_DESCRIPTOR,
+                        remoteDataDir,
                         System.currentTimeMillis(),
                         System.currentTimeMillis()));
         coordinatorContext.putTablePath(tableId, DATA1_TABLE_PATH);
