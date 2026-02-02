@@ -31,7 +31,7 @@ class ConfigOptionsDocGeneratorTest {
         ConfigOptionsDocGenerator.main(new String[] {});
 
         // Verify the file was actually created
-        File generatedFile = new File("website/docs/maintenance/config_reference.mdx");
+        File generatedFile = new File("website/docs/_configs/_partial_config.mdx");
         assertThat(generatedFile).exists();
     }
 }

@@ -38,9 +38,12 @@ import java.util.TreeMap;
 public class ConfigOptionsDocGenerator {
 
     public static void main(String[] args) throws Exception {
-        Path projectRoot = findProjectRoot();
-        File outputFile =
-                projectRoot.resolve("website/docs/maintenance/config_reference.mdx").toFile();
+        Path root = findProjectRoot();
+        String projectRoot = (root != null) ? root.toString() : System.getProperty("user.dir");
+        String outputPath = projectRoot + "/website/docs/_configs/_partial_config.mdx";
+
+        File outputFile = new File(outputPath);
+        outputFile.getParentFile().mkdirs();
 
         System.out.println("Generating MDX partial: " + outputFile.getAbsolutePath());
 
@@ -62,7 +65,6 @@ public class ConfigOptionsDocGenerator {
         Field[] fields = ConfigOptions.class.getDeclaredFields();
         Map<String, List<Field>> sections = new TreeMap<>();
 
-        // 1. Group the fields first
         for (Field field : fields) {
             if (field.getType().equals(ConfigOption.class)) {
                 String section = "Common";
@@ -79,16 +81,11 @@ public class ConfigOptionsDocGenerator {
             }
         }
 
-        // 2. Generate the HTML for each section
         for (Map.Entry<String, List<Field>> entry : sections.entrySet()) {
             builder.append("## ").append(entry.getKey()).append(" Configurations\n\n");
-            builder.append("<table class=\"configuration-table\">\n")
-                    .append("  <thead>\n    <tr>\n")
-                    .append("      <th style={{width: '25%'}}>Key</th>\n")
-                    .append("      <th style={{width: '15%'}}>Default</th>\n")
-                    .append("      <th style={{width: '15%'}}>Type</th>\n")
-                    .append("      <th style={{width: '45%'}}>Description</th>\n")
-                    .append("    </tr>\n  </thead>\n  <tbody>\n");
+
+            builder.append("| Key | Default | Type | Description |\n");
+            builder.append("| :--- | :--- | :--- | :--- |\n");
 
             for (Field field : entry.getValue()) {
                 ConfigOption<?> option = (ConfigOption<?>) field.get(null);
@@ -98,37 +95,29 @@ public class ConfigOptionsDocGenerator {
                     defaultValue = field.getAnnotation(ConfigOverrideDefault.class).value();
                 }
 
-                // ESCAPE DESCRIPTION: Crucial for MDX/React rendering success
-                // We escape <, >, {, and } which are special JSX characters
+                // IMPORTANT: MDX hates unescaped < or { symbols in text
                 String description =
                         option.description()
-                                .replace("<", "&lt;")
-                                .replace(">", "&gt;")
-                                .replace("{", "&#123;")
-                                .replace("}", "&#125;")
+                                .replace("\n", " ")
+                                .replace("\r", " ")
+                                .replace("|", "\\|")
+                                .replace("<", "&lt;") // Escape for MDX
+                                .replace("{", "&#123;") // Escape for MDX
+                                .replace("}", "&#125;") // Escape for MDX
                                 .replace("%s", "");
 
-                builder.append("    <tr>\n")
-                        .append("      <td><code>")
+                builder.append("| `")
                         .append(option.key())
-                        .append("</code></td>\n")
-                        .append("      <td><code>")
+                        .append("` | `")
                         .append(defaultValue.replace("<", "&lt;"))
-                        .append("</code></td>\n")
-                        .append("      <td>")
+                        .append("` | ")
                         .append(getType(option))
-                        .append("</td>\n")
-                        .append("      <td>")
+                        .append(" | ")
                         .append(description)
-                        .append("</td>\n")
-                        .append("    </tr>\n");
+                        .append(" |\n");
             }
-            builder.append("  </tbody>\n</table>\n\n");
+            builder.append("\n");
         }
-
-        // Mandatory export for MDX partials to render correctly in Docusaurus
-        builder.append("export default ({children}) => <>{children}</>;\n");
-
         return builder.toString();
     }
 
