@@ -1569,6 +1569,45 @@ class KvTabletTest {
                 .as("Total memory usage must be positive")
                 .isGreaterThan(0);
 
+        // ========== Phase 5.1: Verify Fine-Grained Memory Metrics ==========
+        // All fine-grained memory metrics should be non-negative
+        long memTableUsage = statistics.getMemTableMemoryUsage();
+        assertThat(memTableUsage)
+                .as("MemTable memory usage should be non-negative")
+                .isGreaterThanOrEqualTo(0);
+
+        long memTableUnFlushedUsage = statistics.getMemTableUnFlushedMemoryUsage();
+        assertThat(memTableUnFlushedUsage)
+                .as("Unflushed memtable memory usage should be non-negative")
+                .isGreaterThanOrEqualTo(0);
+
+        long tableReadersUsage = statistics.getTableReadersMemoryUsage();
+        assertThat(tableReadersUsage)
+                .as("Table readers memory usage should be non-negative")
+                .isGreaterThanOrEqualTo(0);
+
+        long blockCacheMemoryUsage = statistics.getBlockCacheMemoryUsage();
+        assertThat(blockCacheMemoryUsage)
+                .as("Block cache memory usage should be non-negative")
+                .isGreaterThanOrEqualTo(0);
+
+        long blockCachePinnedUsage = statistics.getBlockCachePinnedUsage();
+        assertThat(blockCachePinnedUsage)
+                .as("Block cache pinned usage should be non-negative")
+                .isGreaterThanOrEqualTo(0);
+
+        // Total memory usage should be at least as large as any individual component
+        long totalMemoryUsage = statistics.getTotalMemoryUsage();
+        assertThat(totalMemoryUsage)
+                .as("Total memory should be at least as large as memtable usage")
+                .isGreaterThanOrEqualTo(memTableUsage);
+        assertThat(totalMemoryUsage)
+                .as("Total memory should be at least as large as table readers usage")
+                .isGreaterThanOrEqualTo(tableReadersUsage);
+        assertThat(totalMemoryUsage)
+                .as("Total memory should be at least as large as block cache usage")
+                .isGreaterThanOrEqualTo(blockCacheMemoryUsage);
+
         // ========== Phase 6: Verify Metrics After Close ==========
         kvTablet.close();
 
@@ -1585,5 +1624,12 @@ class KvTabletTest {
         assertThat(statistics.getCompactionBytesWritten()).isEqualTo(0);
         assertThat(statistics.getCompactionTimeMicros()).isEqualTo(0);
         assertThat(statistics.getTotalMemoryUsage()).isEqualTo(0);
+
+        // Fine-grained memory metrics should also return 0 after close
+        assertThat(statistics.getMemTableMemoryUsage()).isEqualTo(0);
+        assertThat(statistics.getMemTableUnFlushedMemoryUsage()).isEqualTo(0);
+        assertThat(statistics.getTableReadersMemoryUsage()).isEqualTo(0);
+        assertThat(statistics.getBlockCacheMemoryUsage()).isEqualTo(0);
+        assertThat(statistics.getBlockCachePinnedUsage()).isEqualTo(0);
     }
 }

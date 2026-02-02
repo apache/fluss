@@ -97,7 +97,7 @@ abstract class ChangelogVirtualTableITCase extends AbstractTestBase {
                         "create catalog %s with ('type' = 'fluss', '%s' = '%s')",
                         CATALOG_NAME, BOOTSTRAP_SERVERS.key(), bootstrapServers));
         tEnv.executeSql("use catalog " + CATALOG_NAME);
-        tEnv.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 2);
+        tEnv.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 1);
         tEnv.executeSql("create database " + DEFAULT_DB);
         tEnv.useDatabase(DEFAULT_DB);
         // reset clock before each test
@@ -220,16 +220,17 @@ abstract class ChangelogVirtualTableITCase extends AbstractTestBase {
         assertThat(results).hasSize(2);
 
         // Format: +I[_change_type, _log_offset, _commit_timestamp, event_id, event_type]
-        // Log tables use +A (append-only) change type
-        assertThat(results.get(0)).isEqualTo("+I[+A, 0, 1970-01-01T00:00:01Z, 1, click]");
-        assertThat(results.get(1)).isEqualTo("+I[+A, 1, 1970-01-01T00:00:01Z, 2, view]");
+        // Log tables use insert (append-only) change type
+        assertThat(results.get(0)).isEqualTo("+I[insert, 0, 1970-01-01T00:00:01Z, 1, click]");
+        assertThat(results.get(1)).isEqualTo("+I[insert, 1, 1970-01-01T00:00:01Z, 2, view]");
 
         // Insert more data with new timestamp
         CLOCK.advanceTime(Duration.ofMillis(1000));
         writeRows(conn, tablePath, Arrays.asList(row(3, "purchase")), true);
 
         List<String> moreResults = collectRowsWithTimeout(rowIter, 1, true);
-        assertThat(moreResults.get(0)).isEqualTo("+I[+A, 2, 1970-01-01T00:00:02Z, 3, purchase]");
+        assertThat(moreResults.get(0))
+                .isEqualTo("+I[insert, 2, 1970-01-01T00:00:02Z, 3, purchase]");
     }
 
     @Test
@@ -254,7 +255,7 @@ abstract class ChangelogVirtualTableITCase extends AbstractTestBase {
         CLOCK.advanceTime(Duration.ofMillis(100));
         writeRows(conn, tablePath, Arrays.asList(row(1, "Item-1", 100L, "Desc-1")), false);
         List<String> insertResult = collectRowsWithTimeout(rowIter, 1, false);
-        assertThat(insertResult.get(0)).isEqualTo("+I[+I, 1, Item-1]");
+        assertThat(insertResult.get(0)).isEqualTo("+I[insert, 1, Item-1]");
 
         // Test UPDATE
         CLOCK.advanceTime(Duration.ofMillis(100));
@@ -264,15 +265,15 @@ abstract class ChangelogVirtualTableITCase extends AbstractTestBase {
                 Arrays.asList(row(1, "Item-1-Updated", 150L, "Desc-1-Updated")),
                 false);
         List<String> updateResults = collectRowsWithTimeout(rowIter, 2, false);
-        assertThat(updateResults.get(0)).isEqualTo("+I[-U, 1, Item-1]");
-        assertThat(updateResults.get(1)).isEqualTo("+I[+U, 1, Item-1-Updated]");
+        assertThat(updateResults.get(0)).isEqualTo("+I[update_before, 1, Item-1]");
+        assertThat(updateResults.get(1)).isEqualTo("+I[update_after, 1, Item-1-Updated]");
 
         // Test DELETE
         CLOCK.advanceTime(Duration.ofMillis(100));
         deleteRows(
                 conn, tablePath, Arrays.asList(row(1, "Item-1-Updated", 150L, "Desc-1-Updated")));
         List<String> deleteResult = collectRowsWithTimeout(rowIter, 1, true);
-        assertThat(deleteResult.get(0)).isEqualTo("+I[-D, 1, Item-1-Updated]");
+        assertThat(deleteResult.get(0)).isEqualTo("+I[delete, 1, Item-1-Updated]");
     }
 
     @Test
@@ -304,20 +305,20 @@ abstract class ChangelogVirtualTableITCase extends AbstractTestBase {
 
         // With ManualClock and 1 bucket, we can assert exact row values
         // Format: +I[_change_type, _log_offset, _commit_timestamp, id, name, amount]
-        assertThat(results.get(0)).isEqualTo("+I[+I, 0, 1970-01-01T00:00:01Z, 1, Item-1, 100]");
-        assertThat(results.get(1)).isEqualTo("+I[+I, 1, 1970-01-01T00:00:01Z, 2, Item-2, 200]");
+        assertThat(results.get(0)).isEqualTo("+I[insert, 0, 1970-01-01T00:00:01Z, 1, Item-1, 100]");
+        assertThat(results.get(1)).isEqualTo("+I[insert, 1, 1970-01-01T00:00:01Z, 2, Item-2, 200]");
 
         // Test UPDATE operation with new timestamp
         CLOCK.advanceTime(Duration.ofMillis(1000));
         writeRows(conn, tablePath, Arrays.asList(row(1, "Item-1-Updated", 150L)), false);
 
-        // Collect update records (should get -U and +U)
+        // Collect update records (should get update_before and update_after)
         List<String> updateResults = collectRowsWithTimeout(rowIter, 2, false);
         assertThat(updateResults).hasSize(2);
         assertThat(updateResults.get(0))
-                .isEqualTo("+I[-U, 2, 1970-01-01T00:00:02Z, 1, Item-1, 100]");
+                .isEqualTo("+I[update_before, 2, 1970-01-01T00:00:02Z, 1, Item-1, 100]");
         assertThat(updateResults.get(1))
-                .isEqualTo("+I[+U, 3, 1970-01-01T00:00:02Z, 1, Item-1-Updated, 150]");
+                .isEqualTo("+I[update_after, 3, 1970-01-01T00:00:02Z, 1, Item-1-Updated, 150]");
 
         // Test DELETE operation with new timestamp
         CLOCK.advanceTime(Duration.ofMillis(1000));
@@ -327,7 +328,7 @@ abstract class ChangelogVirtualTableITCase extends AbstractTestBase {
         List<String> deleteResult = collectRowsWithTimeout(rowIter, 1, true);
         assertThat(deleteResult).hasSize(1);
         assertThat(deleteResult.get(0))
-                .isEqualTo("+I[-D, 4, 1970-01-01T00:00:03Z, 2, Item-2, 200]");
+                .isEqualTo("+I[delete, 4, 1970-01-01T00:00:03Z, 2, Item-2, 200]");
     }
 
     @Test
@@ -361,7 +362,7 @@ abstract class ChangelogVirtualTableITCase extends AbstractTestBase {
         assertThat(earliestResults).hasSize(5);
         // All should be INSERT change types
         for (String result : earliestResults) {
-            assertThat(result).startsWith("+I[+I,");
+            assertThat(result).startsWith("+I[insert,");
         }
 
         // 2. Test scan.startup.mode='timestamp' - should read records from specific timestamp
@@ -374,9 +375,9 @@ abstract class ChangelogVirtualTableITCase extends AbstractTestBase {
         assertThat(timestampResults).hasSize(2);
         // Should contain records from batch2 only
         assertThat(timestampResults)
-                .containsExactlyInAnyOrder(
-                        "+I[+I, 3, 1970-01-01T00:00:00.200Z, 4, v4]",
-                        "+I[+I, 4, 1970-01-01T00:00:00.200Z, 5, v5]");
+                .containsExactly(
+                        "+I[insert, 3, 1970-01-01T00:00:00.200Z, 4, v4]",
+                        "+I[insert, 4, 1970-01-01T00:00:00.200Z, 5, v5]");
     }
 
     @Test
@@ -406,15 +407,19 @@ abstract class ChangelogVirtualTableITCase extends AbstractTestBase {
         // Collect initial inserts
         List<String> results = collectRowsWithTimeout(rowIter, 3, false);
         assertThat(results)
-                .containsExactlyInAnyOrder(
-                        "+I[+I, 1, Item-1, us]", "+I[+I, 2, Item-2, us]", "+I[+I, 3, Item-3, eu]");
+                .containsExactly(
+                        "+I[insert, 1, Item-1, us]",
+                        "+I[insert, 2, Item-2, us]",
+                        "+I[insert, 3, Item-3, eu]");
 
         // Update a record in a specific partition
         CLOCK.advanceTime(Duration.ofMillis(100));
         tEnv.executeSql("INSERT INTO partitioned_test VALUES (1, 'Item-1-Updated', 'us')").await();
         List<String> updateResults = collectRowsWithTimeout(rowIter, 2, false);
         assertThat(updateResults)
-                .containsExactly("+I[-U, 1, Item-1, us]", "+I[+U, 1, Item-1-Updated, us]");
+                .containsExactly(
+                        "+I[update_before, 1, Item-1, us]",
+                        "+I[update_after, 1, Item-1-Updated, us]");
 
         rowIter.close();
     }

@@ -263,6 +263,17 @@ public class Sender implements Runnable {
         }
     }
 
+    /** Complete batch with bucket and log end offset info (for KV batches). */
+    private void completeBatch(
+            ReadyWriteBatch readyWriteBatch, TableBucket bucket, long logEndOffset) {
+        if (idempotenceManager.idempotenceEnabled()) {
+            idempotenceManager.handleCompletedBatch(readyWriteBatch);
+        }
+        if (readyWriteBatch.writeBatch().complete(bucket, logEndOffset)) {
+            maybeRemoveAndDeallocateBatch(readyWriteBatch);
+        }
+    }
+
     private void failBatch(
             ReadyWriteBatch batch, Exception exception, boolean adjustBatchSequences) {
         if (batch.writeBatch().completeExceptionally(exception)) {
@@ -492,7 +503,10 @@ public class Sender implements Runnable {
                                 writeBatch, ApiError.fromErrorMessage(respForBucket));
                 invalidMetadataTablesSet.addAll(invalidMetadataTables);
             } else {
-                completeBatch(writeBatch);
+                // Get log end offset (LEO) from response for KV batches
+                long logEndOffset =
+                        respForBucket.hasLogEndOffset() ? respForBucket.getLogEndOffset() : -1;
+                completeBatch(writeBatch, tb, logEndOffset);
             }
         }
         metadataUpdater.invalidPhysicalTableBucketMeta(invalidMetadataTablesSet);

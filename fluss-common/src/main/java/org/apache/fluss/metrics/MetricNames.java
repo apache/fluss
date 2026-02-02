@@ -39,6 +39,7 @@ public class MetricNames {
     public static final String ACTIVE_TABLET_SERVER_COUNT = "activeTabletServerCount";
     public static final String OFFLINE_BUCKET_COUNT = "offlineBucketCount";
     public static final String TABLE_COUNT = "tableCount";
+    public static final String LAKE_TABLE_COUNT = "lakeTableCount";
     public static final String BUCKET_COUNT = "bucketCount";
     public static final String PARTITION_COUNT = "partitionCount";
     public static final String REPLICAS_TO_DELETE_COUNT = "replicasToDeleteCount";
@@ -178,6 +179,27 @@ public class MetricNames {
     // Server-level RocksDB metrics (aggregated from all tables, Sum aggregation)
     /** Total memory usage across all RocksDB instances in this server (Sum aggregation). */
     public static final String ROCKSDB_MEMORY_USAGE_TOTAL = "rocksdbMemoryUsageTotal";
+
+    // Table-level RocksDB memory metrics (Sum aggregation)
+    /** Total memtable memory usage across all buckets of this table. */
+    public static final String ROCKSDB_MEMTABLE_MEMORY_USAGE_TOTAL =
+            "rocksdbMemTableMemoryUsageTotal";
+
+    /** Total unflushed memtable memory usage across all buckets of this table. */
+    public static final String ROCKSDB_MEMTABLE_UNFLUSHED_MEMORY_USAGE_TOTAL =
+            "rocksdbMemTableUnFlushedMemoryUsageTotal";
+
+    /** Total table readers (indexes and filters) memory usage across all buckets of this table. */
+    public static final String ROCKSDB_TABLE_READERS_MEMORY_USAGE_TOTAL =
+            "rocksdbTableReadersMemoryUsageTotal";
+
+    /** Total block cache memory usage across all buckets of this table. */
+    public static final String ROCKSDB_BLOCK_CACHE_MEMORY_USAGE_TOTAL =
+            "rocksdbBlockCacheMemoryUsageTotal";
+
+    /** Total pinned memory in block cache across all buckets of this table. */
+    public static final String ROCKSDB_BLOCK_CACHE_PINNED_USAGE_TOTAL =
+            "rocksdbBlockCachePinnedUsageTotal";
 
     // --------------------------------------------------------------------------------------------
     // metrics for table bucket

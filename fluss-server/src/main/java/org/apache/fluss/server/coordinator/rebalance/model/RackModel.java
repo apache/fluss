@@ -59,6 +59,18 @@ public class RackModel {
         return rack;
     }
 
+    /**
+     * @return true if the rack contains a server without offline tag.
+     */
+    public boolean rackContainsServerWithoutOfflineTag() {
+        for (ServerModel server : servers.values()) {
+            if (!server.isOfflineTagged()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     @Nullable
     ServerModel server(int serverId) {
         return servers.get(serverId);

@@ -27,7 +27,9 @@ import org.apache.fluss.client.table.scanner.ScanRecord;
 import org.apache.fluss.client.table.scanner.log.LogScanner;
 import org.apache.fluss.client.table.scanner.log.ScanRecords;
 import org.apache.fluss.client.table.writer.AppendWriter;
+import org.apache.fluss.client.table.writer.DeleteResult;
 import org.apache.fluss.client.table.writer.TableWriter;
+import org.apache.fluss.client.table.writer.UpsertResult;
 import org.apache.fluss.client.table.writer.UpsertWriter;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
@@ -1803,6 +1805,105 @@ class FlussTableITCase extends ClientToServerITCaseBase {
             assertThat(total).isEqualTo(0);
 
             scanner.close();
+        }
+    }
+
+    // ---------------------- Upsert/Delete Result with LogEndOffset tests ----------------------
+
+    @Test
+    void testUpsertAndDeleteReturnLogEndOffset() throws Exception {
+        // Create a PK table with single bucket for predictable offset tracking
+        TablePath tablePath = TablePath.of("test_db_1", "test_upsert_delete_log_end_offset");
+        Schema schema =
+                Schema.newBuilder()
+                        .column("a", DataTypes.INT())
+                        .column("b", DataTypes.STRING())
+                        .primaryKey("a")
+                        .build();
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder().schema(schema).distributedBy(1, "a").build();
+        createTable(tablePath, tableDescriptor, true);
+
+        try (Table table = conn.getTable(tablePath)) {
+            UpsertWriter upsertWriter = table.newUpsert().createWriter();
+            TableBucket expectedBucket = new TableBucket(table.getTableInfo().getTableId(), 0);
+
+            // First upsert - should return log end offset > 0
+            UpsertResult upsertResult1 = upsertWriter.upsert(row(1, "a")).get();
+            assertThat(upsertResult1.getBucket()).isEqualTo(expectedBucket);
+            assertThat(upsertResult1.getLogEndOffset()).isEqualTo(1);
+
+            // Second upsert - should return higher log end offset
+            UpsertResult upsertResult2 = upsertWriter.upsert(row(2, "b")).get();
+            assertThat(upsertResult2.getBucket()).isEqualTo(expectedBucket);
+            assertThat(upsertResult2.getLogEndOffset()).isEqualTo(2);
+
+            // Update existing key - should return higher log end offset
+            UpsertResult upsertResult3 = upsertWriter.upsert(row(1, "aa")).get();
+            assertThat(upsertResult3.getBucket()).isEqualTo(expectedBucket);
+            assertThat(upsertResult3.getLogEndOffset()).isEqualTo(4);
+
+            // Delete - should return higher log end offset
+            DeleteResult deleteResult = upsertWriter.delete(row(1, "aa")).get();
+            assertThat(deleteResult.getBucket()).isEqualTo(expectedBucket);
+            assertThat(deleteResult.getLogEndOffset()).isEqualTo(5);
+
+            // Verify the data via lookup
+            Lookuper lookuper = table.newLookup().createLookuper();
+            // key 1 should be deleted
+            assertThat(lookupRow(lookuper, row(1))).isNull();
+            // key 2 should exist
+            assertThat(lookupRow(lookuper, row(2))).isNotNull();
+        }
+    }
+
+    @Test
+    void testBatchedUpsertReturnsSameLogEndOffset() throws Exception {
+        // Test that multiple records in the same batch receive the same log end offset
+        TablePath tablePath = TablePath.of("test_db_1", "test_batched_upsert_log_end_offset");
+        Schema schema =
+                Schema.newBuilder()
+                        .column("a", DataTypes.INT())
+                        .column("b", DataTypes.STRING())
+                        .primaryKey("a")
+                        .build();
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder().schema(schema).distributedBy(1, "a").build();
+        long tableId = createTable(tablePath, tableDescriptor, true);
+
+        // Configure small batch size to ensure records are batched together
+        Configuration config = new Configuration(clientConf);
+        config.set(ConfigOptions.CLIENT_WRITER_BATCH_SIZE, new MemorySize(1024 * 1024)); // 1MB
+        config.set(
+                ConfigOptions.CLIENT_WRITER_MAX_INFLIGHT_REQUESTS_PER_BUCKET, 1); // Force batching
+
+        try (Connection connection = ConnectionFactory.createConnection(config);
+                Table table = connection.getTable(tablePath)) {
+            UpsertWriter upsertWriter = table.newUpsert().createWriter();
+
+            // Send multiple upserts without waiting - they should be batched
+            CompletableFuture<UpsertResult> future1 = upsertWriter.upsert(row(1, "a"));
+            CompletableFuture<UpsertResult> future2 = upsertWriter.upsert(row(2, "b"));
+            CompletableFuture<UpsertResult> future3 = upsertWriter.upsert(row(3, "c"));
+
+            // Flush to send the batch
+            upsertWriter.flush();
+
+            // Get results
+            UpsertResult result1 = future1.get();
+            UpsertResult result2 = future2.get();
+            UpsertResult result3 = future3.get();
+
+            TableBucket expectedBucket = new TableBucket(tableId, 0);
+            // All results should have valid bucket and log end offset
+            assertThat(result1.getBucket()).isEqualTo(expectedBucket);
+            assertThat(result2.getBucket()).isEqualTo(expectedBucket);
+            assertThat(result3.getBucket()).isEqualTo(expectedBucket);
+            // Records in the same batch should have the same log end offset
+            // (since they're sent to the same bucket)
+            assertThat(result1.getLogEndOffset()).isEqualTo(3);
+            assertThat(result2.getLogEndOffset()).isEqualTo(3);
+            assertThat(result3.getLogEndOffset()).isEqualTo(3);
         }
     }
 }

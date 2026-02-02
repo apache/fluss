@@ -948,7 +948,50 @@ These metrics use Sum aggregation to show the total value across all tables in a
       <th rowspan="1"><strong>tabletserver</strong></th>
       <td style={{textAlign: 'center', verticalAlign: 'middle' }} rowspan="1">-</td>
       <td>rocksdbMemoryUsageTotal</td>
-      <td>Total memory usage across all RocksDB instances in this server (in bytes). This includes memory used by memtables, block cache, and other RocksDB internal structures.</td>
+      <td>Total memory usage across all RocksDB instances in this server (in bytes).</td>
+      <td>Gauge</td>
+    </tr>
+  </tbody>
+</table>
+
+#### Table-level RocksDB Memory Metrics (Sum Aggregation)
+
+<table class="table table-bordered">
+  <thead>
+    <tr>
+      <th class="text-left" style={{width: '30pt'}}>Scope</th>
+      <th class="text-left" style={{width: '150pt'}}>Infix</th>
+      <th class="text-left" style={{width: '80pt'}}>Metrics</th>
+      <th class="text-left" style={{width: '300pt'}}>Description</th>
+      <th class="text-left" style={{width: '40pt'}}>Type</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th rowspan="6"><strong>tabletserver</strong></th>
+      <td rowspan="6">table</td>
+      <td>rocksdbMemTableMemoryUsageTotal</td>
+      <td>Total memtable memory usage across all buckets of this table (in bytes).</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>rocksdbMemTableUnFlushedMemoryUsageTotal</td>
+      <td>Total unflushed memtable memory usage across all buckets of this table (in bytes).</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>rocksdbTableReadersMemoryUsageTotal</td>
+      <td>Total table readers (indexes and filters) memory usage across all buckets of this table (in bytes).</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>rocksdbBlockCacheMemoryUsageTotal</td>
+      <td>Total block cache memory usage across all buckets of this table (in bytes).</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>rocksdbBlockCachePinnedUsageTotal</td>
+      <td>Total pinned memory in block cache across all buckets of this table (in bytes).</td>
       <td>Gauge</td>
     </tr>
   </tbody>

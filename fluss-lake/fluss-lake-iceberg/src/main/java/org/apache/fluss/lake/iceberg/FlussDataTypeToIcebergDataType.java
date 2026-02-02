@@ -179,6 +179,8 @@ public class FlussDataTypeToIcebergDataType implements DataTypeVisitor<Type> {
 
     @Override
     public Type visit(MapType mapType) {
+        // According to the Iceberg spec,
+        // the key and value fields of a map should have consecutive IDs
         int keyFieldId = getNextId();
         int valueFieldId = getNextId();
 

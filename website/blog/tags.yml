@@ -20,3 +20,11 @@ releases:
   label: 'releases'
   permalink: '/releases'
   description: 'Content related release announcement.'
+streaming-lakehouse:
+  label: 'Streaming Lakehouse'
+apache-iceberg:
+  label: 'Apache Iceberg'
+real-time-analytics:
+  label: 'Real-time Analytics'
+apache-fluss:
+  label: 'Apache Fluss'

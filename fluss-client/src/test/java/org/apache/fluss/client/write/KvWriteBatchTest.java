@@ -168,7 +168,7 @@ class KvWriteBatchTest {
             CompletableFuture<Void> future = new CompletableFuture<>();
             kvProducerBatch.tryAppend(
                     createWriteRecord(),
-                    exception -> {
+                    (bucket, offset, exception) -> {
                         if (exception != null) {
                             future.completeExceptionally(exception);
                         } else {
@@ -233,7 +233,7 @@ class KvWriteBatchTest {
     }
 
     private WriteCallback newWriteCallback() {
-        return exception -> {
+        return (bucket, offset, exception) -> {
             if (exception != null) {
                 throw new RuntimeException(exception);
             }

@@ -27,6 +27,7 @@ import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.InvalidAlterTableException;
 import org.apache.fluss.exception.InvalidConfigException;
 import org.apache.fluss.exception.InvalidTableException;
+import org.apache.fluss.flink.FlinkConnectorOptions;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
@@ -914,7 +915,7 @@ abstract class FlinkCatalogITCase {
         // Verify options are inherited from base table
         assertThat(changelogTable.getOptions()).containsEntry("bucket.num", "1");
 
-        // Verify $changelog log tables (append-only with +A change type)
+        // Verify $changelog log tables (append-only with insert change type)
         tEnv.executeSql("CREATE TABLE log_table_for_changelog (id INT, name STRING)");
 
         CatalogTable logChangelogTable =
@@ -933,6 +934,55 @@ abstract class FlinkCatalogITCase {
                         .build();
 
         assertThat(logChangelogTable.getUnresolvedSchema()).isEqualTo(expectedLogSchema);
+    }
+
+    @Test
+    void testGetBinlogVirtualTable() throws Exception {
+        // Create a primary key table with partition
+        tEnv.executeSql(
+                "CREATE TABLE pk_table_for_binlog ("
+                        + "  id INT NOT NULL,"
+                        + "  name STRING NOT NULL,"
+                        + "  amount BIGINT,"
+                        + "  PRIMARY KEY (id, name) NOT ENFORCED"
+                        + ") PARTITIONED BY (name) "
+                        + "WITH ('bucket.num' = '1')");
+
+        // Get the $binlog virtual table via catalog API
+        CatalogTable binlogTable =
+                (CatalogTable)
+                        catalog.getTable(new ObjectPath(DEFAULT_DB, "pk_table_for_binlog$binlog"));
+
+        // use string representation for assertion to simplify the unresolved schema comparison
+        assertThat(binlogTable.getUnresolvedSchema().toString())
+                .isEqualTo(
+                        "(\n"
+                                + "  `_change_type` STRING NOT NULL,\n"
+                                + "  `_log_offset` BIGINT NOT NULL,\n"
+                                + "  `_commit_timestamp` TIMESTAMP_LTZ(3) NOT NULL,\n"
+                                + "  `before` [ROW<id INT NOT NULL, name STRING NOT NULL, amount BIGINT>],\n"
+                                + "  `after` [ROW<id INT NOT NULL, name STRING NOT NULL, amount BIGINT>]\n"
+                                + ")");
+
+        // Binlog virtual tables have empty partition keys (columns are nested)
+        assertThat(binlogTable.getPartitionKeys()).isEmpty();
+
+        // Partition info is stored as an internal boolean flag
+        assertThat(binlogTable.getOptions())
+                .containsEntry(FlinkConnectorOptions.INTERNAL_BINLOG_IS_PARTITIONED.key(), "true");
+
+        // Verify options are inherited from base table
+        assertThat(binlogTable.getOptions()).containsEntry("bucket.num", "1");
+
+        // Verify $binlog is NOT supported for log tables (no primary key)
+        tEnv.executeSql("CREATE TABLE log_table_for_binlog (id INT, name STRING)");
+
+        assertThatThrownBy(
+                        () ->
+                                catalog.getTable(
+                                        new ObjectPath(DEFAULT_DB, "log_table_for_binlog$binlog")))
+                .isInstanceOf(UnsupportedOperationException.class)
+                .hasMessageContaining("only supported for primary key tables");
     }
 
     /**

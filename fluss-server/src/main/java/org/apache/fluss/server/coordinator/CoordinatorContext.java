@@ -184,6 +184,21 @@ public class CoordinatorContext {
         return tablePathById;
     }
 
+    /**
+     * Returns the number of lake tables (tables with datalake enabled) in the cluster.
+     *
+     * @return the count of lake tables
+     */
+    public int getLakeTableCount() {
+        int count = 0;
+        for (TableInfo tableInfo : tableInfoById.values()) {
+            if (tableInfo.getTableConfig().isDataLakeEnabled()) {
+                count++;
+            }
+        }
+        return count;
+    }
+
     public Set<TableBucket> getAllBuckets() {
         Set<TableBucket> allBuckets = new HashSet<>();
         for (Map.Entry<Long, Map<Integer, List<Integer>>> tableAssign :

@@ -145,4 +145,19 @@ public class ClusterModelTest {
                 .hasMessageContaining(
                         "Requested replica 1 is not a replica of bucket TableBucket{tableId=1, bucket=0}");
     }
+
+    @Test
+    void testMaxReplicaFactor() {
+        ClusterModel clusterModel = new ClusterModel(servers);
+        assertThat(clusterModel.maxReplicationFactor()).isEqualTo(1);
+
+        clusterModel.createReplica(0, new TableBucket(1, 0), 0, true);
+        assertThat(clusterModel.maxReplicationFactor()).isEqualTo(1);
+        clusterModel.createReplica(1, new TableBucket(1, 0), 1, false);
+        assertThat(clusterModel.maxReplicationFactor()).isEqualTo(2);
+        clusterModel.createReplica(2, new TableBucket(1, 0), 2, false);
+        assertThat(clusterModel.maxReplicationFactor()).isEqualTo(3);
+        clusterModel.createReplica(0, new TableBucket(2, 0L, 0), 0, true);
+        assertThat(clusterModel.maxReplicationFactor()).isEqualTo(3);
+    }
 }

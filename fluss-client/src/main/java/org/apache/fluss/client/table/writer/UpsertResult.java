@@ -18,7 +18,10 @@
 package org.apache.fluss.client.table.writer;
 
 import org.apache.fluss.annotation.PublicEvolving;
+import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.row.InternalRow;
+
+import javax.annotation.Nullable;
 
 /**
  * The result of upserting a record ({@link UpsertWriter#upsert(InternalRow)}).
@@ -27,6 +30,47 @@ import org.apache.fluss.row.InternalRow;
  */
 @PublicEvolving
 public class UpsertResult {
-    // currently, it's an empty class, it will be a compatible evolution if it extends
-    // to have offset, timestamp, etc. in the future
+
+    private final @Nullable TableBucket bucket;
+    private final long logEndOffset;
+
+    /**
+     * Creates a result with bucket and log end offset information.
+     *
+     * @param bucket the bucket this record was written to
+     * @param logEndOffset the log end offset (LEO) after this write, i.e., the offset of the next
+     *     record to be written
+     */
+    public UpsertResult(@Nullable TableBucket bucket, long logEndOffset) {
+        this.bucket = bucket;
+        this.logEndOffset = logEndOffset;
+    }
+
+    /**
+     * Returns the bucket this record was written to.
+     *
+     * @return the bucket, or null if not available
+     */
+    @Nullable
+    public TableBucket getBucket() {
+        return bucket;
+    }
+
+    /**
+     * Returns the log end offset (LEO) after this write. This is the offset of the next record to
+     * be written to the changelog, not the offset of this specific record.
+     *
+     * <p>Note: When multiple records are batched together, all records in the same batch will
+     * receive the same log end offset.
+     *
+     * @return the log end offset, or -1 if not available
+     */
+    public long getLogEndOffset() {
+        return logEndOffset;
+    }
+
+    /** Creates an empty result (for testing purposes). */
+    public static UpsertResult empty() {
+        return new UpsertResult(null, -1);
+    }
 }

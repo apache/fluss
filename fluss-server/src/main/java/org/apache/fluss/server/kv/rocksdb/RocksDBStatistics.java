@@ -226,8 +226,6 @@ public class RocksDBStatistics implements AutoCloseable {
                 return 0L;
             }
 
-            // Create cache set for memory usage calculation.
-            // If blockCache is null, pass null to MemoryUtil (will only count memtables, etc.)
             Set<Cache> caches = null;
             if (blockCache != null) {
                 caches = new HashSet<>();
@@ -239,9 +237,83 @@ public class RocksDBStatistics implements AutoCloseable {
                             Collections.singletonList(db), caches);
             return memoryUsage.values().stream().mapToLong(Long::longValue).sum();
         } catch (Exception e) {
-            LOG.debug(
-                    "Failed to get total memory usage from RocksDB (possibly closed or unavailable)",
-                    e);
+            LOG.debug("Failed to get total memory usage from RocksDB", e);
+            return 0L;
+        }
+    }
+
+    // ==================== Memory Metrics by Component ====================
+
+    /**
+     * Get memory usage for all memtables (active and immutable).
+     *
+     * @return memtable memory usage in bytes, or 0 if not available
+     */
+    public long getMemTableMemoryUsage() {
+        return getMemoryUsageByType(MemoryUsageType.kMemTableTotal);
+    }
+
+    /**
+     * Get memory usage for unflushed memtables.
+     *
+     * @return unflushed memtable memory usage in bytes, or 0 if not available
+     */
+    public long getMemTableUnFlushedMemoryUsage() {
+        return getMemoryUsageByType(MemoryUsageType.kMemTableUnFlushed);
+    }
+
+    /**
+     * Get memory usage for table readers (indexes and bloom filters).
+     *
+     * @return table readers memory usage in bytes, or 0 if not available
+     */
+    public long getTableReadersMemoryUsage() {
+        return getMemoryUsageByType(MemoryUsageType.kTableReadersTotal);
+    }
+
+    /**
+     * Get memory usage for block cache via MemoryUtil API.
+     *
+     * @return block cache memory usage in bytes, or 0 if not available
+     */
+    public long getBlockCacheMemoryUsage() {
+        return getMemoryUsageByType(MemoryUsageType.kCacheTotal);
+    }
+
+    /**
+     * Get pinned memory usage in block cache.
+     *
+     * @return pinned memory usage in bytes, or 0 if not available
+     */
+    public long getBlockCachePinnedUsage() {
+        try (ResourceGuard.Lease lease = resourceGuard.acquireResource()) {
+            if (blockCache != null) {
+                return blockCache.getPinnedUsage();
+            }
+        } catch (Exception e) {
+            LOG.debug("Failed to get pinned usage from RocksDB", e);
+        }
+        return 0L;
+    }
+
+    private long getMemoryUsageByType(MemoryUsageType type) {
+        try (ResourceGuard.Lease lease = resourceGuard.acquireResource()) {
+            if (db == null) {
+                return 0L;
+            }
+
+            Set<Cache> caches = null;
+            if (blockCache != null) {
+                caches = new HashSet<>();
+                caches.add(blockCache);
+            }
+
+            Map<MemoryUsageType, Long> memoryUsage =
+                    MemoryUtil.getApproximateMemoryUsageByType(
+                            Collections.singletonList(db), caches);
+            return memoryUsage.getOrDefault(type, 0L);
+        } catch (Exception e) {
+            LOG.debug("Failed to get memory usage for type {} from RocksDB", type, e);
             return 0L;
         }
     }

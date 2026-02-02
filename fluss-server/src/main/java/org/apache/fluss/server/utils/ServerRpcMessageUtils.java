@@ -1026,6 +1026,13 @@ public class ServerRpcMessageUtils {
 
             if (bucketResult.failed()) {
                 putKvBucket.setError(bucketResult.getErrorCode(), bucketResult.getErrorMessage());
+            } else {
+                // set log end offset for successful writes
+                // this is used for exactly-once semantics to track checkpoint offsets
+                long logEndOffset = bucketResult.getWriteLogEndOffset();
+                if (logEndOffset >= 0) {
+                    putKvBucket.setLogEndOffset(logEndOffset);
+                }
             }
             putKvRespForBucketList.add(putKvBucket);
         }

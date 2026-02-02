@@ -371,7 +371,8 @@ CALL [catalog_name.]sys.rebalance(
 
 **Parameters:**
 
-- `priorityGoals` (required): The rebalance goals to achieve, specified as goal types. Can be a single goal (e.g., `'REPLICA_DISTRIBUTION'`) or multiple goals separated by commas (e.g., `'REPLICA_DISTRIBUTION,LEADER_DISTRIBUTION'`). Valid goal types are:
+- `priorityGoals` (required): The rebalance goals to achieve, specified as goal types. Can be a single goal (e.g., `'REPLICA_DISTRIBUTION'`) or multiple goals separated by commas (e.g., `'RACK_AWARE,REPLICA_DISTRIBUTION,LEADER_DISTRIBUTION'`). Valid goal types are:
+    - `'RACK_AWARE'`: Ensures replicas of the same bucket are distributed across different racks. This goal should be placed first when rack awareness is required to prevent non-rack-balanced assignments.
     - `'REPLICA_DISTRIBUTION'`: Generates replica movement tasks to ensure the number of replicas on each TabletServer is near balanced.
     - `'LEADER_DISTRIBUTION'`: Generates leadership movement and leader replica movement tasks to ensure the number of leader replicas on each TabletServer is near balanced.
 
@@ -380,6 +381,7 @@ CALL [catalog_name.]sys.rebalance(
 **Important Notes:**
 
 - Multiple goals can be specified in priority order. The system will attempt to achieve goals in the order specified.
+- When rack awareness is required, place `RACK_AWARE` as the first goal to ensure subsequent goals respect rack constraints.
 - Rebalance operations run asynchronously in the background. Use the returned rebalance ID to monitor progress.
 - The rebalance operation respects server tags set by `add_server_tag`. For example, servers marked with `PERMANENT_OFFLINE` will have their buckets migrated away.
 
@@ -389,11 +391,14 @@ CALL [catalog_name.]sys.rebalance(
 -- Use the Fluss catalog (replace 'fluss_catalog' with your catalog name if different)
 USE fluss_catalog;
 
--- Trigger rebalance with replica distribution goal
+-- Trigger rebalance with rack-aware goal (recommended for multi-rack deployments)
+CALL sys.rebalance('RACK_AWARE,REPLICA_DISTRIBUTION');
+
+-- Trigger rebalance with replica distribution goal only
 CALL sys.rebalance('REPLICA_DISTRIBUTION');
 
 -- Trigger rebalance with multiple goals in priority order
-CALL sys.rebalance('REPLICA_DISTRIBUTION,LEADER_DISTRIBUTION');
+CALL sys.rebalance('RACK_AWARE,REPLICA_DISTRIBUTION,LEADER_DISTRIBUTION');
 ```
 
 ### list_rebalance

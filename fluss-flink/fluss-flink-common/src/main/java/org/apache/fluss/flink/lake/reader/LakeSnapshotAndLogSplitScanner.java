@@ -20,6 +20,7 @@ package org.apache.fluss.flink.lake.reader;
 
 import org.apache.fluss.client.table.Table;
 import org.apache.fluss.client.table.scanner.ScanRecord;
+import org.apache.fluss.client.table.scanner.SortMergeReader;
 import org.apache.fluss.client.table.scanner.batch.BatchScanner;
 import org.apache.fluss.client.table.scanner.log.LogScanner;
 import org.apache.fluss.client.table.scanner.log.ScanRecords;
@@ -32,6 +33,7 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.record.ChangeType;
 import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.row.KeyValueRow;
 import org.apache.fluss.utils.CloseableIterator;
 
 import javax.annotation.Nullable;

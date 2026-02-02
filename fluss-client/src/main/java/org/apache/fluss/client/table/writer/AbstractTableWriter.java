@@ -22,6 +22,7 @@ import org.apache.fluss.client.write.WriteRecord;
 import org.apache.fluss.client.write.WriterClient;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.metadata.PhysicalTablePath;
+import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.InternalRow;
@@ -65,7 +66,7 @@ public abstract class AbstractTableWriter implements TableWriter {
         CompletableFuture<Void> future = new CompletableFuture<>();
         writerClient.send(
                 record,
-                (exception) -> {
+                (bucket, offset, exception) -> {
                     if (exception == null) {
                         future.complete(null);
                     } else {
@@ -73,6 +74,36 @@ public abstract class AbstractTableWriter implements TableWriter {
                     }
                 });
         return future;
+    }
+
+    /**
+     * Send a record and return a future with a result containing bucket and log end offset. This is
+     * used by KV writers that need to track offsets for exactly-once semantics.
+     *
+     * @param record the record to send
+     * @param resultFactory factory to create the result from bucket and log end offset
+     * @param <T> the result type
+     * @return a future that completes with the result
+     */
+    protected <T> CompletableFuture<T> sendWithResult(
+            WriteRecord record, ResultFactory<T> resultFactory) {
+        CompletableFuture<T> future = new CompletableFuture<>();
+        writerClient.send(
+                record,
+                (bucket, logEndOffset, exception) -> {
+                    if (exception == null) {
+                        future.complete(resultFactory.create(bucket, logEndOffset));
+                    } else {
+                        future.completeExceptionally(exception);
+                    }
+                });
+        return future;
+    }
+
+    /** Factory interface for creating result objects from bucket and log end offset. */
+    @FunctionalInterface
+    protected interface ResultFactory<T> {
+        T create(TableBucket bucket, long logEndOffset);
     }
 
     protected PhysicalTablePath getPhysicalPath(InternalRow row) {

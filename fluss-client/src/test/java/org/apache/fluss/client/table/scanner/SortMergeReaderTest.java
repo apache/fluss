@@ -15,14 +15,14 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.flink.lake.reader;
+package org.apache.fluss.client.table.scanner;
 
-import org.apache.fluss.client.table.scanner.ScanRecord;
 import org.apache.fluss.record.ChangeType;
 import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.row.KeyValueRow;
 import org.apache.fluss.row.ProjectedRow;
 import org.apache.fluss.types.IntType;
 import org.apache.fluss.types.RowType;

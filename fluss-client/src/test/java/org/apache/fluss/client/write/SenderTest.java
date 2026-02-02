@@ -105,7 +105,7 @@ final class SenderTest {
     void testSimple() throws Exception {
         long offset = 0;
         CompletableFuture<Exception> future = new CompletableFuture<>();
-        appendToAccumulator(tb1, row(1, "a"), future::complete);
+        appendToAccumulator(tb1, row(1, "a"), (tb, leo, e) -> future.complete(e));
         sender.runOnce();
         assertThat(sender.numOfInFlightBatches(tb1)).isEqualTo(1);
         finishRequest(tb1, 0, createProduceLogResponse(tb1, offset, 1));
@@ -129,7 +129,7 @@ final class SenderTest {
                         0);
         // do a successful retry.
         CompletableFuture<Exception> future = new CompletableFuture<>();
-        appendToAccumulator(tb1, row(1, "a"), future::complete);
+        appendToAccumulator(tb1, row(1, "a"), (tb, leo, e) -> future.complete(e));
         sender1.runOnce();
         assertThat(sender1.numOfInFlightBatches(tb1)).isEqualTo(1);
         long offset = 0;
@@ -140,8 +140,8 @@ final class SenderTest {
         assertThat(future.get()).isNull();
 
         // do an unsuccessful retry.
-        future = new CompletableFuture<>();
-        appendToAccumulator(tb1, row(1, "a"), future::complete);
+        CompletableFuture<Exception> future2 = new CompletableFuture<>();
+        appendToAccumulator(tb1, row(1, "a"), (tb, leo, e) -> future2.complete(e));
         sender1.runOnce();
         assertThat(sender1.numOfInFlightBatches(tb1)).isEqualTo(1);
 
@@ -155,7 +155,7 @@ final class SenderTest {
         finishRequest(tb1, 0, createProduceLogResponse(tb1, Errors.REQUEST_TIME_OUT));
         sender1.runOnce();
         assertThat(sender1.numOfInFlightBatches(tb1)).isEqualTo(0);
-        assertThat(future.get())
+        assertThat(future2.get())
                 .isInstanceOf(TimeoutException.class)
                 .hasMessageContaining(Errors.REQUEST_TIME_OUT.message());
     }
@@ -174,7 +174,7 @@ final class SenderTest {
     void testCanRetryWithoutIdempotence() throws Exception {
         // do a successful retry.
         CompletableFuture<Exception> future = new CompletableFuture<>();
-        appendToAccumulator(tb1, row(1, "a"), future::complete);
+        appendToAccumulator(tb1, row(1, "a"), (tb, leo, e) -> future.complete(e));
         sender.runOnce();
         assertThat(sender.numOfInFlightBatches(tb1)).isEqualTo(1);
         assertThat(future.isDone()).isFalse();
@@ -204,14 +204,14 @@ final class SenderTest {
 
         // Send first ProduceLogRequest.
         CompletableFuture<Exception> future1 = new CompletableFuture<>();
-        appendToAccumulator(tb1, row(1, "a"), future1::complete);
+        appendToAccumulator(tb1, row(1, "a"), (tb, leo, e) -> future1.complete(e));
         sender1.runOnce();
         assertThat(idempotenceManager.nextSequence(tb1)).isEqualTo(1);
         assertThat(idempotenceManager.lastAckedBatchSequence(tb1)).isNotPresent();
 
         // Send second ProduceLogRequest.
         CompletableFuture<Exception> future2 = new CompletableFuture<>();
-        appendToAccumulator(tb1, row(1, "a"), future2::complete);
+        appendToAccumulator(tb1, row(1, "a"), (tb, leo, e) -> future2.complete(e));
         sender1.runOnce();
         assertThat(idempotenceManager.nextSequence(tb1)).isEqualTo(2);
         assertThat(idempotenceManager.lastAckedBatchSequence(tb1)).isNotPresent();
@@ -244,7 +244,7 @@ final class SenderTest {
 
         for (int i = 0; i < MAX_INFLIGHT_REQUEST_PER_BUCKET - 1; i++) {
             CompletableFuture<Exception> future = new CompletableFuture<>();
-            appendToAccumulator(tb1, row(1, "a"), future::complete);
+            appendToAccumulator(tb1, row(1, "a"), (tb, leo, e) -> future.complete(e));
             sender1.runOnce();
             assertThat(idempotenceManager.inflightBatchSize(tb1)).isEqualTo(i + 1);
             assertThat(idempotenceManager.canSendMoreRequests(tb1)).isTrue();
@@ -252,7 +252,7 @@ final class SenderTest {
 
         // add one batch to make the inflight request size equal to max.
         CompletableFuture<Exception> future = new CompletableFuture<>();
-        appendToAccumulator(tb1, row(1, "a"), future::complete);
+        appendToAccumulator(tb1, row(1, "a"), (tb, leo, e) -> future.complete(e));
         sender1.runOnce();
         assertThat(idempotenceManager.inflightBatchSize(tb1))
                 .isEqualTo(MAX_INFLIGHT_REQUEST_PER_BUCKET);
@@ -260,7 +260,7 @@ final class SenderTest {
 
         // add one more batch, it will not be drained from accumulator.
         CompletableFuture<Exception> future1 = new CompletableFuture<>();
-        appendToAccumulator(tb1, row(1, "a"), future1::complete);
+        appendToAccumulator(tb1, row(1, "a"), (tb, leo, e) -> future1.complete(e));
         sender1.runOnce();
         assertThat(idempotenceManager.inflightBatchSize(tb1))
                 .isEqualTo(MAX_INFLIGHT_REQUEST_PER_BUCKET);
@@ -288,7 +288,7 @@ final class SenderTest {
         // 1. send five batches first to full MAX_INFLIGHT_REQUEST_PER_BUCKET.
         for (int i = 0; i < MAX_INFLIGHT_REQUEST_PER_BUCKET; i++) {
             CompletableFuture<Exception> future = new CompletableFuture<>();
-            appendToAccumulator(tb1, row(1, "a"), future::complete);
+            appendToAccumulator(tb1, row(1, "a"), (tb, leo, e) -> future.complete(e));
             assertThat(idempotenceManager.canSendMoreRequests(tb1)).isTrue();
             sender.runOnce(); // runOnce to send request.
         }
@@ -298,7 +298,7 @@ final class SenderTest {
         // 2. try to append more data into accumulator, it will not be drained from accumulator.
         for (int i = 0; i < 1000; i++) {
             CompletableFuture<Exception> future = new CompletableFuture<>();
-            appendToAccumulator(tb1, row(1, "a"), future::complete);
+            appendToAccumulator(tb1, row(1, "a"), (tb, leo, e) -> future.complete(e));
         }
         // No batches can be drained from accumulator as the inflight request size is max in
         // IdempotenceManager.
@@ -326,7 +326,7 @@ final class SenderTest {
             // empty.
             for (int j = 0; j < 50; j++) {
                 CompletableFuture<Exception> future = new CompletableFuture<>();
-                appendToAccumulator(tb1, row(1, "a"), future::complete);
+                appendToAccumulator(tb1, row(1, "a"), (tb, leo, e) -> future.complete(e));
             }
 
             // already have five batches in idempotenceManager inflight batches.
@@ -359,19 +359,19 @@ final class SenderTest {
 
         // Send first ProduceLogRequest.
         CompletableFuture<Exception> future1 = new CompletableFuture<>();
-        appendToAccumulator(tb1, row(1, "a"), future1::complete);
+        appendToAccumulator(tb1, row(1, "a"), (tb, leo, e) -> future1.complete(e));
         sender1.runOnce();
         assertThat(idempotenceManager.nextSequence(tb1)).isEqualTo(1);
         assertThat(idempotenceManager.lastAckedBatchSequence(tb1)).isNotPresent();
 
         // Send second ProduceLogRequest.
         CompletableFuture<Exception> future2 = new CompletableFuture<>();
-        appendToAccumulator(tb1, row(1, "a"), future2::complete);
+        appendToAccumulator(tb1, row(1, "a"), (tb, leo, e) -> future2.complete(e));
         sender1.runOnce();
 
         // Send third ProduceLogRequest.
         CompletableFuture<Exception> future3 = new CompletableFuture<>();
-        appendToAccumulator(tb1, row(1, "a"), future3::complete);
+        appendToAccumulator(tb1, row(1, "a"), (tb, leo, e) -> future3.complete(e));
         sender1.runOnce();
 
         // finish batch one with retriable error.
@@ -381,7 +381,7 @@ final class SenderTest {
 
         // Queue the forth request, it shouldn't sent until the first 3 complete.
         CompletableFuture<Exception> future4 = new CompletableFuture<>();
-        appendToAccumulator(tb1, row(1, "a"), future4::complete);
+        appendToAccumulator(tb1, row(1, "a"), (tb, leo, e) -> future4.complete(e));
         assertThat(idempotenceManager.lastAckedBatchSequence(tb1)).isNotPresent();
 
         finishIdempotentProduceLogRequest(
@@ -445,11 +445,11 @@ final class SenderTest {
 
         // Send the first ProduceLogRequest.
         CompletableFuture<Exception> future1 = new CompletableFuture<>();
-        appendToAccumulator(tb1, row(1, "a"), future1::complete);
+        appendToAccumulator(tb1, row(1, "a"), (tb, leo, e) -> future1.complete(e));
         sender1.runOnce();
         // Send the second ProduceLogRequest.
         CompletableFuture<Exception> future2 = new CompletableFuture<>();
-        appendToAccumulator(tb1, row(1, "a"), future2::complete);
+        appendToAccumulator(tb1, row(1, "a"), (tb, leo, e) -> future2.complete(e));
         sender1.runOnce();
 
         // response 0 with retrievable error which will reEnqueue the batch.
@@ -495,14 +495,14 @@ final class SenderTest {
 
         // Send first ProduceLogRequest.
         CompletableFuture<Exception> future1 = new CompletableFuture<>();
-        appendToAccumulator(tb1, row(1, "a"), future1::complete);
+        appendToAccumulator(tb1, row(1, "a"), (tb, leo, e) -> future1.complete(e));
         sender1.runOnce();
         assertThat(idempotenceManager.nextSequence(tb1)).isEqualTo(1);
         assertThat(idempotenceManager.lastAckedBatchSequence(tb1)).isNotPresent();
 
         // Send second ProduceLogRequest.
         CompletableFuture<Exception> future2 = new CompletableFuture<>();
-        appendToAccumulator(tb1, row(1, "a"), future2::complete);
+        appendToAccumulator(tb1, row(1, "a"), (tb, leo, e) -> future2.complete(e));
         sender1.runOnce();
         assertThat(idempotenceManager.nextSequence(tb1)).isEqualTo(2);
         assertThat(idempotenceManager.lastAckedBatchSequence(tb1)).isNotPresent();
@@ -564,14 +564,14 @@ final class SenderTest {
 
         // Send first ProduceLogRequest.
         CompletableFuture<Exception> future1 = new CompletableFuture<>();
-        appendToAccumulator(tb1, row(1, "a"), future1::complete);
+        appendToAccumulator(tb1, row(1, "a"), (tb, leo, e) -> future1.complete(e));
         sender1.runOnce();
         assertThat(idempotenceManager.nextSequence(tb1)).isEqualTo(1);
         assertThat(idempotenceManager.lastAckedBatchSequence(tb1)).isNotPresent();
 
         // Send second ProduceLogRequest.
         CompletableFuture<Exception> future2 = new CompletableFuture<>();
-        appendToAccumulator(tb1, row(1, "a"), future2::complete);
+        appendToAccumulator(tb1, row(1, "a"), (tb, leo, e) -> future2.complete(e));
         sender1.runOnce();
         assertThat(idempotenceManager.nextSequence(tb1)).isEqualTo(2);
         assertThat(idempotenceManager.lastAckedBatchSequence(tb1)).isNotPresent();
@@ -619,14 +619,14 @@ final class SenderTest {
 
         // first finish second ProduceLogRequest with success.
         CompletableFuture<Exception> future1 = new CompletableFuture<>();
-        appendToAccumulator(tb1, row(1, "a"), future1::complete);
+        appendToAccumulator(tb1, row(1, "a"), (tb, leo, e) -> future1.complete(e));
         sender1.runOnce();
         assertThat(idempotenceManager.nextSequence(tb1)).isEqualTo(1);
         assertThat(idempotenceManager.lastAckedBatchSequence(tb1)).isNotPresent();
 
         // Send second ProduceLogRequest.
         CompletableFuture<Exception> future2 = new CompletableFuture<>();
-        appendToAccumulator(tb1, row(1, "a"), future2::complete);
+        appendToAccumulator(tb1, row(1, "a"), (tb, leo, e) -> future2.complete(e));
         sender1.runOnce();
         assertThat(idempotenceManager.nextSequence(tb1)).isEqualTo(2);
         assertThat(idempotenceManager.lastAckedBatchSequence(tb1)).isNotPresent();
@@ -657,7 +657,7 @@ final class SenderTest {
         assertThat(idempotenceManager.nextSequence(tb1)).isEqualTo(0);
 
         CompletableFuture<Exception> future1 = new CompletableFuture<>();
-        appendToAccumulator(tb1, row(1, "a"), future1::complete);
+        appendToAccumulator(tb1, row(1, "a"), (tb, leo, e) -> future1.complete(e));
         sender1.runOnce();
         finishIdempotentProduceLogRequest(0, tb1, 0, createProduceLogResponse(tb1, 0L, 1L));
         sender1.runOnce();
@@ -671,7 +671,7 @@ final class SenderTest {
     void testSendWhenDestinationIsNullInMetadata() throws Exception {
         long offset = 0;
         CompletableFuture<Exception> future = new CompletableFuture<>();
-        appendToAccumulator(tb1, row(1, "a"), future::complete);
+        appendToAccumulator(tb1, row(1, "a"), (tb, leo, e) -> future.complete(e));
 
         int leaderNode = metadataUpdater.leaderFor(DATA1_TABLE_PATH, tb1);
         // now, remove leader node ,so that send destination
@@ -730,7 +730,7 @@ final class SenderTest {
                         key,
                         WriteFormat.COMPACTED_KV,
                         null),
-                future::complete,
+                (tb, leo, e) -> future.complete(e),
                 metadataUpdater.getCluster(),
                 0,
                 false);

@@ -81,13 +81,13 @@ public class ServerModelTest {
     void testToString() {
         ServerModel serverModel = new ServerModel(0, "rack0", true);
         assertThat(serverModel.toString())
-                .isEqualTo("ServerModel[id=0,rack=rack0,isAlive=true,replicaCount=0]");
+                .isEqualTo("ServerModel[id=0,rack=rack0,isOfflineTagged=true,replicaCount=0]");
 
         serverModel.putReplica(
                 new TableBucket(1L, 0),
                 new ReplicaModel(new TableBucket(1L, 0), serverModel, false));
         assertThat(serverModel.toString())
-                .isEqualTo("ServerModel[id=0,rack=rack0,isAlive=true,replicaCount=1]");
+                .isEqualTo("ServerModel[id=0,rack=rack0,isOfflineTagged=true,replicaCount=1]");
     }
 
     @Test
