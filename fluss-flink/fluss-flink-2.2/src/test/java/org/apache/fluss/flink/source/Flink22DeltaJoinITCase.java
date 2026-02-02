@@ -143,6 +143,8 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
 
     @Test
     void testDeltaJoin() throws Exception {
+        // disable cache to get stable results with updating
+        tEnv.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_DELTA_JOIN_CACHE_ENABLED, false);
         String leftTableName = "left_table";
         String rightTableName = "right_table";
         String sinkTableName = "sink_table";
@@ -152,13 +154,87 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
                 "a1 int, b1 varchar, c1 bigint, d1 int, e1 bigint",
                 "c1, d1",
                 "c1",
-                ImmutableMap.of("table.merge-engine", "first_row"));
+                ImmutableMap.of("table.delete.behavior", "IGNORE"));
         createSource(
                 rightTableName,
                 "a2 int, b2 varchar, c2 bigint, d2 int, e2 bigint",
                 "c2, d2",
                 "c2",
-                ImmutableMap.of("table.merge-engine", "first_row"));
+                ImmutableMap.of("table.delete.behavior", "IGNORE"));
+        createSink(
+                sinkTableName,
+                "a1 int, b1 varchar, c1 bigint, d1 int, e1 bigint, a2 int, b2 varchar, c2 bigint, d2 int, e2 bigint",
+                "c1, d1, c2, d2");
+
+        List<InternalRow> rows1 =
+                Arrays.asList(
+                        row(1, "v1", 100L, 1, 10000L),
+                        row(2, "v2", 100L, 2, 20000L),
+                        row(3, "v3", 300L, 3, 30000L),
+                        row(4, "v4", 400L, 4, 40000L),
+                        // update
+                        row(5, "v5", 100L, 1, 50000L));
+        TablePath leftTablePath = TablePath.of(DEFAULT_DB, leftTableName);
+        writeRows(conn, leftTablePath, rows1, false);
+        // wait for the first snapshot to finish to get the stable result
+        FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshot(leftTablePath);
+
+        List<InternalRow> rows2 =
+                Arrays.asList(
+                        row(1, "v1", 100L, 1, 10000L),
+                        row(2, "v2", 200L, 2, 20000L),
+                        row(3, "v3", 330L, 4, 30000L),
+                        row(4, "v4", 500L, 4, 50000L),
+                        // update
+                        row(6, "v6", 100L, 1, 60000L));
+        TablePath rightTablePath = TablePath.of(DEFAULT_DB, rightTableName);
+        writeRows(conn, rightTablePath, rows2, false);
+        // wait for the first snapshot to finish to get the stable result
+        FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshot(rightTablePath);
+
+        String sql =
+                String.format(
+                        "INSERT INTO %s SELECT * FROM %s INNER JOIN %s ON c1 = c2",
+                        sinkTableName, leftTableName, rightTableName);
+
+        assertThat(tEnv.explainSql(sql))
+                .contains("DeltaJoin(joinType=[InnerJoin], where=[(c1 = c2)]");
+
+        tEnv.executeSql(sql);
+
+        CloseableIterator<Row> collected =
+                tEnv.executeSql(String.format("select * from %s", sinkTableName)).collect();
+        List<String> expected =
+                Arrays.asList(
+                        "+I[5, v5, 100, 1, 50000, 6, v6, 100, 1, 60000]",
+                        "-U[5, v5, 100, 1, 50000, 6, v6, 100, 1, 60000]",
+                        "+U[5, v5, 100, 1, 50000, 6, v6, 100, 1, 60000]",
+                        "+I[2, v2, 100, 2, 20000, 6, v6, 100, 1, 60000]",
+                        "-U[2, v2, 100, 2, 20000, 6, v6, 100, 1, 60000]",
+                        "+U[2, v2, 100, 2, 20000, 6, v6, 100, 1, 60000]");
+        assertResultsIgnoreOrder(collected, expected, true);
+    }
+
+    @Test
+    void testDeltaJoinOnPrimaryKey() throws Exception {
+        // disable cache to get stable results with updating
+        tEnv.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_DELTA_JOIN_CACHE_ENABLED, false);
+        String leftTableName = "left_table";
+        String rightTableName = "right_table";
+        String sinkTableName = "sink_table";
+
+        createSource(
+                leftTableName,
+                "a1 int, b1 varchar, c1 bigint, d1 int, e1 bigint",
+                "c1, d1",
+                "c1",
+                ImmutableMap.of("table.delete.behavior", "IGNORE"));
+        createSource(
+                rightTableName,
+                "a2 int, b2 varchar, c2 bigint, d2 int, e2 bigint",
+                "c2, d2",
+                "c2",
+                ImmutableMap.of("table.delete.behavior", "IGNORE"));
         createSink(
                 sinkTableName,
                 "a1 int, b1 varchar, c1 bigint, d1 int, e1 bigint, a2 int, b2 varchar, c2 bigint, d2 int, e2 bigint",
@@ -168,23 +244,27 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
                 Arrays.asList(
                         row(1, "v1", 100L, 1, 10000L),
                         row(2, "v2", 200L, 2, 20000L),
-                        row(3, "v1", 300L, 3, 30000L),
+                        row(3, "v3", 300L, 3, 30000L),
                         row(4, "v4", 400L, 4, 40000L),
-                        // Add data with the same primary key as the first row
+                        // update
                         row(5, "v5", 100L, 1, 50000L));
         TablePath leftTablePath = TablePath.of(DEFAULT_DB, leftTableName);
         writeRows(conn, leftTablePath, rows1, false);
+        // wait for the first snapshot to finish to get the stable result
+        FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshot(leftTablePath);
 
         List<InternalRow> rows2 =
                 Arrays.asList(
                         row(1, "v1", 100L, 1, 10000L),
-                        row(2, "v3", 200L, 2, 20000L),
-                        row(3, "v4", 300L, 4, 30000L),
+                        row(2, "v2", 200L, 2, 20000L),
+                        row(3, "v3", 300L, 4, 30000L),
                         row(4, "v4", 500L, 4, 50000L),
-                        // Add data with the same primary key as the first row
+                        // update
                         row(6, "v6", 100L, 1, 60000L));
         TablePath rightTablePath = TablePath.of(DEFAULT_DB, rightTableName);
         writeRows(conn, rightTablePath, rows2, false);
+        // wait for the first snapshot to finish to get the stable result
+        FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshot(rightTablePath);
 
         String sql =
                 String.format(
@@ -200,17 +280,75 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
                 tEnv.executeSql(String.format("select * from %s", sinkTableName)).collect();
         List<String> expected =
                 Arrays.asList(
-                        "+I[1, v1, 100, 1, 10000, 1, v1, 100, 1, 10000]",
-                        "-U[1, v1, 100, 1, 10000, 1, v1, 100, 1, 10000]",
-                        "+U[1, v1, 100, 1, 10000, 1, v1, 100, 1, 10000]",
-                        "+I[2, v2, 200, 2, 20000, 2, v3, 200, 2, 20000]",
-                        "-U[2, v2, 200, 2, 20000, 2, v3, 200, 2, 20000]",
-                        "+U[2, v2, 200, 2, 20000, 2, v3, 200, 2, 20000]");
+                        "+I[5, v5, 100, 1, 50000, 6, v6, 100, 1, 60000]",
+                        "-U[5, v5, 100, 1, 50000, 6, v6, 100, 1, 60000]",
+                        "+U[5, v5, 100, 1, 50000, 6, v6, 100, 1, 60000]",
+                        "+I[2, v2, 200, 2, 20000, 2, v2, 200, 2, 20000]",
+                        "-U[2, v2, 200, 2, 20000, 2, v2, 200, 2, 20000]",
+                        "+U[2, v2, 200, 2, 20000, 2, v2, 200, 2, 20000]");
         assertResultsIgnoreOrder(collected, expected, true);
     }
 
     @Test
-    void testDeltaJoinWithProjectionAndFilter() throws Exception {
+    void testDeltaJoinWithCalc() throws Exception {
+        String leftTableName = "left_table_proj";
+        createSource(
+                leftTableName,
+                "a1 int, b1 varchar, c1 bigint, d1 int, e1 bigint",
+                "c1, d1",
+                "c1",
+                ImmutableMap.of("table.delete.behavior", "IGNORE"));
+
+        List<InternalRow> rows1 =
+                Arrays.asList(
+                        row(1, "v1", 100L, 1, 10000L),
+                        row(2, "v2", 200L, 2, 20000L),
+                        row(3, "v1", 300L, 3, 30000L));
+        TablePath leftTablePath = TablePath.of(DEFAULT_DB, leftTableName);
+        writeRows(conn, leftTablePath, rows1, false);
+
+        String rightTableName = "right_table_proj";
+        createSource(
+                rightTableName,
+                "a2 int, b2 varchar, c2 bigint, d2 int, e2 bigint",
+                "c2",
+                "c2",
+                ImmutableMap.of("table.delete.behavior", "IGNORE"));
+
+        List<InternalRow> rows2 =
+                Arrays.asList(
+                        row(1, "v1", 100L, 1, 10000L),
+                        row(2, "v2", 200L, 2, 20000L),
+                        row(3, "v3", 300L, 4, 30000L));
+        TablePath rightTablePath = TablePath.of(DEFAULT_DB, rightTableName);
+        writeRows(conn, rightTablePath, rows2, false);
+
+        String sinkTableName = "sink_table_proj";
+        createSink(sinkTableName, "a1 int, c1 bigint, d1 int, a2 int", "c1, d1");
+
+        String sql =
+                String.format(
+                        "INSERT INTO %s SELECT a1, c1, d1, a2 FROM ("
+                                + " SELECT * FROM %s WHERE d1 > 1"
+                                + ") INNER JOIN ("
+                                + " SELECT * FROM %s WHERE c2 < 300"
+                                + ") ON c1 = c2",
+                        sinkTableName, leftTableName, rightTableName);
+
+        assertThat(tEnv.explainSql(sql))
+                .contains("DeltaJoin(joinType=[InnerJoin], where=[(c1 = c2)]");
+
+        tEnv.executeSql(sql);
+
+        CloseableIterator<Row> collected =
+                tEnv.executeSql(String.format("select * from %s", sinkTableName)).collect();
+        List<String> expected =
+                Arrays.asList("+I[2, 200, 2, 2]", "-U[2, 200, 2, 2]", "+U[2, 200, 2, 2]");
+        assertResultsIgnoreOrder(collected, expected, true);
+    }
+
+    @Test
+    void testDeltaJoinWithAppendOnlySourceAndCalc() throws Exception {
         String leftTableName = "left_table_proj";
         createSource(
                 leftTableName,
@@ -239,7 +377,7 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
                 Arrays.asList(
                         row(1, "v1", 100L, 1, 10000L),
                         row(2, "v3", 200L, 2, 20000L),
-                        row(3, "v4", 300L, 4, 30000L));
+                        row(3, "v4", 400L, 4, 30000L));
         TablePath rightTablePath = TablePath.of(DEFAULT_DB, rightTableName);
         writeRows(conn, rightTablePath, rows2, false);
 
@@ -248,11 +386,11 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
 
         String sql =
                 String.format(
-                        "INSERT INTO %s SELECT a1, c1, a2 FROM %s INNER JOIN %s ON c1 = c2 AND d1 = d2 WHERE a1 > 1",
+                        "INSERT INTO %s SELECT a1, c1, a2 FROM %s INNER JOIN %s ON c1 = c2 WHERE a1 > 1",
                         sinkTableName, leftTableName, rightTableName);
 
         assertThat(tEnv.explainSql(sql))
-                .contains("DeltaJoin(joinType=[InnerJoin], where=[((c1 = c2) AND (d1 = d2))]");
+                .contains("DeltaJoin(joinType=[InnerJoin], where=[(c1 = c2)]");
 
         tEnv.executeSql(sql);
 
@@ -287,6 +425,8 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
                 "c1, d1, c2, d2");
 
         // Filter on e1 > e2, where e1 and e2 are NOT part of the upsert key
+        // TODO we can add a UpsertFilterOperator that can convert the un-match-filter UPSERT record
+        //  into DELETE record.
         String sql =
                 String.format(
                         "INSERT INTO %s SELECT * FROM %s INNER JOIN %s ON c1 = c2 AND d1 = d2 WHERE e1 > e2",
@@ -313,19 +453,19 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
         createSource(
                 leftTableName,
                 "a1 int, b1 varchar, c1 bigint, d1 int, e1 bigint",
+                "c1, d1, e1",
                 "c1, d1",
-                "c1",
                 ImmutableMap.of("table.delete.behavior", "IGNORE"));
 
         List<InternalRow> rows1 =
                 Arrays.asList(
                         row(1, "v1", 100L, 1, 10000L),
-                        row(2, "v2", 200L, 2, 20000L),
-                        row(3, "v3", 50L, 3, 30000L),
+                        row(2, "v2", 200L, 2, 20001L),
+                        row(3, "v3", 300L, 3, 30000L),
                         // Add row with same PK (100, 1) to generate UPDATE in CDC mode
-                        // This row is filtered out (d1=1, filter is d1>1), so doesn't affect join
+                        // This row is filtered out by (e2 / 100) <> c2, so doesn't affect join
                         // result
-                        row(4, "v1_updated", 100L, 1, 15000L));
+                        row(4, "v1_updated", 100L, 1, 10000L));
         TablePath leftTablePath = TablePath.of(DEFAULT_DB, leftTableName);
         writeRows(conn, leftTablePath, rows1, false);
 
@@ -343,38 +483,39 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
                         row(2, "v4", 200L, 2, 20000L),
                         row(3, "v5", 300L, 4, 40000L),
                         // Add row with same PK (100, 1) to generate UPDATE in CDC mode
-                        // This row is filtered out (d2=1, filter is d2>1), so doesn't affect join
+                        // This row is filtered out by (e2 / 100) <> c2, so doesn't affect join
                         // result
-                        row(5, "v1_updated", 100L, 1, 12000L));
+                        row(5, "v1_updated", 100L, 1, 10000L));
         TablePath rightTablePath = TablePath.of(DEFAULT_DB, rightTableName);
         writeRows(conn, rightTablePath, rows2, false);
 
         String sinkTableName = "sink_table_nonequi_upsert";
-        createSink(sinkTableName, "a1 int, c1 bigint, d1 int, a2 int", "c1, d1");
+        createSink(sinkTableName, "a1 int, c1 bigint, d1 int, e1 bigint, a2 int", "c1, d1, e1");
 
         String sql =
                 String.format(
-                        "INSERT INTO %s SELECT a1, c1, d1, a2 FROM %s INNER JOIN %s ON c1 = c2 AND d1 = d2 AND d1 > 1",
+                        "INSERT INTO %s SELECT a1, c1, d1, e1, a2 FROM %s INNER JOIN %s "
+                                + "ON c1 = c2 AND d1 = d2 AND e1 <> (c2 * 100)",
                         sinkTableName, leftTableName, rightTableName);
 
         assertThat(tEnv.explainSql(sql))
-                .contains("DeltaJoin(joinType=[InnerJoin], where=[((c1 = c2) AND (d1 = d2))]");
+                .contains(
+                        "DeltaJoin(joinType=[InnerJoin], where=[((c1 = c2) AND (d1 = d2) AND (e1 <> (c2 * 100)))]");
 
         tEnv.executeSql(sql);
 
         CloseableIterator<Row> collected =
                 tEnv.executeSql(String.format("select * from %s", sinkTableName)).collect();
-        // Filter (d1 > 1 AND d2 > 1) is pushed down before join
-        // PK (100, 1) has duplicate rows but d1=1 is filtered out, so doesn't appear in result
-        // PK (200, 2) passes filter: single row on each side, joins successfully
-        // Delta join produces duplicate changes pattern
         List<String> expected =
-                Arrays.asList("+I[2, 200, 2, 2]", "-U[2, 200, 2, 2]", "+U[2, 200, 2, 2]");
+                Arrays.asList(
+                        "+I[2, 200, 2, 20001, 2]",
+                        "-U[2, 200, 2, 20001, 2]",
+                        "+U[2, 200, 2, 20001, 2]");
         assertResultsIgnoreOrder(collected, expected, true);
     }
 
     @Test
-    void testDeltaJoinWithNonEquiConditionInsertOnly() throws Exception {
+    void testDeltaJoinWithAppendOnlySourceAndNonEquiCondition() throws Exception {
         String leftTableName = "left_table_nonequi_insert";
         createSource(
                 leftTableName,
@@ -452,7 +593,7 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
                 "a1 int, c1 bigint, d1 int",
                 "c1, d1",
                 "c1",
-                ImmutableMap.of("table.merge-engine", "first_row"));
+                ImmutableMap.of("table.delete.behavior", "IGNORE"));
         List<InternalRow> rows1 = Collections.singletonList(row(1, 100L, 1));
         writeRows(conn, TablePath.of(DEFAULT_DB, leftTableName), rows1, false);
 
@@ -460,11 +601,11 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
         createSource(
                 rightTableName,
                 "a2 int, c2 bigint, d2 int",
-                "c2, d2",
+                "c2",
                 "c2",
                 ImmutableMap.of(
-                        "table.merge-engine",
-                        "first_row",
+                        "table.delete.behavior",
+                        "IGNORE",
                         "lookup.cache",
                         "partial",
                         "lookup.partial-cache.max-rows",
@@ -473,153 +614,22 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
         writeRows(conn, TablePath.of(DEFAULT_DB, rightTableName), rows2, false);
 
         String sinkTableName = "sink_table_cache";
-        createSink(sinkTableName, "a1 int, a2 int", "a1");
+        createSink(sinkTableName, "a1 int, c1 bigint, d1 int, a2 int", "c1, d1");
 
         String sql =
                 String.format(
-                        "INSERT INTO %s SELECT T1.a1, T2.a2 FROM %s AS T1 INNER JOIN %s AS T2 ON T1.c1 = T2.c2 AND T1.d1 = T2.d2",
+                        "INSERT INTO %s SELECT a1, c1, d1, a2 FROM %s AS T1 INNER JOIN %s AS T2 ON T1.c1 = T2.c2",
                         sinkTableName, leftTableName, rightTableName);
 
         assertThat(tEnv.explainSql(sql))
-                .contains("DeltaJoin(joinType=[InnerJoin], where=[((c1 = c2) AND (d1 = d2))]");
-
-        tEnv.executeSql(sql);
-
-        CloseableIterator<Row> collected =
-                tEnv.executeSql(String.format("select * from %s", sinkTableName)).collect();
-        List<String> expected = Arrays.asList("+I[1, 1]", "-U[1, 1]", "+U[1, 1]");
-        assertResultsIgnoreOrder(collected, expected, true);
-    }
-
-    @Test
-    void testDeltaJoinWithPrimaryKeyTableNoDeletes() throws Exception {
-        String leftTableName = "left_table_normal_pk";
-        createSource(
-                leftTableName,
-                "a1 int, b1 varchar, c1 bigint, d1 int, e1 bigint",
-                "c1, d1",
-                "c1",
-                ImmutableMap.of("table.delete.behavior", "IGNORE"));
-
-        List<InternalRow> rows1 =
-                Arrays.asList(
-                        row(1, "v1", 100L, 1, 10000L),
-                        row(2, "v2", 200L, 2, 20000L),
-                        row(3, "v3", 300L, 3, 30000L),
-                        // Add row with same PK (100, 1) to generate UPDATE in CDC mode
-                        row(4, "v1_updated", 100L, 1, 15000L));
-        TablePath leftTablePath = TablePath.of(DEFAULT_DB, leftTableName);
-        writeRows(conn, leftTablePath, rows1, false);
-        // wait for the first snapshot to finish to get the stable result
-        FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshot(leftTablePath);
-
-        String rightTableName = "right_table_normal_pk";
-        createSource(
-                rightTableName,
-                "a2 int, b2 varchar, c2 bigint, d2 int, e2 bigint",
-                "c2, d2",
-                "c2",
-                ImmutableMap.of("table.delete.behavior", "IGNORE"));
-
-        List<InternalRow> rows2 =
-                Arrays.asList(
-                        row(1, "v1", 100L, 1, 10000L),
-                        row(2, "v4", 200L, 2, 20000L),
-                        row(3, "v5", 400L, 4, 40000L),
-                        // Add row with same PK (100, 1) to generate UPDATE in CDC mode
-                        row(5, "v1_updated", 100L, 1, 12000L));
-        TablePath rightTablePath = TablePath.of(DEFAULT_DB, rightTableName);
-        writeRows(conn, rightTablePath, rows2, false);
-        // wait for the first snapshot to finish to get the stable result
-        FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshot(rightTablePath);
-
-        String sinkTableName = "sink_table_normal_pk";
-        createSink(
-                sinkTableName,
-                "a1 int, b1 varchar, c1 bigint, d1 int, a2 int, b2 varchar",
-                "c1, d1");
-
-        String sql =
-                String.format(
-                        "INSERT INTO %s SELECT a1, b1, c1, d1, a2, b2 FROM %s INNER JOIN %s ON c1 = c2 AND d1 = d2",
-                        sinkTableName, leftTableName, rightTableName);
-
-        assertThat(tEnv.explainSql(sql))
-                .contains("DeltaJoin(joinType=[InnerJoin], where=[((c1 = c2) AND (d1 = d2))]");
-
-        tEnv.executeSql(sql);
-
-        CloseableIterator<Row> collected =
-                tEnv.executeSql(String.format("select * from %s", sinkTableName)).collect();
-
-        List<String> expected =
-                Arrays.asList(
-                        "+I[4, v1_updated, 100, 1, 5, v1_updated]",
-                        "-U[4, v1_updated, 100, 1, 5, v1_updated]",
-                        "+U[4, v1_updated, 100, 1, 5, v1_updated]",
-                        "+I[2, v2, 200, 2, 2, v4]",
-                        "-U[2, v2, 200, 2, 2, v4]",
-                        "+U[2, v2, 200, 2, 2, v4]");
-        assertResultsIgnoreOrder(collected, expected, true);
-    }
-
-    @Test
-    void testDeltaJoinOnBucketKey() throws Exception {
-        String leftTableName = "left_table_bucket_key";
-        createSource(
-                leftTableName,
-                "a1 int, b1 varchar, c1 bigint, d1 int, e1 bigint",
-                "c1, d1",
-                "c1",
-                ImmutableMap.of("table.merge-engine", "first_row"));
-
-        List<InternalRow> rows1 =
-                Arrays.asList(
-                        row(1, "v1", 100L, 1, 10000L),
-                        row(2, "v2", 100L, 2, 20000L),
-                        row(3, "v3", 200L, 1, 30000L));
-        TablePath leftTablePath = TablePath.of(DEFAULT_DB, leftTableName);
-        writeRows(conn, leftTablePath, rows1, false);
-
-        String rightTableName = "right_table_bucket_key";
-        createSource(
-                rightTableName,
-                "a2 int, b2 varchar, c2 bigint, d2 int, e2 bigint",
-                "c2, d2",
-                "c2",
-                ImmutableMap.of("table.merge-engine", "first_row"));
-
-        List<InternalRow> rows2 =
-                Arrays.asList(row(10, "r1", 100L, 5, 50000L), row(20, "r2", 200L, 6, 60000L));
-        TablePath rightTablePath = TablePath.of(DEFAULT_DB, rightTableName);
-        writeRows(conn, rightTablePath, rows2, false);
-
-        String sinkTableName = "sink_table_bucket_key";
-        createSink(sinkTableName, "a1 int, b1 varchar, c1 bigint, a2 int, b2 varchar", "a1, a2");
-
-        String sql =
-                String.format(
-                        "INSERT INTO %s SELECT a1, b1, c1, a2, b2 FROM %s INNER JOIN %s ON c1 = c2",
-                        sinkTableName, leftTableName, rightTableName);
-
-        assertThat(tEnv.explainSql(sql))
-                .contains("DeltaJoin(joinType=[InnerJoin], where=[=(c1, c2)]");
+                .contains("DeltaJoin(joinType=[InnerJoin], where=[(c1 = c2)]");
 
         tEnv.executeSql(sql);
 
         CloseableIterator<Row> collected =
                 tEnv.executeSql(String.format("select * from %s", sinkTableName)).collect();
         List<String> expected =
-                Arrays.asList(
-                        "+I[1, v1, 100, 10, r1]",
-                        "-U[1, v1, 100, 10, r1]",
-                        "+U[1, v1, 100, 10, r1]",
-                        "+I[2, v2, 100, 10, r1]",
-                        "-U[2, v2, 100, 10, r1]",
-                        "+U[2, v2, 100, 10, r1]",
-                        "+I[3, v3, 200, 20, r2]",
-                        "-U[3, v3, 200, 20, r2]",
-                        "+U[3, v3, 200, 20, r2]");
+                Arrays.asList("+I[1, 100, 1, 1]", "-U[1, 100, 1, 1]", "+U[1, 100, 1, 1]");
         assertResultsIgnoreOrder(collected, expected, true);
     }
 
@@ -658,7 +668,39 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
     }
 
     @Test
-    void testDeltaJoinWhenJoinKeyExceedsPrimaryKey() throws Exception {
+    void testDeltaJoinWithJoinKeyExceedsPrimaryKey() {
+        String leftTableName = "left_table_exceed_pk";
+        createSource(
+                leftTableName,
+                "a1 int, b1 varchar, c1 bigint, d1 int, e1 bigint",
+                "c1, d1",
+                "c1",
+                ImmutableMap.of("table.delete.behavior", "IGNORE"));
+
+        String rightTableName = "right_table_exceed_pk";
+        createSource(
+                rightTableName,
+                "a2 int, b2 varchar, c2 bigint, d2 int, e2 bigint",
+                "c2, d2",
+                "c2",
+                ImmutableMap.of("table.delete.behavior", "IGNORE"));
+
+        String sinkTableName = "sink_table_exceed_pk";
+        createSink(
+                sinkTableName, "a1 int, c1 bigint, d1 int, e1 bigint, a2 int, e2 bigint", "c1, d1");
+
+        String sql =
+                String.format(
+                        "INSERT INTO %s SELECT a1, c1, d1, e1, a2, e2 FROM %s INNER JOIN %s ON c1 = c2 AND d1 = d2 AND e1 = e2",
+                        sinkTableName, leftTableName, rightTableName);
+
+        assertThatThrownBy(() -> tEnv.explainSql(sql))
+                .isInstanceOf(ValidationException.class)
+                .hasMessageContaining("doesn't support to do delta join optimization");
+    }
+
+    @Test
+    void testDeltaJoinWithAppendOnlySourceAndJoinKeyExceedsPrimaryKey() throws Exception {
         String leftTableName = "left_table_exceed_pk";
         createSource(
                 leftTableName,
@@ -723,7 +765,7 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
                 "a1 int, b1 varchar, c1 bigint, d1 int, e1 bigint",
                 "c1, d1",
                 "c1",
-                ImmutableMap.of("table.merge-engine", "first_row"));
+                ImmutableMap.of("table.delete.behavior", "IGNORE"));
 
         String rightTableName = "right_table_no_idx_force";
         createSource(
@@ -731,7 +773,7 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
                 "a2 int, b2 varchar, c2 bigint, d2 int, e2 bigint",
                 "c2, d2",
                 "c2",
-                ImmutableMap.of("table.merge-engine", "first_row"));
+                ImmutableMap.of("table.delete.behavior", "IGNORE"));
 
         String sinkTableName = "sink_table_no_idx_force";
         createSink(
@@ -757,7 +799,7 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
                 "a1 int, c1 bigint, d1 int",
                 "c1, d1",
                 "c1",
-                ImmutableMap.of("table.merge-engine", "first_row"));
+                ImmutableMap.of("table.delete.behavior", "IGNORE"));
 
         String rightTableName = "right_table_outer_fail";
         createSource(
@@ -765,7 +807,7 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
                 "a2 int, c2 bigint, d2 int",
                 "c2, d2",
                 "c2",
-                ImmutableMap.of("table.merge-engine", "first_row"));
+                ImmutableMap.of("table.delete.behavior", "IGNORE"));
 
         String sinkTableName = "sink_table_outer_fail";
         createSink(sinkTableName, "a1 int, c1 bigint, a2 int", "c1");
@@ -809,7 +851,7 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
                 "a1 int, c1 bigint, d1 int",
                 "c1, d1",
                 "c1",
-                ImmutableMap.of("table.merge-engine", "first_row"));
+                ImmutableMap.of("table.delete.behavior", "IGNORE"));
 
         String table2 = "cascade_table2";
         createSource(
@@ -817,7 +859,7 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
                 "a2 int, c2 bigint, d2 int",
                 "c2, d2",
                 "c2",
-                ImmutableMap.of("table.merge-engine", "first_row"));
+                ImmutableMap.of("table.delete.behavior", "IGNORE"));
 
         String table3 = "cascade_table3";
         createSource(
@@ -825,7 +867,7 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
                 "a3 int, c3 bigint, d3 int",
                 "c3, d3",
                 "c3",
-                ImmutableMap.of("table.merge-engine", "first_row"));
+                ImmutableMap.of("table.delete.behavior", "IGNORE"));
 
         String sinkTableName = "cascade_sink";
         createSink(
@@ -867,6 +909,8 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
                 ImmutableMap.of("table.delete.behavior", "IGNORE"));
 
         // Sink PK (a1, a2) doesn't match upstream update key (c1, d1, c2, d2)
+        // TODO: this depends on Fluss supports MVCC/point-in-time lookup to support change upsert
+        //  keys
         String sinkTableName = "sink_table_materializer";
         createSink(
                 sinkTableName,
@@ -891,7 +935,7 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
                 "a1 int, c1 bigint, d1 int",
                 "c1, d1",
                 "c1",
-                ImmutableMap.of("table.merge-engine", "first_row"));
+                ImmutableMap.of("table.delete.behavior", "IGNORE"));
 
         String rightTableName = "right_table_nondeterministic";
         createSource(
@@ -899,14 +943,16 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
                 "a2 int, c2 bigint, d2 int",
                 "c2, d2",
                 "c2",
-                ImmutableMap.of("table.merge-engine", "first_row"));
+                ImmutableMap.of("table.delete.behavior", "IGNORE"));
 
         String sinkTableName = "sink_table_nondeterministic";
-        createSink(sinkTableName, "a1 int, c1 bigint, rand_val double", "c1");
+        // TODO this should be supported in Flink in future for non-deterministic functions before
+        //  sinking
+        createSink(sinkTableName, "c1 bigint, d1 bigint, rand_val double", "c1");
 
         String sql =
                 String.format(
-                        "INSERT INTO %s SELECT a1, c1, RAND() FROM %s INNER JOIN %s ON c1 = c2 AND d1 = d2",
+                        "INSERT INTO %s SELECT c1, d1, RAND() FROM %s INNER JOIN %s ON c1 = c2 AND d1 = d2",
                         sinkTableName, leftTableName, rightTableName);
 
         assertThatThrownBy(() -> tEnv.explainSql(sql))
