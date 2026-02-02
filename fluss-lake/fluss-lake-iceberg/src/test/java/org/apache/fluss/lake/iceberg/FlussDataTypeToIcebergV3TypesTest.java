@@ -18,7 +18,9 @@
 package org.apache.fluss.lake.iceberg;
 
 import org.apache.fluss.types.DataTypes;
+import org.apache.fluss.types.IntType;
 import org.apache.fluss.types.LocalZonedTimestampNanoType;
+import org.apache.fluss.types.MapType;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.types.TimestampNanoType;
 
@@ -93,5 +95,61 @@ class FlussDataTypeToIcebergV3TypesTest {
 
         assertThat(tsNano.shouldAdjustToUTC()).isFalse();
         assertThat(tsNanoLtz.shouldAdjustToUTC()).isTrue();
+    }
+
+    @Test
+    void testMapType() {
+        MapType mapType = new MapType(DataTypes.STRING(), DataTypes.INT());
+        Type icebergType = mapType.accept(FlussDataTypeToIcebergDataType.INSTANCE);
+
+        assertThat(icebergType).isInstanceOf(Types.MapType.class);
+        Types.MapType icebergMapType = (Types.MapType) icebergType;
+
+        assertThat(icebergMapType.keyType()).isInstanceOf(Types.StringType.class);
+        assertThat(icebergMapType.valueType()).isInstanceOf(Types.IntegerType.class);
+    }
+
+    @Test
+    void testMapTypeWithNullableValue() {
+        // Map with nullable value type (IntType(true) = nullable)
+        MapType mapType = new MapType(DataTypes.STRING(), new IntType(true));
+        FlussDataTypeToIcebergDataType converter = new FlussDataTypeToIcebergDataType(0);
+        Type icebergType = mapType.accept(converter);
+
+        assertThat(icebergType).isInstanceOf(Types.MapType.class);
+        Types.MapType icebergMapType = (Types.MapType) icebergType;
+
+        assertThat(icebergMapType.isValueOptional()).isTrue();
+    }
+
+    @Test
+    void testMapTypeWithNonNullableValue() {
+        // Map with non-nullable value type (IntType(false) = NOT NULL)
+        MapType mapType = new MapType(DataTypes.STRING(), new IntType(false));
+        FlussDataTypeToIcebergDataType converter = new FlussDataTypeToIcebergDataType(0);
+        Type icebergType = mapType.accept(converter);
+
+        assertThat(icebergType).isInstanceOf(Types.MapType.class);
+        Types.MapType icebergMapType = (Types.MapType) icebergType;
+
+        assertThat(icebergMapType.isValueRequired()).isTrue();
+    }
+
+    @Test
+    void testRowWithMapType() {
+        RowType rowType =
+                DataTypes.ROW(
+                        DataTypes.FIELD("id", DataTypes.INT()),
+                        DataTypes.FIELD(
+                                "metadata", new MapType(DataTypes.STRING(), DataTypes.STRING())));
+
+        FlussDataTypeToIcebergDataType converter = new FlussDataTypeToIcebergDataType(rowType);
+        Type icebergType = rowType.accept(converter);
+
+        assertThat(icebergType).isInstanceOf(Types.StructType.class);
+        Types.StructType structType = (Types.StructType) icebergType;
+
+        assertThat(structType.fields()).hasSize(2);
+        assertThat(structType.field("metadata").type()).isInstanceOf(Types.MapType.class);
     }
 }
