@@ -1,25 +1,28 @@
 ---
 slug: fluss_fraud_detection
 date: 2026-02-01
-title: "A fraud detection pipeline with streamhouse: Apache Fluss, Apache Flink and Iceberg."
+title: "A fraud detection pipeline with Streamhouse"
 authors: [jacopogardini]
 toc_max_heading_level: 5
 ---
 
-# A fraud detection pipeline with streamhouse: Apache Fluss, Apache Flink and Iceberg.
+# A fraud detection pipeline with Streamhouse.
+## Apache Fluss, Apache Flink and Iceberg.
 
 Fraud detection is a mission-critical capability for businesses operating in financial services, e-commerce, and digital payments. Detecting suspicious transactions in real time can prevent significant losses and protect customers. This blog demonstrates how to build a streamhouse that processes bank transactions in real time, detects fraud, and serves data seamlessly across hot (sub‑second latency) and cold (minutes‑latency) layers.
 Real-time detection and historical analytics are combined, enabling businesses to act quickly while maintaining a complete audit trail.
+
+<!-- truncate -->
 
 ## Streamhouse Architecture
 ### Overview
 A Streamhouse is a modern data architecture that unifies real‑time stream processing and batch processing on top of a data lake, enabling organizations to work seamlessly with both current and historical data in a single system. It bridges the traditional gap between streaming systems and lakehouse storage, delivering near–real‑time insights, cost‑efficiency, and simplified architectures.
 A Streamhouse brings several major advantages:
-- Unified architecture: No need to maintain separate streaming and batch systems; both run on the same storage and compute foundation.
-- Real‑time analytics: Stream-native storage (e.g. Apache Fluss) enables sub‑second consumption.
-- Cost‑efficiency: Uses a data‑lake foundation, which is cheaper and more scalable than warehouse‑centric architectures.
-- ACID guarantees: with streaming updates when built on open table formats like Apache Iceberg.
-- Improved data freshness: Hot data is immediately queryable by streaming processors, while cold data is efficiently stored for historical analytics.
+- **Unified architecture:** No need to maintain separate streaming and batch systems; both run on the same storage and compute foundation.
+- **Real‑time analytics:** Stream-native storage (e.g. Apache Fluss) enables sub‑second consumption.
+- **Cost‑efficiency:** Uses a data‑lake foundation, which is cheaper and more scalable than warehouse‑centric architectures.
+- **ACID guarantees:** with streaming updates when built on open table formats like Apache Iceberg.
+- **Improved data freshness:** Hot data is immediately queryable by streaming processors, while cold data is efficiently stored for historical analytics.
 
 In simple terms: a Streamhouse = Streaming + Lakehouse
 
@@ -28,10 +31,10 @@ A single architecture that:
 - handles historical data (batch) through a cold layer
 
 The hot layer is responsible for low‑latency ingestion and real‑time processing. It is composed of:
-1. Data Producers: these are the data sources continuously generating live event streams (applications, microservices, sensors, CDC pipelines, etc.).
+1. **Data Producers:** these are the data sources continuously generating live event streams (applications, microservices, sensors, CDC pipelines, etc.).
 Supports the overall concept of streaming ingestion into Streamhouses.
-2. Streaming Storage Layer: this layer stores live streams and enables their immediate consumption by real‑time processors. For example Apache Fluss, which provides ultra‑low‑latency streaming storage optimized for fast ingestion and fast consumption by systems like Apache Flink or microservices. 
-3. Streaming Processors Engines: that consume and process streaming data with low latency, such as Apache Flink, which is core to many Streamhouse implementations. These components together deliver sub‑second end‑to‑end processing latency.
+2. **Streaming Storage Layer:** this layer stores live streams and enables their immediate consumption by real‑time processors. For example Apache Fluss, which provides ultra‑low‑latency streaming storage optimized for fast ingestion and fast consumption by systems like Apache Flink or microservices. 
+3. **Streaming Processors Engines:** that consume and process streaming data with low latency, such as Apache Flink, which is core to many Streamhouse implementations. These components together deliver sub‑second end‑to‑end processing latency.
 
 The cold layer provides durable, optimized, and cost‑effective storage for large‑scale historical data and is formed by:
 1. Lakehouse Storage, a data lakehouse built on an open table format (e.g., Apache Iceberg, Paimon, etc.), which provides:
@@ -369,7 +372,7 @@ public class FraudDetectionJob {
 ```
 Each step of the streaming pipeline, such as reading from the source, applying transformations, and writing to the sink, has been modeled as a strategy. These strategies are combined into the ```FraudPipeline``` which implements the ```FlinkPipeline``` interface. The ```FlinkPipeline``` interface is accountable to hold and combine the strategies, exposing the ```compose``` and ```run``` signatures. The ```compose``` method is used to chain the strategies together, while the ```run``` method triggers the Flink execution environment.
 
-<img src="assets/fluss_fraud_detection/flinkpipe.jpg" width="100%" heigth="100%">
+<img src="assets/fluss_fraud_detection/flinkpipe.jpg" width="100%" height="100%" />
 
 ```java
 public class FraudPipeline implements FlinkPipeline {
@@ -415,7 +418,7 @@ There are 4 strategies interfaces with different accountability explained in the
 #### 1. InitCatalogStrategy interface and InitFlinkCatalogStrategy implementation
 This interface defines the catalog initialization, exposing the ```init``` method.
 
-<img src="assets/fluss_fraud_detection/catstr.png"  width="35%" heigth="35%">
+<img src="assets/fluss_fraud_detection/catstr.png"  width="35%" height="35%" />
 
 The ```InitFlinkCatalogStrategy``` implementation, which extends ```InitCatalogStrategy```, overrides the ```init``` method to define and activate a Flink catalog, enabling the use of the Fluss tables.
 
@@ -435,11 +438,11 @@ public void init() {
 ```
 
 #### 2. SourceStrategy interface and TransactionFlussSourceStrategy implementation
-This interface represents the reading from a source and returning records with a DataStream Flink API of type ```DataStream<T>```, exposing the ```createSource``` signature.
+This interface represents the reading from a source and returning records with a DataStream Flink API of type `DataStream<T>`, exposing the `createSource` signature.
 
-<img src="assets/fluss_fraud_detection/soustr.png" width="35%" heigth="35%">
+<img src="assets/fluss_fraud_detection/soustr.png" width="35%" height="35%" />
 
-The ```TransactionFlussSourceStrategy``` implementation overrides the ```createSource``` method to read from the Fluss Transaction table using the [FlussSource](https://fluss.apache.org/docs/engine-flink/datastream/#datastream-source) connector and return a ```DataStream<Transaction>```.
+The `TransactionFlussSourceStrategy` implementation overrides the `createSource` method to read from the Fluss Transaction table using the [FlussSource](https://fluss.apache.org/docs/engine-flink/datastream/#datastream-source) connector and return a `DataStream<Transaction>`.
 
 Snippet from TransactionFlussSourceStrategy.java
 ```java
@@ -458,7 +461,7 @@ public DataStream<Transaction> createSource() {
       .name("transactions-datastream");
 }
 ```
-As you can see in the snippet below , the deserialization of the Fluss ```LogRecord``` from the Transaction table into the ```Transaction``` POJO required by the DataStream type is handled by the ```TransactionDeserializationSchema``` class, which extends ```FlussDeserializationSchema``` to override the ```deserialize``` method. The ```record``` is used to instanciate a ```Transaction``` POJO. The corresponding changeLog type is mapped into the ```kind``` field and since the Fluss source is a Log Table it always equals to an insert.
+As you can see in the snippet below , the deserialization of the Fluss `LogRecord` from the Transaction table into the `Transaction` POJO required by the DataStream type is handled by the `TransactionDeserializationSchema` class, which extends `FlussDeserializationSchema` to override the `deserialize` method. The `record` is used to instanciate a `Transaction` POJO. The corresponding changeLog type is mapped into the `kind` field and since the Fluss source is a Log Table it always equals to an insert.
 
 Snippet from TransactionDeserializationSchema.java
 ```java
@@ -475,11 +478,11 @@ public Transaction deserialize(LogRecord record) throws Exception {
 ```
 
 #### 3. TransformStrategy interface and FraudTransformStrategy implementation
-This interface models the transformation applied to a Datastreams. It takes a ```Datastream<I>```, returns ```Datastream<O>``` exposing the ```transform``` method.
+This interface models the transformation applied to a Datastreams. It takes a `Datastream<I>`, returns `Datastream<O>` exposing the `transform` method.
 
-<img src="assets/fluss_fraud_detection/fraudstr.png" width="35%" heigth="35%">
+<img src="assets/fluss_fraud_detection/fraudstr.png" width="35%" height="35%" />
 
-The ```FraudTransformStrategy``` implementation overrides the ```transform``` method, which takes a ```DataStream<Transaction>``` as a parameter and returns a ```DataStream<Fraud>``` after applying the following transformations:
+The `FraudTransformStrategy` implementation overrides the `transform` method, which takes a `DataStream<Transaction>` as a parameter and returns a `DataStream<Fraud>` after applying the following transformations:
 1. ```keyBy(Transaction::getAccountId)```: groups the Transaction stream by ```accountId``` so that all transactions with the same ```accountId``` go to the same parallel subtask. After keyBy, you get a KeyedStream, which enables per-key state and timers.
 2. ```process(new FraudDetector())```: applies the ```FraudDetector``` ```KeyedProcessFunction``` to the keyed stream.
 A KeyedProcessFunction is the lowest-level, per-key operator in Flink that provides:
@@ -507,10 +510,10 @@ public class FraudTransformStrategy implements TransformStrategy<Transaction, Fr
 }
 ```
 
-```FraudDetector``` extends KeyedProcessFunction<Long, Transaction, Fraud>, where:
-- ```Long``` is the type of the key (the ```accountId```)
-- ```Transaction``` is the input type
-- ```Fraud``` is the output type
+`FraudDetector` extends `KeyedProcessFunction<Long, Transaction, Fraud>`, where:
+- `Long` is the type of the key (the `accountId`)
+- `Transaction` is the input type
+- `Fraud` is the output type
 
 The fraudulent record is identified by the ```processElement``` override method which implements a simple rule:
 - If a small transaction is followed by a large transaction within one minute (processing time), emit a ```Fraud```.
@@ -541,9 +544,9 @@ public void processElement(Transaction transaction, Context context, Collector<F
 
 #### 4. EnrichedFraudTransformStrategy implementation
 
-<img src="assets/fluss_fraud_detection/enfraudstr.png" width="35%" heigth="35%">
+<img src="assets/fluss_fraud_detection/enfraudstr.png" width="35%" height="35%" />
 
-The ```EnrichedFraudTransformStrategy``` implementation reads the ```Datastream<Fraud>``` and perform an enrichment adding the account name for each record.
+The `EnrichedFraudTransformStrategy` implementation reads the `Datastream<Fraud>` and perform an enrichment adding the account name for each record.
 This is done switching from Flink Datastream API to Flink Table API and performing a temporal look up join against the the Fluss Account table which acts as a dimension.
 
 Snipped from EnrichedFraudTransformStrategy.java
@@ -587,14 +590,14 @@ public DataStream<EnrichedFraud> transform(DataStream<Fraud> fraudsDs) {
 The ```fraudsView``` is a dynamic table created on top of the fraud stream.
 It exposes a processing-time attribute.
 For each record in ```f``` (```fraudsView```), the corresponding account row is looked up as it existed at the processing time of ```f``` (```f.procTime```).
-Enriched records are converted back and returned as a DataStream<EnrichedFraud> in order to be written to the Fluss sink by the next startegy.
+Enriched records are converted back and returned as a `DataStream<EnrichedFraud>` in order to be written to the Fluss sink by the next startegy.
 
 ### 5. SinkStrategy interface and FraudFlussSinkStrategy implementation
-This interface models the writing of a ```Datastream<T>``` to the FlinkSink, exposing the ```createSink``` method.
+This interface models the writing of a `Datastream<T>` to the FlinkSink, exposing the `createSink` method.
 
-<img src="assets/fluss_fraud_detection/sinkstr.png" width="35%" heigth="35%">
+<img src="assets/fluss_fraud_detection/sinkstr.png" width="35%" height="35%" />
 
-```FraudFlussSinkStrategy``` reads the ```Datastream<Fraud>``` and sinks record to Fluss Fraud table leveraging [FlussSink](https://fluss.apache.org/docs/engine-flink/datastream/#datastream-sink) sink connector.
+`FraudFlussSinkStrategy` reads the `Datastream<Fraud>` and sinks record to Fluss Fraud table leveraging [FlussSink](https://fluss.apache.org/docs/engine-flink/datastream/#datastream-sink) sink connector.
 
 FraudFlussSinkStrategy.java
 ```java
