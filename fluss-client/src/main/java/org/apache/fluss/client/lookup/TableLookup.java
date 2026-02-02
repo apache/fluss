@@ -24,6 +24,7 @@ import org.apache.fluss.metadata.TableInfo;
 import javax.annotation.Nullable;
 
 import java.util.List;
+import java.util.stream.Collectors;
 
 /** API for configuring and creating {@link Lookuper}. */
 public class TableLookup implements Lookup {
@@ -64,12 +65,54 @@ public class TableLookup implements Lookup {
 
     @Override
     public Lookuper createLookuper() {
-        if (lookupColumnNames == null) {
+        if (lookupColumnNames == null || isPrimaryKey(lookupColumnNames)) {
             return new PrimaryKeyLookuper(tableInfo, schemaGetter, metadataUpdater, lookupClient);
-        } else {
+        }  
+
+        if (isPrefixKey(lookupColumnNames)) {
             return new PrefixKeyLookuper(
-                    tableInfo, schemaGetter, metadataUpdater, lookupClient, lookupColumnNames);
+                tableInfo, schemaGetter, metadataUpdater, lookupClient, lookupColumnNames);
+        } else {
+            throw new IllegalArgumentException(
+                    String.format(
+                            "Invalid lookup columns %s for table '%s'. "
+                                    + "Lookup columns must be either the complete primary key %s "
+                                    + "or a valid prefix key (bucket key %s as prefix of physical primary key %s).",
+                            lookupColumnNames,
+                            tableInfo.getTablePath(),
+                            tableInfo.getPrimaryKeys(),
+                            tableInfo.getBucketKeys(),
+                            tableInfo.getPhysicalPrimaryKeys()));
         }
+    }
+
+    private boolean isPrimaryKey(List<String> lookupColumns) {
+        return lookupColumns.equals(tableInfo.getPrimaryKeys());
+    }
+
+    private boolean isPrefixKey(List<String> lookupColumns) {
+        if (!tableInfo.hasPrimaryKey()) {
+            return false;
+        }
+        
+        List<String> physicalLookupColumns =
+                lookupColumns.stream()
+                        .filter(col -> !tableInfo.getPartitionKeys().contains(col))
+                        .collect(Collectors.toList());
+        
+        List<String> physicalPrimaryKeys = tableInfo.getPhysicalPrimaryKeys();
+        
+        if (physicalLookupColumns.isEmpty() || physicalLookupColumns.size() >= physicalPrimaryKeys.size()) {
+            return false;
+        }
+        
+        for (int i = 0; i < physicalLookupColumns.size(); i++) {
+            if (!physicalLookupColumns.get(i).equals(physicalPrimaryKeys.get(i))) {
+                return false;
+            }
+        }
+        
+        return true;
     }
 
     @Override

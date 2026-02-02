@@ -196,16 +196,11 @@ class FlussLakeTableITCase {
         // lookup
         try (Table table = conn.getTable(tablePath)) {
             // init lookup columns
-            List<String> lookUpColumns;
-            Lookuper lookuper;
-            if (isDefaultBucketKey) {
-                lookUpColumns = Arrays.asList("a", "c", "d");
-                lookuper = table.newLookup().createLookuper();
-            } else {
-                lookUpColumns =
-                        isPartitioned ? Arrays.asList("a", "d") : Collections.singletonList("a");
-                lookuper = table.newLookup().lookupBy(lookUpColumns).createLookuper();
-            }
+            List<String> lookUpColumns =
+                    isDefaultBucketKey
+                            ? Arrays.asList("a", "c", "d")
+                            : isPartitioned ? Arrays.asList("a", "d") : Collections.singletonList("a");
+            Lookuper lookuper = table.newLookup().lookupBy(lookUpColumns).createLookuper();
             List<InternalRow.FieldGetter> lookUpFieldGetter = new ArrayList<>(lookUpColumns.size());
             for (int columnIndex : pkTableSchema.getColumnIndexes(lookUpColumns)) {
                 lookUpFieldGetter.add(
