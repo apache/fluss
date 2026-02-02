@@ -18,7 +18,6 @@
 package org.apache.fluss.client.lookup;
 
 import org.apache.fluss.client.metadata.MetadataUpdater;
-import org.apache.fluss.config.Configuration;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.TableDescriptor;
@@ -52,8 +51,7 @@ public class TableLookupTest {
     void testCreateLookuperWithPrimaryKey() {
         // Test: lookupBy with complete primary key should create PrimaryKeyLookuper
         TableInfo tableInfo = createTestTableInfo(false, false);
-        TableLookup tableLookup =
-                createTableLookup(tableInfo, Arrays.asList("a", "c", "d"));
+        TableLookup tableLookup = createTableLookup(tableInfo, Arrays.asList("a", "c", "d"));
 
         Lookuper lookuper = tableLookup.createLookuper();
         assertThat(lookuper).isInstanceOf(PrimaryKeyLookuper.class);
@@ -85,8 +83,7 @@ public class TableLookupTest {
     void testCreateLookuperWithPrimaryKeyPartitioned() {
         // Test: lookupBy with complete primary key (partitioned) should create PrimaryKeyLookuper
         TableInfo tableInfo = createTestTableInfo(true, true);
-        TableLookup tableLookup =
-                createTableLookup(tableInfo, Arrays.asList("a", "c", "d"));
+        TableLookup tableLookup = createTableLookup(tableInfo, Arrays.asList("a", "c", "d"));
 
         Lookuper lookuper = tableLookup.createLookuper();
         assertThat(lookuper).isInstanceOf(PrimaryKeyLookuper.class);
@@ -101,13 +98,15 @@ public class TableLookupTest {
         TableLookup tableLookup1 = createTableLookup(tableInfo, Arrays.asList("b", "c"));
         assertThatThrownBy(tableLookup1::createLookuper)
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("Invalid lookup columns");
+                .hasMessageContaining("must contain all bucket keys")
+                .hasMessageContaining("in order");
 
         // Test with partial primary key but not a valid prefix
         TableLookup tableLookup2 = createTableLookup(tableInfo, Arrays.asList("c", "d"));
         assertThatThrownBy(tableLookup2::createLookuper)
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("Invalid lookup columns");
+                .hasMessageContaining("must contain all bucket keys")
+                .hasMessageContaining("in order");
     }
 
     @Test
@@ -118,7 +117,8 @@ public class TableLookupTest {
 
         assertThatThrownBy(tableLookup::createLookuper)
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("Invalid lookup columns");
+                .hasMessageContaining("must contain all bucket keys")
+                .hasMessageContaining("in order");
     }
 
     @Test
@@ -129,7 +129,8 @@ public class TableLookupTest {
 
         assertThatThrownBy(tableLookup::createLookuper)
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("Invalid lookup columns");
+                .hasMessageContaining("must contain all bucket keys")
+                .hasMessageContaining("in order");
     }
 
     @Test
@@ -152,10 +153,12 @@ public class TableLookupTest {
 
         assertThatThrownBy(tableLookup::createLookuper)
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("Invalid lookup columns");
+                .hasMessageContaining("Log table")
+                .hasMessageContaining("doesn't support lookup");
     }
 
-    private TableLookup createTableLookup(TableInfo tableInfo, java.util.List<String> lookupColumns) {
+    private TableLookup createTableLookup(
+            TableInfo tableInfo, java.util.List<String> lookupColumns) {
         SchemaGetter schemaGetter = mock(SchemaGetter.class);
         MetadataUpdater metadataUpdater = mock(MetadataUpdater.class);
         LookupClient lookupClient = mock(LookupClient.class);
@@ -163,8 +166,9 @@ public class TableLookupTest {
         if (lookupColumns == null) {
             return new TableLookup(tableInfo, schemaGetter, metadataUpdater, lookupClient);
         } else {
-            return (TableLookup) new TableLookup(tableInfo, schemaGetter, metadataUpdater, lookupClient)
-                    .lookupBy(lookupColumns);
+            return (TableLookup)
+                    new TableLookup(tableInfo, schemaGetter, metadataUpdater, lookupClient)
+                            .lookupBy(lookupColumns);
         }
     }
 
@@ -173,13 +177,10 @@ public class TableLookupTest {
      *
      * @param isPartitioned whether the table is partitioned by "d"
      * @param isDefaultBucketKey whether using default bucket key
-     * @return TableInfo with:
-     *     - Columns: [a INT, b STRING, c STRING, d STRING]
-     *     - Primary key: [a, c, d]
-     *     - Partition key: [d] (if isPartitioned)
-     *     - Bucket key: [a, c] (if isDefaultBucketKey and isPartitioned)
-     *                   [a, c, d] (if isDefaultBucketKey and !isPartitioned)
-     *                   [a] (if !isDefaultBucketKey)
+     * @return TableInfo with: - Columns: [a INT, b STRING, c STRING, d STRING] - Primary key: [a,
+     *     c, d] - Partition key: [d] (if isPartitioned) - Bucket key: [a, c] (if isDefaultBucketKey
+     *     and isPartitioned) [a, c, d] (if isDefaultBucketKey and !isPartitioned) [a] (if
+     *     !isDefaultBucketKey)
      */
     private TableInfo createTestTableInfo(boolean isPartitioned, boolean isDefaultBucketKey) {
         Schema schema =
@@ -197,7 +198,9 @@ public class TableLookupTest {
             builder.partitionedBy("d");
         }
 
-        if (!isDefaultBucketKey) {
+        if (isDefaultBucketKey) {
+            builder.distributedBy(3);
+        } else {
             builder.distributedBy(3, "a");
         }
 
@@ -214,10 +217,8 @@ public class TableLookupTest {
      * Create a test table info with specific bucket key.
      *
      * @param bucketKeys the bucket key columns
-     * @return TableInfo with:
-     *     - Columns: [a INT, b STRING, c STRING, d STRING]
-     *     - Primary key: [a, c, d]
-     *     - Bucket key: specified by parameter
+     * @return TableInfo with: - Columns: [a INT, b STRING, c STRING, d STRING] - Primary key: [a,
+     *     c, d] - Bucket key: specified by parameter
      */
     private TableInfo createTestTableInfoWithBucketKey(java.util.List<String> bucketKeys) {
         Schema schema =

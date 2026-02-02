@@ -23,8 +23,12 @@ import org.apache.fluss.metadata.TableInfo;
 
 import javax.annotation.Nullable;
 
+import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
-import java.util.stream.Collectors;
+import java.util.Set;
+
+import static org.apache.fluss.utils.Preconditions.checkArgument;
 
 /** API for configuring and creating {@link Lookuper}. */
 public class TableLookup implements Lookup {
@@ -65,54 +69,62 @@ public class TableLookup implements Lookup {
 
     @Override
     public Lookuper createLookuper() {
+        checkArgument(
+                tableInfo.hasPrimaryKey(),
+                "Log table %s doesn't support lookup",
+                tableInfo.getTablePath());
+
         if (lookupColumnNames == null || isPrimaryKey(lookupColumnNames)) {
             return new PrimaryKeyLookuper(tableInfo, schemaGetter, metadataUpdater, lookupClient);
-        }  
+        }
 
-        if (isPrefixKey(lookupColumnNames)) {
-            return new PrefixKeyLookuper(
+        validatePrefixLookup(tableInfo, lookupColumnNames);
+        return new PrefixKeyLookuper(
                 tableInfo, schemaGetter, metadataUpdater, lookupClient, lookupColumnNames);
-        } else {
+    }
+
+    private void validatePrefixLookup(TableInfo tableInfo, List<String> lookupColumns) {
+        // verify the bucket keys are the prefix subset of physical primary keys
+        List<String> physicalPrimaryKeys = tableInfo.getPhysicalPrimaryKeys();
+        List<String> bucketKeys = tableInfo.getBucketKeys();
+        for (int i = 0; i < bucketKeys.size(); i++) {
+            if (!bucketKeys.get(i).equals(physicalPrimaryKeys.get(i))) {
+                throw new IllegalArgumentException(
+                        String.format(
+                                "Can not perform prefix lookup on table '%s', "
+                                        + "because the bucket keys %s is not a prefix subset of the "
+                                        + "physical primary keys %s (excluded partition fields if present).",
+                                tableInfo.getTablePath(), bucketKeys, physicalPrimaryKeys));
+            }
+        }
+
+        // verify the lookup columns must contain all partition fields if this is partitioned table
+        if (tableInfo.isPartitioned()) {
+            List<String> partitionKeys = tableInfo.getPartitionKeys();
+            Set<String> lookupColumnsSet = new HashSet<>(lookupColumns);
+            if (!lookupColumnsSet.containsAll(partitionKeys)) {
+                throw new IllegalArgumentException(
+                        String.format(
+                                "Can not perform prefix lookup on table '%s', "
+                                        + "because the lookup columns %s must contain all partition fields %s.",
+                                tableInfo.getTablePath(), lookupColumns, partitionKeys));
+            }
+        }
+
+        // verify the lookup columns must contain all bucket keys **in order**
+        List<String> physicalLookupColumns = new ArrayList<>(lookupColumns);
+        physicalLookupColumns.removeAll(tableInfo.getPartitionKeys());
+        if (!physicalLookupColumns.equals(bucketKeys)) {
             throw new IllegalArgumentException(
                     String.format(
-                            "Invalid lookup columns %s for table '%s'. "
-                                    + "Lookup columns must be either the complete primary key %s "
-                                    + "or a valid prefix key (bucket key %s as prefix of physical primary key %s).",
-                            lookupColumnNames,
-                            tableInfo.getTablePath(),
-                            tableInfo.getPrimaryKeys(),
-                            tableInfo.getBucketKeys(),
-                            tableInfo.getPhysicalPrimaryKeys()));
+                            "Can not perform prefix lookup on table '%s', "
+                                    + "because the lookup columns %s must contain all bucket keys %s in order.",
+                            tableInfo.getTablePath(), lookupColumns, bucketKeys));
         }
     }
 
     private boolean isPrimaryKey(List<String> lookupColumns) {
         return lookupColumns.equals(tableInfo.getPrimaryKeys());
-    }
-
-    private boolean isPrefixKey(List<String> lookupColumns) {
-        if (!tableInfo.hasPrimaryKey()) {
-            return false;
-        }
-        
-        List<String> physicalLookupColumns =
-                lookupColumns.stream()
-                        .filter(col -> !tableInfo.getPartitionKeys().contains(col))
-                        .collect(Collectors.toList());
-        
-        List<String> physicalPrimaryKeys = tableInfo.getPhysicalPrimaryKeys();
-        
-        if (physicalLookupColumns.isEmpty() || physicalLookupColumns.size() >= physicalPrimaryKeys.size()) {
-            return false;
-        }
-        
-        for (int i = 0; i < physicalLookupColumns.size(); i++) {
-            if (!physicalLookupColumns.get(i).equals(physicalPrimaryKeys.get(i))) {
-                return false;
-            }
-        }
-        
-        return true;
     }
 
     @Override
