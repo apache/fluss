@@ -17,14 +17,16 @@
 
 package org.apache.fluss.server.coordinator;
 
+import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.metadata.Schema;
+import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.types.DataTypes;
 
 import org.junit.jupiter.api.Test;
 
-import java.util.Collections;
+import java.time.Duration;
 
 import static org.apache.fluss.config.ConfigOptions.TABLE_DATALAKE_ENABLED;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -41,7 +43,7 @@ class CoordinatorContextTest {
         assertThat(context.getLakeTableCount()).isEqualTo(0);
 
         // Add a non-lake table
-        TableInfo nonLakeTable = createTableInfo(1L, "db1", "table1", false);
+        TableInfo nonLakeTable = createTableInfo(1L, TablePath.of("db1", "table1"), false);
         context.putTablePath(1L, nonLakeTable.getTablePath());
         context.putTableInfo(nonLakeTable);
 
@@ -49,7 +51,7 @@ class CoordinatorContextTest {
         assertThat(context.getLakeTableCount()).isEqualTo(0);
 
         // Add a lake table
-        TableInfo lakeTable = createTableInfo(2L, "db1", "table2", true);
+        TableInfo lakeTable = createTableInfo(2L, TablePath.of("db1", "table2"), true);
         context.putTablePath(2L, lakeTable.getTablePath());
         context.putTableInfo(lakeTable);
 
@@ -57,7 +59,7 @@ class CoordinatorContextTest {
         assertThat(context.getLakeTableCount()).isEqualTo(1);
 
         // Add another lake table
-        TableInfo lakeTable2 = createTableInfo(3L, "db2", "table3", true);
+        TableInfo lakeTable2 = createTableInfo(3L, TablePath.of("db2", "table3"), true);
         context.putTablePath(3L, lakeTable2.getTablePath());
         context.putTableInfo(lakeTable2);
 
@@ -65,39 +67,22 @@ class CoordinatorContextTest {
         assertThat(context.getLakeTableCount()).isEqualTo(2);
     }
 
-    private TableInfo createTableInfo(
-            long tableId, String database, String tableName, boolean isLakeTable) {
-        Schema schema = Schema.newBuilder().column("f1", DataTypes.INT()).build();
-        TablePath tablePath = TablePath.of(database, tableName);
+    private TableInfo createTableInfo(long tableId, TablePath tablePath, boolean isLake) {
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(Schema.newBuilder().column("f1", DataTypes.INT()).build())
+                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
+                        .property(ConfigOptions.TABLE_DATALAKE_FRESHNESS, Duration.ZERO)
+                        .property(TABLE_DATALAKE_ENABLED, isLake)
+                        .distributedBy(1)
+                        .build();
 
-        if (isLakeTable) {
-            return TableInfo.of(
-                    tablePath,
-                    tableId,
-                    0,
-                    schema,
-                    Collections.emptyList(),
-                    Collections.emptyList(),
-                    1,
-                    java.util.Collections.singletonMap(TABLE_DATALAKE_ENABLED.key(), "true"),
-                    Collections.emptyMap(),
-                    null,
-                    System.currentTimeMillis(),
-                    System.currentTimeMillis());
-        } else {
-            return TableInfo.of(
-                    tablePath,
-                    tableId,
-                    0,
-                    schema,
-                    Collections.emptyList(),
-                    Collections.emptyList(),
-                    1,
-                    Collections.emptyMap(),
-                    Collections.emptyMap(),
-                    null,
-                    System.currentTimeMillis(),
-                    System.currentTimeMillis());
-        }
+        return TableInfo.of(
+                tablePath,
+                tableId,
+                1,
+                tableDescriptor,
+                System.currentTimeMillis(),
+                System.currentTimeMillis());
     }
 }
