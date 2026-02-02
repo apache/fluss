@@ -953,23 +953,16 @@ abstract class FlinkCatalogITCase {
                 (CatalogTable)
                         catalog.getTable(new ObjectPath(DEFAULT_DB, "pk_table_for_binlog$binlog"));
 
-        // Build expected schema: metadata columns + nested before/after ROW columns
-        org.apache.flink.table.api.DataTypes.Field[] nestedFields =
-                new org.apache.flink.table.api.DataTypes.Field[] {
-                    DataTypes.FIELD("id", DataTypes.INT().notNull()),
-                    DataTypes.FIELD("name", DataTypes.STRING().notNull()),
-                    DataTypes.FIELD("amount", DataTypes.BIGINT())
-                };
-        Schema expectedSchema =
-                Schema.newBuilder()
-                        .column("_change_type", DataTypes.STRING().notNull())
-                        .column("_log_offset", DataTypes.BIGINT().notNull())
-                        .column("_commit_timestamp", DataTypes.TIMESTAMP_LTZ(3).notNull())
-                        .column("before", DataTypes.ROW(nestedFields))
-                        .column("after", DataTypes.ROW(nestedFields))
-                        .build();
-
-        assertThat(binlogTable.getUnresolvedSchema()).isEqualTo(expectedSchema);
+        // use string representation for assertion to simplify the unresolved schema comparison
+        assertThat(binlogTable.getUnresolvedSchema().toString())
+                .isEqualTo(
+                        "(\n"
+                                + "  `_change_type` STRING NOT NULL,\n"
+                                + "  `_log_offset` BIGINT NOT NULL,\n"
+                                + "  `_commit_timestamp` TIMESTAMP_LTZ(3) NOT NULL,\n"
+                                + "  `before` [ROW<id INT NOT NULL, name STRING NOT NULL, amount BIGINT>],\n"
+                                + "  `after` [ROW<id INT NOT NULL, name STRING NOT NULL, amount BIGINT>]\n"
+                                + ")");
 
         // Binlog virtual tables have empty partition keys (columns are nested)
         assertThat(binlogTable.getPartitionKeys()).isEmpty();
