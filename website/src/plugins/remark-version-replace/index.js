@@ -54,8 +54,8 @@ const plugin = (options) => {
             "$FLUSS_VERSION$": version.fullVersion,
             "$FLUSS_VERSION_SHORT$": version.shortVersion,
             "$FLUSS_DOCKER_VERSION$": version.dockerVersion,
-            "$PAIMON_VERSION$": "1.3.1",
-            "$PAIMON_VERSION_SHORT$": "1.3"
+            "$PAIMON_VERSION$": version.paimonVersion,
+            "$PAIMON_VERSION_SHORT$": version.paimonVersionShort
         };
 
         // RegExp to find any replacement keys.
