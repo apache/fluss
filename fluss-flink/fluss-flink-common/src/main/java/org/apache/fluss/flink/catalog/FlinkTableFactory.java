@@ -363,9 +363,7 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
 
         // Check if the table is partitioned from the internal option
         boolean isPartitioned =
-                Boolean.parseBoolean(
-                        catalogTableOptions.get(
-                                FlinkConnectorOptions.INTERNAL_BINLOG_IS_PARTITIONED.key()));
+                tableOptions.get(FlinkConnectorOptions.INTERNAL_BINLOG_IS_PARTITIONED);
 
         long partitionDiscoveryIntervalMs =
                 tableOptions

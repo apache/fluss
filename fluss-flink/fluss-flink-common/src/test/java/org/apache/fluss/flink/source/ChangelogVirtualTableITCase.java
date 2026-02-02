@@ -97,7 +97,7 @@ abstract class ChangelogVirtualTableITCase extends AbstractTestBase {
                         "create catalog %s with ('type' = 'fluss', '%s' = '%s')",
                         CATALOG_NAME, BOOTSTRAP_SERVERS.key(), bootstrapServers));
         tEnv.executeSql("use catalog " + CATALOG_NAME);
-        tEnv.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 2);
+        tEnv.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 1);
         tEnv.executeSql("create database " + DEFAULT_DB);
         tEnv.useDatabase(DEFAULT_DB);
         // reset clock before each test
@@ -375,7 +375,7 @@ abstract class ChangelogVirtualTableITCase extends AbstractTestBase {
         assertThat(timestampResults).hasSize(2);
         // Should contain records from batch2 only
         assertThat(timestampResults)
-                .containsExactlyInAnyOrder(
+                .containsExactly(
                         "+I[insert, 3, 1970-01-01T00:00:00.200Z, 4, v4]",
                         "+I[insert, 4, 1970-01-01T00:00:00.200Z, 5, v5]");
     }
@@ -407,7 +407,7 @@ abstract class ChangelogVirtualTableITCase extends AbstractTestBase {
         // Collect initial inserts
         List<String> results = collectRowsWithTimeout(rowIter, 3, false);
         assertThat(results)
-                .containsExactlyInAnyOrder(
+                .containsExactly(
                         "+I[insert, 1, Item-1, us]",
                         "+I[insert, 2, Item-2, us]",
                         "+I[insert, 3, Item-3, eu]");

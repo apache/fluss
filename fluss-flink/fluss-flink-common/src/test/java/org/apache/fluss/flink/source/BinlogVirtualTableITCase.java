@@ -339,8 +339,6 @@ abstract class BinlogVirtualTableITCase extends AbstractTestBase {
                         + optionsEarliest;
         CloseableIterator<Row> rowIterEarliest = tEnv.executeSql(queryEarliest).collect();
         List<String> earliestResults = collectRowsWithTimeout(rowIterEarliest, 5, true);
-        // Sort results for deterministic assertion
-        Collections.sort(earliestResults);
         assertThat(earliestResults)
                 .isEqualTo(
                         Arrays.asList(
@@ -358,7 +356,6 @@ abstract class BinlogVirtualTableITCase extends AbstractTestBase {
                         + optionsTimestamp;
         CloseableIterator<Row> rowIterTimestamp = tEnv.executeSql(queryTimestamp).collect();
         List<String> timestampResults = collectRowsWithTimeout(rowIterTimestamp, 2, true);
-        Collections.sort(timestampResults);
         assertThat(timestampResults)
                 .isEqualTo(Arrays.asList("+I[insert, 4, v4]", "+I[insert, 5, v5]"));
     }

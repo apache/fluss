@@ -84,7 +84,6 @@ public class ChangelogRowConverter implements RecordToFlinkRowConverter {
         return producedType;
     }
 
-    // todo check with Jark to use Short String and make direct changes in ChangeType enum
     /** Converts a Fluss ChangeType to its string representation for the changelog virtual table. */
     private String convertChangeTypeToString(ChangeType changeType) {
         switch (changeType) {
