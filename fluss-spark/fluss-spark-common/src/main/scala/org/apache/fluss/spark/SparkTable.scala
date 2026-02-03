@@ -42,7 +42,14 @@ class SparkTable(
   with SupportsWrite
   with SQLConfHelper {
 
+  private def populateSparkConf(flussConfig: FlussConfiguration): Unit = {
+    conf.getAllConfs.filter(_._1.startsWith("spark.sql.fluss")).foreach { case (k, v) =>
+      flussConfig.setString(k, v)
+    }
+  }
+
   override def newWriteBuilder(logicalWriteInfo: LogicalWriteInfo): WriteBuilder = {
+    populateSparkConf(flussConfig)
     if (tableInfo.getPrimaryKeys.isEmpty) {
       new FlussAppendWriteBuilder(tablePath, logicalWriteInfo.schema(), flussConfig)
     } else {
@@ -51,6 +58,7 @@ class SparkTable(
   }
 
   override def newScanBuilder(options: CaseInsensitiveStringMap): ScanBuilder = {
+    populateSparkConf(flussConfig)
     if (tableInfo.getPrimaryKeys.isEmpty) {
       new FlussAppendScanBuilder(tablePath, tableInfo, options, flussConfig)
     } else {

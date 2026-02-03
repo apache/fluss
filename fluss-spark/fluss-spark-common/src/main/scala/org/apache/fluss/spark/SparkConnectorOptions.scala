@@ -19,6 +19,8 @@ package org.apache.fluss.spark
 
 import org.apache.fluss.config.{ConfigBuilder, ConfigOption}
 
+import java.time.Duration
+
 object SparkConnectorOptions {
 
   val PRIMARY_KEY: ConfigOption[String] =
@@ -67,6 +69,6 @@ object SparkConnectorOptions {
     ConfigBuilder
       .key("scan.startup.mode")
       .stringType()
-      .defaultValue(StartUpMode.LATEST.toString)
+      .defaultValue(StartUpMode.FULL.toString)
       .withDescription("The start up mode when read Fluss table.")
 }

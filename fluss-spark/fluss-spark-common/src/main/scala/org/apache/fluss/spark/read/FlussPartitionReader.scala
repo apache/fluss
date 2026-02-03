@@ -24,8 +24,8 @@ import org.apache.fluss.config.Configuration
 import org.apache.fluss.metadata.{TableInfo, TablePath}
 import org.apache.fluss.row.{InternalRow => FlussInternalRow}
 import org.apache.fluss.spark.row.DataConverter
+import org.apache.fluss.spark.SparkFlussConf
 import org.apache.fluss.types.RowType
-
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.connector.read.PartitionReader
@@ -36,7 +36,7 @@ abstract class FlussPartitionReader(tablePath: TablePath, flussConfig: Configura
   extends PartitionReader[InternalRow]
   with Logging {
 
-  protected val POLL_TIMEOUT: Duration = Duration.ofMillis(100)
+  protected val POLL_TIMEOUT: Duration = Duration.ofMillis(flussConfig.getRawValue(SparkFlussConf.LOG_SCANNER_POLL_TIMEOUT.key).orElse("1000").asInstanceOf[String].toLong)
   protected lazy val conn: Connection = ConnectionFactory.createConnection(flussConfig)
   protected lazy val table: Table = conn.getTable(tablePath)
   protected lazy val tableInfo: TableInfo = table.getTableInfo

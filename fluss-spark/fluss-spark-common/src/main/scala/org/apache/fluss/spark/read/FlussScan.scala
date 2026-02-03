@@ -42,9 +42,10 @@ object FlussScan {
     SparkConnectorOptions.StartUpMode.withName(
       options.getOrDefault(
         SparkConnectorOptions.SCAN_START_UP_MODE.key(),
-        SparkConnectorOptions.StartUpMode.EARLIEST.toString)) match {
+        SparkConnectorOptions.SCAN_START_UP_MODE.defaultValue()).toUpperCase) match {
       case SparkConnectorOptions.StartUpMode.EARLIEST => OffsetsInitializer.earliest()
-      // TODO Support full start up mode.
+      case SparkConnectorOptions.StartUpMode.FULL => OffsetsInitializer.full()
+      case SparkConnectorOptions.StartUpMode.LATEST => OffsetsInitializer.latest()
       case _ =>
         throw new IllegalArgumentException(
           s"Unsupported scan start up mode: ${options.get(SparkConnectorOptions.SCAN_START_UP_MODE.key())}")
@@ -97,6 +98,9 @@ case class FlussUpsertScan(
   override def toBatch: Batch = {
     val startOffsetsInitializer = FlussScan.startOffsetsInitializer(options)
     val stoppingOffsetsInitializer = FlussScan.stoppingOffsetsInitializer(true, options)
+    if (startOffsetsInitializer != OffsetsInitializer.latest()) {
+      throw new UnsupportedOperationException("Upsert scan only support FULL startup mode.")
+    }
     new FlussUpsertBatch(
       tablePath,
       tableInfo,

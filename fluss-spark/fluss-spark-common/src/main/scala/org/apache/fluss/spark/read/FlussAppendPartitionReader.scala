@@ -65,7 +65,7 @@ class FlussAppendPartitionReader(
     if (currentRecords.hasNext) {
       val scanRecord = currentRecords.next()
       currentRow = convertToSparkRow(scanRecord)
-      currentOffset += 1
+      currentOffset = scanRecord.logOffset() + 1
       true
     } else if (currentOffset < flussPartition.stopOffset) {
       throw new IllegalStateException(s"No more data from fluss server," +
@@ -82,6 +82,9 @@ class FlussAppendPartitionReader(
   }
 
   private def initialize(): Unit = {
+    if (flussPartition.startOffset >= flussPartition.stopOffset) {
+      throw new IllegalArgumentException(s"Invalid offset range $flussPartition")
+    }
     logInfo(s"Prepare read table $tablePath partition $partitionId bucket $bucketId" +
       s" with start offset ${flussPartition.startOffset} stop offset ${flussPartition.stopOffset}")
     if (partitionId != null) {
