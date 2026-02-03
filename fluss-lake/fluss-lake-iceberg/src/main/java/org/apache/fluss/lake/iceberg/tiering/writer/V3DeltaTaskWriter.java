@@ -37,11 +37,15 @@ import org.apache.iceberg.io.FileIO;
 import org.apache.iceberg.io.OutputFileFactory;
 import org.apache.iceberg.io.WriteResult;
 import org.apache.iceberg.relocated.com.google.common.collect.Lists;
+import org.apache.iceberg.util.StructLikeMap;
+import org.apache.iceberg.util.StructLikeUtil;
+import org.apache.iceberg.util.StructProjection;
 
 import javax.annotation.Nullable;
 
 import java.io.IOException;
 import java.util.List;
+import java.util.Map;
 import java.util.function.Function;
 
 import static org.apache.fluss.lake.iceberg.utils.IcebergConversions.toPartition;
@@ -49,7 +53,8 @@ import static org.apache.fluss.lake.iceberg.utils.IcebergConversions.toPartition
 /** V3-aware delta writer using deletion vectors for position deletes when supported. */
 public class V3DeltaTaskWriter extends BaseTaskWriter<Record> {
 
-    private final V3EqualityDeltaWriter deltaWriter;
+    private final BaseEqualityDeltaWriter deltaWriter;
+    private final boolean useDeletionVectors;
 
     public V3DeltaTaskWriter(
             Table icebergTable,
@@ -63,16 +68,21 @@ public class V3DeltaTaskWriter extends BaseTaskWriter<Record> {
             int bucket) {
         super(icebergTable.spec(), format, appenderFactory, fileFactory, io, targetFileSize);
 
-        boolean useDeletionVectors = FormatVersionManager.supportsDeletionVectors(icebergTable);
+        this.useDeletionVectors = FormatVersionManager.supportsDeletionVectors(icebergTable);
+        PartitionKey partitionKey = toPartition(icebergTable, partition, bucket);
 
-        this.deltaWriter =
-                new V3EqualityDeltaWriter(
-                        toPartition(icebergTable, partition, bucket),
-                        icebergTable.schema(),
-                        deleteSchema,
-                        icebergTable.spec(),
-                        useDeletionVectors,
-                        fileFactory);
+        if (useDeletionVectors) {
+            this.deltaWriter =
+                    new V3DVWriter(
+                            partitionKey,
+                            icebergTable.schema(),
+                            deleteSchema,
+                            icebergTable.spec(),
+                            fileFactory);
+        } else {
+            this.deltaWriter =
+                    new V2EqualityDeltaWriter(partitionKey, icebergTable.schema(), deleteSchema);
+        }
     }
 
     @Override
@@ -87,9 +97,11 @@ public class V3DeltaTaskWriter extends BaseTaskWriter<Record> {
     @Override
     public WriteResult complete() throws IOException {
         WriteResult baseResult = super.complete();
-
         List<DeleteFile> allDeleteFiles = Lists.newArrayList(baseResult.deleteFiles());
-        allDeleteFiles.addAll(deltaWriter.getDvDeleteFiles());
+
+        if (useDeletionVectors && deltaWriter instanceof V3DVWriter) {
+            allDeleteFiles.addAll(((V3DVWriter) deltaWriter).getDvDeleteFiles());
+        }
 
         return WriteResult.builder()
                 .addDataFiles(baseResult.dataFiles())
@@ -103,32 +115,61 @@ public class V3DeltaTaskWriter extends BaseTaskWriter<Record> {
         deltaWriter.close();
     }
 
-    /** Equality delta writer with optional DV support for intra-batch position deletes. */
-    private class V3EqualityDeltaWriter extends BaseEqualityDeltaWriter {
-        private final boolean useDeletionVectors;
+    /** V2 equality delta writer - uses base class position delete handling. */
+    private class V2EqualityDeltaWriter extends BaseEqualityDeltaWriter {
+        V2EqualityDeltaWriter(PartitionKey partition, Schema schema, Schema eqDeleteSchema) {
+            super(partition, schema, eqDeleteSchema);
+        }
+
+        @Override
+        protected StructLike asStructLike(Record record) {
+            return record;
+        }
+
+        @Override
+        protected StructLike asStructLikeKey(Record record) {
+            return record;
+        }
+    }
+
+    /** V3 writer using DVFileWriter for position deletes instead of base class handling. */
+    private class V3DVWriter extends BaseEqualityDeltaWriter {
         private final DVFileWriter dvWriter;
+        private final StructProjection keyProjection;
         private final PartitionSpec spec;
         private final StructLike partition;
+        private final RollingFileWriter dataWriter;
+        private Map<StructLike, PathOffset> positionMap;
         private DeleteWriteResult dvResult;
 
-        V3EqualityDeltaWriter(
+        V3DVWriter(
                 PartitionKey partitionKey,
                 Schema schema,
                 Schema eqDeleteSchema,
                 PartitionSpec spec,
-                boolean useDeletionVectors,
                 OutputFileFactory fileFactory) {
             super(partitionKey, schema, eqDeleteSchema);
+            this.keyProjection = StructProjection.create(schema, eqDeleteSchema);
             this.spec = spec;
             this.partition = partitionKey;
-            this.useDeletionVectors = useDeletionVectors;
+            this.dataWriter = new RollingFileWriter(partitionKey);
+            this.positionMap = StructLikeMap.create(eqDeleteSchema.asStruct());
 
-            if (useDeletionVectors) {
-                Function<String, PositionDeleteIndex> loadPreviousDeletes = path -> null;
-                this.dvWriter = new BaseDVFileWriter(fileFactory, loadPreviousDeletes);
-            } else {
-                this.dvWriter = null;
+            Function<String, PositionDeleteIndex> loadPreviousDeletes = path -> null;
+            this.dvWriter = new BaseDVFileWriter(fileFactory, loadPreviousDeletes);
+        }
+
+        @Override
+        public void write(Record row) throws IOException {
+            CharSequence path = dataWriter.currentPath();
+            long pos = dataWriter.currentRows();
+            StructLike key = StructLikeUtil.copy(keyProjection.wrap(row));
+
+            PathOffset previous = positionMap.put(key, new PathOffset(path, pos));
+            if (previous != null) {
+                dvWriter.delete(previous.path.toString(), previous.rowOffset, spec, partition);
             }
+            dataWriter.write(row);
         }
 
         @Override
@@ -142,18 +183,31 @@ public class V3DeltaTaskWriter extends BaseTaskWriter<Record> {
         }
 
         List<DeleteFile> getDvDeleteFiles() {
-            if (dvResult != null) {
-                return dvResult.deleteFiles();
-            }
-            return Lists.newArrayList();
+            return dvResult != null ? dvResult.deleteFiles() : Lists.newArrayList();
         }
 
         @Override
         public void close() throws IOException {
-            super.close();
+            if (dataWriter != null) {
+                dataWriter.close();
+            }
             if (dvWriter != null) {
                 dvWriter.close();
                 dvResult = dvWriter.result();
+            }
+            if (positionMap != null) {
+                positionMap.clear();
+                positionMap = null;
+            }
+        }
+
+        private class PathOffset {
+            final CharSequence path;
+            final long rowOffset;
+
+            PathOffset(CharSequence path, long rowOffset) {
+                this.path = path;
+                this.rowOffset = rowOffset;
             }
         }
     }

@@ -21,6 +21,7 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.lake.iceberg.tiering.IcebergCatalogProvider;
 import org.apache.fluss.lake.iceberg.version.FormatVersionManager;
 
+import org.apache.iceberg.DeleteFile;
 import org.apache.iceberg.FileFormat;
 import org.apache.iceberg.PartitionSpec;
 import org.apache.iceberg.Schema;
@@ -155,6 +156,57 @@ class V3DeltaTaskWriterTest {
 
         assertThat(FormatVersionManager.supportsDeletionVectors(v2Table)).isFalse();
         assertThat(FormatVersionManager.supportsDeletionVectors(v3Table)).isTrue();
+    }
+
+    @Test
+    void testV3IntraBatchUpdateProducesPuffinDeleteFile() throws Exception {
+        Table table = createTableWithFormatVersion(3);
+        V3DeltaTaskWriter writer = createWriter(table);
+
+        // Write record then update same key (triggers intra-batch position delete)
+        writer.write(createRecord(table.schema(), 1L, "original"));
+        writer.write(createRecord(table.schema(), 1L, "updated"));
+
+        WriteResult result = writer.complete();
+
+        // Should have delete files in Puffin format for V3
+        assertThat(result.deleteFiles()).isNotEmpty();
+        DeleteFile deleteFile = result.deleteFiles()[0];
+        assertThat(deleteFile.format()).isEqualTo(FileFormat.PUFFIN);
+    }
+
+    @Test
+    void testV3DeleteFileHasReferencedDataFile() throws Exception {
+        Table table = createTableWithFormatVersion(3);
+        V3DeltaTaskWriter writer = createWriter(table);
+
+        // Write record then update same key
+        writer.write(createRecord(table.schema(), 1L, "original"));
+        writer.write(createRecord(table.schema(), 1L, "updated"));
+
+        WriteResult result = writer.complete();
+
+        // DV delete files should reference the data file
+        assertThat(result.deleteFiles()).isNotEmpty();
+        DeleteFile deleteFile = result.deleteFiles()[0];
+        assertThat(deleteFile.referencedDataFile()).isNotNull();
+    }
+
+    @Test
+    void testV2IntraBatchUpdateUsesTraditionalPositionDelete() throws Exception {
+        Table table = createTableWithFormatVersion(2);
+        V3DeltaTaskWriter writer = createWriter(table);
+
+        // Write record then update same key
+        writer.write(createRecord(table.schema(), 1L, "original"));
+        writer.write(createRecord(table.schema(), 1L, "updated"));
+
+        WriteResult result = writer.complete();
+
+        // V2 should use traditional position deletes (PARQUET), not Puffin
+        assertThat(result.deleteFiles()).isNotEmpty();
+        DeleteFile deleteFile = result.deleteFiles()[0];
+        assertThat(deleteFile.format()).isNotEqualTo(FileFormat.PUFFIN);
     }
 
     private Table createTableWithFormatVersion(int formatVersion) {
