@@ -17,6 +17,8 @@
 
 package org.apache.fluss.fs.s3.token;
 
+import org.apache.fluss.annotation.VisibleForTesting;
+import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.fs.token.CredentialsJsonSerde;
 import org.apache.fluss.fs.token.ObtainedSecurityToken;
 
@@ -46,28 +48,61 @@ public class S3DelegationTokenProvider {
 
     private static final String REGION_KEY = "fs.s3a.region";
     private static final String ENDPOINT_KEY = "fs.s3a.endpoint";
+    private static final String PATH_STYLE_ACCESS_KEY = "fs.s3a.path.style.access";
 
     private final String scheme;
+    private final Type type;
     private final String region;
     private final String accessKey;
     private final String secretKey;
-    private final Map<String, String> additionInfos;
+    private final Map<String, String> additionalInfos;
+    private final ObtainedSecurityToken defaultToken;
 
-    public S3DelegationTokenProvider(String scheme, Configuration conf) {
+    /** Type of token that should be provided. */
+    public enum Type {
+        NO_TOKEN, // supported by S3-compatible object stores (e.g., MinIO)
+        STS_SESSION_TOKEN // currently only supported by AWS
+    }
+
+    public S3DelegationTokenProvider(String scheme, Configuration conf, Type type) {
         this.scheme = scheme;
+        this.type = type;
         this.region = conf.get(REGION_KEY);
-        checkNotNull(region, "Region is not set.");
+        validateRegion(type, region);
         this.accessKey = conf.get(ACCESS_KEY_ID);
         this.secretKey = conf.get(ACCESS_KEY_SECRET);
-        this.additionInfos = new HashMap<>();
-        for (String key : Arrays.asList(REGION_KEY, ENDPOINT_KEY)) {
+        this.additionalInfos = new HashMap<>();
+        for (String key : Arrays.asList(REGION_KEY, ENDPOINT_KEY, PATH_STYLE_ACCESS_KEY)) {
             if (conf.get(key) != null) {
-                additionInfos.put(key, conf.get(key));
+                additionalInfos.put(key, conf.get(key));
             }
+        }
+        if (type == Type.NO_TOKEN) {
+            defaultToken =
+                    new ObtainedSecurityToken(this.scheme, new byte[0], null, additionalInfos);
+        } else {
+            defaultToken = null;
+        }
+    }
+
+    private static void validateRegion(Type type, String region) {
+        if (type == Type.STS_SESSION_TOKEN) {
+            checkNotNull(region, "Region is not set.");
         }
     }
 
     public ObtainedSecurityToken obtainSecurityToken() {
+        switch (type) {
+            case NO_TOKEN:
+                return defaultToken;
+            case STS_SESSION_TOKEN:
+                return obtainStsSessionToken();
+            default:
+                throw new FlussRuntimeException("Unknown token type: " + type);
+        }
+    }
+
+    private ObtainedSecurityToken obtainStsSessionToken() {
         LOG.info("Obtaining session credentials token with access key: {}", accessKey);
 
         AWSSecurityTokenService stsClient =
@@ -86,7 +121,10 @@ public class S3DelegationTokenProvider {
                 credentials.getExpiration());
 
         return new ObtainedSecurityToken(
-                scheme, toJson(credentials), credentials.getExpiration().getTime(), additionInfos);
+                scheme,
+                toJson(credentials),
+                credentials.getExpiration().getTime(),
+                additionalInfos);
     }
 
     private byte[] toJson(Credentials credentials) {
@@ -96,5 +134,10 @@ public class S3DelegationTokenProvider {
                         credentials.getSecretAccessKey(),
                         credentials.getSessionToken());
         return CredentialsJsonSerde.toJson(flussCredentials);
+    }
+
+    @VisibleForTesting
+    public Type getType() {
+        return type;
     }
 }
