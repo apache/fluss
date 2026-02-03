@@ -163,7 +163,7 @@ mkdir -p lib opt
 # Flink connectors
 wget -O lib/flink-faker.jar https://github.com/knaufk/flink-faker/releases/download/v0.5.3/flink-faker-0.5.3.jar
 wget -O lib/fluss-flink.jar "https://repo1.maven.org/maven2/org/apache/fluss/fluss-flink-1.20/$FLUSS_DOCKER_VERSION$/fluss-flink-1.20-$FLUSS_DOCKER_VERSION$.jar"
-wget -O lib/iceberg-flink-runtime.jar "https://repo1.maven.org/maven2/org/apache/iceberg/iceberg-flink-runtime-1.20/1.10.0/iceberg-flink-runtime-1.20-1.10.0.jar"
+wget -O lib/iceberg-flink-runtime.jar "https://repo1.maven.org/maven2/org/apache/iceberg/iceberg-flink-runtime-1.20/1.10.1/iceberg-flink-runtime-1.20-1.10.1.jar"
 
 # Fluss lake plugin
 wget -O lib/fluss-lake-iceberg.jar https://repo1.maven.org/maven2/org/apache/fluss/fluss-lake-iceberg/$FLUSS_DOCKER_VERSION$/fluss-lake-iceberg-$FLUSS_DOCKER_VERSION$.jar
@@ -175,6 +175,13 @@ wget -O lib/failsafe.jar https://repo1.maven.org/maven2/dev/failsafe/failsafe/3.
 # Tiering service
 wget -O opt/fluss-flink-tiering.jar https://repo1.maven.org/maven2/org/apache/fluss/fluss-flink-tiering/$FLUSS_DOCKER_VERSION$/fluss-flink-tiering-$FLUSS_DOCKER_VERSION$.jar
 ```
+
+:::info
+You can add more jars to this `lib` directory based on your requirements:
+- **Cloud storage support**: For AWS S3 integration with Iceberg, add the corresponding Iceberg bundle jars (e.g., `iceberg-aws-bundle`)
+- **Custom Hadoop configurations**: Add jars for specific HDFS distributions or custom authentication mechanisms
+- **Other catalog backends**: Add jars needed for alternative Iceberg catalog implementations (e.g., Rest, Hive, Glue)
+:::
 
 3. Create a `Dockerfile` for the custom Flink image:
 
