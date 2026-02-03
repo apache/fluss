@@ -154,7 +154,7 @@ volumes:
 The Docker Compose environment consists of the following containers:
 - **RustFS:** an S3-compatible object storage for tiered storage. You can access the RustFS console at http://localhost:9001 with credentials `rustfsadmin/rustfsadmin`.
    - RustFS is used as replacement for S3 in this quickstart example, you may want to configure this to use cloud file system
-   - See [here](maintenance/filesystem/overview.md) for information on how to setup cloud file systems
+   - See [here](/maintenance/filesystems/overview.md) for information on how to setup cloud file systems
 - **Fluss Cluster:** a Fluss `CoordinatorServer`, a Fluss `TabletServer` and a `ZooKeeper` server.
    - Snapshot interval `kv.snapshot.interval` is configured as 60 seconds. You may want to configure this differently for production systems
    - Credentials are configured directly with `s3.access-key` and `s3.secret-key`. Production systems should use CredentialsProvider chain specific to cloud environments.
@@ -184,7 +184,7 @@ docker run --rm --net=host \
 You can also visit http://localhost:8083/ to see if Flink is running normally.
 
 :::note
-- If you want to additionally use an observability stack, follow one of the provided quickstart guides [here](maintenance/observability/quickstart.md) and then continue with this guide.
+- If you want to additionally use an observability stack, follow one of the provided quickstart guides [here](/docs/maintenance/observability/quickstart.md) and then continue with this guide.
 - All the following commands involving `docker compose` should be executed in the created working directory that contains the `docker-compose.yml` file.
 :::
 
