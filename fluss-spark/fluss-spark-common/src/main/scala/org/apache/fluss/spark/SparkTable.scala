@@ -43,9 +43,14 @@ class SparkTable(
   with SQLConfHelper {
 
   private def populateSparkConf(flussConfig: FlussConfiguration): Unit = {
-    conf.getAllConfs.filter(_._1.startsWith("spark.sql.fluss")).foreach { case (k, v) =>
-      flussConfig.setString(k, v)
-    }
+    conf.getAllConfs
+      .filter(_._1.startsWith(SparkConnectorOptions.SPARK_FLUSS_CONF_PREFIX))
+      .foreach {
+        case (k, v) =>
+          flussConfig.setString(
+            k.substring(SparkConnectorOptions.SPARK_FLUSS_CONF_PREFIX.length),
+            v)
+      }
   }
 
   override def newWriteBuilder(logicalWriteInfo: LogicalWriteInfo): WriteBuilder = {
