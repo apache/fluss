@@ -141,7 +141,8 @@ class PaimonKeyDecoderTest {
         PaimonKeyDecoder decoder = new PaimonKeyDecoder(rowType, rowType.getFieldNames());
 
         // Test short strings (≤7 bytes with 0x80 marker) and long strings (>7 bytes)
-        for (String testStr : Arrays.asList("", "a", "1234567", "12345678", "Hello, Paimon!")) {
+        for (String testStr :
+                Arrays.asList("", "a", "1234567", "12345678", "Hello, Paimon!", "你好,世界！")) {
             InternalRow original = createStringRow(testStr);
             byte[] encoded = encoder.encodeKey(original);
             InternalRow decoded = decoder.decodeKey(encoded);

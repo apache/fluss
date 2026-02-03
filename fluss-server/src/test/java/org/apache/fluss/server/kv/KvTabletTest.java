@@ -290,17 +290,11 @@ class KvTabletTest {
                                 0,
                                 Arrays.asList(
                                         // -- for batch 1
-                                        ChangeType.INSERT,
-                                        ChangeType.INSERT,
-                                        ChangeType.UPDATE_BEFORE,
-                                        ChangeType.UPDATE_AFTER),
+                                        ChangeType.INSERT, ChangeType.INSERT),
                                 Arrays.asList(
                                         // for k1
                                         new Object[] {1, null, null},
-                                        // for k2: +I
-                                        new Object[] {2, null, null},
-                                        // for k2: -U, +U
-                                        new Object[] {2, null, null},
+                                        // for k2: +I, the second K2 update is skipped
                                         new Object[] {2, null, null})));
 
         LogRecords actualLogRecords = readLogRecords();
@@ -618,7 +612,8 @@ class KvTabletTest {
                         .build();
         initLogTabletAndKvTablet(schema, new HashMap<>());
         KvRecordTestUtils.KvRecordFactory recordFactory =
-                KvRecordTestUtils.KvRecordFactory.of(schema.getRowType());
+                KvRecordTestUtils.KvRecordFactory.of(
+                        schema.getRowType().project(Collections.singletonList("user_name")));
 
         // start threads to put records
         List<Future<LogAppendInfo>> putFutures = new ArrayList<>();
@@ -629,12 +624,12 @@ class KvTabletTest {
             KvRecordBatch kvRecordBatch1 =
                     kvRecordBatchFactory.ofRecords(
                             Arrays.asList(
-                                    recordFactory.ofRecord(k1.getBytes(), new Object[] {k1, null}),
-                                    recordFactory.ofRecord(k2.getBytes(), new Object[] {k2, null}),
-                                    recordFactory.ofRecord(
-                                            k3.getBytes(), new Object[] {k3, null})));
+                                    recordFactory.ofRecord(k1.getBytes(), new Object[] {k1}),
+                                    recordFactory.ofRecord(k2.getBytes(), new Object[] {k2}),
+                                    recordFactory.ofRecord(k3.getBytes(), new Object[] {k3})));
             // test concurrent putting to test thread-safety of AutoIncrementManager
-            putFutures.add(executor.submit(() -> kvTablet.putAsLeader(kvRecordBatch1, null)));
+            putFutures.add(
+                    executor.submit(() -> kvTablet.putAsLeader(kvRecordBatch1, new int[] {0})));
         }
 
         // wait for all putting finished
@@ -660,6 +655,43 @@ class KvTabletTest {
         List<Integer> expectedUids =
                 IntStream.rangeClosed(1, 30).boxed().collect(Collectors.toList());
         assertThat(actualUids).isEqualTo(expectedUids);
+    }
+
+    @Test
+    void testAutoIncrementWithInvalidTargetColumns() throws Exception {
+        Schema schema =
+                Schema.newBuilder()
+                        .column("user_name", DataTypes.STRING())
+                        .column("uid", DataTypes.INT())
+                        .column("age", DataTypes.INT())
+                        .primaryKey("user_name")
+                        .enableAutoIncrement("uid")
+                        .build();
+        initLogTabletAndKvTablet(schema, new HashMap<>());
+        KvRecordTestUtils.KvRecordFactory recordFactory =
+                KvRecordTestUtils.KvRecordFactory.of(schema.getRowType());
+
+        KvRecordBatch kvRecordBatch =
+                kvRecordBatchFactory.ofRecords(
+                        Arrays.asList(
+                                recordFactory.ofRecord(
+                                        "k1".getBytes(), new Object[] {"k1", null, null}),
+                                recordFactory.ofRecord(
+                                        "k2".getBytes(), new Object[] {"k2", null, null})));
+        // target columns contain auto-increment column
+        assertThatThrownBy(() -> kvTablet.putAsLeader(kvRecordBatch, new int[] {0, 1}))
+                .isInstanceOf(InvalidTargetColumnException.class)
+                .hasMessageContaining(
+                        "Auto-increment column [uid] at index 1 must not be included in target columns.");
+
+        // no specify target columns, which is also invalid for auto-increment
+        assertThatThrownBy(() -> kvTablet.putAsLeader(kvRecordBatch, null))
+                .isInstanceOf(InvalidTargetColumnException.class)
+                .hasMessageContaining(
+                        "The table contains an auto-increment column [uid], but update target columns are not explicitly specified.");
+
+        // valid case: target columns don't contain auto-increment column
+        kvTablet.putAsLeader(kvRecordBatch, new int[] {0, 2});
     }
 
     @Test

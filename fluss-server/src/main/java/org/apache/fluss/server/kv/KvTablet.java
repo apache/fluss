@@ -332,7 +332,7 @@ public final class KvTablet {
                             autoIncrementManager.getUpdaterForSchema(kvFormat, latestSchemaId);
 
                     // Validate targetColumns doesn't contain auto-increment column
-                    validateTargetColumns(targetColumns, currentAutoIncrementUpdater, latestSchema);
+                    currentAutoIncrementUpdater.validateTargetColumns(targetColumns);
 
                     // Determine the row merger based on mergeMode:
                     // - DEFAULT: Use the configured merge engine (rowMerger)
@@ -408,21 +408,6 @@ public final class KvTablet {
                             + schemaIdOfNewData
                             + ", latest schema id: "
                             + latestSchemaId);
-        }
-    }
-
-    private void validateTargetColumns(
-            int[] targetColumns, AutoIncrementUpdater autoIncrementUpdater, Schema schema) {
-        if (!autoIncrementUpdater.hasAutoIncrement() || targetColumns == null) {
-            return;
-        }
-        List<String> autoIncrementColumnNames = schema.getAutoIncrementColumnNames();
-        for (int colIdx : targetColumns) {
-            if (autoIncrementColumnNames.contains(schema.getColumnName(colIdx))) {
-                throw new IllegalArgumentException(
-                        "targetColumns must not include auto-increment column name: "
-                                + schema.getColumnName(colIdx));
-            }
         }
     }
 

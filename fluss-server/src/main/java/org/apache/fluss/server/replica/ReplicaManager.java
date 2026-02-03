@@ -142,6 +142,7 @@ import static org.apache.fluss.config.ConfigOptions.KV_FORMAT_VERSION_2;
 import static org.apache.fluss.server.TabletManagerBase.getTableInfo;
 import static org.apache.fluss.utils.FileUtils.isDirectoryEmpty;
 import static org.apache.fluss.utils.Preconditions.checkArgument;
+import static org.apache.fluss.utils.Preconditions.checkNotNull;
 import static org.apache.fluss.utils.Preconditions.checkState;
 import static org.apache.fluss.utils.concurrent.LockUtils.inLock;
 
@@ -597,13 +598,14 @@ public class ReplicaManager {
 
     /**
      * Collect missing keys from lookup results for insertion, populating both context and batch
-     * maps.
+     * maps. And returns the schema of the table, may return null if there is no missing keys.
      */
-    private void collectMissingKeysForInsert(
+    private Schema collectMissingKeysForInsert(
             Map<TableBucket, List<byte[]>> entriesPerBucket,
             Map<TableBucket, LookupResultForBucket> lookupResults,
             Map<TableBucket, MissingKeysContext> missingKeysContextMap,
             Map<TableBucket, KvRecordBatch> kvRecordBatchMap) {
+        Schema schema = null;
         for (Map.Entry<TableBucket, List<byte[]>> entry : entriesPerBucket.entrySet()) {
             TableBucket tb = entry.getKey();
             LookupResultForBucket lookupResult = lookupResults.get(tb);
@@ -622,13 +624,14 @@ public class ReplicaManager {
                 }
             }
             if (!missingKeys.isEmpty()) {
+                TableInfo tableInfo = getReplicaOrException(tb).getTableInfo();
                 missingKeysContextMap.put(tb, new MissingKeysContext(missingIndexes, missingKeys));
-                kvRecordBatchMap.put(
-                        tb,
-                        KeyRecordBatch.create(
-                                missingKeys, getReplicaOrException(tb).getTableInfo()));
+                kvRecordBatchMap.put(tb, KeyRecordBatch.create(missingKeys, tableInfo));
+                schema = tableInfo.getSchema();
             }
         }
+        // this assumes all table buckets belong to the same table
+        return schema;
     }
 
     /** Lookup a single key value. */
@@ -706,19 +709,18 @@ public class ReplicaManager {
             checkArgument(
                     timeoutMs != null && requiredAcks != null,
                     "timeoutMs and requiredAcks must be set");
+
             Map<TableBucket, MissingKeysContext> entriesPerBucketToInsert = new HashMap<>();
             Map<TableBucket, KvRecordBatch> produceEntryData = new HashMap<>();
-            collectMissingKeysForInsert(
-                    entriesPerBucket,
-                    lookupResultForBucketMap,
-                    entriesPerBucketToInsert,
-                    produceEntryData);
+            Schema schema =
+                    collectMissingKeysForInsert(
+                            entriesPerBucket,
+                            lookupResultForBucketMap,
+                            entriesPerBucketToInsert,
+                            produceEntryData);
 
             if (!produceEntryData.isEmpty()) {
-                // Compute target columns: exclude auto-increment to prevent overwriting
-                TableBucket firstBucket = produceEntryData.keySet().iterator().next();
-                Schema schema = getReplicaOrException(firstBucket).getTableInfo().getSchema();
-
+                checkNotNull(schema, "Schema must be available for insert-if-not-exists");
                 // TODO: Performance optimization: during lookup-with-insert-if-not-exists flow,
                 // the original key bytes are wrapped in KeyRecordBatch, then during putRecordsToKv
                 // they are decoded to rows and immediately re-encoded back to key bytes, causing

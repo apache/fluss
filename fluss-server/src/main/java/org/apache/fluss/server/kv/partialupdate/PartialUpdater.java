@@ -41,6 +41,7 @@ public class PartialUpdater {
 
     private final BitSet partialUpdateCols = new BitSet();
     private final BitSet primaryKeyCols = new BitSet();
+    private final boolean updatePrimaryKeyOnly;
     private final DataType[] fieldDataTypes;
 
     public PartialUpdater(KvFormat kvFormat, short schemaId, Schema schema, int[] targetColumns) {
@@ -60,6 +61,7 @@ public class PartialUpdater {
             flussFieldGetters[i] = InternalRow.createFieldGetter(fieldDataTypes[i], i);
         }
         this.rowEncoder = RowEncoder.create(kvFormat, fieldDataTypes);
+        this.updatePrimaryKeyOnly = partialUpdateCols.equals(primaryKeyCols);
     }
 
     private void sanityCheck(Schema schema, int[] targetColumns) {
@@ -100,6 +102,11 @@ public class PartialUpdater {
      * @return the updated value (schema id + row bytes)
      */
     public BinaryValue updateRow(@Nullable BinaryValue oldValue, BinaryValue partialValue) {
+        if (updatePrimaryKeyOnly && oldValue != null) {
+            // only primary key columns are updated, return the old value directly
+            return oldValue;
+        }
+
         rowEncoder.startNewRow();
         // write each field
         for (int i = 0; i < fieldDataTypes.length; i++) {

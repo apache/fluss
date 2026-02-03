@@ -18,6 +18,7 @@
 
 package org.apache.fluss.server.kv.autoinc;
 
+import org.apache.fluss.exception.InvalidTargetColumnException;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.record.BinaryValue;
@@ -26,6 +27,7 @@ import org.apache.fluss.row.encode.RowEncoder;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypeRoot;
 
+import javax.annotation.Nullable;
 import javax.annotation.concurrent.NotThreadSafe;
 
 /**
@@ -42,6 +44,7 @@ public class PerSchemaAutoIncrementUpdater implements AutoIncrementUpdater {
     private final RowEncoder rowEncoder;
     private final int fieldLength;
     private final int targetColumnIdx;
+    private final String autoIncrementColumnName;
     private final SequenceGenerator sequenceGenerator;
     private final short schemaId;
     private final boolean requireInteger;
@@ -69,11 +72,13 @@ public class PerSchemaAutoIncrementUpdater implements AutoIncrementUpdater {
                             "Auto-increment column ID %d not found in schema columns: %s",
                             autoIncrementColumnId, schema.getColumnIds()));
         }
+        this.autoIncrementColumnName = schema.getAutoIncrementColumnNames().get(0);
         this.requireInteger = fieldDataTypes[targetColumnIdx].is(DataTypeRoot.INTEGER);
         this.rowEncoder = RowEncoder.create(kvFormat, fieldDataTypes);
         this.flussFieldGetters = flussFieldGetters;
     }
 
+    @Override
     public BinaryValue updateAutoIncrementColumns(BinaryValue rowValue) {
         rowEncoder.startNewRow();
         for (int i = 0; i < fieldLength; i++) {
@@ -91,6 +96,34 @@ public class PerSchemaAutoIncrementUpdater implements AutoIncrementUpdater {
             }
         }
         return new BinaryValue(schemaId, rowEncoder.finishRow());
+    }
+
+    @Override
+    public void validateTargetColumns(@Nullable int[] targetColumnIndexes) {
+        if (targetColumnIndexes != null) {
+            boolean found = false;
+            for (int idx : targetColumnIndexes) {
+                if (idx == targetColumnIdx) {
+                    found = true;
+                    break;
+                }
+            }
+            if (found) {
+                throw new InvalidTargetColumnException(
+                        String.format(
+                                "Auto-increment column [%s] at index %d must not be included in target columns.",
+                                autoIncrementColumnName, targetColumnIdx));
+            }
+        } else {
+            // The current table contains an auto-increment column, but no target columns have been
+            // specified, which implies all columns (including the auto-increment one) would be
+            // updated. This is not allowed.
+            throw new InvalidTargetColumnException(
+                    String.format(
+                            "The table contains an auto-increment column [%s], but update target columns are not explicitly specified. "
+                                    + "Please specify the update target columns and exclude the auto-increment column from them.",
+                            autoIncrementColumnName));
+        }
     }
 
     @Override

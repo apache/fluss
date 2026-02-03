@@ -53,11 +53,6 @@ public class AutoIncrementManager {
             TablePath tablePath,
             TableConfig tableConf,
             SequenceGeneratorFactory seqGeneratorFactory) {
-        this.autoIncrementUpdaterCache =
-                Caffeine.newBuilder()
-                        .maximumSize(5)
-                        .expireAfterAccess(Duration.ofMinutes(5))
-                        .build();
         this.schemaGetter = schemaGetter;
         int schemaId = schemaGetter.getLatestSchemaInfo().getSchemaId();
         Schema schema = schemaGetter.getSchema(schemaId);
@@ -74,17 +69,28 @@ public class AutoIncrementManager {
             sequenceGenerator =
                     seqGeneratorFactory.createSequenceGenerator(
                             tablePath, autoIncrementColumn, tableConf.getAutoIncrementCacheSize());
+            autoIncrementUpdaterCache =
+                    Caffeine.newBuilder()
+                            .maximumSize(5)
+                            .expireAfterAccess(Duration.ofMinutes(5))
+                            .build();
         } else {
             autoIncrementColumnId = -1;
             sequenceGenerator = null;
+            autoIncrementUpdaterCache = null;
         }
     }
 
     // Supports removing or reordering columns; does NOT support adding an auto-increment column to
     // an existing table.
     public AutoIncrementUpdater getUpdaterForSchema(KvFormat kvFormat, int latestSchemaId) {
-        return autoIncrementUpdaterCache.get(
-                latestSchemaId, k -> createAutoIncrementUpdater(kvFormat, k));
+        if (autoIncrementColumnId == -1) {
+            // return no-op updater directly if there is no auto-increment column
+            return NO_OP_UPDATER;
+        } else {
+            return autoIncrementUpdaterCache.get(
+                    latestSchemaId, k -> createAutoIncrementUpdater(kvFormat, k));
+        }
     }
 
     private AutoIncrementUpdater createAutoIncrementUpdater(KvFormat kvFormat, int schemaId) {

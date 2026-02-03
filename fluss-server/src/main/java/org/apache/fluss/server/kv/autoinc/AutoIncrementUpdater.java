@@ -18,7 +18,10 @@
 
 package org.apache.fluss.server.kv.autoinc;
 
+import org.apache.fluss.exception.InvalidTargetColumnException;
 import org.apache.fluss.record.BinaryValue;
+
+import javax.annotation.Nullable;
 
 /** A updater to auto increment column . */
 public interface AutoIncrementUpdater {
@@ -34,6 +37,17 @@ public interface AutoIncrementUpdater {
      * @return a {@link BinaryValue} representing the updated row; never {@code null}
      */
     BinaryValue updateAutoIncrementColumns(BinaryValue rowValue);
+
+    /**
+     * Validates the target column indexes for auto-increment updates.
+     *
+     * @param targetColumnIndexes the indexes of the target columns to be validated, may be {@code
+     *     null}
+     * @throws InvalidTargetColumnException if the target columns are invalid
+     */
+    default void validateTargetColumns(@Nullable int[] targetColumnIndexes) {
+        // no op
+    }
 
     /**
      * Returns whether this updater actually performs auto-increment logic.

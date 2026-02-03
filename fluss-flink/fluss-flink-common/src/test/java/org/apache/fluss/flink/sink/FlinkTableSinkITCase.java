@@ -1671,6 +1671,99 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
     }
 
     @Test
+    void testAutoIncrementWithTargetColumns() throws Exception {
+        // use single parallelism to make result ordering stable
+        tEnv.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 1);
+
+        String tableName = "auto_increment_pk_table";
+        // Create a table with auto increment column
+        tEnv.executeSql(
+                String.format(
+                        "create table %s ("
+                                + " id int not null,"
+                                + " auto_increment_id bigint,"
+                                + " amount bigint,"
+                                + " primary key (id) not enforced"
+                                + ") with ('auto-increment.fields'='auto_increment_id')",
+                        tableName));
+
+        // Insert initial data specifying only id and amount
+        tEnv.executeSql(
+                        String.format(
+                                "INSERT INTO %s (id, amount) VALUES "
+                                        + "(1, 100), "
+                                        + "(2, 200), "
+                                        + "(3, 150), "
+                                        + "(4, 250)",
+                                tableName))
+                .await();
+
+        tEnv.executeSql(
+                        String.format(
+                                "INSERT INTO %s (id, amount) VALUES " + "(3, 350), " + "(5, 500)",
+                                tableName))
+                .await();
+
+        List<String> expectedResults =
+                Arrays.asList(
+                        "+I[1, 1, 100]",
+                        "+I[2, 2, 200]",
+                        "+I[3, 3, 150]",
+                        "+I[4, 4, 250]",
+                        "-U[3, 3, 150]",
+                        "+U[3, 3, 350]",
+                        "+I[5, 5, 500]");
+
+        // Collect results with timeout
+        assertQueryResultExactOrder(
+                tEnv,
+                String.format(
+                        "SELECT id, auto_increment_id, amount FROM %s /*+ OPTIONS('scan.startup.mode' = 'earliest') */",
+                        tableName),
+                expectedResults);
+
+        // verify invalid target columns that include auto-increment column
+        assertThatThrownBy(
+                        () ->
+                                tEnv.executeSql(
+                                                String.format(
+                                                        "INSERT INTO %s (id, auto_increment_id) VALUES "
+                                                                + "(6, 10)",
+                                                        tableName))
+                                        .await())
+                .hasRootCauseInstanceOf(IllegalArgumentException.class)
+                .hasRootCauseMessage(
+                        "Explicitly specifying values for the auto increment column auto_increment_id is not allowed.");
+
+        assertThatThrownBy(
+                        () ->
+                                tEnv.executeSql(
+                                                String.format(
+                                                        "INSERT INTO %s VALUES " + "(6, 10, 600)",
+                                                        tableName))
+                                        .await())
+                .hasRootCauseInstanceOf(IllegalArgumentException.class)
+                .hasRootCauseMessage(
+                        "This table has auto increment column [auto_increment_id]. "
+                                + "Explicitly specifying values for an auto increment column is not allowed. "
+                                + "Please specify non-auto-increment columns as target columns using partialUpdate first.");
+
+        assertThatThrownBy(
+                        () ->
+                                tEnv.executeSql(
+                                                String.format(
+                                                        "INSERT INTO %s (id, amount, auto_increment_id) VALUES "
+                                                                + "(6, 600, 10)",
+                                                        tableName))
+                                        .await())
+                .hasRootCauseInstanceOf(IllegalArgumentException.class)
+                .hasRootCauseMessage(
+                        "This table has auto increment column [auto_increment_id]. "
+                                + "Explicitly specifying values for an auto increment column is not allowed. "
+                                + "Please specify non-auto-increment columns as target columns using partialUpdate first.");
+    }
+
+    @Test
     void testWalModeWithAutoIncrement() throws Exception {
         // use single parallelism to make result ordering stable
         tEnv.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 1);

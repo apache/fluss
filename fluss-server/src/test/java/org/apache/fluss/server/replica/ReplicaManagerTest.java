@@ -906,7 +906,6 @@ class ReplicaManagerTest extends ReplicaTestBase {
         assertLogRecordsEquals(DATA3_ROW_TYPE, records, expected, ChangeType.INSERT, schemaGetter2);
     }
 
-    // Fixme
     @Test
     void testConcurrentLookupWithInsertIfNotExistsAutoIncrement() throws Exception {
         TableBucket tb = new TableBucket(DATA3_TABLE_ID_PK_AUTO_INC, 1);
@@ -992,45 +991,22 @@ class ReplicaManagerTest extends ReplicaTestBase {
         // Values should be 1, 2, 3 (in any order due to concurrency)
         assertThat(autoIncrementValues).containsExactlyInAnyOrder(1L, 2L, 3L);
 
-        // Verify WAL: 3 INSERTs minimum, up to 15 if all concurrent updates execute
+        // Verify exactly 3 changelog entries were written (one per unique key)
         FetchLogResultForBucket logResult = fetchLog(tb, 0L);
+        // Only the first upsert for a given primary key generates changelog records. Subsequent
+        // upserts on the same primary key produce empty batches, but still increment the log
+        // offset. As a result, the High Watermark may exceed 3 due to these empty batches advancing
+        // the offset.
         assertThat(logResult.getHighWatermark()).isBetween(3L, 15L);
-
-        // Decode all WAL records
+        // Verify log records contain the expected keys with INSERT change type
         LogRecords records = logResult.records();
-        LogRecordReadContext readContext =
-                LogRecordReadContext.createArrowReadContext(
-                        DATA3_ROW_TYPE,
-                        DEFAULT_SCHEMA_ID,
-                        new TestingSchemaGetter(DEFAULT_SCHEMA_ID, DATA3_SCHEMA_PK_AUTO_INC));
-
-        List<Tuple2<ChangeType, Long>> recordsWithAutoInc = new ArrayList<>();
-        for (LogRecordBatch batch : records.batches()) {
-            try (CloseableIterator<LogRecord> iterator = batch.records(readContext)) {
-                while (iterator.hasNext()) {
-                    LogRecord record = iterator.next();
-                    recordsWithAutoInc.add(
-                            Tuple2.of(record.getChangeType(), record.getRow().getLong(2)));
-                }
-            }
-        }
-
-        // First 3 must be INSERTs with unique auto-increment values (1, 2, 3)
-        assertThat(recordsWithAutoInc).hasSizeGreaterThanOrEqualTo(3);
-        Set<Long> insertAutoIncs = new HashSet<>();
-        for (int i = 0; i < 3; i++) {
-            assertThat(recordsWithAutoInc.get(i).f0).isEqualTo(ChangeType.INSERT);
-            insertAutoIncs.add(recordsWithAutoInc.get(i).f1);
-        }
-        assertThat(insertAutoIncs).containsExactlyInAnyOrder(1L, 2L, 3L);
-
-        // Remaining 12 must be UPDATE pairs (UPDATE_BEFORE + UPDATE_AFTER) preserving
-        // auto-increment
-        for (int i = 3; i < recordsWithAutoInc.size(); i++) {
-            Tuple2<ChangeType, Long> record = recordsWithAutoInc.get(i);
-            assertThat(record.f0).isIn(ChangeType.UPDATE_BEFORE, ChangeType.UPDATE_AFTER);
-            assertThat(record.f1).isIn(1L, 2L, 3L);
-        }
+        List<Object[]> expected =
+                Arrays.asList(
+                        new Object[] {100, null, 1L},
+                        new Object[] {200, null, 2L},
+                        new Object[] {300, null, 3L});
+        // only 3 INSERT changelogs generated, the rest are empty batches
+        assertLogRecordsEquals(DATA3_ROW_TYPE, records, expected, ChangeType.INSERT, schemaGetter);
     }
 
     @Test
