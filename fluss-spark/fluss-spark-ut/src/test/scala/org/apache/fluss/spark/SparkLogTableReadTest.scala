@@ -80,44 +80,48 @@ class SparkLogTableReadTest extends FlussSparkTestBase {
     }
   }
 
-  test("Spark Read: primary key table") {
+  test("Spark Read: partitioned log table") {
     withTable("t") {
-      sql(s"""
-             |CREATE TABLE $DEFAULT_DATABASE.t (orderId BIGINT, itemId BIGINT, amount INT, address STRING)
-             |TBLPROPERTIES("primary.key" = "orderId")
-             |""".stripMargin)
-
-      sql(s"""
-             |INSERT INTO $DEFAULT_DATABASE.t VALUES
-             |(600L, 21L, 601, "addr1"), (700L, 22L, 602, "addr2"),
-             |(800L, 23L, 603, "addr3"), (900L, 24L, 604, "addr4"),
-             |(1000L, 25L, 605, "addr5")
-             |""".stripMargin)
-
-      checkAnswer(
-        sql(s"SELECT * FROM $DEFAULT_DATABASE.t ORDER BY orderId"),
-        Row(600L, 21L, 601, "addr1") ::
-          Row(700L, 22L, 602, "addr2") ::
-          Row(800L, 23L, 603, "addr3") ::
-          Row(900L, 24L, 604, "addr4") ::
-          Row(1000L, 25L, 605, "addr5") :: Nil
+      sql(
+        s"""
+           |CREATE TABLE $DEFAULT_DATABASE.t (orderId BIGINT, itemId BIGINT, amount INT, address STRING, dt STRING)
+           |PARTITIONED BY (dt)
+           |""".stripMargin
       )
 
       sql(s"""
              |INSERT INTO $DEFAULT_DATABASE.t VALUES
-             |(700L, 220L, 602, "addr2"),
-             |(900L, 240L, 604, "addr4"),
-             |(1100L, 260L, 606, "addr6")
+             |(600L, 21L, 601, "addr1", "2026-01-01"), (700L, 22L, 602, "addr2", "2026-01-01"),
+             |(800L, 23L, 603, "addr3", "2026-01-02"), (900L, 24L, 604, "addr4", "2026-01-02"),
+             |(1000L, 25L, 605, "addr5", "2026-01-03")
              |""".stripMargin)
 
       checkAnswer(
+        sql(s"SELECT * FROM $DEFAULT_DATABASE.t ORDER BY orderId"),
+        Row(600L, 21L, 601, "addr1", "2026-01-01") ::
+          Row(700L, 22L, 602, "addr2", "2026-01-01") ::
+          Row(800L, 23L, 603, "addr3", "2026-01-02") ::
+          Row(900L, 24L, 604, "addr4", "2026-01-02") ::
+          Row(1000L, 25L, 605, "addr5", "2026-01-03") :: Nil
+      )
+
+      // Read with partition filter
+      checkAnswer(
+        sql(s"SELECT * FROM $DEFAULT_DATABASE.t WHERE dt = '2026-01-01' ORDER BY orderId"),
+        Row(600L, 21L, 601, "addr1", "2026-01-01") ::
+          Row(700L, 22L, 602, "addr2", "2026-01-01") :: Nil
+      )
+
+      // Read with multiple partitions filter
+      checkAnswer(
         sql(s"""
-               |SELECT orderId, itemId, address FROM $DEFAULT_DATABASE.t
-               |WHERE amount <= 603 ORDER BY orderId""".stripMargin),
-        Row(600L, 21L, "addr1") ::
-          Row(700L, 220L, "addr2") ::
-          Row(800L, 23L, "addr3") ::
-          Nil
+               |SELECT orderId, address, dt FROM $DEFAULT_DATABASE.t
+               |WHERE dt IN ('2026-01-01', '2026-01-02')
+               |ORDER BY orderId""".stripMargin),
+        Row(600L, "addr1", "2026-01-01") ::
+          Row(700L, "addr2", "2026-01-01") ::
+          Row(800L, "addr3", "2026-01-02") ::
+          Row(900L, "addr4", "2026-01-02") :: Nil
       )
     }
   }
