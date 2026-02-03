@@ -65,7 +65,6 @@ class GetClusterConfigsProcedure(tableCatalog: TableCatalog) extends BaseProcedu
 
   private def getConfigs(configKeys: Array[String]): Array[InternalRow] = {
     try {
-      val admin = getAdmin()
       val configs = admin.describeClusterConfigs().get().asScala
 
       if (configKeys.isEmpty) {

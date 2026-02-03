@@ -64,6 +64,8 @@
                 </executions>
                 <configuration>
                     <visitor>true</visitor>
+                    <listener>true</listener>
+                    <sourceDirectory>src/main/antlr4</sourceDirectory>
                 </configuration>
             </plugin>
 

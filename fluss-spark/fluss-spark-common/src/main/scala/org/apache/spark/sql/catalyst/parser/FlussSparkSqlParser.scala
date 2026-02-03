@@ -23,7 +23,6 @@ import org.antlr.v4.runtime.misc.{Interval, ParseCancellationException}
 import org.apache.spark.sql.AnalysisException
 import org.apache.spark.sql.catalyst.{FunctionIdentifier, TableIdentifier}
 import org.apache.spark.sql.catalyst.expressions.Expression
-import org.apache.spark.sql.catalyst.parser.{ParseException, ParserInterface}
 import org.apache.spark.sql.catalyst.plans.logical.LogicalPlan
 import org.apache.spark.sql.types.{DataType, StructType}
 
@@ -73,15 +72,14 @@ class FlussSparkSqlParser(delegate: ParserInterface) extends ParserInterface {
   }
 
   private def parse[T](sqlText: String)(
-      toResult: org.apache.spark.sql.catalyst.parser.FlussSparkSqlParserParser => T): T = {
-    val lexer = new FlussSparkSqlParserLexer(
-      new UpperCaseCharStream(CharStreams.fromString(sqlText)))
+      toResult: org.apache.spark.sql.catalyst.parser.FlussSqlExtensionParser => T): T = {
+    val lexer = new FlussSqlExtensionLexer(new UpperCaseCharStream(CharStreams.fromString(sqlText)))
     lexer.removeErrorListeners()
     lexer.addErrorListener(FlussParseErrorListener)
 
     val tokenStream = new CommonTokenStream(lexer)
     val parser =
-      new org.apache.spark.sql.catalyst.parser.FlussSparkSqlParserParser(tokenStream)
+      new org.apache.spark.sql.catalyst.parser.FlussSqlExtensionParser(tokenStream)
     parser.removeErrorListeners()
     parser.addErrorListener(FlussParseErrorListener)
 

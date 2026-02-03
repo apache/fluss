@@ -18,10 +18,7 @@
 package org.apache.fluss.spark.procedure
 
 import org.apache.fluss.config.ConfigOptions
-import org.apache.fluss.config.cluster.{AlterConfig, AlterConfigOpType}
 import org.apache.fluss.spark.FlussSparkTestBase
-
-import scala.collection.JavaConverters._
 
 class GetClusterConfigsProcedureTest extends FlussSparkTestBase {
 
@@ -41,6 +38,10 @@ class GetClusterConfigsProcedureTest extends FlussSparkTestBase {
         assert(row.getString(1) != null)
         assert(row.getString(2) != null)
     }
+
+    val result2 =
+      sql(s"CALL $DEFAULT_CATALOG.sys.get_cluster_configs(config_keys => array())").collect()
+    assertResult(result)(result2)
   }
 
   test("get_cluster_configs: get specific configuration") {
@@ -50,15 +51,12 @@ class GetClusterConfigsProcedureTest extends FlussSparkTestBase {
       s"CALL $DEFAULT_CATALOG.sys.get_cluster_configs(config_keys => array('$testKey'))").collect()
 
     assert(result.length == 1)
-    val row = result.head
-    assert(row.getString(0) == testKey)
-    assert(row.getString(1) != null)
-    assert(row.getString(2) != null)
+    assert(result.head.toString() == "[kv.snapshot.interval,1 s,STATIC]")
   }
 
   test("get_cluster_configs: get multiple configurations") {
     val key1 = ConfigOptions.KV_SNAPSHOT_INTERVAL.key()
-    val key2 = ConfigOptions.REMOTE_DATA_DIR.key()
+    val key2 = ConfigOptions.BIND_LISTENERS.key()
 
     val result =
       sql(s"CALL $DEFAULT_CATALOG.sys.get_cluster_configs(config_keys => array('$key1', '$key2'))")
@@ -66,15 +64,10 @@ class GetClusterConfigsProcedureTest extends FlussSparkTestBase {
 
     assert(result.length == 2)
 
-    val keys = result.map(_.getString(0)).toSet
-    assert(keys.contains(key1))
-    assert(keys.contains(key2))
-
-    result.foreach {
-      row =>
-        assert(row.getString(1) != null)
-        assert(row.getString(2) != null)
-    }
+    // convert the result into a map of key to value for easy verification, key is the first column
+    val kvMap: Map[String, String] = result.map(r => r.getString(0) -> r.toString).toMap
+    assert(kvMap.getOrElse(key1, "") == s"[$key1,1 s,STATIC]")
+    assert(kvMap.getOrElse(key2, "") == s"[$key2,FLUSS://localhost:0,STATIC]")
   }
 
   test("get_cluster_configs: get non-existent configuration") {

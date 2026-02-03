@@ -97,29 +97,12 @@ abstract class BaseProcedure(tableCatalog: TableCatalog) extends Procedure {
    * @return
    *   the Admin instance
    */
-  protected def getAdmin(): Admin = {
+  protected def admin: Admin = {
     tableCatalog match {
-      case withAdmin: WithFlussAdmin => withAdmin.getAdmin
+      case withAdmin: WithFlussAdmin => withAdmin.admin
       case _ =>
         throw new IllegalStateException(
           s"Catalog does not support Fluss admin: ${tableCatalog.getClass.getName}")
-    }
-  }
-
-  /**
-   * Gets the Fluss Admin client from a SparkTable.
-   *
-   * @param table
-   *   the SparkTable instance
-   * @return
-   *   the Admin instance
-   */
-  protected def getAdmin(table: SparkTable): Admin = {
-    table match {
-      case abstractTable: AbstractSparkTable => abstractTable.admin
-      case _ =>
-        throw new IllegalArgumentException(
-          s"Table is not an AbstractSparkTable: ${table.getClass.getName}")
     }
   }
 

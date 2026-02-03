@@ -20,12 +20,10 @@ package org.apache.spark.sql.catalyst.parser
 import org.apache.fluss.spark.catalyst.plans.logical._
 
 import org.antlr.v4.runtime._
-import org.antlr.v4.runtime.misc.Interval
 import org.antlr.v4.runtime.tree.{ParseTree, TerminalNode}
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.catalyst.expressions.Expression
-import org.apache.spark.sql.catalyst.parser.FlussSparkSqlParserParser._
-import org.apache.spark.sql.catalyst.parser.ParserInterface
+import org.apache.spark.sql.catalyst.parser.FlussSqlExtensionParser._
 import org.apache.spark.sql.catalyst.plans.logical._
 
 import scala.collection.JavaConverters._
@@ -37,7 +35,7 @@ import scala.collection.JavaConverters._
  *   The main Spark SQL parser.
  */
 class FlussSqlAstBuilder(delegate: ParserInterface)
-  extends FlussSparkSqlParserBaseVisitor[AnyRef]
+  extends FlussSqlExtensionBaseVisitor[AnyRef]
   with Logging {
 
   /** Creates a single statement of extension statements. */
