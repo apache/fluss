@@ -239,10 +239,10 @@ class V3DeltaTaskWriterTest {
         Table table = createTableWithFormatVersion(3);
         V3DeltaTaskWriter writer = createWriter(table);
 
-        // Write same key 3 times
-        writer.write(createRecord(table.schema(), 1L, "v1")); // position 0 -> deleted
-        writer.write(createRecord(table.schema(), 1L, "v2")); // position 1 -> deleted
-        writer.write(createRecord(table.schema(), 1L, "v3")); // position 2 -> live
+        // Write same key 3 times - each new write deletes the previous position
+        writer.write(createRecord(table.schema(), 1L, "v1")); // pos 0, no delete yet
+        writer.write(createRecord(table.schema(), 1L, "v2")); // pos 1, deletes pos 0
+        writer.write(createRecord(table.schema(), 1L, "v3")); // pos 2, deletes pos 1 (live)
 
         WriteResult result = writer.complete();
 
@@ -263,11 +263,11 @@ class V3DeltaTaskWriterTest {
         Table table = createTableWithFormatVersion(3);
         V3DeltaTaskWriter writer = createWriter(table);
 
-        // Interleaved updates for two keys
-        writer.write(createRecord(table.schema(), 1L, "a1")); // pos 0 -> deleted (key 1)
-        writer.write(createRecord(table.schema(), 2L, "b1")); // pos 1 -> deleted (key 2)
-        writer.write(createRecord(table.schema(), 1L, "a2")); // pos 2 -> live (key 1)
-        writer.write(createRecord(table.schema(), 2L, "b2")); // pos 3 -> live (key 2)
+        // Interleaved updates for two keys - deletion happens when same key is written again
+        writer.write(createRecord(table.schema(), 1L, "a1")); // pos 0, key=1, no delete yet
+        writer.write(createRecord(table.schema(), 2L, "b1")); // pos 1, key=2, no delete yet
+        writer.write(createRecord(table.schema(), 1L, "a2")); // pos 2, key=1, deletes pos 0 (live)
+        writer.write(createRecord(table.schema(), 2L, "b2")); // pos 3, key=2, deletes pos 1 (live)
 
         WriteResult result = writer.complete();
 
@@ -287,12 +287,12 @@ class V3DeltaTaskWriterTest {
         Table table = createTableWithFormatVersion(3);
         V3DeltaTaskWriter writer = createWriter(table);
 
-        // 3 updates to key=1 (2 deletes) + 2 updates to key=2 (1 delete) = 3 total deletes
-        writer.write(createRecord(table.schema(), 1L, "v1"));
-        writer.write(createRecord(table.schema(), 1L, "v2"));
-        writer.write(createRecord(table.schema(), 1L, "v3")); // 2 deletes for key 1
-        writer.write(createRecord(table.schema(), 2L, "x1"));
-        writer.write(createRecord(table.schema(), 2L, "x2")); // 1 delete for key 2
+        // 3 writes to key=1 produces 2 deletes, 2 writes to key=2 produces 1 delete = 3 total
+        writer.write(createRecord(table.schema(), 1L, "v1")); // pos 0, no delete
+        writer.write(createRecord(table.schema(), 1L, "v2")); // pos 1, deletes pos 0
+        writer.write(createRecord(table.schema(), 1L, "v3")); // pos 2, deletes pos 1
+        writer.write(createRecord(table.schema(), 2L, "x1")); // pos 3, no delete
+        writer.write(createRecord(table.schema(), 2L, "x2")); // pos 4, deletes pos 3
 
         WriteResult result = writer.complete();
 
@@ -306,9 +306,9 @@ class V3DeltaTaskWriterTest {
         Table table = createTableWithFormatVersion(3);
         V3DeltaTaskWriter writer = createWriter(table);
 
-        // Write same key twice
-        writer.write(createRecord(table.schema(), 1L, "original")); // position 0
-        writer.write(createRecord(table.schema(), 1L, "updated")); // position 1
+        // Write same key twice - second write triggers delete of first
+        writer.write(createRecord(table.schema(), 1L, "original")); // pos 0, no delete yet
+        writer.write(createRecord(table.schema(), 1L, "updated")); // pos 1, deletes pos 0
 
         WriteResult result = writer.complete();
         DeleteFile dvFile = result.deleteFiles()[0];
