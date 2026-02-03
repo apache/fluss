@@ -161,19 +161,19 @@ cd fluss-quickstart-iceberg
 mkdir -p lib opt
 
 # Flink connectors
-wget -O lib/flink-faker.jar https://github.com/knaufk/flink-faker/releases/download/v0.5.3/flink-faker-0.5.3.jar
-wget -O lib/fluss-flink.jar "https://repo1.maven.org/maven2/org/apache/fluss/fluss-flink-1.20/$FLUSS_DOCKER_VERSION$/fluss-flink-1.20-$FLUSS_DOCKER_VERSION$.jar"
-wget -O lib/iceberg-flink-runtime.jar "https://repo1.maven.org/maven2/org/apache/iceberg/iceberg-flink-runtime-1.20/1.10.1/iceberg-flink-runtime-1.20-1.10.1.jar"
+wget -O lib/flink-faker-0.5.3.jar https://github.com/knaufk/flink-faker/releases/download/v0.5.3/flink-faker-0.5.3.jar
+wget -O "lib/fluss-flink-1.20-$FLUSS_DOCKER_VERSION$.jar" "https://repo1.maven.org/maven2/org/apache/fluss/fluss-flink-1.20/$FLUSS_DOCKER_VERSION$/fluss-flink-1.20-$FLUSS_DOCKER_VERSION$.jar"
+wget -O lib/iceberg-flink-runtime-1.20-1.10.1.jar "https://repo1.maven.org/maven2/org/apache/iceberg/iceberg-flink-runtime-1.20/1.10.1/iceberg-flink-runtime-1.20-1.10.1.jar"
 
 # Fluss lake plugin
-wget -O lib/fluss-lake-iceberg.jar https://repo1.maven.org/maven2/org/apache/fluss/fluss-lake-iceberg/$FLUSS_DOCKER_VERSION$/fluss-lake-iceberg-$FLUSS_DOCKER_VERSION$.jar
+wget -O "lib/fluss-lake-iceberg-$FLUSS_DOCKER_VERSION$.jar" "https://repo1.maven.org/maven2/org/apache/fluss/fluss-lake-iceberg/$FLUSS_DOCKER_VERSION$/fluss-lake-iceberg-$FLUSS_DOCKER_VERSION$.jar"
 
 # Hadoop filesystem support
-wget -O lib/hadoop-apache.jar https://repo1.maven.org/maven2/io/trino/hadoop/hadoop-apache/3.3.5-2/hadoop-apache-3.3.5-2.jar
-wget -O lib/failsafe.jar https://repo1.maven.org/maven2/dev/failsafe/failsafe/3.3.2/failsafe-3.3.2.jar
+wget -O lib/hadoop-apache-3.3.5-2.jar https://repo1.maven.org/maven2/io/trino/hadoop/hadoop-apache/3.3.5-2/hadoop-apache-3.3.5-2.jar
+wget -O lib/failsafe-3.3.2.jar https://repo1.maven.org/maven2/dev/failsafe/failsafe/3.3.2/failsafe-3.3.2.jar
 
 # Tiering service
-wget -O opt/fluss-flink-tiering.jar https://repo1.maven.org/maven2/org/apache/fluss/fluss-flink-tiering/$FLUSS_DOCKER_VERSION$/fluss-flink-tiering-$FLUSS_DOCKER_VERSION$.jar
+wget -O "opt/fluss-flink-tiering-$FLUSS_DOCKER_VERSION$.jar" "https://repo1.maven.org/maven2/org/apache/fluss/fluss-flink-tiering/$FLUSS_DOCKER_VERSION$/fluss-flink-tiering-$FLUSS_DOCKER_VERSION$.jar"
 ```
 
 :::info
@@ -183,26 +183,7 @@ You can add more jars to this `lib` directory based on your requirements:
 - **Other catalog backends**: Add jars needed for alternative Iceberg catalog implementations (e.g., Rest, Hive, Glue)
 :::
 
-3. Create a `Dockerfile` for the custom Flink image:
-
-```dockerfile
-FROM flink:1.20
-USER root
-RUN apt-get update && apt-get install -y tree && rm -rf /var/lib/apt/lists/*
-RUN sed -i 's/exec $(drop_privs_cmd)/exec/g' /docker-entrypoint.sh
-COPY lib/* /opt/flink/lib/
-COPY opt/* /opt/flink/opt/
-```
-
-This Dockerfile modifies the Flink entrypoint to run as root, which is required for writing to shared volumes.
-
-4. Build the custom Flink image:
-
-```shell
-docker build -t fluss-iceberg-flink:1.20 -f Dockerfile .
-```
-
-5. Create a `docker-compose.yml` file with the following content:
+3. Create a `docker-compose.yml` file with the following content:
 
 ```yaml
 services:
@@ -222,8 +203,9 @@ services:
         datalake.iceberg.warehouse: /tmp/iceberg
     volumes:
       - shared-tmpfs:/tmp/iceberg
-      - ./lib/fluss-lake-iceberg.jar:/opt/fluss/plugins/iceberg/fluss-lake-iceberg.jar
-      - ./lib/hadoop-apache.jar:/opt/fluss/plugins/iceberg/hadoop-apache.jar
+      - shared-tmpfs:/tmp/fluss
+      - ./lib/fluss-lake-iceberg-$FLUSS_DOCKER_VERSION$.jar:/opt/fluss/plugins/iceberg/fluss-lake-iceberg.jar
+      - ./lib/hadoop-apache-3.3.5-2.jar:/opt/fluss/plugins/iceberg/hadoop-apache.jar
   tablet-server:
     image: apache/fluss:$FLUSS_DOCKER_VERSION$
     command: tabletServer
@@ -242,25 +224,39 @@ services:
         datalake.iceberg.warehouse: /tmp/iceberg
     volumes:
       - shared-tmpfs:/tmp/iceberg
+      - shared-tmpfs:/tmp/fluss
   zookeeper:
     restart: always
     image: zookeeper:3.9.2
   jobmanager:
-    image: fluss-iceberg-flink:1.20
+    image: flink:1.20-scala_2.12-java17
     ports:
       - "8083:8081"
-    command: jobmanager
+    entrypoint: ["/bin/bash", "-c"]
+    command: >
+      "sed -i 's/exec $(drop_privs_cmd)//g' /docker-entrypoint.sh &&
+       cp /tmp/jars/*.jar /opt/flink/lib/ 2>/dev/null || true;
+       cp /tmp/opt/*.jar /opt/flink/opt/ 2>/dev/null || true;
+       /docker-entrypoint.sh jobmanager"
     environment:
       - |
         FLINK_PROPERTIES=
         jobmanager.rpc.address: jobmanager
     volumes:
       - shared-tmpfs:/tmp/iceberg
+      - shared-tmpfs:/tmp/fluss
+      - ./lib:/tmp/jars
+      - ./opt:/tmp/opt
   taskmanager:
-    image: fluss-iceberg-flink:1.20
+    image: flink:1.20-scala_2.12-java17
     depends_on:
       - jobmanager
-    command: taskmanager
+    entrypoint: ["/bin/bash", "-c"]
+    command: >
+      "sed -i 's/exec $(drop_privs_cmd)//g' /docker-entrypoint.sh &&
+       cp /tmp/jars/*.jar /opt/flink/lib/ 2>/dev/null || true;
+       cp /tmp/opt/*.jar /opt/flink/opt/ 2>/dev/null || true;
+       /docker-entrypoint.sh taskmanager"
     environment:
       - |
         FLINK_PROPERTIES=
@@ -268,6 +264,9 @@ services:
         taskmanager.numberOfTaskSlots: 10
     volumes:
       - shared-tmpfs:/tmp/iceberg
+      - shared-tmpfs:/tmp/fluss
+      - ./lib:/tmp/jars
+      - ./opt:/tmp/opt
 
 volumes:
   shared-tmpfs:
@@ -281,7 +280,7 @@ The Docker Compose environment consists of the following containers:
 - **Fluss Cluster:** a Fluss `CoordinatorServer`, a Fluss `TabletServer` and a `ZooKeeper` server.
 - **Flink Cluster**: a Flink `JobManager` and a Flink `TaskManager` container to execute queries.
 
-6. To start all containers, run:
+4. To start all containers, run:
 ```shell
 docker compose up -d
 ```
@@ -585,10 +584,6 @@ CREATE TABLE datalake_enriched_orders (
 ```
 
 Next, perform streaming data writing into the **datalake-enabled** table, `datalake_enriched_orders`:
-```sql  title="Flink SQL"
--- switch to streaming mode
-SET 'execution.runtime-mode' = 'streaming';
-```
 
 ```sql  title="Flink SQL"
 -- insert tuples into datalake_enriched_orders
@@ -829,21 +824,6 @@ SELECT sum(total_price) as sum_price FROM datalake_enriched_orders;
 
 You can execute the real-time analytics query multiple times, and the results will vary with each run as new data is continuously written to Fluss in real-time.
 
-Finally, you can use the following command to view the files stored in Iceberg:
-```shell
-docker compose exec taskmanager tree /tmp/iceberg/fluss
-```
-
-**Sample Output:**
-```shell
-/tmp/iceberg/fluss
-└── datalake_enriched_orders
-    ├── data
-    │   └── 00000-0-abc123.parquet
-    └── metadata
-        ├── snap-1234567890123456789-1-abc123.avro
-        └── v1.metadata.json
-```
 The files adhere to Iceberg's standard format, enabling seamless querying with other engines such as [Spark](https://iceberg.apache.org/docs/latest/spark-queries/) and [Trino](https://trino.io/docs/current/connector/iceberg.html).
 
   </TabItem>
