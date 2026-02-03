@@ -40,6 +40,7 @@ import javax.annotation.Nullable;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -103,6 +104,7 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
             String columns,
             String primaryKey,
             String bucketKey,
+            @Nullable String partitionKey,
             @Nullable Map<String, String> extraOptions) {
         Map<String, String> withOptions = new HashMap<>();
         if (extraOptions != null) {
@@ -110,16 +112,24 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
         }
         withOptions.put("connector", "fluss");
         withOptions.put("bucket.key", bucketKey);
-
-        tEnv.executeSql(
+        StringBuilder ddlBuilder = new StringBuilder();
+        ddlBuilder.append(
                 String.format(
-                        "create table %s ( %s, primary key (%s) NOT ENFORCED ) with ( %s )",
-                        tableName,
-                        columns,
-                        primaryKey,
+                        "create table %s ( %s, primary key (%s) NOT ENFORCED )",
+                        tableName, columns, primaryKey));
+        if (partitionKey != null) {
+            ddlBuilder.append(String.format(" partitioned by (%s)", partitionKey));
+            withOptions.put("table.auto-partition.enabled", "true");
+            withOptions.put("table.auto-partition.time-unit", "year");
+        }
+        ddlBuilder.append(
+                String.format(
+                        " with (%s)",
                         withOptions.entrySet().stream()
                                 .map(e -> String.format("'%s' = '%s'", e.getKey(), e.getValue()))
                                 .collect(Collectors.joining(", "))));
+
+        tEnv.executeSql(ddlBuilder.toString());
     }
 
     /**
@@ -154,12 +164,14 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
                 "a1 int, b1 varchar, c1 bigint, d1 int, e1 bigint",
                 "c1, d1",
                 "c1",
+                null,
                 ImmutableMap.of("table.delete.behavior", "IGNORE"));
         createSource(
                 rightTableName,
                 "a2 int, b2 varchar, c2 bigint, d2 int, e2 bigint",
                 "c2, d2",
                 "c2",
+                null,
                 ImmutableMap.of("table.delete.behavior", "IGNORE"));
         createSink(
                 sinkTableName,
@@ -228,12 +240,14 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
                 "a1 int, b1 varchar, c1 bigint, d1 int, e1 bigint",
                 "c1, d1",
                 "c1",
+                null,
                 ImmutableMap.of("table.delete.behavior", "IGNORE"));
         createSource(
                 rightTableName,
                 "a2 int, b2 varchar, c2 bigint, d2 int, e2 bigint",
                 "c2, d2",
                 "c2",
+                null,
                 ImmutableMap.of("table.delete.behavior", "IGNORE"));
         createSink(
                 sinkTableName,
@@ -297,6 +311,7 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
                 "a1 int, b1 varchar, c1 bigint, d1 int, e1 bigint",
                 "c1, d1",
                 "c1",
+                null,
                 ImmutableMap.of("table.delete.behavior", "IGNORE"));
 
         List<InternalRow> rows1 =
@@ -313,6 +328,7 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
                 "a2 int, b2 varchar, c2 bigint, d2 int, e2 bigint",
                 "c2",
                 "c2",
+                null,
                 ImmutableMap.of("table.delete.behavior", "IGNORE"));
 
         List<InternalRow> rows2 =
@@ -355,6 +371,7 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
                 "a1 int, b1 varchar, c1 bigint, d1 int, e1 bigint",
                 "c1, d1",
                 "c1",
+                null,
                 ImmutableMap.of("table.merge-engine", "first_row"));
 
         List<InternalRow> rows1 =
@@ -371,6 +388,7 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
                 "a2 int, b2 varchar, c2 bigint, d2 int, e2 bigint",
                 "c2, d2",
                 "c2",
+                null,
                 ImmutableMap.of("table.merge-engine", "first_row"));
 
         List<InternalRow> rows2 =
@@ -408,6 +426,7 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
                 "a1 int, b1 varchar, c1 bigint, d1 int, e1 bigint",
                 "c1, d1",
                 "c1",
+                null,
                 ImmutableMap.of("table.delete.behavior", "IGNORE"));
 
         String rightTableName = "right_table_force_fail";
@@ -416,6 +435,7 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
                 "a2 int, b2 varchar, c2 bigint, d2 int, e2 bigint",
                 "c2, d2",
                 "c2",
+                null,
                 ImmutableMap.of("table.delete.behavior", "IGNORE"));
 
         String sinkTableName = "sink_table_force_fail";
@@ -455,6 +475,7 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
                 "a1 int, b1 varchar, c1 bigint, d1 int, e1 bigint",
                 "c1, d1, e1",
                 "c1, d1",
+                null,
                 ImmutableMap.of("table.delete.behavior", "IGNORE"));
 
         List<InternalRow> rows1 =
@@ -475,6 +496,7 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
                 "a2 int, b2 varchar, c2 bigint, d2 int, e2 bigint",
                 "c2, d2",
                 "c2",
+                null,
                 ImmutableMap.of("table.delete.behavior", "IGNORE"));
 
         List<InternalRow> rows2 =
@@ -522,6 +544,7 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
                 "a1 int, b1 varchar, c1 bigint, d1 int, e1 bigint",
                 "c1, d1",
                 "c1",
+                null,
                 ImmutableMap.of("table.merge-engine", "first_row"));
 
         List<InternalRow> rows1 =
@@ -538,6 +561,7 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
                 "a2 int, b2 varchar, c2 bigint, d2 int, e2 bigint",
                 "c2, d2",
                 "c2",
+                null,
                 ImmutableMap.of("table.merge-engine", "first_row"));
 
         List<InternalRow> rows2 =
@@ -593,6 +617,7 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
                 "a1 int, c1 bigint, d1 int",
                 "c1, d1",
                 "c1",
+                null,
                 ImmutableMap.of("table.delete.behavior", "IGNORE"));
         List<InternalRow> rows1 = Collections.singletonList(row(1, 100L, 1));
         writeRows(conn, TablePath.of(DEFAULT_DB, leftTableName), rows1, false);
@@ -603,6 +628,7 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
                 "a2 int, c2 bigint, d2 int",
                 "c2",
                 "c2",
+                null,
                 ImmutableMap.of(
                         "table.delete.behavior",
                         "IGNORE",
@@ -634,6 +660,84 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
     }
 
     @Test
+    void testDeltaJoinWithPartitionedTable() throws Exception {
+        String leftTableName = "left_table_partitioned";
+        createSource(
+                leftTableName,
+                "a1 int, b1 varchar, c1 bigint, d1 int, pt1 varchar",
+                "c1, d1, pt1",
+                "c1",
+                "pt1",
+                ImmutableMap.of("table.delete.behavior", "IGNORE"));
+        TablePath leftTablePath = TablePath.of(DEFAULT_DB, leftTableName);
+        Iterator<String> leftPartitionIterator =
+                waitUntilPartitions(FLUSS_CLUSTER_EXTENSION.getZooKeeperClient(), leftTablePath)
+                        .values()
+                        .iterator();
+        // pick two partition to insert data
+        String leftPartition1 = leftPartitionIterator.next();
+        String leftPartition2 = leftPartitionIterator.next();
+        List<InternalRow> rows1 =
+                Arrays.asList(
+                        row(1, "v1", 100L, 1000, leftPartition1),
+                        row(2, "v2", 200L, 2000, leftPartition1),
+                        row(3, "v3", 100L, 3000, leftPartition2),
+                        row(4, "v4", 400L, 4000, leftPartition2));
+        writeRows(conn, leftTablePath, rows1, false);
+
+        String rightTableName = "right_table_partitioned";
+        createSource(
+                rightTableName,
+                "a2 int, b2 varchar, c2 bigint, d2 int, pt2 varchar",
+                "c2, pt2",
+                "c2",
+                "pt2",
+                ImmutableMap.of("table.delete.behavior", "IGNORE"));
+        TablePath rightTablePath = TablePath.of(DEFAULT_DB, rightTableName);
+        Iterator<String> rightPartitionIterator =
+                waitUntilPartitions(FLUSS_CLUSTER_EXTENSION.getZooKeeperClient(), rightTablePath)
+                        .values()
+                        .iterator();
+        // pick two partition to insert data
+        String rightPartition1 = rightPartitionIterator.next();
+        String rightPartition2 = rightPartitionIterator.next();
+        List<InternalRow> rows2 =
+                Arrays.asList(
+                        row(1, "v1", 100L, 1000, rightPartition1),
+                        row(4, "v4", 400L, 3000, rightPartition2));
+        writeRows(conn, rightTablePath, rows2, false);
+
+        String sinkTableName = "sink_table";
+        createSink(
+                sinkTableName,
+                "a1 int, b1 varchar, c1 bigint, d1 int, pt1 varchar, b2 varchar",
+                "c1, d1, pt1");
+
+        String sql =
+                String.format(
+                        "INSERT INTO %s SELECT a1, b1, c1, d1, pt1, b2 FROM %s AS T1 INNER JOIN %s AS T2 "
+                                + "ON T1.c1 = T2.c2 AND T1.pt1 = T2.pt2",
+                        sinkTableName, leftTableName, rightTableName);
+
+        assertThat(tEnv.explainSql(sql))
+                .contains("DeltaJoin(joinType=[InnerJoin], where=[((c1 = c2) AND (pt1 = pt2))]");
+
+        tEnv.executeSql(sql);
+
+        CloseableIterator<Row> collected =
+                tEnv.executeSql(String.format("select * from %s", sinkTableName)).collect();
+        List<String> expected =
+                Arrays.asList(
+                        String.format("+I[1, v1, 100, 1000, %s, v1]", leftPartition1),
+                        String.format("-U[1, v1, 100, 1000, %s, v1]", leftPartition1),
+                        String.format("+U[1, v1, 100, 1000, %s, v1]", leftPartition1),
+                        String.format("+I[4, v4, 400, 4000, %s, v4]", leftPartition2),
+                        String.format("-U[4, v4, 400, 4000, %s, v4]", leftPartition2),
+                        String.format("+U[4, v4, 400, 4000, %s, v4]", leftPartition2));
+        assertResultsIgnoreOrder(collected, expected, true);
+    }
+
+    @Test
     void testDeltaJoinFailsWhenSourceHasDelete() {
         String leftTableName = "left_table_delete_force";
         createSource(
@@ -641,6 +745,7 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
                 "a1 int, b1 varchar, c1 bigint, d1 int, e1 bigint",
                 "c1, d1",
                 "c1",
+                null,
                 null);
 
         String rightTableName = "right_table_delete_force";
@@ -649,6 +754,7 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
                 "a2 int, b2 varchar, c2 bigint, d2 int, e2 bigint",
                 "c2, d2",
                 "c2",
+                null,
                 null);
 
         String sinkTableName = "sink_table_delete_force";
@@ -675,6 +781,7 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
                 "a1 int, b1 varchar, c1 bigint, d1 int, e1 bigint",
                 "c1, d1",
                 "c1",
+                null,
                 ImmutableMap.of("table.delete.behavior", "IGNORE"));
 
         String rightTableName = "right_table_exceed_pk";
@@ -683,6 +790,7 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
                 "a2 int, b2 varchar, c2 bigint, d2 int, e2 bigint",
                 "c2, d2",
                 "c2",
+                null,
                 ImmutableMap.of("table.delete.behavior", "IGNORE"));
 
         String sinkTableName = "sink_table_exceed_pk";
@@ -707,6 +815,7 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
                 "a1 int, b1 varchar, c1 bigint, d1 int, e1 bigint",
                 "c1, d1",
                 "c1",
+                null,
                 ImmutableMap.of("table.merge-engine", "first_row"));
 
         List<InternalRow> rows1 =
@@ -720,6 +829,7 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
                 "a2 int, b2 varchar, c2 bigint, d2 int, e2 bigint",
                 "c2, d2",
                 "c2",
+                null,
                 ImmutableMap.of("table.merge-engine", "first_row"));
 
         List<InternalRow> rows2 =
@@ -765,6 +875,7 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
                 "a1 int, b1 varchar, c1 bigint, d1 int, e1 bigint",
                 "c1, d1",
                 "c1",
+                null,
                 ImmutableMap.of("table.delete.behavior", "IGNORE"));
 
         String rightTableName = "right_table_no_idx_force";
@@ -773,6 +884,7 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
                 "a2 int, b2 varchar, c2 bigint, d2 int, e2 bigint",
                 "c2, d2",
                 "c2",
+                null,
                 ImmutableMap.of("table.delete.behavior", "IGNORE"));
 
         String sinkTableName = "sink_table_no_idx_force";
@@ -799,6 +911,7 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
                 "a1 int, c1 bigint, d1 int",
                 "c1, d1",
                 "c1",
+                null,
                 ImmutableMap.of("table.delete.behavior", "IGNORE"));
 
         String rightTableName = "right_table_outer_fail";
@@ -807,6 +920,7 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
                 "a2 int, c2 bigint, d2 int",
                 "c2, d2",
                 "c2",
+                null,
                 ImmutableMap.of("table.delete.behavior", "IGNORE"));
 
         String sinkTableName = "sink_table_outer_fail";
@@ -851,6 +965,7 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
                 "a1 int, c1 bigint, d1 int",
                 "c1, d1",
                 "c1",
+                null,
                 ImmutableMap.of("table.delete.behavior", "IGNORE"));
 
         String table2 = "cascade_table2";
@@ -859,6 +974,7 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
                 "a2 int, c2 bigint, d2 int",
                 "c2, d2",
                 "c2",
+                null,
                 ImmutableMap.of("table.delete.behavior", "IGNORE"));
 
         String table3 = "cascade_table3";
@@ -867,6 +983,7 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
                 "a3 int, c3 bigint, d3 int",
                 "c3, d3",
                 "c3",
+                null,
                 ImmutableMap.of("table.delete.behavior", "IGNORE"));
 
         String sinkTableName = "cascade_sink";
@@ -898,6 +1015,7 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
                 "a1 int, b1 varchar, c1 bigint, d1 int, e1 bigint",
                 "c1, d1",
                 "c1",
+                null,
                 ImmutableMap.of("table.delete.behavior", "IGNORE"));
 
         String rightTableName = "right_table_materializer";
@@ -906,6 +1024,7 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
                 "a2 int, b2 varchar, c2 bigint, d2 int, e2 bigint",
                 "c2, d2",
                 "c2",
+                null,
                 ImmutableMap.of("table.delete.behavior", "IGNORE"));
 
         // Sink PK (a1, a2) doesn't match upstream update key (c1, d1, c2, d2)
@@ -935,6 +1054,7 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
                 "a1 int, c1 bigint, d1 int",
                 "c1, d1",
                 "c1",
+                null,
                 ImmutableMap.of("table.delete.behavior", "IGNORE"));
 
         String rightTableName = "right_table_nondeterministic";
@@ -943,6 +1063,7 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
                 "a2 int, c2 bigint, d2 int",
                 "c2, d2",
                 "c2",
+                null,
                 ImmutableMap.of("table.delete.behavior", "IGNORE"));
 
         String sinkTableName = "sink_table_nondeterministic";
