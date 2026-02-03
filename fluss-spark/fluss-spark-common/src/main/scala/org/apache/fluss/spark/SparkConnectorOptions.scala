@@ -19,8 +19,6 @@ package org.apache.fluss.spark
 
 import org.apache.fluss.config.{ConfigBuilder, ConfigOption}
 
-import java.time.Duration
-
 object SparkConnectorOptions {
 
   val PRIMARY_KEY: ConfigOption[String] =
@@ -60,25 +58,4 @@ object SparkConnectorOptions {
 
   val SPARK_TABLE_OPTIONS: Seq[String] =
     Seq(PRIMARY_KEY, BUCKET_KEY, BUCKET_NUMBER, COMMENT).map(_.key)
-
-  /** Client configuration can be specified through the `spark.sql.fluss.` prefix. */
-  val SPARK_FLUSS_CONF_PREFIX = "spark.sql.fluss."
-
-  object StartUpMode extends Enumeration {
-    val FULL, EARLIEST, LATEST, TIMESTAMP = Value
-  }
-
-  val SCAN_START_UP_MODE: ConfigOption[String] =
-    ConfigBuilder
-      .key("scan.startup.mode")
-      .stringType()
-      .defaultValue(StartUpMode.FULL.toString)
-      .withDescription("The start up mode when read Fluss table.")
-
-  val LOG_SCANNER_POLL_TIMEOUT: ConfigOption[Duration] =
-    ConfigBuilder
-      .key("log.scanner.poll.timeout")
-      .durationType()
-      .defaultValue(Duration.ofMillis(10000L))
-      .withDescription("The timeout for log scanner to poll records.")
 }

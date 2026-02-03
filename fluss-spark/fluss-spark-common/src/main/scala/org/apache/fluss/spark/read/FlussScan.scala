@@ -20,7 +20,7 @@ package org.apache.fluss.spark.read
 import org.apache.fluss.client.initializer.{OffsetsInitializer, SnapshotOffsetsInitializer}
 import org.apache.fluss.config.Configuration
 import org.apache.fluss.metadata.{TableInfo, TablePath}
-import org.apache.fluss.spark.{SparkConnectorOptions, SparkConversions}
+import org.apache.fluss.spark.{SparkConversions, SparkFlussConf}
 
 import org.apache.spark.sql.connector.read.{Batch, Scan}
 import org.apache.spark.sql.types.StructType
@@ -43,17 +43,17 @@ object FlussScan {
       flussConfig: Configuration): OffsetsInitializer = {
     val startupMode = options
       .getOrDefault(
-        SparkConnectorOptions.SCAN_START_UP_MODE.key(),
-        flussConfig.get(SparkConnectorOptions.SCAN_START_UP_MODE))
+        SparkFlussConf.SCAN_START_UP_MODE.key(),
+        flussConfig.get(SparkFlussConf.SCAN_START_UP_MODE))
       .toUpperCase
 
-    SparkConnectorOptions.StartUpMode.withName(startupMode) match {
-      case SparkConnectorOptions.StartUpMode.EARLIEST => OffsetsInitializer.earliest()
-      case SparkConnectorOptions.StartUpMode.FULL => OffsetsInitializer.full()
-      case SparkConnectorOptions.StartUpMode.LATEST => OffsetsInitializer.latest()
+    SparkFlussConf.StartUpMode.withName(startupMode) match {
+      case SparkFlussConf.StartUpMode.EARLIEST => OffsetsInitializer.earliest()
+      case SparkFlussConf.StartUpMode.FULL => OffsetsInitializer.full()
+      case SparkFlussConf.StartUpMode.LATEST => OffsetsInitializer.latest()
       case _ =>
         throw new IllegalArgumentException(
-          s"Unsupported scan start up mode: ${options.get(SparkConnectorOptions.SCAN_START_UP_MODE.key())}")
+          s"Unsupported scan start up mode: ${options.get(SparkFlussConf.SCAN_START_UP_MODE.key())}")
     }
   }
 
