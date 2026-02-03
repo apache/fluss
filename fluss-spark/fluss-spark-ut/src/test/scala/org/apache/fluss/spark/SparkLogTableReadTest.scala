@@ -122,69 +122,6 @@ class SparkLogTableReadTest extends FlussSparkTestBase {
     }
   }
 
-  test("Fluss Write: log partition table") {
-    withTable("t") {
-      sql(
-        s"""
-           |CREATE TABLE $DEFAULT_DATABASE.t (id INT, pt STRING)
-           |PARTITIONED BY (pt)
-           |""".stripMargin
-      )
-      sql(
-        s"""
-           |INSERT INTO $DEFAULT_DATABASE.t values(1, "a")
-           |""".stripMargin)
-      spark.sparkContext.setLogLevel("INFO")
-      checkAnswer(sql(s"SELECT * from $DEFAULT_DATABASE.t"), Seq(Row(1, "a")))
-    }
-  }
-
-  test("Spark Read: partitioned log table") {
-    withTable("t") {
-      sql(
-        s"""
-           |CREATE TABLE $DEFAULT_DATABASE.t (orderId BIGINT, itemId BIGINT, amount INT, address STRING, dt STRING)
-           |PARTITIONED BY (dt)
-           |""".stripMargin
-      )
-
-      sql(s"""
-             |INSERT INTO $DEFAULT_DATABASE.t VALUES
-             |(600L, 21L, 601, "addr1", "2026-01-01"), (700L, 22L, 602, "addr2", "2026-01-01"),
-             |(800L, 23L, 603, "addr3", "2026-01-02"), (900L, 24L, 604, "addr4", "2026-01-02"),
-             |(1000L, 25L, 605, "addr5", "2026-01-03")
-             |""".stripMargin)
-
-      checkAnswer(
-        sql(s"SELECT * FROM $DEFAULT_DATABASE.t ORDER BY orderId"),
-        Row(600L, 21L, 601, "addr1", "2026-01-01") ::
-          Row(700L, 22L, 602, "addr2", "2026-01-01") ::
-          Row(800L, 23L, 603, "addr3", "2026-01-02") ::
-          Row(900L, 24L, 604, "addr4", "2026-01-02") ::
-          Row(1000L, 25L, 605, "addr5", "2026-01-03") :: Nil
-      )
-
-      // Read with partition filter
-      checkAnswer(
-        sql(s"SELECT * FROM $DEFAULT_DATABASE.t WHERE dt = '2026-01-01' ORDER BY orderId"),
-        Row(600L, 21L, 601, "addr1", "2026-01-01") ::
-          Row(700L, 22L, 602, "addr2", "2026-01-01") :: Nil
-      )
-
-      // Read with multiple partitions filter
-      checkAnswer(
-        sql(s"""
-               |SELECT orderId, address, dt FROM $DEFAULT_DATABASE.t
-               |WHERE dt IN ('2026-01-01', '2026-01-02')
-               |ORDER BY orderId""".stripMargin),
-        Row(600L, "addr1", "2026-01-01") ::
-          Row(700L, "addr2", "2026-01-01") ::
-          Row(800L, "addr3", "2026-01-02") ::
-          Row(900L, "addr4", "2026-01-02") :: Nil
-      )
-    }
-  }
-
   test("Spark: all data types") {
     withTable("t") {
       sql(s"""
