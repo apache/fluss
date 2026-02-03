@@ -348,6 +348,8 @@ public class ReplicaManager {
         physicalStorage.gauge(
                 MetricNames.SERVER_PHYSICAL_STORAGE_REMOTE_LOG_SIZE,
                 this::physicalStorageRemoteLogSize);
+        physicalStorage.gauge(
+                MetricNames.SERVER_PHYSICAL_STORAGE_STANDBY_SIZE, this::physicalStorageStandbySize);
     }
 
     @VisibleForTesting
@@ -400,11 +402,19 @@ public class ReplicaManager {
                         replica -> {
                             long size = replica.getLogTablet().logSize();
                             if (replica.isKvTable()) {
-                                size += replica.getLatestKvSnapshotSize();
+                                if (replica.isLeader()) {
+                                    size += replica.getLatestKvSnapshotSize();
+                                } else if (replica.isStandby()) {
+                                    size += replica.getStandbySnapshotSize();
+                                }
                             }
                             return size;
                         })
                 .reduce(0L, Long::sum);
+    }
+
+    private long physicalStorageStandbySize() {
+        return onlineReplicas().map(Replica::getStandbySnapshotSize).reduce(0L, Long::sum);
     }
 
     private long physicalStorageRemoteLogSize() {
@@ -951,20 +961,53 @@ public class ReplicaManager {
     public void notifyKvSnapshotOffset(
             NotifyKvSnapshotOffsetData notifyKvSnapshotOffsetData,
             Consumer<NotifyKvSnapshotOffsetResponse> responseCallback) {
-        inLock(
-                replicaStateChangeLock,
-                () -> {
-                    // check or apply coordinator epoch.
-                    validateAndApplyCoordinatorEpoch(
-                            notifyKvSnapshotOffsetData.getCoordinatorEpoch(),
-                            "notifyKvSnapshotOffset");
-                    // update the snapshot offset.
-                    TableBucket tb = notifyKvSnapshotOffsetData.getTableBucket();
-                    LogTablet logTablet = getReplicaOrException(tb).getLogTablet();
-                    logTablet.updateMinRetainOffset(
-                            notifyKvSnapshotOffsetData.getMinRetainOffset());
-                    responseCallback.accept(new NotifyKvSnapshotOffsetResponse());
-                });
+        TableBucket tb = notifyKvSnapshotOffsetData.getTableBucket();
+        Long snapshotId = notifyKvSnapshotOffsetData.getSnapshotId();
+        long minRetainOffset = notifyKvSnapshotOffsetData.getMinRetainOffset();
+
+        // Validate and get replica under lock
+        Replica replica =
+                inLock(
+                        replicaStateChangeLock,
+                        () -> {
+                            // check or apply coordinator epoch.
+                            validateAndApplyCoordinatorEpoch(
+                                    notifyKvSnapshotOffsetData.getCoordinatorEpoch(),
+                                    "notifyKvSnapshotOffset");
+                            return getReplicaOrException(tb);
+                        });
+
+        // Respond immediately to avoid blocking coordinator
+        responseCallback.accept(new NotifyKvSnapshotOffsetResponse());
+
+        // Download snapshot asynchronously outside the lock to avoid blocking
+        // leader/follower transitions and other state changes
+        if (snapshotId != null) {
+            ioExecutor.execute(
+                    () -> {
+                        try {
+                            replica.downloadSnapshot(snapshotId);
+                            updateMinRetainOffset(replica, minRetainOffset);
+                            LOG.debug(
+                                    "Successfully downloaded snapshot {} for standby replica {}.",
+                                    snapshotId,
+                                    tb);
+                        } catch (Exception e) {
+                            LOG.error(
+                                    "Error downloading snapshot id {} for standby replica {}.",
+                                    snapshotId,
+                                    tb,
+                                    e);
+                        }
+                    });
+        } else {
+            updateMinRetainOffset(replica, minRetainOffset);
+        }
+    }
+
+    private void updateMinRetainOffset(Replica replica, long minRetainOffset) {
+        LogTablet logTablet = replica.getLogTablet();
+        logTablet.updateMinRetainOffset(minRetainOffset);
     }
 
     public void notifyLakeTableOffset(

@@ -152,6 +152,18 @@ public class DefaultSnapshotContext implements SnapshotContext {
     }
 
     @Override
+    public CompletedSnapshot getCompletedSnapshotProvider(TableBucket tableBucket, long snapshotId)
+            throws Exception {
+        Optional<CompletedSnapshotHandle> optSnapshotHandle =
+                completedSnapshotHandleStore.getCompletedSnapshotHandle(tableBucket, snapshotId);
+        if (optSnapshotHandle.isPresent()) {
+            return optSnapshotHandle.get().retrieveCompleteSnapshot();
+        } else {
+            return null;
+        }
+    }
+
+    @Override
     public int maxFetchLogSizeInRecoverKv() {
         return maxFetchLogSizeInRecoverKv;
     }

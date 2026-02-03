@@ -82,4 +82,15 @@ public interface CompletedSnapshotHandleStore {
      */
     Optional<CompletedSnapshotHandle> getLatestCompletedSnapshotHandle(TableBucket tableBucket)
             throws Exception;
+
+    /**
+     * Get the completed snapshot handle for the given snapshot id of the given table bucket.
+     *
+     * @param tableBucket the table bucket the snapshot belongs to
+     * @param snapshotId the snapshot id
+     * @return the completed snapshot handle, empty if no any snapshot
+     * @throws Exception if getting failed
+     */
+    Optional<CompletedSnapshotHandle> getCompletedSnapshotHandle(
+            TableBucket tableBucket, long snapshotId) throws Exception;
 }

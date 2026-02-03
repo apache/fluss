@@ -40,20 +40,29 @@ public interface IsrState {
      */
     List<Integer> maximalIsr();
 
+    List<Integer> standbyReplicas();
+
     /** Indicates if we have an AdjustIsr request inflight. */
     boolean isInflight();
 
     /** Class to represent the committed isr state of a {@link TableBucket}. */
     class CommittedIsrState implements IsrState {
         private final List<Integer> isr;
+        private final List<Integer> standbyReplicas;
 
-        public CommittedIsrState(List<Integer> isr) {
+        public CommittedIsrState(List<Integer> isr, List<Integer> standbyReplicas) {
             this.isr = isr;
+            this.standbyReplicas = standbyReplicas;
         }
 
         @Override
         public List<Integer> isr() {
             return isr;
+        }
+
+        @Override
+        public List<Integer> standbyReplicas() {
+            return standbyReplicas;
         }
 
         @Override
@@ -136,6 +145,11 @@ public interface IsrState {
         }
 
         @Override
+        public List<Integer> standbyReplicas() {
+            return lastCommittedState.standbyReplicas();
+        }
+
+        @Override
         public List<Integer> maximalIsr() {
             ArrayList<Integer> maximalIsr = new ArrayList<>(lastCommittedState.isr());
             maximalIsr.add(newInSyncReplicaId);
@@ -203,6 +217,11 @@ public interface IsrState {
         @Override
         public List<Integer> isr() {
             return lastCommittedState.isr();
+        }
+
+        @Override
+        public List<Integer> standbyReplicas() {
+            return lastCommittedState.standbyReplicas();
         }
 
         @Override

@@ -333,5 +333,12 @@ class CompletedSnapshotStoreManagerTest {
             return new ArrayList<>(snapshotHandleMap.get(tableBucket).values())
                     .stream().max(Comparator.comparingLong(CompletedSnapshotHandle::getSnapshotId));
         }
+
+        @Override
+        public Optional<CompletedSnapshotHandle> getCompletedSnapshotHandle(
+                TableBucket tableBucket, long snapshotId) throws Exception {
+            return Optional.ofNullable(snapshotHandleMap.get(tableBucket))
+                    .map(map -> map.get(snapshotId));
+        }
     }
 }

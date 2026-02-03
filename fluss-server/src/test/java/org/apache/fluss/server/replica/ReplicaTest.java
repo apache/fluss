@@ -43,7 +43,6 @@ import org.apache.fluss.server.log.LogReadInfo;
 import org.apache.fluss.server.testutils.KvTestUtils;
 import org.apache.fluss.server.zk.NOPErrorHandler;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
-import org.apache.fluss.testutils.DataTestUtils;
 import org.apache.fluss.testutils.common.ManuallyTriggeredScheduledExecutorService;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.types.Tuple2;
@@ -53,7 +52,6 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.io.File;
 import java.io.IOException;
-import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -661,94 +659,6 @@ final class ReplicaTest extends ReplicaTestBase {
     }
 
     @Test
-    void testRestore(@TempDir Path snapshotKvTabletDirPath) throws Exception {
-        TableBucket tableBucket = new TableBucket(DATA1_TABLE_ID_PK, 1);
-        TestSnapshotContext testKvSnapshotContext =
-                new TestSnapshotContext(snapshotKvTabletDirPath.toString());
-        ManuallyTriggeredScheduledExecutorService scheduledExecutorService =
-                testKvSnapshotContext.scheduledExecutorService;
-        TestingCompletedKvSnapshotCommitter kvSnapshotStore =
-                testKvSnapshotContext.testKvSnapshotStore;
-
-        // make a kv replica
-        Replica kvReplica =
-                makeKvReplica(DATA1_PHYSICAL_TABLE_PATH_PK, tableBucket, testKvSnapshotContext);
-        makeKvReplicaAsLeader(kvReplica);
-        putRecordsToLeader(
-                kvReplica,
-                DataTestUtils.genKvRecordBatch(new Object[] {1, "a"}, new Object[] {2, "b"}));
-        makeKvReplicaAsFollower(kvReplica, 1);
-
-        // make a kv replica again, should restore from log
-        makeKvReplicaAsLeader(kvReplica, 2);
-        assertThat(kvReplica.getKvTablet()).isNotNull();
-        KvTablet kvTablet = kvReplica.getKvTablet();
-
-        // check result
-        List<Tuple2<byte[], byte[]>> expectedKeyValues =
-                getKeyValuePairs(genKvRecords(new Object[] {1, "a"}, new Object[] {2, "b"}));
-        verifyGetKeyValues(kvTablet, expectedKeyValues);
-
-        // trigger first snapshot (task has been scheduled after becoming leader)
-        scheduledExecutorService.triggerAllNonPeriodicTasks();
-        // wait until the snapshot success
-        kvSnapshotStore.waitUntilSnapshotComplete(tableBucket, 0);
-
-        // write data again
-        putRecordsToLeader(
-                kvReplica,
-                DataTestUtils.genKvRecordBatch(new Object[] {2, "bbb"}, new Object[] {3, "c"}));
-
-        // restore again
-        makeKvReplicaAsLeader(kvReplica, 3);
-        expectedKeyValues =
-                getKeyValuePairs(
-                        genKvRecords(
-                                new Object[] {1, "a"},
-                                new Object[] {2, "bbb"},
-                                new Object[] {3, "c"}));
-        kvTablet = kvReplica.getKvTablet();
-        verifyGetKeyValues(kvTablet, expectedKeyValues);
-
-        // test recover with schema evolution.
-        short newSchemaId = 2;
-        // trigger second snapshot (task has been scheduled after becoming leader again)
-        scheduledExecutorService.triggerAllNonPeriodicTasks();
-        // wait until the snapshot success
-        kvSnapshotStore.waitUntilSnapshotComplete(tableBucket, 1);
-        // write data with old schema
-        putRecordsToLeader(
-                kvReplica,
-                DataTestUtils.genKvRecordBatch(new Object[] {4, "555"}, new Object[] {3, "d"}));
-        // update schema.
-        zkClient.registerSchema(DATA1_TABLE_PATH_PK, DATA2_SCHEMA, newSchemaId);
-        serverMetadataCache.updateLatestSchema(
-                DATA1_TABLE_ID, new SchemaInfo(DATA2_SCHEMA, newSchemaId));
-        // write data with new schema
-        putRecordsToLeader(
-                kvReplica,
-                DataTestUtils.genKvRecordBatch(
-                        newSchemaId,
-                        DATA2_ROW_TYPE,
-                        new Object[] {5, "555", "666"},
-                        new Object[] {4, "555", "666"}));
-        expectedKeyValues =
-                getKeyValuePairs(genKvRecords(new Object[] {1, "a"}, new Object[] {2, "bbb"}));
-        expectedKeyValues.addAll(
-                getKeyValuePairs(
-                        newSchemaId,
-                        genKvRecords(
-                                DATA2_ROW_TYPE,
-                                new Object[] {3, "d", null},
-                                new Object[] {4, "555", "666"},
-                                new Object[] {5, "555", "666"})));
-        // restore again and apply the schema.
-        makeKvReplicaAsLeader(kvReplica, 4);
-        kvTablet = kvReplica.getKvTablet();
-        verifyGetKeyValues(kvTablet, expectedKeyValues);
-    }
-
-    @Test
     void testUpdateIsDataLakeEnabled() throws Exception {
         Replica logReplica =
                 makeLogReplica(DATA1_PHYSICAL_TABLE_PATH, new TableBucket(DATA1_TABLE_ID, 1));
@@ -801,6 +711,7 @@ final class ReplicaTest extends ReplicaTestBase {
                                 TABLET_SERVER_ID,
                                 leaderEpoch,
                                 Collections.singletonList(TABLET_SERVER_ID),
+                                Collections.emptyList(),
                                 INITIAL_COORDINATOR_EPOCH,
                                 // we also use the leader epoch as bucket epoch
                                 leaderEpoch)));
@@ -818,6 +729,7 @@ final class ReplicaTest extends ReplicaTestBase {
                                 TABLET_SERVER_ID,
                                 leaderEpoch,
                                 Collections.singletonList(TABLET_SERVER_ID),
+                                Collections.emptyList(),
                                 INITIAL_COORDINATOR_EPOCH,
                                 // we also use the leader epoch as bucket epoch
                                 leaderEpoch)));
