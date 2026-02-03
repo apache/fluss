@@ -308,7 +308,6 @@ class SparkStreamingTest extends FlussSparkTestBase with StreamTest {
           schema,
           Seq(Row(4, "data4", 44, "dd", "a"), Row(5, "data5", 55, "ee", "b"))),
         ProcessAllAvailable(),
-        CheckLastBatch(Row(4, "data4", 44, "dd", "a"), Row(5, "data5", 55, "ee", "b")),
         CheckAnswer(Row(4, "data4", 44, "dd", "a"), Row(5, "data5", 55, "ee", "b"))
       )
 

@@ -103,7 +103,7 @@ class FlussSparkTestBase extends QueryTest with SharedSparkSession {
       case Some(ls) => ls
       case _ =>
         val ls = table.newScan().createLogScanner()
-        (0 until table.getTableInfo.getNumBuckets).foreach(i => ls.subscribeFromBeginning(0, i))
+        (0 until table.getTableInfo.getNumBuckets).foreach(i => ls.subscribeFromBeginning(i))
         ls
     }
     val scanRecords = logScanner.poll(Duration.ofSeconds(1))

@@ -63,7 +63,7 @@ abstract class FlussMicroBatchStream(
 
   lazy val partitionInfos: util.List[PartitionInfo] = admin.listPartitionInfos(tablePath).get()
 
-  var allDataForTriggerAvailableNow: Option[TableBucketOffsets] = None
+  private var allDataForTriggerAvailableNow: Option[TableBucketOffsets] = None
 
   protected def projection: Array[Int] = {
     val columnNameToIndex = tableInfo.getSchema.getColumnNames.asScala.zipWithIndex.toMap
@@ -138,6 +138,7 @@ abstract class FlussMicroBatchStream(
     }
   }
 
+  // No need to notify fluss server
   override def commit(end: Offset): Unit = {}
 
   override def stop(): Unit = close()
@@ -151,7 +152,7 @@ abstract class FlussMicroBatchStream(
     Map.empty[String, String].asJava
   }
 
-  protected def getOrCreateInitialPartitionOffsets(): TableBucketOffsets = {
+  private def getOrCreateInitialPartitionOffsets(): TableBucketOffsets = {
     // TODO load from checkpoint dir
     if (tableInfo.isPartitioned) {
       initPartitionedSplits()
@@ -160,7 +161,7 @@ abstract class FlussMicroBatchStream(
     }
   }
 
-  protected def initPartitionedSplits(): TableBucketOffsets = {
+  private def initPartitionedSplits(): TableBucketOffsets = {
     val partitionOffsets = partitionInfos.asScala.map {
       partitionInfo =>
         if (tableInfo.hasPrimaryKey) {
@@ -177,7 +178,7 @@ abstract class FlussMicroBatchStream(
     new TableBucketOffsets(tableInfo.getTableId, mergedOffsets)
   }
 
-  protected def initNonPartitionedSplits(): TableBucketOffsets = {
+  private def initNonPartitionedSplits(): TableBucketOffsets = {
     if (tableInfo.hasPrimaryKey) {
       getSnapshotAndLogSplits(None)
     } else {
@@ -185,13 +186,13 @@ abstract class FlussMicroBatchStream(
     }
   }
 
-  protected def getSnapshotAndLogSplits(
+  private def getSnapshotAndLogSplits(
       partitionInfo: Option[PartitionInfo]): TableBucketOffsets = {
     // TODO read snapshot when more startup mode supported
     getLogSplit(partitionInfo)
   }
 
-  protected def getLogSplit(partitionInfo: Option[PartitionInfo]): TableBucketOffsets = {
+  private def getLogSplit(partitionInfo: Option[PartitionInfo]): TableBucketOffsets = {
     val buckets = (0 until tableInfo.getNumBuckets).toSeq
     FlussMicroBatchStream.getLatestOffsets(
       tableInfo,
@@ -337,6 +338,7 @@ class FlussUpsertMicroBatchStream(
         tableBucket =>
           val startOffset = startOffsets.getOffsets.get(tableBucket)
           val stopOffset = stopOffsets.getOffsets.get(tableBucket)
+          // TODO read snapshot with startup mode.
           FlussUpsertInputPartition(tableBucket, -1, startOffset, stopOffset)
       }
       .filter(e => e.logStartingOffset < e.logStoppingOffset)
