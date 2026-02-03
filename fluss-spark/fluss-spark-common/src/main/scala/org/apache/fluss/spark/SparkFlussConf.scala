@@ -17,23 +17,37 @@
 
 package org.apache.fluss.spark
 
+import org.apache.fluss.config.{ConfigBuilder, ConfigOption}
 import org.apache.fluss.config.ConfigBuilder.key
-import org.apache.fluss.config.ConfigOption
 
-import org.apache.spark.sql.internal.SQLConf.buildConf
+import java.time.Duration
 
 object SparkFlussConf {
 
-  val READ_OPTIMIZED = buildConf("spark.sql.fluss.readOptimized")
-    .internal()
-    .doc("If true, Spark will only read data from data lake snapshot or kv snapshot, not execute merge them with log changes. This is a temporary configuration that will be deprecated when read-optimized table(e.g. `mytbl$ro`) is supported.")
-    .booleanConf
-    .createWithDefault(false)
+  val SPARK_FLUSS_CONF_PREFIX = "spark.sql.fluss."
 
   val READ_OPTIMIZED_OPTION: ConfigOption[java.lang.Boolean] =
-    key(READ_OPTIMIZED.key)
+    key("read.optimized")
       .booleanType()
-      .defaultValue(READ_OPTIMIZED.defaultValue.get)
-      .withDescription(READ_OPTIMIZED.doc)
+      .defaultValue(false)
+      .withDescription(
+        "If true, Spark will only read data from data lake snapshot or kv snapshot, not execute merge them with log changes. This is a temporary configuration that will be deprecated when read-optimized table(e.g. `mytbl$ro`) is supported.")
 
+  object StartUpMode extends Enumeration {
+    val FULL, EARLIEST, LATEST, TIMESTAMP = Value
+  }
+
+  val SCAN_START_UP_MODE: ConfigOption[String] =
+    ConfigBuilder
+      .key("scan.startup.mode")
+      .stringType()
+      .defaultValue(StartUpMode.FULL.toString)
+      .withDescription("The start up mode when read Fluss table.")
+
+  val LOG_SCANNER_POLL_TIMEOUT: ConfigOption[Duration] =
+    ConfigBuilder
+      .key("log.scanner.poll.timeout")
+      .durationType()
+      .defaultValue(Duration.ofMillis(10000L))
+      .withDescription("The timeout for log scanner to poll records.")
 }

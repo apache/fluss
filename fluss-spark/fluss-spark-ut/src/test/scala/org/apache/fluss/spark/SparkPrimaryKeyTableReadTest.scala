@@ -38,6 +38,12 @@ class SparkPrimaryKeyTableReadTest extends FlussSparkTestBase {
     new Configuration()
   }
 
+  override protected def beforeEach(): Unit = {
+    super.beforeEach()
+    sql(
+      s"set ${SparkFlussConf.SPARK_FLUSS_CONF_PREFIX}${SparkFlussConf.SCAN_START_UP_MODE.key()}=full")
+  }
+
   test("Spark Read: primary key table") {
     withTable("t") {
       val tablePath = createTablePath("t")
@@ -101,7 +107,8 @@ class SparkPrimaryKeyTableReadTest extends FlussSparkTestBase {
           Row(800L, 23L, "addr3") ::
           Nil
       )
-      withSQLConf(SparkFlussConf.READ_OPTIMIZED.key -> "true") {
+      withSQLConf(
+        s"${SparkFlussConf.SPARK_FLUSS_CONF_PREFIX}${SparkFlussConf.READ_OPTIMIZED_OPTION.key()}" -> "true") {
         checkAnswer(
           sql(s"SELECT * FROM $DEFAULT_DATABASE.t ORDER BY orderId"),
           Row(600L, 21L, 601, "addr1") ::
@@ -123,6 +130,13 @@ class SparkPrimaryKeyTableReadTest extends FlussSparkTestBase {
           Row(800L, 23L, "addr3") ::
           Nil
       )
+
+      // Only support FULL startup mode.
+      withSQLConf(
+        s"${SparkFlussConf.SPARK_FLUSS_CONF_PREFIX}${SparkFlussConf.SCAN_START_UP_MODE.key()}" -> "latest") {
+        intercept[UnsupportedOperationException](
+          sql(s"SELECT * FROM $DEFAULT_DATABASE.t ORDER BY orderId").show())
+      }
     }
   }
 
