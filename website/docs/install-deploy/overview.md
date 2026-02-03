@@ -43,6 +43,8 @@ We have listed them in the table below the figure.
             </td>
             <td>
                 <ul>
+                    <li>[Command Line Interface](apis/cli.md)</li>
+                    <li>[Java Client](apis/java-client.md)</li>
                     <li>[Flink Connector](engine-flink/getting-started.md)</li>
                 </ul>
             </td>

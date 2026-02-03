@@ -39,6 +39,13 @@
             <scope>provided</scope>
         </dependency>
 
+        <dependency>
+            <groupId>org.apache.fluss</groupId>
+            <artifactId>fluss-cli</artifactId>
+            <version>${project.version}</version>
+            <scope>provided</scope>
+        </dependency>
+
         <!--  filesystem plugin -->
         <dependency>
             <groupId>org.apache.fluss</groupId>

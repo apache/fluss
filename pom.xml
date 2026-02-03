@@ -55,6 +55,7 @@
         <module>fluss-metrics</module>
         <module>fluss-client</module>
         <module>fluss-rpc</module>
+        <module>fluss-cli</module>
         <module>fluss-dist</module>
         <module>fluss-filesystems</module>
         <module>fluss-test-utils</module>
