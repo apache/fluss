@@ -42,6 +42,8 @@ class SparkPrimaryKeyTableReadTest extends FlussSparkTestBase {
     super.beforeEach()
     sql(
       s"set ${SparkFlussConf.SPARK_FLUSS_CONF_PREFIX}${SparkFlussConf.SCAN_START_UP_MODE.key()}=full")
+    sql(
+      s"set ${SparkFlussConf.SPARK_FLUSS_CONF_PREFIX}${SparkFlussConf.READ_OPTIMIZED_OPTION.key()}=false")
   }
 
   test("Spark Read: primary key table") {
