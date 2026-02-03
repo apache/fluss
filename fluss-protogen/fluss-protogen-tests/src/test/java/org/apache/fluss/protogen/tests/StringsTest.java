@@ -115,4 +115,14 @@ public class StringsTest {
         assertThat(lps.getNameAt(0)).isEqualTo("d");
         assertThat(lps.getNameAt(1)).isEqualTo("e");
     }
+
+    @Test
+    public void testToString() {
+        S lps = new S();
+        lps.addName("a");
+        lps.addName("b");
+        lps.addName("c");
+
+        System.out.println(lps.toString());
+    }
 }
