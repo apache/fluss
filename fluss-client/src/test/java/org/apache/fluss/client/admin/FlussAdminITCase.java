@@ -866,19 +866,12 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         admin.createDatabase("db3", DatabaseDescriptor.EMPTY, true).get();
         assertThat(admin.listDatabases().get())
                 .containsExactlyInAnyOrder("test_db", "db1", "db2", "db3", "fluss");
-        assertThat(admin.listDatabases(ListDatabaseOption.create(true)).get())
-                .containsExactlyInAnyOrder(
-                        new DatabaseSummary("test_db", null, null),
-                        new DatabaseSummary("db1", null, null),
-                        new DatabaseSummary("db2", null, null),
-                        new DatabaseSummary("db3", null, null),
-                        new DatabaseSummary("fluss", null, null));
         Map<String, Integer> databaseSummaries =
-                admin.listDatabases(ListDatabaseOption.create(false)).get().stream()
+                admin.listDatabaseSummaries().get().stream()
                         .collect(
                                 Collectors.toMap(
                                         DatabaseSummary::getDatabaseName,
-                                        summary -> summary.getTableCount().orElse(-1)));
+                                        DatabaseSummary::getTableCount));
         assertThat(databaseSummaries.get("db1")).isEqualTo(0);
         assertThat(databaseSummaries.get("db2")).isEqualTo(0);
 
@@ -887,11 +880,11 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         assertThat(admin.listTables("db1").get()).containsExactlyInAnyOrder("table1", "table2");
         assertThat(admin.listTables("db2").get()).isEmpty();
         databaseSummaries =
-                admin.listDatabases(ListDatabaseOption.create(false)).get().stream()
+                admin.listDatabaseSummaries().get().stream()
                         .collect(
                                 Collectors.toMap(
                                         DatabaseSummary::getDatabaseName,
-                                        summary -> summary.getTableCount().orElse(-1)));
+                                        DatabaseSummary::getTableCount));
         assertThat(databaseSummaries.get("db1")).isEqualTo(1);
         assertThat(databaseSummaries.get("db2")).isEqualTo(0);
 

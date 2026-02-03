@@ -97,13 +97,13 @@ public abstract class ServerTestBase {
                         ? CoordinatorZNode.path()
                         : ServerIdZNode.path(server.conf.getInt(ConfigOptions.TABLET_SERVER_ID));
 
-        long oldNodeCtime = zookeeperClient.getStat(path).getCtime();
+        long oldNodeCtime = zookeeperClient.getStat(path).get().getCtime();
         // let's restart zk to mock zk client re-init session
         ZOO_KEEPER_EXTENSION_WRAPPER.getCustomExtension().restart();
         retry(
                 Duration.ofMinutes(2),
                 () -> {
-                    Stat stat = zookeeperClient.getStat(path);
+                    Stat stat = zookeeperClient.getStat(path).get();
                     assertThat(stat.getCtime()).isGreaterThan(oldNodeCtime);
                 });
     }

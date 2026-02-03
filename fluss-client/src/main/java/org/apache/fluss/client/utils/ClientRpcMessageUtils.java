@@ -639,10 +639,6 @@ public class ClientRpcMessageUtils {
 
     public static List<DatabaseSummary> toDatabaseSummaries(ListDatabasesResponse response) {
         List<DatabaseSummary> databaseSummaries = new ArrayList<>();
-        for (String databaseName : response.getDatabaseNamesList()) {
-            databaseSummaries.add(new DatabaseSummary(databaseName, null, null));
-        }
-
         for (PbDatabaseSummary pbDatabaseSummary : response.getDatabaseSummariesList()) {
             databaseSummaries.add(
                     new DatabaseSummary(

@@ -45,4 +45,11 @@ public abstract class ZkAsyncRequest {
             super(path);
         }
     }
+
+    /** The request for ZooKeeper checkExists async operation. */
+    public static class ZkCheckExistsRequest extends ZkAsyncRequest {
+        protected ZkCheckExistsRequest(String path) {
+            super(path);
+        }
+    }
 }

@@ -29,6 +29,7 @@ import org.apache.fluss.config.cluster.ColumnPositionType;
 import org.apache.fluss.config.cluster.ConfigEntry;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.fs.token.ObtainedSecurityToken;
+import org.apache.fluss.metadata.DatabaseSummary;
 import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
@@ -95,6 +96,7 @@ import org.apache.fluss.rpc.messages.PbAlterConfig;
 import org.apache.fluss.rpc.messages.PbBucketMetadata;
 import org.apache.fluss.rpc.messages.PbBucketOffset;
 import org.apache.fluss.rpc.messages.PbCreateAclRespInfo;
+import org.apache.fluss.rpc.messages.PbDatabaseSummary;
 import org.apache.fluss.rpc.messages.PbDescribeConfig;
 import org.apache.fluss.rpc.messages.PbDropAclsFilterResult;
 import org.apache.fluss.rpc.messages.PbDropAclsMatchingAcl;
@@ -1861,6 +1863,18 @@ public class ServerRpcMessageUtils {
                             }
                             return pbDescribeConfig;
                         })
+                .collect(Collectors.toList());
+    }
+
+    public static List<PbDatabaseSummary> toPbDatabaseSummary(
+            List<DatabaseSummary> databaseSummaries) {
+        return databaseSummaries.stream()
+                .map(
+                        databaseSummary ->
+                                new PbDatabaseSummary()
+                                        .setDatabaseName(databaseSummary.getDatabaseName())
+                                        .setCreatedTime(databaseSummary.getCreatedTime())
+                                        .setTableCount(databaseSummary.getTableCount()))
                 .collect(Collectors.toList());
     }
 

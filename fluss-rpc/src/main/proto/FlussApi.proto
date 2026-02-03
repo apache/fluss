@@ -93,7 +93,7 @@ message DatabaseExistsResponse {
 
 // list databases request and response
 message ListDatabasesRequest {
-  optional bool database_name_only = 1;
+  optional bool include_summary = 1;
 }
 
 message ListDatabasesResponse {

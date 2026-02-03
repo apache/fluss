@@ -35,8 +35,10 @@ import org.apache.fluss.security.acl.ResourceType;
 import org.apache.fluss.server.authorizer.DefaultAuthorizer.VersionedAcls;
 import org.apache.fluss.server.entity.RegisterTableBucketLeadAndIsrInfo;
 import org.apache.fluss.server.metadata.BucketMetadata;
+import org.apache.fluss.server.zk.ZkAsyncRequest.ZkCheckExistsRequest;
 import org.apache.fluss.server.zk.ZkAsyncRequest.ZkGetChildrenRequest;
 import org.apache.fluss.server.zk.ZkAsyncRequest.ZkGetDataRequest;
+import org.apache.fluss.server.zk.ZkAsyncResponse.ZkCheckExistsResponse;
 import org.apache.fluss.server.zk.ZkAsyncResponse.ZkGetChildrenResponse;
 import org.apache.fluss.server.zk.ZkAsyncResponse.ZkGetDataResponse;
 import org.apache.fluss.server.zk.data.BucketSnapshot;
@@ -488,18 +490,25 @@ public class ZooKeeperClient implements AutoCloseable {
         return getChildren(DatabasesZNode.path());
     }
 
-    public Optional<DatabaseSummary> getDatabaseSummary(String databaseName) throws Exception {
-        Stat stat = getStat(DatabaseZNode.path(databaseName));
-        if (stat == null) {
-            return Optional.empty();
+    public List<DatabaseSummary> listDatabaseSummaries(Collection<String> databaseNames)
+            throws Exception {
+        Map<String, String> path2DatabaseNamesMap =
+                databaseNames.stream()
+                        .collect(toMap(DatabaseZNode::path, databaseName -> databaseName));
+        List<ZkCheckExistsResponse> statsInBackground =
+                getStatInBackground(path2DatabaseNamesMap.keySet());
+        List<DatabaseSummary> databaseSummaries = new ArrayList<>();
+        for (ZkCheckExistsResponse getStatResponse : statsInBackground) {
+            getStatResponse.maybeThrow();
+            // To decrease the cost, use zk node creation time as the database creation
+            // time rather than create_time in node data.
+            databaseSummaries.add(
+                    new DatabaseSummary(
+                            path2DatabaseNamesMap.get(getStatResponse.getPath()),
+                            getStatResponse.getStat().getCtime(),
+                            getStatResponse.getStat().getNumChildren()));
         }
-        return Optional.of(
-                new DatabaseSummary(
-                        databaseName,
-                        // To decrease the cost, use zk node creation time as the database creation
-                        // time rather than create_time in node data.
-                        stat.getCtime(),
-                        stat.getNumChildren()));
+        return databaseSummaries;
     }
 
     public List<String> listTables(String databaseName) throws Exception {
@@ -1290,8 +1299,13 @@ public class ZooKeeperClient implements AutoCloseable {
     }
 
     /** Gets the data and stat of a given zk node path. */
-    public Stat getStat(String path) throws Exception {
-        return zkClient.checkExists().forPath(path);
+    public Optional<Stat> getStat(String path) throws Exception {
+        try {
+            Stat stat = zkClient.checkExists().forPath(path);
+            return Optional.ofNullable(stat);
+        } catch (KeeperException.NoNodeException e) {
+            return Optional.empty();
+        }
     }
 
     /** delete a path. */
@@ -1436,7 +1450,8 @@ public class ZooKeeperClient implements AutoCloseable {
 
                     } else if (request instanceof ZkGetChildrenRequest) {
                         zkClient.getChildren().inBackground(callback).forPath(request.getPath());
-
+                    } else if (request instanceof ZkCheckExistsRequest) {
+                        zkClient.checkExists().inBackground(callback).forPath(request.getPath());
                     } else {
                         throw new IllegalArgumentException(
                                 "Unsupported request type: " + request.getClass());
@@ -1506,6 +1521,20 @@ public class ZooKeeperClient implements AutoCloseable {
         List<ZkGetDataRequest> requests =
                 paths.stream().map(ZkGetDataRequest::new).collect(Collectors.toList());
         return handleRequestInBackground(requests, ZkGetDataResponse::create);
+    }
+
+    /**
+     * Gets the stat of given zk node paths in background.
+     *
+     * @param paths the paths to fetch stat
+     * @return list of async responses for each path
+     * @throws Exception if there is an error during the operation
+     */
+    private List<ZkCheckExistsResponse> getStatInBackground(Collection<String> paths)
+            throws Exception {
+        List<ZkCheckExistsRequest> requests =
+                paths.stream().map(ZkCheckExistsRequest::new).collect(Collectors.toList());
+        return handleRequestInBackground(requests, ZkCheckExistsResponse::create);
     }
 
     /**

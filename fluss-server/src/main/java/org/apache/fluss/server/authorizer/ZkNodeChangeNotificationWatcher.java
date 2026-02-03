@@ -139,7 +139,7 @@ public class ZkNodeChangeNotificationWatcher {
         for (String notification : sortedNotifications) {
             String notificationNode = seqNodeRoot + "/" + notification;
             try {
-                Stat state = zooKeeperClient.getStat(notificationNode);
+                Stat state = zooKeeperClient.getStat(notificationNode).get();
                 if (now - state.getCtime() >= changeExpirationMs) {
                     LOG.debug("Purging change notification {}", notificationNode);
                     zooKeeperClient.deletePath(notificationNode);

@@ -181,7 +181,7 @@ public interface Admin extends AutoCloseable {
     CompletableFuture<List<String>> listDatabases();
 
     /** List all databases' summary information in fluss cluster asynchronously. */
-    CompletableFuture<List<DatabaseSummary>> listDatabases(ListDatabaseOption option);
+    CompletableFuture<List<DatabaseSummary>> listDatabaseSummaries();
 
     /**
      * Create a new table asynchronously.

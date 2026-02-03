@@ -247,12 +247,8 @@ public class FlussAdmin implements Admin {
     }
 
     @Override
-    public CompletableFuture<List<DatabaseSummary>> listDatabases(ListDatabaseOption option) {
-        ListDatabasesRequest request = new ListDatabasesRequest();
-        if (!option.isDatabaseNameOnly()) {
-            request.setDatabaseNameOnly(false);
-        }
-
+    public CompletableFuture<List<DatabaseSummary>> listDatabaseSummaries() {
+        ListDatabasesRequest request = new ListDatabasesRequest().setIncludeSummary(true);
         return readOnlyGateway
                 .listDatabases(request)
                 .thenApply(ClientRpcMessageUtils::toDatabaseSummaries);

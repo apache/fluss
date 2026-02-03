@@ -168,10 +168,10 @@ public class MetadataManager {
         return uncheck(zookeeperClient::listDatabases, "Fail to list database");
     }
 
-    public Optional<DatabaseSummary> getDatabaseSummary(String databaseName) {
+    public List<DatabaseSummary> listDatabaseSummaries(Collection<String> databaseNames) {
         return uncheck(
-                () -> zookeeperClient.getDatabaseSummary(databaseName),
-                "Fail to get database summary for " + databaseName);
+                () -> zookeeperClient.listDatabaseSummaries(databaseNames),
+                "Fail to get database summaries for " + databaseNames);
     }
 
     public List<String> listTables(String databaseName) throws DatabaseNotExistException {

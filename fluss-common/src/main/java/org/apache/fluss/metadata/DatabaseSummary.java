@@ -19,10 +19,7 @@ package org.apache.fluss.metadata;
 
 import org.apache.fluss.annotation.PublicEvolving;
 
-import javax.annotation.Nullable;
-
 import java.util.Objects;
-import java.util.Optional;
 
 /**
  * Aggregated summary information of a database for listing purposes.
@@ -36,11 +33,10 @@ import java.util.Optional;
 @PublicEvolving
 public class DatabaseSummary {
     private final String databaseName;
-    private final @Nullable Long createdTime;
-    private final @Nullable Integer tableCount;
+    private final long createdTime;
+    private final int tableCount;
 
-    public DatabaseSummary(
-            String databaseName, @Nullable Long createdTime, @Nullable Integer tableCount) {
+    public DatabaseSummary(String databaseName, long createdTime, int tableCount) {
         this.databaseName = databaseName;
         this.createdTime = createdTime;
         this.tableCount = tableCount;
@@ -60,8 +56,8 @@ public class DatabaseSummary {
      *
      * @return the creation timestamp
      */
-    public Optional<Long> getCreatedTime() {
-        return Optional.ofNullable(createdTime);
+    public long getCreatedTime() {
+        return createdTime;
     }
 
     /**
@@ -69,8 +65,8 @@ public class DatabaseSummary {
      *
      * @return the table count
      */
-    public Optional<Integer> getTableCount() {
-        return Optional.ofNullable(tableCount);
+    public int getTableCount() {
+        return tableCount;
     }
 
     @Override

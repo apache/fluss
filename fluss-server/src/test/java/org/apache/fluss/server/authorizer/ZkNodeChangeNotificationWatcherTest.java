@@ -105,7 +105,7 @@ public class ZkNodeChangeNotificationWatcherTest {
         for (String node : nodesBeforeStart) {
             maxCtimeBeforeStart =
                     Math.max(
-                            zookeeperClient.getStat(seqNodeRoot + "/" + node).getCtime(),
+                            zookeeperClient.getStat(seqNodeRoot + "/" + node).get().getCtime(),
                             maxCtimeBeforeStart);
         }
         // Advance the clock to make the initial notifications obsolete

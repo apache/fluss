@@ -673,7 +673,11 @@ class ZooKeeperClientTest {
     void testGetDatabaseSummary() throws Exception {
         TablePath tablePath = TablePath.of("db", "tb1");
 
-        assertThat(zookeeperClient.getDatabaseSummary(tablePath.getDatabaseName())).isEmpty();
+        assertThatThrownBy(
+                        () ->
+                                zookeeperClient.listDatabaseSummaries(
+                                        Collections.singletonList(tablePath.getDatabaseName())))
+                .isExactlyInstanceOf(KeeperException.NoNodeException.class);
 
         // register table.
         long beforeCreateTime = System.currentTimeMillis();
@@ -690,12 +694,14 @@ class ZooKeeperClientTest {
         zookeeperClient.registerTable(tablePath, tableReg1);
 
         long afterCreateTime = System.currentTimeMillis();
-        assertThat(zookeeperClient.getDatabaseSummary(tablePath.getDatabaseName())).isPresent();
-        DatabaseSummary databaseSummary =
-                zookeeperClient.getDatabaseSummary(tablePath.getDatabaseName()).get();
+        List<DatabaseSummary> databaseSummaries =
+                zookeeperClient.listDatabaseSummaries(
+                        Collections.singletonList(tablePath.getDatabaseName()));
+        assertThat(databaseSummaries).hasSize(1);
+        DatabaseSummary databaseSummary = databaseSummaries.get(0);
         assertThat(databaseSummary.getDatabaseName()).isEqualTo("db");
-        assertThat(databaseSummary.getTableCount().orElse(-1)).isEqualTo(1);
-        assertThat(databaseSummary.getCreatedTime().orElse(-1L))
+        assertThat(databaseSummary.getTableCount()).isEqualTo(1);
+        assertThat(databaseSummary.getCreatedTime())
                 .isGreaterThanOrEqualTo(beforeCreateTime)
                 .isLessThanOrEqualTo(afterCreateTime);
     }
