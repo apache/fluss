@@ -28,6 +28,8 @@ import org.apache.fluss.remote.RemoteLogSegment;
 import org.apache.fluss.rpc.entity.FetchLogResultForBucket;
 import org.apache.fluss.rpc.messages.PbAclFilter;
 import org.apache.fluss.rpc.messages.PbAclInfo;
+import org.apache.fluss.rpc.messages.PbDataType;
+import org.apache.fluss.rpc.messages.PbDataTypeRoot;
 import org.apache.fluss.rpc.messages.PbFetchLogRespForBucket;
 import org.apache.fluss.rpc.messages.PbKeyValue;
 import org.apache.fluss.rpc.messages.PbPartitionSpec;
@@ -45,6 +47,23 @@ import org.apache.fluss.security.acl.Resource;
 import org.apache.fluss.security.acl.ResourceFilter;
 import org.apache.fluss.security.acl.ResourceType;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
+import org.apache.fluss.types.BigIntType;
+import org.apache.fluss.types.BinaryType;
+import org.apache.fluss.types.BooleanType;
+import org.apache.fluss.types.BytesType;
+import org.apache.fluss.types.CharType;
+import org.apache.fluss.types.DataType;
+import org.apache.fluss.types.DateType;
+import org.apache.fluss.types.DecimalType;
+import org.apache.fluss.types.DoubleType;
+import org.apache.fluss.types.FloatType;
+import org.apache.fluss.types.IntType;
+import org.apache.fluss.types.LocalZonedTimestampType;
+import org.apache.fluss.types.SmallIntType;
+import org.apache.fluss.types.StringType;
+import org.apache.fluss.types.TimeType;
+import org.apache.fluss.types.TimestampType;
+import org.apache.fluss.types.TinyIntType;
 
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
@@ -202,8 +221,19 @@ public class CommonRpcMessageUtils {
                         respForBucket.hasRecords()
                                 ? MemoryLogRecords.pointToByteBuffer(recordsBuffer)
                                 : MemoryLogRecords.EMPTY;
-                fetchLogResultForBucket =
-                        new FetchLogResultForBucket(tb, records, respForBucket.getHighWatermark());
+
+                if (respForBucket.hasSkipToNextFetchOffset()
+                        && respForBucket.getSkipToNextFetchOffset() > 0) {
+                    fetchLogResultForBucket =
+                            new FetchLogResultForBucket(
+                                    tb,
+                                    respForBucket.getHighWatermark(),
+                                    respForBucket.getSkipToNextFetchOffset());
+                } else {
+                    fetchLogResultForBucket =
+                            new FetchLogResultForBucket(
+                                    tb, records, respForBucket.getHighWatermark());
+                }
             }
         }
 
@@ -233,5 +263,92 @@ public class CommonRpcMessageUtils {
             partitionValues.add(pbKeyValue.getValue());
         }
         return new ResolvedPartitionSpec(partitionKeys, partitionValues);
+    }
+
+    public static DataType toDataType(PbDataType type) {
+        switch (type.getRoot()) {
+            case BOOLEAN:
+                return new BooleanType(type.isNullable());
+            case INT:
+                return new IntType(type.isNullable());
+            case TINYINT:
+                return new TinyIntType(type.isNullable());
+            case SMALLINT:
+                return new SmallIntType(type.isNullable());
+            case BIGINT:
+                return new BigIntType(type.isNullable());
+            case FLOAT:
+                return new FloatType(type.isNullable());
+            case DOUBLE:
+                return new DoubleType(type.isNullable());
+            case CHAR:
+                return new CharType(type.isNullable(), type.getLength());
+            case VARCHAR:
+                return new StringType(type.isNullable());
+            case DECIMAL:
+                return new DecimalType(type.isNullable(), type.getPrecision(), type.getScale());
+            case DATE:
+                return new DateType(type.isNullable());
+            case TIME_WITHOUT_TIME_ZONE:
+                return new TimeType(type.isNullable(), type.getPrecision());
+            case TIMESTAMP_WITHOUT_TIME_ZONE:
+                return new TimestampType(type.isNullable(), type.getPrecision());
+            case TIMESTAMP_WITH_LOCAL_TIME_ZONE:
+                return new LocalZonedTimestampType(type.isNullable(), type.getPrecision());
+            case BINARY:
+                return new BinaryType(type.getLength());
+            case BYTES:
+                return new BytesType(type.isNullable());
+            default:
+                throw new IllegalArgumentException("Unknown data type root: " + type.getRoot());
+        }
+    }
+
+    public static PbDataType toPbDataType(DataType dataType) {
+        PbDataType pbDataType = new PbDataType();
+        pbDataType.setNullable(dataType.isNullable());
+        if (dataType instanceof BooleanType) {
+            pbDataType.setRoot(PbDataTypeRoot.BOOLEAN);
+        } else if (dataType instanceof IntType) {
+            pbDataType.setRoot(PbDataTypeRoot.INT);
+        } else if (dataType instanceof TinyIntType) {
+            pbDataType.setRoot(PbDataTypeRoot.TINYINT);
+        } else if (dataType instanceof SmallIntType) {
+            pbDataType.setRoot(PbDataTypeRoot.SMALLINT);
+        } else if (dataType instanceof BigIntType) {
+            pbDataType.setRoot(PbDataTypeRoot.BIGINT);
+        } else if (dataType instanceof FloatType) {
+            pbDataType.setRoot(PbDataTypeRoot.FLOAT);
+        } else if (dataType instanceof DoubleType) {
+            pbDataType.setRoot(PbDataTypeRoot.DOUBLE);
+        } else if (dataType instanceof CharType) {
+            pbDataType.setRoot(PbDataTypeRoot.CHAR);
+            pbDataType.setLength(((CharType) dataType).getLength());
+        } else if (dataType instanceof StringType) {
+            pbDataType.setRoot(PbDataTypeRoot.VARCHAR);
+        } else if (dataType instanceof DecimalType) {
+            pbDataType.setRoot(PbDataTypeRoot.DECIMAL);
+            pbDataType.setPrecision(((DecimalType) dataType).getPrecision());
+            pbDataType.setScale(((DecimalType) dataType).getScale());
+        } else if (dataType instanceof DateType) {
+            pbDataType.setRoot(PbDataTypeRoot.DATE);
+        } else if (dataType instanceof TimeType) {
+            pbDataType.setRoot(PbDataTypeRoot.TIME_WITHOUT_TIME_ZONE);
+            pbDataType.setPrecision(((TimeType) dataType).getPrecision());
+        } else if (dataType instanceof TimestampType) {
+            pbDataType.setRoot(PbDataTypeRoot.TIMESTAMP_WITHOUT_TIME_ZONE);
+            pbDataType.setPrecision(((TimestampType) dataType).getPrecision());
+        } else if (dataType instanceof LocalZonedTimestampType) {
+            pbDataType.setRoot(PbDataTypeRoot.TIMESTAMP_WITH_LOCAL_TIME_ZONE);
+            pbDataType.setPrecision(((LocalZonedTimestampType) dataType).getPrecision());
+        } else if (dataType instanceof BinaryType) {
+            pbDataType.setRoot(PbDataTypeRoot.BINARY);
+            pbDataType.setLength(((BinaryType) dataType).getLength());
+        } else if (dataType instanceof BytesType) {
+            pbDataType.setRoot(PbDataTypeRoot.BYTES);
+        } else {
+            throw new IllegalArgumentException("Unknown data type: " + dataType.getClass());
+        }
+        return pbDataType;
     }
 }

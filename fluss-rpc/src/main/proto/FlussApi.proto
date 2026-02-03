@@ -672,6 +672,11 @@ message DeleteProducerOffsetsResponse {
 
 
 // --------------- Inner classes ----------------
+message PbFilter {
+  required PbPredicate predicate = 1;
+  required int32 schema_id = 2;
+}
+
 message PbApiVersion {
   required int32 api_key = 1;
   required int32 min_version = 2;
@@ -754,6 +759,7 @@ message PbFetchLogReqForTable {
   required bool projection_pushdown_enabled = 2;
   repeated int32 projected_fields = 3 [packed = true];
   repeated PbFetchLogReqForBucket buckets_req = 4;
+  optional PbFilter filter = 5;
 }
 
 message PbFetchLogReqForBucket {
@@ -777,6 +783,7 @@ message PbFetchLogRespForBucket {
   optional int64 log_start_offset = 6; // TODO now we don't introduce log start offset, but remain it in protobuf
   optional PbRemoteLogFetchInfo remote_log_fetch_info = 7;
   optional bytes records = 8;
+  optional int64 skip_to_next_fetch_offset = 9; // Will be set when all bathes filtered out
 }
 
 message PbPutKvReqForBucket {
@@ -1123,4 +1130,122 @@ message PbBucketOffset {
 message PbProducerTableOffsets {
   required int64 table_id = 1;
   repeated PbBucketOffset bucket_offsets = 2;
+}
+
+/**
+* Definition of predicate system related message
+*/
+
+enum PbPredicateType {
+  LEAF = 0;
+  COMPOUND = 1;
+}
+
+// Represents a predicate that can be serialized and transmitted across
+// languages
+message PbPredicate {
+  required PbPredicateType type = 1;
+  optional PbLeafPredicate leaf = 2;
+  optional PbCompoundPredicate compound = 3;
+}
+
+// Represents a leaf predicate that compares a field with literals
+message PbLeafPredicate {
+  // The function to apply (equals, not equals, etc.)
+  required PbLeafFunction function = 1;
+  // The field reference
+  required PbFieldRef field_ref = 2;
+  // The literals to compare with
+  repeated PbLiteralValue literals = 3;
+}
+
+// Represents a field reference
+message PbFieldRef {
+  // The name of the field
+  required string field_name = 1;
+  // The data type of the field
+  required PbDataType data_type = 2;
+  // Optional field index in the row
+  required int32 field_index = 3;
+}
+
+// Represents a compound predicate that combines multiple predicates
+message PbCompoundPredicate {
+  // The function to apply (AND, OR)
+  required PbCompoundFunction function = 1;
+  // The child predicates
+  repeated PbPredicate children = 2;
+}
+
+// Represents a leaf function
+enum PbLeafFunction {
+  EQUAL = 0;
+  NOT_EQUAL = 1;
+  LESS_THAN = 2;
+  LESS_OR_EQUAL = 3;
+  GREATER_THAN = 4;
+  GREATER_OR_EQUAL = 5;
+  IS_NULL = 6;
+  IS_NOT_NULL = 7;
+  STARTS_WITH = 8;
+  CONTAINS = 9;
+  END_WITH = 10;
+  IN = 11;
+  NOT_IN = 12;
+}
+
+// Represents a compound function
+enum PbCompoundFunction {
+  AND = 0;
+  OR = 1;
+  NOT = 2;
+}
+
+// Represents a data type
+message PbDataType {
+  required PbDataTypeRoot root = 1;
+  // For complex types like DECIMAL, additional parameters
+  optional int32 length = 2;
+  required bool nullable = 3;
+  optional int32 precision = 4;
+  optional int32 scale = 5;
+}
+
+// Root of data types
+enum PbDataTypeRoot {
+  BOOLEAN = 0;
+  TINYINT = 1;
+  SMALLINT = 2;
+  INT = 3;
+  BIGINT = 4;
+  FLOAT = 5;
+  DOUBLE = 6;
+  CHAR = 7;
+  VARCHAR = 8;
+  DECIMAL = 9;
+  DATE = 10;
+  TIME_WITHOUT_TIME_ZONE = 11;
+  TIMESTAMP_WITHOUT_TIME_ZONE = 12;
+  TIMESTAMP_WITH_LOCAL_TIME_ZONE = 13;
+  BINARY = 14;
+  BYTES = 15;
+}
+
+// Represents a literal value
+message PbLiteralValue {
+  required PbDataType type = 1;
+  optional bool boolean_value = 2;
+  optional int32 int_value = 3;
+  optional int64 bigint_value = 4;
+  optional float float_value = 5;
+  optional double double_value = 6;
+  optional string string_value = 7;
+  optional bytes binary_value = 8;
+  optional int64 decimal_value = 9;    // Serialized decimal (compact mode)
+  optional bytes decimal_bytes = 10;   // Serialized decimal (non-compact mode)
+  optional int32 date_value = 11;      // Days since epoch
+  optional int64 time_value = 12;      // Milliseconds of day
+  optional int64 timestamp_millis_value = 13; // Epoch millis
+  optional int32 timestamp_nano_of_millis_value = 14 [default = 0]; // Nano of millis
+  required bool is_null = 15 [default = false];
 }
