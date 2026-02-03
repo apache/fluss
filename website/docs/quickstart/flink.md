@@ -33,7 +33,7 @@ mkdir fluss-quickstart-flink
 cd fluss-quickstart-flink
 ```
 
-2. Create a `lib` directory and download the required jar files. You can adjust the Flink version as needed. Please make sure to download the compatible versions of [fluss-flink connector jar](/downloads) and [flink-connector-faker](https://github.com/knaufk/flink-faker/releases)
+2. Create a `lib` directory and download the required jar files. You can adjust the Flink version as needed. Please make sure to download the compatible versions of [fluss-flink connector jar](/downloads), [fluss-fs-s3 jar](/downloads), and [flink-connector-faker](https://github.com/knaufk/flink-faker/releases)
 
 ```shell
 export FLINK_VERSION="1.20"
@@ -43,27 +43,49 @@ export FLINK_VERSION="1.20"
 mkdir lib
 wget -O lib/flink-faker-0.5.3.jar https://github.com/knaufk/flink-faker/releases/download/v0.5.3/flink-faker-0.5.3.jar
 wget -O "lib/fluss-flink-${FLINK_VERSION}-$FLUSS_DOCKER_VERSION$.jar" "https://repo1.maven.org/maven2/org/apache/fluss/fluss-flink-${FLINK_VERSION}/$FLUSS_DOCKER_VERSION$/fluss-flink-${FLINK_VERSION}-$FLUSS_DOCKER_VERSION$.jar"
+wget -O "lib/fluss-fs-s3-$FLUSS_DOCKER_VERSION$.jar" "https://repo1.maven.org/maven2/org/apache/fluss/fluss-fs-s3/$FLUSS_DOCKER_VERSION$/fluss-fs-s3-$FLUSS_DOCKER_VERSION$.jar"
 ```
 
 3. Create a `docker-compose.yml` file with the following content:
 
 ```yaml
 services:
+  #begin RustFS (S3-compatible storage)
+  rustfs:
+    image: rustfs/rustfs:latest
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      - RUSTFS_ACCESS_KEY=rustfsadmin
+      - RUSTFS_SECRET_KEY=rustfsadmin
+      - RUSTFS_CONSOLE_ENABLE=true
+    volumes:
+      - rustfs-data:/data
+    command: /data
+  #end
   #begin Fluss cluster
   coordinator-server:
     image: apache/fluss:$FLUSS_DOCKER_VERSION$
     command: coordinatorServer
     depends_on:
       - zookeeper
+      - rustfs
     environment:
       - |
         FLUSS_PROPERTIES=
         zookeeper.address: zookeeper:2181
         bind.listeners: FLUSS://coordinator-server:9123
-        remote.data.dir: /tmp/fluss/remote-data
+        remote.data.dir: s3://fluss/remote-data
+        s3.endpoint: http://rustfs:9000
+        s3.access-key: rustfsadmin
+        s3.secret-key: rustfsadmin
+        s3.path-style-access: true
+    volumes:
+      - ./lib:/tmp/fluss-lib
+    entrypoint: ["sh", "-c", "cp -v /tmp/fluss-lib/fluss-fs-s3-*.jar /opt/fluss/lib/ 2>/dev/null || true && exec /docker-entrypoint.sh coordinatorServer"]
   tablet-server:
     image: apache/fluss:$FLUSS_DOCKER_VERSION$
-    command: tabletServer
     depends_on:
       - coordinator-server
     environment:
@@ -72,8 +94,15 @@ services:
         zookeeper.address: zookeeper:2181
         bind.listeners: FLUSS://tablet-server:9123
         data.dir: /tmp/fluss/data
-        remote.data.dir: /tmp/fluss/remote-data
-        kv.snapshot.interval: 0s
+        remote.data.dir: s3://fluss/remote-data
+        s3.endpoint: http://rustfs:9000
+        s3.access-key: rustfsadmin
+        s3.secret-key: rustfsadmin
+        s3.path-style-access: true
+        kv.snapshot.interval: 60s
+    volumes:
+      - ./lib:/tmp/fluss-lib
+    entrypoint: ["sh", "-c", "cp -v /tmp/fluss-lib/fluss-fs-s3-*.jar /opt/fluss/lib/ 2>/dev/null || true && exec /docker-entrypoint.sh tabletServer"]
   zookeeper:
     restart: always
     image: zookeeper:3.9.2
@@ -112,14 +141,19 @@ services:
       - |
         FLINK_PROPERTIES=
         jobmanager.rpc.address: jobmanager
-        rest.address: jobmanager    
+        rest.address: jobmanager
     entrypoint: ["sh", "-c", "cp -v /tmp/lib/*.jar /opt/flink/lib && exec /docker-entrypoint.sh bin/sql-client.sh"]
     volumes:
       - ./lib:/tmp/lib
   #end
+
+volumes:
+  rustfs-data:
 ```
 
 The Docker Compose environment consists of the following containers:
+- **RustFS:** an S3-compatible object storage for tiered storage. You can access the RustFS console at http://localhost:9001 with credentials `rustfsadmin/rustfsadmin`.
+   - RustFS is used as replacement for S3 in this quickstart example (snapshots are taken every 60s), you may want to configure this to use cloud object store with different snapshot interval in production 
 - **Fluss Cluster:** a Fluss `CoordinatorServer`, a Fluss `TabletServer` and a `ZooKeeper` server.
 - **Flink Cluster**: a Flink `JobManager`, a Flink `TaskManager`, and a Flink SQL client container to execute queries.
 
@@ -129,11 +163,20 @@ docker compose up -d
 ```
 This command automatically starts all the containers defined in the Docker Compose configuration in detached mode.
 
-Run 
+Run
 ```shell
 docker compose ps
 ```
 to check whether all containers are running properly.
+
+4. Create the S3 bucket for Fluss tiered storage. Open the RustFS console at http://localhost:9001, login with `rustfsadmin/rustfsadmin`, click **"Create Bucket"** in the top left corner, enter `fluss` as the bucket name, and click **Create**.
+
+Alternatively, you can use the MinIO client (`mc`) which is compatible with RustFS:
+```shell
+docker run --rm --net=host \
+    -e MC_HOST_rustfs=http://rustfsadmin:rustfsadmin@localhost:9000 \
+    minio/mc mb rustfs/fluss
+```
 
 You can also visit http://localhost:8083/ to see if Flink is running normally.
 
@@ -397,6 +440,26 @@ DELETE FROM fluss_customer WHERE `cust_key` = 1;
 The following SQL query should return an empty result.
 ```sql title="Flink SQL"
 SELECT * FROM fluss_customer WHERE `cust_key` = 1;
+```
+### Tiered Storage
+
+Finally, you can use the following command to view the files stored on RustFS:
+
+```shell
+docker run --rm --net=host \
+-e MC_HOST_rustfs=http://rustfsadmin:rustfsadmin@localhost:9000 \
+minio/mc ls --recursive rustfs/fluss/                
+```
+
+Sample output: 
+```shell
+[2026-02-03 20:28:59 UTC]  26KiB STANDARD remote-data/kv/fluss/enriched_orders-3/0/shared/4f675202-e560-4b8e-9af4-08e9769b4797
+[2026-02-03 20:27:59 UTC]  11KiB STANDARD remote-data/kv/fluss/enriched_orders-3/0/shared/87447c34-81d0-4be5-b4c8-abcea5ce68e9
+[2026-02-03 20:28:59 UTC]     0B STANDARD remote-data/kv/fluss/enriched_orders-3/0/snap-0/
+[2026-02-03 20:28:59 UTC] 1.1KiB STANDARD remote-data/kv/fluss/enriched_orders-3/0/snap-1/_METADATA
+[2026-02-03 20:28:59 UTC]   211B STANDARD remote-data/kv/fluss/enriched_orders-3/0/snap-1/aaffa8fc-ddb3-4754-938a-45e28df6d975
+[2026-02-03 20:28:59 UTC]    16B STANDARD remote-data/kv/fluss/enriched_orders-3/0/snap-1/d3c18e43-11ee-4e39-912d-087ca01de0e8
+[2026-02-03 20:28:59 UTC] 6.2KiB STANDARD remote-data/kv/fluss/enriched_orders-3/0/snap-1/ea2f2097-aa9a-4c2a-9e72-530218cd551c
 ```
 
 ## Clean up
