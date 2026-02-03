@@ -617,7 +617,7 @@ final class ReplicaTest extends ReplicaTestBase {
         // now simulate the latest snapshot (snapshot2) being broken by
         // deleting its metadata files and unshared SST files
         // This simulates file corruption while ZK metadata remains intact
-        snapshot2.getKvSnapshotHandle().discard();
+        snapshot2.getKvSnapshotHandle().discard(null, 1);
 
         // ZK metadata should still show snapshot2 as latest (file corruption hasn't been detected
         // yet)
@@ -656,7 +656,7 @@ final class ReplicaTest extends ReplicaTestBase {
         // The key test is that the system can handle broken snapshots and recover correctly
 
         // Verify that we successfully simulated the broken snapshot condition
-        File metadataFile = new File(snapshot2.getMetadataFilePath().getPath());
+        File metadataFile = new File(snapshot2.getMetadataFilePath(null).getPath());
         assertThat(metadataFile.exists()).isFalse();
     }
 

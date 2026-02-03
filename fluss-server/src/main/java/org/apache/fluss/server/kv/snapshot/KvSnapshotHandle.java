@@ -17,7 +17,9 @@
 
 package org.apache.fluss.server.kv.snapshot;
 
+import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.server.utils.SnapshotUtil;
+import org.apache.fluss.utils.FlussPaths;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -97,12 +99,13 @@ public class KvSnapshotHandle {
         return snapshotSize;
     }
 
-    public void discard() {
+    public void discard(FsPath remoteKvTabletDir, long snapshotId) {
         SharedKvFileRegistry registry = this.sharedKvFileRegistry;
         final boolean isRegistered = (registry != null);
 
         try {
             SnapshotUtil.bestEffortDiscardAllKvFiles(
+                    FlussPaths.remoteKvSnapshotDir(remoteKvTabletDir, snapshotId),
                     privateFileHandles.stream()
                             .map(KvFileHandleAndLocalPath::getKvFileHandle)
                             .collect(Collectors.toList()));
@@ -113,6 +116,7 @@ public class KvSnapshotHandle {
         if (!isRegistered) {
             try {
                 SnapshotUtil.bestEffortDiscardAllKvFiles(
+                        FlussPaths.remoteKvSharedDir(remoteKvTabletDir),
                         sharedFileHandles.stream()
                                 .map(KvFileHandleAndLocalPath::getKvFileHandle)
                                 .collect(Collectors.toSet()));

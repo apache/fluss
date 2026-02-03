@@ -21,6 +21,7 @@ import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.concurrent.FutureUtils;
 
 import javax.annotation.concurrent.NotThreadSafe;
@@ -68,31 +69,22 @@ public class CompletedSnapshot {
     /** The next log offset when the snapshot is triggered. */
     private final long logOffset;
 
-    /** The location where the snapshot is stored. */
-    private final FsPath snapshotLocation;
-
     public static final String SNAPSHOT_DATA_NOT_EXISTS_ERROR_MESSAGE = "No such file or directory";
 
     public CompletedSnapshot(
             TableBucket tableBucket,
             long snapshotID,
-            FsPath snapshotLocation,
             KvSnapshotHandle kvSnapshotHandle,
             long logOffset) {
         this.tableBucket = tableBucket;
         this.snapshotID = snapshotID;
-        this.snapshotLocation = snapshotLocation;
         this.kvSnapshotHandle = kvSnapshotHandle;
         this.logOffset = logOffset;
     }
 
     @VisibleForTesting
-    CompletedSnapshot(
-            TableBucket tableBucket,
-            long snapshotID,
-            FsPath snapshotLocation,
-            KvSnapshotHandle kvSnapshotHandle) {
-        this(tableBucket, snapshotID, snapshotLocation, kvSnapshotHandle, 0);
+    CompletedSnapshot(TableBucket tableBucket, long snapshotID, KvSnapshotHandle kvSnapshotHandle) {
+        this(tableBucket, snapshotID, kvSnapshotHandle, 0);
     }
 
     public long getSnapshotID() {
@@ -125,54 +117,43 @@ public class CompletedSnapshot {
         sharedKvFileRegistry.registerAllAfterRestored(this);
     }
 
-    public CompletableFuture<Void> discardAsync(Executor ioExecutor) {
+    public CompletableFuture<Void> discardAsync(FsPath remoteKvTabletDir, Executor ioExecutor) {
         // it'll discard the snapshot files for kv, it'll always discard
         // the private files; for shared files, only if they're not be registered in
         // SharedKvRegistry, can the files be deleted.
         CompletableFuture<Void> discardKvFuture =
-                FutureUtils.runAsync(kvSnapshotHandle::discard, ioExecutor);
+                FutureUtils.runAsync(
+                        () -> kvSnapshotHandle.discard(remoteKvTabletDir, snapshotID), ioExecutor);
 
+        FsPath snapshotLocation = FlussPaths.remoteKvSnapshotDir(remoteKvTabletDir, snapshotID);
         CompletableFuture<Void> discardMetaFileFuture =
-                FutureUtils.runAsync(this::disposeMetadata, ioExecutor);
+                FutureUtils.runAsync(() -> disposeMetadata(snapshotLocation), ioExecutor);
 
         return FutureUtils.runAfterwards(
                 FutureUtils.completeAll(Arrays.asList(discardKvFuture, discardMetaFileFuture)),
-                this::disposeSnapshotStorage);
+                () -> disposeSnapshotStorage(snapshotLocation));
     }
 
-    private void disposeSnapshotStorage() throws IOException {
+    private void disposeSnapshotStorage(FsPath snapshotLocation) throws IOException {
         if (snapshotLocation != null) {
             FileSystem fileSystem = snapshotLocation.getFileSystem();
             fileSystem.delete(snapshotLocation, false);
         }
     }
 
-    /**
-     * Return the metadata file path that stores all the information that describes the snapshot.
-     */
-    public FsPath getMetadataFilePath() {
-        return new FsPath(snapshotLocation, SNAPSHOT_METADATA_FILE_NAME);
-    }
-
     public static FsPath getMetadataFilePath(FsPath snapshotLocation) {
         return new FsPath(snapshotLocation, SNAPSHOT_METADATA_FILE_NAME);
     }
 
-    private void disposeMetadata() throws IOException {
-        FsPath metadataFilePath = getMetadataFilePath();
+    private void disposeMetadata(FsPath snapshotLocation) throws IOException {
+        FsPath metadataFilePath = getMetadataFilePath(snapshotLocation);
         FileSystem fileSystem = metadataFilePath.getFileSystem();
         fileSystem.delete(metadataFilePath, false);
     }
 
-    public FsPath getSnapshotLocation() {
-        return snapshotLocation;
-    }
-
     @Override
     public String toString() {
-        return String.format(
-                "CompletedSnapshot %d for %s located at %s",
-                snapshotID, tableBucket, snapshotLocation);
+        return String.format("CompletedSnapshot %d for %s", snapshotID, tableBucket);
     }
 
     @Override
@@ -187,12 +168,11 @@ public class CompletedSnapshot {
         return snapshotID == that.snapshotID
                 && logOffset == that.logOffset
                 && Objects.equals(tableBucket, that.tableBucket)
-                && Objects.equals(kvSnapshotHandle, that.kvSnapshotHandle)
-                && Objects.equals(snapshotLocation, that.snapshotLocation);
+                && Objects.equals(kvSnapshotHandle, that.kvSnapshotHandle);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(tableBucket, snapshotID, kvSnapshotHandle, logOffset, snapshotLocation);
+        return Objects.hash(tableBucket, snapshotID, kvSnapshotHandle, logOffset);
     }
 }

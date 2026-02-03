@@ -96,9 +96,7 @@ class KvSnapshotDataUploaderTest {
                             .findFirst()
                             .get()
                             .getKvFileHandle();
-            assertThat(kvFileHandle.getFilePath())
-                    .startsWith(LocalFileSystem.getLocalFsURI().getScheme());
-            FsPath fsPath = new FsPath(kvFileHandle.getFilePath());
+            FsPath fsPath = new FsPath(snapshotSharedDirectory, kvFileHandle.getFilePath());
             FSDataInputStream inputStream = fsPath.getFileSystem().open(fsPath);
             assertContentEqual(path, inputStream);
         }

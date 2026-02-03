@@ -145,6 +145,7 @@ public final class Replica {
 
     private final PhysicalTablePath physicalPath;
     private final TableBucket tableBucket;
+    private final FsPath remoteDataDir;
 
     private final LogManager logManager;
     private final LogTablet logTablet;
@@ -221,6 +222,7 @@ public final class Replica {
             FatalErrorHandler fatalErrorHandler,
             BucketMetricGroup bucketMetricGroup,
             TableInfo tableInfo,
+            FsPath remoteDataDir,
             Clock clock)
             throws Exception {
         this.physicalPath = physicalPath;
@@ -252,6 +254,7 @@ public final class Replica {
 
         this.logTablet = createLog(lazyHighWatermarkCheckpoint);
         this.logTablet.updateIsDataLakeEnabled(tableConfig.isDataLakeEnabled());
+        this.remoteDataDir = remoteDataDir;
         this.clock = clock;
         registerMetrics();
     }
@@ -739,8 +742,20 @@ public final class Replica {
     private void downloadKvSnapshots(CompletedSnapshot completedSnapshot, Path kvTabletDir)
             throws IOException {
         Path kvDbPath = kvTabletDir.resolve(RocksDBKvBuilder.DB_INSTANCE_DIR_STRING);
+
+        FsPath remoteKvTabletDir =
+                FlussPaths.remoteKvTabletDir(
+                        FlussPaths.remoteKvDir(remoteDataDir), physicalPath, tableBucket);
+        FsPath snapshotDirectory =
+                FlussPaths.remoteKvSnapshotDir(
+                        remoteKvTabletDir, completedSnapshot.getSnapshotID());
+        FsPath sharedSnapshotDirectory = FlussPaths.remoteKvSharedDir(remoteKvTabletDir);
         KvSnapshotDownloadSpec downloadSpec =
-                new KvSnapshotDownloadSpec(completedSnapshot.getKvSnapshotHandle(), kvDbPath);
+                new KvSnapshotDownloadSpec(
+                        snapshotDirectory,
+                        sharedSnapshotDirectory,
+                        completedSnapshot.getKvSnapshotHandle(),
+                        kvDbPath);
         long start = clock.milliseconds();
         LOG.info("Start to download kv snapshot {} to directory {}.", completedSnapshot, kvDbPath);
         KvSnapshotDataDownloader kvSnapshotDataDownloader =
@@ -750,7 +765,7 @@ public final class Replica {
         } catch (Exception e) {
             if (e.getMessage().contains(CompletedSnapshot.SNAPSHOT_DATA_NOT_EXISTS_ERROR_MESSAGE)) {
                 try {
-                    snapshotContext.handleSnapshotBroken(completedSnapshot);
+                    snapshotContext.handleSnapshotBroken(remoteKvTabletDir, completedSnapshot);
                 } catch (Exception t) {
                     LOG.error("Handle broken snapshot {} failed.", completedSnapshot, t);
                 }

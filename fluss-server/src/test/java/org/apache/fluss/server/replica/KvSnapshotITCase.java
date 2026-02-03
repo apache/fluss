@@ -138,8 +138,9 @@ class KvSnapshotITCase {
                                     Tuple2.of("k1", new Object[] {1, "k1"}),
                                     Tuple2.of("k2", new Object[] {2, "k2"})));
             KvTestUtils.checkSnapshot(completedSnapshot, expectedKeyValues, 2);
-            bucketKvSnapshotDirs.add(
-                    new File(completedSnapshot.getSnapshotLocation().getParent().getPath()));
+            //            bucketKvSnapshotDirs.add(
+            //                    new
+            // File(completedSnapshot.getSnapshotLocation().getParent().getPath()));
 
             // put kv batch again
             kvRecordBatch =

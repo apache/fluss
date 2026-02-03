@@ -18,7 +18,6 @@
 package org.apache.fluss.server.testutils;
 
 import org.apache.fluss.config.Configuration;
-import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.rpc.messages.LookupResponse;
 import org.apache.fluss.rpc.messages.PbLookupRespForBucket;
@@ -35,6 +34,7 @@ import org.apache.fluss.server.kv.snapshot.KvSnapshotDataDownloader;
 import org.apache.fluss.server.kv.snapshot.KvSnapshotDownloadSpec;
 import org.apache.fluss.server.kv.snapshot.KvSnapshotHandle;
 import org.apache.fluss.server.kv.snapshot.PlaceholderKvFileHandler;
+import org.apache.fluss.server.kv.snapshot.SnapshotLocation;
 import org.apache.fluss.utils.CloseableRegistry;
 import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.types.Tuple2;
@@ -68,7 +68,7 @@ public class KvTestUtils {
             assertThat(completedSnapshot.getLogOffset()).isEqualTo(expectLogOffset);
             try (RocksDBKv rocksDBKv =
                     buildFromSnapshotHandle(
-                            completedSnapshot.getKvSnapshotHandle(), temRebuildPath)) {
+                            null, completedSnapshot.getKvSnapshotHandle(), temRebuildPath)) {
                 // check the key counts
                 int keyCounts = getKeyCounts(rocksDBKv.getDb());
                 assertThat(keyCounts).isEqualTo(expectedKeyValues.size());
@@ -121,13 +121,13 @@ public class KvTestUtils {
         return new CompletedSnapshot(
                 tableBucket,
                 snapshotId,
-                new FsPath(
-                        snapshotRootDir
-                                + String.format(
-                                        "/tableBucket-%d-bucket-%d-snapshot-%d",
-                                        tableBucket.getTableId(),
-                                        tableBucket.getBucket(),
-                                        snapshotId)),
+                //                new FsPath(
+                //                        snapshotRootDir
+                //                                + String.format(
+                //                                        "/tableBucket-%d-bucket-%d-snapshot-%d",
+                //                                        tableBucket.getTableId(),
+                //                                        tableBucket.getBucket(),
+                //                                        snapshotId)),
                 new KvSnapshotHandle(Collections.emptyList(), Collections.emptyList(), 0),
                 0);
     }
@@ -143,13 +143,16 @@ public class KvTestUtils {
     }
 
     public static RocksDBKv buildFromSnapshotHandle(
-            KvSnapshotHandle kvSnapshotHandle, Path destPath) throws Exception {
+            SnapshotLocation snapshotLocation, KvSnapshotHandle kvSnapshotHandle, Path destPath)
+            throws Exception {
         ExecutorService downloadThreadPool = Executors.newSingleThreadExecutor();
         try (CloseableRegistry closeableRegistry = new CloseableRegistry()) {
             KvSnapshotDataDownloader dbDataDownloader =
                     new KvSnapshotDataDownloader(downloadThreadPool);
             KvSnapshotDownloadSpec downloadSpec1 =
                     new KvSnapshotDownloadSpec(
+                            snapshotLocation.getSnapshotDirectory(),
+                            snapshotLocation.getSharedSnapshotDirectory(),
                             kvSnapshotHandle,
                             destPath.resolve(RocksDBKvBuilder.DB_INSTANCE_DIR_STRING));
 

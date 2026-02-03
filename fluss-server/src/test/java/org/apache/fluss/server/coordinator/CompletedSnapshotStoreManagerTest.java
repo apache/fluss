@@ -54,7 +54,7 @@ import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
+import static org.apache.fluss.record.TestData.DATA1_PHYSICAL_TABLE_PATH;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test for {@link CompletedSnapshotStoreManager}. */
@@ -120,7 +120,7 @@ class CompletedSnapshotStoreManagerTest {
             assertThat(
                             completedSnapshotStoreManager
                                     .getOrCreateCompletedSnapshotStore(
-                                            DATA1_TABLE_PATH, tableBucket)
+                                            DATA1_PHYSICAL_TABLE_PATH, tableBucket)
                                     .getAllSnapshots())
                     .hasSize(maxNumberOfSnapshotsToRetain);
         }
@@ -148,7 +148,7 @@ class CompletedSnapshotStoreManagerTest {
             assertThat(
                             completedSnapshotStoreManager
                                     .getOrCreateCompletedSnapshotStore(
-                                            DATA1_TABLE_PATH, tableBucket)
+                                            DATA1_PHYSICAL_TABLE_PATH, tableBucket)
                                     .getAllSnapshots())
                     .hasSize(maxNumberOfSnapshotsToRetain);
         }
@@ -157,7 +157,8 @@ class CompletedSnapshotStoreManagerTest {
         TableBucket nonExistBucket = new TableBucket(10, 100);
         assertThat(
                         completedSnapshotStoreManager
-                                .getOrCreateCompletedSnapshotStore(DATA1_TABLE_PATH, nonExistBucket)
+                                .getOrCreateCompletedSnapshotStore(
+                                        DATA1_PHYSICAL_TABLE_PATH, nonExistBucket)
                                 .getAllSnapshots())
                 .hasSize(0);
     }
@@ -191,7 +192,7 @@ class CompletedSnapshotStoreManagerTest {
         CompletedSnapshot validSnapshot =
                 KvTestUtils.mockCompletedSnapshot(tempDir, tableBucket, 1L);
         TestingCompletedSnapshotHandle validSnapshotHandle =
-                new TestingCompletedSnapshotHandle(validSnapshot);
+                new TestingCompletedSnapshotHandle(validSnapshot, null);
 
         CompletedSnapshot invalidSnapshot =
                 KvTestUtils.mockCompletedSnapshot(tempDir, tableBucket, 2L);
@@ -211,12 +212,13 @@ class CompletedSnapshotStoreManagerTest {
                         ioExecutor,
                         zookeeperClient,
                         zooKeeperClient -> completedSnapshotHandleStore,
-                        TestingMetricGroups.COORDINATOR_METRICS);
+                        TestingMetricGroups.COORDINATOR_METRICS,
+                        null);
 
         // Verify that only the valid snapshot remains
         CompletedSnapshotStore completedSnapshotStore =
                 completedSnapshotStoreManager.getOrCreateCompletedSnapshotStore(
-                        DATA1_TABLE_PATH, tableBucket);
+                        DATA1_PHYSICAL_TABLE_PATH, tableBucket);
         assertThat(completedSnapshotStore.getAllSnapshots()).hasSize(1);
         assertThat(completedSnapshotStore.getAllSnapshots().get(0).getSnapshotID()).isEqualTo(1L);
     }
@@ -227,14 +229,15 @@ class CompletedSnapshotStoreManagerTest {
                 maxNumberOfSnapshotsToRetain,
                 ioExecutor,
                 zookeeperClient,
-                TestingMetricGroups.COORDINATOR_METRICS);
+                TestingMetricGroups.COORDINATOR_METRICS,
+                null);
     }
 
     private CompletedSnapshot getLatestCompletedSnapshot(
             CompletedSnapshotStoreManager completedSnapshotStoreManager, TableBucket tableBucket) {
         CompletedSnapshotStore completedSnapshotStore =
                 completedSnapshotStoreManager.getOrCreateCompletedSnapshotStore(
-                        DATA1_TABLE_PATH, tableBucket);
+                        DATA1_PHYSICAL_TABLE_PATH, tableBucket);
         return completedSnapshotStore.getLatestSnapshot().get();
     }
 
@@ -245,7 +248,7 @@ class CompletedSnapshotStoreManagerTest {
         TableBucket tableBucket = completedSnapshot.getTableBucket();
         CompletedSnapshotStore completedSnapshotStore =
                 completedSnapshotStoreManager.getOrCreateCompletedSnapshotStore(
-                        DATA1_TABLE_PATH, tableBucket);
+                        DATA1_PHYSICAL_TABLE_PATH, tableBucket);
         completedSnapshotStore.add(completedSnapshot);
     }
 
@@ -283,7 +286,7 @@ class CompletedSnapshotStoreManagerTest {
             extends TestingCompletedSnapshotHandle {
 
         public TestingCompletedSnapshotHandleWithFileNotFound(CompletedSnapshot snapshot) {
-            super(snapshot, false);
+            super(snapshot, null, false);
         }
 
         @Override

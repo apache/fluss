@@ -22,6 +22,7 @@ import org.apache.fluss.fs.FSDataOutputStream;
 import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.utils.FlussPaths;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -75,12 +76,15 @@ public class CompletedSnapshotStore {
      */
     private final ArrayDeque<CompletedSnapshot> completedSnapshots;
 
+    private final FsPath remoteKvTabletDir;
+
     public CompletedSnapshotStore(
             int maxNumberOfSnapshotsToRetain,
             SharedKvFileRegistry sharedKvFileRegistry,
             Collection<CompletedSnapshot> completedSnapshots,
             CompletedSnapshotHandleStore completedSnapshotHandleStore,
-            Executor executor) {
+            Executor executor,
+            FsPath remoteKvTabletDir) {
         this.maxNumberOfSnapshotsToRetain = maxNumberOfSnapshotsToRetain;
         this.sharedKvFileRegistry = sharedKvFileRegistry;
         this.completedSnapshots = new ArrayDeque<>();
@@ -88,6 +92,7 @@ public class CompletedSnapshotStore {
         this.completedSnapshotHandleStore = completedSnapshotHandleStore;
         this.ioExecutor = executor;
         this.snapshotsCleaner = new SnapshotsCleaner();
+        this.remoteKvTabletDir = remoteKvTabletDir;
     }
 
     public void add(final CompletedSnapshot completedSnapshot) throws Exception {
@@ -103,7 +108,7 @@ public class CompletedSnapshotStore {
     }
 
     public long getNumSnapshots() {
-        return inLock(lock, () -> completedSnapshots.size());
+        return inLock(lock, completedSnapshots::size);
     }
 
     /**
@@ -154,6 +159,7 @@ public class CompletedSnapshotStore {
                                         // deletion
                                         sharedKvFileRegistry.unregisterUnusedKvFile(id);
                                         snapshotsCleaner.cleanSubsumedSnapshots(
+                                                remoteKvTabletDir,
                                                 id,
                                                 Collections.emptySet(),
                                                 postCleanup,
@@ -234,6 +240,12 @@ public class CompletedSnapshotStore {
         return inLock(lock, () -> Optional.ofNullable(completedSnapshots.peekLast()));
     }
 
+    public FsPath getSnapshotMetadataFilePath(CompletedSnapshot snapshot) {
+        FsPath snapshotLocation =
+                FlussPaths.remoteKvSnapshotDir(remoteKvTabletDir, snapshot.getSnapshotID());
+        return CompletedSnapshot.getMetadataFilePath(snapshotLocation);
+    }
+
     /**
      * Serialize the completed snapshot to a metadata file, and return the handle wrapping the
      * metadata file path.
@@ -244,7 +256,7 @@ public class CompletedSnapshotStore {
         // we just reuse the snapshot dir to store the snapshot info to avoid another path
         // config
         Exception latestException = null;
-        FsPath filePath = snapshot.getMetadataFilePath();
+        FsPath filePath = getSnapshotMetadataFilePath(snapshot);
         FileSystem fs = filePath.getFileSystem();
         byte[] jsonBytes = CompletedSnapshotJsonSerde.toJson(snapshot);
         for (int attempt = 0; attempt < 10; attempt++) {
