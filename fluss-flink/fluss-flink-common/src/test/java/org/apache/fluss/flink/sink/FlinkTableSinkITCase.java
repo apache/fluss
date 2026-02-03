@@ -1803,20 +1803,20 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
 
         List<String> expectedResults =
                 Arrays.asList(
-                        "+I[1, 1, 100]",
-                        "+I[2, 2, 200]",
-                        "+I[3, 3, 150]",
-                        "+I[4, 4, 250]",
-                        "-U[1, 1, 100]",
-                        "+U[1, 1, 120]",
-                        "-U[3, 3, 150]",
-                        "+U[3, 3, 180]");
+                        "+I[insert, 1, 1, 100]",
+                        "+I[insert, 2, 2, 200]",
+                        "+I[insert, 3, 3, 150]",
+                        "+I[insert, 4, 4, 250]",
+                        "+I[update_after, 1, 1, 120]",
+                        "+I[update_after, 3, 3, 180]");
 
-        // Collect results with timeout
+        // Flink will generate ChangelogNormalize node to auto-complete the -U message,
+        // so we should read $changelog table to force read the raw underlying changelog
         assertQueryResultExactOrder(
                 tEnv,
                 String.format(
-                        "SELECT id, auto_increment_id, amount FROM %s /*+ OPTIONS('scan.startup.mode' = 'earliest') */",
+                        "SELECT _change_type, id, auto_increment_id, amount "
+                                + "FROM %s$changelog /*+ OPTIONS('scan.startup.mode' = 'earliest') */",
                         tableName),
                 expectedResults);
     }
