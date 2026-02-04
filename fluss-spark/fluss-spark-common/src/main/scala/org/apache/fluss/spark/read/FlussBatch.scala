@@ -76,8 +76,6 @@ class FlussAppendBatch(
     tablePath: TablePath,
     tableInfo: TableInfo,
     readSchema: StructType,
-    startOffsetsInitializer: OffsetsInitializer,
-    stoppingOffsetsInitializer: OffsetsInitializer,
     options: CaseInsensitiveStringMap,
     flussConfig: Configuration)
   extends FlussBatch(tablePath, tableInfo, readSchema, flussConfig) {
