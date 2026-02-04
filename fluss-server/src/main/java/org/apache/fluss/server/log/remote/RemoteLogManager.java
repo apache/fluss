@@ -38,6 +38,7 @@ import org.apache.fluss.utils.concurrent.ExecutorThreadFactory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.annotation.Nullable;
 import javax.annotation.concurrent.ThreadSafe;
 
 import java.io.Closeable;
@@ -305,7 +306,7 @@ public class RemoteLogManager implements Closeable {
     }
 
     @VisibleForTesting
-    RemoteLogTablet remoteLogTablet(TableBucket tableBucket) {
+    public RemoteLogTablet remoteLogTablet(TableBucket tableBucket) {
         RemoteLogTablet remoteLog = remoteLogs.get(tableBucket);
         if (remoteLog == null) {
             throw new IllegalStateException(
@@ -386,5 +387,10 @@ public class RemoteLogManager implements Closeable {
     @VisibleForTesting
     public RemoteLogIndexCache getRemoteLogIndexCache() {
         return remoteLogIndexCache;
+    }
+
+    @VisibleForTesting
+    public @Nullable TaskWithFuture getTaskWithFuture(TableBucket tableBucket) {
+        return rlmTasks.get(tableBucket);
     }
 }

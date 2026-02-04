@@ -1523,7 +1523,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
         replicaManager.stopReplicas(
                 INITIAL_COORDINATOR_EPOCH,
                 Collections.singletonList(
-                        new StopReplicaData(tb, true, INITIAL_COORDINATOR_EPOCH, 1)),
+                        new StopReplicaData(tb, true, true, INITIAL_COORDINATOR_EPOCH, 1)),
                 future1::complete);
         assertThat(future1.get()).containsOnly(new StopReplicaResultForBucket(tb));
         ReplicaManager.HostedReplica hostedReplica = replicaManager.getReplica(tb);
@@ -1554,7 +1554,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
         replicaManager.stopReplicas(
                 INITIAL_COORDINATOR_EPOCH,
                 Collections.singletonList(
-                        new StopReplicaData(tb, true, INITIAL_COORDINATOR_EPOCH, 1)),
+                        new StopReplicaData(tb, true, true, INITIAL_COORDINATOR_EPOCH, 1)),
                 future1::complete);
         assertThat(future1.get())
                 .containsOnly(

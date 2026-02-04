@@ -901,6 +901,7 @@ public class ReplicaManager {
                                             stopReplica(
                                                     tb,
                                                     data.isDelete(),
+                                                    data.isDeleteRemote(),
                                                     deletedTableIds,
                                                     deletedPartitionIds));
                                 } catch (Exception e) {
@@ -1715,6 +1716,7 @@ public class ReplicaManager {
     private StopReplicaResultForBucket stopReplica(
             TableBucket tb,
             boolean delete,
+            boolean deleteRemote,
             Map<Long, Path> deletedTableIds,
             Map<Long, Path> deletedPartitionIds) {
         // First stop fetchers for this table bucket.
@@ -1738,8 +1740,9 @@ public class ReplicaManager {
                 }
             }
 
-            remoteLogManager.stopReplica(replicaToDelete, delete && replicaToDelete.isLeader());
-            if (delete && replicaToDelete.isLeader()) {
+            remoteLogManager.stopReplica(
+                    replicaToDelete, deleteRemote && replicaToDelete.isLeader());
+            if (deleteRemote && replicaToDelete.isLeader()) {
                 kvManager.deleteRemoteKvSnapshot(
                         replicaToDelete.getPhysicalTablePath(), replicaToDelete.getTableBucket());
             }

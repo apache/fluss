@@ -900,6 +900,7 @@ message PbStopReplicaReqForBucket {
   required PbTableBucket table_bucket = 1;
   required int32 leader_epoch = 2;
   required bool delete = 3;
+  optional bool deleteRemote = 4;
 }
 
 message PbStopReplicaRespForBucket {

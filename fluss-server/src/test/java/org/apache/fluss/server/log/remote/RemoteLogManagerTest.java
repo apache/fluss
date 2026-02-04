@@ -26,12 +26,17 @@ import org.apache.fluss.rpc.entity.FetchLogResultForBucket;
 import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.server.coordinator.TestCoordinatorGateway;
 import org.apache.fluss.server.entity.FetchReqInfo;
+import org.apache.fluss.server.entity.StopReplicaData;
+import org.apache.fluss.server.entity.StopReplicaResultForBucket;
 import org.apache.fluss.server.log.FetchParams;
 import org.apache.fluss.server.log.LogTablet;
 import org.apache.fluss.server.replica.Replica;
+import org.apache.fluss.server.replica.ReplicaManager;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.time.Duration;
@@ -40,8 +45,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 import static org.apache.fluss.record.TestData.DATA1_PHYSICAL_TABLE_PATH;
+import static org.apache.fluss.record.TestData.DATA1_PHYSICAL_TABLE_PATH_PA_2024;
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_ID;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
@@ -497,8 +504,76 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
         assertThatThrownBy(() -> remoteLogManager.relevantRemoteLogSegments(tb, 0L))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("RemoteLogTablet can't be found for table-bucket " + tb);
-        FsPath logTabletDir = remoteLogTabletDir(remoteLogDir(conf), DATA1_PHYSICAL_TABLE_PATH, tb);
+        FsPath logTabletDir =
+                remoteLogTabletDir(
+                        remoteLogDir(conf),
+                        partitionTable
+                                ? DATA1_PHYSICAL_TABLE_PATH_PA_2024
+                                : DATA1_PHYSICAL_TABLE_PATH,
+                        tb);
         assertThat(logTabletDir.getFileSystem().exists(logTabletDir)).isFalse();
+    }
+
+    @ParameterizedTest
+    @MethodSource("stopArgs")
+    void testStopReplicaDeleteRemoteLog(boolean partitionTable, boolean deleteRemote)
+            throws Exception {
+        TableBucket tb = makeTableBucket(partitionTable);
+        // Need to make leader by ReplicaManager.
+        makeLogTableAsLeader(tb, partitionTable);
+        LogTablet logTablet = replicaManager.getReplicaOrException(tb).getLogTablet();
+        addMultiSegmentsToLogTablet(logTablet, 5);
+        // trigger RLMTask copy local log segment to remote and update metadata.
+        remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
+        RemoteLogTablet remoteLog = remoteLogManager.remoteLogTablet(tb);
+        List<RemoteLogSegment> remoteLogSegmentList =
+                remoteLogManager.relevantRemoteLogSegments(tb, 0L);
+        assertThat(remoteLogSegmentList.size()).isEqualTo(4);
+        assertThat(listRemoteLogFiles(tb))
+                .isEqualTo(
+                        remoteLogSegmentList.stream()
+                                .map(s -> s.remoteLogSegmentId().toString())
+                                .collect(Collectors.toSet()));
+        assertThat(remoteLogManager.getTaskWithFuture(tb)).isNotNull();
+
+        FsPath logTabletDir =
+                remoteLogTabletDir(
+                        remoteLogDir(conf),
+                        partitionTable
+                                ? DATA1_PHYSICAL_TABLE_PATH_PA_2024
+                                : DATA1_PHYSICAL_TABLE_PATH,
+                        tb);
+        assertThat(logTabletDir.getFileSystem().exists(logTabletDir)).isTrue();
+
+        // stop with delete = false, deleteRemote =false, local and remote log should be kept,
+        // remote log task will be removed.
+        CompletableFuture<List<StopReplicaResultForBucket>> future1 = new CompletableFuture<>();
+        replicaManager.stopReplicas(
+                0,
+                Collections.singletonList(new StopReplicaData(tb, false, false, 0, 0)),
+                future1::complete);
+        assertThat(future1.get()).containsOnly(new StopReplicaResultForBucket(tb));
+        ReplicaManager.HostedReplica hostedReplica = replicaManager.getReplica(tb);
+        assertThat(hostedReplica).isInstanceOf(ReplicaManager.OnlineReplica.class);
+        assertThat(logTabletDir.getFileSystem().exists(logTabletDir)).isTrue();
+        assertThat(remoteLogManager.getTaskWithFuture(tb)).isNull();
+
+        CompletableFuture<List<StopReplicaResultForBucket>> future2 = new CompletableFuture<>();
+        replicaManager.stopReplicas(
+                0,
+                Collections.singletonList(new StopReplicaData(tb, true, deleteRemote, 0, 0)),
+                future2::complete);
+        assertThat(future2.get()).containsOnly(new StopReplicaResultForBucket(tb));
+        hostedReplica = replicaManager.getReplica(tb);
+        assertThat(hostedReplica).isInstanceOf(ReplicaManager.NoneReplica.class);
+        if (!deleteRemote) {
+            // stop with delete = true, deleteRemote =false, local log should be deleted, remote log
+            // should be kept.
+            assertThat(logTabletDir.getFileSystem().exists(logTabletDir)).isTrue();
+        } else {
+            // stop with delete = true, deleteRemote =true, local and remote log should be deleted
+            assertThat(logTabletDir.getFileSystem().exists(logTabletDir)).isFalse();
+        }
     }
 
     @ParameterizedTest
@@ -539,5 +614,13 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
         } else {
             return new TableBucket(tableId, 0);
         }
+    }
+
+    private static Stream<Arguments> stopArgs() {
+        return Stream.of(
+                Arguments.of(false, false),
+                Arguments.of(false, true),
+                Arguments.of(true, false),
+                Arguments.of(true, true));
     }
 }

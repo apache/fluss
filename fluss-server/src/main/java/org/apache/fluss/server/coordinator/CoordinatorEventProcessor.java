@@ -143,11 +143,11 @@ import java.util.stream.Collectors;
 import static org.apache.fluss.server.coordinator.statemachine.BucketState.OfflineBucket;
 import static org.apache.fluss.server.coordinator.statemachine.BucketState.OnlineBucket;
 import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.NewReplica;
-import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.NonExistentReplica;
 import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.OfflineReplica;
 import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.OnlineReplica;
 import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.ReplicaDeletionStarted;
 import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.ReplicaDeletionSuccessful;
+import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.ReplicaMigrateSuccessful;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeAdjustIsrResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeListRebalanceProgressResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeRebalanceResponse;
@@ -911,30 +911,25 @@ public class CoordinatorEventProcessor implements EventProcessor {
 
         // transmit to deletion started for retry delete replicas
         Set<TableBucketReplica> needRetryDeleteReplicas = new HashSet<>();
+        Set<TableBucketReplica> needRetryMigrateReplicas = new HashSet<>();
         retryDeleteAndSuccessDeleteReplicas.f0.forEach(
                 (replica) -> {
-                    // For rebalance case. the replica state already set to null in method
-                    // stopRemovedReplicasOfReassignedBucket. so we need not reset it again.
-                    if (coordinatorContext.getReplicaState(replica) != null) {
+                    // For rebalance case. the replica state already set to ReplicaMigrateSuccessful
+                    // in method stopRemovedReplicasOfReassignedBucket. so we need to do migrate
+                    // again if failed.
+                    if (coordinatorContext.getReplicaState(replica) == ReplicaMigrateSuccessful) {
+                        needRetryMigrateReplicas.add(replica);
+                    } else {
                         needRetryDeleteReplicas.add(replica);
                     }
                 });
         replicaStateMachine.handleStateChanges(needRetryDeleteReplicas, ReplicaDeletionStarted);
+        replicaStateMachine.handleStateChanges(needRetryMigrateReplicas, ReplicaMigrateSuccessful);
 
         // add all the replicas that considered as success delete to success deleted replicas
         successDeletedReplicas.addAll(retryDeleteAndSuccessDeleteReplicas.f1);
-
-        Set<TableBucketReplica> newSuccessDeleteReplicas = new HashSet<>();
-        successDeletedReplicas.forEach(
-                (replica) -> {
-                    // For rebalance case. the replica state already set to null in method
-                    // stopRemovedReplicasOfReassignedBucket. so we need not reset it again.
-                    if (coordinatorContext.getReplicaState(replica) != null) {
-                        newSuccessDeleteReplicas.add(replica);
-                    }
-                });
         // transmit to deletion successful for success deleted replicas
-        replicaStateMachine.handleStateChanges(newSuccessDeleteReplicas, ReplicaDeletionSuccessful);
+        replicaStateMachine.handleStateChanges(successDeletedReplicas, ReplicaDeletionSuccessful);
         // if any success deletion, we can resume
         if (!successDeletedReplicas.isEmpty()) {
             tableManager.resumeDeletions();
@@ -1413,20 +1408,19 @@ public class CoordinatorEventProcessor implements EventProcessor {
      *
      * <ul>
      *   <li>B1. Move all replicas in AR to OnlineReplica state.
-     *   <li>B2. Set RS = TRS, AR = [], RR = [] in memory.
-     *   <li>B3. Send a LeaderAndIsr request with RS = TRS. This will prevent the leader from adding
-     *       any replica in TRS - ORS back in the isr. If the current leader is not in TRS or isn't
-     *       alive, we move the leader to a new replica in TRS. We may send the LeaderAndIsr to more
-     *       than the TRS replicas due to the way the partition state machine works (it reads
-     *       replicas from ZK)
-     *   <li>B4. Move all replicas in RR to OfflineReplica state. As part of OfflineReplica state
+     *   <li>B2. Send a LeaderAndIsr request with RS = ORS +TRS. The will make the origin leader
+     *       change to the new leader. this request will be sent to every tabletServer in ORS +TRS.
+     *   <li>B3. Set RS = TRS, AR = [], RR = [] in memory.
+     *   <li>Re-send LeaderAndIsr request with new leader and a new RS (using TRS) and same isr to
+     *       every tabletServer in TRS.
+     *   <li>B5. Move all replicas in RR to OfflineReplica state. As part of OfflineReplica state
      *       change, we shrink the isr to remove RR in ZooKeeper and send a LeaderAndIsr ONLY to the
      *       Leader to notify it of the shrunk isr. After that, we send a StopReplica (delete =
      *       false) to the replicas in RR.
-     *   <li>B5. Move all replicas in RR to NonExistentReplica state. This will send a StopReplica
+     *   <li>B6. Move all replicas in RR to NonExistentReplica state. This will send a StopReplica
      *       (delete = true) to he replicas in RR to physically delete the replicas on disk.
-     *   <li>B6. Update ZK with RS=TRS, AR=[], RR=[].
-     *   <li>B7. After electing leader, the replicas and isr information changes. So resend the
+     *   <li>B7. Update ZK with RS=TRS, AR=[], RR=[].
+     *   <li>B8. After electing leader, the replicas and isr information changes. So resend the
      *       update metadata request to every tabletServer.
      *   <li>B8. Mark the ongoing rebalance task to finish.
      * </ul>
@@ -1461,6 +1455,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
             ReplicaReassignment reassignment,
             boolean isReassignmentComplete)
             throws Exception {
+
         List<Integer> addingReplicas = reassignment.addingReplicas;
         List<Integer> removingReplicas = reassignment.removingReplicas;
 
@@ -1491,17 +1486,21 @@ public class CoordinatorEventProcessor implements EventProcessor {
                                             new TableBucketReplica(tableBucket, replica)),
                                     OnlineReplica));
             List<Integer> targetReplicas = reassignment.getTargetReplicas();
-            // B2. Set RS = TRS, AR = [], RR = [] in memory.
-            coordinatorContext.updateBucketReplicaAssignment(tableBucket, targetReplicas);
-            // B3. Send LeaderAndIsr request with a potential new leader (if current leader not in
-            // TRS) and a new RS (using TRS) and same isr to every tabletServer in ORS + TRS or TRS
+            // B2. Send LeaderAndIsr request with a potential new leader (if current leader not in
+            // TRS) and a new RS (using ORS + TRS) and same isr to every tabletServer in ORS + TRS
             maybeReassignedBucketLeaderIfRequired(tableBucket, targetReplicas);
-            // B4. replicas in RR -> Offline (force those replicas out of isr)
-            // B5. replicas in RR -> NonExistentReplica (force those replicas to be deleted)
+            // B3. Set RS = TRS, AR = [], RR = [] in memory.
+            coordinatorContext.updateBucketReplicaAssignment(tableBucket, targetReplicas);
+            // B4. Re-send LeaderAndIsr request with new leader and a new RS (using TRS) and same
+            // isr to every tabletServer in TRS.
+            updateBucketEpochAndSendRequest(tableBucket, targetReplicas);
+
+            // B5. replicas in RR -> Offline (force those replicas out of isr)
+            // B6. replicas in RR -> NonExistentReplica (force those replicas to be deleted)
             stopRemovedReplicasOfReassignedBucket(tableBucket, removingReplicas);
-            // B6. Update ZK with RS = TRS, AR = [], RR = [].
+            // B7. Update ZK with RS = TRS, AR = [], RR = [].
             updateReplicaAssignmentForBucket(tableBucket, targetReplicas);
-            // B7. After electing a leader in B3, the replicas and isr information changes, so
+            // B8. After electing a leader in B3, the replicas and isr information changes, so
             // resend the update metadata request to every tabletServer.
             updateTabletServerMetadataCache(
                     new HashSet<>(coordinatorContext.getLiveTabletServers().values()),
@@ -1557,16 +1556,11 @@ public class CoordinatorEventProcessor implements EventProcessor {
 
     private void stopRemovedReplicasOfReassignedBucket(
             TableBucket tableBucket, List<Integer> removingReplicas) {
-        Set<TableBucketReplica> replicasToBeDeleted = new HashSet<>();
+        Set<TableBucketReplica> replicasToBeMoved = new HashSet<>();
         removingReplicas.forEach(
-                replica -> replicasToBeDeleted.add(new TableBucketReplica(tableBucket, replica)));
-        replicaStateMachine.handleStateChanges(replicasToBeDeleted, OfflineReplica);
-        // send stop replica command to the old replicas.
-        replicaStateMachine.handleStateChanges(replicasToBeDeleted, ReplicaDeletionStarted);
-        // TODO: Eventually bucket reassignment could use a callback that does retries if deletion
-        // failed
-        replicaStateMachine.handleStateChanges(replicasToBeDeleted, ReplicaDeletionSuccessful);
-        replicaStateMachine.handleStateChanges(replicasToBeDeleted, NonExistentReplica);
+                replica -> replicasToBeMoved.add(new TableBucketReplica(tableBucket, replica)));
+        replicaStateMachine.handleStateChanges(replicasToBeMoved, OfflineReplica);
+        replicaStateMachine.handleStateChanges(replicasToBeMoved, ReplicaMigrateSuccessful);
     }
 
     private void updateReplicaAssignmentForBucket(

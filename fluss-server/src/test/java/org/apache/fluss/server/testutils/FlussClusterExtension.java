@@ -832,7 +832,7 @@ public final class FlussClusterExtension
                                 .addAllStopReplicasReqs(
                                         Collections.singleton(
                                                 makeStopBucketReplica(
-                                                        tableBucket, false, leaderEpoch))))
+                                                        tableBucket, false, false, leaderEpoch))))
                 .get();
     }
 

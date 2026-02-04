@@ -716,11 +716,12 @@ public class ServerRpcMessageUtils {
     }
 
     public static PbStopReplicaReqForBucket makeStopBucketReplica(
-            TableBucket tableBucket, boolean isDelete, int leaderEpoch) {
+            TableBucket tableBucket, boolean isDelete, boolean deleteRemote, int leaderEpoch) {
         PbStopReplicaReqForBucket stopBucketReplicaRequest = new PbStopReplicaReqForBucket();
         PbTableBucket pbTableBucket =
                 stopBucketReplicaRequest
                         .setDelete(isDelete)
+                        .setDeleteRemote(deleteRemote)
                         .setLeaderEpoch(leaderEpoch)
                         .setTableBucket()
                         .setBucketId(tableBucket.getBucket())
@@ -739,6 +740,9 @@ public class ServerRpcMessageUtils {
                     new StopReplicaData(
                             toTableBucket(tableBucket),
                             reqForBucket.isDelete(),
+                            reqForBucket.hasDeleteRemote()
+                                    ? reqForBucket.isDeleteRemote()
+                                    : reqForBucket.isDelete(),
                             request.getCoordinatorEpoch(),
                             reqForBucket.getLeaderEpoch()));
         }

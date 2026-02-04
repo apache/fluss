@@ -241,6 +241,7 @@ public class CoordinatorRequestBatch {
             Set<Integer> tabletServers,
             TableBucket tableBucket,
             boolean isDelete,
+            boolean deleteRemote,
             int leaderEpoch) {
         tabletServers.stream()
                 .filter(s -> s >= 0)
@@ -255,7 +256,10 @@ public class CoordinatorRequestBatch {
                                             && stopBucketReplica.get(tableBucket).isDelete();
                             PbStopReplicaReqForBucket protoStopReplicaForBucket =
                                     makeStopBucketReplica(
-                                            tableBucket, alreadyDelete || isDelete, leaderEpoch);
+                                            tableBucket,
+                                            alreadyDelete || isDelete,
+                                            deleteRemote,
+                                            leaderEpoch);
                             stopBucketReplica.put(tableBucket, protoStopReplicaForBucket);
                         });
     }
