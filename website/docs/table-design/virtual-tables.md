@@ -91,20 +91,43 @@ SELECT * FROM orders$changelog;
 Output:
 
 ```
-+----+---------------+-------------+---------------------+----------+---------------+---------+
-| op | _change_type  | _log_offset | _commit_timestamp   | order_id | customer_name | amount  |
-+----+---------------+-------------+---------------------+----------+---------------+---------+
-| +I | insert        |           0 | 2024-01-15 10:30:00 |        1 | Rhea          |  100.00 |
-| +I | update_before |           1 | 2024-01-15 10:35:00 |        1 | Rhea          |  100.00 |
-| +I | update_after  |           2 | 2024-01-15 10:35:00 |        1 | Rhea          |  150.00 |
-| +I | delete        |           3 | 2024-01-15 10:40:00 |        1 | Rhea          |  150.00 |
-+----+---------------+-------------+---------------------+----------+---------------+---------+
++---------------+-------------+---------------------+----------+---------------+---------+
+| _change_type  | _log_offset | _commit_timestamp   | order_id | customer_name | amount  |
++---------------+-------------+---------------------+----------+---------------+---------+
+| insert        |           0 | 2024-01-15 10:30:00 |        1 | Rhea          |  100.00 |
+| update_before |           1 | 2024-01-15 10:35:00 |        1 | Rhea          |  100.00 |
+| update_after  |           2 | 2024-01-15 10:35:00 |        1 | Rhea          |  150.00 |
+| delete        |           3 | 2024-01-15 10:40:00 |        1 | Rhea          |  150.00 |
++---------------+-------------+---------------------+----------+---------------+---------+
 ```
 
-:::note
-The `op` column is Flink's row kind indicator. For changelog virtual tables, all rows are emitted as `+I` (insert) to the downstream, while the actual change type is captured in the `_change_type` column.
-:::
 
+### Startup Modes
+
+
+| Mode | Description |
+|------|-------------|
+| `earliest` | Start reading from the beginning of the log |
+| `latest` | Start reading from the current end of the log (only new changes) |
+| `timestamp` | Start reading from a specific timestamp (milliseconds since epoch) |
+
+
+The changelog table supports different startup modes to control where reading begins:
+
+```sql title="Flink SQL"
+-- Read from the beginning (default)
+SELECT * FROM orders$changelog /*+ OPTIONS('scan.startup.mode' = 'earliest') */;
+
+-- Read only new changes from now
+SELECT * FROM orders$changelog /*+ OPTIONS('scan.startup.mode' = 'latest') */;
+
+-- Read from a specific timestamp
+SELECT * FROM orders$changelog /*+ OPTIONS('scan.startup.mode' = 'timestamp', 'scan.startup.timestamp' = '1705312200000') */;
+```
+
+### Limitations
+
+- Projection, partition, and predicate pushdowns are not supported yet. This will be addressed in future releases.
 
 ## Binlog Table
 
@@ -167,13 +190,13 @@ SELECT * FROM users$binlog;
 Output:
 
 ```
-+----+--------------+-------------+---------------------+----------------------------------+--------------------------------------+
-| op | _change_type | _log_offset | _commit_timestamp   | before                           | after                                |
-+----+--------------+-------------+---------------------+----------------------------------+--------------------------------------+
-| +I | insert       |           0 | 2024-01-15 10:30:00 | NULL                             | (1, Alice, alice@example.com)        |
-| +I | update       |           2 | 2024-01-15 10:35:00 | (1, Alice, alice@example.com)    | (1, Alice Smith, alice.smith@example.com) |
-| +I | delete       |           3 | 2024-01-15 10:40:00 | (1, Alice Smith, alice.smith@example.com) | NULL                        |
-+----+--------------+-------------+---------------------+----------------------------------+--------------------------------------+
++--------------+-------------+---------------------+----------------------------------+--------------------------------------+
+| _change_type | _log_offset | _commit_timestamp   | before                           | after                                |
++--------------+-------------+---------------------+----------------------------------+--------------------------------------+
+| insert       |           0 | 2024-01-15 10:30:00 | NULL                             | (1, Alice, alice@example.com)        |
+| update       |           2 | 2024-01-15 10:35:00 | (1, Alice, alice@example.com)    | (1, Alice Smith, alice.smith@example.com) |
+| delete       |           3 | 2024-01-15 10:40:00 | (1, Alice Smith, alice.smith@example.com) | NULL                        |
++--------------+-------------+---------------------+----------------------------------+--------------------------------------+
 ```
 
 #### Accessing Nested Fields
@@ -200,19 +223,20 @@ WHERE _change_type = 'update';
 | `timestamp` | Start reading from a specific timestamp (milliseconds since epoch) |
 
 
-The virtual table supports different startup modes to control where reading begins:
+The binlog table supports different startup modes to control where reading begins:
 
 ```sql title="Flink SQL"
 -- Read from the beginning (default)
-SELECT * FROM orders$changelog /*+ OPTIONS('scan.startup.mode' = 'earliest') */;
+SELECT * FROM orders$binlog /*+ OPTIONS('scan.startup.mode' = 'earliest') */;
 
 -- Read only new changes from now
 SELECT * FROM orders$binlog /*+ OPTIONS('scan.startup.mode' = 'latest') */;
 
 -- Read from a specific timestamp
-SELECT * FROM orders$changelog /*+ OPTIONS('scan.startup.mode' = 'timestamp', 'scan.startup.timestamp' = '1705312200000') */;
+SELECT * FROM orders$binlog /*+ OPTIONS('scan.startup.mode' = 'timestamp', 'scan.startup.timestamp' = '1705312200000') */;
 ```
 
 
 ### Limitations
-- Projection & partition & predicate pushdowns are not supported yet.
+
+- Projection, partition, and predicate pushdowns are not supported yet. This will be addressed in future releases.
