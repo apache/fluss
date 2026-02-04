@@ -62,12 +62,12 @@ Starting from Fluss 0.9, the `fluss-lake-paimon` JAR no longer bundles `paimon-b
 
 🔧 **Action Required**: Manually add a compatible `paimon-bundle` JAR to your Flink `lib` directory.
 
-#### Migration Steps
+### Migration Steps
 
 Choose a compatible version of `paimon-bundle` JAR from the [Apache Paimon Downloads](https://paimon.apache.org/docs/1.3/project/download/) page 
 and place it in `$FLINK_HOME/lib/`.
 
-#### Tested Paimon Versions
+### Tested Paimon Versions
 
 | Use Case        | Required/Tested Versions                          |
 |-----------------|---------------------------------------------------|
