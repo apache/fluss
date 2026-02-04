@@ -66,8 +66,8 @@
         <module>fluss-jmh</module>
         <module>fluss-lake</module>
         <module>fluss-kafka</module>
-        <module>tools/ci/fluss-ci-tools</module>
         <module>fluss-docgen</module>
+        <module>tools/ci/fluss-ci-tools</module>
     </modules>
 
     <properties>

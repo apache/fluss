@@ -18,7 +18,7 @@ To update the configuration documentation, run the following command from the pr
 
 ```bash
 ./mvnw compile -pl fluss-docgen -am
-````
+```
 
 ## Integration with Website
 
@@ -27,3 +27,4 @@ The generated file is stored in `website/docs/_configs/_partial_config.mdx`. To 
 ```markdown
 import PartialConfig from '../_configs/_partial_config.mdx';
 <PartialConfig></PartialConfig>
+```
