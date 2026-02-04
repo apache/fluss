@@ -251,14 +251,17 @@ public class CoordinatorRequestBatch {
                                     stopReplicaRequestMap.computeIfAbsent(id, k -> new HashMap<>());
                             // reduce delete flag, if it has been marked as deleted,
                             // we will set it as delete replica
-                            boolean alreadyDelete =
+                            boolean alreadyDeleteLocal =
                                     stopBucketReplica.get(tableBucket) != null
                                             && stopBucketReplica.get(tableBucket).isDelete();
+                            boolean alreadyDeleteRemote =
+                                    stopBucketReplica.get(tableBucket) != null
+                                            && stopBucketReplica.get(tableBucket).isDeleteRemote();
                             PbStopReplicaReqForBucket protoStopReplicaForBucket =
                                     makeStopBucketReplica(
                                             tableBucket,
-                                            alreadyDelete || deleteLocal,
-                                            alreadyDelete || deleteRemote,
+                                            alreadyDeleteLocal || deleteLocal,
+                                            alreadyDeleteRemote || deleteRemote,
                                             leaderEpoch);
                             stopBucketReplica.put(tableBucket, protoStopReplicaForBucket);
                         });

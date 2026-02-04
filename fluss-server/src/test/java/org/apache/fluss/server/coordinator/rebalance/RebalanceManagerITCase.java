@@ -30,8 +30,10 @@ import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.AddServerTagRequest;
-import org.apache.fluss.server.coordinator.CoordinatorContext;
+import org.apache.fluss.server.coordinator.CoordinatorEventProcessor;
+import org.apache.fluss.server.coordinator.event.AccessContextEvent;
 import org.apache.fluss.server.coordinator.rebalance.model.ClusterModel;
+import org.apache.fluss.server.coordinator.statemachine.ReplicaState;
 import org.apache.fluss.server.log.remote.RemoteLogManager;
 import org.apache.fluss.server.log.remote.RemoteLogManifest;
 import org.apache.fluss.server.log.remote.RemoteLogTablet;
@@ -50,7 +52,9 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Objects;
 import java.util.Set;
+import java.util.concurrent.TimeUnit;
 
 import static org.apache.fluss.record.TestData.DATA1;
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
@@ -154,27 +158,17 @@ public class RebalanceManagerITCase {
         // rebalance to [3, 4, 5]
         RebalancePlanForBucket planForBucket = buildRebalancePlanForBucket(tb);
 
-        CoordinatorContext coordinatorContext =
-                FLUSS_CLUSTER_EXTENSION
-                        .getCoordinatorServer()
-                        .getCoordinatorEventProcessor()
-                        .getCoordinatorContext();
-        planForBucket
-                .getOriginReplicas()
-                .forEach(
-                        replicaId ->
-                                assertThat(
-                                                coordinatorContext.getReplicaState(
-                                                        new TableBucketReplica(tb, replicaId)))
-                                        .isEqualTo(OnlineReplica));
-        planForBucket
-                .getNewReplicas()
-                .forEach(
-                        replicaId ->
-                                assertThat(
-                                                coordinatorContext.getReplicaState(
-                                                        new TableBucketReplica(tb, replicaId)))
-                                        .isNull());
+        List<Integer> originReplicas = planForBucket.getOriginReplicas();
+        List<Integer> newReplicas = planForBucket.getNewReplicas();
+
+        List<ReplicaState> originReplicaStates = new ArrayList<>();
+        List<ReplicaState> newReplicaStates = new ArrayList<>();
+        fromCoordinatorContext(
+                tb, originReplicas, newReplicas, originReplicaStates, newReplicaStates);
+
+        // verify pre-rebalance states
+        assertThat(originReplicaStates).allMatch(replicaState -> replicaState == OnlineReplica);
+        assertThat(newReplicaStates).allMatch(Objects::isNull);
 
         rebalanceManager.registerRebalance(
                 "test-rebalance-dsds",
@@ -199,34 +193,22 @@ public class RebalanceManagerITCase {
                     assertThat(FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(tb)).isEqualTo(newLeader);
 
                     // origin replicas all set to offline.
-                    List<Integer> originReplicas = planForBucket.getOriginReplicas();
                     for (int originReplica : originReplicas) {
                         TabletServer ts =
                                 FLUSS_CLUSTER_EXTENSION.getTabletServerById(originReplica);
                         ReplicaManager rm = ts.getReplicaManager();
                         assertThat(rm.getReplica(tb))
                                 .isInstanceOf(ReplicaManager.NoneReplica.class);
-
-                        // replica state changes.
-                        planForBucket
-                                .getOriginReplicas()
-                                .forEach(
-                                        replicaId ->
-                                                assertThat(
-                                                                coordinatorContext.getReplicaState(
-                                                                        new TableBucketReplica(
-                                                                                tb, replicaId)))
-                                                        .isNull());
-                        planForBucket
-                                .getNewReplicas()
-                                .forEach(
-                                        replicaId ->
-                                                assertThat(
-                                                                coordinatorContext.getReplicaState(
-                                                                        new TableBucketReplica(
-                                                                                tb, replicaId)))
-                                                        .isEqualTo(OnlineReplica));
                     }
+
+                    // replica state changes.
+                    originReplicaStates.clear();
+                    newReplicaStates.clear();
+                    fromCoordinatorContext(
+                            tb, originReplicas, newReplicas, originReplicaStates, newReplicaStates);
+                    assertThat(originReplicaStates).allMatch(Objects::isNull);
+                    assertThat(newReplicaStates)
+                            .allMatch(replicaState -> replicaState == OnlineReplica);
                 });
         // remote log not be deleted.
         int newLeader = planForBucket.getNewLeader();
@@ -238,6 +220,36 @@ public class RebalanceManagerITCase {
         assertThat(newManifest.getPhysicalTablePath().getTablePath()).isEqualTo(DATA1_TABLE_PATH);
         assertThat(newManifest.getTableBucket()).isEqualTo(tb);
         assertThat(newManifest.getRemoteLogSegmentList().size()).isEqualTo(remoteLogSize);
+    }
+
+    private void fromCoordinatorContext(
+            TableBucket tb,
+            List<Integer> originReplicas,
+            List<Integer> newReplicas,
+            List<ReplicaState> originalReplicaStates,
+            List<ReplicaState> newReplicaStates)
+            throws Exception {
+        AccessContextEvent<Void> event =
+                new AccessContextEvent<>(
+                        ctx -> {
+                            originReplicas.forEach(
+                                    replica -> {
+                                        originalReplicaStates.add(
+                                                ctx.getReplicaState(
+                                                        new TableBucketReplica(tb, replica)));
+                                    });
+                            newReplicas.forEach(
+                                    replica -> {
+                                        newReplicaStates.add(
+                                                ctx.getReplicaState(
+                                                        new TableBucketReplica(tb, replica)));
+                                    });
+                            return null;
+                        });
+        CoordinatorEventProcessor processor =
+                FLUSS_CLUSTER_EXTENSION.getCoordinatorServer().getCoordinatorEventProcessor();
+        processor.getCoordinatorEventManager().put(event);
+        event.getResultFuture().get(30, TimeUnit.SECONDS);
     }
 
     private TableBucket setupTableBucket() throws Exception {
