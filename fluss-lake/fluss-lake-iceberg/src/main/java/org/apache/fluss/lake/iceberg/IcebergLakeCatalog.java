@@ -98,11 +98,11 @@ public class IcebergLakeCatalog implements LakeCatalog {
     @Override
     public void createTable(TablePath tablePath, TableDescriptor tableDescriptor, Context context)
             throws TableAlreadyExistException {
-        // validate single key field requirement
+        // validate at most one key field requirement
         List<String> keys = tableDescriptor.getBucketKeys();
         checkArgument(
-                keys.size() == 1,
-                "Key fields must have exactly one field for iceberg format, but got: %s",
+                keys.size() <= 1,
+                "Iceberg format supports at most one bucket key, but got: %s",
                 keys);
 
         // convert Fluss table path to iceberg table
