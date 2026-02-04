@@ -56,4 +56,8 @@ public class SnapshotResult implements Serializable {
     public long getSnapshotSize() {
         return kvSnapshotHandle.getSnapshotSize();
     }
+
+    public long getIncrementalSize() {
+        return kvSnapshotHandle.getIncrementalSize();
+    }
 }
