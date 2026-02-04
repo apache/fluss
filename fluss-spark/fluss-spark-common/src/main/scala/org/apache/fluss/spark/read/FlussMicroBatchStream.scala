@@ -45,9 +45,7 @@ abstract class FlussMicroBatchStream(
     readSchema: StructType,
     options: CaseInsensitiveStringMap,
     flussConfig: Configuration,
-    checkpointLocation: String,
-    startOffsetsInitializer: OffsetsInitializer,
-    stoppingOffsetsInitializer: OffsetsInitializer)
+    checkpointLocation: String)
   extends SupportsTriggerAvailableNow
   with ReportsSourceMetrics
   with MicroBatchStream
@@ -64,6 +62,12 @@ abstract class FlussMicroBatchStream(
   lazy val partitionInfos: util.List[PartitionInfo] = admin.listPartitionInfos(tablePath).get()
 
   private var allDataForTriggerAvailableNow: Option[TableBucketOffsets] = None
+
+  val startOffsetsInitializer: OffsetsInitializer =
+    FlussOffsetInitializers.startOffsetsInitializer(options, flussConfig)
+
+  val stoppingOffsetsInitializer: OffsetsInitializer =
+    FlussOffsetInitializers.stoppingOffsetsInitializer(false, options, flussConfig)
 
   protected def projection: Array[Int] = {
     val columnNameToIndex = tableInfo.getSchema.getColumnNames.asScala.zipWithIndex.toMap
@@ -247,18 +251,14 @@ class FlussAppendMicroBatchStream(
     readSchema: StructType,
     options: CaseInsensitiveStringMap,
     flussConfig: Configuration,
-    checkpointLocation: String,
-    startOffsetsInitializer: OffsetsInitializer,
-    stoppingOffsetsInitializer: OffsetsInitializer)
+    checkpointLocation: String)
   extends FlussMicroBatchStream(
     tablePath,
     tableInfo,
     readSchema,
     options,
     flussConfig,
-    checkpointLocation,
-    startOffsetsInitializer,
-    stoppingOffsetsInitializer) {
+    checkpointLocation) {
 
   override def createReaderFactory(): PartitionReaderFactory = {
     new FlussAppendPartitionReaderFactory(tablePath, projection, options, flussConfig)
@@ -301,18 +301,14 @@ class FlussUpsertMicroBatchStream(
     readSchema: StructType,
     options: CaseInsensitiveStringMap,
     flussConfig: Configuration,
-    checkpointLocation: String,
-    startOffsetsInitializer: OffsetsInitializer,
-    stoppingOffsetsInitializer: OffsetsInitializer)
+    checkpointLocation: String)
   extends FlussMicroBatchStream(
     tablePath,
     tableInfo,
     readSchema,
     options,
     flussConfig,
-    checkpointLocation,
-    startOffsetsInitializer,
-    stoppingOffsetsInitializer) {
+    checkpointLocation) {
 
   override def planInputPartitions(start: Offset, end: Offset): Array[InputPartition] = {
     // TODO process new partition and deleted partition

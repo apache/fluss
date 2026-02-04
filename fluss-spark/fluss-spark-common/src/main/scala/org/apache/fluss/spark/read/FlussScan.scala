@@ -51,19 +51,13 @@ case class FlussAppendScan(
   }
 
   override def toMicroBatchStream(checkpointLocation: String): MicroBatchStream = {
-    val startOffsetsInitializer =
-      FlussOffsetInitializers.startOffsetsInitializer(options, flussConfig)
-    val stoppingOffsetsInitializer =
-      FlussOffsetInitializers.stoppingOffsetsInitializer(false, options, flussConfig)
     new FlussAppendMicroBatchStream(
       tablePath,
       tableInfo,
       readSchema,
       options,
       flussConfig,
-      checkpointLocation,
-      startOffsetsInitializer,
-      stoppingOffsetsInitializer)
+      checkpointLocation)
   }
 }
 
