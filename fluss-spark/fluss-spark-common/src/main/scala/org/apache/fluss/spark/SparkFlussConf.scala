@@ -44,9 +44,9 @@ object SparkFlussConf {
       .defaultValue(StartUpMode.FULL.toString)
       .withDescription("The start up mode when read Fluss table.")
 
-  val LOG_SCANNER_POLL_TIMEOUT: ConfigOption[Duration] =
+  val SCAN_POLL_TIMEOUT: ConfigOption[Duration] =
     ConfigBuilder
-      .key("log.scanner.poll.timeout")
+      .key("scan.poll.timeout")
       .durationType()
       .defaultValue(Duration.ofMillis(10000L))
       .withDescription("The timeout for log scanner to poll records.")
