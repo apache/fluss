@@ -17,7 +17,6 @@
 
 package org.apache.fluss.spark.read
 
-import org.apache.fluss.client.initializer.SnapshotOffsetsInitializer
 import org.apache.fluss.config.Configuration
 import org.apache.fluss.metadata.{TableInfo, TablePath}
 import org.apache.fluss.spark.SparkConversions
@@ -47,18 +46,7 @@ case class FlussAppendScan(
   extends FlussScan {
 
   override def toBatch: Batch = {
-    val startOffsetsInitializer =
-      FlussOffsetInitializers.startOffsetsInitializer(options, flussConfig)
-    val stoppingOffsetsInitializer =
-      FlussOffsetInitializers.stoppingOffsetsInitializer(true, options, flussConfig)
-    new FlussAppendBatch(
-      tablePath,
-      tableInfo,
-      readSchema,
-      startOffsetsInitializer,
-      stoppingOffsetsInitializer,
-      options,
-      flussConfig)
+    new FlussAppendBatch(tablePath, tableInfo, readSchema, options, flussConfig)
   }
 }
 
@@ -72,20 +60,6 @@ case class FlussUpsertScan(
   extends FlussScan {
 
   override def toBatch: Batch = {
-    val startOffsetsInitializer =
-      FlussOffsetInitializers.startOffsetsInitializer(options, flussConfig)
-    val stoppingOffsetsInitializer =
-      FlussOffsetInitializers.stoppingOffsetsInitializer(true, options, flussConfig)
-    if (!startOffsetsInitializer.isInstanceOf[SnapshotOffsetsInitializer]) {
-      throw new UnsupportedOperationException("Upsert scan only support FULL startup mode.")
-    }
-    new FlussUpsertBatch(
-      tablePath,
-      tableInfo,
-      readSchema,
-      startOffsetsInitializer,
-      stoppingOffsetsInitializer,
-      options,
-      flussConfig)
+    new FlussUpsertBatch(tablePath, tableInfo, readSchema, options, flussConfig)
   }
 }

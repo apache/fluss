@@ -19,7 +19,7 @@ package org.apache.fluss.spark.read
 
 import org.apache.fluss.client.{Connection, ConnectionFactory}
 import org.apache.fluss.client.admin.Admin
-import org.apache.fluss.client.initializer.{BucketOffsetsRetrieverImpl, OffsetsInitializer}
+import org.apache.fluss.client.initializer.{BucketOffsetsRetrieverImpl, OffsetsInitializer, SnapshotOffsetsInitializer}
 import org.apache.fluss.client.metadata.KvSnapshots
 import org.apache.fluss.client.table.scanner.log.LogScanner
 import org.apache.fluss.config.Configuration
@@ -47,6 +47,10 @@ abstract class FlussBatch(
 
   lazy val partitionInfos: util.List[PartitionInfo] = admin.listPartitionInfos(tablePath).get()
 
+  def startOffsetsInitializer: OffsetsInitializer
+
+  def stoppingOffsetsInitializer: OffsetsInitializer
+
   protected def projection: Array[Int] = {
     val columnNameToIndex = tableInfo.getSchema.getColumnNames.asScala.zipWithIndex.toMap
     readSchema.fields.map {
@@ -72,11 +76,17 @@ class FlussAppendBatch(
     tablePath: TablePath,
     tableInfo: TableInfo,
     readSchema: StructType,
-    startOffsetsInitializer: OffsetsInitializer,
-    stoppingOffsetsInitializer: OffsetsInitializer,
     options: CaseInsensitiveStringMap,
     flussConfig: Configuration)
   extends FlussBatch(tablePath, tableInfo, readSchema, flussConfig) {
+
+  override val startOffsetsInitializer: OffsetsInitializer = {
+    FlussOffsetInitializers.startOffsetsInitializer(options, flussConfig)
+  }
+
+  override val stoppingOffsetsInitializer: OffsetsInitializer = {
+    FlussOffsetInitializers.stoppingOffsetsInitializer(true, options, flussConfig)
+  }
 
   override def planInputPartitions(): Array[InputPartition] = {
     val bucketOffsetsRetrieverImpl = new BucketOffsetsRetrieverImpl(admin, tablePath)
@@ -155,11 +165,21 @@ class FlussUpsertBatch(
     tablePath: TablePath,
     tableInfo: TableInfo,
     readSchema: StructType,
-    startOffsetsInitializer: OffsetsInitializer,
-    stoppingOffsetsInitializer: OffsetsInitializer,
     options: CaseInsensitiveStringMap,
     flussConfig: Configuration)
   extends FlussBatch(tablePath, tableInfo, readSchema, flussConfig) {
+
+  override val startOffsetsInitializer: OffsetsInitializer = {
+    val offsetsInitializer = FlussOffsetInitializers.startOffsetsInitializer(options, flussConfig)
+    if (!offsetsInitializer.isInstanceOf[SnapshotOffsetsInitializer]) {
+      throw new UnsupportedOperationException("Upsert scan only support FULL startup mode.")
+    }
+    offsetsInitializer
+  }
+
+  override val stoppingOffsetsInitializer: OffsetsInitializer = {
+    FlussOffsetInitializers.stoppingOffsetsInitializer(true, options, flussConfig)
+  }
 
   private val bucketOffsetsRetriever = new BucketOffsetsRetrieverImpl(admin, tablePath)
 
