@@ -454,7 +454,7 @@ public class CoordinatorRequestBatch {
             // we collect the buckets whose replica is to be deleted
             Set<TableBucket> deletedReplicaBuckets =
                     stopReplicas.values().stream()
-                            .filter(PbStopReplicaReqForBucket::isDelete)
+                            .filter(pbBucket -> pbBucket.isDelete() && pbBucket.isDeleteRemote())
                             .map(t -> toTableBucket(t.getTableBucket()))
                             .collect(Collectors.toSet());
 

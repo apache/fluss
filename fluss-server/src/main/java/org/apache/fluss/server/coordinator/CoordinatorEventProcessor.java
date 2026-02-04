@@ -911,40 +911,13 @@ public class CoordinatorEventProcessor implements EventProcessor {
                         coordinatorContext.retryDeleteAndSuccessDeleteReplicas(failDeletedReplicas);
 
         // transmit to deletion started for retry delete replicas
-        Set<TableBucketReplica> needRetryDeleteReplicas = new HashSet<>();
-        Set<TableBucketReplica> needRetryMigrateReplicas = new HashSet<>();
-        retryDeleteAndSuccessDeleteReplicas.f0.forEach(
-                (replica) -> {
-                    // For rebalance case. the replica state already set to ReplicaMigrateSuccessful
-                    // in method stopRemovedReplicasOfReassignedBucket. so we need to do migrate
-                    // again if failed.
-                    if (coordinatorContext.getReplicaState(replica) == ReplicaMigrationStarted) {
-                        needRetryMigrateReplicas.add(replica);
-                    } else {
-                        needRetryDeleteReplicas.add(replica);
-                    }
-                });
-        replicaStateMachine.handleStateChanges(needRetryDeleteReplicas, ReplicaDeletionStarted);
-        replicaStateMachine.handleStateChanges(needRetryMigrateReplicas, ReplicaMigrationStarted);
+        replicaStateMachine.handleStateChanges(
+                retryDeleteAndSuccessDeleteReplicas.f0, ReplicaDeletionStarted);
 
         // add all the replicas that considered as success delete to success deleted replicas
         successDeletedReplicas.addAll(retryDeleteAndSuccessDeleteReplicas.f1);
-
-        successDeletedReplicas.forEach(
-                (replica) -> {
-                    if (coordinatorContext.getReplicaState(replica) == ReplicaMigrationStarted) {
-                        // For rebalance case. the replica state already set to
-                        // ReplicaMigrationStarted
-                        // in method stopRemovedReplicasOfReassignedBucket. so we need to change to
-                        // NonExistentReplica directly.
-                        replicaStateMachine.handleStateChanges(
-                                successDeletedReplicas, NonExistentReplica);
-                    } else {
-                        // transmit to deletion successful for success deleted replicas
-                        replicaStateMachine.handleStateChanges(
-                                successDeletedReplicas, ReplicaDeletionSuccessful);
-                    }
-                });
+        // transmit to deletion successful for success deleted replicas
+        replicaStateMachine.handleStateChanges(successDeletedReplicas, ReplicaDeletionSuccessful);
 
         // if any success deletion, we can resume
         if (!successDeletedReplicas.isEmpty()) {
@@ -1577,6 +1550,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
                 replica -> replicasToBeMoved.add(new TableBucketReplica(tableBucket, replica)));
         replicaStateMachine.handleStateChanges(replicasToBeMoved, OfflineReplica);
         replicaStateMachine.handleStateChanges(replicasToBeMoved, ReplicaMigrationStarted);
+        replicaStateMachine.handleStateChanges(replicasToBeMoved, NonExistentReplica);
     }
 
     private void updateReplicaAssignmentForBucket(
