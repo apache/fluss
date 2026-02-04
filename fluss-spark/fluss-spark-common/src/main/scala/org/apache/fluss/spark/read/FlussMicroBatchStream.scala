@@ -186,8 +186,7 @@ abstract class FlussMicroBatchStream(
     }
   }
 
-  private def getSnapshotAndLogSplits(
-      partitionInfo: Option[PartitionInfo]): TableBucketOffsets = {
+  private def getSnapshotAndLogSplits(partitionInfo: Option[PartitionInfo]): TableBucketOffsets = {
     // TODO read snapshot when more startup mode supported
     getLogSplit(partitionInfo)
   }

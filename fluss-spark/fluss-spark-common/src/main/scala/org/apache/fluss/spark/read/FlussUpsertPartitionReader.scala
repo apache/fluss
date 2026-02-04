@@ -28,9 +28,11 @@ import org.apache.fluss.row.{encode, InternalRow, KeyValueRow}
 import org.apache.fluss.spark.SparkFlussConf
 import org.apache.fluss.spark.utils.LogChangesIterator
 import org.apache.fluss.utils.CloseableIterator
+
 import org.apache.spark.internal.Logging
 
 import java.util.Comparator
+
 import scala.collection.JavaConverters._
 import scala.collection.mutable
 
