@@ -333,7 +333,12 @@ public class CoordinatorServer extends ServerBase {
         }
     }
 
-    private CoordinatorEventProcessor getCoordinatorEventProcessor() {
+    /**
+     * Get the coordinator event processor. Don't call this method directly as the coordinator event
+     * processor is single threaded model.
+     */
+    @VisibleForTesting
+    public CoordinatorEventProcessor getCoordinatorEventProcessor() {
         if (coordinatorEventProcessor != null) {
             return coordinatorEventProcessor;
         } else {

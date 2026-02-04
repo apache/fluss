@@ -390,7 +390,8 @@ public class RemoteLogManager implements Closeable {
     }
 
     @VisibleForTesting
-    public @Nullable TaskWithFuture getTaskWithFuture(TableBucket tableBucket) {
+    @Nullable
+    TaskWithFuture getTaskWithFuture(TableBucket tableBucket) {
         return rlmTasks.get(tableBucket);
     }
 }

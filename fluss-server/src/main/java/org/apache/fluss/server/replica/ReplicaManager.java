@@ -900,7 +900,7 @@ public class ReplicaManager {
                                     result.add(
                                             stopReplica(
                                                     tb,
-                                                    data.isDelete(),
+                                                    data.isDeleteLocal(),
                                                     data.isDeleteRemote(),
                                                     deletedTableIds,
                                                     deletedPartitionIds));
@@ -1712,10 +1712,22 @@ public class ReplicaManager {
         }
     }
 
-    /** Stop the given replica. */
+    /**
+     * Stop the replica for the given table bucket.
+     *
+     * @param tb the table bucket
+     * @param deleteLocal whether to delete the local data, this will be true not only the table or
+     *     partition of the table bucket already deleted or the replica is migrated to another
+     *     server by rebalance
+     * @param deleteRemote whether to delete the remote data, like remote log and kv snapshot, this
+     *     means the table or partition of the table bucket already deleted
+     * @param deletedTableIds the table ids that are deleted
+     * @param deletedPartitionIds the partition ids that are deleted
+     * @return the result of stop replica
+     */
     private StopReplicaResultForBucket stopReplica(
             TableBucket tb,
-            boolean delete,
+            boolean deleteLocal,
             boolean deleteRemote,
             Map<Long, Path> deletedTableIds,
             Map<Long, Path> deletedPartitionIds) {
@@ -1725,7 +1737,7 @@ public class ReplicaManager {
         HostedReplica replica = getReplica(tb);
         if (replica instanceof OnlineReplica) {
             Replica replicaToDelete = ((OnlineReplica) replica).getReplica();
-            if (delete) {
+            if (deleteLocal) {
                 if (allReplicas.remove(tb) != null) {
                     serverMetricGroup.removeTableBucketMetricGroup(
                             replicaToDelete.getPhysicalTablePath().getTablePath(), tb);

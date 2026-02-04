@@ -143,11 +143,12 @@ import java.util.stream.Collectors;
 import static org.apache.fluss.server.coordinator.statemachine.BucketState.OfflineBucket;
 import static org.apache.fluss.server.coordinator.statemachine.BucketState.OnlineBucket;
 import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.NewReplica;
+import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.NonExistentReplica;
 import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.OfflineReplica;
 import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.OnlineReplica;
 import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.ReplicaDeletionStarted;
 import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.ReplicaDeletionSuccessful;
-import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.ReplicaMigrateSuccessful;
+import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.ReplicaMigrationStarted;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeAdjustIsrResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeListRebalanceProgressResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeRebalanceResponse;
@@ -917,19 +918,34 @@ public class CoordinatorEventProcessor implements EventProcessor {
                     // For rebalance case. the replica state already set to ReplicaMigrateSuccessful
                     // in method stopRemovedReplicasOfReassignedBucket. so we need to do migrate
                     // again if failed.
-                    if (coordinatorContext.getReplicaState(replica) == ReplicaMigrateSuccessful) {
+                    if (coordinatorContext.getReplicaState(replica) == ReplicaMigrationStarted) {
                         needRetryMigrateReplicas.add(replica);
                     } else {
                         needRetryDeleteReplicas.add(replica);
                     }
                 });
         replicaStateMachine.handleStateChanges(needRetryDeleteReplicas, ReplicaDeletionStarted);
-        replicaStateMachine.handleStateChanges(needRetryMigrateReplicas, ReplicaMigrateSuccessful);
+        replicaStateMachine.handleStateChanges(needRetryMigrateReplicas, ReplicaMigrationStarted);
 
         // add all the replicas that considered as success delete to success deleted replicas
         successDeletedReplicas.addAll(retryDeleteAndSuccessDeleteReplicas.f1);
-        // transmit to deletion successful for success deleted replicas
-        replicaStateMachine.handleStateChanges(successDeletedReplicas, ReplicaDeletionSuccessful);
+
+        successDeletedReplicas.forEach(
+                (replica) -> {
+                    if (coordinatorContext.getReplicaState(replica) == ReplicaMigrationStarted) {
+                        // For rebalance case. the replica state already set to
+                        // ReplicaMigrationStarted
+                        // in method stopRemovedReplicasOfReassignedBucket. so we need to change to
+                        // NonExistentReplica directly.
+                        replicaStateMachine.handleStateChanges(
+                                successDeletedReplicas, NonExistentReplica);
+                    } else {
+                        // transmit to deletion successful for success deleted replicas
+                        replicaStateMachine.handleStateChanges(
+                                successDeletedReplicas, ReplicaDeletionSuccessful);
+                    }
+                });
+
         // if any success deletion, we can resume
         if (!successDeletedReplicas.isEmpty()) {
             tableManager.resumeDeletions();
@@ -1349,8 +1365,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
         if (planForBucket != null) {
             ReplicaReassignment reassignment =
                     ReplicaReassignment.build(
-                            coordinatorContext.getAssignment(tableBucket),
-                            planForBucket.getNewReplicas());
+                            planForBucket.getOriginReplicas(), planForBucket.getNewReplicas());
             try {
                 if (planForBucket.isLeaderChanged() && !reassignment.isBeingReassigned()) {
                     LeaderAndIsr leaderAndIsr = zooKeeperClient.getLeaderAndIsr(tableBucket).get();
@@ -1416,9 +1431,10 @@ public class CoordinatorEventProcessor implements EventProcessor {
      *   <li>B5. Move all replicas in RR to OfflineReplica state. As part of OfflineReplica state
      *       change, we shrink the isr to remove RR in ZooKeeper and send a LeaderAndIsr ONLY to the
      *       Leader to notify it of the shrunk isr. After that, we send a StopReplica (delete =
-     *       false) to the replicas in RR.
-     *   <li>B6. Move all replicas in RR to NonExistentReplica state. This will send a StopReplica
-     *       (delete = true) to he replicas in RR to physically delete the replicas on disk.
+     *       false and deleteRemote = false) to the replicas in RR.
+     *   <li>B6. Move all replicas in RR to ReplicaMigrationStarted state. This will send a
+     *       StopReplica (delete = true and deleteRemote = false) to he replicas in RR to physically
+     *       delete the replicas on disk but don't delete the data in remote storage.
      *   <li>B7. Update ZK with RS=TRS, AR=[], RR=[].
      *   <li>B8. After electing leader, the replicas and isr information changes. So resend the
      *       update metadata request to every tabletServer.
@@ -1455,7 +1471,6 @@ public class CoordinatorEventProcessor implements EventProcessor {
             ReplicaReassignment reassignment,
             boolean isReassignmentComplete)
             throws Exception {
-
         List<Integer> addingReplicas = reassignment.addingReplicas;
         List<Integer> removingReplicas = reassignment.removingReplicas;
 
@@ -1496,7 +1511,8 @@ public class CoordinatorEventProcessor implements EventProcessor {
             updateBucketEpochAndSendRequest(tableBucket, targetReplicas);
 
             // B5. replicas in RR -> Offline (force those replicas out of isr)
-            // B6. replicas in RR -> NonExistentReplica (force those replicas to be deleted)
+            // B6. replicas in RR -> ReplicaMigrationStarted (force those replicas to be migration
+            // started)
             stopRemovedReplicasOfReassignedBucket(tableBucket, removingReplicas);
             // B7. Update ZK with RS = TRS, AR = [], RR = [].
             updateReplicaAssignmentForBucket(tableBucket, targetReplicas);
@@ -1560,7 +1576,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
         removingReplicas.forEach(
                 replica -> replicasToBeMoved.add(new TableBucketReplica(tableBucket, replica)));
         replicaStateMachine.handleStateChanges(replicasToBeMoved, OfflineReplica);
-        replicaStateMachine.handleStateChanges(replicasToBeMoved, ReplicaMigrateSuccessful);
+        replicaStateMachine.handleStateChanges(replicasToBeMoved, ReplicaMigrationStarted);
     }
 
     private void updateReplicaAssignmentForBucket(

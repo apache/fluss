@@ -308,14 +308,14 @@ public class ReplicaStateMachine {
                         replica -> doStateChange(replica, ReplicaState.OfflineReplica));
 
                 break;
-            case ReplicaMigrateSuccessful:
+            case ReplicaMigrationStarted:
                 validReplicas.forEach(
-                        replica -> doStateChange(replica, ReplicaState.ReplicaMigrateSuccessful));
+                        replica -> doStateChange(replica, ReplicaState.ReplicaMigrationStarted));
                 validReplicas.forEach(
                         tableBucketReplica -> {
                             int replicaServer = tableBucketReplica.getReplica();
-                            // send stop replica request with delete = true and deleteRemote = false
-                            // indicates the replica is migrated.
+                            // send stop replica request with deleteLocal = true and deleteRemote =
+                            // false indicates the replica is migrated.
                             coordinatorRequestBatch.addStopReplicaRequestForTabletServers(
                                     Collections.singleton(replicaServer),
                                     tableBucketReplica.getTableBucket(),
@@ -328,7 +328,7 @@ public class ReplicaStateMachine {
             case ReplicaDeletionStarted:
                 validReplicas.forEach(
                         replica -> doStateChange(replica, ReplicaState.ReplicaDeletionStarted));
-                // send stop replica request with delete = true and delete = true indicates the
+                // send stop replica request with deleteLocal = true and delete = true indicates the
                 // replica is deleted.
                 validReplicas.forEach(
                         tableBucketReplica -> {

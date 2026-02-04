@@ -25,10 +25,12 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.MemorySize;
 import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableBucketReplica;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.AddServerTagRequest;
+import org.apache.fluss.server.coordinator.CoordinatorContext;
 import org.apache.fluss.server.coordinator.rebalance.model.ClusterModel;
 import org.apache.fluss.server.log.remote.RemoteLogManager;
 import org.apache.fluss.server.log.remote.RemoteLogManifest;
@@ -54,6 +56,7 @@ import static org.apache.fluss.record.TestData.DATA1;
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
+import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.OnlineReplica;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.assertProduceLogResponse;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.createPartition;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.createTable;
@@ -144,11 +147,35 @@ public class RebalanceManagerITCase {
         RemoteLogManifest manifest = remoteLogTablet.currentManifest();
         assertThat(manifest.getPhysicalTablePath().getTablePath()).isEqualTo(DATA1_TABLE_PATH);
         assertThat(manifest.getTableBucket()).isEqualTo(tb);
-        assertThat(manifest.getRemoteLogSegmentList().size()).isGreaterThan(0);
+        int remoteLogSize = manifest.getRemoteLogSegmentList().size();
+        assertThat(remoteLogSize).isGreaterThan(0);
 
         // try to trigger rebalance. for example, if current assignment is [0, 1, 2], try to trigger
         // rebalance to [3, 4, 5]
         RebalancePlanForBucket planForBucket = buildRebalancePlanForBucket(tb);
+
+        CoordinatorContext coordinatorContext =
+                FLUSS_CLUSTER_EXTENSION
+                        .getCoordinatorServer()
+                        .getCoordinatorEventProcessor()
+                        .getCoordinatorContext();
+        planForBucket
+                .getOriginReplicas()
+                .forEach(
+                        replicaId ->
+                                assertThat(
+                                                coordinatorContext.getReplicaState(
+                                                        new TableBucketReplica(tb, replicaId)))
+                                        .isEqualTo(OnlineReplica));
+        planForBucket
+                .getNewReplicas()
+                .forEach(
+                        replicaId ->
+                                assertThat(
+                                                coordinatorContext.getReplicaState(
+                                                        new TableBucketReplica(tb, replicaId)))
+                                        .isNull());
+
         rebalanceManager.registerRebalance(
                 "test-rebalance-dsds",
                 Collections.singletonMap(tb, planForBucket),
@@ -179,6 +206,26 @@ public class RebalanceManagerITCase {
                         ReplicaManager rm = ts.getReplicaManager();
                         assertThat(rm.getReplica(tb))
                                 .isInstanceOf(ReplicaManager.NoneReplica.class);
+
+                        // replica state changes.
+                        planForBucket
+                                .getOriginReplicas()
+                                .forEach(
+                                        replicaId ->
+                                                assertThat(
+                                                                coordinatorContext.getReplicaState(
+                                                                        new TableBucketReplica(
+                                                                                tb, replicaId)))
+                                                        .isNull());
+                        planForBucket
+                                .getNewReplicas()
+                                .forEach(
+                                        replicaId ->
+                                                assertThat(
+                                                                coordinatorContext.getReplicaState(
+                                                                        new TableBucketReplica(
+                                                                                tb, replicaId)))
+                                                        .isEqualTo(OnlineReplica));
                     }
                 });
         // remote log not be deleted.
@@ -190,7 +237,7 @@ public class RebalanceManagerITCase {
         RemoteLogManifest newManifest = leaderRlt.currentManifest();
         assertThat(newManifest.getPhysicalTablePath().getTablePath()).isEqualTo(DATA1_TABLE_PATH);
         assertThat(newManifest.getTableBucket()).isEqualTo(tb);
-        assertThat(newManifest.getRemoteLogSegmentList().size()).isGreaterThan(0);
+        assertThat(newManifest.getRemoteLogSegmentList().size()).isEqualTo(remoteLogSize);
     }
 
     private TableBucket setupTableBucket() throws Exception {

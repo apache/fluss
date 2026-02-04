@@ -899,7 +899,12 @@ message PbNotifyLeaderAndIsrRespForBucket {
 message PbStopReplicaReqForBucket {
   required PbTableBucket table_bucket = 1;
   required int32 leader_epoch = 2;
+  // delete means remove local replica data (i.e., data stored on the current node).
   required bool delete = 3;
+  // deleteRemote means remove remote replica data (e.g., data in object storage) and was introduced in v0.9.
+  // For backward compatibility, if a request does not include the deleteRemote flag, the system treats delete as
+  // deleteRemote (i.e., it falls back to remote deletion). This ensures older CoordinatorServer continues to function
+  // correctly with newer TabletServers.
   optional bool deleteRemote = 4;
 }
 

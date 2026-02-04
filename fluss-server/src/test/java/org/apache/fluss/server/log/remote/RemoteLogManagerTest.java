@@ -525,7 +525,6 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
         addMultiSegmentsToLogTablet(logTablet, 5);
         // trigger RLMTask copy local log segment to remote and update metadata.
         remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
-        RemoteLogTablet remoteLog = remoteLogManager.remoteLogTablet(tb);
         List<RemoteLogSegment> remoteLogSegmentList =
                 remoteLogManager.relevantRemoteLogSegments(tb, 0L);
         assertThat(remoteLogSegmentList.size()).isEqualTo(4);
@@ -536,14 +535,15 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
                                 .collect(Collectors.toSet()));
         assertThat(remoteLogManager.getTaskWithFuture(tb)).isNotNull();
 
-        FsPath logTabletDir =
+        FsPath remoteLogTabletDir =
                 remoteLogTabletDir(
                         remoteLogDir(conf),
                         partitionTable
                                 ? DATA1_PHYSICAL_TABLE_PATH_PA_2024
                                 : DATA1_PHYSICAL_TABLE_PATH,
                         tb);
-        assertThat(logTabletDir.getFileSystem().exists(logTabletDir)).isTrue();
+        assertThat(remoteLogTabletDir.getFileSystem().exists(remoteLogTabletDir)).isTrue();
+        assertThat(logTablet.getLogDir().exists()).isTrue();
 
         // stop with delete = false, deleteRemote =false, local and remote log should be kept,
         // remote log task will be removed.
@@ -555,7 +555,7 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
         assertThat(future1.get()).containsOnly(new StopReplicaResultForBucket(tb));
         ReplicaManager.HostedReplica hostedReplica = replicaManager.getReplica(tb);
         assertThat(hostedReplica).isInstanceOf(ReplicaManager.OnlineReplica.class);
-        assertThat(logTabletDir.getFileSystem().exists(logTabletDir)).isTrue();
+        assertThat(remoteLogTabletDir.getFileSystem().exists(remoteLogTabletDir)).isTrue();
         assertThat(remoteLogManager.getTaskWithFuture(tb)).isNull();
 
         CompletableFuture<List<StopReplicaResultForBucket>> future2 = new CompletableFuture<>();
@@ -566,13 +566,14 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
         assertThat(future2.get()).containsOnly(new StopReplicaResultForBucket(tb));
         hostedReplica = replicaManager.getReplica(tb);
         assertThat(hostedReplica).isInstanceOf(ReplicaManager.NoneReplica.class);
+        assertThat(logTablet.getLogDir().exists()).isFalse();
         if (!deleteRemote) {
             // stop with delete = true, deleteRemote =false, local log should be deleted, remote log
             // should be kept.
-            assertThat(logTabletDir.getFileSystem().exists(logTabletDir)).isTrue();
+            assertThat(remoteLogTabletDir.getFileSystem().exists(remoteLogTabletDir)).isTrue();
         } else {
             // stop with delete = true, deleteRemote =true, local and remote log should be deleted
-            assertThat(logTabletDir.getFileSystem().exists(logTabletDir)).isFalse();
+            assertThat(remoteLogTabletDir.getFileSystem().exists(remoteLogTabletDir)).isFalse();
         }
     }
 
