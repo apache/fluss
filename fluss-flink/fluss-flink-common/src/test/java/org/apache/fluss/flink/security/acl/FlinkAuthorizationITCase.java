@@ -17,12 +17,6 @@
 
 package org.apache.fluss.flink.security.acl;
 
-import org.apache.commons.lang3.RandomUtils;
-import org.apache.flink.table.api.EnvironmentSettings;
-import org.apache.flink.table.api.TableEnvironment;
-import org.apache.flink.test.util.AbstractTestBase;
-import org.apache.flink.types.Row;
-import org.apache.flink.util.CollectionUtil;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.MemorySize;
@@ -42,6 +36,13 @@ import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.ParentResourceBlockingClassLoader;
 import org.apache.fluss.utils.TemporaryClassLoaderContext;
+
+import org.apache.commons.lang3.RandomUtils;
+import org.apache.flink.table.api.EnvironmentSettings;
+import org.apache.flink.table.api.TableEnvironment;
+import org.apache.flink.test.util.AbstractTestBase;
+import org.apache.flink.types.Row;
+import org.apache.flink.util.CollectionUtil;
 import org.apache.hadoop.minikdc.MiniKdc;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
