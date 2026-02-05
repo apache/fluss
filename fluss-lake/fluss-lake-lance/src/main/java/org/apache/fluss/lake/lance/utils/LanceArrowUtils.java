@@ -23,6 +23,7 @@ import org.apache.fluss.types.BinaryType;
 import org.apache.fluss.types.BooleanType;
 import org.apache.fluss.types.BytesType;
 import org.apache.fluss.types.CharType;
+import org.apache.fluss.types.DataField;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DateType;
 import org.apache.fluss.types.DecimalType;
@@ -45,6 +46,7 @@ import org.apache.arrow.vector.types.pojo.Field;
 import org.apache.arrow.vector.types.pojo.FieldType;
 import org.apache.arrow.vector.types.pojo.Schema;
 
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
@@ -125,6 +127,12 @@ public class LanceArrowUtils {
                                     "element",
                                     ((ArrayType) logicalType).getElementType(),
                                     tableProperties));
+        } else if (logicalType instanceof RowType) {
+            RowType rowType = (RowType) logicalType;
+            children = new ArrayList<>(rowType.getFieldCount());
+            for (DataField field : rowType.getFields()) {
+                children.add(toArrowField(field.getName(), field.getType(), tableProperties));
+            }
         }
         return new Field(fieldName, fieldType, children);
     }
@@ -192,6 +200,8 @@ public class LanceArrowUtils {
             }
         } else if (dataType instanceof ArrayType) {
             return ArrowType.List.INSTANCE;
+        } else if (dataType instanceof RowType) {
+            return ArrowType.Struct.INSTANCE;
         } else {
             throw new UnsupportedOperationException(
                     String.format(
