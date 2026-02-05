@@ -110,6 +110,15 @@ public class FlinkRowAssertionsUtils {
                 Duration.ofMinutes(1));
     }
 
+    public static List<String> collectBatchRows(CloseableIterator<Row> iterator) throws Exception {
+        List<String> actual = new ArrayList<>();
+        while (iterator.hasNext()) {
+            actual.add(iterator.next().toString());
+        }
+        iterator.close();
+        return actual;
+    }
+
     protected static List<String> collectRowsWithTimeout(
             CloseableIterator<Row> iterator,
             int expectedCount,
