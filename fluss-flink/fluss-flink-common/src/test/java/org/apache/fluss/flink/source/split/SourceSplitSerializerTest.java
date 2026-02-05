@@ -61,6 +61,62 @@ class SourceSplitSerializerTest {
 
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
+    void testHybridSnapshotLogSplitSerdeWithBacklogOffset(boolean isPartitioned) throws Exception {
+        int snapshotId = 100;
+        long logStartingOffset = 50;
+        long backlogMarkedStoppingOffset = 200;
+        TableBucket bucket = isPartitioned ? partitionedTableBucket : tableBucket;
+        String partitionName = isPartitioned ? "2026" : null;
+
+        HybridSnapshotLogSplit splitWithBacklog =
+                new HybridSnapshotLogSplit(
+                        bucket,
+                        partitionName,
+                        snapshotId,
+                        logStartingOffset,
+                        backlogMarkedStoppingOffset);
+        byte[] serialized = serializer.serialize(splitWithBacklog);
+        SourceSplitBase deserializedSplit =
+                serializer.deserialize(serializer.getVersion(), serialized);
+        assertThat(deserializedSplit).isEqualTo(splitWithBacklog);
+        assertThat(((HybridSnapshotLogSplit) deserializedSplit).getBacklogMarkedStoppingOffset())
+                .isPresent()
+                .hasValue(backlogMarkedStoppingOffset);
+
+        HybridSnapshotLogSplit splitFull =
+                new HybridSnapshotLogSplit(
+                        bucket,
+                        partitionName,
+                        snapshotId,
+                        5L,
+                        true,
+                        logStartingOffset,
+                        backlogMarkedStoppingOffset);
+        serialized = serializer.serialize(splitFull);
+        deserializedSplit = serializer.deserialize(serializer.getVersion(), serialized);
+        assertThat(deserializedSplit).isEqualTo(splitFull);
+        assertThat(((HybridSnapshotLogSplit) deserializedSplit).getBacklogMarkedStoppingOffset())
+                .isPresent()
+                .hasValue(backlogMarkedStoppingOffset);
+
+        HybridSnapshotLogSplit splitNoBacklog =
+                new HybridSnapshotLogSplit(
+                        bucket,
+                        partitionName,
+                        snapshotId,
+                        5L,
+                        true,
+                        logStartingOffset,
+                        LogSplit.NO_STOPPING_OFFSET);
+        serialized = serializer.serialize(splitNoBacklog);
+        deserializedSplit = serializer.deserialize(serializer.getVersion(), serialized);
+        assertThat(deserializedSplit).isEqualTo(splitNoBacklog);
+        assertThat(((HybridSnapshotLogSplit) deserializedSplit).getBacklogMarkedStoppingOffset())
+                .isEmpty();
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
     void testLogSplitSerde(boolean isPartitioned) throws Exception {
         TableBucket bucket = isPartitioned ? partitionedTableBucket : tableBucket;
         String partitionName = isPartitioned ? "2024" : null;
@@ -70,5 +126,52 @@ class SourceSplitSerializerTest {
         SourceSplitBase deserializedSplit =
                 serializer.deserialize(serializer.getVersion(), serialized);
         assertThat(deserializedSplit).isEqualTo(logSplit);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testLogSplitSerdeWithBacklogOffset(boolean isPartitioned) throws Exception {
+        TableBucket bucket = isPartitioned ? partitionedTableBucket : tableBucket;
+        String partitionName = isPartitioned ? "2024" : null;
+
+        long startingOffset = 100;
+        long stoppingOffset = 500;
+        long backlogMarkedOffset = 300;
+        LogSplit logSplitWithBacklog =
+                new LogSplit(
+                        bucket, partitionName, startingOffset, stoppingOffset, backlogMarkedOffset);
+
+        byte[] serialized = serializer.serialize(logSplitWithBacklog);
+        SourceSplitBase deserializedSplit =
+                serializer.deserialize(serializer.getVersion(), serialized);
+        assertThat(deserializedSplit).isEqualTo(logSplitWithBacklog);
+        assertThat(((LogSplit) deserializedSplit).getBacklogMarkedOffset())
+                .isPresent()
+                .hasValue(backlogMarkedOffset);
+
+        LogSplit logSplitWithStoppingOnly =
+                new LogSplit(bucket, partitionName, startingOffset, stoppingOffset);
+        serialized = serializer.serialize(logSplitWithStoppingOnly);
+        deserializedSplit = serializer.deserialize(serializer.getVersion(), serialized);
+        assertThat(deserializedSplit).isEqualTo(logSplitWithStoppingOnly);
+        assertThat(((LogSplit) deserializedSplit).getBacklogMarkedOffset()).isEmpty();
+        assertThat(((LogSplit) deserializedSplit).getStoppingOffset())
+                .isPresent()
+                .hasValue(stoppingOffset);
+
+        LogSplit logSplitWithBacklogOnly =
+                new LogSplit(
+                        bucket,
+                        partitionName,
+                        startingOffset,
+                        LogSplit.NO_STOPPING_OFFSET,
+                        backlogMarkedOffset);
+        serialized = serializer.serialize(logSplitWithBacklogOnly);
+        deserializedSplit = serializer.deserialize(serializer.getVersion(), serialized);
+        assertThat(deserializedSplit).isEqualTo(logSplitWithBacklogOnly);
+        assertThat(((LogSplit) deserializedSplit).getBacklogMarkedOffset())
+                .isPresent()
+                .hasValue(backlogMarkedOffset);
+        assertThat(((LogSplit) deserializedSplit).getStoppingOffset()).isEmpty();
     }
 }

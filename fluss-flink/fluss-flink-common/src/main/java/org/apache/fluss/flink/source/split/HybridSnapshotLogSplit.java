@@ -22,6 +22,9 @@ import org.apache.fluss.metadata.TableBucket;
 import javax.annotation.Nullable;
 
 import java.util.Objects;
+import java.util.Optional;
+
+import static org.apache.fluss.flink.source.split.LogSplit.NO_STOPPING_OFFSET;
 
 /**
  * The hybrid split for first reading the snapshot files and then switch to read the cdc log from a
@@ -35,13 +38,37 @@ public class HybridSnapshotLogSplit extends SnapshotSplit {
     private static final String HYBRID_SPLIT_PREFIX = "hybrid-snapshot-log-";
     private final boolean isSnapshotFinished;
     private final long logStartingOffset;
+    private final long backlogMarkedStoppingOffset;
 
     public HybridSnapshotLogSplit(
             TableBucket tableBucket,
             @Nullable String partitionName,
             long snapshotId,
             long logStartingOffset) {
-        this(tableBucket, partitionName, snapshotId, 0, false, logStartingOffset);
+        this(
+                tableBucket,
+                partitionName,
+                snapshotId,
+                0L,
+                false,
+                logStartingOffset,
+                NO_STOPPING_OFFSET);
+    }
+
+    public HybridSnapshotLogSplit(
+            TableBucket tableBucket,
+            @Nullable String partitionName,
+            long snapshotId,
+            long logStartingOffset,
+            long backlogMarkedStoppingOffset) {
+        this(
+                tableBucket,
+                partitionName,
+                snapshotId,
+                0L,
+                false,
+                logStartingOffset,
+                backlogMarkedStoppingOffset);
     }
 
     public HybridSnapshotLogSplit(
@@ -51,13 +78,38 @@ public class HybridSnapshotLogSplit extends SnapshotSplit {
             long recordsToSkip,
             boolean isSnapshotFinished,
             long logStartingOffset) {
+        this(
+                tableBucket,
+                partitionName,
+                snapshotId,
+                recordsToSkip,
+                isSnapshotFinished,
+                logStartingOffset,
+                NO_STOPPING_OFFSET);
+    }
+
+    public HybridSnapshotLogSplit(
+            TableBucket tableBucket,
+            @Nullable String partitionName,
+            long snapshotId,
+            long recordsToSkip,
+            boolean isSnapshotFinished,
+            long logStartingOffset,
+            long backlogMarkedStoppingOffset) {
         super(tableBucket, partitionName, snapshotId, recordsToSkip);
         this.isSnapshotFinished = isSnapshotFinished;
         this.logStartingOffset = logStartingOffset;
+        this.backlogMarkedStoppingOffset = backlogMarkedStoppingOffset;
     }
 
     public long getLogStartingOffset() {
         return logStartingOffset;
+    }
+
+    public Optional<Long> getBacklogMarkedStoppingOffset() {
+        return backlogMarkedStoppingOffset >= 0
+                ? Optional.of(backlogMarkedStoppingOffset)
+                : Optional.empty();
     }
 
     public boolean isSnapshotFinished() {
@@ -82,12 +134,17 @@ public class HybridSnapshotLogSplit extends SnapshotSplit {
         }
         HybridSnapshotLogSplit that = (HybridSnapshotLogSplit) o;
         return isSnapshotFinished == that.isSnapshotFinished
-                && logStartingOffset == that.logStartingOffset;
+                && logStartingOffset == that.logStartingOffset
+                && backlogMarkedStoppingOffset == that.backlogMarkedStoppingOffset;
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(super.hashCode(), isSnapshotFinished, logStartingOffset);
+        return Objects.hash(
+                super.hashCode(),
+                isSnapshotFinished,
+                logStartingOffset,
+                backlogMarkedStoppingOffset);
     }
 
     @Override
@@ -103,6 +160,8 @@ public class HybridSnapshotLogSplit extends SnapshotSplit {
                 + isSnapshotFinished
                 + ", logStartingOffset="
                 + logStartingOffset
+                + ", backlogMarkedStoppingOffset="
+                + backlogMarkedStoppingOffset
                 + ", recordsToSkip="
                 + recordsToSkip
                 + '}';
