@@ -41,9 +41,9 @@ export FLINK_VERSION="1.20"
 
 ```shell
 mkdir lib
-wget -O lib/flink-faker-0.5.3.jar https://github.com/knaufk/flink-faker/releases/download/v0.5.3/flink-faker-0.5.3.jar
-wget -O "lib/fluss-flink-${FLINK_VERSION}-$FLUSS_DOCKER_VERSION$.jar" "https://repo1.maven.org/maven2/org/apache/fluss/fluss-flink-${FLINK_VERSION}/$FLUSS_DOCKER_VERSION$/fluss-flink-${FLINK_VERSION}-$FLUSS_DOCKER_VERSION$.jar"
-wget -O "lib/fluss-fs-s3-$FLUSS_DOCKER_VERSION$.jar" "https://repo1.maven.org/maven2/org/apache/fluss/fluss-fs-s3/$FLUSS_DOCKER_VERSION$/fluss-fs-s3-$FLUSS_DOCKER_VERSION$.jar"
+curl -fL -o lib/flink-faker-0.5.3.jar https://github.com/knaufk/flink-faker/releases/download/v0.5.3/flink-faker-0.5.3.jar
+curl -fL -o "lib/fluss-flink-${FLINK_VERSION}-$FLUSS_DOCKER_VERSION$.jar" "https://repo1.maven.org/maven2/org/apache/fluss/fluss-flink-${FLINK_VERSION}/$FLUSS_DOCKER_VERSION$/fluss-flink-${FLINK_VERSION}-$FLUSS_DOCKER_VERSION$.jar"
+curl -fL -o "lib/fluss-fs-s3-$FLUSS_DOCKER_VERSION$.jar" "https://repo1.maven.org/maven2/org/apache/fluss/fluss-fs-s3/$FLUSS_DOCKER_VERSION$/fluss-fs-s3-$FLUSS_DOCKER_VERSION$.jar"
 ```
 
 3. Create a `docker-compose.yml` file with the following content:
@@ -81,11 +81,9 @@ services:
         s3.access-key: rustfsadmin
         s3.secret-key: rustfsadmin
         s3.path-style-access: true
-    volumes:
-      - ./lib:/tmp/fluss-lib
-    entrypoint: ["sh", "-c", "cp -v /tmp/fluss-lib/fluss-fs-s3-*.jar /opt/fluss/lib/ 2>/dev/null || true && exec /docker-entrypoint.sh coordinatorServer"]
   tablet-server:
     image: apache/fluss:$FLUSS_DOCKER_VERSION$
+    command: tabletServer
     depends_on:
       - coordinator-server
     environment:
@@ -100,9 +98,6 @@ services:
         s3.secret-key: rustfsadmin
         s3.path-style-access: true
         kv.snapshot.interval: 60s
-    volumes:
-      - ./lib:/tmp/fluss-lib
-    entrypoint: ["sh", "-c", "cp -v /tmp/fluss-lib/fluss-fs-s3-*.jar /opt/fluss/lib/ 2>/dev/null || true && exec /docker-entrypoint.sh tabletServer"]
   zookeeper:
     restart: always
     image: zookeeper:3.9.2
