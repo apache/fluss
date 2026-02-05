@@ -139,6 +139,12 @@ public class SaslServerAuthenticator implements ServerAuthenticator {
     @Override
     public byte[] evaluateResponse(byte[] token) throws AuthenticationException {
         try {
+            // Use Subject.doAs to bind the login subject to the current AccessControlContext.
+            // This is required for Kerberos (GSSAPI) authentication because:
+            // - GssKrb5Server.evaluateResponse() -> GSSContextImpl.acceptSecContext()
+            //   retrieves the Subject via Subject.getSubject(AccessController.getContext())
+            //   to obtain server credentials from the keytab for validating client service tickets.
+            // - Without Subject.doAs, GSSAPI cannot find the credentials and authentication fails.
             return Subject.doAs(
                     loginManager.subject(),
                     (PrivilegedExceptionAction<byte[]>) () -> saslServer.evaluateResponse(token));
