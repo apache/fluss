@@ -23,7 +23,9 @@ import org.apache.fluss.lake.lance.LanceConfig;
 import org.apache.fluss.lake.lance.testutils.FlinkLanceTieringTestBase;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.GenericArray;
+import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.server.zk.data.lake.LakeTable;
 
 import com.lancedb.lance.Dataset;
@@ -140,6 +142,112 @@ class LanceTieringITCase extends FlinkLanceTieringTestBase {
         jobClient.cancel().get();
     }
 
+    @Test
+    void testTieringWithNestedRowType() throws Exception {
+        // Test: Log table with nested Row type
+        TablePath t1 = TablePath.of(DEFAULT_DB, "logTableWithNestedRow");
+        long t1Id = createLogTableWithNestedRowType(t1);
+        TableBucket t1Bucket = new TableBucket(t1Id, 0);
+
+        // Create nested row data
+        for (int i = 0; i < 10; i++) {
+            GenericRow addressRow1 = new GenericRow(2);
+            addressRow1.setField(0, BinaryString.fromString("New York"));
+            addressRow1.setField(1, 10001);
+
+            GenericRow addressRow2 = new GenericRow(2);
+            addressRow2.setField(0, BinaryString.fromString("Los Angeles"));
+            addressRow2.setField(1, 90001);
+
+            GenericRow addressRow3 = new GenericRow(2);
+            addressRow3.setField(0, BinaryString.fromString("Chicago"));
+            addressRow3.setField(1, 60601);
+
+            writeRows(
+                    t1,
+                    Arrays.asList(
+                            row(1, "Alice", addressRow1),
+                            row(2, "Bob", addressRow2),
+                            row(3, "Charlie", addressRow3)),
+                    true);
+        }
+
+        // then start tiering job
+        JobClient jobClient = buildTieringJob(execEnv);
+
+        // check the status of replica after synced
+        assertReplicaStatus(t1Bucket, 30);
+
+        LanceConfig config1 =
+                LanceConfig.from(
+                        lanceConf.toMap(),
+                        Collections.emptyMap(),
+                        t1.getDatabaseName(),
+                        t1.getTableName());
+
+        // check data in lance using TSV string comparison
+        String expectedTsv1 = buildExpectedTsvForNestedRowTable(30);
+        checkDataInLance(config1, expectedTsv1);
+        checkSnapshotPropertyInLance(config1, Collections.singletonMap(t1Bucket, 30L));
+
+        jobClient.cancel().get();
+    }
+
+    @Test
+    void testTieringWithArrayOfRowType() throws Exception {
+        // Test: Log table with array of Row type
+        TablePath t1 = TablePath.of(DEFAULT_DB, "logTableWithArrayOfRow");
+        long t1Id = createLogTableWithArrayOfRowType(t1);
+        TableBucket t1Bucket = new TableBucket(t1Id, 0);
+
+        // Create array of rows data
+        for (int i = 0; i < 10; i++) {
+            GenericRow item1 = new GenericRow(2);
+            item1.setField(0, BinaryString.fromString("Apple"));
+            item1.setField(1, 5);
+
+            GenericRow item2 = new GenericRow(2);
+            item2.setField(0, BinaryString.fromString("Banana"));
+            item2.setField(1, 3);
+
+            GenericRow item3 = new GenericRow(2);
+            item3.setField(0, BinaryString.fromString("Orange"));
+            item3.setField(1, 7);
+
+            GenericArray items1 = new GenericArray(new Object[] {item1, item2});
+            GenericArray items2 = new GenericArray(new Object[] {item3});
+            GenericArray items3 = new GenericArray(new Object[] {item1, item2, item3});
+
+            writeRows(
+                    t1,
+                    Arrays.asList(
+                            row(1, "Order1", items1),
+                            row(2, "Order2", items2),
+                            row(3, "Order3", items3)),
+                    true);
+        }
+
+        // then start tiering job
+        JobClient jobClient = buildTieringJob(execEnv);
+
+        // check the status of replica after synced
+        assertReplicaStatus(t1Bucket, 30);
+
+        LanceConfig config1 =
+                LanceConfig.from(
+                        lanceConf.toMap(),
+                        Collections.emptyMap(),
+                        t1.getDatabaseName(),
+                        t1.getTableName());
+
+        // check data in lance using TSV string comparison
+        String expectedTsv1 = buildExpectedTsvForArrayOfRowTable(30);
+        checkDataInLance(config1, expectedTsv1);
+        checkSnapshotPropertyInLance(config1, Collections.singletonMap(t1Bucket, 30L));
+
+        jobClient.cancel().get();
+    }
+
     private void checkSnapshotPropertyInLance(
             LanceConfig config, Map<TableBucket, Long> expectedOffsets) throws Exception {
         ReadOptions.Builder builder = new ReadOptions.Builder();
@@ -205,6 +313,30 @@ class LanceTieringITCase extends FlinkLanceTieringTestBase {
             sb.append("1\tv1\t[\"tag1\",\"tag2\"]\t[10,20]\t[0.1,0.2,0.3,0.4]\n");
             sb.append("2\tv2\t[\"tag3\"]\t[30,40,50]\t[0.5,0.6,0.7,0.8]\n");
             sb.append("3\tv3\t[\"tag4\",\"tag5\",\"tag6\"]\t[60]\t[0.9,1.0,1.1,1.2]\n");
+        }
+        return sb.toString();
+    }
+
+    private String buildExpectedTsvForNestedRowTable(int rowCount) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("id\tname\taddress\n");
+        for (int i = 0; i < rowCount / 3; i++) {
+            sb.append("1\tAlice\t{\"city\":\"New York\",\"zip\":10001}\n");
+            sb.append("2\tBob\t{\"city\":\"Los Angeles\",\"zip\":90001}\n");
+            sb.append("3\tCharlie\t{\"city\":\"Chicago\",\"zip\":60601}\n");
+        }
+        return sb.toString();
+    }
+
+    private String buildExpectedTsvForArrayOfRowTable(int rowCount) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("id\tname\titems\n");
+        for (int i = 0; i < rowCount / 3; i++) {
+            sb.append(
+                    "1\tOrder1\t[{\"item_name\":\"Apple\",\"quantity\":5},{\"item_name\":\"Banana\",\"quantity\":3}]\n");
+            sb.append("2\tOrder2\t[{\"item_name\":\"Orange\",\"quantity\":7}]\n");
+            sb.append(
+                    "3\tOrder3\t[{\"item_name\":\"Apple\",\"quantity\":5},{\"item_name\":\"Banana\",\"quantity\":3},{\"item_name\":\"Orange\",\"quantity\":7}]\n");
         }
         return sb.toString();
     }
