@@ -605,6 +605,65 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
                 .isEqualTo(-1L);
     }
 
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testAlterTableTieredLogLocalSegments(boolean partitionedTable) throws Exception {
+        // 1. Create table with initial config tieredLogLocalSegments = 2
+        long tableId =
+                registerTableInZkClient(
+                        DATA1_TABLE_PATH,
+                        DATA1_SCHEMA,
+                        200L,
+                        Collections.emptyList(),
+                        Collections.singletonMap(
+                                ConfigOptions.TABLE_TIERED_LOG_LOCAL_SEGMENTS.key(), "2"));
+        TableBucket tb = makeTableBucket(tableId, partitionedTable);
+        makeLogTableAsLeader(tb, partitionedTable);
+
+        Replica replica = replicaManager.getReplicaOrException(tb);
+        LogTablet logTablet = replica.getLogTablet();
+
+        // Verify initial config
+        assertThat(logTablet.getTieredLogLocalSegments()).isEqualTo(2);
+
+        // 2. Generate 10 segments, upload 9 to remote (excluding active segment)
+        addMultiSegmentsToLogTablet(logTablet, 10);
+        remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
+
+        // Verify upload success
+        List<RemoteLogSegment> remoteSegments = remoteLogManager.relevantRemoteLogSegments(tb, 0L);
+        assertThat(remoteSegments).hasSize(9);
+
+        // Verify 2 local segments retained
+        assertThat(logTablet.getSegments()).hasSize(2);
+
+        // 3. Directly update config via Replica (simulating metadata propagation)
+        replica.updateTieredLogLocalSegments(5);
+
+        // Verify LogTablet internal state has been updated
+        assertThat(logTablet.getTieredLogLocalSegments()).isEqualTo(5);
+
+        // 4. Generate more segments and trigger cleanup, verify new config takes effect
+        addMultiSegmentsToLogTablet(logTablet, 10);
+        remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
+
+        // Should retain 5 local segments
+        assertThat(logTablet.getSegments()).hasSize(5);
+
+        // 5. Modify config to 3 again, verify multiple modifications work
+        replica.updateTieredLogLocalSegments(3);
+
+        // Verify LogTablet internal state updated again
+        assertThat(logTablet.getTieredLogLocalSegments()).isEqualTo(3);
+
+        // Generate more segments and verify new config takes effect
+        addMultiSegmentsToLogTablet(logTablet, 5);
+        remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
+
+        // Should retain 3 local segments
+        assertThat(logTablet.getSegments()).hasSize(3);
+    }
+
     private TableBucket makeTableBucket(boolean partitionTable) {
         return makeTableBucket(DATA1_TABLE_ID, partitionTable);
     }
