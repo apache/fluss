@@ -17,6 +17,12 @@
 
 package org.apache.fluss.flink.security.acl;
 
+import org.apache.commons.lang3.RandomUtils;
+import org.apache.flink.table.api.EnvironmentSettings;
+import org.apache.flink.table.api.TableEnvironment;
+import org.apache.flink.test.util.AbstractTestBase;
+import org.apache.flink.types.Row;
+import org.apache.flink.util.CollectionUtil;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.MemorySize;
@@ -36,13 +42,6 @@ import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.ParentResourceBlockingClassLoader;
 import org.apache.fluss.utils.TemporaryClassLoaderContext;
-
-import org.apache.commons.lang3.RandomUtils;
-import org.apache.flink.table.api.EnvironmentSettings;
-import org.apache.flink.table.api.TableEnvironment;
-import org.apache.flink.test.util.AbstractTestBase;
-import org.apache.flink.types.Row;
-import org.apache.flink.util.CollectionUtil;
 import org.apache.hadoop.minikdc.MiniKdc;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
@@ -276,6 +275,62 @@ abstract class FlinkAuthorizationITCase extends AbstractTestBase {
                                     CollectionUtil.iteratorToList(
                                             tEnv.executeSql("show databases").collect());
                             assertThat(databases).contains(Row.of(testDB));
+                        });
+
+                // Test: Invalid credentials should fail
+                String invalidPrincipal = String.format("nonexistent@%s", realm);
+                String invalidJaas =
+                        String.format(
+                                "com.sun.security.auth.module.Krb5LoginModule required "
+                                        + "useKeyTab=true storeKey=true useTicketCache=false "
+                                        + "keyTab=\"%s\" principal=\"%s\";",
+                                keytab.getAbsolutePath(), invalidPrincipal);
+
+                String createInvalidCatalogDDL =
+                        String.format(
+                                "create catalog invalid_kerberos_catalog with ( \n"
+                                        + "'type' = 'fluss', \n"
+                                        + "'bootstrap.servers' = '%s', \n"
+                                        + "'client.security.protocol' = 'sasl', \n"
+                                        + "'client.security.sasl.mechanism' = 'GSSAPI', \n"
+                                        + "'client.security.sasl.jaas.config' = '%s' \n"
+                                        + ")",
+                                bootstrapServers, invalidJaas);
+
+                assertThatThrownBy(
+                                () -> {
+                                    tEnv.executeSql(createInvalidCatalogDDL).await();
+                                    tEnv.executeSql("use catalog invalid_kerberos_catalog").await();
+                                    tEnv.executeSql("show databases").await();
+                                })
+                        .hasRootCauseInstanceOf(javax.security.auth.login.LoginException.class);
+
+                // Test: keytab/principal config options
+                String keytabPrincipalCatalogDDL =
+                        String.format(
+                                "create catalog keytab_principal_catalog with ( \n"
+                                        + "'type' = 'fluss', \n"
+                                        + "'bootstrap.servers' = '%s', \n"
+                                        + "'client.security.protocol' = 'sasl', \n"
+                                        + "'client.security.sasl.mechanism' = 'GSSAPI', \n"
+                                        + "'client.security.kerberos.keytab' = '%s', \n"
+                                        + "'client.security.kerberos.principal' = '%s' \n"
+                                        + ")",
+                                bootstrapServers, keytab.getAbsolutePath(), clientPrincipal);
+
+                tEnv.executeSql(keytabPrincipalCatalogDDL).await();
+                tEnv.executeSql("use catalog keytab_principal_catalog").await();
+
+                String keytabTestDB = "test_keytab_principal_db";
+                tEnv.executeSql("create database " + keytabTestDB).await();
+
+                org.apache.fluss.testutils.common.CommonTestUtils.retry(
+                        java.time.Duration.ofSeconds(60),
+                        () -> {
+                            List<Row> databases =
+                                    CollectionUtil.iteratorToList(
+                                            tEnv.executeSql("show databases").collect());
+                            assertThat(databases).contains(Row.of(keytabTestDB));
                         });
             } finally {
                 kerberosFluss.close();
