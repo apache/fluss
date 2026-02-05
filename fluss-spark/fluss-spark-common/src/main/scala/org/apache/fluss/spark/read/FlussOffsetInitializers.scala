@@ -17,7 +17,7 @@
 
 package org.apache.fluss.spark.read
 
-import org.apache.fluss.client.initializer.OffsetsInitializer
+import org.apache.fluss.client.initializer.{NoStoppingOffsetsInitializer, OffsetsInitializer}
 import org.apache.fluss.config.Configuration
 import org.apache.fluss.spark.SparkFlussConf
 
@@ -50,7 +50,7 @@ object FlussOffsetInitializers {
     if (isBatch) {
       OffsetsInitializer.latest()
     } else {
-      throw new UnsupportedOperationException("Stream read is not supported yet.")
+      new NoStoppingOffsetsInitializer()
     }
   }
 }
