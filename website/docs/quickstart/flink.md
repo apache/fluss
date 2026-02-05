@@ -22,6 +22,10 @@ All commands were tested with Docker version 27.4.0 and Docker Compose version v
 We encourage you to use a recent version of Docker and [Compose v2](https://docs.docker.com/compose/releases/migrate/) (however, Compose v1 might work with a few adaptions).
 :::
 
+:::tip
+RustFS is used as replacement for S3 in this quickstart example, for your production setup you may want to configure this to use cloud file system. See [here](/maintenance/filesystems/overview.md) for information on how to setup cloud file systems
+:::
+
 ### Starting required components
 
 We will use `docker compose` to spin up the required components for this tutorial.
@@ -63,6 +67,18 @@ services:
     volumes:
       - rustfs-data:/data
     command: /data
+  rustfs-init:
+    image: minio/mc
+    depends_on:
+      - rustfs
+    entrypoint: >
+      /bin/sh -c "
+      until mc alias set rustfs http://rustfs:9000 rustfsadmin rustfsadmin; do
+        echo 'Waiting for RustFS...';
+        sleep 1;
+      done;
+      mc mb --ignore-existing rustfs/fluss;
+      "
   #end
   #begin Fluss cluster
   coordinator-server:
@@ -70,7 +86,7 @@ services:
     command: coordinatorServer
     depends_on:
       - zookeeper
-      - rustfs
+      - rustfs-init
     environment:
       - |
         FLUSS_PROPERTIES=
@@ -147,15 +163,13 @@ volumes:
 ```
 
 The Docker Compose environment consists of the following containers:
-- **RustFS:** an S3-compatible object storage for tiered storage. You can access the RustFS console at http://localhost:9001 with credentials `rustfsadmin/rustfsadmin`.
-   - RustFS is used as replacement for S3 in this quickstart example, you may want to configure this to use cloud file system
-   - See [here](/maintenance/filesystems/overview.md) for information on how to setup cloud file systems
+- **RustFS:** an S3-compatible object storage for tiered storage. You can access the RustFS console at http://localhost:9001 with credentials `rustfsadmin/rustfsadmin`. An init container (`rustfs-init`) automatically creates the `fluss` bucket on startup.
 - **Fluss Cluster:** a Fluss `CoordinatorServer`, a Fluss `TabletServer` and a `ZooKeeper` server.
    - Snapshot interval `kv.snapshot.interval` is configured as 60 seconds. You may want to configure this differently for production systems
    - Credentials are configured directly with `s3.access-key` and `s3.secret-key`. Production systems should use CredentialsProvider chain specific to cloud environments.
 - **Flink Cluster**: a Flink `JobManager`, a Flink `TaskManager`, and a Flink SQL client container to execute queries.
 
-3. To start all containers, run:
+4. To start all containers, run:
 ```shell
 docker compose up -d
 ```
@@ -167,16 +181,7 @@ docker compose ps
 ```
 to check whether all containers are running properly.
 
-4. Create the S3 bucket for Fluss tiered storage. Open the RustFS console at http://localhost:9001, login with `rustfsadmin/rustfsadmin`, click **"Create Bucket"** in the top left corner, enter `fluss` as the bucket name, and click **Create**.
-
-Alternatively, you can use the MinIO client (`mc`) which is compatible with RustFS:
-```shell
-docker run --rm --net=host \
-    -e MC_HOST_rustfs=http://rustfsadmin:rustfsadmin@localhost:9000 \
-    minio/mc mb rustfs/fluss
-```
-
-You can also visit http://localhost:8083/ to see if Flink is running normally.
+5. Verify the setup. You can visit http://localhost:8083/ to see if Flink is running normally. The S3 bucket for Fluss tiered storage is automatically created by the `rustfs-init` service. You can access the RustFS console at http://localhost:9001 with credentials `rustfsadmin/rustfsadmin` to view the `fluss` bucket.
 
 :::note
 - If you want to additionally use an observability stack, follow one of the provided quickstart guides [here](/docs/maintenance/observability/quickstart.md) and then continue with this guide.
@@ -439,9 +444,17 @@ The following SQL query should return an empty result.
 ```sql title="Flink SQL"
 SELECT * FROM fluss_customer WHERE `cust_key` = 1;
 ```
-### Tiered Storage
 
-Finally, you can use the following command to view the files stored on RustFS:
+### Quitting Sql Client
+
+The following command allows you to quit Flink SQL Client.
+```sql title="Flink SQL"
+quit;
+```
+
+### Remote Storage
+
+Finally, you can use the following command to view the Primary Key Table snapshot files stored on RustFS:
 
 ```shell
 docker run --rm --net=host \
