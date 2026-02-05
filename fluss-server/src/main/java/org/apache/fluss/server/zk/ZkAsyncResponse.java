@@ -59,6 +59,18 @@ public abstract class ZkAsyncResponse {
         }
     }
 
+    /** Returns a string representation of the error message, or empty string if none. */
+    public String getErrorMessage() {
+        return resultException()
+                .map(e -> e.getClass().getSimpleName() + ": " + e.getMessage())
+                .orElse("");
+    }
+
+    /** Returns true if the response indicates an error. */
+    public boolean hasError() {
+        return resultCode != Code.OK;
+    }
+
     // -------------------------------------------------------------------------------------------
 
     /** The response for ZooKeeper getData async operation. */

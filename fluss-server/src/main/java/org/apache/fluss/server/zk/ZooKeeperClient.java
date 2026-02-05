@@ -498,15 +498,24 @@ public class ZooKeeperClient implements AutoCloseable {
         List<ZkCheckExistsResponse> statsInBackground =
                 getStatInBackground(path2DatabaseNamesMap.keySet());
         List<DatabaseSummary> databaseSummaries = new ArrayList<>();
-        for (ZkCheckExistsResponse getStatResponse : statsInBackground) {
-            getStatResponse.maybeThrow();
-            // To decrease the cost, use zk node creation time as the database creation
-            // time rather than create_time in node data.
-            databaseSummaries.add(
-                    new DatabaseSummary(
-                            path2DatabaseNamesMap.get(getStatResponse.getPath()),
-                            getStatResponse.getStat().getCtime(),
-                            getStatResponse.getStat().getNumChildren()));
+        for (ZkCheckExistsResponse response : statsInBackground) {
+            Stat stat = response.getStat();
+            if (!response.hasError() && stat != null) {
+                // To decrease the cost, use zk node creation time as the database creation
+                // time rather than create_time in node data.
+                databaseSummaries.add(
+                        new DatabaseSummary(
+                                path2DatabaseNamesMap.get(response.getPath()),
+                                response.getStat().getCtime(),
+                                response.getStat().getNumChildren()));
+            } else {
+                // silently ignore the database which does not exist anymore,
+                // because the database names are listed by server not user
+                LOG.warn(
+                        "Failed to get database summary for database {}. {}",
+                        path2DatabaseNamesMap.get(response.getPath()),
+                        response.getErrorMessage());
+            }
         }
         return databaseSummaries;
     }

@@ -647,6 +647,13 @@ public class ClientRpcMessageUtils {
                             pbDatabaseSummary.getTableCount()));
         }
 
+        if (response.getDatabaseNamesCount() > 0 && response.getDatabaseSummariesCount() == 0) {
+            // backward-compatibility for older server versions that only returns database names
+            for (String dbName : response.getDatabaseNamesList()) {
+                databaseSummaries.add(new DatabaseSummary(dbName, -1L, -1));
+            }
+        }
+
         return databaseSummaries;
     }
 }

@@ -673,11 +673,10 @@ class ZooKeeperClientTest {
     void testGetDatabaseSummary() throws Exception {
         TablePath tablePath = TablePath.of("db", "tb1");
 
-        assertThatThrownBy(
-                        () ->
-                                zookeeperClient.listDatabaseSummaries(
-                                        Collections.singletonList(tablePath.getDatabaseName())))
-                .isExactlyInstanceOf(KeeperException.NoNodeException.class);
+        assertThat(
+                        zookeeperClient.listDatabaseSummaries(
+                                Collections.singletonList(tablePath.getDatabaseName())))
+                .isEmpty();
 
         // register table.
         long beforeCreateTime = System.currentTimeMillis();

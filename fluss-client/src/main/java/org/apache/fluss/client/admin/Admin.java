@@ -180,7 +180,18 @@ public interface Admin extends AutoCloseable {
     /** List all databases in fluss cluster asynchronously. */
     CompletableFuture<List<String>> listDatabases();
 
-    /** List all databases' summary information in fluss cluster asynchronously. */
+    /**
+     * List all databases' summary information in fluss cluster asynchronously. The difference
+     * between this method and {@link #listDatabases()} is that this method also include some
+     * summaries for the database, like {@link DatabaseSummary#getCreatedTime()} and {@link
+     * DatabaseSummary#getTableCount()}.
+     *
+     * <p>When interacting older version of fluss cluster which does not support this API, it will
+     * fall back to {@link #listDatabases()} with {@code -1} value for {@link
+     * DatabaseSummary#getCreatedTime()} and {@link DatabaseSummary#getTableCount()}.
+     *
+     * @since 0.9
+     */
     CompletableFuture<List<DatabaseSummary>> listDatabaseSummaries();
 
     /**
