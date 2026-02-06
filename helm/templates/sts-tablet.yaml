@@ -77,17 +77,22 @@ spec:
               echo "security.protocol.map: {{ include "fluss.listeners.protocolMap" . }}" >> $FLUSS_HOME/conf/server.yaml && \
 
               {{- if (include "fluss.isSaslEnabled" .) }}
+              {{- $saslUsers := default (list) .Values.sasl.users -}}
+              {{- if eq (len $saslUsers) 0 -}}
+              {{- fail "sasl.users must contain at least one user when SASL is enabled in listeners" -}}
+              {{- end }}
               {{- $jaasUsers := list -}}
-              {{- range .Values.sasl.users }}
+              {{- range $saslUsers }}
               {{- $jaasUsers = append $jaasUsers (printf "user_%s=\\\"%s\\\"" .username .password) -}}
               {{- end }}
+              {{- $clientUser := first $saslUsers }}
               echo "security.sasl.enabled.mechanisms: {{ .Values.sasl.mechanism }}" >> $FLUSS_HOME/conf/server.yaml && \
               echo "security.sasl.plain.jaas.config: org.apache.fluss.security.auth.sasl.plain.PlainLoginModule required {{ join " " $jaasUsers }};" >> $FLUSS_HOME/conf/server.yaml && \
 
-              echo "client.security.protocol: SASL" >> conf/server.yaml && \
-              echo "client.security.sasl.mechanism: {{ .Values.sasl.mechanism }}" >> conf/server.yaml && \
-              echo "client.security.sasl.username: {{ (first .Values.sasl.users).username }}" >> conf/server.yaml && \
-              echo "client.security.sasl.password: {{ (first .Values.sasl.users).password }}" >> conf/server.yaml && \
+              echo "client.security.protocol: SASL" >> $FLUSS_HOME/conf/server.yaml && \
+              echo "client.security.sasl.mechanism: {{ .Values.sasl.mechanism }}" >> $FLUSS_HOME/conf/server.yaml && \
+              echo "client.security.sasl.username: {{ $clientUser.username }}" >> $FLUSS_HOME/conf/server.yaml && \
+              echo "client.security.sasl.password: {{ $clientUser.password }}" >> $FLUSS_HOME/conf/server.yaml && \
               {{- end }}
 
               bin/tablet-server.sh start-foreground

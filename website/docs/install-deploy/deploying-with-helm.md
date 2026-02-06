@@ -291,7 +291,7 @@ sasl:
       password: password
 ```
 
-The `users` defines comma-separated list of usernames and passwords for client communications when SASL is enabled.
+The `users` defines comma-separated list of usernames and passwords for client communications when SASL is enabled. The first user will be used for the client authentication.
 
 ### Storage Configuration
 
