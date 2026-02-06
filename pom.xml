@@ -52,6 +52,7 @@
 
     <modules>
         <module>fluss-common</module>
+        <module>fluss-codegen</module>
         <module>fluss-metrics</module>
         <module>fluss-client</module>
         <module>fluss-rpc</module>
@@ -663,6 +664,8 @@
                         <exclude>tools/releasing/release/**</exclude>
                         <!-- Configuration Files. -->
                         <exclude>**/fluss-bin/conf/servers</exclude>
+                        <!-- Test expected files (code generation test fixtures) -->
+                        <exclude>**/*.expected</exclude>
                         <!-- Website Files. -->
                         <exclude>website/**/_category_.json</exclude>
                         <exclude>website/package.json</exclude>
