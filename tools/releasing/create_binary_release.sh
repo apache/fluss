@@ -49,6 +49,8 @@ if [ "$(uname)" == "Darwin" ]; then
     export COPYFILE_DISABLE=1
 else
     SHASUM="sha512sum"
+    # Initialize TAR_OPTIONS as empty for Linux to avoid "unbound variable" errors
+    TAR_OPTIONS=""
 fi
 
 cd ..
