@@ -4,6 +4,7 @@ sidebar_position: 1
 ---
 
 # Server Configuration
+import PartialConfig from '../_configs/_partial_config.mdx';
 
 All configurations can be set in Fluss configuration file `conf/server.yaml`
 
@@ -199,3 +200,5 @@ Kafka protocol compatibility is still in development.
 | kafka.listener.names           | String   | KAFKA   | The listener names for Kafka wire protocol communication. Support multiple listener names, separated by comma.     |
 | kafka.database                 | String   | kafka   | The database for Fluss Kafka. The default database is `kafka`.                                                     |
 | kafka.connection.max-idle-time | Duration | 60s     | Close kafka idle connections after the given time specified by this config.                                        |
+
+<PartialConfig></PartialConfig>
