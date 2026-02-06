@@ -104,42 +104,53 @@ public class IcebergLakeCommitter implements LakeCommitter<IcebergWriteResult, I
             // Refresh table to get latest metadata
             icebergTable.refresh();
 
-            SnapshotUpdate<?> snapshotUpdate;
-            if (committable.getDeleteFiles().isEmpty()) {
-                // Simple append-only case: only data files, no delete files or compaction
-                AppendFiles appendFiles = icebergTable.newAppend();
-                committable.getDataFiles().forEach(appendFiles::appendFile);
-                snapshotUpdate = appendFiles;
-            } else {
-                /*
-                 Row delta validations are not needed for streaming changes that write equality
-                 deletes. Equality deletes are applied to data in all previous sequence numbers,
-                 so retries may push deletes further in the future, but do not affect correctness.
-                 Position deletes committed to the table in this path are used only to delete rows
-                 from data files that are being added in this commit. There is no way for data
-                 files added along with the delete files to be concurrently removed, so there is
-                 no need to validate the files referenced by the position delete files that are
-                 being committed.
-                */
-                RowDelta rowDelta = icebergTable.newRowDelta();
-                committable.getDataFiles().forEach(rowDelta::addRows);
-                committable.getDeleteFiles().forEach(rowDelta::addDeletes);
-                snapshotUpdate = rowDelta;
-            }
+            Long snapshotId = null;
 
-            // commit written files
-            long snapshotId = commit(snapshotUpdate, snapshotProperties);
+            /*
+             Rewrite files MUST be committed BEFORE data/delete files.
 
-            // There exists rewrite files, commit rewrite files
+             Rewrite operations call validateFromSnapshot(snapshotId) to ensure the files being
+             replaced haven't changed since the rewrite was planned. If we commit data/delete
+             files first (via AppendFiles or RowDelta), the table's current snapshot advances.
+             The subsequent rewrite validation then fails because it's checking against a
+             now-stale snapshot ID, triggering Iceberg's retry loop indefinitely.
+
+             By committing rewrites first, the validation succeeds against the current snapshot,
+             and subsequent data/delete commits simply advance the snapshot further.
+            */
             List<RewriteDataFileResult> rewriteDataFileResults =
                     committable.rewriteDataFileResults();
             if (!rewriteDataFileResults.isEmpty()) {
-                Long rewriteCommitSnapshotId =
-                        commitRewrite(rewriteDataFileResults, snapshotProperties);
-                if (rewriteCommitSnapshotId != null) {
-                    snapshotId = rewriteCommitSnapshotId;
-                }
+                snapshotId = commitRewrite(rewriteDataFileResults, snapshotProperties);
             }
+
+            // Commit data/delete files
+            if (!committable.getDataFiles().isEmpty() || !committable.getDeleteFiles().isEmpty()) {
+                SnapshotUpdate<?> snapshotUpdate;
+                if (committable.getDeleteFiles().isEmpty()) {
+                    // Simple append-only case: only data files, no delete files
+                    AppendFiles appendFiles = icebergTable.newAppend();
+                    committable.getDataFiles().forEach(appendFiles::appendFile);
+                    snapshotUpdate = appendFiles;
+                } else {
+                    /*
+                     Row delta validations are not needed for streaming changes that write equality
+                     deletes. Equality deletes are applied to data in all previous sequence numbers,
+                     so retries may push deletes further in the future, but do not affect correctness.
+                     Position deletes committed to the table in this path are used only to delete rows
+                     from data files that are being added in this commit. There is no way for data
+                     files added along with the delete files to be concurrently removed, so there is
+                     no need to validate the files referenced by the position delete files that are
+                     being committed.
+                    */
+                    RowDelta rowDelta = icebergTable.newRowDelta();
+                    committable.getDataFiles().forEach(rowDelta::addRows);
+                    committable.getDeleteFiles().forEach(rowDelta::addDeletes);
+                    snapshotUpdate = rowDelta;
+                }
+                snapshotId = commit(snapshotUpdate, snapshotProperties);
+            }
+
             return checkNotNull(snapshotId, "Iceberg committed snapshot id must be non-null.");
         } catch (Exception e) {
             throw new IOException("Failed to commit to Iceberg table.", e);
