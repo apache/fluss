@@ -236,12 +236,13 @@ curl -fL -o lib/iceberg-flink-runtime-1.20-1.10.1.jar "https://repo1.maven.org/m
 curl -fL -o "lib/fluss-lake-iceberg-$FLUSS_DOCKER_VERSION$.jar" "https://repo1.maven.org/maven2/org/apache/fluss/fluss-lake-iceberg/$FLUSS_DOCKER_VERSION$/fluss-lake-iceberg-$FLUSS_DOCKER_VERSION$.jar"
 
 # Hadoop filesystem support
-curl -fL -o lib/hadoop-apache-3.3.5-2.jar https://repo1.maven.org/maven2/io/trino/hadoop/hadoop-apache/3.3.5-2/hadoop-apache-3.3.5-2.jar
+curl -fL -o lib/hadoop-client-api-3.3.5.jar https://repo1.maven.org/maven2/org/apache/hadoop/hadoop-client-api/3.3.5/hadoop-client-api-3.3.5.jar
+curl -fL -o lib/hadoop-client-runtime-3.3.5.jar https://repo1.maven.org/maven2/org/apache/hadoop/hadoop-client-runtime/3.3.5/hadoop-client-runtime-3.3.5.jar
+curl -fL -o lib/commons-logging-1.2.jar https://repo1.maven.org/maven2/commons-logging/commons-logging/1.2/commons-logging-1.2.jar
 
 # AWS S3 support (s3a:// scheme)
-curl -fL -o lib/hadoop-aws-3.3.1.jar https://repo1.maven.org/maven2/org/apache/hadoop/hadoop-aws/3.3.1/hadoop-aws-3.3.1.jar
+curl -fL -o lib/hadoop-aws-3.3.5.jar https://repo1.maven.org/maven2/org/apache/hadoop/hadoop-aws/3.3.5/hadoop-aws-3.3.5.jar
 curl -fL -o lib/aws-java-sdk-bundle-1.12.367.jar https://repo1.maven.org/maven2/com/amazonaws/aws-java-sdk-bundle/1.12.367/aws-java-sdk-bundle-1.12.367.jar
-curl -fL -o lib/hadoop-shaded-guava-1.1.1.jar https://repo1.maven.org/maven2/org/apache/hadoop/thirdparty/hadoop-shaded-guava/1.1.1/hadoop-shaded-guava-1.1.1.jar
 
 # Tiering service
 curl -fL -o "opt/fluss-flink-tiering-$FLUSS_DOCKER_VERSION$.jar" "https://repo1.maven.org/maven2/org/apache/fluss/fluss-flink-tiering/$FLUSS_DOCKER_VERSION$/fluss-flink-tiering-$FLUSS_DOCKER_VERSION$.jar"
@@ -310,10 +311,11 @@ services:
       - shared-tmpfs:/tmp/iceberg
       - shared-tmpfs:/tmp/fluss
       - ./lib/fluss-lake-iceberg-$FLUSS_DOCKER_VERSION$.jar:/opt/fluss/plugins/iceberg/fluss-lake-iceberg-$FLUSS_DOCKER_VERSION$.jar
-      - ./lib/hadoop-apache-3.3.5-2.jar:/opt/fluss/plugins/iceberg/hadoop-apache-3.3.5-2.jar
-      - ./lib/hadoop-aws-3.3.1.jar:/opt/fluss/plugins/iceberg/hadoop-aws-3.3.1.jar
+      - ./lib/hadoop-client-api-3.3.5.jar:/opt/fluss/plugins/iceberg/hadoop-client-api-3.3.5.jar
+      - ./lib/hadoop-client-runtime-3.3.5.jar:/opt/fluss/plugins/iceberg/hadoop-client-runtime-3.3.5.jar
+      - ./lib/hadoop-aws-3.3.5.jar:/opt/fluss/plugins/iceberg/hadoop-aws-3.3.5.jar
       - ./lib/aws-java-sdk-bundle-1.12.367.jar:/opt/fluss/plugins/iceberg/aws-java-sdk-bundle-1.12.367.jar
-      - ./lib/hadoop-shaded-guava-1.1.1.jar:/opt/fluss/plugins/iceberg/hadoop-shaded-guava-1.1.1.jar
+      - ./lib/commons-logging-1.2.jar:/opt/fluss/plugins/iceberg/commons-logging-1.2.jar
   tablet-server:
     image: apache/fluss:$FLUSS_DOCKER_VERSION$
     command: tabletServer
@@ -430,7 +432,7 @@ Congratulations, you are all set!
 
 First, use the following command to enter the Flink SQL CLI Container:
 ```shell
-docker compose exec jobmanager ./bin/sql-client.sh
+docker compose exec -e ROOT_LOG_LEVEL=DEBUG jobmanager ./sql-client
 ```
 
 To simplify this guide, we will create three temporary tables with `faker` connector to generate data:
@@ -501,7 +503,7 @@ SET 'table.exec.sink.not-null-enforcer'='DROP';
 
 First, use the following command to enter the Flink SQL CLI Container:
 ```shell
-docker compose exec jobmanager ./bin/sql-client.sh
+docker compose exec -e ROOT_LOG_LEVEL=DEBUG jobmanager ./bin/sql-client.sh
 ```
 
 To simplify this guide, we will create three temporary tables with `faker` connector to generate data:
@@ -712,7 +714,11 @@ docker compose exec jobmanager \
     --fluss.bootstrap.servers coordinator-server:9123 \
     --datalake.format iceberg \
     --datalake.iceberg.type hadoop \
-    --datalake.iceberg.warehouse /tmp/iceberg
+    --datalake.iceberg.warehouse s3a://fluss/iceberg \
+    --datalake.iceberg.iceberg.hadoop.fs.s3a.endpoint http://rustfs:9000 \
+    --datalake.iceberg.iceberg.hadoop.fs.s3a.access-key rustfsadmin \
+    --datalake.iceberg.iceberg.hadoop.fs.s3a.secret-key rustfsadmin \
+    --datalake.iceberg.iceberg.hadoop.fs.s3a.path.style.access true
 ```
 You should see a Flink Job to tier data from Fluss to Iceberg running in the [Flink Web UI](http://localhost:8083/).
 
