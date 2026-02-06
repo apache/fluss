@@ -21,16 +21,15 @@ import org.apache.fluss.config.ConfigOption;
 import org.apache.fluss.config.MemorySize;
 
 import java.time.Duration;
+import java.util.Collection;
+import java.util.stream.Collectors;
 
 /** Utility class for formatting configuration options into human-readable documentation. */
 public class ConfigDocUtils {
 
-    /**
-     * Formats the default value of a {@link ConfigOption} for documentation purposes.
-     *
-     * @param option The configuration option to format.
-     * @return A string representation of the default value.
-     */
+    /** The threshold for considering a duration or memory size as infinite. */
+    private static final long INFINITE_THRESHOLD = 9223372036L;
+
     public static String formatDefaultValue(ConfigOption<?> option) {
         Object value = option.defaultValue();
 
@@ -38,33 +37,52 @@ public class ConfigDocUtils {
             return "none";
         }
 
-        // Handle Duration: Convert ISO-8601 (PT15M) to human-readable (15 min).
         if (value instanceof Duration) {
-            Duration d = (Duration) value;
-            long seconds = d.getSeconds(); // Use Java 8 compatible method.
-
-            if (seconds == 0) {
-                return "0 s";
-            }
-            if (seconds >= 3600 && seconds % 3600 == 0) {
-                return (seconds / 3600) + " hours";
-            }
-            if (seconds >= 60 && seconds % 60 == 0) {
-                return (seconds / 60) + " min";
-            }
-            return seconds + " s";
+            return formatDuration((Duration) value);
         }
 
-        // Handle MemorySize: Uses internal toString() for human-readable units (e.g., 64 mb).
         if (value instanceof MemorySize) {
-            return value.toString();
+            MemorySize mem = (MemorySize) value;
+            // Handle max values to avoid showing raw bytes
+            if (mem.getBytes() >= Long.MAX_VALUE || mem.getBytes() < 0) {
+                return "infinite";
+            }
+            return value.toString().toLowerCase();
         }
 
-        // Handle Strings: Specifically check for empty values.
+        if (value instanceof Collection) {
+            Collection<?> col = (Collection<?>) value;
+            if (col.isEmpty()) {
+                return "none";
+            }
+            return "[" + col.stream().map(String::valueOf).collect(Collectors.joining(", ")) + "]";
+        }
+
         if (value instanceof String && ((String) value).isEmpty()) {
             return "(empty)";
         }
 
-        return value.toString();
+        return String.valueOf(value);
+    }
+
+    private static String formatDuration(Duration d) {
+        long seconds = d.getSeconds();
+        if (seconds >= INFINITE_THRESHOLD || seconds < 0) {
+            return "infinite";
+        }
+        if (seconds == 0) {
+            return "0 s";
+        }
+
+        if (seconds >= 86400 && seconds % 86400 == 0) {
+            return (seconds / 86400) + " days";
+        }
+        if (seconds >= 3600 && seconds % 3600 == 0) {
+            return (seconds / 3600) + " hours";
+        }
+        if (seconds >= 60 && seconds % 60 == 0) {
+            return (seconds / 60) + " min";
+        }
+        return seconds + " s";
     }
 }
