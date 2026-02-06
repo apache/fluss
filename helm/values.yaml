@@ -27,11 +27,6 @@ image:
   pullPolicy: IfNotPresent
   pullSecrets: []
 
-appConfig:
-  internalPort: 9123
-  externalPort: 9124
-
-
 # Fluss server configuration options
 configurationOverrides:
   default.bucket.number: 3
@@ -55,6 +50,13 @@ coordinator:
     enabled: false
     size: 1Gi
     storageClass:
+
+# Fluss listener configurations
+listeners:
+  internal:
+    port: 9123
+  client:
+    port: 9124
 
 resources: {}
   # We usually recommend not to specify default resources and to leave this as a conscious
