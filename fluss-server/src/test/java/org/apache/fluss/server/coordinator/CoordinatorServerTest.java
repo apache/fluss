@@ -26,8 +26,10 @@ import org.apache.fluss.server.zk.data.CoordinatorAddress;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 
+import java.time.Duration;
 import java.util.Optional;
 
+import static org.apache.fluss.testutils.common.CommonTestUtils.waitUntil;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test for {@link CoordinatorServer} . */
@@ -38,6 +40,7 @@ class CoordinatorServerTest extends ServerTestBase {
     @BeforeEach
     void beforeEach() throws Exception {
         coordinatorServer = startCoordinatorServer(createConfiguration());
+        waitUntilCoordinatorServerElected();
     }
 
     @AfterEach
@@ -55,6 +58,7 @@ class CoordinatorServerTest extends ServerTestBase {
     @Override
     protected ServerBase getStartFailServer() {
         Configuration configuration = createConfiguration();
+        configuration.set(ConfigOptions.COORDINATOR_ID, 0);
         configuration.set(ConfigOptions.BIND_LISTENERS, "CLIENT://localhost:-12");
         return new CoordinatorServer(configuration);
     }
@@ -63,10 +67,18 @@ class CoordinatorServerTest extends ServerTestBase {
     protected void checkAfterStartServer() throws Exception {
         assertThat(coordinatorServer.getRpcServer()).isNotNull();
         // check the data put in zk after coordinator server start
-        Optional<CoordinatorAddress> optCoordinatorAddr = zookeeperClient.getCoordinatorAddress();
+        Optional<CoordinatorAddress> optCoordinatorAddr =
+                zookeeperClient.getCoordinatorLeaderAddress();
         assertThat(optCoordinatorAddr).isNotEmpty();
         verifyEndpoint(
                 optCoordinatorAddr.get().getEndpoints(),
                 coordinatorServer.getRpcServer().getBindEndpoints());
+    }
+
+    public void waitUntilCoordinatorServerElected() {
+        waitUntil(
+                () -> zookeeperClient.getCoordinatorLeaderAddress().isPresent(),
+                Duration.ofSeconds(5),
+                "Fail to wait coordinator server elected");
     }
 }

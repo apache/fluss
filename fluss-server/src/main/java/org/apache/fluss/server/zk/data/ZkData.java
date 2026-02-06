@@ -303,13 +303,44 @@ public final class ZkData {
     // ------------------------------------------------------------------------------------------
 
     /**
-     * The znode for the active coordinator. The znode path is:
+     * The znode for alive coordinators. The znode path is:
      *
-     * <p>/coordinators/active
-     *
-     * <p>Note: introduce standby coordinators in the future for znode "/coordinators/standby/".
+     * <p>/coordinators/ids
      */
-    public static final class CoordinatorZNode {
+    public static final class CoordinatorIdsZNode {
+        public static String path() {
+            return "/coordinators/ids";
+        }
+    }
+
+    /**
+     * The znode for a registered Coordinator information. The znode path is:
+     *
+     * <p>/coordinators/ids/[serverId]
+     */
+    public static final class CoordinatorIdZNode {
+        public static String path(int serverId) {
+            return CoordinatorIdsZNode.path() + "/" + serverId;
+        }
+    }
+
+    /**
+     * The znode for the coordinator leader election. The znode path is:
+     *
+     * <p>/coordinators/election
+     */
+    public static final class CoordinatorElectionZNode {
+        public static String path() {
+            return "/coordinators/election";
+        }
+    }
+
+    /**
+     * The znode for the active coordinator leader. The znode path is:
+     *
+     * <p>/coordinators/leader
+     */
+    public static final class CoordinatorLeaderZNode {
         public static String path() {
             return "/coordinators/active";
         }
@@ -324,6 +355,24 @@ public final class ZkData {
         }
     }
 
+    /**
+     * The znode for the coordinator epoch. The znode path is:
+     *
+     * <p>/coordinators/epoch
+     */
+    public static final class CoordinatorEpochZNode {
+        public static String path() {
+            return "/coordinators/epoch";
+        }
+
+        public static byte[] encode(int epoch) {
+            return String.valueOf(epoch).getBytes();
+        }
+
+        public static int decode(byte[] bytes) {
+            return Integer.parseInt(new String(bytes));
+        }
+    }
     // ------------------------------------------------------------------------------------------
     // ZNodes under "/tabletservers/"
     // ------------------------------------------------------------------------------------------

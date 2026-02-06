@@ -72,7 +72,7 @@ public class ServerMetricUtils {
     @VisibleForTesting static final String METRIC_GROUP_MEMORY = "memory";
 
     public static CoordinatorMetricGroup createCoordinatorGroup(
-            MetricRegistry registry, String clusterId, String hostname, String serverId) {
+            MetricRegistry registry, String clusterId, String hostname, int serverId) {
         CoordinatorMetricGroup coordinatorMetricGroup =
                 new CoordinatorMetricGroup(registry, clusterId, hostname, serverId);
         createAndInitializeStatusMetricGroup(coordinatorMetricGroup);
