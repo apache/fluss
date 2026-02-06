@@ -234,9 +234,11 @@ public final class KvTablet {
     private static RocksDBKv buildRocksDBKv(
             Configuration configuration, File kvDir, RateLimiter sharedRateLimiter)
             throws IOException {
-        // Enable statistics to support RocksDB statistics collection
+        // Check if statistics collection is enabled from configuration
+        boolean enableStatistics = configuration.get(ConfigOptions.KV_STATISTICS_ENABLED);
         RocksDBResourceContainer rocksDBResourceContainer =
-                new RocksDBResourceContainer(configuration, kvDir, true, sharedRateLimiter);
+                new RocksDBResourceContainer(
+                        configuration, kvDir, enableStatistics, sharedRateLimiter);
         RocksDBKvBuilder rocksDBKvBuilder =
                 new RocksDBKvBuilder(
                         kvDir,

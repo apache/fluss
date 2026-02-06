@@ -17,6 +17,7 @@
 
 package org.apache.fluss.server.kv;
 
+import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.exception.InvalidTargetColumnException;
@@ -1439,6 +1440,9 @@ class KvTabletTest {
 
     @Test
     void testRocksDBMetrics() throws Exception {
+        // Enable RocksDB statistics for this test
+        conf.set(ConfigOptions.KV_STATISTICS_ENABLED, true);
+
         // Initialize tablet with schema
         initLogTabletAndKvTablet(DATA1_SCHEMA_PK, new HashMap<>());
 

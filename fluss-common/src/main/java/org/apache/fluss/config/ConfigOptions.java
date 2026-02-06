@@ -1636,6 +1636,19 @@ public class ConfigOptions {
                                     + "The RateLimiter is always enabled. The default value is Long.MAX_VALUE (effectively unlimited). "
                                     + "Set to a lower value (e.g., 100MB) to limit the rate.");
 
+    public static final ConfigOption<Boolean> KV_STATISTICS_ENABLED =
+            key("kv.rocksdb.statistics.enabled")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription(
+                            "Whether to enable RocksDB statistics collection for metrics. "
+                                    + "When enabled, RocksDB will collect various statistics like bytes read/written, "
+                                    + "compaction time, flush time, etc., which can be exposed through Fluss metrics. "
+                                    + "Enabling statistics has a small performance overhead (typically < 5%). "
+                                    + "If you experience performance issues or don't need RocksDB-level metrics, "
+                                    + "you can disable this option to reduce overhead. "
+                                    + "The default value is `true`.");
+
     // --------------------------------------------------------------------------
     // Provided configurable ColumnFamilyOptions within Fluss
     // --------------------------------------------------------------------------

@@ -167,7 +167,7 @@ public class RocksDBStatistics implements AutoCloseable {
      * @return number of L0 files, or 0 if not available
      */
     public long getNumFilesAtLevel0() {
-        return getPropertyValue(defaultColumnFamilyHandle, "rocksdb.num-files-at-level0");
+        return getPropertyLongValue(defaultColumnFamilyHandle, "rocksdb.num-files-at-level0");
     }
 
     /**
@@ -176,7 +176,7 @@ public class RocksDBStatistics implements AutoCloseable {
      * @return 1 if flush is pending, 0 otherwise
      */
     public long getFlushPending() {
-        return getPropertyValue("rocksdb.mem-table-flush-pending");
+        return getPropertyLongValue("rocksdb.mem-table-flush-pending");
     }
 
     /**
@@ -185,7 +185,7 @@ public class RocksDBStatistics implements AutoCloseable {
      * @return 1 if compaction is pending, 0 otherwise
      */
     public long getCompactionPending() {
-        return getPropertyValue("rocksdb.compaction-pending");
+        return getPropertyLongValue("rocksdb.compaction-pending");
     }
 
     /**
@@ -380,60 +380,44 @@ public class RocksDBStatistics implements AutoCloseable {
     }
 
     /**
-     * Get property value from RocksDB with resource guard protection.
+     * Get long property value from RocksDB with resource guard protection.
+     *
+     * <p>This method uses getLongProperty() instead of getProperty() to avoid string allocation in
+     * the JNI layer.
      *
      * @param propertyName the property name to query
      * @return the property value as long, or 0 if not available or RocksDB is closed
      */
-    private long getPropertyValue(String propertyName) {
+    private long getPropertyLongValue(String propertyName) {
+        return getPropertyLongValue(null, propertyName);
+    }
+
+    /**
+     * Get long property value from RocksDB for a specific column family with resource guard
+     * protection.
+     *
+     * <p>Some RocksDB properties are column family specific and must be accessed through the column
+     * family handle. This method uses getLongProperty() instead of getProperty() to avoid string
+     * allocation in the JNI layer.
+     *
+     * @param columnFamilyHandle the column family handle, null for DB-level properties
+     * @param propertyName the property name to query
+     * @return the property value as long, or 0 if not available or RocksDB is closed
+     */
+    private long getPropertyLongValue(
+            @Nullable ColumnFamilyHandle columnFamilyHandle, String propertyName) {
         try (ResourceGuard.Lease lease = resourceGuard.acquireResource()) {
-            String value = db.getProperty(propertyName);
-            if (value != null && !value.isEmpty()) {
-                return Long.parseLong(value);
+            if (columnFamilyHandle != null) {
+                return db.getLongProperty(columnFamilyHandle, propertyName);
+            } else {
+                return db.getLongProperty(propertyName);
             }
         } catch (RocksDBException e) {
             LOG.debug(
                     "Failed to get property {} from RocksDB (possibly closed or unavailable)",
                     propertyName,
                     e);
-        } catch (NumberFormatException e) {
-            LOG.debug("Failed to parse property {} value as long", propertyName, e);
         } catch (Exception e) {
-            // ResourceGuard may throw exception if RocksDB is closed
-            LOG.debug(
-                    "Failed to access RocksDB for property {} (possibly closed)", propertyName, e);
-        }
-        return 0L;
-    }
-
-    /**
-     * Get property value from RocksDB for a specific column family with resource guard protection.
-     *
-     * <p>Some RocksDB properties are column family specific and must be accessed through the column
-     * family handle.
-     *
-     * @param columnFamilyHandle the column family handle
-     * @param propertyName the property name to query
-     * @return the property value as long, or 0 if not available or RocksDB is closed
-     */
-    private long getPropertyValue(ColumnFamilyHandle columnFamilyHandle, String propertyName) {
-        try (ResourceGuard.Lease lease = resourceGuard.acquireResource()) {
-            if (columnFamilyHandle == null) {
-                return 0L;
-            }
-            String value = db.getProperty(columnFamilyHandle, propertyName);
-            if (value != null && !value.isEmpty()) {
-                return Long.parseLong(value);
-            }
-        } catch (RocksDBException e) {
-            LOG.debug(
-                    "Failed to get property {} from RocksDB column family (possibly closed or unavailable)",
-                    propertyName,
-                    e);
-        } catch (NumberFormatException e) {
-            LOG.debug("Failed to parse property {} value as long", propertyName, e);
-        } catch (Exception e) {
-            // ResourceGuard may throw exception if RocksDB is closed
             LOG.debug(
                     "Failed to access RocksDB for property {} (possibly closed)", propertyName, e);
         }
