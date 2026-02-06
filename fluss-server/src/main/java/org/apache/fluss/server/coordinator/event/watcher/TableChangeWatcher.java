@@ -19,10 +19,10 @@ package org.apache.fluss.server.coordinator.event.watcher;
 
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.TableConfig;
+import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableInfo;
-import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.coordinator.event.CreatePartitionEvent;
 import org.apache.fluss.server.coordinator.event.CreateTableEvent;
@@ -33,6 +33,7 @@ import org.apache.fluss.server.coordinator.event.SchemaChangeEvent;
 import org.apache.fluss.server.coordinator.event.TableRegistrationChangeEvent;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
+import org.apache.fluss.server.zk.data.PartitionRegistration;
 import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.server.zk.data.ZkData.DatabasesZNode;
@@ -149,7 +150,8 @@ public class TableChangeWatcher {
                                 PartitionZNode.parsePath(oldData.getPath());
                         if (physicalTablePath != null) {
                             // it's for deletion of a table partition node
-                            TablePartition partition = PartitionZNode.decode(oldData.getData());
+                            PartitionRegistration partition =
+                                    PartitionZNode.decode(oldData.getData());
                             eventManager.put(
                                     new DropPartitionEvent(
                                             partition.getTableId(),
@@ -223,7 +225,7 @@ public class TableChangeWatcher {
 
         private void processCreatePartition(
                 TablePath tablePath, String partitionName, ChildData partitionData) {
-            TablePartition partition = PartitionZNode.decode(partitionData.getData());
+            PartitionRegistration partition = PartitionZNode.decode(partitionData.getData());
             long partitionId = partition.getPartitionId();
             long tableId = partition.getTableId();
             PartitionAssignment partitionAssignment;
@@ -247,9 +249,19 @@ public class TableChangeWatcher {
                         e);
                 return;
             }
+            // Use default remote data dir configured by ConfigOptions.REMOTE_DATA_DIR for
+            // PartitionRegistration created by old cluster.
+            FsPath remoteDataDir =
+                    Optional.ofNullable(partition.getRemoteDataDir())
+                            .orElseGet(zooKeeperClient::getDefaultRemoteDataDir);
             eventManager.put(
                     new CreatePartitionEvent(
-                            tablePath, tableId, partitionId, partitionName, partitionAssignment));
+                            tablePath,
+                            tableId,
+                            partitionId,
+                            partitionName,
+                            partitionAssignment,
+                            remoteDataDir));
         }
 
         private void processTableRegistrationChange(TablePath tablePath, ChildData newData) {
