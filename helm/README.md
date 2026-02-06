@@ -22,7 +22,7 @@ This chart deploys an Apache Fluss cluster on Kubernetes, following Helm best pr
 It requires a Zookeeper ensemble to be running in the same Kubernetes cluster. In future releases, we may add support for an embedded Zookeeper cluster.
 
 
-## Development environment 
+## Development environment
 
 | component                                                                      | version |
 | ------------------------------------------------------------------------------ | ------- |
@@ -33,7 +33,7 @@ It requires a Zookeeper ensemble to be running in the same Kubernetes cluster. I
 | [Apache Fluss](https://fluss.apache.org/docs/)                                 | v0.10.0-incubating  |
 
 
-## Image requirements 
+## Image requirements
 
 A container image for Fluss is available on DockerHub as `fluss/fluss`. You can use it directly or build your own from this repo. To use your own image you need to build the project with [Maven](https://fluss.apache.org/community/dev/building/) and build it with Docker.
 

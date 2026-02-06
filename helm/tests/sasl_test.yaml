@@ -1,0 +1,120 @@
+#
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+
+suite: sasl-disabled-secret
+templates:
+  - templates/secret-sasl.yaml
+tests:
+  - it: does not render sasl secret when sasl is disabled
+    set:
+      listeners.internal.protocol: PLAINTEXT
+      listeners.client.protocol: PLAINTEXT
+    asserts:
+      - hasDocuments:
+          count: 0
+---
+
+suite: sasl-disabled-statefulset
+templates:
+  - templates/sts-coordinator.yaml
+tests:
+  - it: does not render sasl settings in pod spec when sasl is disabled
+    set:
+      listeners.internal.protocol: PLAINTEXT
+      listeners.client.protocol: PLAINTEXT
+    asserts:
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'security\.sasl\.enabled\.mechanisms:'
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'security\.sasl\.plain\.jaas\.config:'
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'client\.security\.sasl\.username:'
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'client\.security\.sasl\.password:'
+      - notContains:
+          path: spec.template.spec.volumes
+          content:
+            name: sasl-config
+---
+
+suite: sasl-enabled-generated-secret
+templates:
+  - templates/secret-sasl.yaml
+tests:
+  - it: renders generated sasl secret when sasl is enabled
+    set:
+      listeners.internal.protocol: SASL_PLAINTEXT
+      listeners.client.protocol: SASL_PLAINTEXT
+    asserts:
+      - hasDocuments:
+          count: 1
+      - matchRegex:
+          path: metadata.name
+          pattern: ^RELEASE-NAME-fluss-sasl-jaas-config$
+---
+
+suite: sasl-enabled-statefulset-uses-generated-secret
+templates:
+  - templates/sts-coordinator.yaml
+tests:
+  - it: references generated secret and renders sasl config lines
+    set:
+      listeners.internal.protocol: SASL_PLAINTEXT
+      listeners.client.protocol: SASL_PLAINTEXT
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: sasl-config
+            secret:
+              secretName: RELEASE-NAME-fluss-sasl-jaas-config
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'security\.sasl\.plain\.jaas\.config:'
+---
+
+suite: sasl-empty-users-fails
+templates:
+  - templates/sts-coordinator.yaml
+tests:
+  - it: fails with clear message when sasl users are empty
+    set:
+      listeners.internal.protocol: SASL_PLAINTEXT
+      listeners.client.protocol: SASL_PLAINTEXT
+      sasl.users: []
+    asserts:
+      - failedTemplate:
+          errorMessage: sasl.users must contain at least one user when SASL is enabled in listeners
+---
+
+suite: server-yaml-write-path
+templates:
+  - templates/sts-tablet.yaml
+tests:
+  - it: writes server yaml using expected destination path
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: cp /opt/conf/server\.yaml \$FLUSS_HOME/conf
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: '>> \$FLUSS_HOME/conf/server\.yaml'

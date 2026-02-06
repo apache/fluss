@@ -58,6 +58,15 @@ listeners:
   client:
     port: 9124
 
+# Fluss listener configurations
+listeners:
+  internal:
+    protocol: PLAINTEXT
+    port: 9123
+  client:
+    protocol: PLAINTEXT
+    port: 9124
+
 resources: {}
   # We usually recommend not to specify default resources and to leave this as a conscious
   # choice for the user. This also increases chances charts run on environments with little
@@ -85,3 +94,12 @@ serviceAccount:
   # Additional annotations to apply to the ServiceAccount.
   # These can be useful, for example, to support integrations like workload identity.
   annotations: {}
+
+## Fluss SASL configurations for authentication.
+## These are required if SASL listeners are configured.
+sasl:
+  mechanism: PLAIN
+  # List of client users for authentication
+  users:
+    - username: admin
+      password: password

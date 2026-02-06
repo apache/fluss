@@ -74,6 +74,26 @@ spec:
               echo "tablet-server.id: ${FLUSS_SERVER_ID}" >> $FLUSS_HOME/conf/server.yaml && \
               echo "bind.listeners: ${BIND_LISTENERS}" >> $FLUSS_HOME/conf/server.yaml && \
               echo "advertised.listeners: ${ADVERTISED_LISTENERS}" >> $FLUSS_HOME/conf/server.yaml && \
+              echo "security.protocol.map: {{ include "fluss.listeners.protocolMap" . }}" >> $FLUSS_HOME/conf/server.yaml && \
+
+              {{- if (include "fluss.isSaslEnabled" .) }}
+              {{- $saslUsers := default (list) .Values.sasl.users -}}
+              {{- if eq (len $saslUsers) 0 -}}
+              {{- fail "sasl.users must contain at least one user when SASL is enabled in listeners" -}}
+              {{- end }}
+              {{- $jaasUsers := list -}}
+              {{- range $saslUsers }}
+              {{- $jaasUsers = append $jaasUsers (printf "user_%s=\\\"%s\\\"" .username .password) -}}
+              {{- end }}
+              {{- $clientUser := first $saslUsers -}}
+              echo "security.sasl.enabled.mechanisms: {{ .Values.sasl.mechanism }}" >> $FLUSS_HOME/conf/server.yaml && \
+              echo "security.sasl.plain.jaas.config: org.apache.fluss.security.auth.sasl.plain.PlainLoginModule required {{ join " " $jaasUsers }};" >> $FLUSS_HOME/conf/server.yaml && \
+
+              echo "client.security.protocol: SASL" >> $FLUSS_HOME/conf/server.yaml && \
+              echo "client.security.sasl.mechanism: {{ .Values.sasl.mechanism }}" >> $FLUSS_HOME/conf/server.yaml && \
+              echo "client.security.sasl.username: {{ $clientUser.username }}" >> $FLUSS_HOME/conf/server.yaml && \
+              echo "client.security.sasl.password: {{ $clientUser.password }}" >> $FLUSS_HOME/conf/server.yaml && \
+              {{- end }}
 
               bin/tablet-server.sh start-foreground
           livenessProbe:
@@ -97,6 +117,11 @@ spec:
               mountPath: /opt/conf
             - name: data
               mountPath: /tmp/fluss/data
+            {{- if (include "fluss.isSaslEnabled" .) }}
+            - name: sasl-config
+              mountPath: /etc/fluss/conf
+              readOnly: true
+            {{- end }}
       volumes:
         - name: fluss-conf
           configMap:
@@ -104,6 +129,11 @@ spec:
         {{- if not .Values.tablet.storage.enabled }}
         - name: data
           emptyDir: {}
+        {{- end }}
+        {{- if (include "fluss.isSaslEnabled" .) }}
+        - name: sasl-config
+          secret:
+            secretName: {{ include "fluss.fullname" . }}-sasl-jaas-config
         {{- end }}
   {{- if .Values.tablet.storage.enabled }}
   volumeClaimTemplates:
