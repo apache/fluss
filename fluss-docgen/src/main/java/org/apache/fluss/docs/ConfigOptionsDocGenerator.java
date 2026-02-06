@@ -17,6 +17,7 @@
 
 package org.apache.fluss.docs;
 
+import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.annotation.docs.ConfigOverrideDefault;
 import org.apache.fluss.annotation.docs.ConfigSection;
 import org.apache.fluss.config.ConfigOption;
@@ -24,17 +25,23 @@ import org.apache.fluss.config.ConfigOptions;
 
 import java.io.File;
 import java.lang.reflect.Field;
+import java.lang.reflect.ParameterizedType;
+import java.lang.reflect.Type;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
 
-/** Generator for configuration documentation. */
+/**
+ * Generator for configuration documentation. Produces a list-based MDX file grouped by sections
+ * with support for default overrides and proper type formatting.
+ */
 public class ConfigOptionsDocGenerator {
 
     public static void main(String[] args) throws Exception {
@@ -43,19 +50,17 @@ public class ConfigOptionsDocGenerator {
         String outputPath = projectRoot + "/website/docs/_configs/_partial_config.mdx";
 
         File outputFile = new File(outputPath);
-        outputFile.getParentFile().mkdirs();
-
-        System.out.println("Generating MDX partial: " + outputFile.getAbsolutePath());
-
-        if (!outputFile.getParentFile().exists()) {
-            outputFile.getParentFile().mkdirs();
+        File parent = outputFile.getParentFile();
+        if (parent != null && !parent.exists()) {
+            if (!parent.mkdirs()) {
+                throw new RuntimeException("Failed to create directory: " + parent);
+            }
         }
 
         String content = generateMDXContent();
         Files.write(
                 outputFile.toPath(), Collections.singletonList(content), StandardCharsets.UTF_8);
-
-        System.out.println("SUCCESS: MDX partial generated.");
+        System.out.println("SUCCESS: Generated " + outputFile.getAbsolutePath());
     }
 
     private static String generateMDXContent() throws IllegalAccessException {
@@ -66,74 +71,149 @@ public class ConfigOptionsDocGenerator {
         Map<String, List<Field>> sections = new TreeMap<>();
 
         for (Field field : fields) {
+            // Using name check to avoid retention issues with Internal.class if necessary
+            if (field.isAnnotationPresent(Internal.class)) {
+                continue;
+            }
+
             if (field.getType().equals(ConfigOption.class)) {
-                String section = "Common";
-                if (field.isAnnotationPresent(ConfigSection.class)) {
-                    section = field.getAnnotation(ConfigSection.class).value();
-                } else {
-                    ConfigOption<?> option = (ConfigOption<?>) field.get(null);
-                    String key = option.key();
-                    if (key != null && key.contains(".")) {
-                        section = capitalize(key.split("\\.")[0]);
-                    }
-                }
-                sections.computeIfAbsent(section, k -> new ArrayList<>()).add(field);
+                ConfigOption<?> option = (ConfigOption<?>) field.get(null);
+                String sectionName = getSectionName(field, option);
+                sections.computeIfAbsent(sectionName, k -> new ArrayList<>()).add(field);
             }
         }
 
         for (Map.Entry<String, List<Field>> entry : sections.entrySet()) {
             builder.append("## ").append(entry.getKey()).append(" Configurations\n\n");
 
-            builder.append("| Key | Default | Type | Description |\n");
-            builder.append("| :--- | :--- | :--- | :--- |\n");
+            List<Field> sectionFields = entry.getValue();
+            sectionFields.sort(Comparator.comparing(f -> getOptionKey(f)));
 
-            for (Field field : entry.getValue()) {
+            for (Field field : sectionFields) {
                 ConfigOption<?> option = (ConfigOption<?>) field.get(null);
 
-                String defaultValue = ConfigDocUtils.formatDefaultValue(option);
-                if (field.isAnnotationPresent(ConfigOverrideDefault.class)) {
-                    defaultValue = field.getAnnotation(ConfigOverrideDefault.class).value();
-                }
+                String defaultValue = getFormattedDefaultValue(field, option);
+                String scope = getScope(option.key());
+                String description = cleanDescription(option.description());
+                boolean isDeprecated = field.isAnnotationPresent(Deprecated.class);
 
-                // IMPORTANT: MDX hates unescaped < or { symbols in text
-                String description =
-                        option.description()
-                                .replace("\n", " ")
-                                .replace("\r", " ")
-                                .replace("|", "\\|")
-                                .replace("<", "&lt;") // Escape for MDX
-                                .replace("{", "&#123;") // Escape for MDX
-                                .replace("}", "&#125;") // Escape for MDX
-                                .replace("%s", "");
-
-                builder.append("| `")
+                builder.append("### `")
                         .append(option.key())
-                        .append("` | `")
-                        .append(defaultValue.replace("<", "&lt;"))
-                        .append("` | ")
-                        .append(getType(option))
-                        .append(" | ")
-                        .append(description)
-                        .append(" |\n");
+                        .append("` {#")
+                        .append(option.key().replace(".", "-"))
+                        .append("}\n\n");
+
+                if (isDeprecated) {
+                    builder.append("> **Warning**: This configuration is **Deprecated**.\n\n");
+                }
+                builder.append("* **Default**: `").append(defaultValue).append("`\n");
+                builder.append("* **Type**: ").append(getType(field)).append("\n");
+                builder.append("* **Scope**: ").append(scope).append("\n\n");
+
+                builder.append(description).append("\n\n");
+                builder.append("---\n\n");
             }
-            builder.append("\n");
         }
         return builder.toString();
     }
 
-    private static String getType(ConfigOption<?> option) {
-        Object def = option.defaultValue();
-        if (def != null) {
-            return def.getClass().getSimpleName();
+    private static String getOptionKey(Field field) {
+        try {
+            return ((ConfigOption<?>) field.get(null)).key();
+        } catch (IllegalAccessException e) {
+            return "";
         }
-        return "String";
+    }
+
+    private static String getFormattedDefaultValue(Field field, ConfigOption<?> option) {
+        if (field.isAnnotationPresent(ConfigOverrideDefault.class)) {
+            return field.getAnnotation(ConfigOverrideDefault.class).value();
+        }
+        Object defaultValue = option.defaultValue();
+        if (defaultValue == null) {
+            return "(none)";
+        }
+        return defaultValue.toString();
+    }
+
+    private static String getSectionName(Field field, ConfigOption<?> option) {
+        if (field.isAnnotationPresent(ConfigSection.class)) {
+            return field.getAnnotation(ConfigSection.class).value();
+        }
+        String key = option.key();
+        if (key.contains(".")) {
+            return capitalize(key.split("\\.")[0]);
+        }
+        return "Common";
+    }
+
+    private static String getScope(String key) {
+        if (key.startsWith("table.")) {
+            return "Table";
+        } else if (key.startsWith("client.")) {
+            return "Client";
+        }
+        return "Server";
+    }
+
+    private static String cleanDescription(String desc) {
+        if (desc == null) {
+            return "";
+        }
+        return desc.replace("\n", " ")
+                .replace("\r", " ")
+                .replace("<", "&lt;")
+                .replace("{", "&#123;")
+                .replace("}", "&#125;")
+                .replace("%s", "true");
+    }
+
+    private static String getType(Field field) {
+        String typeName = "String";
+        try {
+            Type genericType = field.getGenericType();
+            if (genericType instanceof ParameterizedType) {
+                Type[] typeArgs = ((ParameterizedType) genericType).getActualTypeArguments();
+                if (typeArgs.length > 0) {
+                    String fullTypeName = typeArgs[0].getTypeName();
+                    typeName = extractSimpleName(fullTypeName);
+                }
+            }
+        } catch (Exception ignored) {
+            // fallback
+        }
+
+        switch (typeName.toLowerCase()) {
+            case "integer":
+                return "Int";
+            case "long":
+                return "Long";
+            case "boolean":
+                return "Boolean";
+            case "duration":
+                return "Duration";
+            case "memorysize":
+                return "MemorySize";
+            case "double":
+                return "Double";
+            case "list":
+                return "List";
+            case "string":
+                return "String";
+            default:
+                return typeName;
+        }
+    }
+
+    private static String extractSimpleName(String fullTypeName) {
+        String simple = fullTypeName.substring(fullTypeName.lastIndexOf(".") + 1);
+        return simple.replace("$", "").replace(">", "");
     }
 
     private static String capitalize(String str) {
-        if (str == null || str.isEmpty()) {
-            return str;
-        }
-        return str.substring(0, 1).toUpperCase() + str.substring(1);
+        return (str == null || str.isEmpty())
+                ? str
+                : str.substring(0, 1).toUpperCase() + str.substring(1);
     }
 
     private static Path findProjectRoot() {
