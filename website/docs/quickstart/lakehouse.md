@@ -51,13 +51,15 @@ wget -O "lib/paimon-bundle-$PAIMON_VERSION$.jar" "https://repo.maven.apache.org/
 # Hadoop bundle jar
 wget -O lib/flink-shaded-hadoop-2-uber-2.8.3-10.0.jar https://repo.maven.apache.org/maven2/org/apache/flink/flink-shaded-hadoop-2-uber/2.8.3-10.0/flink-shaded-hadoop-2-uber-2.8.3-10.0.jar
 
+# AWS S3 support
+wget -O "lib/paimon-s3-$PAIMON_VERSION$.jar" "https://repo.maven.apache.org/maven2/org/apache/paimon/paimon-s3/$PAIMON_VERSION$/paimon-s3-$PAIMON_VERSION$.jar"
+
 # Tiering service
 wget -O "opt/fluss-flink-tiering-$FLUSS_DOCKER_VERSION$.jar" "https://repo1.maven.org/maven2/org/apache/fluss/fluss-flink-tiering/$FLUSS_DOCKER_VERSION$/fluss-flink-tiering-$FLUSS_DOCKER_VERSION$.jar"
 ```
 
 :::info
 You can add more jars to this `lib` directory based on your requirements:
-- **Cloud storage support**: For AWS S3 integration with Paimon, add the corresponding [paimon-s3](https://repo.maven.apache.org/maven2/org/apache/paimon/paimon-s3/$PAIMON_VERSION$/paimon-s3-$PAIMON_VERSION$.jar)
 - **Other catalog backends**: Add jars needed for alternative Paimon catalog implementations (e.g., Hive, JDBC)
   :::
 
@@ -139,6 +141,7 @@ services:
         jobmanager.rpc.address: jobmanager
         taskmanager.numberOfTaskSlots: 10
         taskmanager.memory.process.size: 2048m
+        taskmanager.memory.task.off-heap.size: 128m
     volumes:
       - shared-tmpfs:/tmp/paimon
       - shared-tmpfs:/tmp/fluss
@@ -198,24 +201,26 @@ cd fluss-quickstart-iceberg
 mkdir -p lib opt
 
 # Flink connectors
-wget -O lib/flink-faker-0.5.3.jar https://github.com/knaufk/flink-faker/releases/download/v0.5.3/flink-faker-0.5.3.jar
-wget -O "lib/fluss-flink-1.20-$FLUSS_DOCKER_VERSION$.jar" "https://repo1.maven.org/maven2/org/apache/fluss/fluss-flink-1.20/$FLUSS_DOCKER_VERSION$/fluss-flink-1.20-$FLUSS_DOCKER_VERSION$.jar"
-wget -O lib/iceberg-flink-runtime-1.20-1.10.1.jar "https://repo1.maven.org/maven2/org/apache/iceberg/iceberg-flink-runtime-1.20/1.10.1/iceberg-flink-runtime-1.20-1.10.1.jar"
+curl -fL -o lib/flink-faker-0.5.3.jar https://github.com/knaufk/flink-faker/releases/download/v0.5.3/flink-faker-0.5.3.jar
+curl -fL -o "lib/fluss-flink-1.20-$FLUSS_DOCKER_VERSION$.jar" "https://repo1.maven.org/maven2/org/apache/fluss/fluss-flink-1.20/$FLUSS_DOCKER_VERSION$/fluss-flink-1.20-$FLUSS_DOCKER_VERSION$.jar"
+curl -fL -o lib/iceberg-flink-runtime-1.20-1.10.1.jar "https://repo1.maven.org/maven2/org/apache/iceberg/iceberg-flink-runtime-1.20/1.10.1/iceberg-flink-runtime-1.20-1.10.1.jar"
 
 # Fluss lake plugin
-wget -O "lib/fluss-lake-iceberg-$FLUSS_DOCKER_VERSION$.jar" "https://repo1.maven.org/maven2/org/apache/fluss/fluss-lake-iceberg/$FLUSS_DOCKER_VERSION$/fluss-lake-iceberg-$FLUSS_DOCKER_VERSION$.jar"
+curl -fL -o "lib/fluss-lake-iceberg-$FLUSS_DOCKER_VERSION$.jar" "https://repo1.maven.org/maven2/org/apache/fluss/fluss-lake-iceberg/$FLUSS_DOCKER_VERSION$/fluss-lake-iceberg-$FLUSS_DOCKER_VERSION$.jar"
 
 # Hadoop filesystem support
-wget -O lib/hadoop-apache-3.3.5-2.jar https://repo1.maven.org/maven2/io/trino/hadoop/hadoop-apache/3.3.5-2/hadoop-apache-3.3.5-2.jar
-wget -O lib/failsafe-3.3.2.jar https://repo1.maven.org/maven2/dev/failsafe/failsafe/3.3.2/failsafe-3.3.2.jar
+curl -fL -o lib/hadoop-apache-3.3.5-2.jar https://repo1.maven.org/maven2/io/trino/hadoop/hadoop-apache/3.3.5-2/hadoop-apache-3.3.5-2.jar
+curl -fL -o lib/failsafe-3.3.2.jar https://repo1.maven.org/maven2/dev/failsafe/failsafe/3.3.2/failsafe-3.3.2.jar
+
+# AWS S3 support
+curl -fL -o lib/iceberg-aws-bundle-1.10.1.jar https://repo1.maven.org/maven2/org/apache/iceberg/iceberg-aws-bundle/1.10.1/iceberg-aws-bundle-1.10.1.jar
 
 # Tiering service
-wget -O "opt/fluss-flink-tiering-$FLUSS_DOCKER_VERSION$.jar" "https://repo1.maven.org/maven2/org/apache/fluss/fluss-flink-tiering/$FLUSS_DOCKER_VERSION$/fluss-flink-tiering-$FLUSS_DOCKER_VERSION$.jar"
+curl -fL -o "opt/fluss-flink-tiering-$FLUSS_DOCKER_VERSION$.jar" "https://repo1.maven.org/maven2/org/apache/fluss/fluss-flink-tiering/$FLUSS_DOCKER_VERSION$/fluss-flink-tiering-$FLUSS_DOCKER_VERSION$.jar"
 ```
 
 :::info
 You can add more jars to this `lib` directory based on your requirements:
-- **Cloud storage support**: For AWS S3 integration with Iceberg, add the corresponding Iceberg bundle jars (e.g., `iceberg-aws-bundle`)
 - **Custom Hadoop configurations**: Add jars for specific HDFS distributions or custom authentication mechanisms
 - **Other catalog backends**: Add jars needed for alternative Iceberg catalog implementations (e.g., Rest, Hive, Glue)
 :::
@@ -243,6 +248,7 @@ services:
       - shared-tmpfs:/tmp/fluss
       - ./lib/fluss-lake-iceberg-$FLUSS_DOCKER_VERSION$.jar:/opt/fluss/plugins/iceberg/fluss-lake-iceberg-$FLUSS_DOCKER_VERSION$.jar
       - ./lib/hadoop-apache-3.3.5-2.jar:/opt/fluss/plugins/iceberg/hadoop-apache-3.3.5-2.jar
+      - ./lib/iceberg-aws-bundle-1.10.1.jar:/opt/fluss/plugins/iceberg/iceberg-aws-bundle-1.10.1.jar
   tablet-server:
     image: apache/fluss:$FLUSS_DOCKER_VERSION$
     command: tabletServer
@@ -300,6 +306,7 @@ services:
         jobmanager.rpc.address: jobmanager
         taskmanager.numberOfTaskSlots: 10
         taskmanager.memory.process.size: 2048m
+        taskmanager.memory.task.off-heap.size: 128m
     volumes:
       - shared-tmpfs:/tmp/iceberg
       - shared-tmpfs:/tmp/fluss
@@ -627,7 +634,7 @@ Open a new terminal, navigate to the `fluss-quickstart-iceberg` directory, and e
 ```shell
 docker compose exec jobmanager \
     /opt/flink/bin/flink run \
-    /opt/flink/opt/fluss-flink-tiering.jar \
+    /opt/flink/opt/fluss-flink-tiering-$FLUSS_VERSION$.jar \
     --fluss.bootstrap.servers coordinator-server:9123 \
     --datalake.format iceberg \
     --datalake.iceberg.type hadoop \

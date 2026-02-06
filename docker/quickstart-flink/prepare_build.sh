@@ -76,7 +76,7 @@ download_jar() {
     log_info "Downloading $description..."
 
     # Download the file
-    if ! wget -O "$dest_file" "$url"; then
+    if ! curl -fL -o "$dest_file" "$url"; then
         log_error "Failed to download $description from $url"
         return 1
     fi
