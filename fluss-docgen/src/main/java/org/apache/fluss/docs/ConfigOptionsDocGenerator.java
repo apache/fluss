@@ -165,7 +165,8 @@ public class ConfigOptionsDocGenerator {
                 .replace("<", "&lt;")
                 .replace("{", "&#123;")
                 .replace("}", "&#125;")
-                .replace("%s", "true");
+                .replace("%s", "true")
+                .replaceAll("\\[(.*?)\\]\\s*\\(.*?\\)", "$1");
     }
 
     private static String getType(Field field) {
