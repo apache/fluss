@@ -28,6 +28,8 @@ import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.encode.KeyEncoder;
 import org.apache.fluss.types.RowType;
+import org.apache.fluss.utils.ExceptionUtils;
+import org.apache.fluss.utils.concurrent.FutureUtils;
 
 import javax.annotation.Nullable;
 import javax.annotation.concurrent.NotThreadSafe;
@@ -35,7 +37,7 @@ import javax.annotation.concurrent.NotThreadSafe;
 import java.util.Collections;
 import java.util.concurrent.CompletableFuture;
 
-import static org.apache.fluss.client.utils.ClientUtils.getPartitionId;
+import static org.apache.fluss.client.utils.ClientUtils.getPartitionIdAsync;
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 
 /** An implementation of {@link Lookuper} that lookups by primary key. */
@@ -93,44 +95,68 @@ class PrimaryKeyLookuper extends AbstractLookuper implements Lookuper {
 
     @Override
     public CompletableFuture<LookupResult> lookup(InternalRow lookupKey) {
-        // encoding the key row using a compacted way consisted with how the key is encoded when put
-        // a row
-        byte[] pkBytes = primaryKeyEncoder.encodeKey(lookupKey);
-        byte[] bkBytes =
-                bucketKeyEncoder == primaryKeyEncoder
-                        ? pkBytes
-                        : bucketKeyEncoder.encodeKey(lookupKey);
-        Long partitionId = null;
-        if (partitionGetter != null) {
-            try {
-                partitionId =
-                        getPartitionId(
+        try {
+            // encoding the key row using a compacted way consisted with how the key is encoded when
+            // put a row
+            byte[] pkBytes = primaryKeyEncoder.encodeKey(lookupKey);
+            byte[] bkBytes =
+                    bucketKeyEncoder == primaryKeyEncoder
+                            ? pkBytes
+                            : bucketKeyEncoder.encodeKey(lookupKey);
+
+            // If partition getter is present, we need to get partition ID asynchronously
+            if (partitionGetter != null) {
+                // Use async version to avoid blocking Netty IO threads
+                return getPartitionIdAsync(
                                 lookupKey,
                                 partitionGetter,
                                 tableInfo.getTablePath(),
-                                metadataUpdater);
-            } catch (PartitionNotExistException e) {
-                return CompletableFuture.completedFuture(new LookupResult(Collections.emptyList()));
+                                metadataUpdater)
+                        .thenCompose(partitionId -> performLookup(partitionId, bkBytes, pkBytes))
+                        .exceptionally(
+                                throwable -> {
+                                    // Handle partition not exist exception by returning null result
+                                    if (ExceptionUtils.findThrowable(
+                                                    throwable, PartitionNotExistException.class)
+                                            .isPresent()) {
+                                        return new LookupResult((InternalRow) null);
+                                    }
+                                    // Re-throw other exceptions
+                                    throw new RuntimeException(throwable);
+                                });
+            } else {
+                // No partition, directly perform lookup
+                return performLookup(null, bkBytes, pkBytes);
             }
+        } catch (Exception e) {
+            return FutureUtils.failedCompletableFuture(e);
         }
+    }
 
+    /**
+     * Perform the actual lookup operation and process the result.
+     *
+     * @param partitionId the partition ID, or null if the table is not partitioned
+     * @param bkBytes the encoded bucket key bytes
+     * @param pkBytes the encoded primary key bytes
+     * @return a CompletableFuture containing the lookup result
+     */
+    private CompletableFuture<LookupResult> performLookup(
+            @Nullable Long partitionId, byte[] bkBytes, byte[] pkBytes) {
         int bucketId = bucketingFunction.bucketing(bkBytes, numBuckets);
         TableBucket tableBucket = new TableBucket(tableInfo.getTableId(), partitionId, bucketId);
-        CompletableFuture<LookupResult> lookupFuture = new CompletableFuture<>();
-        lookupClient
+        return lookupClient
                 .lookup(tableInfo.getTablePath(), tableBucket, pkBytes)
-                .whenComplete(
-                        (result, error) -> {
-                            if (error != null) {
-                                lookupFuture.completeExceptionally(error);
-                            } else {
-                                handleLookupResponse(
-                                        result == null
-                                                ? Collections.emptyList()
-                                                : Collections.singletonList(result),
-                                        lookupFuture);
-                            }
+                .thenCompose(
+                        result -> {
+                            CompletableFuture<LookupResult> resultFuture =
+                                    new CompletableFuture<>();
+                            handleLookupResponse(
+                                    result == null
+                                            ? Collections.emptyList()
+                                            : Collections.singletonList(result),
+                                    resultFuture);
+                            return resultFuture;
                         });
-        return lookupFuture;
     }
 }

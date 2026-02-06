@@ -40,6 +40,8 @@ import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
+import static org.apache.fluss.utils.concurrent.LockUtils.inWriteLock;
+
 /** Testing class for metadata updater. */
 public class TestingMetadataUpdater extends MetadataUpdater {
     public static final ServerNode COORDINATOR =
@@ -72,7 +74,15 @@ public class TestingMetadataUpdater extends MetadataUpdater {
         super(
                 RpcClient.create(conf, TestingClientMetricGroup.newInstance(), false),
                 conf,
-                Cluster.empty());
+                Cluster.empty(),
+                // Provide a no-op metadata fetcher for testing
+                (gateway,
+                        partialUpdate,
+                        originCluster,
+                        tablePaths,
+                        tablePartitions,
+                        tablePartitionIds) ->
+                        java.util.concurrent.CompletableFuture.completedFuture(originCluster));
         initializeCluster(coordinatorServer, tabletServers, tableInfos);
         coordinatorGateway = new TestCoordinatorGateway();
         if (customGateways != null) {
@@ -133,15 +143,26 @@ public class TestingMetadataUpdater extends MetadataUpdater {
         }
     }
 
-    public void updateCluster(Cluster cluster) {
-        this.cluster = cluster;
+    public void updateCluster(Cluster newCluster) {
+        setCluster(newCluster);
+    }
+
+    /** Helper method to set cluster for testing. */
+    private void setCluster(Cluster newCluster) {
+        inWriteLock(
+                clusterRWLock,
+                () -> {
+                    super.cluster = newCluster;
+                    return null;
+                });
     }
 
     @Override
     public void checkAndUpdateTableMetadata(Set<TablePath> tablePaths) {
+        Cluster currentCluster = getCluster();
         Set<TablePath> needUpdateTablePaths =
                 tablePaths.stream()
-                        .filter(tablePath -> !cluster.getTableId(tablePath).isPresent())
+                        .filter(tablePath -> !currentCluster.getTableId(tablePath).isPresent())
                         .collect(Collectors.toSet());
         if (!needUpdateTablePaths.isEmpty()) {
             throw new IllegalStateException(
@@ -163,7 +184,7 @@ public class TestingMetadataUpdater extends MetadataUpdater {
 
     @Override
     public TabletServerGateway newTabletServerClientForNode(int serverId) {
-        if (cluster.getTabletServer(serverId) == null) {
+        if (getCluster().getTabletServer(serverId) == null) {
             return null;
         } else {
             return tabletServerGatewayMap.get(serverId);
@@ -212,12 +233,12 @@ public class TestingMetadataUpdater extends MetadataUpdater {
                                             replicas)));
                     tableIdByPath.put(tablePath, tableId);
                 });
-        cluster =
+        setCluster(
                 new Cluster(
                         tabletServerMap,
                         coordinatorServer,
                         tablePathToBucketLocations,
                         tableIdByPath,
-                        Collections.emptyMap());
+                        Collections.emptyMap()));
     }
 }
