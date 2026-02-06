@@ -987,6 +987,39 @@ The files adhere to Iceberg's standard format, enabling seamless querying with o
   </TabItem>
 </Tabs>
 
+### Tiered Storage
+
+You can use the following command to view the files stored on RustFS:
+
+```shell
+docker run --rm --net=host \
+-e MC_HOST_rustfs=http://rustfsadmin:rustfsadmin@localhost:9000 \
+minio/mc ls --recursive rustfs/fluss/                
+```
+
+Sample output:
+```shell
+[2026-02-06 20:11:52 UTC] 9.7KiB STANDARD iceberg/fluss/datalake_enriched_orders/data/__bucket=0/00000-0-315417a0-d83b-4a54-a706-58154f2f049a-00001.parquet
+[2026-02-06 20:11:22 UTC] 9.5KiB STANDARD iceberg/fluss/datalake_enriched_orders/data/__bucket=0/00000-0-a5cc57b7-72f0-415a-b817-f6fe29ed17c2-00001.parquet
+[2026-02-06 20:10:52 UTC]  14KiB STANDARD iceberg/fluss/datalake_enriched_orders/data/__bucket=0/00000-0-c555c8f6-e200-415e-97c2-4bf5cf283ab5-00001.parquet
+[2026-02-06 20:09:53 UTC]  15KiB STANDARD iceberg/fluss/datalake_enriched_orders/data/__bucket=0/00000-0-df6952fd-ecb3-4f9f-afea-60e176c0c69f-00001.parquet
+[2026-02-06 20:10:52 UTC] 8.1KiB STANDARD iceberg/fluss/datalake_enriched_orders/metadata/014f763d-a7e4-4716-bd9c-5fede24c2f27-m0.avro
+[2026-02-06 20:09:53 UTC] 8.1KiB STANDARD iceberg/fluss/datalake_enriched_orders/metadata/50786e7f-d4b6-4821-a173-1927f67017a5-m0.avro
+[2026-02-06 20:11:22 UTC] 8.1KiB STANDARD iceberg/fluss/datalake_enriched_orders/metadata/be02a347-7781-4195-82e3-5c5dbcef06e5-m0.avro
+[2026-02-06 20:11:52 UTC] 8.1KiB STANDARD iceberg/fluss/datalake_enriched_orders/metadata/c606fd42-9452-46d9-a258-d731332ba3af-m0.avro
+[2026-02-06 20:09:53 UTC] 4.4KiB STANDARD iceberg/fluss/datalake_enriched_orders/metadata/snap-2826026129110087788-1-50786e7f-d4b6-4821-a173-1927f67017a5.avro
+[2026-02-06 20:11:22 UTC] 4.5KiB STANDARD iceberg/fluss/datalake_enriched_orders/metadata/snap-4708533898857736722-1-be02a347-7781-4195-82e3-5c5dbcef06e5.avro
+[2026-02-06 20:11:52 UTC] 4.5KiB STANDARD iceberg/fluss/datalake_enriched_orders/metadata/snap-5039287922324762391-1-c606fd42-9452-46d9-a258-d731332ba3af.avro
+[2026-02-06 20:10:52 UTC] 4.4KiB STANDARD iceberg/fluss/datalake_enriched_orders/metadata/snap-7111191572558807319-1-014f763d-a7e4-4716-bd9c-5fede24c2f27.avro
+[2026-02-06 20:09:01 UTC] 1.8KiB STANDARD iceberg/fluss/datalake_enriched_orders/metadata/v1.metadata.json
+[2026-02-06 20:09:53 UTC] 2.8KiB STANDARD iceberg/fluss/datalake_enriched_orders/metadata/v2.metadata.json
+[2026-02-06 20:10:52 UTC] 3.8KiB STANDARD iceberg/fluss/datalake_enriched_orders/metadata/v3.metadata.json
+[2026-02-06 20:11:22 UTC] 4.8KiB STANDARD iceberg/fluss/datalake_enriched_orders/metadata/v4.metadata.json
+[2026-02-06 20:11:52 UTC] 5.8KiB STANDARD iceberg/fluss/datalake_enriched_orders/metadata/v5.metadata.json
+[2026-02-06 20:11:52 UTC]     1B STANDARD iceberg/fluss/datalake_enriched_orders/metadata/version-hint.text
+[2026-02-06 20:11:52 UTC]    50B STANDARD remote-data/lake/fluss/datalake_enriched_orders-3/metadata/b47da549-c4d7-4443-be56-b99e917ce267.offsets
+```
+
 ## Clean up
 After finishing the tutorial, run `exit` to exit Flink SQL CLI Container and then run 
 ```shell
