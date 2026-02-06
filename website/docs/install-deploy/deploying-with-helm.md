@@ -231,7 +231,6 @@ The following table lists the configurable parameters of the Fluss chart, and th
 |-----------|-------------|---------|
 | `sasl.mechanism` | SASL mechanism | `PLAIN` |
 | `sasl.users` | User list for PLAIN authentication | `[{username: admin, password: password}]` |
-| `sasl.existingSecret` | Use existing secret containing `jaas.conf` | `""` |
 
 ## Advanced Configuration
 
@@ -291,7 +290,7 @@ sasl:
       password: password
 ```
 
-The `users` defines comma-separated list of usernames and passwords for client communications when SASL is enabled. The first user will be used for the client authentication.
+The `users` field defines the list of usernames and passwords for SASL authentication. The first user in the list is used for internal client authentication in the chart templates.
 
 ### Storage Configuration
 

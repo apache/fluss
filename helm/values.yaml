@@ -103,5 +103,3 @@ sasl:
   users:
     - username: admin
       password: password
-  # If specified, the existing secret must contain a key `jaas.conf` with the JAAS configuration
-  existingSecret: ""

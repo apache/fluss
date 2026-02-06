@@ -88,7 +88,7 @@ spec:
               {{- range $saslUsers }}
               {{- $jaasUsers = append $jaasUsers (printf "user_%s=\\\"%s\\\"" .username .password) -}}
               {{- end }}
-              {{- $clientUser := first $saslUsers }}
+              {{- $clientUser := first $saslUsers -}}
               echo "security.sasl.enabled.mechanisms: {{ .Values.sasl.mechanism }}" >> $FLUSS_HOME/conf/server.yaml && \
               echo "security.sasl.plain.jaas.config: org.apache.fluss.security.auth.sasl.plain.PlainLoginModule required {{ join " " $jaasUsers }};" >> $FLUSS_HOME/conf/server.yaml && \
 
@@ -136,7 +136,7 @@ spec:
         {{- if (include "fluss.isSaslEnabled" .) }}
         - name: sasl-config
           secret:
-            secretName: {{ if .Values.sasl.existingSecret }}{{ .Values.sasl.existingSecret }}{{ else }}{{ include "fluss.fullname" . }}-sasl-jaas-config{{ end }}
+            secretName: {{ include "fluss.fullname" . }}-sasl-jaas-config
         {{- end }}
   {{- if .Values.coordinator.storage.enabled }}
   volumeClaimTemplates:
