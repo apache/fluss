@@ -291,6 +291,10 @@ services:
       - zookeeper
       - rustfs
     environment:
+      - AWS_ACCESS_KEY_ID=rustfsadmin
+      - AWS_SECRET_ACCESS_KEY=rustfsadmin
+      - AWS_REGION=us-east-1
+      - AWS_ENDPOINT_URL_S3=http://rustfs:9000
       - |
         FLUSS_PROPERTIES=
         zookeeper.address: zookeeper:2181
@@ -304,8 +308,8 @@ services:
         datalake.iceberg.type: hadoop
         datalake.iceberg.warehouse: s3a://fluss/iceberg
         datalake.iceberg.iceberg.hadoop.fs.s3a.endpoint: http://rustfs:9000
-        datalake.iceberg.iceberg.hadoop.fs.s3a.access-key: rustfsadmin
-        datalake.iceberg.iceberg.hadoop.fs.s3a.secret-key: rustfsadmin
+        datalake.iceberg.iceberg.hadoop.fs.s3a.access.key: rustfsadmin
+        datalake.iceberg.iceberg.hadoop.fs.s3a.secret.key: rustfsadmin
         datalake.iceberg.iceberg.hadoop.fs.s3a.path.style.access: true
     volumes:
       - shared-tmpfs:/tmp/iceberg
@@ -337,8 +341,8 @@ services:
         datalake.iceberg.type: hadoop
         datalake.iceberg.warehouse: s3a://fluss/iceberg
         datalake.iceberg.iceberg.hadoop.fs.s3a.endpoint: http://rustfs:9000
-        datalake.iceberg.iceberg.hadoop.fs.s3a.access-key: rustfsadmin
-        datalake.iceberg.iceberg.hadoop.fs.s3a.secret-key: rustfsadmin
+        datalake.iceberg.iceberg.hadoop.fs.s3a.access.key: rustfsadmin
+        datalake.iceberg.iceberg.hadoop.fs.s3a.secret.key: rustfsadmin
         datalake.iceberg.iceberg.hadoop.fs.s3a.path.style.access: true
     volumes:
       - shared-tmpfs:/tmp/iceberg
@@ -357,9 +361,17 @@ services:
        cp /tmp/opt/*.jar /opt/flink/opt/ 2>/dev/null || true;
        /docker-entrypoint.sh jobmanager"
     environment:
+      - AWS_ACCESS_KEY_ID=rustfsadmin
+      - AWS_SECRET_ACCESS_KEY=rustfsadmin
+      - AWS_REGION=us-east-1
+      - AWS_ENDPOINT_URL_S3=http://rustfs:9000
       - |
         FLINK_PROPERTIES=
         jobmanager.rpc.address: jobmanager
+        flink.hadoop.fs.s3a.endpoint: http://rustfs:9000
+        flink.hadoop.fs.s3a.access-key: rustfsadmin
+        flink.hadoop.fs.s3a.secret-key: rustfsadmin
+        flink.hadoop.fs.s3a.path.style.access: true
     volumes:
       - shared-tmpfs:/tmp/iceberg
       - shared-tmpfs:/tmp/fluss
@@ -716,8 +728,8 @@ docker compose exec jobmanager \
     --datalake.iceberg.type hadoop \
     --datalake.iceberg.warehouse s3a://fluss/iceberg \
     --datalake.iceberg.iceberg.hadoop.fs.s3a.endpoint http://rustfs:9000 \
-    --datalake.iceberg.iceberg.hadoop.fs.s3a.access-key rustfsadmin \
-    --datalake.iceberg.iceberg.hadoop.fs.s3a.secret-key rustfsadmin \
+    --datalake.iceberg.iceberg.hadoop.fs.s3a.access.key rustfsadmin \
+    --datalake.iceberg.iceberg.hadoop.fs.s3a.secret.key rustfsadmin \
     --datalake.iceberg.iceberg.hadoop.fs.s3a.path.style.access true
 ```
 You should see a Flink Job to tier data from Fluss to Iceberg running in the [Flink Web UI](http://localhost:8083/).
