@@ -576,6 +576,109 @@
                 <artifactId>maven-checkstyle-plugin</artifactId>
             </plugin>
 
+            <plugin>
+                <groupId>org.apache.rat</groupId>
+                <artifactId>apache-rat-plugin</artifactId>
+                <version>0.16.1</version>
+                <inherited>false</inherited>
+                <executions>
+                    <execution>
+                        <id>rat-check</id>
+                        <phase>validate</phase>
+                        <goals>
+                            <goal>check</goal>
+                        </goals>
+                    </execution>
+                </executions>
+                <configuration>
+                    <consoleOutput>true</consoleOutput>
+                    <excludeSubProjects>false</excludeSubProjects>
+                    <numUnapprovedLicenses>0</numUnapprovedLicenses>
+                    <licenses>
+                        <!-- Enforce this license:
+                            Licensed to the Apache Software Foundation (ASF) under one
+                            or more contributor license agreements.  See the NOTICE file
+                            distributed with this work for additional information
+                            regarding copyright ownership.  The ASF licenses this file
+                            to you under the Apache License, Version 2.0 (the
+                            "License"); you may not use this file except in compliance
+                            with the License.  You may obtain a copy of the License at
+                              http://www.apache.org/licenses/LICENSE-2.0
+                            Unless required by applicable law or agreed to in writing,
+                            software distributed under the License is distributed on an
+                            "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+                            KIND, either express or implied.  See the License for the
+                            specific language governing permissions and limitations
+                            under the License.
+                        -->
+                        <license implementation="org.apache.rat.analysis.license.SimplePatternBasedLicense">
+                            <licenseFamilyCategory>AL2</licenseFamilyCategory>
+                            <licenseFamilyName>Apache License 2.0</licenseFamilyName>
+                            <patterns>
+                                <pattern>Licensed to the Apache Software Foundation (ASF) under one</pattern>
+                            </patterns>
+                        </license>
+                        <license>
+                            <!-- Explicitly forbid Alibaba license to catch non-compliant headers during our migration from Alibaba to ASF.
+                                We must add this check because an Alibaba license header may contain Apache text and be wrongly marked as approved. -->
+                            <family>BAN</family>
+                            <text>Alibaba Group Holding Ltd</text>
+                        </license>
+                    </licenses>
+                    <families>
+                        <family>
+                            <id>BAN</id>
+                            <name>The license not allowed in this project.</name>
+                        </family>
+                    </families>
+                    <licenseFamilies>
+                        <licenseFamily implementation="org.apache.rat.license.SimpleLicenseFamily">
+                            <familyName>Apache License 2.0</familyName>
+                        </licenseFamily>
+                    </licenseFamilies>
+                    <approvedLicenses>
+                        <id>AL2</id>
+                    </approvedLicenses>
+                    <excludes>
+                        <!-- Additional files like .gitignore etc.-->
+                        <exclude>**/.*/**</exclude>
+                        <exclude>**/*.prefs</exclude>
+                        <exclude>**/*.log</exclude>
+                        <!-- Documentation files in the main trunk. -->
+                        <exclude>**/*.md</exclude>
+                        <exclude>**/*.mdx</exclude>
+                        <!-- IDE files. -->
+                        <exclude>**/*.iml</exclude>
+                        <exclude>**/.idea/**</exclude>
+                        <!-- Generated content -->
+                        <exclude>**/target/**</exclude>
+                        <exclude>build-target/**</exclude>
+                        <exclude>**/scalastyle-output.xml</exclude>
+                        <exclude>**/*.svg</exclude>
+                        <exclude>**/dependency-reduced-pom.xml</exclude>
+                        <!-- Bundled license files -->
+                        <exclude>**/LICENSE*</exclude>
+                        <exclude>**/NOTICE*</exclude>
+                        <!-- artifacts created during release process -->
+                        <exclude>tools/releasing/release/**</exclude>
+                        <!-- Configuration Files. -->
+                        <exclude>**/fluss-bin/conf/servers</exclude>
+                        <!-- Website Files. -->
+                        <exclude>website/**/_category_.json</exclude>
+                        <exclude>website/package.json</exclude>
+                        <exclude>website/package-lock.json</exclude>
+                        <exclude>website/static/**</exclude>
+                        <exclude>website/build/**</exclude>
+                        <exclude>website/node_modules/**</exclude>
+                    </excludes>
+                </configuration>
+            </plugin>
+
+            <plugin>
+                <groupId>com.diffplug.spotless</groupId>
+                <artifactId>spotless-maven-plugin</artifactId>
+            </plugin>
+
             <!--surefire for unit tests and integration tests-->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
