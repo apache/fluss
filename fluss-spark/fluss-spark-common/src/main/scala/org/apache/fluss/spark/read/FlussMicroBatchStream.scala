@@ -157,7 +157,6 @@ abstract class FlussMicroBatchStream(
   }
 
   private def getOrCreateInitialPartitionOffsets(): TableBucketOffsets = {
-    // TODO load from checkpoint dir
     if (tableInfo.isPartitioned) {
       initPartitionedSplits()
     } else {
