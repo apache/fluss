@@ -134,7 +134,7 @@ services:
         s3.access-key: rustfsadmin
         s3.secret-key: rustfsadmin
         s3.path.style.access: true
-        kv.snapshot.interval: 0s
+        kv.snapshot.interval: 60s
         datalake.format: paimon
         datalake.paimon.metastore: filesystem
         datalake.paimon.warehouse: s3://fluss/paimon
@@ -331,7 +331,7 @@ services:
         zookeeper.address: zookeeper:2181
         bind.listeners: FLUSS://tablet-server:9123
         data.dir: /tmp/fluss/data
-        kv.snapshot.interval: 0s
+        kv.snapshot.interval: 60s
         remote.data.dir: s3://fluss/remote-data
         s3.endpoint: http://rustfs:9000
         s3.access-key: rustfsadmin
