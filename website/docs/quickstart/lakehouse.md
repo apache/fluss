@@ -117,8 +117,6 @@ services:
         datalake.paimon.s3.secret-key: rustfsadmin
         datalake.paimon.s3.path.style.access: true
     volumes:
-      - shared-tmpfs:/tmp/paimon
-      - shared-tmpfs:/tmp/fluss
       - ./lib/paimon-s3-1.3.1.jar:/opt/fluss/plugins/paimon/paimon-s3-1.3.1.jar
   tablet-server:
     image: apache/fluss:$FLUSS_DOCKER_VERSION$
@@ -145,8 +143,6 @@ services:
         datalake.paimon.s3.secret-key: rustfsadmin
         datalake.paimon.s3.path.style.access: true
     volumes:
-      - shared-tmpfs:/tmp/paimon
-      - shared-tmpfs:/tmp/fluss
       - ./lib/paimon-s3-1.3.1.jar:/opt/fluss/plugins/paimon/paimon-s3-1.3.1.jar
   zookeeper:
     restart: always
@@ -166,8 +162,6 @@ services:
         FLINK_PROPERTIES=
         jobmanager.rpc.address: jobmanager
     volumes:
-      - shared-tmpfs:/tmp/paimon
-      - shared-tmpfs:/tmp/fluss
       - ./lib:/tmp/jars
       - ./opt:/tmp/opt
   taskmanager:
@@ -188,17 +182,10 @@ services:
         taskmanager.memory.process.size: 2048m
         taskmanager.memory.task.off-heap.size: 128m
     volumes:
-      - shared-tmpfs:/tmp/paimon
-      - shared-tmpfs:/tmp/fluss
       - ./lib:/tmp/jars
       - ./opt:/tmp/opt
 
 volumes:
-  shared-tmpfs:
-    driver: local
-    driver_opts:
-      type: "tmpfs"
-      device: "tmpfs"
   rustfs-data:
 ```
 
