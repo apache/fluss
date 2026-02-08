@@ -18,6 +18,7 @@
 package org.apache.fluss.metadata;
 
 import org.apache.fluss.annotation.PublicEvolving;
+import org.apache.fluss.types.DataType;
 
 import javax.annotation.Nullable;
 
@@ -104,6 +105,17 @@ public final class AggFunction implements Serializable {
     }
 
     /**
+     * Validates data type of this aggregation function. This method checks that the field data type
+     * is valid
+     *
+     * @param fieldType the field data type
+     * @throws IllegalArgumentException if any data type is invalid
+     */
+    public void validateDataType(DataType fieldType) {
+        type.validateDataType(fieldType);
+    }
+
+    /**
      * Validates all parameters of this aggregation function.
      *
      * <p>This method checks that:
@@ -115,7 +127,7 @@ public final class AggFunction implements Serializable {
      *
      * @throws IllegalArgumentException if any parameter is invalid
      */
-    public void validate() {
+    public void validateParameters() {
         for (Map.Entry<String, String> entry : parameters.entrySet()) {
             type.validateParameter(entry.getKey(), entry.getValue());
         }
