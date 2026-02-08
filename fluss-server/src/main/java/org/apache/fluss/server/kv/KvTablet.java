@@ -41,9 +41,11 @@ import org.apache.fluss.record.KvRecord;
 import org.apache.fluss.record.KvRecordBatch;
 import org.apache.fluss.record.KvRecordReadContext;
 import org.apache.fluss.row.BinaryRow;
+import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.PaddingRow;
 import org.apache.fluss.row.arrow.ArrowWriterPool;
 import org.apache.fluss.row.arrow.ArrowWriterProvider;
+import org.apache.fluss.row.encode.RowEncoder;
 import org.apache.fluss.row.encode.ValueDecoder;
 import org.apache.fluss.rpc.protocol.MergeMode;
 import org.apache.fluss.server.kv.autoinc.AutoIncrementManager;
@@ -83,6 +85,7 @@ import javax.annotation.concurrent.ThreadSafe;
 import java.io.File;
 import java.io.IOException;
 import java.util.Collection;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Executor;
@@ -328,23 +331,31 @@ public final class KvTablet {
                     short latestSchemaId = (short) schemaInfo.getSchemaId();
                     validateSchemaId(kvRecords.schemaId(), latestSchemaId);
 
+                    // Convert target column positions from client's schema to latest
+                    // schema positions using column IDs if schemas differ.
+                    int[] resolvedTargetColumns = targetColumns;
+                    if (targetColumns != null && kvRecords.schemaId() != latestSchemaId) {
+                        Schema clientSchema = schemaGetter.getSchema(kvRecords.schemaId());
+                        resolvedTargetColumns =
+                                convertTargetColumns(targetColumns, clientSchema, latestSchema);
+                    }
+
                     AutoIncrementUpdater currentAutoIncrementUpdater =
                             autoIncrementManager.getUpdaterForSchema(kvFormat, latestSchemaId);
 
                     // Validate targetColumns doesn't contain auto-increment column
-                    currentAutoIncrementUpdater.validateTargetColumns(targetColumns);
+                    currentAutoIncrementUpdater.validateTargetColumns(resolvedTargetColumns);
 
                     // Determine the row merger based on mergeMode:
                     // - DEFAULT: Use the configured merge engine (rowMerger)
                     // - OVERWRITE: Bypass merge engine, use pre-created overwriteRowMerger
                     //   to directly replace values (for undo recovery scenarios)
-                    // We only support ADD COLUMN, so targetColumns is fine to be used directly.
                     RowMerger currentMerger =
                             (mergeMode == MergeMode.OVERWRITE)
                                     ? overwriteRowMerger.configureTargetColumns(
-                                            targetColumns, latestSchemaId, latestSchema)
+                                            resolvedTargetColumns, latestSchemaId, latestSchema)
                                     : rowMerger.configureTargetColumns(
-                                            targetColumns, latestSchemaId, latestSchema);
+                                            resolvedTargetColumns, latestSchemaId, latestSchema);
 
                     RowType latestRowType = latestSchema.getRowType();
                     WalBuilder walBuilder = createWalBuilder(latestSchemaId, latestRowType);
@@ -360,6 +371,8 @@ public final class KvTablet {
                         processKvRecords(
                                 kvRecords,
                                 kvRecords.schemaId(),
+                                latestSchemaId,
+                                latestSchema,
                                 currentMerger,
                                 currentAutoIncrementUpdater,
                                 walBuilder,
@@ -414,6 +427,8 @@ public final class KvTablet {
     private void processKvRecords(
             KvRecordBatch kvRecords,
             short schemaIdOfNewData,
+            short latestSchemaId,
+            Schema latestSchema,
             RowMerger currentMerger,
             AutoIncrementUpdater autoIncrementUpdater,
             WalBuilder walBuilder,
@@ -433,10 +448,17 @@ public final class KvTablet {
             BinaryRow row = kvRecord.getRow();
             BinaryValue currentValue = row == null ? null : new BinaryValue(schemaIdOfNewData, row);
 
+            // Align incoming row to latest schema if it was written with an older schema.
+            if (currentValue != null && schemaIdOfNewData != latestSchemaId) {
+                currentValue = alignToLatestSchema(currentValue, latestSchemaId, latestSchema);
+            }
+
             if (currentValue == null) {
                 logOffset =
                         processDeletion(
                                 key,
+                                latestSchemaId,
+                                latestSchema,
                                 currentMerger,
                                 valueDecoder,
                                 walBuilder,
@@ -447,6 +469,8 @@ public final class KvTablet {
                         processUpsert(
                                 key,
                                 currentValue,
+                                latestSchemaId,
+                                latestSchema,
                                 currentMerger,
                                 autoIncrementUpdater,
                                 valueDecoder,
@@ -459,6 +483,8 @@ public final class KvTablet {
 
     private long processDeletion(
             KvPreWriteBuffer.Key key,
+            short latestSchemaId,
+            Schema latestSchema,
             RowMerger currentMerger,
             ValueDecoder valueDecoder,
             WalBuilder walBuilder,
@@ -484,6 +510,10 @@ public final class KvTablet {
         }
 
         BinaryValue oldValue = valueDecoder.decodeValue(oldValueBytes);
+        // Align old KV row to latest schema if it was stored with an older schema.
+        if (oldValue.schemaId != latestSchemaId) {
+            oldValue = alignToLatestSchema(oldValue, latestSchemaId, latestSchema);
+        }
         BinaryValue newValue = currentMerger.delete(oldValue);
 
         // if newValue is null, it means the row should be deleted
@@ -497,6 +527,8 @@ public final class KvTablet {
     private long processUpsert(
             KvPreWriteBuffer.Key key,
             BinaryValue currentValue,
+            short latestSchemaId,
+            Schema latestSchema,
             RowMerger currentMerger,
             AutoIncrementUpdater autoIncrementUpdater,
             ValueDecoder valueDecoder,
@@ -526,6 +558,10 @@ public final class KvTablet {
         }
 
         BinaryValue oldValue = valueDecoder.decodeValue(oldValueBytes);
+        // Align old KV row to latest schema if it was stored with an older schema.
+        if (oldValue.schemaId != latestSchemaId) {
+            oldValue = alignToLatestSchema(oldValue, latestSchemaId, latestSchema);
+        }
         BinaryValue newValue = currentMerger.merge(oldValue, currentValue);
 
         if (newValue == oldValue) {
@@ -580,6 +616,74 @@ public final class KvTablet {
             kvPreWriteBuffer.put(key, newValue.encodeValue(), logOffset + 1);
             return logOffset + 2;
         }
+    }
+
+    /**
+     * Converts a {@link BinaryValue} from its source schema layout to the latest schema layout
+     * using column IDs to map positions. New columns (present in latest but not in source) are
+     * filled with null. This only runs when schemas differ; the common case short-circuits.
+     */
+    private BinaryValue alignToLatestSchema(
+            BinaryValue value, short latestSchemaId, Schema latestSchema) {
+        if (value.schemaId == latestSchemaId) {
+            return value;
+        }
+
+        Schema sourceSchema = schemaGetter.getSchema(value.schemaId);
+        List<Integer> sourceColIds = sourceSchema.getColumnIds();
+        List<Integer> targetColIds = latestSchema.getColumnIds();
+
+        Map<Integer, Integer> sourceIdToPos = new HashMap<>();
+        for (int i = 0; i < sourceColIds.size(); i++) {
+            sourceIdToPos.put(sourceColIds.get(i), i);
+        }
+
+        InternalRow.FieldGetter[] sourceGetters =
+                InternalRow.createFieldGetters(sourceSchema.getRowType());
+        RowEncoder encoder = RowEncoder.create(kvFormat, latestSchema.getRowType());
+        encoder.startNewRow();
+        for (int targetPos = 0; targetPos < targetColIds.size(); targetPos++) {
+            Integer sourcePos = sourceIdToPos.get(targetColIds.get(targetPos));
+            if (sourcePos == null) {
+                // Column added after the source schema — fill with null.
+                encoder.encodeField(targetPos, null);
+            } else {
+                encoder.encodeField(targetPos, sourceGetters[sourcePos].getFieldOrNull(value.row));
+            }
+        }
+        return new BinaryValue(latestSchemaId, encoder.finishRow());
+    }
+
+    /**
+     * Converts target column positions from the client's (source) schema to the latest (target)
+     * schema using column IDs. This is needed when a client sends a partial update using an older
+     * schema whose positions need to be remapped to the latest schema layout.
+     */
+    static int[] convertTargetColumns(int[] positions, Schema sourceSchema, Schema targetSchema) {
+        List<Integer> sourceColIds = sourceSchema.getColumnIds();
+        List<Integer> targetColIds = targetSchema.getColumnIds();
+
+        Map<Integer, Integer> targetIdToPos = new HashMap<>();
+        for (int i = 0; i < targetColIds.size(); i++) {
+            targetIdToPos.put(targetColIds.get(i), i);
+        }
+
+        int resultCount = 0;
+        int[] buffer = new int[positions.length];
+        for (int position : positions) {
+            int colId = sourceColIds.get(position);
+            Integer targetPos = targetIdToPos.get(colId);
+            if (targetPos != null) {
+                buffer[resultCount++] = targetPos;
+            }
+            // Column was dropped in the latest schema — skip it.
+        }
+        if (resultCount == positions.length) {
+            return buffer;
+        }
+        int[] result = new int[resultCount];
+        System.arraycopy(buffer, 0, result, 0, resultCount);
+        return result;
     }
 
     private WalBuilder createWalBuilder(int schemaId, RowType rowType) throws Exception {
