@@ -30,7 +30,6 @@ import org.apache.fluss.spark.utils.LogChangesIterator
 import org.apache.fluss.utils.CloseableIterator
 
 import org.apache.spark.internal.Logging
-import org.apache.spark.sql.util.CaseInsensitiveStringMap
 
 import java.util.Comparator
 
@@ -210,6 +209,7 @@ class FlussUpsertPartitionReader(
 
   private def initialize(): Unit = {
     val currentTs = System.currentTimeMillis()
+    logInfo(s"Prepare read table $tablePath $flussPartition")
 
     val sortMergeReader = createSortMergeReader()
 

@@ -85,8 +85,7 @@ class FlussAppendPartitionReader(
     if (flussPartition.startOffset >= flussPartition.stopOffset) {
       throw new IllegalArgumentException(s"Invalid offset range $flussPartition")
     }
-    logInfo(s"Prepare read table $tablePath partition $partitionId bucket $bucketId" +
-      s" with start offset ${flussPartition.startOffset} stop offset ${flussPartition.stopOffset}")
+    logInfo(s"Prepare read table $tablePath $flussPartition")
     if (partitionId != null) {
       logScanner.subscribe(partitionId, bucketId, flussPartition.startOffset)
     } else {
