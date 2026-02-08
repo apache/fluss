@@ -32,11 +32,8 @@ import org.apache.fluss.types.RowType;
 import javax.annotation.Nullable;
 import javax.annotation.concurrent.NotThreadSafe;
 
-import java.util.ArrayList;
 import java.util.Collections;
-import java.util.HashSet;
 import java.util.List;
-import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 
 import static org.apache.fluss.client.utils.ClientUtils.getPartitionId;
@@ -69,8 +66,6 @@ class PrefixKeyLookuper extends AbstractLookuper implements Lookuper {
             LookupClient lookupClient,
             List<String> lookupColumnNames) {
         super(tableInfo, metadataUpdater, lookupClient, schemaGetter);
-        // sanity check
-        validatePrefixLookup(tableInfo, lookupColumnNames);
         this.numBuckets = tableInfo.getNumBuckets();
         // the row type of the input lookup row
         RowType lookupRowType = tableInfo.getRowType().project(lookupColumnNames);
@@ -99,63 +94,6 @@ class PrefixKeyLookuper extends AbstractLookuper implements Lookuper {
                 tableInfo.isPartitioned()
                         ? new PartitionGetter(lookupRowType, tableInfo.getPartitionKeys())
                         : null;
-    }
-
-    private void validatePrefixLookup(TableInfo tableInfo, List<String> lookupColumns) {
-        // verify is primary key table
-        if (!tableInfo.hasPrimaryKey()) {
-            throw new IllegalArgumentException(
-                    String.format(
-                            "Log table %s doesn't support prefix lookup",
-                            tableInfo.getTablePath()));
-        }
-
-        // verify the bucket keys are the prefix subset of physical primary keys
-        List<String> physicalPrimaryKeys = tableInfo.getPhysicalPrimaryKeys();
-        List<String> bucketKeys = tableInfo.getBucketKeys();
-        for (int i = 0; i < bucketKeys.size(); i++) {
-            if (!bucketKeys.get(i).equals(physicalPrimaryKeys.get(i))) {
-                throw new IllegalArgumentException(
-                        String.format(
-                                "Can not perform prefix lookup on table '%s', "
-                                        + "because the bucket keys %s is not a prefix subset of the "
-                                        + "physical primary keys %s (excluded partition fields if present).",
-                                tableInfo.getTablePath(), bucketKeys, physicalPrimaryKeys));
-            }
-        }
-
-        // verify the lookup columns must contain all partition fields if this is partitioned table
-        if (tableInfo.isPartitioned()) {
-            List<String> partitionKeys = tableInfo.getPartitionKeys();
-            Set<String> lookupColumnsSet = new HashSet<>(lookupColumns);
-            if (!lookupColumnsSet.containsAll(partitionKeys)) {
-                throw new IllegalArgumentException(
-                        String.format(
-                                "Can not perform prefix lookup on table '%s', "
-                                        + "because the lookup columns %s must contain all partition fields %s.",
-                                tableInfo.getTablePath(), lookupColumns, partitionKeys));
-            }
-        }
-
-        // verify the lookup columns must contain all bucket keys **in order**
-        List<String> physicalLookupColumns = new ArrayList<>(lookupColumns);
-        physicalLookupColumns.removeAll(tableInfo.getPartitionKeys());
-        if (!physicalLookupColumns.equals(bucketKeys)) {
-            throw new IllegalArgumentException(
-                    String.format(
-                            "Can not perform prefix lookup on table '%s', "
-                                    + "because the lookup columns %s must contain all bucket keys %s in order.",
-                            tableInfo.getTablePath(), lookupColumns, bucketKeys));
-        }
-
-        if (bucketKeys.equals(physicalPrimaryKeys)) {
-            throw new IllegalArgumentException(
-                    String.format(
-                            "Can not perform prefix lookup on table '%s', "
-                                    + "because the lookup columns %s equals the physical primary keys %s. "
-                                    + "Please use primary key lookup (Lookuper without lookupBy) instead.",
-                            tableInfo.getTablePath(), lookupColumns, physicalPrimaryKeys));
-        }
     }
 
     @Override

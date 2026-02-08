@@ -36,7 +36,6 @@ import java.util.Collections;
 import java.util.concurrent.CompletableFuture;
 
 import static org.apache.fluss.client.utils.ClientUtils.getPartitionId;
-import static org.apache.fluss.utils.Preconditions.checkArgument;
 
 /** An implementation of {@link Lookuper} that lookups by primary key. */
 @NotThreadSafe
@@ -62,10 +61,6 @@ class PrimaryKeyLookuper extends AbstractLookuper implements Lookuper {
             MetadataUpdater metadataUpdater,
             LookupClient lookupClient) {
         super(tableInfo, metadataUpdater, lookupClient, schemaGetter);
-        checkArgument(
-                tableInfo.hasPrimaryKey(),
-                "Log table %s doesn't support lookup",
-                tableInfo.getTablePath());
         this.numBuckets = tableInfo.getNumBuckets();
 
         // the row type of the input lookup row
