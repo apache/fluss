@@ -38,24 +38,24 @@ cd fluss-quickstart-paimon
 mkdir -p lib opt
 
 # Flink connectors
-wget -O lib/flink-faker-0.5.3.jar https://github.com/knaufk/flink-faker/releases/download/v0.5.3/flink-faker-0.5.3.jar
-wget -O "lib/fluss-flink-1.20-$FLUSS_DOCKER_VERSION$.jar" "https://repo1.maven.org/maven2/org/apache/fluss/fluss-flink-1.20/$FLUSS_DOCKER_VERSION$/fluss-flink-1.20-$FLUSS_DOCKER_VERSION$.jar"
-wget -O "lib/paimon-flink-1.20-$PAIMON_VERSION$.jar" "https://repo1.maven.org/maven2/org/apache/paimon/paimon-flink-1.20/$PAIMON_VERSION$/paimon-flink-1.20-$PAIMON_VERSION$.jar"
+curl -fL -o lib/flink-faker-0.5.3.jar https://github.com/knaufk/flink-faker/releases/download/v0.5.3/flink-faker-0.5.3.jar
+curl -fL -o "lib/fluss-flink-1.20-$FLUSS_DOCKER_VERSION$.jar" "https://repo1.maven.org/maven2/org/apache/fluss/fluss-flink-1.20/$FLUSS_DOCKER_VERSION$/fluss-flink-1.20-$FLUSS_DOCKER_VERSION$.jar"
+curl -fL -o "lib/paimon-flink-1.20-$PAIMON_VERSION$.jar" "https://repo1.maven.org/maven2/org/apache/paimon/paimon-flink-1.20/$PAIMON_VERSION$/paimon-flink-1.20-$PAIMON_VERSION$.jar"
 
 # Fluss lake plugin
-wget -O "lib/fluss-lake-paimon-$FLUSS_DOCKER_VERSION$.jar" "https://repo1.maven.org/maven2/org/apache/fluss/fluss-lake-paimon/$FLUSS_DOCKER_VERSION$/fluss-lake-paimon-$FLUSS_DOCKER_VERSION$.jar"
+curl -fL -o "lib/fluss-lake-paimon-$FLUSS_DOCKER_VERSION$.jar" "https://repo1.maven.org/maven2/org/apache/fluss/fluss-lake-paimon/$FLUSS_DOCKER_VERSION$/fluss-lake-paimon-$FLUSS_DOCKER_VERSION$.jar"
 
 # Paimon bundle jar
-wget -O "lib/paimon-bundle-$PAIMON_VERSION$.jar" "https://repo.maven.apache.org/maven2/org/apache/paimon/paimon-bundle/$PAIMON_VERSION$/paimon-bundle-$PAIMON_VERSION$.jar"
+curl -fL -o "lib/paimon-bundle-$PAIMON_VERSION$.jar" "https://repo.maven.apache.org/maven2/org/apache/paimon/paimon-bundle/$PAIMON_VERSION$/paimon-bundle-$PAIMON_VERSION$.jar"
 
 # Hadoop bundle jar
-wget -O lib/flink-shaded-hadoop-2-uber-2.8.3-10.0.jar https://repo.maven.apache.org/maven2/org/apache/flink/flink-shaded-hadoop-2-uber/2.8.3-10.0/flink-shaded-hadoop-2-uber-2.8.3-10.0.jar
+curl -fL -o lib/flink-shaded-hadoop-2-uber-2.8.3-10.0.jar https://repo.maven.apache.org/maven2/org/apache/flink/flink-shaded-hadoop-2-uber/2.8.3-10.0/flink-shaded-hadoop-2-uber-2.8.3-10.0.jar
 
 # AWS S3 support
-wget -O "lib/paimon-s3-$PAIMON_VERSION$.jar" "https://repo.maven.apache.org/maven2/org/apache/paimon/paimon-s3/$PAIMON_VERSION$/paimon-s3-$PAIMON_VERSION$.jar"
+curl -fL -o "lib/paimon-s3-$PAIMON_VERSION$.jar" "https://repo.maven.apache.org/maven2/org/apache/paimon/paimon-s3/$PAIMON_VERSION$/paimon-s3-$PAIMON_VERSION$.jar"
 
 # Tiering service
-wget -O "opt/fluss-flink-tiering-$FLUSS_DOCKER_VERSION$.jar" "https://repo1.maven.org/maven2/org/apache/fluss/fluss-flink-tiering/$FLUSS_DOCKER_VERSION$/fluss-flink-tiering-$FLUSS_DOCKER_VERSION$.jar"
+curl -fL -o "opt/fluss-flink-tiering-$FLUSS_DOCKER_VERSION$.jar" "https://repo1.maven.org/maven2/org/apache/fluss/fluss-flink-tiering/$FLUSS_DOCKER_VERSION$/fluss-flink-tiering-$FLUSS_DOCKER_VERSION$.jar"
 ```
 
 :::info
@@ -104,13 +104,22 @@ services:
         FLUSS_PROPERTIES=
         zookeeper.address: zookeeper:2181
         bind.listeners: FLUSS://coordinator-server:9123
-        remote.data.dir: /tmp/fluss/remote-data
+        remote.data.dir: s3://fluss/remote-data
+        s3.endpoint: http://rustfs:9000
+        s3.access-key: rustfsadmin
+        s3.secret-key: rustfsadmin
+        s3.path.style.access: true
         datalake.format: paimon
         datalake.paimon.metastore: filesystem
-        datalake.paimon.warehouse: /tmp/paimon
+        datalake.paimon.warehouse: s3://fluss/paimon
+        datalake.paimon.s3.endpoint: http://rustfs:9000
+        datalake.paimon.s3.access-key: rustfsadmin
+        datalake.paimon.s3.secret-key: rustfsadmin
+        datalake.paimon.s3.path.style.access: true
     volumes:
       - shared-tmpfs:/tmp/paimon
       - shared-tmpfs:/tmp/fluss
+      - ./lib/paimon-s3-1.3.1.jar:/opt/fluss/plugins/paimon/paimon-s3-1.3.1.jar
   tablet-server:
     image: apache/fluss:$FLUSS_DOCKER_VERSION$
     command: tabletServer
@@ -122,14 +131,23 @@ services:
         zookeeper.address: zookeeper:2181
         bind.listeners: FLUSS://tablet-server:9123
         data.dir: /tmp/fluss/data
-        remote.data.dir: /tmp/fluss/remote-data
+        remote.data.dir: s3://fluss/remote-data
+        s3.endpoint: http://rustfs:9000
+        s3.access-key: rustfsadmin
+        s3.secret-key: rustfsadmin
+        s3.path.style.access: true
         kv.snapshot.interval: 0s
         datalake.format: paimon
         datalake.paimon.metastore: filesystem
-        datalake.paimon.warehouse: /tmp/paimon
+        datalake.paimon.warehouse: s3://fluss/paimon
+        datalake.paimon.s3.endpoint: http://rustfs:9000
+        datalake.paimon.s3.access-key: rustfsadmin
+        datalake.paimon.s3.secret-key: rustfsadmin
+        datalake.paimon.s3.path.style.access: true
     volumes:
       - shared-tmpfs:/tmp/paimon
       - shared-tmpfs:/tmp/fluss
+      - ./lib/paimon-s3-1.3.1.jar:/opt/fluss/plugins/paimon/paimon-s3-1.3.1.jar
   zookeeper:
     restart: always
     image: zookeeper:3.9.2
@@ -181,6 +199,7 @@ volumes:
     driver_opts:
       type: "tmpfs"
       device: "tmpfs"
+  rustfs-data:
 ```
 
 The Docker Compose environment consists of the following containers:
@@ -363,8 +382,6 @@ services:
     environment:
       - AWS_ACCESS_KEY_ID=rustfsadmin
       - AWS_SECRET_ACCESS_KEY=rustfsadmin
-      - AWS_REGION=us-east-1
-      - AWS_ENDPOINT_URL_S3=http://rustfs:9000
       - |
         FLINK_PROPERTIES=
         jobmanager.rpc.address: jobmanager
@@ -388,12 +405,18 @@ services:
        cp /tmp/opt/*.jar /opt/flink/opt/ 2>/dev/null || true;
        /docker-entrypoint.sh taskmanager"
     environment:
+      - AWS_ACCESS_KEY_ID=rustfsadmin
+      - AWS_SECRET_ACCESS_KEY=rustfsadmin
       - |
         FLINK_PROPERTIES=
         jobmanager.rpc.address: jobmanager
         taskmanager.numberOfTaskSlots: 10
         taskmanager.memory.process.size: 2048m
         taskmanager.memory.task.off-heap.size: 128m
+        flink.hadoop.fs.s3a.endpoint: http://rustfs:9000
+        flink.hadoop.fs.s3a.access-key: rustfsadmin
+        flink.hadoop.fs.s3a.secret-key: rustfsadmin
+        flink.hadoop.fs.s3a.path.style.access: true
     volumes:
       - shared-tmpfs:/tmp/iceberg
       - shared-tmpfs:/tmp/fluss
@@ -444,7 +467,7 @@ Congratulations, you are all set!
 
 First, use the following command to enter the Flink SQL CLI Container:
 ```shell
-docker compose exec -e ROOT_LOG_LEVEL=DEBUG jobmanager ./sql-client
+docker compose exec -e ROOT_LOG_LEVEL=DEBUG jobmanager ./bin/sql-client.sh
 ```
 
 To simplify this guide, we will create three temporary tables with `faker` connector to generate data:
@@ -587,12 +610,30 @@ SET 'table.exec.sink.not-null-enforcer'='DROP';
 ## Create Fluss Tables
 ### Create Fluss Catalog
 Use the following SQL to create a Fluss catalog:
+
+<Tabs groupId="lake-tabs">
+  <TabItem value="paimon" label="Paimon" default>
+
+```sql title="Flink SQL"
+CREATE CATALOG fluss_catalog WITH (
+    'type' = 'fluss',
+    'bootstrap.servers' = 'coordinator-server:9123',
+    'paimon.s3.access-key' = 'rustfsadmin',
+    'paimon.s3.secret-key' = 'rustfsadmin'
+);
+```
+  </TabItem>
+
+  <TabItem value="iceberg" label="Iceberg">
+
 ```sql title="Flink SQL"
 CREATE CATALOG fluss_catalog WITH (
     'type' = 'fluss',
     'bootstrap.servers' = 'coordinator-server:9123'
 );
 ```
+  </TabItem>
+</Tabs>
 
 ```sql title="Flink SQL"
 USE CATALOG fluss_catalog;
@@ -709,7 +750,11 @@ docker compose exec jobmanager \
     --fluss.bootstrap.servers coordinator-server:9123 \
     --datalake.format paimon \
     --datalake.paimon.metastore filesystem \
-    --datalake.paimon.warehouse /tmp/paimon
+    --datalake.paimon.warehouse s3://fluss/paimon \
+    --datalake.paimon.s3.endpoint http://rustfs:9000 \
+    --datalake.paimon.s3.access.key rustfsadmin \
+    --datalake.paimon.s3.secret.key rustfsadmin \
+    --datalake.paimon.s3.path.style.access true
 ```
 You should see a Flink Job to tier data from Fluss to Paimon running in the [Flink Web UI](http://localhost:8083/).
 
@@ -997,7 +1042,39 @@ docker run --rm --net=host \
 minio/mc ls --recursive rustfs/fluss/                
 ```
 
+<Tabs groupId="lake-tabs">
+  <TabItem value="paimon" label="Paimon" default>
+
 Sample output:
+
+```shell
+[2026-02-08 14:04:38 UTC]     0B STANDARD paimon/default.db/
+[2026-02-08 14:03:49 UTC]  18KiB STANDARD paimon/fluss.db/datalake_enriched_orders/bucket-0/changelog-05cec7e1-241b-4eb2-98f6-7cba7b028044-0.parquet
+[2026-02-08 14:04:49 UTC]  17KiB STANDARD paimon/fluss.db/datalake_enriched_orders/bucket-0/changelog-5b4af110-753a-4a90-a88c-575a358172cd-0.parquet
+[2026-02-08 14:03:49 UTC]  18KiB STANDARD paimon/fluss.db/datalake_enriched_orders/bucket-0/data-05cec7e1-241b-4eb2-98f6-7cba7b028044-1.parquet
+[2026-02-08 14:04:49 UTC]  17KiB STANDARD paimon/fluss.db/datalake_enriched_orders/bucket-0/data-5b4af110-753a-4a90-a88c-575a358172cd-1.parquet
+[2026-02-08 14:03:50 UTC] 2.3KiB STANDARD paimon/fluss.db/datalake_enriched_orders/manifest/manifest-682241ff-2c6e-4e2b-97d1-812a5c8c6513-0
+[2026-02-08 14:03:50 UTC] 2.3KiB STANDARD paimon/fluss.db/datalake_enriched_orders/manifest/manifest-682241ff-2c6e-4e2b-97d1-812a5c8c6513-1
+[2026-02-08 14:04:49 UTC] 2.3KiB STANDARD paimon/fluss.db/datalake_enriched_orders/manifest/manifest-e9a4dee4-9a39-4cf7-8711-37e971f3a992-0
+[2026-02-08 14:04:49 UTC] 2.3KiB STANDARD paimon/fluss.db/datalake_enriched_orders/manifest/manifest-e9a4dee4-9a39-4cf7-8711-37e971f3a992-1
+[2026-02-08 14:03:50 UTC]   884B STANDARD paimon/fluss.db/datalake_enriched_orders/manifest/manifest-list-5838d008-153a-47c2-b137-343e52c36cf6-0
+[2026-02-08 14:03:50 UTC]   989B STANDARD paimon/fluss.db/datalake_enriched_orders/manifest/manifest-list-5838d008-153a-47c2-b137-343e52c36cf6-1
+[2026-02-08 14:03:50 UTC]   985B STANDARD paimon/fluss.db/datalake_enriched_orders/manifest/manifest-list-5838d008-153a-47c2-b137-343e52c36cf6-2
+[2026-02-08 14:04:49 UTC]   989B STANDARD paimon/fluss.db/datalake_enriched_orders/manifest/manifest-list-5c48f649-66a5-42a2-aa0c-f73f033dec12-0
+[2026-02-08 14:04:49 UTC]   983B STANDARD paimon/fluss.db/datalake_enriched_orders/manifest/manifest-list-5c48f649-66a5-42a2-aa0c-f73f033dec12-1
+[2026-02-08 14:04:49 UTC]   984B STANDARD paimon/fluss.db/datalake_enriched_orders/manifest/manifest-list-5c48f649-66a5-42a2-aa0c-f73f033dec12-2
+[2026-02-08 14:02:55 UTC] 1.6KiB STANDARD paimon/fluss.db/datalake_enriched_orders/schema/schema-0
+[2026-02-08 14:04:49 UTC]     1B STANDARD paimon/fluss.db/datalake_enriched_orders/snapshot/LATEST
+[2026-02-08 14:03:50 UTC]   830B STANDARD paimon/fluss.db/datalake_enriched_orders/snapshot/snapshot-1
+[2026-02-08 14:04:49 UTC]   831B STANDARD paimon/fluss.db/datalake_enriched_orders/snapshot/snapshot-2
+[2026-02-08 14:04:49 UTC]    50B STANDARD remote-data/lake/fluss/datalake_enriched_orders-3/metadata/ad03c401-2002-414f-8545-de9512a60f44.offsets
+```
+  </TabItem>
+
+  <TabItem value="iceberg" label="Iceberg">
+
+Sample output:
+
 ```shell
 [2026-02-06 20:11:52 UTC] 9.7KiB STANDARD iceberg/fluss/datalake_enriched_orders/data/__bucket=0/00000-0-315417a0-d83b-4a54-a706-58154f2f049a-00001.parquet
 [2026-02-06 20:11:22 UTC] 9.5KiB STANDARD iceberg/fluss/datalake_enriched_orders/data/__bucket=0/00000-0-a5cc57b7-72f0-415a-b817-f6fe29ed17c2-00001.parquet
@@ -1019,6 +1096,10 @@ Sample output:
 [2026-02-06 20:11:52 UTC]     1B STANDARD iceberg/fluss/datalake_enriched_orders/metadata/version-hint.text
 [2026-02-06 20:11:52 UTC]    50B STANDARD remote-data/lake/fluss/datalake_enriched_orders-3/metadata/b47da549-c4d7-4443-be56-b99e917ce267.offsets
 ```
+
+  </TabItem>
+</Tabs>
+
 
 ## Clean up
 After finishing the tutorial, run `exit` to exit Flink SQL CLI Container and then run 
