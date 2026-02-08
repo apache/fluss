@@ -51,13 +51,15 @@ wget -O "lib/paimon-bundle-$PAIMON_VERSION$.jar" "https://repo.maven.apache.org/
 # Hadoop bundle jar
 wget -O lib/flink-shaded-hadoop-2-uber-2.8.3-10.0.jar https://repo.maven.apache.org/maven2/org/apache/flink/flink-shaded-hadoop-2-uber/2.8.3-10.0/flink-shaded-hadoop-2-uber-2.8.3-10.0.jar
 
+# AWS S3 support
+wget -O "lib/paimon-s3-$PAIMON_VERSION$.jar" "https://repo.maven.apache.org/maven2/org/apache/paimon/paimon-s3/$PAIMON_VERSION$/paimon-s3-$PAIMON_VERSION$.jar"
+
 # Tiering service
 wget -O "opt/fluss-flink-tiering-$FLUSS_DOCKER_VERSION$.jar" "https://repo1.maven.org/maven2/org/apache/fluss/fluss-flink-tiering/$FLUSS_DOCKER_VERSION$/fluss-flink-tiering-$FLUSS_DOCKER_VERSION$.jar"
 ```
 
 :::info
 You can add more jars to this `lib` directory based on your requirements:
-- **Cloud storage support**: For AWS S3 integration with Paimon, add the corresponding [paimon-s3](https://repo.maven.apache.org/maven2/org/apache/paimon/paimon-s3/$PAIMON_VERSION$/paimon-s3-$PAIMON_VERSION$.jar)
 - **Other catalog backends**: Add jars needed for alternative Paimon catalog implementations (e.g., Hive, JDBC)
   :::
 
@@ -65,11 +67,38 @@ You can add more jars to this `lib` directory based on your requirements:
 
 ```yaml
 services:
+  #begin RustFS (S3-compatible storage)
+  rustfs:
+    image: rustfs/rustfs:latest
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      - RUSTFS_ACCESS_KEY=rustfsadmin
+      - RUSTFS_SECRET_KEY=rustfsadmin
+      - RUSTFS_CONSOLE_ENABLE=true
+    volumes:
+      - rustfs-data:/data
+    command: /data
+  rustfs-init:
+    image: minio/mc
+    depends_on:
+      - rustfs
+    entrypoint: >
+      /bin/sh -c "
+      until mc alias set rustfs http://rustfs:9000 rustfsadmin rustfsadmin; do
+        echo 'Waiting for RustFS...';
+        sleep 1;
+      done;
+      mc mb --ignore-existing rustfs/fluss;
+      "
+  #end
   coordinator-server:
     image: apache/fluss:$FLUSS_DOCKER_VERSION$
     command: coordinatorServer
     depends_on:
       - zookeeper
+      - rustfs
     environment:
       - |
         FLUSS_PROPERTIES=
@@ -139,6 +168,7 @@ services:
         jobmanager.rpc.address: jobmanager
         taskmanager.numberOfTaskSlots: 10
         taskmanager.memory.process.size: 2048m
+        taskmanager.memory.task.off-heap.size: 128m
     volumes:
       - shared-tmpfs:/tmp/paimon
       - shared-tmpfs:/tmp/fluss
@@ -198,24 +228,28 @@ cd fluss-quickstart-iceberg
 mkdir -p lib opt
 
 # Flink connectors
-wget -O lib/flink-faker-0.5.3.jar https://github.com/knaufk/flink-faker/releases/download/v0.5.3/flink-faker-0.5.3.jar
-wget -O "lib/fluss-flink-1.20-$FLUSS_DOCKER_VERSION$.jar" "https://repo1.maven.org/maven2/org/apache/fluss/fluss-flink-1.20/$FLUSS_DOCKER_VERSION$/fluss-flink-1.20-$FLUSS_DOCKER_VERSION$.jar"
-wget -O lib/iceberg-flink-runtime-1.20-1.10.1.jar "https://repo1.maven.org/maven2/org/apache/iceberg/iceberg-flink-runtime-1.20/1.10.1/iceberg-flink-runtime-1.20-1.10.1.jar"
+curl -fL -o lib/flink-faker-0.5.3.jar https://github.com/knaufk/flink-faker/releases/download/v0.5.3/flink-faker-0.5.3.jar
+curl -fL -o "lib/fluss-flink-1.20-$FLUSS_DOCKER_VERSION$.jar" "https://repo1.maven.org/maven2/org/apache/fluss/fluss-flink-1.20/$FLUSS_DOCKER_VERSION$/fluss-flink-1.20-$FLUSS_DOCKER_VERSION$.jar"
+curl -fL -o lib/iceberg-flink-runtime-1.20-1.10.1.jar "https://repo1.maven.org/maven2/org/apache/iceberg/iceberg-flink-runtime-1.20/1.10.1/iceberg-flink-runtime-1.20-1.10.1.jar"
 
 # Fluss lake plugin
-wget -O "lib/fluss-lake-iceberg-$FLUSS_DOCKER_VERSION$.jar" "https://repo1.maven.org/maven2/org/apache/fluss/fluss-lake-iceberg/$FLUSS_DOCKER_VERSION$/fluss-lake-iceberg-$FLUSS_DOCKER_VERSION$.jar"
+curl -fL -o "lib/fluss-lake-iceberg-$FLUSS_DOCKER_VERSION$.jar" "https://repo1.maven.org/maven2/org/apache/fluss/fluss-lake-iceberg/$FLUSS_DOCKER_VERSION$/fluss-lake-iceberg-$FLUSS_DOCKER_VERSION$.jar"
 
 # Hadoop filesystem support
-wget -O lib/hadoop-apache-3.3.5-2.jar https://repo1.maven.org/maven2/io/trino/hadoop/hadoop-apache/3.3.5-2/hadoop-apache-3.3.5-2.jar
-wget -O lib/failsafe-3.3.2.jar https://repo1.maven.org/maven2/dev/failsafe/failsafe/3.3.2/failsafe-3.3.2.jar
+curl -fL -o lib/hadoop-client-api-3.3.5.jar https://repo1.maven.org/maven2/org/apache/hadoop/hadoop-client-api/3.3.5/hadoop-client-api-3.3.5.jar
+curl -fL -o lib/hadoop-client-runtime-3.3.5.jar https://repo1.maven.org/maven2/org/apache/hadoop/hadoop-client-runtime/3.3.5/hadoop-client-runtime-3.3.5.jar
+curl -fL -o lib/commons-logging-1.2.jar https://repo1.maven.org/maven2/commons-logging/commons-logging/1.2/commons-logging-1.2.jar
+
+# AWS S3 support (s3a:// scheme)
+curl -fL -o lib/hadoop-aws-3.3.5.jar https://repo1.maven.org/maven2/org/apache/hadoop/hadoop-aws/3.3.5/hadoop-aws-3.3.5.jar
+curl -fL -o lib/aws-java-sdk-bundle-1.12.367.jar https://repo1.maven.org/maven2/com/amazonaws/aws-java-sdk-bundle/1.12.367/aws-java-sdk-bundle-1.12.367.jar
 
 # Tiering service
-wget -O "opt/fluss-flink-tiering-$FLUSS_DOCKER_VERSION$.jar" "https://repo1.maven.org/maven2/org/apache/fluss/fluss-flink-tiering/$FLUSS_DOCKER_VERSION$/fluss-flink-tiering-$FLUSS_DOCKER_VERSION$.jar"
+curl -fL -o "opt/fluss-flink-tiering-$FLUSS_DOCKER_VERSION$.jar" "https://repo1.maven.org/maven2/org/apache/fluss/fluss-flink-tiering/$FLUSS_DOCKER_VERSION$/fluss-flink-tiering-$FLUSS_DOCKER_VERSION$.jar"
 ```
 
 :::info
 You can add more jars to this `lib` directory based on your requirements:
-- **Cloud storage support**: For AWS S3 integration with Iceberg, add the corresponding Iceberg bundle jars (e.g., `iceberg-aws-bundle`)
 - **Custom Hadoop configurations**: Add jars for specific HDFS distributions or custom authentication mechanisms
 - **Other catalog backends**: Add jars needed for alternative Iceberg catalog implementations (e.g., Rest, Hive, Glue)
 :::
@@ -224,25 +258,68 @@ You can add more jars to this `lib` directory based on your requirements:
 
 ```yaml
 services:
+  #begin RustFS (S3-compatible storage)
+  rustfs:
+    image: rustfs/rustfs:latest
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      - RUSTFS_ACCESS_KEY=rustfsadmin
+      - RUSTFS_SECRET_KEY=rustfsadmin
+      - RUSTFS_CONSOLE_ENABLE=true
+    volumes:
+      - rustfs-data:/data
+    command: /data
+  rustfs-init:
+    image: minio/mc
+    depends_on:
+      - rustfs
+    entrypoint: >
+      /bin/sh -c "
+      until mc alias set rustfs http://rustfs:9000 rustfsadmin rustfsadmin; do
+        echo 'Waiting for RustFS...';
+        sleep 1;
+      done;
+      mc mb --ignore-existing rustfs/fluss;
+      "
+  #end
   coordinator-server:
     image: apache/fluss:$FLUSS_DOCKER_VERSION$
     command: coordinatorServer
     depends_on:
       - zookeeper
+      - rustfs
     environment:
+      - AWS_ACCESS_KEY_ID=rustfsadmin
+      - AWS_SECRET_ACCESS_KEY=rustfsadmin
+      - AWS_REGION=us-east-1
+      - AWS_ENDPOINT_URL_S3=http://rustfs:9000
       - |
         FLUSS_PROPERTIES=
         zookeeper.address: zookeeper:2181
         bind.listeners: FLUSS://coordinator-server:9123
-        remote.data.dir: /tmp/fluss/remote-data
+        remote.data.dir: s3://fluss/remote-data
+        s3.endpoint: http://rustfs:9000
+        s3.access-key: rustfsadmin
+        s3.secret-key: rustfsadmin
+        s3.path.style.access: true
         datalake.format: iceberg
         datalake.iceberg.type: hadoop
-        datalake.iceberg.warehouse: /tmp/iceberg
+        datalake.iceberg.warehouse: s3a://fluss/iceberg
+        datalake.iceberg.iceberg.hadoop.fs.s3a.endpoint: http://rustfs:9000
+        datalake.iceberg.iceberg.hadoop.fs.s3a.access.key: rustfsadmin
+        datalake.iceberg.iceberg.hadoop.fs.s3a.secret.key: rustfsadmin
+        datalake.iceberg.iceberg.hadoop.fs.s3a.path.style.access: true
     volumes:
       - shared-tmpfs:/tmp/iceberg
       - shared-tmpfs:/tmp/fluss
       - ./lib/fluss-lake-iceberg-$FLUSS_DOCKER_VERSION$.jar:/opt/fluss/plugins/iceberg/fluss-lake-iceberg-$FLUSS_DOCKER_VERSION$.jar
-      - ./lib/hadoop-apache-3.3.5-2.jar:/opt/fluss/plugins/iceberg/hadoop-apache-3.3.5-2.jar
+      - ./lib/hadoop-client-api-3.3.5.jar:/opt/fluss/plugins/iceberg/hadoop-client-api-3.3.5.jar
+      - ./lib/hadoop-client-runtime-3.3.5.jar:/opt/fluss/plugins/iceberg/hadoop-client-runtime-3.3.5.jar
+      - ./lib/hadoop-aws-3.3.5.jar:/opt/fluss/plugins/iceberg/hadoop-aws-3.3.5.jar
+      - ./lib/aws-java-sdk-bundle-1.12.367.jar:/opt/fluss/plugins/iceberg/aws-java-sdk-bundle-1.12.367.jar
+      - ./lib/commons-logging-1.2.jar:/opt/fluss/plugins/iceberg/commons-logging-1.2.jar
   tablet-server:
     image: apache/fluss:$FLUSS_DOCKER_VERSION$
     command: tabletServer
@@ -254,11 +331,19 @@ services:
         zookeeper.address: zookeeper:2181
         bind.listeners: FLUSS://tablet-server:9123
         data.dir: /tmp/fluss/data
-        remote.data.dir: /tmp/fluss/remote-data
         kv.snapshot.interval: 0s
+        remote.data.dir: s3://fluss/remote-data
+        s3.endpoint: http://rustfs:9000
+        s3.access-key: rustfsadmin
+        s3.secret-key: rustfsadmin
+        s3.path.style.access: true
         datalake.format: iceberg
         datalake.iceberg.type: hadoop
-        datalake.iceberg.warehouse: /tmp/iceberg
+        datalake.iceberg.warehouse: s3a://fluss/iceberg
+        datalake.iceberg.iceberg.hadoop.fs.s3a.endpoint: http://rustfs:9000
+        datalake.iceberg.iceberg.hadoop.fs.s3a.access.key: rustfsadmin
+        datalake.iceberg.iceberg.hadoop.fs.s3a.secret.key: rustfsadmin
+        datalake.iceberg.iceberg.hadoop.fs.s3a.path.style.access: true
     volumes:
       - shared-tmpfs:/tmp/iceberg
       - shared-tmpfs:/tmp/fluss
@@ -276,9 +361,17 @@ services:
        cp /tmp/opt/*.jar /opt/flink/opt/ 2>/dev/null || true;
        /docker-entrypoint.sh jobmanager"
     environment:
+      - AWS_ACCESS_KEY_ID=rustfsadmin
+      - AWS_SECRET_ACCESS_KEY=rustfsadmin
+      - AWS_REGION=us-east-1
+      - AWS_ENDPOINT_URL_S3=http://rustfs:9000
       - |
         FLINK_PROPERTIES=
         jobmanager.rpc.address: jobmanager
+        flink.hadoop.fs.s3a.endpoint: http://rustfs:9000
+        flink.hadoop.fs.s3a.access-key: rustfsadmin
+        flink.hadoop.fs.s3a.secret-key: rustfsadmin
+        flink.hadoop.fs.s3a.path.style.access: true
     volumes:
       - shared-tmpfs:/tmp/iceberg
       - shared-tmpfs:/tmp/fluss
@@ -300,6 +393,7 @@ services:
         jobmanager.rpc.address: jobmanager
         taskmanager.numberOfTaskSlots: 10
         taskmanager.memory.process.size: 2048m
+        taskmanager.memory.task.off-heap.size: 128m
     volumes:
       - shared-tmpfs:/tmp/iceberg
       - shared-tmpfs:/tmp/fluss
@@ -312,6 +406,7 @@ volumes:
     driver_opts:
       type: "tmpfs"
       device: "tmpfs"
+  rustfs-data:
 ```
 
 The Docker Compose environment consists of the following containers:
@@ -349,7 +444,7 @@ Congratulations, you are all set!
 
 First, use the following command to enter the Flink SQL CLI Container:
 ```shell
-docker compose exec jobmanager ./bin/sql-client.sh
+docker compose exec -e ROOT_LOG_LEVEL=DEBUG jobmanager ./sql-client
 ```
 
 To simplify this guide, we will create three temporary tables with `faker` connector to generate data:
@@ -420,7 +515,7 @@ SET 'table.exec.sink.not-null-enforcer'='DROP';
 
 First, use the following command to enter the Flink SQL CLI Container:
 ```shell
-docker compose exec jobmanager ./bin/sql-client.sh
+docker compose exec -e ROOT_LOG_LEVEL=DEBUG jobmanager ./bin/sql-client.sh
 ```
 
 To simplify this guide, we will create three temporary tables with `faker` connector to generate data:
@@ -627,11 +722,15 @@ Open a new terminal, navigate to the `fluss-quickstart-iceberg` directory, and e
 ```shell
 docker compose exec jobmanager \
     /opt/flink/bin/flink run \
-    /opt/flink/opt/fluss-flink-tiering.jar \
+    /opt/flink/opt/fluss-flink-tiering-$FLUSS_VERSION$.jar \
     --fluss.bootstrap.servers coordinator-server:9123 \
     --datalake.format iceberg \
     --datalake.iceberg.type hadoop \
-    --datalake.iceberg.warehouse /tmp/iceberg
+    --datalake.iceberg.warehouse s3a://fluss/iceberg \
+    --datalake.iceberg.iceberg.hadoop.fs.s3a.endpoint http://rustfs:9000 \
+    --datalake.iceberg.iceberg.hadoop.fs.s3a.access.key rustfsadmin \
+    --datalake.iceberg.iceberg.hadoop.fs.s3a.secret.key rustfsadmin \
+    --datalake.iceberg.iceberg.hadoop.fs.s3a.path.style.access true
 ```
 You should see a Flink Job to tier data from Fluss to Iceberg running in the [Flink Web UI](http://localhost:8083/).
 
@@ -887,6 +986,39 @@ The files adhere to Iceberg's standard format, enabling seamless querying with o
 
   </TabItem>
 </Tabs>
+
+### Tiered Storage
+
+You can use the following command to view the files stored on RustFS:
+
+```shell
+docker run --rm --net=host \
+-e MC_HOST_rustfs=http://rustfsadmin:rustfsadmin@localhost:9000 \
+minio/mc ls --recursive rustfs/fluss/                
+```
+
+Sample output:
+```shell
+[2026-02-06 20:11:52 UTC] 9.7KiB STANDARD iceberg/fluss/datalake_enriched_orders/data/__bucket=0/00000-0-315417a0-d83b-4a54-a706-58154f2f049a-00001.parquet
+[2026-02-06 20:11:22 UTC] 9.5KiB STANDARD iceberg/fluss/datalake_enriched_orders/data/__bucket=0/00000-0-a5cc57b7-72f0-415a-b817-f6fe29ed17c2-00001.parquet
+[2026-02-06 20:10:52 UTC]  14KiB STANDARD iceberg/fluss/datalake_enriched_orders/data/__bucket=0/00000-0-c555c8f6-e200-415e-97c2-4bf5cf283ab5-00001.parquet
+[2026-02-06 20:09:53 UTC]  15KiB STANDARD iceberg/fluss/datalake_enriched_orders/data/__bucket=0/00000-0-df6952fd-ecb3-4f9f-afea-60e176c0c69f-00001.parquet
+[2026-02-06 20:10:52 UTC] 8.1KiB STANDARD iceberg/fluss/datalake_enriched_orders/metadata/014f763d-a7e4-4716-bd9c-5fede24c2f27-m0.avro
+[2026-02-06 20:09:53 UTC] 8.1KiB STANDARD iceberg/fluss/datalake_enriched_orders/metadata/50786e7f-d4b6-4821-a173-1927f67017a5-m0.avro
+[2026-02-06 20:11:22 UTC] 8.1KiB STANDARD iceberg/fluss/datalake_enriched_orders/metadata/be02a347-7781-4195-82e3-5c5dbcef06e5-m0.avro
+[2026-02-06 20:11:52 UTC] 8.1KiB STANDARD iceberg/fluss/datalake_enriched_orders/metadata/c606fd42-9452-46d9-a258-d731332ba3af-m0.avro
+[2026-02-06 20:09:53 UTC] 4.4KiB STANDARD iceberg/fluss/datalake_enriched_orders/metadata/snap-2826026129110087788-1-50786e7f-d4b6-4821-a173-1927f67017a5.avro
+[2026-02-06 20:11:22 UTC] 4.5KiB STANDARD iceberg/fluss/datalake_enriched_orders/metadata/snap-4708533898857736722-1-be02a347-7781-4195-82e3-5c5dbcef06e5.avro
+[2026-02-06 20:11:52 UTC] 4.5KiB STANDARD iceberg/fluss/datalake_enriched_orders/metadata/snap-5039287922324762391-1-c606fd42-9452-46d9-a258-d731332ba3af.avro
+[2026-02-06 20:10:52 UTC] 4.4KiB STANDARD iceberg/fluss/datalake_enriched_orders/metadata/snap-7111191572558807319-1-014f763d-a7e4-4716-bd9c-5fede24c2f27.avro
+[2026-02-06 20:09:01 UTC] 1.8KiB STANDARD iceberg/fluss/datalake_enriched_orders/metadata/v1.metadata.json
+[2026-02-06 20:09:53 UTC] 2.8KiB STANDARD iceberg/fluss/datalake_enriched_orders/metadata/v2.metadata.json
+[2026-02-06 20:10:52 UTC] 3.8KiB STANDARD iceberg/fluss/datalake_enriched_orders/metadata/v3.metadata.json
+[2026-02-06 20:11:22 UTC] 4.8KiB STANDARD iceberg/fluss/datalake_enriched_orders/metadata/v4.metadata.json
+[2026-02-06 20:11:52 UTC] 5.8KiB STANDARD iceberg/fluss/datalake_enriched_orders/metadata/v5.metadata.json
+[2026-02-06 20:11:52 UTC]     1B STANDARD iceberg/fluss/datalake_enriched_orders/metadata/version-hint.text
+[2026-02-06 20:11:52 UTC]    50B STANDARD remote-data/lake/fluss/datalake_enriched_orders-3/metadata/b47da549-c4d7-4443-be56-b99e917ce267.offsets
+```
 
 ## Clean up
 After finishing the tutorial, run `exit` to exit Flink SQL CLI Container and then run 
