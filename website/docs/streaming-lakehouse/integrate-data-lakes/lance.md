@@ -130,7 +130,7 @@ The following table shows the mapping between [Fluss data types](table-design/da
 
 ## Array Type Support
 
-Fluss supports the `ARRAY\<t\>` data type, which is particularly useful for machine learning and AI applications, such as storing vector embeddings.
+Fluss supports the `ARRAY<t>` data type, which is particularly useful for machine learning and AI applications, such as storing vector embeddings.
 When tiering data to Lance, Fluss automatically converts `ARRAY` columns to Lance's List type (or FixedSizeList for fixed-dimension arrays).
 
 ### Use Cases for Array Type
