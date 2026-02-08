@@ -331,8 +331,6 @@ services:
         datalake.iceberg.iceberg.hadoop.fs.s3a.secret.key: rustfsadmin
         datalake.iceberg.iceberg.hadoop.fs.s3a.path.style.access: true
     volumes:
-      - shared-tmpfs:/tmp/iceberg
-      - shared-tmpfs:/tmp/fluss
       - ./lib/fluss-lake-iceberg-$FLUSS_DOCKER_VERSION$.jar:/opt/fluss/plugins/iceberg/fluss-lake-iceberg-$FLUSS_DOCKER_VERSION$.jar
       - ./lib/hadoop-client-api-3.3.5.jar:/opt/fluss/plugins/iceberg/hadoop-client-api-3.3.5.jar
       - ./lib/hadoop-client-runtime-3.3.5.jar:/opt/fluss/plugins/iceberg/hadoop-client-runtime-3.3.5.jar
@@ -363,9 +361,6 @@ services:
         datalake.iceberg.iceberg.hadoop.fs.s3a.access.key: rustfsadmin
         datalake.iceberg.iceberg.hadoop.fs.s3a.secret.key: rustfsadmin
         datalake.iceberg.iceberg.hadoop.fs.s3a.path.style.access: true
-    volumes:
-      - shared-tmpfs:/tmp/iceberg
-      - shared-tmpfs:/tmp/fluss
   zookeeper:
     restart: always
     image: zookeeper:3.9.2
@@ -386,12 +381,8 @@ services:
         FLINK_PROPERTIES=
         jobmanager.rpc.address: jobmanager
         flink.hadoop.fs.s3a.endpoint: http://rustfs:9000
-        flink.hadoop.fs.s3a.access-key: rustfsadmin
-        flink.hadoop.fs.s3a.secret-key: rustfsadmin
         flink.hadoop.fs.s3a.path.style.access: true
     volumes:
-      - shared-tmpfs:/tmp/iceberg
-      - shared-tmpfs:/tmp/fluss
       - ./lib:/tmp/jars
       - ./opt:/tmp/opt
   taskmanager:
@@ -414,21 +405,12 @@ services:
         taskmanager.memory.process.size: 2048m
         taskmanager.memory.task.off-heap.size: 128m
         flink.hadoop.fs.s3a.endpoint: http://rustfs:9000
-        flink.hadoop.fs.s3a.access-key: rustfsadmin
-        flink.hadoop.fs.s3a.secret-key: rustfsadmin
         flink.hadoop.fs.s3a.path.style.access: true
     volumes:
-      - shared-tmpfs:/tmp/iceberg
-      - shared-tmpfs:/tmp/fluss
       - ./lib:/tmp/jars
       - ./opt:/tmp/opt
 
 volumes:
-  shared-tmpfs:
-    driver: local
-    driver_opts:
-      type: "tmpfs"
-      device: "tmpfs"
   rustfs-data:
 ```
 
