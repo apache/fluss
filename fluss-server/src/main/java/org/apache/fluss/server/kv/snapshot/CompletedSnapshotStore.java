@@ -248,6 +248,7 @@ public class CompletedSnapshotStore {
         void subsume(CompletedSnapshot snapshot) throws Exception;
     }
 
+    /** A function to check whether a snapshot still in use. */
     @FunctionalInterface
     public interface SnapshotInUseChecker {
         boolean isInUse(CompletedSnapshot snapshot);
