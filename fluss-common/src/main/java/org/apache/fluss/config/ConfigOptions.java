@@ -17,6 +17,7 @@
 
 package org.apache.fluss.config;
 
+import org.apache.fluss.annotation.Documentation;
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.annotation.PublicEvolving;
 import org.apache.fluss.compression.ArrowCompressionType;
@@ -59,6 +60,7 @@ public class ConfigOptions {
     public static final int CURRENT_KV_FORMAT_VERSION = KV_FORMAT_VERSION_2;
 
     @Internal
+    @Documentation.Section("Common")
     public static final String[] PARENT_FIRST_LOGGING_PATTERNS =
             new String[] {
                 "org.slf4j",
@@ -71,6 +73,7 @@ public class ConfigOptions {
     // ------------------------------------------------------------------------
     //  ConfigOptions for Fluss Cluster
     // ------------------------------------------------------------------------
+    @Documentation.Section("Common")
     public static final ConfigOption<Integer> DEFAULT_BUCKET_NUMBER =
             key("default.bucket.number")
                     .intType()
@@ -81,6 +84,7 @@ public class ConfigOptions {
                                     + "and all the tables without specifying bucket number in the cluster will use the value "
                                     + "as the bucket number.");
 
+    @Documentation.Section("Common")
     public static final ConfigOption<Integer> DEFAULT_REPLICATION_FACTOR =
             key("default.replication.factor")
                     .intType()
@@ -91,6 +95,7 @@ public class ConfigOptions {
                                     + "and all the tables without specifying replication factor in the cluster will use the value "
                                     + "as replication factor.");
 
+    @Documentation.Section("Common")
     public static final ConfigOption<String> REMOTE_DATA_DIR =
             key("remote.data.dir")
                     .stringType()
@@ -99,6 +104,7 @@ public class ConfigOptions {
                             "The directory used for storing the kv snapshot data files and remote log for log tiered storage "
                                     + " in a Fluss supported filesystem.");
 
+    @Documentation.Section("Common")
     public static final ConfigOption<MemorySize> REMOTE_FS_WRITE_BUFFER_SIZE =
             key("remote.fs.write-buffer-size")
                     .memoryType()
@@ -106,6 +112,7 @@ public class ConfigOptions {
                     .withDescription(
                             "The default size of the write buffer for writing the local files to remote file systems.");
 
+    @Documentation.Section("Common")
     public static final ConfigOption<List<String>> PLUGIN_ALWAYS_PARENT_FIRST_LOADER_PATTERNS =
             key("plugin.classloader.parent-first-patterns.default")
                     .stringType()
@@ -128,6 +135,7 @@ public class ConfigOptions {
                                     + " against the fully qualified class name. This setting should generally not be modified. To add another "
                                     + " pattern we recommend to use \"plugin.classloader.parent-first-patterns.additional\" instead.");
 
+    @Documentation.Section("Common")
     public static final ConfigOption<List<String>>
             PLUGIN_ALWAYS_PARENT_FIRST_LOADER_PATTERNS_ADDITIONAL =
                     key("plugin.classloader.parent-first-patterns.additional")
@@ -141,6 +149,7 @@ public class ConfigOptions {
                                             + PLUGIN_ALWAYS_PARENT_FIRST_LOADER_PATTERNS.key()
                                             + "\".");
 
+    @Documentation.Section("Common")
     public static final ConfigOption<Duration> AUTO_PARTITION_CHECK_INTERVAL =
             key("auto-partition.check.interval")
                     .durationType()
@@ -149,6 +158,7 @@ public class ConfigOptions {
                             "The interval of auto partition check. "
                                     + "The default value is 10 minutes.");
 
+    @Documentation.Section("Common")
     public static final ConfigOption<Boolean> LOG_TABLE_ALLOW_CREATION =
             key("allow.create.log.tables")
                     .booleanType()
@@ -158,6 +168,7 @@ public class ConfigOptions {
                                     + "attempts to create log tables (tables without primary key) will be rejected. "
                                     + "The default value is true.");
 
+    @Documentation.Section("Common")
     public static final ConfigOption<Boolean> KV_TABLE_ALLOW_CREATION =
             key("allow.create.kv.tables")
                     .booleanType()
@@ -167,6 +178,7 @@ public class ConfigOptions {
                                     + "attempts to create kv tables (tables with primary key) will be rejected. "
                                     + "The default value is true.");
 
+    @Documentation.Section("Common")
     public static final ConfigOption<Integer> MAX_PARTITION_NUM =
             key("max.partition.num")
                     .intType()
@@ -175,6 +187,7 @@ public class ConfigOptions {
                             "Limits the maximum number of partitions that can be created for a partitioned table "
                                     + "to avoid creating too many partitions.");
 
+    @Documentation.Section("Common")
     public static final ConfigOption<Duration> ACL_NOTIFICATION_EXPIRATION_TIME =
             key("acl.notification.expiration-time")
                     .durationType()
@@ -186,6 +199,7 @@ public class ConfigOptions {
                                     + "The default value is 15 minutes. "
                                     + "This setting is important to ensure that ACL changes are propagated in a timely manner and do not remain active longer than necessary.");
 
+    @Documentation.Section("Common")
     public static final ConfigOption<Boolean> AUTHORIZER_ENABLED =
             key("authorizer.enabled")
                     .booleanType()
@@ -195,6 +209,7 @@ public class ConfigOptions {
                                     + "If enabled, access control is enforced based on the authorization rules defined in the configuration. "
                                     + "If disabled, all operations and resources are accessible to all users.");
 
+    @Documentation.Section("Common")
     public static final ConfigOption<String> AUTHORIZER_TYPE =
             key("authorizer.type")
                     .stringType()
@@ -205,6 +220,7 @@ public class ConfigOptions {
                                     + "The default value is `default`, which indicates the built-in authorizer implementation. "
                                     + "Custom authorizers can be implemented by providing a matching plugin identifier.");
 
+    @Documentation.Section("Common")
     public static final ConfigOption<String> SUPER_USERS =
             key("super.users")
                     .stringType()
@@ -215,13 +231,14 @@ public class ConfigOptions {
                                     + "and each super user should be specified in the format `principal_type:principal_name`, e.g., `User:admin;User:bob`. "
                                     + "This configuration is critical for defining administrative privileges in the system.");
 
+    @Documentation.Section("Common")
     public static final ConfigOption<Integer> MAX_BUCKET_NUM =
             key("max.bucket.num")
                     .intType()
                     .defaultValue(128000)
                     .withDescription(
-                            "The maximum number of buckets that can be created for a table."
-                                    + "The default value is 128000");
+                            "The maximum number of buckets that can be created for a table. "
+                                    + "The default value is 128000.");
 
     /**
      * The network address and port the server binds to for accepting connections.
@@ -232,6 +249,7 @@ public class ConfigOptions {
      *
      * <p>The default value {@code "CLIENT://localhost:9123"} is suitable for local development.
      */
+    @Documentation.Section("Common")
     public static final ConfigOption<String> BIND_LISTENERS =
             key("bind.listeners")
                     .stringType()
@@ -254,6 +272,7 @@ public class ConfigOptions {
      * environments</b> to ensure proper cluster discovery. If not explicitly set, the value of
      * {@code bind.listeners} will be used as fallback.
      */
+    @Documentation.Section("Common")
     public static final ConfigOption<String> ADVERTISED_LISTENERS =
             key("advertised.listeners")
                     .stringType()
@@ -264,12 +283,14 @@ public class ConfigOptions {
                                     + "Format matches `bind.listeners` (listener_name://host:port). "
                                     + "Defaults to the value of `bind.listeners` if not explicitly configured.");
 
+    @Documentation.Section("Common")
     public static final ConfigOption<String> INTERNAL_LISTENER_NAME =
             key("internal.listener.name")
                     .stringType()
                     .defaultValue(DEFAULT_LISTENER_NAME)
                     .withDescription("The listener for server internal communication.");
 
+    @Documentation.Section("Common")
     public static final ConfigOption<List<String>> SERVER_SASL_ENABLED_MECHANISMS_CONFIG =
             key("security.sasl.enabled.mechanisms").stringType().asList().noDefaultValue();
 
@@ -298,6 +319,7 @@ public class ConfigOptions {
      *     instead, which provides a more flexible configuration for multiple ports.
      */
     @Deprecated
+    @Documentation.Section("Coordinator")
     public static final ConfigOption<String> COORDINATOR_HOST =
             key("coordinator.host")
                     .stringType()
@@ -368,7 +390,8 @@ public class ConfigOptions {
                     .withDescription(
                             "The TTL (time-to-live) for producer offsets. "
                                     + "Producer offsets older than this TTL will be automatically cleaned up "
-                                    + "by the coordinator server. Default is 24 hours.");
+                                    + "by the coordinator server. Producer offsets are used for undo recovery when a Flink job fails over before completing its first checkpoint. "
+                                    + "The default value is 24 hours.");
 
     /** The interval for cleaning up expired producer offsets and orphan files in remote storage. */
     public static final ConfigOption<Duration> COORDINATOR_PRODUCER_OFFSETS_CLEANUP_INTERVAL =
@@ -377,7 +400,8 @@ public class ConfigOptions {
                     .defaultValue(Duration.ofHours(1))
                     .withDescription(
                             "The interval for cleaning up expired producer offsets "
-                                    + "and orphan files in remote storage. Default is 1 hour.");
+                                    + "and orphan files in remote storage. The cleanup task runs periodically to remove expired offsets and any orphan files that may have been left behind due to incomplete operations. "
+                                    + "The default value is 1 hour.");
 
     // ------------------------------------------------------------------------
     //  ConfigOptions for Tablet Server
@@ -436,15 +460,17 @@ public class ConfigOptions {
                     .stringType()
                     .noDefaultValue()
                     .withDescription(
-                            "The rack for the tabletServer. This will be used in rack aware bucket assignment "
+                            "The rack for the TabletServer. This will be used in rack aware bucket assignment "
                                     + "for fault tolerance. Examples: `RACK1`, `cn-hangzhou-server10`");
 
+    @Documentation.Section("Server")
+    @Documentation.OverrideDefault("/tmp/fluss-data")
     public static final ConfigOption<String> DATA_DIR =
             key("data.dir")
                     .stringType()
                     .defaultValue("/tmp/fluss-data")
                     .withDescription(
-                            "This configuration controls the directory where fluss will store its data. "
+                            "This configuration controls the directory where Fluss will store its data. "
                                     + "The default value is /tmp/fluss-data");
 
     public static final ConfigOption<Duration> WRITER_ID_EXPIRATION_TIME =
@@ -469,27 +495,21 @@ public class ConfigOptions {
                     .intType()
                     .defaultValue(3)
                     .withDescription(
-                            "The maximum number of retries for controlled shutdown of the tablet server. "
-                                    + "During controlled shutdown, the tablet server attempts to transfer leadership "
-                                    + "of its buckets to other servers. If the transfer fails, it will retry up to "
-                                    + "this number of times before proceeding with shutdown. The default value is 3.");
+                            "Maximum number of attempts to transfer leadership before proceeding with an unclean shutdown during a controlled shutdown procedure.");
 
     public static final ConfigOption<Duration> TABLET_SERVER_CONTROLLED_SHUTDOWN_RETRY_INTERVAL =
             key("tablet-server.controlled-shutdown.retry-interval")
                     .durationType()
                     .defaultValue(Duration.ofMillis(1000))
                     .withDescription(
-                            "The interval between retries during controlled shutdown of the tablet server. "
-                                    + "When controlled shutdown fails to transfer bucket leadership, the tablet server "
-                                    + "will wait for this duration before attempting the next retry. "
-                                    + "The default value is 1000 milliseconds (1 second).");
+                            "Time interval between retry attempts when trying to transfer leadership during controlled shutdown.");
 
     public static final ConfigOption<Integer> BACKGROUND_THREADS =
             key("server.background.threads")
                     .intType()
                     .defaultValue(10)
                     .withDescription(
-                            "The number of threads to use for various background processing tasks.");
+                            "The number of threads to use for various background processing tasks. The default value is 10.");
 
     public static final ConfigOption<MemorySize> SERVER_BUFFER_MEMORY_SIZE =
             key("server.buffer.memory-size")
@@ -512,9 +532,9 @@ public class ConfigOptions {
                     .memoryType()
                     .defaultValue(MemorySize.parse("16mb"))
                     .withDescription(
-                            "The minimum number of bytes that will be allocated by the writer rounded down to the closes multiple of "
+                            "The minimum number of bytes that will be allocated by the writer rounded down to the closest multiple of "
                                     + SERVER_BUFFER_PAGE_SIZE.key()
-                                    + "It must be greater than or equal to "
+                                    + ". It must be greater than or equal to "
                                     + SERVER_BUFFER_PAGE_SIZE.key()
                                     + ". "
                                     + "This option allows to allocate memory in batches to have better CPU-cached friendliness due to contiguous segments.");
@@ -524,13 +544,14 @@ public class ConfigOptions {
                     .durationType()
                     .defaultValue(Duration.ofNanos(Long.MAX_VALUE))
                     .withDescription(
-                            "Defines how long the buffer pool will block when waiting for segments to become available.");
+                            "Defines how long the buffer pool will block when waiting for segments.");
 
     // ------------------------------------------------------------------
     // ZooKeeper Settings
     // ------------------------------------------------------------------
 
     /** The ZooKeeper address to use, when running Fluss with ZooKeeper. */
+    @Documentation.Section("ZooKeeper")
     public static final ConfigOption<String> ZOOKEEPER_ADDRESS =
             key("zookeeper.address")
                     .stringType()
@@ -561,21 +582,22 @@ public class ConfigOptions {
                     .durationType()
                     .defaultValue(Duration.ofMillis(60_000L))
                     .withDeprecatedKeys("recovery.zookeeper.client.session-timeout")
-                    .withDescription("Defines the session timeout for the ZooKeeper session.");
+                    .withDescription(
+                            "Defines the session timeout for the ZooKeeper session in ms.");
 
     public static final ConfigOption<Duration> ZOOKEEPER_CONNECTION_TIMEOUT =
             key("zookeeper.client.connection-timeout")
                     .durationType()
                     .defaultValue(Duration.ofMillis(15_000L))
                     .withDeprecatedKeys("recovery.zookeeper.client.connection-timeout")
-                    .withDescription("Defines the connection timeout for ZooKeeper.");
+                    .withDescription("Defines the connection timeout for ZooKeeper in ms.");
 
     public static final ConfigOption<Duration> ZOOKEEPER_RETRY_WAIT =
             key("zookeeper.client.retry-wait")
                     .durationType()
                     .defaultValue(Duration.ofMillis(5_000L))
                     .withDeprecatedKeys("recovery.zookeeper.client.retry-wait")
-                    .withDescription("Defines the pause between consecutive retries.");
+                    .withDescription("Defines the pause between consecutive retries in ms.");
 
     public static final ConfigOption<Integer> ZOOKEEPER_MAX_RETRY_ATTEMPTS =
             key("zookeeper.client.max-retry-attempts")
@@ -631,6 +653,7 @@ public class ConfigOptions {
     //  ConfigOptions for Log
     // ------------------------------------------------------------------------
 
+    @Documentation.Section("Log")
     public static final ConfigOption<MemorySize> LOG_SEGMENT_FILE_SIZE =
             key("log.segment.file-size")
                     .memoryType()
@@ -654,7 +677,7 @@ public class ConfigOptions {
                     .memoryType()
                     .defaultValue(MemorySize.parse("4k"))
                     .withDescription(
-                            "This setting controls how frequently fluss adds an index entry to its offset index. "
+                            "This setting controls how frequently Fluss adds an index entry to its offset index. "
                                     + "The default setting ensures that we index a message roughly every 4096 bytes. "
                                     + "More indexing allows reads to jump closer to the exact position in the log but "
                                     + "makes the index larger. You probably don't need to change this.");
@@ -691,7 +714,7 @@ public class ConfigOptions {
                     .withDescription(
                             "If a follower replica hasn't sent any fetch log requests or hasn't "
                                     + "consumed up the leaders log end offset for at least this time, "
-                                    + "the leader will remove the follower replica form isr");
+                                    + "the leader will remove the follower replica from isr");
 
     public static final ConfigOption<Integer> LOG_REPLICA_WRITE_OPERATION_PURGE_NUMBER =
             key("log.replica.write-operation-purge-number")
@@ -746,7 +769,7 @@ public class ConfigOptions {
                     .defaultValue(MemorySize.parse("1mb"))
                     .withDescription(
                             "The maximum amount of data the server should return for a table bucket in fetch request "
-                                    + "from follower. Records are fetched in batches, the max bytes size is "
+                                    + "from follower. Records are fetched in batches, and the max bytes size is "
                                     + "config by this option.")
                     .withDeprecatedKeys("log.fetch.max-bytes-for-bucket");
 
@@ -756,7 +779,7 @@ public class ConfigOptions {
                     .defaultValue(Duration.ofMillis(500))
                     .withDescription(
                             "The maximum time to wait for enough bytes to be available for a fetch log request "
-                                    + "from follower to response. This value should always be less than the "
+                                    + "from the follower to response. This value should always be less than the "
                                     + "`log.replica.max-lag-time` at all times to prevent frequent shrinking of ISR for "
                                     + "low throughput tables");
 
@@ -765,7 +788,7 @@ public class ConfigOptions {
                     .memoryType()
                     .defaultValue(MemorySize.parse("1b"))
                     .withDescription(
-                            "The minimum bytes expected for each fetch log request from follower to response. "
+                            "The minimum bytes expected for each fetch log request from the follower to response. "
                                     + "If not enough bytes, wait up to "
                                     + LOG_REPLICA_FETCH_WAIT_MAX_TIME.key()
                                     + " time to return.");
@@ -796,7 +819,7 @@ public class ConfigOptions {
                     .withDescription(
                             "Interval at which remote log manager runs the scheduled tasks like "
                                     + "copy segments, clean up remote log segments, delete local log segments etc. "
-                                    + "If the value is set to 0, it means that the remote log storage is disabled.");
+                                    + "If the value is set to 0s, it means that the remote log storage is disabled.");
 
     public static final ConfigOption<MemorySize> REMOTE_LOG_INDEX_FILE_CACHE_SIZE =
             key("remote.log.index-file-cache-size")
@@ -832,6 +855,7 @@ public class ConfigOptions {
     //  Netty Settings
     // ------------------------------------------------------------------------
 
+    @Documentation.Section("Netty")
     public static final ConfigOption<Integer> NETTY_SERVER_NUM_NETWORK_THREADS =
             key("netty.server.num-network-threads")
                     .intType()
@@ -1189,6 +1213,8 @@ public class ConfigOptions {
                             "The number of remote log segments to keep in local temp file for LogScanner, "
                                     + "which download from remote storage. The default setting is 4.");
 
+    @Documentation.Section("Client")
+    @Documentation.OverrideDefault("/tmp/fluss")
     public static final ConfigOption<String> CLIENT_SCANNER_IO_TMP_DIR =
             key("client.scanner.io.tmpdir")
                     .stringType()
@@ -1368,6 +1394,8 @@ public class ConfigOptions {
                                     + "If the value is `YEAR`, the partition format for "
                                     + "auto created is yyyy.");
 
+    @Documentation.Section("Table")
+    @Documentation.OverrideDefault("UTC")
     public static final ConfigOption<String> TABLE_AUTO_PARTITION_TIMEZONE =
             key("table.auto-partition.time-zone")
                     .stringType()
@@ -1521,6 +1549,7 @@ public class ConfigOptions {
     // ------------------------------------------------------------------------
     //  ConfigOptions for Kv
     // ------------------------------------------------------------------------
+    @Documentation.Section("KV")
     public static final ConfigOption<Duration> KV_SNAPSHOT_INTERVAL =
             key("kv.snapshot.interval")
                     .durationType()
@@ -1630,11 +1659,10 @@ public class ConfigOptions {
                     .memoryType()
                     .defaultValue(new MemorySize(Long.MAX_VALUE))
                     .withDescription(
-                            "The shared rate limit in bytes per second for RocksDB flush and compaction operations "
-                                    + "across all RocksDB instances in the TabletServer. "
-                                    + "All KV tablets share a single global RateLimiter to prevent disk IO from being saturated. "
-                                    + "The RateLimiter is always enabled. The default value is Long.MAX_VALUE (effectively unlimited). "
-                                    + "Set to a lower value (e.g., 100MB) to limit the rate.");
+                            "The bytes per second rate limit for RocksDB flush and compaction operations shared across all RocksDB instances on the TabletServer. "
+                                    + "The rate limiter is always enabled. The default value is Long.MAX_VALUE (effectively unlimited). "
+                                    + "Set to a lower value (e.g., 100MB) to limit the rate. "
+                                    + "This configuration can be updated dynamically without server restart. See [Updating Configs](operations/updating-configs.md) for more details.");
 
     // --------------------------------------------------------------------------
     // Provided configurable ColumnFamilyOptions within Fluss
@@ -1837,6 +1865,7 @@ public class ConfigOptions {
     // ------------------------------------------------------------------------
     //  ConfigOptions for metrics
     // ------------------------------------------------------------------------
+    @Documentation.Section("Metric")
     public static final ConfigOption<List<String>> METRICS_REPORTERS =
             key("metrics.reporters")
                     .stringType()
@@ -1879,7 +1908,7 @@ public class ConfigOptions {
                             .booleanType()
                             .defaultValue(true)
                             .withDescription(
-                                    "Specifies whether a random suffix should be appended to the job name. "
+                                    "Specifies whether a random suffix should be appended to the job name, defaults to true. "
                                             + "This is useful when multiple instances of the reporter "
                                             + "are running on the same host.");
 
@@ -1889,7 +1918,7 @@ public class ConfigOptions {
                             .booleanType()
                             .defaultValue(true)
                             .withDescription(
-                                    "Specifies whether to delete metrics from the PushGateway on shutdown. Fluss will try its best to delete the metrics but this is not guaranteed.");
+                                    "Specifies whether to delete metrics from the PushGateway on shutdown, defaults to true. Fluss will try its best to delete the metrics but this is not guaranteed.");
 
     public static final ConfigOption<String> METRICS_REPORTER_PROMETHEUS_PUSHGATEWAY_GROUPING_KEY =
             key("metrics.reporter.prometheus-push.grouping-key")
@@ -1904,7 +1933,7 @@ public class ConfigOptions {
                             .durationType()
                             .defaultValue(Duration.ofSeconds(10))
                             .withDescription(
-                                    "The interval of pushing metrics to Prometheus PushGateway.");
+                                    "The interval of pushing metrics to Prometheus PushGateway, defaults to 10 SECONDS.");
 
     // ------------------------------------------------------------------------
     //  ConfigOptions for jmx reporter
@@ -1954,8 +1983,8 @@ public class ConfigOptions {
                     .booleanType()
                     .defaultValue(false)
                     .withDescription(
-                            "Whether enable fluss kafka. Disabled by default. "
-                                    + "When this option is set to true, the fluss kafka will be enabled.");
+                            "Whether enable Fluss Kafka. Disabled by default. "
+                                    + "When this option is set to true, the Fluss Kafka will be enabled.");
 
     public static final ConfigOption<List<String>> KAFKA_LISTENER_NAMES =
             key("kafka.listener.names")
@@ -1970,7 +1999,7 @@ public class ConfigOptions {
                     .stringType()
                     .defaultValue("kafka")
                     .withDescription(
-                            "The database for fluss kafka. The default database is `kafka`.");
+                            "The database for Fluss Kafka. The default database is `kafka`.");
 
     public static final ConfigOption<Duration> KAFKA_CONNECTION_MAX_IDLE_TIME =
             key("kafka.connection.max-idle-time")
