@@ -80,12 +80,6 @@ public class RebalanceManagerTest {
     void beforeEach() {
         serverMetadataCache = new CoordinatorMetadataCache();
         testCoordinatorChannelManager = new TestCoordinatorChannelManager();
-        autoPartitionManager =
-                new AutoPartitionManager(serverMetadataCache, metadataManager, new Configuration());
-        lakeTableTieringManager = new LakeTableTieringManager();
-        CoordinatorEventProcessor eventProcessor = buildCoordinatorEventProcessor();
-        rebalanceManager = new RebalanceManager(eventProcessor, zookeeperClient);
-        rebalanceManager.startup();
 
         String remoteDataDir = "/tmp/fluss/remote-data";
         kvSnapshotLeaseManager =
@@ -96,6 +90,13 @@ public class RebalanceManagerTest {
                         SystemClock.getInstance(),
                         TestingMetricGroups.COORDINATOR_METRICS);
         kvSnapshotLeaseManager.start();
+
+        autoPartitionManager =
+                new AutoPartitionManager(serverMetadataCache, metadataManager, new Configuration());
+        lakeTableTieringManager = new LakeTableTieringManager();
+        CoordinatorEventProcessor eventProcessor = buildCoordinatorEventProcessor();
+        rebalanceManager = new RebalanceManager(eventProcessor, zookeeperClient);
+        rebalanceManager.startup();
     }
 
     @AfterEach

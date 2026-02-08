@@ -198,12 +198,6 @@ class CoordinatorEventProcessorTest {
         Configuration conf = new Configuration();
         String remoteDataDir = "/tmp/fluss/remote-data";
         conf.setString(ConfigOptions.REMOTE_DATA_DIR, remoteDataDir);
-        eventProcessor = buildCoordinatorEventProcessor();
-        eventProcessor.startup();
-        metadataManager.createDatabase(
-                defaultDatabase, DatabaseDescriptor.builder().build(), false);
-        completedSnapshotStoreManager = eventProcessor.completedSnapshotStoreManager();
-
         kvSnapshotLeaseManager =
                 new KvSnapshotLeaseManager(
                         Duration.ofMinutes(10).toMillis(),
@@ -212,6 +206,12 @@ class CoordinatorEventProcessorTest {
                         SystemClock.getInstance(),
                         TestingMetricGroups.COORDINATOR_METRICS);
         kvSnapshotLeaseManager.start();
+
+        eventProcessor = buildCoordinatorEventProcessor();
+        eventProcessor.startup();
+        metadataManager.createDatabase(
+                defaultDatabase, DatabaseDescriptor.builder().build(), false);
+        completedSnapshotStoreManager = eventProcessor.completedSnapshotStoreManager();
     }
 
     @AfterEach
