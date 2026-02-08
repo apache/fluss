@@ -143,15 +143,7 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
                         .get(FlinkConnectorOptions.SCAN_PARTITION_DISCOVERY_INTERVAL)
                         .toMillis();
 
-        LeaseContext leaseContext =
-                primaryKeyIndexes.length > 0
-                        ? new LeaseContext(
-                                tableOptions.get(FlinkConnectorOptions.SCAN_KV_SNAPSHOT_LEASE_ID),
-                                tableOptions
-                                        .get(FlinkConnectorOptions.SCAN_KV_SNAPSHOT_LEASE_DURATION)
-                                        .toMillis())
-                        : new LeaseContext(null, null);
-
+        LeaseContext leaseContext = LeaseContext.fromConf(tableOptions);
         return new FlinkTableSource(
                 toFlussTablePath(context.getObjectIdentifier()),
                 toFlussClientConfig(

@@ -32,7 +32,6 @@ import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.IneligibleReplicaException;
 import org.apache.fluss.exception.InvalidCoordinatorException;
 import org.apache.fluss.exception.InvalidUpdateVersionException;
-import org.apache.fluss.exception.KvSnapshotLeaseNotExistException;
 import org.apache.fluss.exception.RebalanceFailureException;
 import org.apache.fluss.exception.ServerNotExistException;
 import org.apache.fluss.exception.ServerTagAlreadyExistException;
@@ -48,7 +47,6 @@ import org.apache.fluss.metadata.TableBucketReplica;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metadata.TablePath;
-import org.apache.fluss.rpc.messages.AcquireKvSnapshotLeaseResponse;
 import org.apache.fluss.rpc.messages.AddServerTagResponse;
 import org.apache.fluss.rpc.messages.AdjustIsrResponse;
 import org.apache.fluss.rpc.messages.CancelRebalanceResponse;
@@ -58,13 +56,10 @@ import org.apache.fluss.rpc.messages.CommitRemoteLogManifestResponse;
 import org.apache.fluss.rpc.messages.ControlledShutdownResponse;
 import org.apache.fluss.rpc.messages.ListRebalanceProgressResponse;
 import org.apache.fluss.rpc.messages.PbCommitLakeTableSnapshotRespForTable;
-import org.apache.fluss.rpc.messages.PbKvSnapshotLeaseForBucket;
 import org.apache.fluss.rpc.messages.RebalanceResponse;
-import org.apache.fluss.rpc.messages.ReleaseKvSnapshotLeaseResponse;
 import org.apache.fluss.rpc.messages.RemoveServerTagResponse;
 import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.server.coordinator.event.AccessContextEvent;
-import org.apache.fluss.server.coordinator.event.AcquireKvSnapshotLeaseEvent;
 import org.apache.fluss.server.coordinator.event.AddServerTagEvent;
 import org.apache.fluss.server.coordinator.event.AdjustIsrReceivedEvent;
 import org.apache.fluss.server.coordinator.event.CancelRebalanceEvent;
@@ -88,12 +83,12 @@ import org.apache.fluss.server.coordinator.event.NotifyKvSnapshotOffsetEvent;
 import org.apache.fluss.server.coordinator.event.NotifyLakeTableOffsetEvent;
 import org.apache.fluss.server.coordinator.event.NotifyLeaderAndIsrResponseReceivedEvent;
 import org.apache.fluss.server.coordinator.event.RebalanceEvent;
-import org.apache.fluss.server.coordinator.event.ReleaseKvSnapshotLeaseEvent;
 import org.apache.fluss.server.coordinator.event.RemoveServerTagEvent;
 import org.apache.fluss.server.coordinator.event.SchemaChangeEvent;
 import org.apache.fluss.server.coordinator.event.TableRegistrationChangeEvent;
 import org.apache.fluss.server.coordinator.event.watcher.TableChangeWatcher;
 import org.apache.fluss.server.coordinator.event.watcher.TabletServerChangeWatcher;
+import org.apache.fluss.server.coordinator.lease.KvSnapshotLeaseManager;
 import org.apache.fluss.server.coordinator.rebalance.RebalanceManager;
 import org.apache.fluss.server.coordinator.statemachine.ReplicaLeaderElection.ControlledShutdownLeaderElection;
 import org.apache.fluss.server.coordinator.statemachine.ReplicaLeaderElection.ReassignmentLeaderElection;
@@ -124,8 +119,6 @@ import org.apache.fluss.server.zk.data.ZkData.TableIdsZNode;
 import org.apache.fluss.server.zk.data.lake.LakeTable;
 import org.apache.fluss.server.zk.data.lake.LakeTableHelper;
 import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
-import org.apache.fluss.server.zk.data.lease.KvSnapshotLeaseMetadataManager;
-import org.apache.fluss.utils.clock.Clock;
 import org.apache.fluss.utils.types.Tuple2;
 
 import org.slf4j.Logger;
@@ -186,8 +179,6 @@ public class CoordinatorEventProcessor implements EventProcessor {
     private final String internalListenerName;
     private final CoordinatorMetricGroup coordinatorMetricGroup;
     private final RebalanceManager rebalanceManager;
-
-    private final KvSnapshotLeaseManager kvSnapshotLeaseManager;
     private final CompletedSnapshotStoreManager completedSnapshotStoreManager;
     private final LakeTableHelper lakeTableHelper;
 
@@ -202,7 +193,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
             Configuration conf,
             ExecutorService ioExecutor,
             MetadataManager metadataManager,
-            Clock clock) {
+            KvSnapshotLeaseManager kvSnapshotLeaseManager) {
         this.zooKeeperClient = zooKeeperClient;
         this.serverMetadataCache = serverMetadataCache;
         this.coordinatorChannelManager = coordinatorChannelManager;
@@ -241,15 +232,6 @@ public class CoordinatorEventProcessor implements EventProcessor {
                 new CoordinatorRequestBatch(
                         coordinatorChannelManager, coordinatorEventManager, coordinatorContext);
 
-        String remoteDataDir = conf.getString(ConfigOptions.REMOTE_DATA_DIR);
-        this.kvSnapshotLeaseManager =
-                new KvSnapshotLeaseManager(
-                        conf,
-                        new KvSnapshotLeaseMetadataManager(zooKeeperClient, remoteDataDir),
-                        coordinatorContext,
-                        clock,
-                        coordinatorMetricGroup);
-
         this.completedSnapshotStoreManager =
                 new CompletedSnapshotStoreManager(
                         conf.getInt(ConfigOptions.KV_MAX_RETAINED_SNAPSHOTS),
@@ -263,7 +245,8 @@ public class CoordinatorEventProcessor implements EventProcessor {
         this.internalListenerName = conf.getString(ConfigOptions.INTERNAL_LISTENER_NAME);
         this.rebalanceManager = new RebalanceManager(this, zooKeeperClient);
         this.ioExecutor = ioExecutor;
-        this.lakeTableHelper = new LakeTableHelper(zooKeeperClient, remoteDataDir);
+        this.lakeTableHelper =
+                new LakeTableHelper(zooKeeperClient, conf.getString(ConfigOptions.REMOTE_DATA_DIR));
     }
 
     public CoordinatorEventManager getCoordinatorEventManager() {
@@ -312,9 +295,6 @@ public class CoordinatorEventProcessor implements EventProcessor {
 
         // start rebalance manager.
         rebalanceManager.startup();
-
-        // start kv snapshot lease manager
-        kvSnapshotLeaseManager.start();
     }
 
     public void shutdown() {
@@ -462,9 +442,6 @@ public class CoordinatorEventProcessor implements EventProcessor {
         LOG.info(
                 "Load table and partition assignment success in {}ms when initializing coordinator context.",
                 System.currentTimeMillis() - start4loadAssignment);
-
-        // load all kv snapshot lease from zookeeper when starting.
-        kvSnapshotLeaseManager.initialize();
 
         long end = System.currentTimeMillis();
         LOG.info("Current total {} tables in the cluster.", coordinatorContext.allTables().size());
@@ -659,18 +636,6 @@ public class CoordinatorEventProcessor implements EventProcessor {
             completeFromCallable(
                     listRebalanceProgressEvent.getRespCallback(),
                     () -> processListRebalanceProgress(listRebalanceProgressEvent));
-        } else if (event instanceof AcquireKvSnapshotLeaseEvent) {
-            AcquireKvSnapshotLeaseEvent acquireKvSnapshotLeaseEvent =
-                    (AcquireKvSnapshotLeaseEvent) event;
-            completeFromCallable(
-                    acquireKvSnapshotLeaseEvent.getRespCallback(),
-                    () -> tryProcessAcquireKvSnapshotLease(acquireKvSnapshotLeaseEvent));
-        } else if (event instanceof ReleaseKvSnapshotLeaseEvent) {
-            ReleaseKvSnapshotLeaseEvent releaseKvSnapshotLeaseEvent =
-                    (ReleaseKvSnapshotLeaseEvent) event;
-            completeFromCallable(
-                    releaseKvSnapshotLeaseEvent.getRespCallback(),
-                    () -> tryProcessReleaseKvSnapshotLease(releaseKvSnapshotLeaseEvent));
         } else if (event instanceof AccessContextEvent) {
             AccessContextEvent<?> accessContextEvent = (AccessContextEvent<?>) event;
             processAccessContext(accessContextEvent);
@@ -2070,53 +2035,6 @@ public class CoordinatorEventProcessor implements EventProcessor {
                 coordinatorContext.getBucketsWithLeaderIn(tabletServerId).stream()
                         .map(ServerRpcMessageUtils::fromTableBucket)
                         .collect(Collectors.toList()));
-        return response;
-    }
-
-    private AcquireKvSnapshotLeaseResponse tryProcessAcquireKvSnapshotLease(
-            AcquireKvSnapshotLeaseEvent event) throws Exception {
-        AcquireKvSnapshotLeaseResponse response = new AcquireKvSnapshotLeaseResponse();
-        Map<TableBucket, Long> unavailableSnapshots =
-                kvSnapshotLeaseManager.acquireLease(
-                        event.getLeaseId(),
-                        event.getLeaseDuration(),
-                        event.getTableIdToLeasedBucket());
-
-        Map<Long, List<PbKvSnapshotLeaseForBucket>> pbFailedTables = new HashMap<>();
-        for (Map.Entry<TableBucket, Long> entry : unavailableSnapshots.entrySet()) {
-            TableBucket tb = entry.getKey();
-            Long snapshotId = entry.getValue();
-            PbKvSnapshotLeaseForBucket pbBucket =
-                    new PbKvSnapshotLeaseForBucket().setBucketId(tb.getBucket());
-            if (tb.getPartitionId() != null) {
-                pbBucket.setPartitionId(tb.getPartitionId());
-            }
-            pbBucket.setSnapshotId(snapshotId);
-            pbFailedTables.computeIfAbsent(tb.getTableId(), k -> new ArrayList<>()).add(pbBucket);
-        }
-
-        for (Map.Entry<Long, List<PbKvSnapshotLeaseForBucket>> entry : pbFailedTables.entrySet()) {
-            response.addTablesLeaseRe()
-                    .setTableId(entry.getKey())
-                    .addAllBucketsReqs(entry.getValue());
-        }
-        return response;
-    }
-
-    private ReleaseKvSnapshotLeaseResponse tryProcessReleaseKvSnapshotLease(
-            ReleaseKvSnapshotLeaseEvent event) throws Exception {
-        ReleaseKvSnapshotLeaseResponse response = new ReleaseKvSnapshotLeaseResponse();
-        Map<Long, List<TableBucket>> tableIdToReleasedBucket = event.getTableIdToReleasedBucket();
-        if (tableIdToReleasedBucket.isEmpty()) {
-            // release all
-            boolean exist = kvSnapshotLeaseManager.releaseAll(event.getLeaseId());
-            if (!exist) {
-                throw new KvSnapshotLeaseNotExistException(
-                        "kv snapshot lease '" + event.getLeaseId() + "' not exits.");
-            }
-        } else {
-            kvSnapshotLeaseManager.release(event.getLeaseId(), tableIdToReleasedBucket);
-        }
         return response;
     }
 

@@ -491,18 +491,18 @@ CALL sys.cancel_rebalance('rebalance-12345');
 
 ## kv snapshot lease
 
-Fluss provides procedures to manage KV snapshot leases, allowing you to release leased kv snapshots.
+Fluss provides procedures to manage KV snapshot leases, allowing you to drop leased kv snapshots.
 
-### release_all_kv_snapshot_lease
+### drop_kv_snapshot_lease
 
-Release all KV snapshots leased under a specified leaseId. This is typically used for handle the scenario of lease
-remnants. After a normal job completion, the registered lease is not released, requiring a manual trigger of the
-procedure for cleanup.
+Drop KV snapshots leased under a specified leaseId. This is typically used for handle the scenario of lease
+remnants. After an abnormal job termination (e.g., crash or forced cancellation), the registered lease may not 
+be released automatically and could require manual cleanup.
 
 **Syntax:**
 
 ```sql
-CALL [catalog_name.]sys.release_all_kv_snapshot_lease(
+CALL [catalog_name.]sys.drop_kv_snapshot_lease(
   leaseId => 'STRING'
 )
 ```
@@ -519,6 +519,6 @@ CALL [catalog_name.]sys.release_all_kv_snapshot_lease(
 -- Use the Fluss catalog (replace 'fluss_catalog' with your catalog name if different)
 USE fluss_catalog;
 
--- Release all KV snapshots leased under the given leaseId
-CALL sys.release_all_kv_snapshot_lease('test-lease-id');
+-- Drop KV snapshots leased under the given leaseId
+CALL sys.drop_kv_snapshot_lease('test-lease-id');
 ```

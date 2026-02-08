@@ -19,31 +19,31 @@ package org.apache.fluss.metadata;
 
 import java.util.Objects;
 
-/** An entity for kv snapshot lease for bucket. */
-public class KvSnapshotLeaseForBucket {
+/** An entity for kv snapshot of table bucket. */
+public class TableBucketSnapshot {
     private final TableBucket tableBucket;
-    private final long kvSnapshotId;
+    private final long snapshotId;
 
-    public KvSnapshotLeaseForBucket(TableBucket tableBucket, long kvSnapshotId) {
+    public TableBucketSnapshot(TableBucket tableBucket, long snapshotId) {
         this.tableBucket = tableBucket;
-        this.kvSnapshotId = kvSnapshotId;
+        this.snapshotId = snapshotId;
     }
 
     public TableBucket getTableBucket() {
         return tableBucket;
     }
 
-    public long getKvSnapshotId() {
-        return kvSnapshotId;
+    public long getSnapshotId() {
+        return snapshotId;
     }
 
     @Override
     public String toString() {
-        return "KvSnapshotLeaseForBucket{"
+        return "TableBucketSnapshot{"
                 + "tableBucket="
                 + tableBucket
-                + ", kvSnapshotId="
-                + kvSnapshotId
+                + ", snapshotId="
+                + snapshotId
                 + '}';
     }
 
@@ -55,12 +55,12 @@ public class KvSnapshotLeaseForBucket {
         if (o == null || getClass() != o.getClass()) {
             return false;
         }
-        KvSnapshotLeaseForBucket that = (KvSnapshotLeaseForBucket) o;
-        return kvSnapshotId == that.kvSnapshotId && Objects.equals(tableBucket, that.tableBucket);
+        TableBucketSnapshot that = (TableBucketSnapshot) o;
+        return snapshotId == that.snapshotId && Objects.equals(tableBucket, that.tableBucket);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(tableBucket, kvSnapshotId);
+        return Objects.hash(tableBucket, snapshotId);
     }
 }

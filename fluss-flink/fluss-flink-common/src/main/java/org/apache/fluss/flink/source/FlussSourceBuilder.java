@@ -25,7 +25,6 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.FlinkConnectorOptions;
 import org.apache.fluss.flink.source.deserializer.FlussDeserializationSchema;
-import org.apache.fluss.flink.source.reader.LeaseContext;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.types.RowType;
@@ -72,8 +71,6 @@ public class FlussSourceBuilder<OUT> {
     private Long scanPartitionDiscoveryIntervalMs;
     private OffsetsInitializer offsetsInitializer;
     private FlussDeserializationSchema<OUT> deserializationSchema;
-    private String kvSnapshotLeaseId;
-    private long kvSnapshotLeaseDurationMs;
 
     private String bootstrapServers;
 
@@ -174,16 +171,6 @@ public class FlussSourceBuilder<OUT> {
     public FlussSourceBuilder<OUT> setProjectedFields(String... projectedFieldNames) {
         checkNotNull(projectedFieldNames, "Field names must not be null");
         this.projectedFieldNames = projectedFieldNames;
-        return this;
-    }
-
-    public FlussSourceBuilder<OUT> setKvSnapshotLeaseId(String kvSnapshotLeaseId) {
-        this.kvSnapshotLeaseId = kvSnapshotLeaseId;
-        return this;
-    }
-
-    public FlussSourceBuilder<OUT> setKvSnapshotLeaseDurationMs(long kvSnapshotLeaseDurationMs) {
-        this.kvSnapshotLeaseDurationMs = kvSnapshotLeaseDurationMs;
         return this;
     }
 
@@ -313,9 +300,6 @@ public class FlussSourceBuilder<OUT> {
                 offsetsInitializer,
                 scanPartitionDiscoveryIntervalMs,
                 deserializationSchema,
-                true,
-                hasPrimaryKey
-                        ? new LeaseContext(kvSnapshotLeaseId, kvSnapshotLeaseDurationMs)
-                        : new LeaseContext(null, null));
+                true);
     }
 }

@@ -42,7 +42,6 @@ import org.apache.fluss.server.zk.data.ServerTags;
 import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.server.zk.data.TabletServerRegistration;
-import org.apache.fluss.server.zk.data.lease.KvSnapshotLease;
 import org.apache.fluss.server.zk.data.lease.KvSnapshotLeaseMetadata;
 import org.apache.fluss.shaded.curator5.org.apache.curator.CuratorZookeeperClient;
 import org.apache.fluss.shaded.curator5.org.apache.curator.framework.CuratorFramework;
@@ -736,14 +735,5 @@ class ZooKeeperClientTest {
         assertThat(databaseSummary.getCreatedTime())
                 .isGreaterThanOrEqualTo(beforeCreateTime)
                 .isLessThanOrEqualTo(afterCreateTime);
-    }
-
-    private void registerBucket(
-            KvSnapshotLease consumer, TableBucket tb, long kvSnapshotId, int bucketNum) {
-        consumer.acquireBucket(tb, kvSnapshotId, bucketNum);
-    }
-
-    private void unregisterBucket(KvSnapshotLease consumer, TableBucket tb) {
-        consumer.releaseBucket(tb);
     }
 }

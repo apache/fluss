@@ -17,7 +17,6 @@
 
 package org.apache.fluss.flink.source.state;
 
-import org.apache.fluss.flink.source.reader.LeaseContext;
 import org.apache.fluss.flink.source.split.SourceSplitBase;
 import org.apache.fluss.metadata.TableBucket;
 
@@ -43,17 +42,17 @@ public class SourceEnumeratorState {
     @Nullable private final List<SourceSplitBase> remainingHybridLakeFlussSplits;
 
     // lease context for restore.
-    private final LeaseContext leaseContext;
+    private final String leaseId;
 
     public SourceEnumeratorState(
             Set<TableBucket> assignedBuckets,
             Map<Long, String> assignedPartitions,
             @Nullable List<SourceSplitBase> remainingHybridLakeFlussSplits,
-            @Nullable LeaseContext leaseContext) {
+            String leaseId) {
         this.assignedBuckets = assignedBuckets;
         this.assignedPartitions = assignedPartitions;
         this.remainingHybridLakeFlussSplits = remainingHybridLakeFlussSplits;
-        this.leaseContext = leaseContext;
+        this.leaseId = leaseId;
     }
 
     public Set<TableBucket> getAssignedBuckets() {
@@ -69,8 +68,8 @@ public class SourceEnumeratorState {
         return remainingHybridLakeFlussSplits;
     }
 
-    public LeaseContext getLeaseContext() {
-        return leaseContext;
+    public String getLeaseId() {
+        return leaseId;
     }
 
     @Override
@@ -86,7 +85,7 @@ public class SourceEnumeratorState {
                 && Objects.equals(assignedPartitions, that.assignedPartitions)
                 && Objects.equals(
                         remainingHybridLakeFlussSplits, that.remainingHybridLakeFlussSplits)
-                && Objects.equals(leaseContext, that.leaseContext);
+                && Objects.equals(leaseId, that.leaseId);
     }
 
     @Override
@@ -103,8 +102,8 @@ public class SourceEnumeratorState {
                 + assignedPartitions
                 + ", remainingHybridLakeFlussSplits="
                 + remainingHybridLakeFlussSplits
-                + ", leaseContext="
-                + leaseContext
+                + ", leaseId="
+                + leaseId
                 + '}';
     }
 }

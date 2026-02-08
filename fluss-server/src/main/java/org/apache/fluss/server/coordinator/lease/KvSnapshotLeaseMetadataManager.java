@@ -16,23 +16,24 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.server.zk.data.lease;
+package org.apache.fluss.server.coordinator.lease;
 
 import org.apache.fluss.fs.FSDataInputStream;
 import org.apache.fluss.fs.FSDataOutputStream;
 import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.fs.FsPath;
-import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.server.zk.ZooKeeperClient;
-import org.apache.fluss.server.zk.data.BucketSnapshot;
+import org.apache.fluss.server.zk.data.lease.KvSnapshotLeaseMetadata;
+import org.apache.fluss.server.zk.data.lease.KvSnapshotTableLease;
+import org.apache.fluss.server.zk.data.lease.KvSnapshotTableLeaseJsonSerde;
 import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.IOUtils;
-import org.apache.fluss.utils.types.Tuple2;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.ByteArrayOutputStream;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -41,8 +42,8 @@ import java.util.Optional;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /**
- * The manager to handle {@link KvSnapshotLease} to register/update/delete metadata from zk and
- * remote fs.
+ * The manager to handle {@link KvSnapshotLeaseHandler} to register/update/delete metadata from zk
+ * and remote fs.
  */
 public class KvSnapshotLeaseMetadataManager {
     private static final Logger LOG = LoggerFactory.getLogger(KvSnapshotLeaseMetadataManager.class);
@@ -62,23 +63,34 @@ public class KvSnapshotLeaseMetadataManager {
     /**
      * Register a new kv snapshot lease to zk and remote fs.
      *
+     * <p>Follows the createdFiles pattern (similar to {@code ProducerOffsetsStore.tryStoreOffsets})
+     * to track files created in this operation. On failure, only the newly created files are
+     * cleaned up, avoiding accidental removal of previously successful metadata files.
+     *
      * @param leaseId the lease id.
      * @param lease the kv snapshot lease.
      */
-    public void registerLease(String leaseId, KvSnapshotLease lease) throws Exception {
-        Map<Long, FsPath> tableIdToRemoteMetadataFsPath = generateMetadataFile(leaseId, lease);
-
-        // generate remote fsPath of metadata.
-        KvSnapshotLeaseMetadata leaseMetadata =
-                new KvSnapshotLeaseMetadata(
-                        lease.getExpirationTime(), tableIdToRemoteMetadataFsPath);
-
-        // register kv snapshot metadata to zk.
+    public void registerLease(String leaseId, KvSnapshotLeaseHandler lease) throws Exception {
+        List<FsPath> createdFiles = new ArrayList<>();
         try {
+            Map<Long, FsPath> tableIdToRemoteMetadataFsPath =
+                    generateMetadataFile(leaseId, lease, createdFiles);
+
+            // generate remote fsPath of metadata.
+            KvSnapshotLeaseMetadata leaseMetadata =
+                    new KvSnapshotLeaseMetadata(
+                            lease.getExpirationTime(), tableIdToRemoteMetadataFsPath);
+
+            // register kv snapshot metadata to zk.
             zkClient.registerKvSnapshotLeaseMetadata(leaseId, leaseMetadata);
         } catch (Exception e) {
-            LOG.warn("Failed to register kv snapshot lease metadata to zk.", e);
-            leaseMetadata.discard();
+            LOG.warn(
+                    "Failed to register kv snapshot lease metadata for lease {}, "
+                            + "cleaning up {} created files.",
+                    leaseId,
+                    createdFiles.size(),
+                    e);
+            cleanupFilesSafely(createdFiles);
             throw e;
         }
     }
@@ -86,33 +98,53 @@ public class KvSnapshotLeaseMetadataManager {
     /**
      * Update a kv snapshot lease to zk and remote fs.
      *
+     * <p>Follows the createdFiles pattern (similar to {@code ProducerOffsetsStore.tryStoreOffsets})
+     * to track files created in this operation. On failure, only the newly created files are
+     * cleaned up, avoiding accidental removal of previously successful metadata files.
+     *
      * @param leaseId the lease id.
-     * @param kvSnapshotLease the kv snapshot lease.
+     * @param kvSnapshotLeaseHandle the kv snapshot lease.
      */
-    public void updateLease(String leaseId, KvSnapshotLease kvSnapshotLease) throws Exception {
+    public void updateLease(String leaseId, KvSnapshotLeaseHandler kvSnapshotLeaseHandle)
+            throws Exception {
         // TODO change this to incremental update to avoid create too many remote metadata files.
-
-        Optional<KvSnapshotLeaseMetadata> originalLeaseMetadata =
-                zkClient.getKvSnapshotLeaseMetadata(leaseId);
-
-        Map<Long, FsPath> tableIdToNewRemoteMetadataFsPath =
-                generateMetadataFile(leaseId, kvSnapshotLease);
-
-        // generate  new kv snapshot lease metadata.
-        KvSnapshotLeaseMetadata newLeaseMetadata =
-                new KvSnapshotLeaseMetadata(
-                        kvSnapshotLease.getExpirationTime(), tableIdToNewRemoteMetadataFsPath);
-        // register new snapshot metadata to zk.
+        Optional<KvSnapshotLeaseMetadata> originalLeaseMetadata;
+        List<FsPath> createdFiles = new ArrayList<>();
         try {
+            originalLeaseMetadata = zkClient.getKvSnapshotLeaseMetadata(leaseId);
+
+            Map<Long, FsPath> tableIdToNewRemoteMetadataFsPath =
+                    generateMetadataFile(leaseId, kvSnapshotLeaseHandle, createdFiles);
+
+            // generate new kv snapshot lease metadata.
+            KvSnapshotLeaseMetadata newLeaseMetadata =
+                    new KvSnapshotLeaseMetadata(
+                            kvSnapshotLeaseHandle.getExpirationTime(),
+                            tableIdToNewRemoteMetadataFsPath);
+
             zkClient.updateKvSnapshotLeaseMetadata(leaseId, newLeaseMetadata);
         } catch (Exception e) {
-            LOG.warn("Failed to update kv snapshot lease metadata to zk.", e);
-            newLeaseMetadata.discard();
+            LOG.warn(
+                    "Failed to update kv snapshot lease metadata for lease {}, "
+                            + "cleaning up {} created files.",
+                    leaseId,
+                    createdFiles.size(),
+                    e);
+            cleanupFilesSafely(createdFiles);
             throw e;
         }
 
-        // discard original snapshot metadata.
-        originalLeaseMetadata.ifPresent(KvSnapshotLeaseMetadata::discard);
+        // Best-effort cleanup of old metadata files. Failures are logged but not propagated,
+        // as the ZK metadata has already been updated to point to the new files.
+        try {
+            originalLeaseMetadata.ifPresent(this::discardLeaseMetadata);
+        } catch (Exception e) {
+            LOG.warn(
+                    "Failed to discard original lease metadata for lease {}, "
+                            + "orphaned files may exist.",
+                    leaseId,
+                    e);
+        }
     }
 
     /**
@@ -121,7 +153,7 @@ public class KvSnapshotLeaseMetadataManager {
      * @param leaseId the lease id.
      * @return the kv snapshot lease.
      */
-    public Optional<KvSnapshotLease> getLease(String leaseId) throws Exception {
+    public Optional<KvSnapshotLeaseHandler> getLease(String leaseId) throws Exception {
         Optional<KvSnapshotLeaseMetadata> kvSnapshotLeaseMetadataOpt =
                 zkClient.getKvSnapshotLeaseMetadata(leaseId);
         if (!kvSnapshotLeaseMetadataOpt.isPresent()) {
@@ -129,8 +161,9 @@ public class KvSnapshotLeaseMetadataManager {
         }
 
         KvSnapshotLeaseMetadata kvSnapshotLeaseMetadata = kvSnapshotLeaseMetadataOpt.get();
-        KvSnapshotLease kvSnapshotLease = buildKvSnapshotLease(kvSnapshotLeaseMetadata);
-        return Optional.of(kvSnapshotLease);
+        KvSnapshotLeaseHandler kvSnapshotLeasehandle =
+                buildKvSnapshotLease(kvSnapshotLeaseMetadata);
+        return Optional.of(kvSnapshotLeasehandle);
     }
 
     /**
@@ -145,36 +178,32 @@ public class KvSnapshotLeaseMetadataManager {
         // delete zk metadata.
         zkClient.deleteKvSnapshotLease(leaseId);
 
-        // delete remote metadata file.
-        leaseMetadataOpt.ifPresent(KvSnapshotLeaseMetadata::discard);
+        // Best-effort cleanup of remote metadata files. Failures are logged but not
+        // propagated, as the ZK metadata has already been deleted.
+        try {
+            leaseMetadataOpt.ifPresent(this::discardLeaseMetadata);
+        } catch (Exception e) {
+            LOG.warn(
+                    "Failed to discard lease metadata for lease {}, " + "orphaned files may exist.",
+                    leaseId,
+                    e);
+        }
     }
 
     /**
-     * Check whether the snapshot exists for the bucket in zookeeper.
-     *
-     * @param tableBucket the table bucket.
-     * @param snapshotId the snapshot id.
-     * @return true if the snapshot exists in the bucket.
+     * Generate metadata files for all tables in the lease. Each created file is tracked in the
+     * provided {@code createdFiles} list for safe cleanup on failure.
      */
-    public boolean isSnapshotExists(TableBucket tableBucket, long snapshotId) throws Exception {
-        List<Tuple2<BucketSnapshot, Long>> allSnapshotAndIds =
-                zkClient.getTableBucketAllSnapshotAndIds(tableBucket);
-        for (Tuple2<BucketSnapshot, Long> snapshotAndId : allSnapshotAndIds) {
-            if (snapshotAndId.f1 == snapshotId) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private Map<Long, FsPath> generateMetadataFile(String leaseId, KvSnapshotLease lease)
+    private Map<Long, FsPath> generateMetadataFile(
+            String leaseId, KvSnapshotLeaseHandler lease, List<FsPath> createdFiles)
             throws Exception {
         Map<Long, FsPath> tableIdToMetadataFile = new HashMap<>();
         for (Map.Entry<Long, KvSnapshotTableLease> entry :
                 lease.getTableIdToTableLease().entrySet()) {
             long tableId = entry.getKey();
-            tableIdToMetadataFile.put(
-                    tableId, generateMetadataFile(tableId, leaseId, entry.getValue()));
+            FsPath path = generateMetadataFile(tableId, leaseId, entry.getValue());
+            createdFiles.add(path);
+            tableIdToMetadataFile.put(tableId, path);
         }
         return tableIdToMetadataFile;
     }
@@ -199,8 +228,8 @@ public class KvSnapshotLeaseMetadataManager {
         return remoteKvSnapshotLeaseFile;
     }
 
-    private KvSnapshotLease buildKvSnapshotLease(KvSnapshotLeaseMetadata kvSnapshotLeaseMetadata)
-            throws Exception {
+    private KvSnapshotLeaseHandler buildKvSnapshotLease(
+            KvSnapshotLeaseMetadata kvSnapshotLeaseMetadata) throws Exception {
         Map<Long, FsPath> tableIdToRemoteMetadataFilePath =
                 kvSnapshotLeaseMetadata.getTableIdToRemoteMetadataFilePath();
         Map<Long, KvSnapshotTableLease> tableIdToTableLease = new HashMap<>();
@@ -209,7 +238,7 @@ public class KvSnapshotLeaseMetadataManager {
             FsPath remoteMetadataFilePath = entry.getValue();
             tableIdToTableLease.put(tableId, buildKvSnapshotTableLease(remoteMetadataFilePath));
         }
-        return new KvSnapshotLease(
+        return new KvSnapshotLeaseHandler(
                 kvSnapshotLeaseMetadata.getExpirationTime(), tableIdToTableLease);
     }
 
@@ -221,6 +250,32 @@ public class KvSnapshotLeaseMetadataManager {
         try (ByteArrayOutputStream outputStream = new ByteArrayOutputStream()) {
             IOUtils.copyBytes(inputStream, outputStream, true);
             return KvSnapshotTableLeaseJsonSerde.fromJson(outputStream.toByteArray());
+        }
+    }
+
+    private void discardLeaseMetadata(KvSnapshotLeaseMetadata kvSnapshotLeaseMetadata) {
+        cleanupFilesSafely(
+                new ArrayList<>(
+                        kvSnapshotLeaseMetadata.getTableIdToRemoteMetadataFilePath().values()));
+    }
+
+    /**
+     * Safely clean up a list of remote files. Each file deletion is independent - failures for
+     * individual files are logged but do not prevent cleanup of remaining files.
+     */
+    private void cleanupFilesSafely(List<FsPath> files) {
+        for (FsPath file : files) {
+            try {
+                FileSystem fileSystem = file.getFileSystem();
+                if (fileSystem.exists(file)) {
+                    fileSystem.delete(file, false);
+                }
+            } catch (Exception e) {
+                LOG.warn(
+                        "Error deleting remote file path of kv snapshot lease metadata at {}",
+                        file,
+                        e);
+            }
         }
     }
 }

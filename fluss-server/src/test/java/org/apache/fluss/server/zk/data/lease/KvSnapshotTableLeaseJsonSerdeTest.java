@@ -17,10 +17,10 @@
 
 package org.apache.fluss.server.zk.data.lease;
 
+import org.apache.fluss.utils.MapUtils;
 import org.apache.fluss.utils.json.JsonSerdeTestBase;
 
-import java.util.HashMap;
-import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 /** Test for {@link KvSnapshotTableLeaseJsonSerde}. */
 public class KvSnapshotTableLeaseJsonSerdeTest extends JsonSerdeTestBase<KvSnapshotTableLease> {
@@ -34,7 +34,7 @@ public class KvSnapshotTableLeaseJsonSerdeTest extends JsonSerdeTestBase<KvSnaps
         KvSnapshotTableLease[] kvSnapshotTableLeases = new KvSnapshotTableLease[2];
         kvSnapshotTableLeases[0] = new KvSnapshotTableLease(1L, new Long[] {1L, -1L, 1L, 2L});
 
-        Map<Long, Long[]> partitionSnapshots = new HashMap<>();
+        ConcurrentHashMap<Long, Long[]> partitionSnapshots = MapUtils.newConcurrentHashMap();
         partitionSnapshots.put(2001L, new Long[] {10L, -1L, 20L, 30L});
         partitionSnapshots.put(2002L, new Long[] {15L, -1L, 25L, 35L});
         kvSnapshotTableLeases[1] = new KvSnapshotTableLease(2L, partitionSnapshots);

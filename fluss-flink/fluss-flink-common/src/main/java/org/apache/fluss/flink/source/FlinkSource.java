@@ -171,7 +171,9 @@ public class FlinkSource<OUT>
                 streaming,
                 partitionFilters,
                 lakeSource,
-                sourceEnumeratorState.getLeaseContext());
+                new LeaseContext(
+                        sourceEnumeratorState.getLeaseId(),
+                        leaseContext.getKvSnapshotLeaseDurationMs()));
     }
 
     @Override

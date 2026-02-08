@@ -32,23 +32,34 @@ import org.apache.fluss.config.MemorySize;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.MergeEngineType;
+import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.ChangeType;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
+import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.types.RowType;
 
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.apache.fluss.record.LogRecordBatchFormat.V0_RECORD_BATCH_HEADER_SIZE;
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA_PK;
+import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR_PK;
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.apache.fluss.testutils.InternalRowAssert.assertThatRow;
+import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** IT case for tests that require manual cluster management. */
@@ -178,6 +189,120 @@ class CustomFlussClusterITCase {
             if (table != null) {
                 table.close();
             }
+            flussClusterExtension.close();
+        }
+    }
+
+    @Test
+    void testConcurrentKvSnapshotLeaseOperations() throws Exception {
+        Configuration conf = initConfig();
+        // Use a short snapshot interval for stress testing
+        conf.set(ConfigOptions.KV_SNAPSHOT_INTERVAL, Duration.ofSeconds(1));
+        final FlussClusterExtension flussClusterExtension =
+                FlussClusterExtension.builder()
+                        .setNumOfTabletServers(3)
+                        .setClusterConf(conf)
+                        .build();
+        flussClusterExtension.start();
+
+        TablePath tablePath = TablePath.of("test_stress_db", "test_concurrent_kv_snapshot_lease");
+
+        try (Connection connection =
+                        ConnectionFactory.createConnection(
+                                flussClusterExtension.getClientConfig());
+                Admin admin = connection.getAdmin()) {
+            admin.createDatabase(tablePath.getDatabaseName(), DatabaseDescriptor.EMPTY, false)
+                    .get();
+            admin.createTable(tablePath, DATA1_TABLE_DESCRIPTOR_PK, false).get();
+
+            long tableId = admin.getTableInfo(tablePath).get().getTableId();
+            int bucketNum = 3;
+
+            // Write initial data
+            try (Table table = connection.getTable(tablePath)) {
+                UpsertWriter upsertWriter = table.newUpsert().createWriter();
+                for (int i = 0; i < 20; i++) {
+                    upsertWriter.upsert(row(i, "value_" + i));
+                }
+                upsertWriter.flush();
+            }
+
+            // Trigger and wait for snapshot
+            flussClusterExtension.triggerAndWaitSnapshot(tablePath);
+
+            // Prepare snapshot IDs for lease operations
+            Map<TableBucket, Long> bucketSnapshotIds = new HashMap<>();
+            for (int bucket = 0; bucket < bucketNum; bucket++) {
+                bucketSnapshotIds.put(new TableBucket(tableId, bucket), 0L);
+            }
+
+            int numLeases = 5;
+            int numConcurrentOps = 3;
+            ExecutorService executor = Executors.newFixedThreadPool(numLeases * numConcurrentOps);
+            AtomicInteger successCount = new AtomicInteger(0);
+            AtomicInteger errorCount = new AtomicInteger(0);
+            List<CompletableFuture<Void>> futures = new ArrayList<>();
+
+            // Concurrently acquire, renew, and drop leases
+            for (int i = 0; i < numLeases; i++) {
+                final String leaseId = "stress-lease-" + i;
+                final long leaseDuration = Duration.ofDays(1).toMillis();
+
+                CompletableFuture<Void> future =
+                        CompletableFuture.runAsync(
+                                () -> {
+                                    try {
+                                        KvSnapshotLease lease =
+                                                admin.createKvSnapshotLease(leaseId, leaseDuration);
+
+                                        // Acquire snapshots
+                                        lease.acquireSnapshots(bucketSnapshotIds).get();
+
+                                        // Renew the lease multiple times
+                                        for (int r = 0; r < 3; r++) {
+                                            lease.renew().get();
+                                        }
+
+                                        // Drop the lease
+                                        lease.dropLease().get();
+
+                                        successCount.incrementAndGet();
+                                    } catch (Exception e) {
+                                        errorCount.incrementAndGet();
+                                    }
+                                },
+                                executor);
+                futures.add(future);
+            }
+
+            // Wait for all concurrent operations to complete
+            CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
+                    .get(2, TimeUnit.MINUTES);
+
+            executor.shutdown();
+            assertThat(executor.awaitTermination(30, TimeUnit.SECONDS)).isTrue();
+
+            // Verify all operations succeeded
+            assertThat(successCount.get()).isEqualTo(numLeases);
+            assertThat(errorCount.get()).isEqualTo(0);
+
+            // Verify all leases are cleaned up
+            ZooKeeperClient zkClient = flussClusterExtension.getZooKeeperClient();
+            retry(
+                    Duration.ofMinutes(1),
+                    () -> assertThat(zkClient.getKvSnapshotLeasesList()).isEmpty());
+
+            // Verify data is still consistent after concurrent operations
+            try (Table table = connection.getTable(tablePath)) {
+                Lookuper lookuper = table.newLookup().createLookuper();
+                for (int i = 0; i < 20; i++) {
+                    InternalRow gotRow = lookuper.lookup(row(i)).get().getSingletonRow();
+                    assertThatRow(gotRow)
+                            .withSchema(DATA1_SCHEMA_PK.getRowType())
+                            .isEqualTo(row(i, "value_" + i));
+                }
+            }
+        } finally {
             flussClusterExtension.close();
         }
     }

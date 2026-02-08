@@ -19,13 +19,14 @@ package org.apache.fluss.server.zk.data.lease;
 
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.core.JsonGenerator;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
+import org.apache.fluss.utils.MapUtils;
 import org.apache.fluss.utils.json.JsonDeserializer;
 import org.apache.fluss.utils.json.JsonSerdeUtils;
 import org.apache.fluss.utils.json.JsonSerializer;
 
 import java.io.IOException;
-import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 /** Json serializer and deserializer for {@link KvSnapshotTableLease}. */
 public class KvSnapshotTableLeaseJsonSerde
@@ -88,7 +89,7 @@ public class KvSnapshotTableLeaseJsonSerde
             return new KvSnapshotTableLease(tableId, bucketSnapshots);
         } else {
             // for partition table.
-            Map<Long, Long[]> partitionSnapshots = new HashMap<>();
+            ConcurrentHashMap<Long, Long[]> partitionSnapshots = MapUtils.newConcurrentHashMap();
             JsonNode partitionSnapshotsNode = node.get(PARTITION_SNAPSHOTS);
             for (JsonNode partitionSnapshotNode : partitionSnapshotsNode) {
                 long partitionId = partitionSnapshotNode.get(PARTITION_ID).asLong();

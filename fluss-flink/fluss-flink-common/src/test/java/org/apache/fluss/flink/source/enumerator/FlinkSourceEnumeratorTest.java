@@ -237,7 +237,7 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
                             streaming,
                             null,
                             null,
-                            new LeaseContext(null, null));
+                            LeaseContext.DEFAULT);
 
             enumerator.start();
 
@@ -438,7 +438,7 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
                                 isPrimaryKeyTable
                                         ? new LeaseContext(
                                                 "kv_snapshot_lease1", Duration.ofDays(1).toMillis())
-                                        : new LeaseContext(null, null))) {
+                                        : LeaseContext.DEFAULT)) {
 
             Map<Long, String> partitionNameByIds =
                     waitUntilPartitions(zooKeeperClient, DEFAULT_TABLE_PATH);

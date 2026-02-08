@@ -41,6 +41,8 @@ import org.apache.fluss.rpc.messages.DropAclsRequest;
 import org.apache.fluss.rpc.messages.DropAclsResponse;
 import org.apache.fluss.rpc.messages.DropDatabaseRequest;
 import org.apache.fluss.rpc.messages.DropDatabaseResponse;
+import org.apache.fluss.rpc.messages.DropKvSnapshotLeaseRequest;
+import org.apache.fluss.rpc.messages.DropKvSnapshotLeaseResponse;
 import org.apache.fluss.rpc.messages.DropPartitionRequest;
 import org.apache.fluss.rpc.messages.DropPartitionResponse;
 import org.apache.fluss.rpc.messages.DropTableRequest;
@@ -197,6 +199,10 @@ public interface AdminGateway extends AdminReadOnlyGateway {
     @RPC(api = ApiKeys.RELEASE_KV_SNAPSHOT_LEASE)
     CompletableFuture<ReleaseKvSnapshotLeaseResponse> releaseKvSnapshotLease(
             ReleaseKvSnapshotLeaseRequest request);
+
+    @RPC(api = ApiKeys.DROP_KV_SNAPSHOT_LEASE)
+    CompletableFuture<DropKvSnapshotLeaseResponse> dropKvSnapshotLease(
+            DropKvSnapshotLeaseRequest request);
 
     // todo: rename table & alter table
 

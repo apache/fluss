@@ -82,9 +82,10 @@ public class FlinkConnectorOptions {
                     .stringType()
                     .defaultValue(String.valueOf(UUID.randomUUID()))
                     .withDescription(
-                            "The lease id to ping kv snapshots. If set, the acquired kv snapshots will not be deleted "
-                                    + "until the consumer finished consuming all the snapshots or the lease duration time "
-                                    + "is reached. If not set, an UUID will be set.");
+                            "The lease ID used to protect acquired KV snapshots from deletion. If specified, "
+                                    + "the snapshots will be retained until either the consumer finishes "
+                                    + "processing all of them or the lease duration expires. By default, "
+                                    + "this value is set to a randomly generated UUID string if not explicitly provided.");
 
     public static final ConfigOption<Duration> SCAN_KV_SNAPSHOT_LEASE_DURATION =
             ConfigOptions.key("scan.kv.snapshot.lease.duration")

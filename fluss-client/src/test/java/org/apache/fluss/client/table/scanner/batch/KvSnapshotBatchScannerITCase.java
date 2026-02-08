@@ -19,12 +19,12 @@ package org.apache.fluss.client.table.scanner.batch;
 
 import org.apache.fluss.bucketing.BucketingFunction;
 import org.apache.fluss.client.admin.ClientToServerITCaseBase;
+import org.apache.fluss.client.admin.KvSnapshotLease;
 import org.apache.fluss.client.metadata.KvSnapshots;
 import org.apache.fluss.client.table.Table;
 import org.apache.fluss.client.table.scanner.RemoteFileDownloader;
 import org.apache.fluss.client.table.writer.UpsertWriter;
 import org.apache.fluss.client.write.HashBucketAssigner;
-import org.apache.fluss.exception.KvSnapshotLeaseNotExistException;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
@@ -35,9 +35,9 @@ import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.ProjectedRow;
 import org.apache.fluss.row.encode.CompactedKeyEncoder;
 import org.apache.fluss.row.encode.KeyEncoder;
+import org.apache.fluss.server.coordinator.lease.KvSnapshotLeaseHandler;
+import org.apache.fluss.server.coordinator.lease.KvSnapshotLeaseMetadataManager;
 import org.apache.fluss.server.zk.ZooKeeperClient;
-import org.apache.fluss.server.zk.data.lease.KvSnapshotLease;
-import org.apache.fluss.server.zk.data.lease.KvSnapshotLeaseMetadataManager;
 import org.apache.fluss.server.zk.data.lease.KvSnapshotTableLease;
 import org.apache.fluss.types.DataTypes;
 
@@ -56,7 +56,6 @@ import java.util.Optional;
 import static org.apache.fluss.record.TestData.DATA1_ROW_TYPE;
 import static org.apache.fluss.testutils.DataTestUtils.compactedRow;
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** IT Case for {@link KvSnapshotBatchScanner}. */
 class KvSnapshotBatchScannerITCase extends ClientToServerITCaseBase {
@@ -193,8 +192,8 @@ class KvSnapshotBatchScannerITCase extends ClientToServerITCaseBase {
         TablePath tablePath = TablePath.of(DEFAULT_DB, "test-kv-snapshot-lease");
         long tableId = createTable(tablePath, DEFAULT_TABLE_DESCRIPTOR, true);
 
-        String kvSnapshotLease1 = "test-lease";
-        String kvSnapshotLease2 = "test-lease2";
+        String kvSnapshotLeaseId1 = "test-lease";
+        String kvSnapshotLeaseId2 = "test-lease2";
 
         // scan the snapshot
         Map<TableBucket, List<InternalRow>> expectedRowByBuckets = putRows(tableId, tablePath, 10);
@@ -216,11 +215,12 @@ class KvSnapshotBatchScannerITCase extends ClientToServerITCaseBase {
             TableBucket tableBucket = new TableBucket(kvSnapshots.getTableId(), bucketId);
             consumeBuckets.put(tableBucket, kvSnapshots.getSnapshotId(bucketId).getAsLong());
         }
-        admin.acquireKvSnapshotLease(
-                        kvSnapshotLease1, consumeBuckets, Duration.ofDays(1).toMillis())
-                .get();
+
+        KvSnapshotLease kvSnapshotLease1 =
+                admin.createKvSnapshotLease(kvSnapshotLeaseId1, Duration.ofDays(1).toMillis());
+        kvSnapshotLease1.acquireSnapshots(consumeBuckets).get();
         checkKvSnapshotLeaseEquals(
-                metadataManager, kvSnapshotLease1, tableId, new Long[] {0L, 0L, 0L});
+                metadataManager, kvSnapshotLeaseId1, tableId, new Long[] {0L, 0L, 0L});
 
         expectedRowByBuckets = putRows(tableId, tablePath, 10);
         // wait snapshot2 finish
@@ -233,11 +233,12 @@ class KvSnapshotBatchScannerITCase extends ClientToServerITCaseBase {
             TableBucket tableBucket = new TableBucket(kvSnapshots.getTableId(), bucketId);
             consumeBuckets.put(tableBucket, kvSnapshots.getSnapshotId(bucketId).getAsLong());
         }
-        admin.acquireKvSnapshotLease(
-                        kvSnapshotLease2, consumeBuckets, Duration.ofDays(1).toMillis())
-                .get();
+
+        KvSnapshotLease kvSnapshotLease2 =
+                admin.createKvSnapshotLease(kvSnapshotLeaseId2, Duration.ofDays(1).toMillis());
+        kvSnapshotLease2.acquireSnapshots(consumeBuckets).get();
         checkKvSnapshotLeaseEquals(
-                metadataManager, kvSnapshotLease2, tableId, new Long[] {1L, 1L, 1L});
+                metadataManager, kvSnapshotLeaseId2, tableId, new Long[] {1L, 1L, 1L});
         // check even snapshot1 is generated, snapshot0 also retained as lease exists.
         for (TableBucket tb : expectedRowByBuckets.keySet()) {
             assertThat(zkClient.getTableBucketSnapshot(tb, 0L).isPresent()).isTrue();
@@ -249,18 +250,16 @@ class KvSnapshotBatchScannerITCase extends ClientToServerITCaseBase {
         FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshots(expectedRowByBuckets.keySet());
 
         // release lease1.
-        admin.releaseKvSnapshotLease(
-                        kvSnapshotLease1, Collections.singleton(new TableBucket(tableId, 0)))
-                .get();
+        kvSnapshotLease1.releaseSnapshots(Collections.singleton(new TableBucket(tableId, 0))).get();
         checkKvSnapshotLeaseEquals(
-                metadataManager, kvSnapshotLease1, tableId, new Long[] {-1L, 0L, 0L});
+                metadataManager, kvSnapshotLeaseId1, tableId, new Long[] {-1L, 0L, 0L});
 
         // release lease2.
-        admin.releaseKvSnapshotLease(kvSnapshotLease2, consumeBuckets.keySet()).get();
-        assertThat(zkClient.getKvSnapshotLeasesList()).doesNotContain(kvSnapshotLease2);
+        kvSnapshotLease2.releaseSnapshots(consumeBuckets.keySet()).get();
+        assertThat(zkClient.getKvSnapshotLeasesList()).doesNotContain(kvSnapshotLeaseId2);
 
         // release all kv snapshot lease of lease1
-        admin.releaseAllKvSnapshotLease(kvSnapshotLease1).get();
+        kvSnapshotLease1.dropLease().get();
         assertThat(zkClient.getKvSnapshotLeasesList()).isEmpty();
 
         expectedRowByBuckets = putRows(tableId, tablePath, 10);
@@ -273,10 +272,10 @@ class KvSnapshotBatchScannerITCase extends ClientToServerITCaseBase {
             assertThat(zkClient.getTableBucketSnapshot(tb, 1L).isPresent()).isFalse();
         }
 
-        assertThatThrownBy(() -> admin.releaseAllKvSnapshotLease("no-exist-lease").get())
-                .rootCause()
-                .isInstanceOf(KvSnapshotLeaseNotExistException.class)
-                .hasMessageContaining("kv snapshot lease 'no-exist-lease' not exits");
+        // drop no exist lease, no exception.
+        admin.createKvSnapshotLease("no-exist-lease", Duration.ofDays(1).toMillis())
+                .dropLease()
+                .get();
     }
 
     private Map<TableBucket, List<InternalRow>> putRows(
@@ -345,9 +344,9 @@ class KvSnapshotBatchScannerITCase extends ClientToServerITCaseBase {
             Long[] expectedBucketIndex)
             throws Exception {
         assertThat(metadataManager.getLeasesList()).contains(leaseId);
-        Optional<KvSnapshotLease> leaseOpt = metadataManager.getLease(leaseId);
+        Optional<KvSnapshotLeaseHandler> leaseOpt = metadataManager.getLease(leaseId);
         assertThat(leaseOpt).isPresent();
-        KvSnapshotLease actualLease = leaseOpt.get();
+        KvSnapshotLeaseHandler actualLease = leaseOpt.get();
         Map<Long, KvSnapshotTableLease> tableIdToTableLease = actualLease.getTableIdToTableLease();
         KvSnapshotTableLease tableLease = tableIdToTableLease.get(tableId);
         assertThat(tableLease).isNotNull();

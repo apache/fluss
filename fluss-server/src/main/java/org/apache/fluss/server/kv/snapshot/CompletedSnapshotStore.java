@@ -21,8 +21,8 @@ import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.fs.FSDataOutputStream;
 import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.fs.FsPath;
-import org.apache.fluss.metadata.KvSnapshotLeaseForBucket;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableBucketSnapshot;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -211,7 +211,7 @@ public class CompletedSnapshotStore {
     /** A function to check whether a snapshot can be subsumed. */
     @FunctionalInterface
     public interface SubsumptionChecker {
-        boolean canSubsume(KvSnapshotLeaseForBucket bucket);
+        boolean canSubsume(TableBucketSnapshot bucket);
     }
 
     private static boolean canSubsume(
@@ -224,7 +224,7 @@ public class CompletedSnapshotStore {
         }
 
         return subsumptionChecker.canSubsume(
-                new KvSnapshotLeaseForBucket(next.getTableBucket(), next.getSnapshotID()));
+                new TableBucketSnapshot(next.getTableBucket(), next.getSnapshotID()));
     }
 
     /**

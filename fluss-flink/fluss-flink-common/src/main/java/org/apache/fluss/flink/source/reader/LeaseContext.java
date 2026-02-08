@@ -17,33 +17,45 @@
 
 package org.apache.fluss.flink.source.reader;
 
-import javax.annotation.Nullable;
+import org.apache.fluss.flink.FlinkConnectorOptions;
+
+import org.apache.flink.configuration.ReadableConfig;
 
 import java.io.Serializable;
+import java.time.Duration;
 import java.util.Objects;
+import java.util.UUID;
 
 /** Context for lease. */
 public class LeaseContext implements Serializable {
 
     private static final long serialVersionUID = 1L;
 
+    public static final LeaseContext DEFAULT =
+            new LeaseContext(UUID.randomUUID().toString(), Duration.ofDays(1).toMillis());
+
     // kv snapshot lease id. null for log table.
-    private final @Nullable String kvSnapshotLeaseId;
+    private final String kvSnapshotLeaseId;
 
     // kv snapshot lease duration. null for log table.
-    private final @Nullable Long kvSnapshotLeaseDurationMs;
+    private final long kvSnapshotLeaseDurationMs;
 
-    public LeaseContext(
-            @Nullable String kvSnapshotLeaseId, @Nullable Long kvSnapshotLeaseDurationMs) {
+    public LeaseContext(String kvSnapshotLeaseId, long kvSnapshotLeaseDurationMs) {
         this.kvSnapshotLeaseId = kvSnapshotLeaseId;
         this.kvSnapshotLeaseDurationMs = kvSnapshotLeaseDurationMs;
     }
 
-    public @Nullable String getKvSnapshotLeaseId() {
+    public static LeaseContext fromConf(ReadableConfig tableOptions) {
+        return new LeaseContext(
+                tableOptions.get(FlinkConnectorOptions.SCAN_KV_SNAPSHOT_LEASE_ID),
+                tableOptions.get(FlinkConnectorOptions.SCAN_KV_SNAPSHOT_LEASE_DURATION).toMillis());
+    }
+
+    public String getKvSnapshotLeaseId() {
         return kvSnapshotLeaseId;
     }
 
-    public @Nullable Long getKvSnapshotLeaseDurationMs() {
+    public long getKvSnapshotLeaseDurationMs() {
         return kvSnapshotLeaseDurationMs;
     }
 

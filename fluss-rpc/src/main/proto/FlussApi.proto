@@ -380,17 +380,17 @@ message GetKvSnapshotMetadataResponse {
 
 message AcquireKvSnapshotLeaseRequest {
   required string lease_id = 1;
-  required int64 lease_duration = 2;
-  repeated PbKvSnapshotLeaseForTable table_lease_req = 3;
+  required int64 lease_duration_ms = 2;
+  repeated PbKvSnapshotLeaseForTable snapshots_to_lease = 3;
 }
 
 message AcquireKvSnapshotLeaseResponse {
-  repeated PbKvSnapshotLeaseForTable tables_lease_res = 3;
+  repeated PbKvSnapshotLeaseForTable unavailable_snapshots = 3;
 }
 
 message ReleaseKvSnapshotLeaseRequest {
   required string lease_id = 1;
-  repeated PbTable release_tables = 2;
+  repeated PbTableBucket buckets_to_release = 2;
 }
 
 message ReleaseKvSnapshotLeaseResponse {}
@@ -864,16 +864,6 @@ message PbTableBucket {
   required int32 bucket_id = 3;
 }
 
-message PbTable {
-  required int64 table_id = 1;
-  repeated PbBucket buckets = 2;
-}
-
-message PbBucket {
-  optional int64 partition_id = 1;
-  required int32 bucket_id = 2;
-}
-
 message PbAdjustIsrReqForTable {
   required int64 table_id = 1;
   repeated PbAdjustIsrReqForBucket buckets_req = 2;
@@ -1175,7 +1165,7 @@ message PbDatabaseSummary {
 
 message PbKvSnapshotLeaseForTable {
   required int64 table_id = 1;
-  repeated PbKvSnapshotLeaseForBucket buckets_req = 2;
+  repeated PbKvSnapshotLeaseForBucket bucket_snapshots = 2;
 }
 
 message PbKvSnapshotLeaseForBucket {

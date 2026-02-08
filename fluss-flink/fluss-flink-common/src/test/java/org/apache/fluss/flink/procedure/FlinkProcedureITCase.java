@@ -144,7 +144,7 @@ public abstract class FlinkProcedureITCase {
                             "+I[sys.rebalance]",
                             "+I[sys.cancel_rebalance]",
                             "+I[sys.list_rebalance]",
-                            "+I[sys.release_all_kv_snapshot_lease]");
+                            "+I[sys.drop_kv_snapshot_lease]");
             // make sure no more results is unread.
             assertResultsIgnoreOrder(showProceduresIterator, expectedShowProceduresResult, true);
         }
@@ -784,7 +784,7 @@ public abstract class FlinkProcedureITCase {
     }
 
     @Test
-    void testReleaseAllKvSnapshotLeaseProcedure() throws Exception {
+    void testDropKvSnapshotLeaseProcedure() throws Exception {
         tEnv.executeSql(
                 "create table testcatalog.fluss.pk_table_test_kv_snapshot_lease ("
                         + "a int not null primary key not enforced, b varchar)");
@@ -814,7 +814,7 @@ public abstract class FlinkProcedureITCase {
         assertThat(zkClient.getKvSnapshotLeaseMetadata(leaseId)).isPresent();
         tEnv.executeSql(
                         String.format(
-                                "Call %s.sys.release_all_kv_snapshot_lease('" + leaseId + "' )",
+                                "Call %s.sys.drop_kv_snapshot_lease('" + leaseId + "' )",
                                 CATALOG_NAME))
                 .await();
         assertThat(zkClient.getKvSnapshotLeaseMetadata(leaseId)).isNotPresent();

@@ -35,6 +35,7 @@ import org.apache.fluss.server.coordinator.LakeTableTieringManager;
 import org.apache.fluss.server.coordinator.MetadataManager;
 import org.apache.fluss.server.coordinator.TestCoordinatorChannelManager;
 import org.apache.fluss.server.coordinator.event.CoordinatorEventManager;
+import org.apache.fluss.server.coordinator.lease.KvSnapshotLeaseManager;
 import org.apache.fluss.server.coordinator.statemachine.ReplicaLeaderElection.ControlledShutdownLeaderElection;
 import org.apache.fluss.server.coordinator.statemachine.TableBucketStateMachine.ElectionResult;
 import org.apache.fluss.server.metadata.CoordinatorMetadataCache;
@@ -87,6 +88,7 @@ class TableBucketStateMachineTest {
     private AutoPartitionManager autoPartitionManager;
     private LakeTableTieringManager lakeTableTieringManager;
     private CoordinatorMetadataCache serverMetadataCache;
+    private KvSnapshotLeaseManager kvSnapshotLeaseManager;
 
     @BeforeAll
     static void baseBeforeAll() {
@@ -100,7 +102,8 @@ class TableBucketStateMachineTest {
     void beforeEach() throws IOException {
         Configuration conf = new Configuration();
         conf.setString(ConfigOptions.COORDINATOR_HOST, "localhost");
-        conf.setString(ConfigOptions.REMOTE_DATA_DIR, "/tmp/fluss/remote-data");
+        String remoteDir = "/tmp/fluss/remote-data";
+        conf.setString(ConfigOptions.REMOTE_DATA_DIR, remoteDir);
         coordinatorContext = new CoordinatorContext();
         testCoordinatorChannelManager = new TestCoordinatorChannelManager();
         coordinatorRequestBatch =
@@ -120,6 +123,15 @@ class TableBucketStateMachineTest {
                                 new LakeCatalogDynamicLoader(new Configuration(), null, true)),
                         new Configuration());
         lakeTableTieringManager = new LakeTableTieringManager();
+
+        kvSnapshotLeaseManager =
+                new KvSnapshotLeaseManager(
+                        Duration.ofMinutes(10).toMillis(),
+                        zookeeperClient,
+                        remoteDir,
+                        SystemClock.getInstance(),
+                        TestingMetricGroups.COORDINATOR_METRICS);
+        kvSnapshotLeaseManager.start();
     }
 
     @Test
@@ -270,7 +282,7 @@ class TableBucketStateMachineTest {
                                 zookeeperClient,
                                 new Configuration(),
                                 new LakeCatalogDynamicLoader(new Configuration(), null, true)),
-                        SystemClock.getInstance());
+                        kvSnapshotLeaseManager);
         CoordinatorEventManager eventManager =
                 new CoordinatorEventManager(
                         coordinatorEventProcessor, TestingMetricGroups.COORDINATOR_METRICS);

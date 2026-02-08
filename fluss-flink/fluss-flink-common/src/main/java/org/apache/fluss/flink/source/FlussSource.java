@@ -68,8 +68,7 @@ public class FlussSource<OUT> extends FlinkSource<OUT> {
             OffsetsInitializer offsetsInitializer,
             long scanPartitionDiscoveryIntervalMs,
             FlussDeserializationSchema<OUT> deserializationSchema,
-            boolean streaming,
-            LeaseContext leaseContext) {
+            boolean streaming) {
         // TODO: Support partition pushDown in datastream
         super(
                 flussConf,
@@ -83,7 +82,7 @@ public class FlussSource<OUT> extends FlinkSource<OUT> {
                 deserializationSchema,
                 streaming,
                 null,
-                leaseContext);
+                LeaseContext.DEFAULT);
     }
 
     /**

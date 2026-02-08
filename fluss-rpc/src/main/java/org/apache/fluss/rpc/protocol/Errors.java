@@ -44,7 +44,6 @@ import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.InvalidTargetColumnException;
 import org.apache.fluss.exception.InvalidTimestampException;
 import org.apache.fluss.exception.InvalidUpdateVersionException;
-import org.apache.fluss.exception.KvSnapshotLeaseNotExistException;
 import org.apache.fluss.exception.KvSnapshotNotExistException;
 import org.apache.fluss.exception.KvStorageException;
 import org.apache.fluss.exception.LakeStorageNotConfiguredException;
@@ -246,9 +245,7 @@ public enum Errors {
     INVALID_PRODUCER_ID_EXCEPTION(
             63,
             "The client has attempted to perform an operation with an invalid producer ID.",
-            InvalidProducerIdException::new),
-    KV_SNAPSHOT_LEASE_NOT_EXIST(
-            64, "The kv snapshot lease is not exist.", KvSnapshotLeaseNotExistException::new);
+            InvalidProducerIdException::new);
 
     private static final Logger LOG = LoggerFactory.getLogger(Errors.class);
 

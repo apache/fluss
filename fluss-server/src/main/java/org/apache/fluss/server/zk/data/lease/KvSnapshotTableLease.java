@@ -23,31 +23,33 @@ import javax.annotation.Nullable;
 import javax.annotation.concurrent.NotThreadSafe;
 
 import java.util.Arrays;
-import java.util.Collections;
 import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.ConcurrentHashMap;
 
 /** The lease of kv snapshot for a table. */
 @NotThreadSafe
 public class KvSnapshotTableLease {
     private final long tableId;
-    private final @Nullable Long[] bucketSnapshots;
-    private final Map<Long, Long[]> partitionSnapshots;
+    private @Nullable Long[] bucketSnapshots;
+    private final ConcurrentHashMap<Long, Long[]> partitionSnapshots;
 
     public KvSnapshotTableLease(long tableId) {
         this(tableId, null, MapUtils.newConcurrentHashMap());
     }
 
     public KvSnapshotTableLease(long tableId, Long[] bucketSnapshots) {
-        this(tableId, bucketSnapshots, Collections.emptyMap());
+        this(tableId, bucketSnapshots, MapUtils.newConcurrentHashMap());
     }
 
-    public KvSnapshotTableLease(long tableId, Map<Long, Long[]> partitionSnapshots) {
+    public KvSnapshotTableLease(long tableId, ConcurrentHashMap<Long, Long[]> partitionSnapshots) {
         this(tableId, null, partitionSnapshots);
     }
 
     public KvSnapshotTableLease(
-            long tableId, @Nullable Long[] bucketSnapshots, Map<Long, Long[]> partitionSnapshots) {
+            long tableId,
+            @Nullable Long[] bucketSnapshots,
+            ConcurrentHashMap<Long, Long[]> partitionSnapshots) {
         this.tableId = tableId;
         this.bucketSnapshots = bucketSnapshots;
         this.partitionSnapshots = partitionSnapshots;
@@ -59,6 +61,10 @@ public class KvSnapshotTableLease {
 
     public @Nullable Long[] getBucketSnapshots() {
         return bucketSnapshots;
+    }
+
+    public void setBucketSnapshots(@Nullable Long[] bucketSnapshots) {
+        this.bucketSnapshots = bucketSnapshots;
     }
 
     public @Nullable Long[] getBucketSnapshots(long partitionId) {

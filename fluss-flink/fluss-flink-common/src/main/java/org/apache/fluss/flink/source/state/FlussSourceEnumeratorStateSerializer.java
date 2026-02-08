@@ -199,7 +199,7 @@ public class FlussSourceEnumeratorStateSerializer
                 assignBucketAndPartitions.f0,
                 assignBucketAndPartitions.f1,
                 remainingHybridLakeFlussSplits,
-                new LeaseContext(null, null));
+                LeaseContext.DEFAULT.getKvSnapshotLeaseId());
     }
 
     private SourceEnumeratorState deserializeV1(byte[] serialized) throws IOException {
@@ -217,7 +217,7 @@ public class FlussSourceEnumeratorStateSerializer
                 assignBucketAndPartitions.f0,
                 assignBucketAndPartitions.f1,
                 remainingHybridLakeFlussSplits,
-                new LeaseContext(null, null));
+                LeaseContext.DEFAULT.getKvSnapshotLeaseId());
     }
 
     private SourceEnumeratorState deserializeV2(byte[] serialized) throws IOException {
@@ -233,7 +233,7 @@ public class FlussSourceEnumeratorStateSerializer
                 assignBucketAndPartitions.f0,
                 assignBucketAndPartitions.f1,
                 remainingHybridLakeFlussSplits,
-                leaseContext);
+                leaseContext.getKvSnapshotLeaseId());
     }
 
     private Tuple2<Set<TableBucket>, Map<Long, String>> deserializeAssignBucketAndPartitions(
@@ -290,36 +290,14 @@ public class FlussSourceEnumeratorStateSerializer
 
     private void serializeLeaseContext(final DataOutputSerializer out, SourceEnumeratorState state)
             throws IOException {
-        LeaseContext leaseContext = state.getLeaseContext();
-        String kvSnapshotLeaseId = leaseContext.getKvSnapshotLeaseId();
-        if (kvSnapshotLeaseId != null) {
-            out.writeBoolean(true);
-            out.writeUTF(kvSnapshotLeaseId);
-        } else {
-            out.writeBoolean(false);
-        }
-
-        Long kvSnapshotLeaseDurationMs = leaseContext.getKvSnapshotLeaseDurationMs();
-        if (kvSnapshotLeaseDurationMs != null) {
-            out.writeBoolean(true);
-            out.writeLong(kvSnapshotLeaseDurationMs);
-        } else {
-            out.writeBoolean(false);
-        }
+        String leaseId = state.getLeaseId();
+        out.writeUTF(leaseId);
     }
 
     private LeaseContext deserializeLeaseContext(final DataInputDeserializer in)
             throws IOException {
-        if (in.readBoolean()) {
-            String kvSnapshotLeaseId = in.readUTF();
-            if (in.readBoolean()) {
-                Long kvSnapshotLeaseDurationMs = in.readLong();
-                return new LeaseContext(kvSnapshotLeaseId, kvSnapshotLeaseDurationMs);
-            } else {
-                return new LeaseContext(kvSnapshotLeaseId, null);
-            }
-        } else {
-            return new LeaseContext(null, null);
-        }
+        String kvSnapshotLeaseId = in.readUTF();
+        return new LeaseContext(
+                kvSnapshotLeaseId, LeaseContext.DEFAULT.getKvSnapshotLeaseDurationMs());
     }
 }

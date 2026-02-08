@@ -33,6 +33,7 @@ import org.apache.fluss.server.DynamicConfigManager;
 import org.apache.fluss.server.ServerBase;
 import org.apache.fluss.server.authorizer.Authorizer;
 import org.apache.fluss.server.authorizer.AuthorizerLoader;
+import org.apache.fluss.server.coordinator.lease.KvSnapshotLeaseManager;
 import org.apache.fluss.server.coordinator.rebalance.RebalanceManager;
 import org.apache.fluss.server.metadata.CoordinatorMetadataCache;
 import org.apache.fluss.server.metadata.ServerMetadataCache;
@@ -144,6 +145,9 @@ public class CoordinatorServer extends ServerBase {
     @GuardedBy("lock")
     private LakeCatalogDynamicLoader lakeCatalogDynamicLoader;
 
+    @GuardedBy("lock")
+    private KvSnapshotLeaseManager kvSnapshotLeaseManager;
+
     public CoordinatorServer(Configuration conf) {
         this(conf, SystemClock.getInstance());
     }
@@ -204,6 +208,18 @@ public class CoordinatorServer extends ServerBase {
                     Executors.newFixedThreadPool(
                             conf.get(ConfigOptions.SERVER_IO_POOL_SIZE),
                             new ExecutorThreadFactory("coordinator-io"));
+
+            // Initialize and start the kv snapshot lease manager
+            this.kvSnapshotLeaseManager =
+                    new KvSnapshotLeaseManager(
+                            conf.get(ConfigOptions.KV_SNAPSHOT_LEASE_EXPIRATION_CHECK_INTERVAL)
+                                    .toMillis(),
+                            zkClient,
+                            conf.getString(ConfigOptions.REMOTE_DATA_DIR),
+                            clock,
+                            serverMetricGroup);
+            kvSnapshotLeaseManager.start();
+
             this.coordinatorService =
                     new CoordinatorService(
                             conf,
@@ -216,7 +232,8 @@ public class CoordinatorServer extends ServerBase {
                             lakeCatalogDynamicLoader,
                             lakeTableTieringManager,
                             dynamicConfigManager,
-                            ioExecutor);
+                            ioExecutor,
+                            kvSnapshotLeaseManager);
 
             this.rpcServer =
                     RpcServer.create(
@@ -259,7 +276,7 @@ public class CoordinatorServer extends ServerBase {
                             conf,
                             ioExecutor,
                             metadataManager,
-                            clock);
+                            kvSnapshotLeaseManager);
             coordinatorEventProcessor.startup();
 
             createDefaultDatabase();

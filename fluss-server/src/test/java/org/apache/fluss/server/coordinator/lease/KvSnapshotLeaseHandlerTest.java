@@ -15,36 +15,36 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.server.zk.data.lease;
+package org.apache.fluss.server.coordinator.lease;
 
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.server.zk.data.lease.KvSnapshotTableLease;
+import org.apache.fluss.utils.MapUtils;
 
 import org.junit.jupiter.api.Test;
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-/** Test for {@link KvSnapshotLease}. */
-public class KvSnapshotLeaseTest {
-
-    private static final int NUM_BUCKET = 2;
+/** Test for {@link KvSnapshotLeaseHandler}. */
+public class KvSnapshotLeaseHandlerTest {
 
     @Test
     void testConstructorAndGetters() {
         long expirationTime = 1000L;
-        KvSnapshotLease kvSnapshotLease = new KvSnapshotLease(expirationTime);
+        KvSnapshotLeaseHandler kvSnapshotLeasehandle = new KvSnapshotLeaseHandler(expirationTime);
 
-        assertThat(kvSnapshotLease.getExpirationTime()).isEqualTo(expirationTime);
-        assertThat(kvSnapshotLease.getTableIdToTableLease()).isEmpty();
-        assertThat(kvSnapshotLease.getLeasedSnapshotCount()).isEqualTo(0);
+        assertThat(kvSnapshotLeasehandle.getExpirationTime()).isEqualTo(expirationTime);
+        assertThat(kvSnapshotLeasehandle.getTableIdToTableLease()).isEmpty();
+        assertThat(kvSnapshotLeasehandle.getLeasedSnapshotCount()).isEqualTo(0);
     }
 
     @Test
     void testRegisterBucketForNonPartitionedTable() {
-        KvSnapshotLease lease = new KvSnapshotLease(1000L);
+        KvSnapshotLeaseHandler lease = new KvSnapshotLeaseHandler(1000L);
         long tableId = 1L;
         int bucketId = 0;
 
@@ -55,9 +55,8 @@ public class KvSnapshotLeaseTest {
         KvSnapshotTableLease tableLease = lease.getTableIdToTableLease().get(tableId);
         Long[] bucketSnapshots = tableLease.getBucketSnapshots();
         assertThat(bucketSnapshots).isNotNull();
-        assertThat(bucketSnapshots).hasSize(NUM_BUCKET);
+        assertThat(bucketSnapshots).hasSize(1);
         assertThat(bucketSnapshots[bucketId]).isEqualTo(123L);
-        assertThat(bucketSnapshots[1]).isEqualTo(-1L);
 
         // Register again same bucket → should be update
         originalSnapshot = acquireBucket(lease, new TableBucket(tableId, bucketId), 456L);
@@ -69,27 +68,72 @@ public class KvSnapshotLeaseTest {
     }
 
     @Test
-    void testIllegalBucketNum() {
-        // Currently, for the same table, the bucket num should be the same.
-        KvSnapshotLease lease = new KvSnapshotLease(1000L);
+    void testAcquireBucketDynamicExpansionForNonPartitionedTable() {
+        KvSnapshotLeaseHandler lease = new KvSnapshotLeaseHandler(1000L);
         long tableId = 1L;
-        int bucketId = 0;
 
-        lease.acquireBucket(new TableBucket(tableId, bucketId), 123L, 10);
-        assertThatThrownBy(() -> lease.acquireBucket(new TableBucket(tableId, bucketId), 456L, 20))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining(
-                        "Bucket index is null, or input bucket number is not equal to the bucket "
-                                + "number of the table.");
+        // Acquire bucket 0 → creates array of size 1
+        acquireBucket(lease, new TableBucket(tableId, 0), 100L);
+        Long[] bucketSnapshots = lease.getTableIdToTableLease().get(tableId).getBucketSnapshots();
+        assertThat(bucketSnapshots).hasSize(1);
+        assertThat(bucketSnapshots[0]).isEqualTo(100L);
+
+        // Acquire bucket 2 → array should expand from size 1 to size 3
+        long originalSnapshot = acquireBucket(lease, new TableBucket(tableId, 2), 200L);
+        assertThat(originalSnapshot).isEqualTo(-1L);
+        bucketSnapshots = lease.getTableIdToTableLease().get(tableId).getBucketSnapshots();
+        assertThat(bucketSnapshots).hasSize(3);
+        assertThat(bucketSnapshots[0]).isEqualTo(100L);
+        assertThat(bucketSnapshots[1]).isEqualTo(-1L);
+        assertThat(bucketSnapshots[2]).isEqualTo(200L);
+
+        // Acquire bucket 1 → no expansion needed, just fill in
+        originalSnapshot = acquireBucket(lease, new TableBucket(tableId, 1), 150L);
+        assertThat(originalSnapshot).isEqualTo(-1L);
+        bucketSnapshots = lease.getTableIdToTableLease().get(tableId).getBucketSnapshots();
+        assertThat(bucketSnapshots).hasSize(3);
+        assertThat(bucketSnapshots[1]).isEqualTo(150L);
+    }
+
+    @Test
+    void testAcquireBucketDynamicExpansionForPartitionedTable() {
+        KvSnapshotLeaseHandler lease = new KvSnapshotLeaseHandler(1000L);
+        long tableId = 1L;
+        long partitionId = 1000L;
+
+        // Acquire partition 1000, bucket 0 → creates array of size 1
+        acquireBucket(lease, new TableBucket(tableId, partitionId, 0), 100L);
+        Long[] partitionBuckets =
+                lease.getTableIdToTableLease()
+                        .get(tableId)
+                        .getPartitionSnapshots()
+                        .get(partitionId);
+        assertThat(partitionBuckets).hasSize(1);
+        assertThat(partitionBuckets[0]).isEqualTo(100L);
+
+        // Acquire partition 1000, bucket 2 → array should expand from size 1 to size 3
+        long originalSnapshot =
+                acquireBucket(lease, new TableBucket(tableId, partitionId, 2), 200L);
+        assertThat(originalSnapshot).isEqualTo(-1L);
+        partitionBuckets =
+                lease.getTableIdToTableLease()
+                        .get(tableId)
+                        .getPartitionSnapshots()
+                        .get(partitionId);
+        assertThat(partitionBuckets).hasSize(3);
+        assertThat(partitionBuckets[0]).isEqualTo(100L);
+        assertThat(partitionBuckets[1]).isEqualTo(-1L);
+        assertThat(partitionBuckets[2]).isEqualTo(200L);
     }
 
     @Test
     void testRegisterBucketForPartitionedTable() {
-        KvSnapshotLease lease = new KvSnapshotLease(1000L);
+        KvSnapshotLeaseHandler lease = new KvSnapshotLeaseHandler(1000L);
         long tableId = 1L;
 
         long originalSnapshot = acquireBucket(lease, new TableBucket(tableId, 1000L, 0), 111L);
         assertThat(originalSnapshot).isEqualTo(-1L);
+        // Acquire bucket 1 for partition 1000 → array expands from size 1 to size 2
         originalSnapshot = acquireBucket(lease, new TableBucket(tableId, 1000L, 1), 122L);
         assertThat(originalSnapshot).isEqualTo(-1L);
         originalSnapshot = acquireBucket(lease, new TableBucket(tableId, 1001L, 0), 122L);
@@ -102,8 +146,9 @@ public class KvSnapshotLeaseTest {
         assertThat(partitionSnapshots).containsKeys(1000L, 1001L);
         assertThat(partitionSnapshots.get(1000L)[0]).isEqualTo(111L);
         assertThat(partitionSnapshots.get(1000L)[1]).isEqualTo(122L);
+        // Partition 1001 only has bucket 0, so its array size is 1
+        assertThat(partitionSnapshots.get(1001L)).hasSize(1);
         assertThat(partitionSnapshots.get(1001L)[0]).isEqualTo(122L);
-        assertThat(partitionSnapshots.get(1001L)[1]).isEqualTo(-1L);
 
         // test update.
         originalSnapshot = acquireBucket(lease, new TableBucket(tableId, 1000L, 0), 222L);
@@ -113,7 +158,7 @@ public class KvSnapshotLeaseTest {
 
     @Test
     void testReleaseBucket() {
-        KvSnapshotLease lease = new KvSnapshotLease(1000L);
+        KvSnapshotLeaseHandler lease = new KvSnapshotLeaseHandler(1000L);
         long tableId = 1L;
 
         // Register
@@ -128,8 +173,43 @@ public class KvSnapshotLeaseTest {
     }
 
     @Test
+    void testReleaseBucketExceedingArraySize() {
+        KvSnapshotLeaseHandler lease = new KvSnapshotLeaseHandler(1000L);
+        long tableId = 1L;
+
+        // Register bucket 0 only → array size is 1
+        acquireBucket(lease, new TableBucket(tableId, 0), 100L);
+        assertThat(lease.getLeasedSnapshotCount()).isEqualTo(1);
+
+        // Release bucket 5 which exceeds the array size → should return -1
+        long snapshotId = releaseBucket(lease, new TableBucket(tableId, 5));
+        assertThat(snapshotId).isEqualTo(-1L);
+        // The original lease should remain unchanged
+        assertThat(lease.getLeasedSnapshotCount()).isEqualTo(1);
+        assertThat(lease.isEmpty()).isFalse();
+    }
+
+    @Test
+    void testReleaseBucketExceedingArraySizeForPartitionedTable() {
+        KvSnapshotLeaseHandler lease = new KvSnapshotLeaseHandler(1000L);
+        long tableId = 1L;
+        long partitionId = 1000L;
+
+        // Register partition 1000, bucket 0 only → array size is 1
+        acquireBucket(lease, new TableBucket(tableId, partitionId, 0), 100L);
+        assertThat(lease.getLeasedSnapshotCount()).isEqualTo(1);
+
+        // Release partition 1000, bucket 3 which exceeds the array size → should return -1
+        long snapshotId = releaseBucket(lease, new TableBucket(tableId, partitionId, 3));
+        assertThat(snapshotId).isEqualTo(-1L);
+        // The original lease should remain unchanged
+        assertThat(lease.getLeasedSnapshotCount()).isEqualTo(1);
+        assertThat(lease.isEmpty()).isFalse();
+    }
+
+    @Test
     void testGetLeasedSnapshotCount() {
-        KvSnapshotLease lease = new KvSnapshotLease(1000L);
+        KvSnapshotLeaseHandler lease = new KvSnapshotLeaseHandler(1000L);
 
         // Non-partitioned
         acquireBucket(lease, new TableBucket(1L, 0), 100L);
@@ -148,27 +228,27 @@ public class KvSnapshotLeaseTest {
 
     @Test
     void testEqualsAndHashCode() {
-        KvSnapshotLease lease = new KvSnapshotLease(1000L);
+        KvSnapshotLeaseHandler lease = new KvSnapshotLeaseHandler(1000L);
         assertThat(lease).isEqualTo(lease);
         assertThat(lease.hashCode()).isEqualTo(lease.hashCode());
 
-        KvSnapshotLease c1 = new KvSnapshotLease(1000L);
-        KvSnapshotLease c2 = new KvSnapshotLease(2000L);
+        KvSnapshotLeaseHandler c1 = new KvSnapshotLeaseHandler(1000L);
+        KvSnapshotLeaseHandler c2 = new KvSnapshotLeaseHandler(2000L);
         assertThat(c1).isNotEqualTo(c2);
 
         // Create two leases with same logical content but different array objects
         Map<Long, KvSnapshotTableLease> map1 = new HashMap<>();
-        Map<Long, Long[]> partitionSnapshots1 = new HashMap<>();
+        ConcurrentHashMap<Long, Long[]> partitionSnapshots1 = MapUtils.newConcurrentHashMap();
         partitionSnapshots1.put(2001L, new Long[] {100L, -1L});
         partitionSnapshots1.put(2002L, new Long[] {-1L, 101L});
         map1.put(1L, new KvSnapshotTableLease(1L, new Long[] {100L, -1L}, partitionSnapshots1));
         Map<Long, KvSnapshotTableLease> map2 = new HashMap<>();
-        Map<Long, Long[]> partitionSnapshots2 = new HashMap<>();
+        ConcurrentHashMap<Long, Long[]> partitionSnapshots2 = MapUtils.newConcurrentHashMap();
         partitionSnapshots2.put(2001L, new Long[] {100L, -1L});
         partitionSnapshots2.put(2002L, new Long[] {-1L, 101L});
         map2.put(1L, new KvSnapshotTableLease(1L, new Long[] {100L, -1L}, partitionSnapshots2));
-        c1 = new KvSnapshotLease(1000L, map1);
-        c2 = new KvSnapshotLease(1000L, map2);
+        c1 = new KvSnapshotLeaseHandler(1000L, map1);
+        c2 = new KvSnapshotLeaseHandler(1000L, map2);
         assertThat(c1).isEqualTo(c2);
         assertThat(c1.hashCode()).isEqualTo(c2.hashCode());
 
@@ -177,14 +257,14 @@ public class KvSnapshotLeaseTest {
         map1.put(1L, new KvSnapshotTableLease(1L, new Long[] {100L, -1L}));
         map2 = new HashMap<>();
         map2.put(1L, new KvSnapshotTableLease(1L, new Long[] {200L, -1L}));
-        c1 = new KvSnapshotLease(1000L, map1);
-        c2 = new KvSnapshotLease(1000L, map2);
+        c1 = new KvSnapshotLeaseHandler(1000L, map1);
+        c2 = new KvSnapshotLeaseHandler(1000L, map2);
         assertThat(c1).isNotEqualTo(c2);
     }
 
     @Test
     void testToString() {
-        KvSnapshotLease lease = new KvSnapshotLease(1000L);
+        KvSnapshotLeaseHandler lease = new KvSnapshotLeaseHandler(1000L);
         acquireBucket(lease, new TableBucket(1L, 0), 100L);
         acquireBucket(lease, new TableBucket(1L, 1), 101L);
         acquireBucket(lease, new TableBucket(2L, 0L, 0), 200L);
@@ -194,14 +274,14 @@ public class KvSnapshotLeaseTest {
                         "KvSnapshotLease{expirationTime=1000, tableIdToTableLease={"
                                 + "1=KvSnapshotTableLease{tableId=1, bucketSnapshots=[100, 101], partitionSnapshots={}}, "
                                 + "2=KvSnapshotTableLease{tableId=2, bucketSnapshots=null, partitionSnapshots={"
-                                + "0=[200, -1], 1=[-1, 201]}}}}");
+                                + "0=[200], 1=[-1, 201]}}}}");
     }
 
-    private long acquireBucket(KvSnapshotLease lease, TableBucket tb, long kvSnapshotId) {
-        return lease.acquireBucket(tb, kvSnapshotId, NUM_BUCKET);
+    private long acquireBucket(KvSnapshotLeaseHandler lease, TableBucket tb, long kvSnapshotId) {
+        return lease.acquireBucket(tb, kvSnapshotId);
     }
 
-    private long releaseBucket(KvSnapshotLease lease, TableBucket tb) {
+    private long releaseBucket(KvSnapshotLeaseHandler lease, TableBucket tb) {
         return lease.releaseBucket(tb);
     }
 }

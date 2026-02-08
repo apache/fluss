@@ -15,9 +15,10 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.server.zk.data.lease;
+package org.apache.fluss.server.coordinator.lease;
 
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.server.zk.data.lease.KvSnapshotTableLease;
 import org.apache.fluss.utils.MapUtils;
 
 import javax.annotation.concurrent.NotThreadSafe;
@@ -26,19 +27,19 @@ import java.util.Arrays;
 import java.util.Map;
 import java.util.Objects;
 
-/** The entity of kv snapshot lease. */
+/** handler of kv snapshot lease. */
 @NotThreadSafe
-public class KvSnapshotLease {
+public class KvSnapshotLeaseHandler {
     private long expirationTime;
 
     /** A map from table id to kv snapshot lease for one table. */
     private final Map<Long, KvSnapshotTableLease> tableIdToTableLease;
 
-    public KvSnapshotLease(long expirationTime) {
+    public KvSnapshotLeaseHandler(long expirationTime) {
         this(expirationTime, MapUtils.newConcurrentHashMap());
     }
 
-    public KvSnapshotLease(
+    public KvSnapshotLeaseHandler(
             long expirationTime, Map<Long, KvSnapshotTableLease> tableIdToTableLease) {
         this.expirationTime = expirationTime;
         this.tableIdToTableLease = tableIdToTableLease;
@@ -57,14 +58,15 @@ public class KvSnapshotLease {
     }
 
     /**
-     * Acquire a bucket to the lease id.
+     * Acquire a bucket to the lease id. If the bucket array already exists but is too small to
+     * accommodate the given bucket id, the array will be dynamically expanded to {@code bucketId +
+     * 1}.
      *
      * @param tableBucket table bucket
      * @param snapshotId snapshot id
-     * @param bucketNum bucket number of this table or partition
      * @return the original registered snapshotId. if -1 means the bucket is new registered
      */
-    public long acquireBucket(TableBucket tableBucket, long snapshotId, int bucketNum) {
+    public long acquireBucket(TableBucket tableBucket, long snapshotId) {
         Long[] bucketSnapshot;
         Long partitionId = tableBucket.getPartitionId();
         long tableId = tableBucket.getTableId();
@@ -75,11 +77,17 @@ public class KvSnapshotLease {
                     tableIdToTableLease.computeIfAbsent(
                             tableId,
                             k -> {
-                                Long[] array = new Long[bucketNum];
+                                Long[] array = new Long[bucketId + 1];
                                 Arrays.fill(array, -1L);
                                 return new KvSnapshotTableLease(tableId, array);
                             });
             bucketSnapshot = tableLease.getBucketSnapshots();
+            // Dynamically expand the array if the bucket id exceeds the current array size.
+            // This can happen when new buckets are added to an existing table.
+            if (bucketSnapshot != null && bucketId >= bucketSnapshot.length) {
+                bucketSnapshot = expandArray(bucketSnapshot, bucketId + 1);
+                tableLease.setBucketSnapshots(bucketSnapshot);
+            }
         } else {
             // For partitioned table.
 
@@ -93,16 +101,23 @@ public class KvSnapshotLease {
                     partitionSnapshots.computeIfAbsent(
                             partitionId,
                             k -> {
-                                Long[] array = new Long[bucketNum];
+                                Long[] array = new Long[bucketId + 1];
                                 Arrays.fill(array, -1L);
                                 return array;
                             });
+            // Dynamically expand the array if the bucket id exceeds the current array size.
+            if (bucketId >= bucketSnapshot.length) {
+                bucketSnapshot = expandArray(bucketSnapshot, bucketId + 1);
+                partitionSnapshots.put(partitionId, bucketSnapshot);
+            }
         }
 
-        if (bucketSnapshot == null || bucketSnapshot.length != bucketNum) {
+        if (bucketSnapshot == null) {
             throw new IllegalArgumentException(
-                    "Bucket index is null, or input bucket number is not equal to the bucket number of the table.");
+                    "Bucket snapshot array is null. This may indicate a conflict between "
+                            + "partitioned and non-partitioned usage for the same table ID.");
         }
+
         long originalSnapshotId = bucketSnapshot[bucketId];
         bucketSnapshot[bucketId] = snapshotId;
         return originalSnapshotId;
@@ -112,7 +127,8 @@ public class KvSnapshotLease {
      * Release a bucket from the lease id.
      *
      * @param tableBucket table bucket
-     * @return the snapshot id of the unregistered bucket
+     * @return the snapshot id of the unregistered bucket, or -1 if the bucket was never registered
+     *     or the bucket id exceeds the current array size
      */
     public long releaseBucket(TableBucket tableBucket) {
         Long[] bucketIndex;
@@ -130,6 +146,12 @@ public class KvSnapshotLease {
 
         Long snapshotId = -1L;
         if (bucketIndex != null) {
+            // The bucket id exceeds the current array size, meaning it was never registered
+            // under this lease. Return -1 directly.
+            if (bucketId >= bucketIndex.length) {
+                return -1L;
+            }
+
             snapshotId = bucketIndex[bucketId];
             bucketIndex[bucketId] = -1L;
 
@@ -160,6 +182,19 @@ public class KvSnapshotLease {
         return tableIdToTableLease.isEmpty();
     }
 
+    /**
+     * Expand the given array to the specified new size, filling new slots with -1L.
+     *
+     * @param original the original array
+     * @param newSize the desired new size (must be greater than original.length)
+     * @return a new expanded array with original values preserved
+     */
+    private Long[] expandArray(Long[] original, int newSize) {
+        Long[] expanded = Arrays.copyOf(original, newSize);
+        Arrays.fill(expanded, original.length, newSize, -1L);
+        return expanded;
+    }
+
     public int getLeasedSnapshotCount() {
         int count = 0;
         for (KvSnapshotTableLease tableLease : tableIdToTableLease.values()) {
@@ -183,10 +218,10 @@ public class KvSnapshotLease {
         if (this == o) {
             return true;
         }
-        if (!(o instanceof KvSnapshotLease)) {
+        if (!(o instanceof KvSnapshotLeaseHandler)) {
             return false;
         }
-        KvSnapshotLease that = (KvSnapshotLease) o;
+        KvSnapshotLeaseHandler that = (KvSnapshotLeaseHandler) o;
         return expirationTime == that.expirationTime
                 && Objects.equals(tableIdToTableLease, that.tableIdToTableLease);
     }

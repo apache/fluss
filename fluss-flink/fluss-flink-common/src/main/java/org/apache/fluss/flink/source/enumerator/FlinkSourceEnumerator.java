@@ -42,6 +42,7 @@ import org.apache.fluss.flink.source.state.SourceEnumeratorState;
 import org.apache.fluss.lake.source.LakeSource;
 import org.apache.fluss.lake.source.LakeSplit;
 import org.apache.fluss.metadata.PartitionInfo;
+import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
@@ -106,6 +107,7 @@ public class FlinkSourceEnumerator
     private final boolean hasPrimaryKey;
     private final boolean isPartitioned;
     private final Configuration flussConf;
+    private final boolean isStreaming;
 
     private final SplitEnumeratorContext<SourceSplitBase> context;
 
@@ -258,6 +260,7 @@ public class FlinkSourceEnumerator
         this.lakeSource = lakeSource;
         this.workerExecutor = workerExecutor;
         this.leaseContext = leaseContext;
+        this.isStreaming = streaming;
     }
 
     @Override
@@ -550,24 +553,20 @@ public class FlinkSourceEnumerator
         Map<Integer, Long> snapshotIds = new HashMap<>();
         Map<Integer, Long> logOffsets = new HashMap<>();
 
-        // retry to get the latest kv snapshots and acquire kvSnapshot lease.
+        // Get the latest kv snapshots and acquire kvSnapshot lease.
         try {
             KvSnapshots kvSnapshots = getLatestKvSnapshots(partitionName);
-            Set<TableBucket> remainingTableBuckets = new HashSet<>(kvSnapshots.getTableBuckets());
 
             tableId = kvSnapshots.getTableId();
             partitionId = kvSnapshots.getPartitionId();
 
-            Set<TableBucket> ignoreBuckets = new HashSet<>();
             Map<TableBucket, Long> bucketsToLease = new HashMap<>();
-            for (TableBucket tb : remainingTableBuckets) {
+            for (TableBucket tb : kvSnapshots.getTableBuckets()) {
                 int bucket = tb.getBucket();
                 OptionalLong snapshotIdOpt = kvSnapshots.getSnapshotId(bucket);
                 OptionalLong logOffsetOpt = kvSnapshots.getLogOffset(bucket);
                 if (snapshotIdOpt.isPresent() && !ignoreTableBucket(tb)) {
                     bucketsToLease.put(tb, snapshotIdOpt.getAsLong());
-                } else {
-                    ignoreBuckets.add(tb);
                 }
 
                 snapshotIds.put(
@@ -575,31 +574,25 @@ public class FlinkSourceEnumerator
                 logOffsets.put(bucket, logOffsetOpt.isPresent() ? logOffsetOpt.getAsLong() : null);
             }
 
-            if (!ignoreBuckets.isEmpty()) {
-                remainingTableBuckets.removeAll(ignoreBuckets);
-            }
-
             if (!bucketsToLease.isEmpty()) {
                 String kvSnapshotLeaseId = leaseContext.getKvSnapshotLeaseId();
                 LOG.info(
                         "Try to acquire kv snapshot lease {} for table {}",
                         kvSnapshotLeaseId,
-                        tablePath);
-                Long kvSnapshotLeaseDurationMs = leaseContext.getKvSnapshotLeaseDurationMs();
+                        PhysicalTablePath.of(tablePath, partitionName));
+                long kvSnapshotLeaseDurationMs = leaseContext.getKvSnapshotLeaseDurationMs();
                 checkNotNull(kvSnapshotLeaseDurationMs, "kv snapshot lease duration is null.");
-                remainingTableBuckets =
+                Set<TableBucket> unavailableTableBucketSet =
                         flussAdmin
-                                .acquireKvSnapshotLease(
-                                        kvSnapshotLeaseId,
-                                        bucketsToLease,
-                                        kvSnapshotLeaseDurationMs)
+                                .createKvSnapshotLease(kvSnapshotLeaseId, kvSnapshotLeaseDurationMs)
+                                .acquireSnapshots(bucketsToLease)
                                 .get()
                                 .getUnavailableTableBucketSet();
-                if (!remainingTableBuckets.isEmpty()) {
+                if (!unavailableTableBucketSet.isEmpty()) {
                     LOG.info(
-                            "Failed to acquire kv snapshot lease for table {}: {}. Retry to re-acquire",
+                            "Failed to acquire kv snapshot lease for table {}: {}.",
                             tablePath,
-                            remainingTableBuckets);
+                            unavailableTableBucketSet);
                 }
             }
         } catch (Exception e) {
@@ -1010,7 +1003,7 @@ public class FlinkSourceEnumerator
                         assignedTableBuckets,
                         assignedPartitions,
                         pendingHybridLakeFlussSplits,
-                        leaseContext);
+                        leaseContext.getKvSnapshotLeaseId());
         LOG.debug("Source Checkpoint is {}", enumeratorState);
         return enumeratorState;
     }
@@ -1028,8 +1021,10 @@ public class FlinkSourceEnumerator
         // send request to fluss to unregister the kv snapshot lease.
         try {
             flussAdmin
-                    .releaseKvSnapshotLease(
-                            leaseContext.getKvSnapshotLeaseId(), consumedKvSnapshots)
+                    .createKvSnapshotLease(
+                            leaseContext.getKvSnapshotLeaseId(),
+                            leaseContext.getKvSnapshotLeaseDurationMs())
+                    .releaseSnapshots(consumedKvSnapshots)
                     .get();
         } catch (Exception e) {
             LOG.error("Failed to release kv snapshot lease. These snapshot need to re-enqueue", e);
@@ -1060,6 +1055,17 @@ public class FlinkSourceEnumerator
     public void close() throws IOException {
         try {
             closed = true;
+
+            if (!isStreaming) {
+                // drop the kv snapshot lease for the batch mode.
+                flussAdmin
+                        .createKvSnapshotLease(
+                                leaseContext.getKvSnapshotLeaseId(),
+                                leaseContext.getKvSnapshotLeaseDurationMs())
+                        .dropLease()
+                        .get();
+            }
+
             if (workerExecutor != null) {
                 workerExecutor.close();
             }

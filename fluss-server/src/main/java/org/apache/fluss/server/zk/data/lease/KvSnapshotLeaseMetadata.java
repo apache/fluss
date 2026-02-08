@@ -17,14 +17,10 @@
 
 package org.apache.fluss.server.zk.data.lease;
 
-import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.fs.FsPath;
 
-import java.io.IOException;
 import java.util.Map;
 import java.util.Objects;
-
-import static org.apache.fluss.metrics.registry.MetricRegistry.LOG;
 
 /** The zkNode data of kv snapshot lease. */
 public class KvSnapshotLeaseMetadata {
@@ -43,25 +39,6 @@ public class KvSnapshotLeaseMetadata {
 
     public Map<Long, FsPath> getTableIdToRemoteMetadataFilePath() {
         return tableIdToRemoteMetadataFilePath;
-    }
-
-    public void discard() {
-        // delete all remote metadata file.
-        tableIdToRemoteMetadataFilePath.values().forEach(this::delete);
-    }
-
-    private void delete(FsPath fsPath) {
-        try {
-            FileSystem fileSystem = fsPath.getFileSystem();
-            if (fileSystem.exists(fsPath)) {
-                fileSystem.delete(fsPath, false);
-            }
-        } catch (IOException e) {
-            LOG.warn(
-                    "Error deleting remote file path of kv snapshot lease metadata at {}",
-                    fsPath,
-                    e);
-        }
     }
 
     @Override

@@ -124,6 +124,8 @@ public class FlinkSourceReader<OUT>
                     bucketsFinishedConsumeKvSnapshot,
                     checkpointId);
 
+            // TODO Reduce the external IO operation, trace by
+            // https://github.com/apache/fluss/issues/2597.
             context.sendSourceEventToCoordinator(
                     new FinishedKvSnapshotConsumeEvent(
                             checkpointId, bucketsFinishedConsumeKvSnapshot));

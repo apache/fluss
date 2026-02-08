@@ -15,20 +15,15 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.server.coordinator;
+package org.apache.fluss.server.coordinator.lease;
 
-import org.apache.fluss.config.ConfigOptions;
-import org.apache.fluss.config.Configuration;
-import org.apache.fluss.metadata.KvSnapshotLeaseForBucket;
-import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableBucketSnapshot;
 import org.apache.fluss.server.metrics.group.TestingMetricGroups;
 import org.apache.fluss.server.zk.NOPErrorHandler;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperExtension;
 import org.apache.fluss.server.zk.data.BucketSnapshot;
-import org.apache.fluss.server.zk.data.lease.KvSnapshotLease;
-import org.apache.fluss.server.zk.data.lease.KvSnapshotLeaseMetadataManager;
 import org.apache.fluss.server.zk.data.lease.KvSnapshotTableLease;
 import org.apache.fluss.testutils.common.AllCallbackWrapper;
 import org.apache.fluss.testutils.common.ManuallyTriggeredScheduledExecutorService;
@@ -51,12 +46,7 @@ import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
 import static org.apache.fluss.record.TestData.DATA1_TABLE_ID_PK;
-import static org.apache.fluss.record.TestData.DATA1_TABLE_INFO_PK;
-import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH_PK;
 import static org.apache.fluss.record.TestData.PARTITION_TABLE_ID;
-import static org.apache.fluss.record.TestData.PARTITION_TABLE_INFO;
-import static org.apache.fluss.record.TestData.PARTITION_TABLE_PATH;
-import static org.apache.fluss.server.coordinator.CoordinatorTestUtils.createServers;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test for {@link KvSnapshotLeaseManager}. */
@@ -67,14 +57,8 @@ public class KvSnapshotLeaseManagerTest {
             new AllCallbackWrapper<>(new ZooKeeperExtension());
 
     private static final long PARTITION_ID_1 = 19001L;
-    private static final PhysicalTablePath PARTITION_TABLE_PATH_1 =
-            PhysicalTablePath.of(PARTITION_TABLE_PATH, "2024");
-
     private static final long PARTITION_ID_2 = 19002L;
-    private static final PhysicalTablePath PARTITION_TABLE_PATH_2 =
-            PhysicalTablePath.of(PARTITION_TABLE_PATH, "2025");
 
-    private static final int NUM_BUCKETS = DATA1_TABLE_INFO_PK.getNumBuckets();
     private static final TableBucket t0b0 = new TableBucket(DATA1_TABLE_ID_PK, 0);
     private static final TableBucket t0b1 = new TableBucket(DATA1_TABLE_ID_PK, 1);
     private static final TableBucket t1p0b0 =
@@ -86,11 +70,9 @@ public class KvSnapshotLeaseManagerTest {
 
     protected static ZooKeeperClient zookeeperClient;
 
-    private CoordinatorContext coordinatorContext;
     private ManualClock manualClock;
     private ManuallyTriggeredScheduledExecutorService clearLeaseScheduler;
     private KvSnapshotLeaseManager kvSnapshotLeaseManager;
-    private KvSnapshotLeaseMetadataManager metadataManager;
 
     private @TempDir Path tempDir;
 
@@ -104,18 +86,13 @@ public class KvSnapshotLeaseManagerTest {
 
     @BeforeEach
     void beforeEach() throws Exception {
-        initCoordinatorContext();
-        Configuration conf = new Configuration();
-        // set a huge expiration check interval to avoid expiration check.
-        conf.set(ConfigOptions.KV_SNAPSHOT_LEASE_EXPIRATION_CHECK_INTERVAL, Duration.ofDays(7));
         manualClock = new ManualClock(System.currentTimeMillis());
         clearLeaseScheduler = new ManuallyTriggeredScheduledExecutorService();
-        metadataManager = new KvSnapshotLeaseMetadataManager(zookeeperClient, tempDir.toString());
         kvSnapshotLeaseManager =
                 new KvSnapshotLeaseManager(
-                        conf,
-                        metadataManager,
-                        coordinatorContext,
+                        Duration.ofDays(7).toMillis(),
+                        zookeeperClient,
+                        tempDir.toString(),
                         clearLeaseScheduler,
                         manualClock,
                         TestingMetricGroups.COORDINATOR_METRICS);
@@ -141,53 +118,60 @@ public class KvSnapshotLeaseManagerTest {
         assertThat(
                         snapshotLeaseNotExists(
                                 Arrays.asList(
-                                        new KvSnapshotLeaseForBucket(t0b0, 0L),
-                                        new KvSnapshotLeaseForBucket(t0b1, 0L),
-                                        new KvSnapshotLeaseForBucket(t1p0b0, 0L),
-                                        new KvSnapshotLeaseForBucket(t1p0b1, 0L),
-                                        new KvSnapshotLeaseForBucket(t1p1b0, 0L))))
+                                        new TableBucketSnapshot(t0b0, 0L),
+                                        new TableBucketSnapshot(t0b1, 0L),
+                                        new TableBucketSnapshot(t1p0b0, 0L),
+                                        new TableBucketSnapshot(t1p0b1, 0L),
+                                        new TableBucketSnapshot(t1p1b0, 0L))))
                 .isTrue();
         assertThat(kvSnapshotLeaseManager.getLeasedBucketCount()).isEqualTo(0);
 
         // test initialize from zookeeper when coordinator is started.
-        KvSnapshotLease kvSnapshotLease = new KvSnapshotLease(1000L);
-        acquire(kvSnapshotLease, new KvSnapshotLeaseForBucket(t0b0, 0L));
-        acquire(kvSnapshotLease, new KvSnapshotLeaseForBucket(t0b1, 0L));
-        acquire(kvSnapshotLease, new KvSnapshotLeaseForBucket(t1p0b0, 0L));
-        acquire(kvSnapshotLease, new KvSnapshotLeaseForBucket(t1p0b1, 0L));
-        acquire(kvSnapshotLease, new KvSnapshotLeaseForBucket(t1p1b0, 0L));
-        metadataManager.registerLease("lease1", kvSnapshotLease);
+        KvSnapshotLeaseHandler kvSnapshotLeasehandle = new KvSnapshotLeaseHandler(1000L);
+        acquire(kvSnapshotLeasehandle, new TableBucketSnapshot(t0b0, 0L));
+        acquire(kvSnapshotLeasehandle, new TableBucketSnapshot(t0b1, 0L));
+        acquire(kvSnapshotLeasehandle, new TableBucketSnapshot(t1p0b0, 0L));
+        acquire(kvSnapshotLeasehandle, new TableBucketSnapshot(t1p0b1, 0L));
+        acquire(kvSnapshotLeasehandle, new TableBucketSnapshot(t1p1b0, 0L));
+        kvSnapshotLeaseManager.getMetadataManager().registerLease("lease1", kvSnapshotLeasehandle);
 
-        kvSnapshotLeaseManager.initialize();
+        kvSnapshotLeaseManager.start();
 
         assertThat(
                         snapshotLeaseExists(
                                 Arrays.asList(
-                                        new KvSnapshotLeaseForBucket(t0b0, 0L),
-                                        new KvSnapshotLeaseForBucket(t0b1, 0L),
-                                        new KvSnapshotLeaseForBucket(t1p0b0, 0L),
-                                        new KvSnapshotLeaseForBucket(t1p0b1, 0L),
-                                        new KvSnapshotLeaseForBucket(t1p1b0, 0L))))
+                                        new TableBucketSnapshot(t0b0, 0L),
+                                        new TableBucketSnapshot(t0b1, 0L),
+                                        new TableBucketSnapshot(t1p0b0, 0L),
+                                        new TableBucketSnapshot(t1p0b1, 0L),
+                                        new TableBucketSnapshot(t1p1b0, 0L))))
                 .isTrue();
         assertThat(kvSnapshotLeaseManager.getLeasedBucketCount()).isEqualTo(5);
 
         // check detail content.
+        // Array sizes are dynamically determined by the maximum bucket id:
+        // - DATA1_TABLE_ID_PK: bucket 0 and 1 → array size 2
+        // - PARTITION_ID_1: bucket 0 and 1 → array size 2
+        // - PARTITION_ID_2: bucket 0 only → array size 1
         Map<Long, KvSnapshotTableLease> tableIdToTableLease = new HashMap<>();
         tableIdToTableLease.put(
                 DATA1_TABLE_ID_PK,
-                new KvSnapshotTableLease(DATA1_TABLE_ID_PK, new Long[] {0L, 0L, -1L}));
+                new KvSnapshotTableLease(DATA1_TABLE_ID_PK, new Long[] {0L, 0L}));
         KvSnapshotTableLease leaseForPartitionTable = new KvSnapshotTableLease(PARTITION_TABLE_ID);
-        leaseForPartitionTable.addPartitionSnapshots(PARTITION_ID_1, new Long[] {0L, 0L, -1L});
-        leaseForPartitionTable.addPartitionSnapshots(PARTITION_ID_2, new Long[] {0L, -1L, -1L});
+        leaseForPartitionTable.addPartitionSnapshots(PARTITION_ID_1, new Long[] {0L, 0L});
+        leaseForPartitionTable.addPartitionSnapshots(PARTITION_ID_2, new Long[] {0L});
         tableIdToTableLease.put(PARTITION_TABLE_ID, leaseForPartitionTable);
-        KvSnapshotLease expectedLease = new KvSnapshotLease(1000L, tableIdToTableLease);
-        assertThat(kvSnapshotLeaseManager.getKvSnapshotLease("lease1")).isEqualTo(expectedLease);
-        assertThat(metadataManager.getLease("lease1")).hasValue(expectedLease);
+        KvSnapshotLeaseHandler expectedLease =
+                new KvSnapshotLeaseHandler(1000L, tableIdToTableLease);
+        assertThat(kvSnapshotLeaseManager.getKvSnapshotLeaseData("lease1"))
+                .isEqualTo(expectedLease);
+        assertThat(kvSnapshotLeaseManager.getMetadataManager().getLease("lease1"))
+                .hasValue(expectedLease);
     }
 
     @Test
     void testAcquireAndRelease() throws Exception {
-        Map<Long, List<KvSnapshotLeaseForBucket>> tableIdToRegisterBucket = initRegisterBuckets();
+        Map<Long, List<TableBucketSnapshot>> tableIdToRegisterBucket = initRegisterBuckets();
         acquire("lease1", tableIdToRegisterBucket);
 
         // first register snapshot to zk.
@@ -200,20 +184,19 @@ public class KvSnapshotLeaseManagerTest {
         tableIdToRegisterBucket.put(
                 PARTITION_TABLE_ID,
                 Arrays.asList(
-                        new KvSnapshotLeaseForBucket(t1p0b0, 1L),
-                        new KvSnapshotLeaseForBucket(t1p0b1, 1L)));
+                        new TableBucketSnapshot(t1p0b0, 1L), new TableBucketSnapshot(t1p0b1, 1L)));
         acquire("lease2", tableIdToRegisterBucket);
 
         assertThat(
                         snapshotLeaseExists(
                                 Arrays.asList(
-                                        new KvSnapshotLeaseForBucket(t0b0, 0L),
-                                        new KvSnapshotLeaseForBucket(t0b1, 0L),
-                                        new KvSnapshotLeaseForBucket(t1p0b0, 0),
-                                        new KvSnapshotLeaseForBucket(t1p0b1, 0L),
-                                        new KvSnapshotLeaseForBucket(t1p1b0, 0L),
-                                        new KvSnapshotLeaseForBucket(t1p0b0, 1L),
-                                        new KvSnapshotLeaseForBucket(t1p0b1, 1L))))
+                                        new TableBucketSnapshot(t0b0, 0L),
+                                        new TableBucketSnapshot(t0b1, 0L),
+                                        new TableBucketSnapshot(t1p0b0, 0),
+                                        new TableBucketSnapshot(t1p0b1, 0L),
+                                        new TableBucketSnapshot(t1p1b0, 0L),
+                                        new TableBucketSnapshot(t1p0b0, 1L),
+                                        new TableBucketSnapshot(t1p0b1, 1L))))
                 .isTrue();
         assertThat(kvSnapshotLeaseManager.getLeasedBucketCount()).isEqualTo(7);
         assertThat(kvSnapshotLeaseManager.getLeaseCount()).isEqualTo(2);
@@ -222,8 +205,7 @@ public class KvSnapshotLeaseManagerTest {
         tableIdToRegisterBucket = new HashMap<>();
         zookeeperClient.registerTableBucketSnapshot(t0b0, new BucketSnapshot(1L, 10L, "test-path"));
         tableIdToRegisterBucket.put(
-                DATA1_TABLE_ID_PK,
-                Collections.singletonList(new KvSnapshotLeaseForBucket(t0b0, 1L)));
+                DATA1_TABLE_ID_PK, Collections.singletonList(new TableBucketSnapshot(t0b0, 1L)));
         acquire("lease1", tableIdToRegisterBucket);
         assertThat(kvSnapshotLeaseManager.getLeasedBucketCount()).isEqualTo(7);
 
@@ -235,63 +217,64 @@ public class KvSnapshotLeaseManagerTest {
                 newTableBucket, new BucketSnapshot(1L, 10L, "test-path"));
         tableIdToRegisterBucket.put(
                 DATA1_TABLE_ID_PK,
-                Collections.singletonList(new KvSnapshotLeaseForBucket(newTableBucket, 1L)));
+                Collections.singletonList(new TableBucketSnapshot(newTableBucket, 1L)));
         acquire("lease1", tableIdToRegisterBucket);
         assertThat(kvSnapshotLeaseManager.getLeasedBucketCount()).isEqualTo(8);
 
         // release
-        Map<Long, List<TableBucket>> tableIdToUnregisterBucket = new HashMap<>();
-        tableIdToUnregisterBucket.put(DATA1_TABLE_ID_PK, Collections.singletonList(newTableBucket));
-        release("lease1", tableIdToUnregisterBucket);
+        release("lease1", Collections.singletonList(newTableBucket));
         assertThat(kvSnapshotLeaseManager.getLeasedBucketCount()).isEqualTo(7);
 
         // release a non-exist bucket.
-        tableIdToUnregisterBucket = new HashMap<>();
-        tableIdToUnregisterBucket.put(
-                DATA1_TABLE_ID_PK,
+        release(
+                "lease1",
                 Collections.singletonList(new TableBucket(DATA1_TABLE_ID_PK, PARTITION_ID_1, 2)));
-        release("lease1", tableIdToUnregisterBucket);
         assertThat(kvSnapshotLeaseManager.getLeasedBucketCount()).isEqualTo(7);
 
         // check detail content for lease1.
+        // - DATA1_TABLE_ID_PK: bucket 0,1 initially (size 2), then bucket 2 acquired and
+        //   released → expanded to size 3: {1L, 0L, -1L}
+        // - PARTITION_ID_1: bucket 0,1 → array size 2
+        // - PARTITION_ID_2: bucket 0 only → array size 1
         Map<Long, KvSnapshotTableLease> tableIdToTableLease = new HashMap<>();
         tableIdToTableLease.put(
                 DATA1_TABLE_ID_PK,
                 new KvSnapshotTableLease(DATA1_TABLE_ID_PK, new Long[] {1L, 0L, -1L}));
         KvSnapshotTableLease leaseForPartitionTable = new KvSnapshotTableLease(PARTITION_TABLE_ID);
-        leaseForPartitionTable.addPartitionSnapshots(PARTITION_ID_1, new Long[] {0L, 0L, -1L});
-        leaseForPartitionTable.addPartitionSnapshots(PARTITION_ID_2, new Long[] {0L, -1L, -1L});
+        leaseForPartitionTable.addPartitionSnapshots(PARTITION_ID_1, new Long[] {0L, 0L});
+        leaseForPartitionTable.addPartitionSnapshots(PARTITION_ID_2, new Long[] {0L});
         tableIdToTableLease.put(PARTITION_TABLE_ID, leaseForPartitionTable);
-        KvSnapshotLease expectedLease =
-                new KvSnapshotLease(manualClock.milliseconds() + 1000L, tableIdToTableLease);
-        assertThat(kvSnapshotLeaseManager.getKvSnapshotLease("lease1")).isEqualTo(expectedLease);
-        assertThat(metadataManager.getLease("lease1")).hasValue(expectedLease);
+        KvSnapshotLeaseHandler expectedLease =
+                new KvSnapshotLeaseHandler(manualClock.milliseconds() + 1000L, tableIdToTableLease);
+        assertThat(kvSnapshotLeaseManager.getKvSnapshotLeaseData("lease1"))
+                .isEqualTo(expectedLease);
+        assertThat(kvSnapshotLeaseManager.getMetadataManager().getLease("lease1"))
+                .hasValue(expectedLease);
 
         // check detail content for lease2.
+        // - PARTITION_ID_1: bucket 0,1 → array size 2
         tableIdToTableLease = new HashMap<>();
         leaseForPartitionTable = new KvSnapshotTableLease(PARTITION_TABLE_ID);
-        leaseForPartitionTable.addPartitionSnapshots(PARTITION_ID_1, new Long[] {1L, 1L, -1L});
+        leaseForPartitionTable.addPartitionSnapshots(PARTITION_ID_1, new Long[] {1L, 1L});
         tableIdToTableLease.put(PARTITION_TABLE_ID, leaseForPartitionTable);
-        KvSnapshotLease expectedLease2 =
-                new KvSnapshotLease(manualClock.milliseconds() + 1000L, tableIdToTableLease);
-        assertThat(kvSnapshotLeaseManager.getKvSnapshotLease("lease2")).isEqualTo(expectedLease2);
-        assertThat(metadataManager.getLease("lease2")).hasValue(expectedLease2);
+        KvSnapshotLeaseHandler expectedLease2 =
+                new KvSnapshotLeaseHandler(manualClock.milliseconds() + 1000L, tableIdToTableLease);
+        assertThat(kvSnapshotLeaseManager.getKvSnapshotLeaseData("lease2"))
+                .isEqualTo(expectedLease2);
+        assertThat(kvSnapshotLeaseManager.getMetadataManager().getLease("lease2"))
+                .hasValue(expectedLease2);
     }
 
     @Test
-    void testUnregisterAll() throws Exception {
-        Map<Long, List<KvSnapshotLeaseForBucket>> tableIdToRegisterBucket = initRegisterBuckets();
+    void testDropLease() throws Exception {
+        Map<Long, List<TableBucketSnapshot>> tableIdToRegisterBucket = initRegisterBuckets();
         acquire("lease1", tableIdToRegisterBucket);
         assertThat(kvSnapshotLeaseManager.getLeasedBucketCount()).isEqualTo(5);
         assertThat(kvSnapshotLeaseManager.getLeaseCount()).isEqualTo(1);
         assertThat(zookeeperClient.getKvSnapshotLeaseMetadata("lease1")).isPresent();
 
-        Map<Long, List<TableBucket>> tableIdToUnregisterBucket = new HashMap<>();
-        tableIdToUnregisterBucket.put(DATA1_TABLE_ID_PK, Arrays.asList(t0b0, t0b1));
-        tableIdToUnregisterBucket.put(PARTITION_TABLE_ID, Arrays.asList(t1p0b0, t1p0b1, t1p1b0));
-
-        // unregister all will clear this lease.
-        release("lease1", tableIdToUnregisterBucket);
+        // release all will clear this lease.
+        release("lease1", Arrays.asList(t0b0, t0b1, t1p0b0, t1p0b1, t1p1b0));
         assertThat(kvSnapshotLeaseManager.getLeasedBucketCount()).isEqualTo(0);
         assertThat(kvSnapshotLeaseManager.getLeaseCount()).isEqualTo(0);
         assertThat(zookeeperClient.getKvSnapshotLeaseMetadata("lease1")).isNotPresent();
@@ -299,7 +282,7 @@ public class KvSnapshotLeaseManagerTest {
 
     @Test
     void testClear() throws Exception {
-        Map<Long, List<KvSnapshotLeaseForBucket>> tableIdToRegisterBucket = initRegisterBuckets();
+        Map<Long, List<TableBucketSnapshot>> tableIdToRegisterBucket = initRegisterBuckets();
         acquire("lease1", tableIdToRegisterBucket);
 
         // first register snapshot to zk.
@@ -311,48 +294,48 @@ public class KvSnapshotLeaseManagerTest {
         tableIdToRegisterBucket.put(
                 PARTITION_TABLE_ID,
                 Arrays.asList(
-                        new KvSnapshotLeaseForBucket(t0b0, 0L), // same ref.
-                        new KvSnapshotLeaseForBucket(t1p0b0, 1L),
-                        new KvSnapshotLeaseForBucket(t1p0b1, 1L)));
+                        new TableBucketSnapshot(t0b0, 0L), // same ref.
+                        new TableBucketSnapshot(t1p0b0, 1L),
+                        new TableBucketSnapshot(t1p0b1, 1L)));
         acquire("lease2", tableIdToRegisterBucket);
 
         assertThat(
                         snapshotLeaseExists(
                                 Arrays.asList(
-                                        new KvSnapshotLeaseForBucket(t0b0, 0L),
-                                        new KvSnapshotLeaseForBucket(t0b1, 0L),
-                                        new KvSnapshotLeaseForBucket(t1p0b0, 0L),
-                                        new KvSnapshotLeaseForBucket(t1p0b1, 0L),
-                                        new KvSnapshotLeaseForBucket(t1p1b0, 0L),
-                                        new KvSnapshotLeaseForBucket(t1p0b0, 1L),
-                                        new KvSnapshotLeaseForBucket(t1p0b1, 1L))))
+                                        new TableBucketSnapshot(t0b0, 0L),
+                                        new TableBucketSnapshot(t0b1, 0L),
+                                        new TableBucketSnapshot(t1p0b0, 0L),
+                                        new TableBucketSnapshot(t1p0b1, 0L),
+                                        new TableBucketSnapshot(t1p1b0, 0L),
+                                        new TableBucketSnapshot(t1p0b0, 1L),
+                                        new TableBucketSnapshot(t1p0b1, 1L))))
                 .isTrue();
-        assertThat(kvSnapshotLeaseManager.getRefCount(new KvSnapshotLeaseForBucket(t0b0, 0L)))
+        assertThat(kvSnapshotLeaseManager.getRefCount(new TableBucketSnapshot(t0b0, 0L)))
                 .isEqualTo(2);
         assertThat(kvSnapshotLeaseManager.getLeasedBucketCount()).isEqualTo(8);
         assertThat(kvSnapshotLeaseManager.getLeaseCount()).isEqualTo(2);
 
-        kvSnapshotLeaseManager.releaseAll("lease1");
-        assertThat(kvSnapshotLeaseManager.getRefCount(new KvSnapshotLeaseForBucket(t0b0, 0L)))
+        kvSnapshotLeaseManager.dropLease("lease1");
+        assertThat(kvSnapshotLeaseManager.getRefCount(new TableBucketSnapshot(t0b0, 0L)))
                 .isEqualTo(1);
         assertThat(kvSnapshotLeaseManager.getLeasedBucketCount()).isEqualTo(3);
         assertThat(kvSnapshotLeaseManager.getLeaseCount()).isEqualTo(1);
         assertThat(zookeeperClient.getKvSnapshotLeaseMetadata("lease1")).isEmpty();
 
-        kvSnapshotLeaseManager.releaseAll("lease2");
-        assertThat(kvSnapshotLeaseManager.getRefCount(new KvSnapshotLeaseForBucket(t0b0, 0L)))
+        kvSnapshotLeaseManager.dropLease("lease2");
+        assertThat(kvSnapshotLeaseManager.getRefCount(new TableBucketSnapshot(t0b0, 0L)))
                 .isEqualTo(0);
         assertThat(kvSnapshotLeaseManager.getLeasedBucketCount()).isEqualTo(0);
         assertThat(kvSnapshotLeaseManager.getLeaseCount()).isEqualTo(0);
         assertThat(zookeeperClient.getKvSnapshotLeaseMetadata("lease2")).isEmpty();
 
-        assertThat(kvSnapshotLeaseManager.releaseAll("non-exist")).isFalse();
+        assertThat(kvSnapshotLeaseManager.dropLease("non-exist")).isFalse();
     }
 
     @Test
     void testExpireLeases() throws Exception {
         // test lease expire by expire thread.
-        Map<Long, List<KvSnapshotLeaseForBucket>> tableIdToLeaseBucket = initRegisterBuckets();
+        Map<Long, List<TableBucketSnapshot>> tableIdToLeaseBucket = initRegisterBuckets();
 
         // expire after 1000ms.
         kvSnapshotLeaseManager.acquireLease("lease1", 1000L, tableIdToLeaseBucket);
@@ -365,9 +348,9 @@ public class KvSnapshotLeaseManagerTest {
         tableIdToLeaseBucket.put(
                 PARTITION_TABLE_ID,
                 Arrays.asList(
-                        new KvSnapshotLeaseForBucket(t0b0, 0L), // same ref.
-                        new KvSnapshotLeaseForBucket(t1p0b0, 1L),
-                        new KvSnapshotLeaseForBucket(t1p0b1, 1L)));
+                        new TableBucketSnapshot(t0b0, 0L), // same ref.
+                        new TableBucketSnapshot(t1p0b0, 1L),
+                        new TableBucketSnapshot(t1p0b1, 1L)));
         // expire after 2000ms.
         kvSnapshotLeaseManager.acquireLease("lease2", 2000L, tableIdToLeaseBucket);
 
@@ -397,74 +380,149 @@ public class KvSnapshotLeaseManagerTest {
 
     @Test
     void registerWithNotExistSnapshotId() throws Exception {
-        Map<Long, List<KvSnapshotLeaseForBucket>> tableIdToRegisterBucket = new HashMap<>();
+        Map<Long, List<TableBucketSnapshot>> tableIdToRegisterBucket = new HashMap<>();
         tableIdToRegisterBucket.put(
                 DATA1_TABLE_ID_PK,
                 Arrays.asList(
-                        new KvSnapshotLeaseForBucket(t0b0, 1000L),
-                        new KvSnapshotLeaseForBucket(t0b1, 1000L)));
+                        new TableBucketSnapshot(t0b0, 1000L),
+                        new TableBucketSnapshot(t0b1, 1000L)));
+
+        // TODO  this case will return t0b0, t0b1, after we add the checker the check whether
+        // snapshot exists.
         assertThat(
                         kvSnapshotLeaseManager
                                 .acquireLease("lease1", 1000L, tableIdToRegisterBucket)
                                 .keySet())
-                .contains(t0b0);
+                .isEmpty();
     }
 
-    private void initCoordinatorContext() {
-        coordinatorContext = new CoordinatorContext();
-        coordinatorContext.setLiveTabletServers(createServers(Arrays.asList(0, 1, 2)));
-
-        // register an non-partitioned table.
-        coordinatorContext.putTableInfo(DATA1_TABLE_INFO_PK);
-        coordinatorContext.putTablePath(DATA1_TABLE_ID_PK, DATA1_TABLE_PATH_PK);
-
-        // register a partitioned table.
-        coordinatorContext.putTableInfo(PARTITION_TABLE_INFO);
-        coordinatorContext.putTablePath(
-                PARTITION_TABLE_INFO.getTableId(), PARTITION_TABLE_INFO.getTablePath());
-        coordinatorContext.putPartition(PARTITION_ID_1, PARTITION_TABLE_PATH_1);
-        coordinatorContext.putPartition(PARTITION_ID_2, PARTITION_TABLE_PATH_2);
-    }
-
-    private Map<Long, List<KvSnapshotLeaseForBucket>> initRegisterBuckets() {
-        Map<Long, List<KvSnapshotLeaseForBucket>> tableIdToRegisterBucket = new HashMap<>();
+    private Map<Long, List<TableBucketSnapshot>> initRegisterBuckets() {
+        Map<Long, List<TableBucketSnapshot>> tableIdToRegisterBucket = new HashMap<>();
         tableIdToRegisterBucket.put(
                 DATA1_TABLE_ID_PK,
                 Arrays.asList(
-                        new KvSnapshotLeaseForBucket(t0b0, 0L),
-                        new KvSnapshotLeaseForBucket(t0b1, 0L)));
+                        new TableBucketSnapshot(t0b0, 0L), new TableBucketSnapshot(t0b1, 0L)));
         tableIdToRegisterBucket.put(
                 PARTITION_TABLE_ID,
                 Arrays.asList(
-                        new KvSnapshotLeaseForBucket(t1p0b0, 0L),
-                        new KvSnapshotLeaseForBucket(t1p0b1, 0L),
-                        new KvSnapshotLeaseForBucket(t1p1b0, 0L)));
+                        new TableBucketSnapshot(t1p0b0, 0L),
+                        new TableBucketSnapshot(t1p0b1, 0L),
+                        new TableBucketSnapshot(t1p1b0, 0L)));
         return tableIdToRegisterBucket;
     }
 
-    private boolean snapshotLeaseNotExists(List<KvSnapshotLeaseForBucket> bucketList) {
+    private boolean snapshotLeaseNotExists(List<TableBucketSnapshot> bucketList) {
         return bucketList.stream()
                 .allMatch(bucket -> kvSnapshotLeaseManager.snapshotLeaseNotExist(bucket));
     }
 
-    private boolean snapshotLeaseExists(List<KvSnapshotLeaseForBucket> bucketList) {
+    private boolean snapshotLeaseExists(List<TableBucketSnapshot> bucketList) {
         return bucketList.stream()
                 .noneMatch(bucket -> kvSnapshotLeaseManager.snapshotLeaseNotExist(bucket));
     }
 
-    private void acquire(
-            String leaseId, Map<Long, List<KvSnapshotLeaseForBucket>> tableIdToLeaseBucket)
+    private void acquire(String leaseId, Map<Long, List<TableBucketSnapshot>> tableIdToLeaseBucket)
             throws Exception {
         kvSnapshotLeaseManager.acquireLease(leaseId, 1000L, tableIdToLeaseBucket);
     }
 
-    private void release(String leaseId, Map<Long, List<TableBucket>> tableIdToReleaseBucket)
-            throws Exception {
-        kvSnapshotLeaseManager.release(leaseId, tableIdToReleaseBucket);
+    private void release(String leaseId, List<TableBucket> tableBucketsToRelease) throws Exception {
+        kvSnapshotLeaseManager.release(leaseId, tableBucketsToRelease);
     }
 
-    private long acquire(KvSnapshotLease kvSnapshotLease, KvSnapshotLeaseForBucket leaseForBucket) {
-        return kvSnapshotLease.acquireBucket(
-                leaseForBucket.getTableBucket(), leaseForBucket.getKvSnapshotId(), NUM_BUCKETS);
+    private long acquire(
+            KvSnapshotLeaseHandler kvSnapshotLeasehandle, TableBucketSnapshot leaseForBucket) {
+        return kvSnapshotLeasehandle.acquireBucket(
+                leaseForBucket.getTableBucket(), leaseForBucket.getSnapshotId());
+    }
+
+    // ------------------------------------------------------------------------
+    //  Bucket Expansion Tests
+    // ------------------------------------------------------------------------
+
+    @Test
+    void testAcquireBucketExpansionForNonPartitionedTable() throws Exception {
+        // Acquire bucket 0 for non-partitioned table → creates array of size 1
+        Map<Long, List<TableBucketSnapshot>> buckets = new HashMap<>();
+        buckets.put(
+                DATA1_TABLE_ID_PK, Collections.singletonList(new TableBucketSnapshot(t0b0, 0L)));
+        acquire("lease1", buckets);
+        assertThat(kvSnapshotLeaseManager.getLeasedBucketCount()).isEqualTo(1);
+
+        // Acquire bucket 1 → should expand array from size 1 to size 2
+        buckets = new HashMap<>();
+        buckets.put(
+                DATA1_TABLE_ID_PK, Collections.singletonList(new TableBucketSnapshot(t0b1, 0L)));
+        acquire("lease1", buckets);
+        assertThat(kvSnapshotLeaseManager.getLeasedBucketCount()).isEqualTo(2);
+
+        // Acquire bucket 5 (skipping buckets 2,3,4) → should expand array from size 2 to size 6
+        TableBucket t0b5 = new TableBucket(DATA1_TABLE_ID_PK, 5);
+        zookeeperClient.registerTableBucketSnapshot(t0b5, new BucketSnapshot(0L, 0L, "test-path"));
+        buckets = new HashMap<>();
+        buckets.put(
+                DATA1_TABLE_ID_PK, Collections.singletonList(new TableBucketSnapshot(t0b5, 0L)));
+        acquire("lease1", buckets);
+        assertThat(kvSnapshotLeaseManager.getLeasedBucketCount()).isEqualTo(3);
+
+        // Verify the array content: bucket 0,1 = 0L, bucket 2-4 = -1L, bucket 5 = 0L
+        Map<Long, KvSnapshotTableLease> tableIdToTableLease = new HashMap<>();
+        tableIdToTableLease.put(
+                DATA1_TABLE_ID_PK,
+                new KvSnapshotTableLease(
+                        DATA1_TABLE_ID_PK, new Long[] {0L, 0L, -1L, -1L, -1L, 0L}));
+        KvSnapshotLeaseHandler expectedLease =
+                new KvSnapshotLeaseHandler(manualClock.milliseconds() + 1000L, tableIdToTableLease);
+        assertThat(kvSnapshotLeaseManager.getKvSnapshotLeaseData("lease1"))
+                .isEqualTo(expectedLease);
+    }
+
+    @Test
+    void testAcquireBucketExpansionForPartitionedTable() throws Exception {
+        // Acquire partition bucket 0 → creates array of size 1
+        Map<Long, List<TableBucketSnapshot>> buckets = new HashMap<>();
+        buckets.put(
+                PARTITION_TABLE_ID, Collections.singletonList(new TableBucketSnapshot(t1p0b0, 0L)));
+        acquire("lease1", buckets);
+        assertThat(kvSnapshotLeaseManager.getLeasedBucketCount()).isEqualTo(1);
+
+        // Acquire partition bucket 3 (skipping bucket 1,2) → should expand array to size 4
+        TableBucket t1p0b3 = new TableBucket(PARTITION_TABLE_ID, PARTITION_ID_1, 3);
+        zookeeperClient.registerTableBucketSnapshot(
+                t1p0b3, new BucketSnapshot(0L, 0L, "test-path"));
+        buckets = new HashMap<>();
+        buckets.put(
+                PARTITION_TABLE_ID, Collections.singletonList(new TableBucketSnapshot(t1p0b3, 0L)));
+        acquire("lease1", buckets);
+        assertThat(kvSnapshotLeaseManager.getLeasedBucketCount()).isEqualTo(2);
+
+        // Verify the array content: bucket 0 = 0L, bucket 1,2 = -1L, bucket 3 = 0L
+        Map<Long, KvSnapshotTableLease> tableIdToTableLease = new HashMap<>();
+        KvSnapshotTableLease leaseForPartitionTable = new KvSnapshotTableLease(PARTITION_TABLE_ID);
+        leaseForPartitionTable.addPartitionSnapshots(PARTITION_ID_1, new Long[] {0L, -1L, -1L, 0L});
+        tableIdToTableLease.put(PARTITION_TABLE_ID, leaseForPartitionTable);
+        KvSnapshotLeaseHandler expectedLease =
+                new KvSnapshotLeaseHandler(manualClock.milliseconds() + 1000L, tableIdToTableLease);
+        assertThat(kvSnapshotLeaseManager.getKvSnapshotLeaseData("lease1"))
+                .isEqualTo(expectedLease);
+    }
+
+    @Test
+    void testReleaseBucketExceedingArraySize() throws Exception {
+        // Acquire bucket 0 only → array size 1
+        Map<Long, List<TableBucketSnapshot>> buckets = new HashMap<>();
+        buckets.put(
+                DATA1_TABLE_ID_PK, Collections.singletonList(new TableBucketSnapshot(t0b0, 0L)));
+        acquire("lease1", buckets);
+        assertThat(kvSnapshotLeaseManager.getLeasedBucketCount()).isEqualTo(1);
+
+        // Release bucket 1 which exceeds array size → should not affect existing leases
+        release("lease1", Collections.singletonList(t0b1));
+        assertThat(kvSnapshotLeaseManager.getLeasedBucketCount()).isEqualTo(1);
+
+        // Release bucket 0 → should remove the lease entry
+        release("lease1", Collections.singletonList(t0b0));
+        assertThat(kvSnapshotLeaseManager.getLeasedBucketCount()).isEqualTo(0);
+        assertThat(kvSnapshotLeaseManager.getLeaseCount()).isEqualTo(0);
     }
 }

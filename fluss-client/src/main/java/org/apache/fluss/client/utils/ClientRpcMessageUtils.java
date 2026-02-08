@@ -62,7 +62,6 @@ import org.apache.fluss.rpc.messages.LookupRequest;
 import org.apache.fluss.rpc.messages.MetadataRequest;
 import org.apache.fluss.rpc.messages.PbAddColumn;
 import org.apache.fluss.rpc.messages.PbAlterConfig;
-import org.apache.fluss.rpc.messages.PbBucket;
 import org.apache.fluss.rpc.messages.PbBucketOffset;
 import org.apache.fluss.rpc.messages.PbDatabaseSummary;
 import org.apache.fluss.rpc.messages.PbDescribeConfig;
@@ -84,6 +83,7 @@ import org.apache.fluss.rpc.messages.PbRebalanceProgressForBucket;
 import org.apache.fluss.rpc.messages.PbRebalanceProgressForTable;
 import org.apache.fluss.rpc.messages.PbRemotePathAndLocalFile;
 import org.apache.fluss.rpc.messages.PbRenameColumn;
+import org.apache.fluss.rpc.messages.PbTableBucket;
 import org.apache.fluss.rpc.messages.PrefixLookupRequest;
 import org.apache.fluss.rpc.messages.ProduceLogRequest;
 import org.apache.fluss.rpc.messages.PutKvRequest;
@@ -421,7 +421,7 @@ public class ClientRpcMessageUtils {
     public static AcquireKvSnapshotLeaseRequest makeAcquireKvSnapshotLeaseRequest(
             String leaseId, Map<TableBucket, Long> snapshotIds, long leaseDuration) {
         AcquireKvSnapshotLeaseRequest request = new AcquireKvSnapshotLeaseRequest();
-        request.setLeaseId(leaseId).setLeaseDuration(leaseDuration);
+        request.setLeaseId(leaseId).setLeaseDurationMs(leaseDuration);
 
         Map<Long, List<PbKvSnapshotLeaseForBucket>> pbLeaseForTables = new HashMap<>();
         for (Map.Entry<TableBucket, Long> entry : snapshotIds.entrySet()) {
@@ -441,9 +441,9 @@ public class ClientRpcMessageUtils {
 
         for (Map.Entry<Long, List<PbKvSnapshotLeaseForBucket>> entry :
                 pbLeaseForTables.entrySet()) {
-            request.addTableLeaseReq()
+            request.addSnapshotsToLease()
                     .setTableId(entry.getKey())
-                    .addAllBucketsReqs(entry.getValue());
+                    .addAllBucketSnapshots(entry.getValue());
         }
         return request;
     }
@@ -451,9 +451,11 @@ public class ClientRpcMessageUtils {
     public static AcquireKvSnapshotLeaseResult toAcquireKvSnapshotLeaseResult(
             AcquireKvSnapshotLeaseResponse response) {
         Map<TableBucket, Long> unavailableSnapshots = new HashMap<>();
-        for (PbKvSnapshotLeaseForTable leaseForTable : response.getTablesLeaseResList()) {
-            long tableId = leaseForTable.getTableId();
-            for (PbKvSnapshotLeaseForBucket leaseForBucket : leaseForTable.getBucketsReqsList()) {
+        for (PbKvSnapshotLeaseForTable unavailableSnapshot :
+                response.getUnavailableSnapshotsList()) {
+            long tableId = unavailableSnapshot.getTableId();
+            for (PbKvSnapshotLeaseForBucket leaseForBucket :
+                    unavailableSnapshot.getBucketSnapshotsList()) {
                 TableBucket tableBucket =
                         new TableBucket(
                                 tableId,
@@ -472,18 +474,17 @@ public class ClientRpcMessageUtils {
         ReleaseKvSnapshotLeaseRequest request = new ReleaseKvSnapshotLeaseRequest();
         request.setLeaseId(leaseId);
 
-        Map<Long, List<PbBucket>> pbLeasedTable = new HashMap<>();
+        List<PbTableBucket> pbTableBuckets = new ArrayList<>();
         for (TableBucket tb : bucketsToRelease) {
-            PbBucket pbBucket = new PbBucket().setBucketId(tb.getBucket());
+            PbTableBucket pbBucket =
+                    new PbTableBucket().setTableId(tb.getTableId()).setBucketId(tb.getBucket());
             if (tb.getPartitionId() != null) {
                 pbBucket.setPartitionId(tb.getPartitionId());
             }
-            pbLeasedTable.computeIfAbsent(tb.getTableId(), k -> new ArrayList<>()).add(pbBucket);
+            pbTableBuckets.add(pbBucket);
         }
 
-        for (Map.Entry<Long, List<PbBucket>> entry : pbLeasedTable.entrySet()) {
-            request.addReleaseTable().setTableId(entry.getKey()).addAllBuckets(entry.getValue());
-        }
+        request.addAllBucketsToReleases(pbTableBuckets);
         return request;
     }
 
