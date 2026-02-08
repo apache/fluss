@@ -27,9 +27,12 @@ import org.apache.fluss.security.auth.sasl.jaas.LoginManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import javax.security.sasl.SaslException;
+import javax.annotation.Nullable;
+import javax.security.auth.Subject;
 import javax.security.sasl.SaslServer;
 
+import java.io.IOException;
+import java.security.PrivilegedExceptionAction;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -46,6 +49,7 @@ public class SaslServerAuthenticator implements ServerAuthenticator {
     private static final String SERVER_AUTHENTICATOR_PREFIX = "security.sasl.";
     private final List<String> enabledMechanisms;
     private SaslServer saslServer;
+    private LoginManager loginManager;
     private final Map<String, String> configs;
 
     public SaslServerAuthenticator(Configuration configuration) {
@@ -103,7 +107,7 @@ public class SaslServerAuthenticator implements ServerAuthenticator {
         JaasContext jaasContext = JaasContext.loadServerContext(listenerName, dynamicJaasConfig);
 
         try {
-            LoginManager loginManager = LoginManager.acquireLoginManager(jaasContext);
+            loginManager = LoginManager.acquireLoginManager(jaasContext);
             saslServer =
                     createSaslServer(
                             mechanism,
@@ -131,13 +135,22 @@ public class SaslServerAuthenticator implements ServerAuthenticator {
         }
     }
 
+    @Nullable
     @Override
     public byte[] evaluateResponse(byte[] token) throws AuthenticationException {
         try {
-            return saslServer.evaluateResponse(token);
-        } catch (SaslException e) {
+            // Use Subject.doAs to bind the login subject to the current AccessControlContext.
+            // This is required for Kerberos (GSSAPI) authentication because:
+            // - GssKrb5Server.evaluateResponse() -> GSSContextImpl.acceptSecContext()
+            //   retrieves the Subject via Subject.getSubject(AccessController.getContext())
+            //   to obtain server credentials from the keytab for validating client service tickets.
+            // - Without Subject.doAs, GSSAPI cannot find the credentials and authentication fails.
+            return Subject.doAs(
+                    loginManager.subject(),
+                    (PrivilegedExceptionAction<byte[]>) () -> saslServer.evaluateResponse(token));
+        } catch (Exception e) {
             throw new AuthenticationException(
-                    String.format("Failed to evaluate SASL response，reason is %s", e.getMessage()));
+                    String.format("Failed to evaluate SASL response: %s", e.getMessage()));
         }
     }
 
@@ -149,5 +162,12 @@ public class SaslServerAuthenticator implements ServerAuthenticator {
     @Override
     public FlussPrincipal createPrincipal() {
         return new FlussPrincipal(saslServer.getAuthorizationID(), "User");
+    }
+
+    @Override
+    public void close() throws IOException {
+        if (loginManager != null) {
+            loginManager.release();
+        }
     }
 }
