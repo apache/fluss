@@ -98,7 +98,7 @@ services:
     command: coordinatorServer
     depends_on:
       - zookeeper
-      - rustfs
+      - rustfs-init
     environment:
       - |
         FLUSS_PROPERTIES=
@@ -295,7 +295,7 @@ services:
     command: coordinatorServer
     depends_on:
       - zookeeper
-      - rustfs
+      - rustfs-init
     environment:
       - |
         FLUSS_PROPERTIES=
@@ -432,7 +432,7 @@ Congratulations, you are all set!
 
 First, use the following command to enter the Flink SQL CLI Container:
 ```shell
-docker compose exec -e ROOT_LOG_LEVEL=DEBUG jobmanager ./bin/sql-client.sh
+docker compose exec jobmanager ./bin/sql-client.sh
 ```
 
 To simplify this guide, we will create three temporary tables with `faker` connector to generate data:
@@ -503,7 +503,7 @@ SET 'table.exec.sink.not-null-enforcer'='DROP';
 
 First, use the following command to enter the Flink SQL CLI Container:
 ```shell
-docker compose exec -e ROOT_LOG_LEVEL=DEBUG jobmanager ./bin/sql-client.sh
+docker compose exec jobmanager ./bin/sql-client.sh
 ```
 
 To simplify this guide, we will create three temporary tables with `faker` connector to generate data:
