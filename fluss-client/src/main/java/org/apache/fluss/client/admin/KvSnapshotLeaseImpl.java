@@ -23,13 +23,13 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.rpc.gateway.AdminGateway;
 import org.apache.fluss.rpc.messages.AcquireKvSnapshotLeaseRequest;
 import org.apache.fluss.rpc.messages.DropKvSnapshotLeaseRequest;
-import org.apache.fluss.rpc.messages.ReleaseKvSnapshotLeaseRequest;
 
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeAcquireKvSnapshotLeaseRequest;
+import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeReleaseKvSnapshotLeaseRequest;
 
 /** The default implementation of KvSnapshotLease. */
 public class KvSnapshotLeaseImpl implements KvSnapshotLease {
@@ -77,9 +77,9 @@ public class KvSnapshotLeaseImpl implements KvSnapshotLease {
 
     @Override
     public CompletableFuture<Void> releaseSnapshots(Set<TableBucket> bucketsToRelease) {
-        ReleaseKvSnapshotLeaseRequest request =
-                new ReleaseKvSnapshotLeaseRequest().setLeaseId(leaseId);
-        return gateway.releaseKvSnapshotLease(request).thenApply(r -> null);
+        return gateway.releaseKvSnapshotLease(
+                        makeReleaseKvSnapshotLeaseRequest(leaseId, bucketsToRelease))
+                .thenApply(r -> null);
     }
 
     @Override
