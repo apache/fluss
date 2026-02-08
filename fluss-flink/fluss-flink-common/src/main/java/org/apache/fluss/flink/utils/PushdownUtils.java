@@ -271,7 +271,8 @@ public class PushdownUtils {
                         tablePath,
                         sourceOutputType,
                         lookupNormalizer,
-                        projectedFields);
+                        projectedFields,
+                        false);
         try {
             // it's fine to pass null here, as we don't use it in it
             lookupFunction.open(null);

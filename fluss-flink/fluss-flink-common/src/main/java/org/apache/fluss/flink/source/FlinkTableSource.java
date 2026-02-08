@@ -123,6 +123,7 @@ public class FlinkTableSource
 
     // options for lookup source
     private final boolean lookupAsync;
+    private final boolean insertIfNotExists;
     @Nullable private final LookupCache cache;
 
     private final long scanPartitionDiscoveryIntervalMs;
@@ -161,6 +162,7 @@ public class FlinkTableSource
             boolean streaming,
             FlinkConnectorOptionsUtils.StartupOptions startupOptions,
             boolean lookupAsync,
+            boolean insertIfNotExists,
             @Nullable LookupCache cache,
             long scanPartitionDiscoveryIntervalMs,
             boolean isDataLakeEnabled,
@@ -177,6 +179,7 @@ public class FlinkTableSource
         this.startupOptions = checkNotNull(startupOptions, "startupOptions must not be null");
 
         this.lookupAsync = lookupAsync;
+        this.insertIfNotExists = insertIfNotExists;
         this.cache = cache;
 
         this.scanPartitionDiscoveryIntervalMs = scanPartitionDiscoveryIntervalMs;
@@ -385,7 +388,8 @@ public class FlinkTableSource
                             tablePath,
                             tableOutputType,
                             lookupNormalizer,
-                            projectedFields);
+                            projectedFields,
+                            insertIfNotExists);
             if (cache != null) {
                 return PartialCachingAsyncLookupProvider.of(asyncLookupFunction, cache);
             } else {
@@ -398,7 +402,8 @@ public class FlinkTableSource
                             tablePath,
                             tableOutputType,
                             lookupNormalizer,
-                            projectedFields);
+                            projectedFields,
+                            insertIfNotExists);
             if (cache != null) {
                 return PartialCachingLookupProvider.of(lookupFunction, cache);
             } else {
@@ -420,6 +425,7 @@ public class FlinkTableSource
                         streaming,
                         startupOptions,
                         lookupAsync,
+                        insertIfNotExists,
                         cache,
                         scanPartitionDiscoveryIntervalMs,
                         isDataLakeEnabled,
