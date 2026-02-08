@@ -63,6 +63,8 @@ import org.apache.fluss.server.zk.data.ZkData.ConfigEntityZNode;
 import org.apache.fluss.server.zk.data.ZkData.CoordinatorZNode;
 import org.apache.fluss.server.zk.data.ZkData.DatabaseZNode;
 import org.apache.fluss.server.zk.data.ZkData.DatabasesZNode;
+import org.apache.fluss.server.zk.data.ZkData.KvSnapshotLeaseZNode;
+import org.apache.fluss.server.zk.data.ZkData.KvSnapshotLeasesZNode;
 import org.apache.fluss.server.zk.data.ZkData.LakeTableZNode;
 import org.apache.fluss.server.zk.data.ZkData.LeaderAndIsrZNode;
 import org.apache.fluss.server.zk.data.ZkData.PartitionIdZNode;
@@ -85,6 +87,7 @@ import org.apache.fluss.server.zk.data.ZkData.TablesZNode;
 import org.apache.fluss.server.zk.data.ZkData.WriterIdZNode;
 import org.apache.fluss.server.zk.data.lake.LakeTable;
 import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
+import org.apache.fluss.server.zk.data.lease.KvSnapshotLeaseMetadata;
 import org.apache.fluss.server.zk.data.producer.ProducerOffsets;
 import org.apache.fluss.shaded.curator5.org.apache.curator.framework.CuratorFramework;
 import org.apache.fluss.shaded.curator5.org.apache.curator.framework.api.BackgroundCallback;
@@ -1037,6 +1040,36 @@ public class ZooKeeperClient implements AutoCloseable {
             snapshots.put(bucketId, optTableBucketSnapshot);
         }
         return snapshots;
+    }
+
+    public List<String> getKvSnapshotLeasesList() throws Exception {
+        return getChildren(KvSnapshotLeasesZNode.path());
+    }
+
+    public void registerKvSnapshotLeaseMetadata(
+            String leaseId, KvSnapshotLeaseMetadata leaseMetadata) throws Exception {
+        String path = KvSnapshotLeaseZNode.path(leaseId);
+        zkClient.create()
+                .creatingParentsIfNeeded()
+                .withMode(CreateMode.PERSISTENT)
+                .forPath(path, KvSnapshotLeaseZNode.encode(leaseMetadata));
+    }
+
+    public void updateKvSnapshotLeaseMetadata(String leaseId, KvSnapshotLeaseMetadata leaseMetadata)
+            throws Exception {
+        String path = KvSnapshotLeaseZNode.path(leaseId);
+        zkClient.setData().forPath(path, KvSnapshotLeaseZNode.encode(leaseMetadata));
+    }
+
+    public Optional<KvSnapshotLeaseMetadata> getKvSnapshotLeaseMetadata(String leaseId)
+            throws Exception {
+        String path = KvSnapshotLeaseZNode.path(leaseId);
+        return getOrEmpty(path).map(KvSnapshotLeaseZNode::decode);
+    }
+
+    public void deleteKvSnapshotLease(String leaseId) throws Exception {
+        String path = KvSnapshotLeaseZNode.path(leaseId);
+        zkClient.delete().forPath(path);
     }
 
     // --------------------------------------------------------------------------------------------

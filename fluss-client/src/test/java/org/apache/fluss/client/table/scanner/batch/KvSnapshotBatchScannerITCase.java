@@ -24,6 +24,7 @@ import org.apache.fluss.client.table.Table;
 import org.apache.fluss.client.table.scanner.RemoteFileDownloader;
 import org.apache.fluss.client.table.writer.UpsertWriter;
 import org.apache.fluss.client.write.HashBucketAssigner;
+import org.apache.fluss.exception.KvSnapshotLeaseNotExistException;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
@@ -34,21 +35,28 @@ import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.ProjectedRow;
 import org.apache.fluss.row.encode.CompactedKeyEncoder;
 import org.apache.fluss.row.encode.KeyEncoder;
+import org.apache.fluss.server.zk.ZooKeeperClient;
+import org.apache.fluss.server.zk.data.lease.KvSnapshotLease;
+import org.apache.fluss.server.zk.data.lease.KvSnapshotLeaseMetadataManager;
+import org.apache.fluss.server.zk.data.lease.KvSnapshotTableLease;
 import org.apache.fluss.types.DataTypes;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 import static org.apache.fluss.record.TestData.DATA1_ROW_TYPE;
 import static org.apache.fluss.testutils.DataTestUtils.compactedRow;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** IT Case for {@link KvSnapshotBatchScanner}. */
 class KvSnapshotBatchScannerITCase extends ClientToServerITCaseBase {
@@ -180,6 +188,97 @@ class KvSnapshotBatchScannerITCase extends ClientToServerITCaseBase {
         testSnapshotRead(tablePath, expectedRowByBuckets);
     }
 
+    @Test
+    public void testKvSnapshotLease() throws Exception {
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "test-kv-snapshot-lease");
+        long tableId = createTable(tablePath, DEFAULT_TABLE_DESCRIPTOR, true);
+
+        String kvSnapshotLease1 = "test-lease";
+        String kvSnapshotLease2 = "test-lease2";
+
+        // scan the snapshot
+        Map<TableBucket, List<InternalRow>> expectedRowByBuckets = putRows(tableId, tablePath, 10);
+
+        // wait snapshot finish
+        FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshots(expectedRowByBuckets.keySet());
+
+        ZooKeeperClient zkClient = FLUSS_CLUSTER_EXTENSION.getZooKeeperClient();
+        String remoteDataDir = FLUSS_CLUSTER_EXTENSION.getRemoteDataDir();
+        KvSnapshotLeaseMetadataManager metadataManager =
+                new KvSnapshotLeaseMetadataManager(zkClient, remoteDataDir);
+
+        assertThat(zkClient.getKvSnapshotLeasesList()).isEmpty();
+
+        // test register kv snapshot lease for snapshot 0.
+        Map<TableBucket, Long> consumeBuckets = new HashMap<>();
+        KvSnapshots kvSnapshots = admin.getLatestKvSnapshots(tablePath).get();
+        for (int bucketId : kvSnapshots.getBucketIds()) {
+            TableBucket tableBucket = new TableBucket(kvSnapshots.getTableId(), bucketId);
+            consumeBuckets.put(tableBucket, kvSnapshots.getSnapshotId(bucketId).getAsLong());
+        }
+        admin.acquireKvSnapshotLease(
+                        kvSnapshotLease1, consumeBuckets, Duration.ofDays(1).toMillis())
+                .get();
+        checkKvSnapshotLeaseEquals(
+                metadataManager, kvSnapshotLease1, tableId, new Long[] {0L, 0L, 0L});
+
+        expectedRowByBuckets = putRows(tableId, tablePath, 10);
+        // wait snapshot2 finish
+        FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshots(expectedRowByBuckets.keySet());
+
+        // test register kv snapshot lease for snapshot 1.
+        consumeBuckets = new HashMap<>();
+        kvSnapshots = admin.getLatestKvSnapshots(tablePath).get();
+        for (int bucketId : kvSnapshots.getBucketIds()) {
+            TableBucket tableBucket = new TableBucket(kvSnapshots.getTableId(), bucketId);
+            consumeBuckets.put(tableBucket, kvSnapshots.getSnapshotId(bucketId).getAsLong());
+        }
+        admin.acquireKvSnapshotLease(
+                        kvSnapshotLease2, consumeBuckets, Duration.ofDays(1).toMillis())
+                .get();
+        checkKvSnapshotLeaseEquals(
+                metadataManager, kvSnapshotLease2, tableId, new Long[] {1L, 1L, 1L});
+        // check even snapshot1 is generated, snapshot0 also retained as lease exists.
+        for (TableBucket tb : expectedRowByBuckets.keySet()) {
+            assertThat(zkClient.getTableBucketSnapshot(tb, 0L).isPresent()).isTrue();
+            assertThat(zkClient.getTableBucketSnapshot(tb, 1L).isPresent()).isTrue();
+        }
+
+        expectedRowByBuckets = putRows(tableId, tablePath, 10);
+        // wait snapshot3 finish
+        FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshots(expectedRowByBuckets.keySet());
+
+        // release lease1.
+        admin.releaseKvSnapshotLease(
+                        kvSnapshotLease1, Collections.singleton(new TableBucket(tableId, 0)))
+                .get();
+        checkKvSnapshotLeaseEquals(
+                metadataManager, kvSnapshotLease1, tableId, new Long[] {-1L, 0L, 0L});
+
+        // release lease2.
+        admin.releaseKvSnapshotLease(kvSnapshotLease2, consumeBuckets.keySet()).get();
+        assertThat(zkClient.getKvSnapshotLeasesList()).doesNotContain(kvSnapshotLease2);
+
+        // release all kv snapshot lease of lease1
+        admin.releaseAllKvSnapshotLease(kvSnapshotLease1).get();
+        assertThat(zkClient.getKvSnapshotLeasesList()).isEmpty();
+
+        expectedRowByBuckets = putRows(tableId, tablePath, 10);
+        // wait snapshot2 finish
+        FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshots(expectedRowByBuckets.keySet());
+        // as all leases are dropped, and new snapshot is generated, all old snapshot are
+        // cleared.
+        for (TableBucket tb : expectedRowByBuckets.keySet()) {
+            assertThat(zkClient.getTableBucketSnapshot(tb, 0L).isPresent()).isFalse();
+            assertThat(zkClient.getTableBucketSnapshot(tb, 1L).isPresent()).isFalse();
+        }
+
+        assertThatThrownBy(() -> admin.releaseAllKvSnapshotLease("no-exist-lease").get())
+                .rootCause()
+                .isInstanceOf(KvSnapshotLeaseNotExistException.class)
+                .hasMessageContaining("kv snapshot lease 'no-exist-lease' not exits");
+    }
+
     private Map<TableBucket, List<InternalRow>> putRows(
             long tableId, TablePath tablePath, int rowNumber) throws Exception {
         List<InternalRow> rows = new ArrayList<>();
@@ -237,5 +336,21 @@ class KvSnapshotBatchScannerITCase extends ClientToServerITCaseBase {
         BucketingFunction function = BucketingFunction.of(DataLakeFormat.PAIMON);
         byte[] key = bucketKeyEncoder.encodeKey(row);
         return function.bucketing(key, DEFAULT_BUCKET_NUM);
+    }
+
+    private void checkKvSnapshotLeaseEquals(
+            KvSnapshotLeaseMetadataManager metadataManager,
+            String leaseId,
+            long tableId,
+            Long[] expectedBucketIndex)
+            throws Exception {
+        assertThat(metadataManager.getLeasesList()).contains(leaseId);
+        Optional<KvSnapshotLease> leaseOpt = metadataManager.getLease(leaseId);
+        assertThat(leaseOpt).isPresent();
+        KvSnapshotLease actualLease = leaseOpt.get();
+        Map<Long, KvSnapshotTableLease> tableIdToTableLease = actualLease.getTableIdToTableLease();
+        KvSnapshotTableLease tableLease = tableIdToTableLease.get(tableId);
+        assertThat(tableLease).isNotNull();
+        assertThat(tableLease.getBucketSnapshots()).isEqualTo(expectedBucketIndex);
     }
 }

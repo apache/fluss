@@ -18,6 +18,7 @@
 package org.apache.fluss.flink.source.state;
 
 import org.apache.fluss.flink.lake.split.LakeSnapshotAndFlussLogSplit;
+import org.apache.fluss.flink.source.reader.LeaseContext;
 import org.apache.fluss.flink.source.split.HybridSnapshotLogSplit;
 import org.apache.fluss.flink.source.split.LogSplit;
 import org.apache.fluss.flink.source.split.SourceSplitBase;
@@ -27,6 +28,8 @@ import org.apache.fluss.lake.source.TestingLakeSplit;
 import org.apache.fluss.metadata.TableBucket;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -44,8 +47,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 class SourceEnumeratorStateSerializerTest {
 
-    @Test
-    void testPendingSplitsCheckpointSerde() throws Exception {
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testPendingSplitsCheckpointSerde(boolean isLogTable) throws Exception {
         FlussSourceEnumeratorStateSerializer serializer =
                 new FlussSourceEnumeratorStateSerializer(new TestingLakeSource());
 
@@ -79,9 +83,16 @@ class SourceEnumeratorStateSerializerTest {
                         lakeHybridSplitBucket, "2024-01-01", lakeSplits, 300L, Long.MIN_VALUE);
         remainingHybridLakeFlussSplits.add(lakeHybridSplit);
 
+        // Add a LeaseContext
+        LeaseContext leaseContext =
+                isLogTable ? new LeaseContext(null, null) : new LeaseContext("leaseId", 1000L);
+
         SourceEnumeratorState sourceEnumeratorState =
                 new SourceEnumeratorState(
-                        assignedBuckets, assignedPartitions, remainingHybridLakeFlussSplits);
+                        assignedBuckets,
+                        assignedPartitions,
+                        remainingHybridLakeFlussSplits,
+                        leaseContext);
 
         // serialize state with remaining hybrid lake fluss splits
         byte[] serialized = serializer.serialize(sourceEnumeratorState);
@@ -107,7 +118,8 @@ class SourceEnumeratorStateSerializerTest {
         assignedPartitions.put(1L, "partition1");
         assignedPartitions.put(2L, "partition2");
         SourceEnumeratorState sourceEnumeratorState =
-                new SourceEnumeratorState(assignedBuckets, assignedPartitions, null);
+                new SourceEnumeratorState(
+                        assignedBuckets, assignedPartitions, null, new LeaseContext(null, null));
         byte[] serialized = serializer.serializeV0(sourceEnumeratorState);
 
         // then deserialize
@@ -124,7 +136,10 @@ class SourceEnumeratorStateSerializerTest {
         remainingHybridLakeFlussSplits.add(logSplit);
         sourceEnumeratorState =
                 new SourceEnumeratorState(
-                        assignedBuckets, assignedPartitions, remainingHybridLakeFlussSplits);
+                        assignedBuckets,
+                        assignedPartitions,
+                        remainingHybridLakeFlussSplits,
+                        new LeaseContext(null, null));
 
         serialized = serializer.serializeV0(sourceEnumeratorState);
 
@@ -145,7 +160,8 @@ class SourceEnumeratorStateSerializerTest {
         assignedPartitions.put(1L, "partition1");
         assignedPartitions.put(2L, "partition2");
         SourceEnumeratorState sourceEnumeratorState =
-                new SourceEnumeratorState(assignedBuckets, assignedPartitions, null);
+                new SourceEnumeratorState(
+                        assignedBuckets, assignedPartitions, null, new LeaseContext(null, null));
         byte[] serialized = serializer.serialize(sourceEnumeratorState);
 
         // test deserialize with nonnull lake source
