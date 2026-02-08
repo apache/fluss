@@ -297,10 +297,6 @@ services:
       - zookeeper
       - rustfs
     environment:
-      - AWS_ACCESS_KEY_ID=rustfsadmin
-      - AWS_SECRET_ACCESS_KEY=rustfsadmin
-      - AWS_REGION=us-east-1
-      - AWS_ENDPOINT_URL_S3=http://rustfs:9000
       - |
         FLUSS_PROPERTIES=
         zookeeper.address: zookeeper:2181
