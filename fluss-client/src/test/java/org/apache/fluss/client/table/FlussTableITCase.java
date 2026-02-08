@@ -476,6 +476,12 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                 .hasMessageContaining(
                         "Can not perform prefix lookup on table 'test_db_1.test_invalid_prefix_lookup_2', "
                                 + "because the lookup columns [b, a] must contain all bucket keys [a, b] in order.");
+
+        assertThatThrownBy(() -> table2.newLookup().lookupBy("a", "b", "c").createLookuper())
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining(
+                        "Can not perform prefix lookup on table 'test_db_1.test_invalid_prefix_lookup_2', "
+                                + "because the lookup columns [a, b, c] equals the physical primary keys [a, b, c]. Please use primary key lookup (Lookuper without lookupBy) instead.");
     }
 
     @Test
@@ -631,6 +637,91 @@ class FlussTableITCase extends ClientToServerITCaseBase {
             {"2026-01-07", "e", 200001L, "batch1"}
         };
         verifyRecords(expectedRecords, autoIncTable, schema);
+    }
+
+    @Test
+    void testLookupWithInsertIfNotExists() throws Exception {
+        TablePath tablePath = TablePath.of("test_db_1", "test_invalid_insert_lookup_table");
+        Schema schema =
+                Schema.newBuilder()
+                        .column("a", DataTypes.INT())
+                        .column("b", DataTypes.INT())
+                        .column("c", DataTypes.INT())
+                        .column("d", new StringType(false))
+                        .primaryKey("b", "c")
+                        .enableAutoIncrement("a")
+                        .build();
+        TableDescriptor tableDescriptor = TableDescriptor.builder().schema(schema).build();
+        createTable(tablePath, tableDescriptor, false);
+        Table invalidTable = conn.getTable(tablePath);
+
+        assertThatThrownBy(
+                        () -> invalidTable.newLookup().enableInsertIfNotExists().createLookuper())
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining(
+                        "Lookup with insertIfNotExists enabled cannot be created for table 'test_db_1.test_invalid_insert_lookup_table', "
+                                + "because it contains non-nullable columns that are not primary key columns or auto increment columns: [d].");
+
+        tablePath = TablePath.of("test_db_1", "test_insert_lookup_table");
+        schema =
+                Schema.newBuilder()
+                        .column("a", DataTypes.INT())
+                        .column("b", DataTypes.INT())
+                        .column("c", DataTypes.INT())
+                        .column("d", new StringType(true))
+                        .primaryKey("b", "c")
+                        .enableAutoIncrement("a")
+                        .build();
+        tableDescriptor = TableDescriptor.builder().schema(schema).distributedBy(1, "b").build();
+        createTable(tablePath, tableDescriptor, true);
+        Table table = conn.getTable(tablePath);
+
+        // verify invalid prefix lookup with insert if not exists enabled.
+        assertThatThrownBy(
+                        () ->
+                                table.newLookup()
+                                        .lookupBy("b")
+                                        .enableInsertIfNotExists()
+                                        .createLookuper())
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining(
+                        "insertIfNotExists cannot be enabled for prefix key lookup, as currently we only support insertIfNotExists for primary key lookup");
+
+        // swap the order of lookupBy and enableInsertIfNotExists,
+        // and verify the exception is still thrown.
+        assertThatThrownBy(
+                        () ->
+                                table.newLookup()
+                                        .enableInsertIfNotExists()
+                                        .lookupBy("b")
+                                        .createLookuper())
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining(
+                        "insertIfNotExists cannot be enabled for prefix key lookup, as currently we only support insertIfNotExists for primary key lookup");
+
+        RowType rowType = schema.getRowType();
+
+        Lookuper lookuper = table.newLookup().createLookuper();
+        // make sure the key does not exist
+        assertThat(lookupRow(lookuper, row(100, 100))).isNull();
+
+        Lookuper insertLookuper = table.newLookup().enableInsertIfNotExists().createLookuper();
+        assertRowValueEquals(
+                rowType,
+                insertLookuper.lookup(row(100, 100)).get().getSingletonRow(),
+                new Object[] {1, 100, 100, null});
+
+        // lookup the same key again
+        assertRowValueEquals(
+                rowType,
+                insertLookuper.lookup(row(100, 100)).get().getSingletonRow(),
+                new Object[] {1, 100, 100, null});
+
+        // test another key
+        assertRowValueEquals(
+                rowType,
+                insertLookuper.lookup(row(200, 200)).get().getSingletonRow(),
+                new Object[] {2, 200, 200, null});
     }
 
     private void partialUpdateRecords(String[] targetColumns, Object[][] records, Table table) {
