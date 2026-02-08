@@ -508,19 +508,23 @@ class CompletedSnapshotStoreTest {
     @Test
     void testLeasedSnapshotDoesNotBlockSubsumedSnapshotCleanup() throws Exception {
         // Simulate that snapshot 1 has a lease and cannot be subsumed.
-        // The subsumption checker returns false for snapshot 1, meaning it is in-use.
+        // The snapshotInUse checker returns true for snapshot 1, meaning it is in-use.
         CompletedSnapshotStore store =
                 createCompletedSnapshotStore(
                         1,
                         defaultHandleStore,
                         Collections.emptyList(),
-                        bucket -> bucket.getSnapshotId() != 1L);
+                        bucket -> bucket.getSnapshotID() == 1L);
 
         CompletedSnapshot cp1 = getSnapshot(1L);
         CompletedSnapshot cp2 = getSnapshot(2L);
         CompletedSnapshot cp3 = getSnapshot(3L);
 
         store.add(cp1);
+        assertThat(store.getAllSnapshots()).hasSize(1);
+        assertThat(store.getAllSnapshots().get(0).getSnapshotID()).isEqualTo(1L);
+        assertThat(store.stillInUseSnapshots).isEmpty();
+
         store.add(cp2);
 
         // After adding cp1 and cp2 with maxRetain=1:
@@ -603,7 +607,7 @@ class CompletedSnapshotStoreTest {
                         Collections.emptyList(),
                         defaultHandleStore,
                         executorService,
-                        bucket -> bucket.getSnapshotId() != 1L);
+                        bucket -> bucket.getSnapshotID() == 1L);
 
         store.add(cp1);
         store.add(cp2);
@@ -670,7 +674,7 @@ class CompletedSnapshotStoreTest {
                         Collections.emptyList(),
                         defaultHandleStore,
                         executorService,
-                        bucket -> !leasedSnapshotIds.contains(bucket.getSnapshotId()));
+                        bucket -> leasedSnapshotIds.contains(bucket.getSnapshotID()));
 
         store.add(cp1);
         store.add(cp2);
@@ -685,7 +689,6 @@ class CompletedSnapshotStoreTest {
         leasedSnapshotIds.remove(1L);
 
         // Add a new snapshot to trigger the release check.
-        TestKvHandle fileC = new TestKvHandle("fileC");
         CompletedSnapshot cp3 =
                 getSnapshotWithSharedFiles(
                         3L,
@@ -710,7 +713,7 @@ class CompletedSnapshotStoreTest {
             int numToRetain,
             CompletedSnapshotHandleStore snapshotHandleStore,
             Collection<CompletedSnapshot> completedSnapshots,
-            CompletedSnapshotStore.SubsumptionChecker subsumptionChecker) {
+            CompletedSnapshotStore.SnapshotInUseChecker snapshotInUseChecker) {
 
         SharedKvFileRegistry sharedKvFileRegistry = new SharedKvFileRegistry();
         return new CompletedSnapshotStore(
@@ -719,7 +722,7 @@ class CompletedSnapshotStoreTest {
                 completedSnapshots,
                 snapshotHandleStore,
                 executorService,
-                subsumptionChecker);
+                snapshotInUseChecker);
     }
 
     private List<CompletedSnapshot> mapToCompletedSnapshot(

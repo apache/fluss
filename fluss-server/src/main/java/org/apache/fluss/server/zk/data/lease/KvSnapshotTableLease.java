@@ -17,39 +17,35 @@
 
 package org.apache.fluss.server.zk.data.lease;
 
-import org.apache.fluss.utils.MapUtils;
-
 import javax.annotation.Nullable;
 import javax.annotation.concurrent.NotThreadSafe;
 
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.Objects;
-import java.util.concurrent.ConcurrentHashMap;
 
 /** The lease of kv snapshot for a table. */
 @NotThreadSafe
 public class KvSnapshotTableLease {
     private final long tableId;
     private @Nullable Long[] bucketSnapshots;
-    private final ConcurrentHashMap<Long, Long[]> partitionSnapshots;
+    private final Map<Long, Long[]> partitionSnapshots;
 
     public KvSnapshotTableLease(long tableId) {
-        this(tableId, null, MapUtils.newConcurrentHashMap());
+        this(tableId, null, new HashMap<>());
     }
 
     public KvSnapshotTableLease(long tableId, Long[] bucketSnapshots) {
-        this(tableId, bucketSnapshots, MapUtils.newConcurrentHashMap());
+        this(tableId, bucketSnapshots, new HashMap<>());
     }
 
-    public KvSnapshotTableLease(long tableId, ConcurrentHashMap<Long, Long[]> partitionSnapshots) {
+    public KvSnapshotTableLease(long tableId, Map<Long, Long[]> partitionSnapshots) {
         this(tableId, null, partitionSnapshots);
     }
 
     public KvSnapshotTableLease(
-            long tableId,
-            @Nullable Long[] bucketSnapshots,
-            ConcurrentHashMap<Long, Long[]> partitionSnapshots) {
+            long tableId, @Nullable Long[] bucketSnapshots, Map<Long, Long[]> partitionSnapshots) {
         this.tableId = tableId;
         this.bucketSnapshots = bucketSnapshots;
         this.partitionSnapshots = partitionSnapshots;

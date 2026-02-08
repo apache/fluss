@@ -238,7 +238,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
                         ioExecutor,
                         zooKeeperClient,
                         coordinatorMetricGroup,
-                        kvSnapshotLeaseManager::snapshotLeaseNotExist);
+                        kvSnapshotLeaseManager::snapshotLeaseExist);
         this.autoPartitionManager = autoPartitionManager;
         this.lakeTableTieringManager = lakeTableTieringManager;
         this.coordinatorMetricGroup = coordinatorMetricGroup;

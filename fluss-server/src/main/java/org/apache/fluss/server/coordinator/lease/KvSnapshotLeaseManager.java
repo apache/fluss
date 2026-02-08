@@ -21,6 +21,7 @@ import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableBucketSnapshot;
 import org.apache.fluss.metrics.MetricNames;
+import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
 import org.apache.fluss.server.metrics.group.CoordinatorMetricGroup;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.lease.KvSnapshotTableLease;
@@ -143,12 +144,18 @@ public class KvSnapshotLeaseManager {
                 this::expireLeases, 0L, leaseExpirationCheckInterval, TimeUnit.MILLISECONDS);
     }
 
-    public boolean snapshotLeaseNotExist(TableBucketSnapshot tableBucketSnapshot) {
+    public boolean snapshotLeaseExist(CompletedSnapshot snapshot) {
+        TableBucketSnapshot tbs =
+                new TableBucketSnapshot(snapshot.getTableBucket(), snapshot.getSnapshotID());
+        return snapshotLeaseExist(tbs);
+    }
+
+    public boolean snapshotLeaseExist(TableBucketSnapshot tbs) {
         return inReadLock(
                 managerLock,
                 () -> {
-                    AtomicInteger count = refCount.get(tableBucketSnapshot);
-                    return count == null || count.get() <= 0;
+                    AtomicInteger count = refCount.get(tbs);
+                    return count != null && count.get() > 0;
                 });
     }
 

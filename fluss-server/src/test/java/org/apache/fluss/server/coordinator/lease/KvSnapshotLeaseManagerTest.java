@@ -413,12 +413,12 @@ public class KvSnapshotLeaseManagerTest {
 
     private boolean snapshotLeaseNotExists(List<TableBucketSnapshot> bucketList) {
         return bucketList.stream()
-                .allMatch(bucket -> kvSnapshotLeaseManager.snapshotLeaseNotExist(bucket));
+                .noneMatch(bucket -> kvSnapshotLeaseManager.snapshotLeaseExist(bucket));
     }
 
     private boolean snapshotLeaseExists(List<TableBucketSnapshot> bucketList) {
         return bucketList.stream()
-                .noneMatch(bucket -> kvSnapshotLeaseManager.snapshotLeaseNotExist(bucket));
+                .allMatch(bucket -> kvSnapshotLeaseManager.snapshotLeaseExist(bucket));
     }
 
     private void acquire(String leaseId, Map<Long, List<TableBucketSnapshot>> tableIdToLeaseBucket)
