@@ -1102,7 +1102,7 @@ public class FlussAuthorizationITCase {
         kvSnapshotLease.acquireSnapshots(snapshotIds).get();
 
         // cleanup: drop the lease using root admin
-        rootAdmin
+        guestAdmin
                 .createKvSnapshotLease("test-acquire-lease", Duration.ofDays(1).toMillis())
                 .dropLease()
                 .get();
@@ -1145,33 +1145,50 @@ public class FlussAuthorizationITCase {
 
     @Test
     void testDropKvSnapshotLease() throws Exception {
+        TableInfo tableInfo = rootAdmin.getTableInfo(DATA1_TABLE_PATH_PK).get();
+        long tableId = tableInfo.getTableId();
+        FLUSS_CLUSTER_EXTENSION.waitUntilTableReady(tableId);
+
         KvSnapshotLease kvSnapshotLease =
                 guestAdmin.createKvSnapshotLease("test-drop-lease", Duration.ofDays(1).toMillis());
+        Map<TableBucket, Long> snapshotIds = new HashMap<>();
+        snapshotIds.put(new TableBucket(tableId, 0), 0L);
 
-        // test dropKvSnapshotLease without WRITE permission on cluster resource
+        // this there is no lease exists, so no AuthorizationException should be thrown
+        kvSnapshotLease.dropLease().get();
+
+        // add READ permission to guest user on table resource
+        List<AclBinding> aclBindings =
+                Collections.singletonList(
+                        new AclBinding(
+                                Resource.table(DATA1_TABLE_PATH_PK),
+                                new AccessControlEntry(
+                                        guestPrincipal, "*", READ, PermissionType.ALLOW)));
+        rootAdmin.createAcls(aclBindings).all().get();
+        FLUSS_CLUSTER_EXTENSION.waitUntilAuthenticationSync(aclBindings, true);
+
+        // test acquireKvSnapshotLease with READ permission should succeed
+        // (no AuthorizationException should be thrown)
+        kvSnapshotLease.acquireSnapshots(snapshotIds).get();
+
+        // remove the READ permission to guest user on table resource
+        rootAdmin.dropAcls(Collections.singletonList(AclBindingFilter.ANY)).all().get();
+
+        // After removing the READ permission, AuthorizationException should be thrown
         assertThatThrownBy(() -> kvSnapshotLease.dropLease().get())
                 .rootCause()
                 .isInstanceOf(AuthorizationException.class)
                 .hasMessageContaining(
                         String.format(
-                                "Principal %s have no authorization to operate WRITE on resource Resource{type=CLUSTER, name='fluss-cluster'}",
-                                guestPrincipal));
+                                "Principal %s have no authorization to operate READ on resource Resource{type=TABLE, name='%s'}",
+                                guestPrincipal, DATA1_TABLE_PATH_PK));
 
-        // add WRITE permission to guest user on cluster resource
-        rootAdmin
-                .createAcls(
-                        Collections.singletonList(
-                                new AclBinding(
-                                        Resource.cluster(),
-                                        new AccessControlEntry(
-                                                guestPrincipal,
-                                                "*",
-                                                OperationType.WRITE,
-                                                PermissionType.ALLOW))))
-                .all()
-                .get();
+        // add READ permission to guest user on table resource
+        rootAdmin.createAcls(aclBindings).all().get();
+        FLUSS_CLUSTER_EXTENSION.waitUntilAuthenticationSync(aclBindings, true);
 
-        // test dropKvSnapshotLease with WRITE permission should succeed
+        // test dropKvSnapshotLease with READ permission should succeed
+        // (no AuthorizationException should be thrown)
         kvSnapshotLease.dropLease().get();
     }
 

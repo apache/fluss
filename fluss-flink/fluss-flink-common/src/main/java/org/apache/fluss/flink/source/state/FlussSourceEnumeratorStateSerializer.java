@@ -97,7 +97,7 @@ public class FlussSourceEnumeratorStateSerializer
         serializeRemainingHybridLakeFlussSplits(out, state);
 
         // write lease context
-        serializeLeaseContext(out, state);
+        serializeLeaseId(out, state);
 
         final byte[] result = out.getCopyOfBuffer();
         out.clear();
@@ -228,7 +228,7 @@ public class FlussSourceEnumeratorStateSerializer
                 deserializeRemainingHybridLakeFlussSplits(in);
 
         // deserialize lease context
-        LeaseContext leaseContext = deserializeLeaseContext(in);
+        LeaseContext leaseContext = deserializeLeaseId(in);
         return new SourceEnumeratorState(
                 assignBucketAndPartitions.f0,
                 assignBucketAndPartitions.f1,
@@ -288,14 +288,13 @@ public class FlussSourceEnumeratorStateSerializer
         }
     }
 
-    private void serializeLeaseContext(final DataOutputSerializer out, SourceEnumeratorState state)
+    private void serializeLeaseId(final DataOutputSerializer out, SourceEnumeratorState state)
             throws IOException {
         String leaseId = state.getLeaseId();
         out.writeUTF(leaseId);
     }
 
-    private LeaseContext deserializeLeaseContext(final DataInputDeserializer in)
-            throws IOException {
+    private LeaseContext deserializeLeaseId(final DataInputDeserializer in) throws IOException {
         String kvSnapshotLeaseId = in.readUTF();
         return new LeaseContext(
                 kvSnapshotLeaseId, LeaseContext.DEFAULT.getKvSnapshotLeaseDurationMs());

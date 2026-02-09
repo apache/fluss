@@ -143,6 +143,7 @@ import org.apache.fluss.server.coordinator.event.EventManager;
 import org.apache.fluss.server.coordinator.event.ListRebalanceProgressEvent;
 import org.apache.fluss.server.coordinator.event.RebalanceEvent;
 import org.apache.fluss.server.coordinator.event.RemoveServerTagEvent;
+import org.apache.fluss.server.coordinator.lease.KvSnapshotLeaseHandler;
 import org.apache.fluss.server.coordinator.lease.KvSnapshotLeaseManager;
 import org.apache.fluss.server.coordinator.producer.ProducerOffsetsManager;
 import org.apache.fluss.server.coordinator.rebalance.goal.Goal;
@@ -938,15 +939,28 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     @Override
     public CompletableFuture<DropKvSnapshotLeaseResponse> dropKvSnapshotLease(
             DropKvSnapshotLeaseRequest request) {
-        // Authorization: require WRITE permission on the cluster
-        if (authorizer != null) {
-            authorizer.authorize(currentSession(), OperationType.WRITE, Resource.cluster());
-        }
-
         String leaseId = request.getLeaseId();
+        // Capture session before entering async block since currentSession() is thread-local
+        Session session = authorizer != null ? currentSession() : null;
         return CompletableFuture.supplyAsync(
                 () -> {
                     try {
+                        // Authorization: require READ permission on all tables acquired by this
+                        // lease.
+                        if (authorizer != null) {
+                            Optional<KvSnapshotLeaseHandler> leaseHandlerOpt =
+                                    kvSnapshotLeaseManager.getLease(leaseId);
+
+                            if (leaseHandlerOpt.isPresent()) {
+                                KvSnapshotLeaseHandler leaseHandler = leaseHandlerOpt.get();
+                                Set<Long> tableIds = leaseHandler.getTableIdToTableLease().keySet();
+                                // Check WRITE permission for each table.
+                                for (Long tableId : tableIds) {
+                                    authorizeTableWithSession(session, OperationType.READ, tableId);
+                                }
+                            }
+                        }
+
                         DropKvSnapshotLeaseResponse response = new DropKvSnapshotLeaseResponse();
                         kvSnapshotLeaseManager.dropLease(leaseId);
                         return response;

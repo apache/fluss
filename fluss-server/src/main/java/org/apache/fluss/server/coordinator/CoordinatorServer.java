@@ -475,6 +475,11 @@ public class CoordinatorServer extends ServerBase {
                 if (lakeCatalogDynamicLoader != null) {
                     lakeCatalogDynamicLoader.close();
                 }
+
+                if (kvSnapshotLeaseManager != null) {
+                    kvSnapshotLeaseManager.close();
+                }
+
             } catch (Throwable t) {
                 exception = ExceptionUtils.firstOrSuppressed(t, exception);
             }

@@ -115,7 +115,7 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
                             streaming,
                             null,
                             null,
-                            new LeaseContext("kv_snapshot_lease", Duration.ofDays(1).toMillis()));
+                            LeaseContext.DEFAULT);
 
             enumerator.start();
 
@@ -164,7 +164,7 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
                             streaming,
                             null,
                             null,
-                            new LeaseContext("kv_snapshot_lease1", Duration.ofDays(1).toMillis()));
+                            LeaseContext.DEFAULT);
             enumerator.start();
             // register all read
             for (int i = 0; i < numSubtasks; i++) {
@@ -285,7 +285,7 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
                             streaming,
                             null,
                             null,
-                            new LeaseContext("kv_snapshot_lease1", Duration.ofDays(1).toMillis()));
+                            LeaseContext.DEFAULT);
 
             enumerator.start();
 
@@ -323,7 +323,7 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
                             streaming,
                             null,
                             null,
-                            new LeaseContext("kv_snapshot_lease1", Duration.ofDays(1).toMillis()));
+                            LeaseContext.DEFAULT);
 
             enumerator.start();
 
@@ -385,7 +385,7 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
                             streaming,
                             null,
                             null,
-                            new LeaseContext("kv_snapshot_lease1", Duration.ofDays(1).toMillis()));
+                            LeaseContext.DEFAULT);
 
             enumerator.start();
             assertThat(context.getSplitsAssignmentSequence()).isEmpty();
@@ -435,10 +435,7 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
                                 null,
                                 null,
                                 workExecutor,
-                                isPrimaryKeyTable
-                                        ? new LeaseContext(
-                                                "kv_snapshot_lease1", Duration.ofDays(1).toMillis())
-                                        : LeaseContext.DEFAULT)) {
+                                LeaseContext.DEFAULT)) {
 
             Map<Long, String> partitionNameByIds =
                     waitUntilPartitions(zooKeeperClient, DEFAULT_TABLE_PATH);
@@ -556,8 +553,7 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
                                 streaming,
                                 null,
                                 null,
-                                new LeaseContext(
-                                        "kv_snapshot_lease1", Duration.ofDays(1).toMillis()))) {
+                                LeaseContext.DEFAULT)) {
 
             // test splits for same non-partitioned bucket, should assign to same task
             TableBucket t1 = new TableBucket(tableId, 0);
@@ -671,8 +667,7 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
                                 null,
                                 lakeSource,
                                 workExecutor,
-                                new LeaseContext(
-                                        "kv_snapshot_lease1", Duration.ofDays(1).toMillis()))) {
+                                LeaseContext.DEFAULT)) {
             enumerator.start();
 
             // Remove the hybrid partition to mock expire after enumerator start

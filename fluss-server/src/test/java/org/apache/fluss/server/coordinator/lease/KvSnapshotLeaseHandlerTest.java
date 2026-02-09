@@ -35,11 +35,11 @@ public class KvSnapshotLeaseHandlerTest {
     @Test
     void testConstructorAndGetters() {
         long expirationTime = 1000L;
-        KvSnapshotLeaseHandler kvSnapshotLeasehandle = new KvSnapshotLeaseHandler(expirationTime);
+        KvSnapshotLeaseHandler kvSnapshotLeaseHandle = new KvSnapshotLeaseHandler(expirationTime);
 
-        assertThat(kvSnapshotLeasehandle.getExpirationTime()).isEqualTo(expirationTime);
-        assertThat(kvSnapshotLeasehandle.getTableIdToTableLease()).isEmpty();
-        assertThat(kvSnapshotLeasehandle.getLeasedSnapshotCount()).isEqualTo(0);
+        assertThat(kvSnapshotLeaseHandle.getExpirationTime()).isEqualTo(expirationTime);
+        assertThat(kvSnapshotLeaseHandle.getTableIdToTableLease()).isEmpty();
+        assertThat(kvSnapshotLeaseHandle.getLeasedSnapshotCount()).isEqualTo(0);
     }
 
     @Test
@@ -278,7 +278,7 @@ public class KvSnapshotLeaseHandlerTest {
     }
 
     private long acquireBucket(KvSnapshotLeaseHandler lease, TableBucket tb, long kvSnapshotId) {
-        return lease.acquireBucket(tb, kvSnapshotId);
+        return lease.acquireBucket(tb, kvSnapshotId, tb.getBucket() + 1);
     }
 
     private long releaseBucket(KvSnapshotLeaseHandler lease, TableBucket tb) {

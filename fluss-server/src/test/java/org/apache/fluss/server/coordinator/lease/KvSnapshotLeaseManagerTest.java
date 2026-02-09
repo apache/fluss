@@ -19,6 +19,7 @@ package org.apache.fluss.server.coordinator.lease;
 
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableBucketSnapshot;
+import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.server.metrics.group.TestingMetricGroups;
 import org.apache.fluss.server.zk.NOPErrorHandler;
 import org.apache.fluss.server.zk.ZooKeeperClient;
@@ -396,6 +397,88 @@ public class KvSnapshotLeaseManagerTest {
                 .isEmpty();
     }
 
+    // ------------------------------------------------------------------------
+    //  findMaxBucketNum Tests
+    // ------------------------------------------------------------------------
+
+    @Test
+    void testFindMaxBucketNumForNonPartitionedTable() {
+        Map<Long, List<TableBucketSnapshot>> tableIdToLeaseBucket = new HashMap<>();
+        // Table 1: buckets 0, 3, 1 → max bucket id = 3, max bucket num = 4
+        tableIdToLeaseBucket.put(
+                1L,
+                Arrays.asList(
+                        new TableBucketSnapshot(new TableBucket(1L, 0), 0L),
+                        new TableBucketSnapshot(new TableBucket(1L, 3), 0L),
+                        new TableBucketSnapshot(new TableBucket(1L, 1), 0L)));
+        // Table 2: bucket 5 only → max bucket num = 6
+        tableIdToLeaseBucket.put(
+                2L, Collections.singletonList(new TableBucketSnapshot(new TableBucket(2L, 5), 0L)));
+
+        Map<Long, Integer> maxBucketNum = new HashMap<>();
+        Map<TablePartition, Integer> maxBucketNumOfPt = new HashMap<>();
+        KvSnapshotLeaseManager.findMaxBucketNum(
+                tableIdToLeaseBucket, maxBucketNum, maxBucketNumOfPt);
+
+        assertThat(maxBucketNum).containsEntry(1L, 4);
+        assertThat(maxBucketNum).containsEntry(2L, 6);
+        assertThat(maxBucketNumOfPt).isEmpty();
+    }
+
+    @Test
+    void testFindMaxBucketNumForPartitionedTable() {
+        Map<Long, List<TableBucketSnapshot>> tableIdToLeaseBucket = new HashMap<>();
+        long tableId = 10L;
+        long partitionId1 = 100L;
+        long partitionId2 = 200L;
+        // Partition 100: buckets 2, 0 → max bucket id = 2, max bucket num = 3
+        // Partition 200: bucket 4 only → max bucket num = 5
+        tableIdToLeaseBucket.put(
+                tableId,
+                Arrays.asList(
+                        new TableBucketSnapshot(new TableBucket(tableId, partitionId1, 2), 0L),
+                        new TableBucketSnapshot(new TableBucket(tableId, partitionId1, 0), 0L),
+                        new TableBucketSnapshot(new TableBucket(tableId, partitionId2, 4), 0L)));
+
+        Map<Long, Integer> maxBucketNum = new HashMap<>();
+        Map<TablePartition, Integer> maxBucketNumOfPt = new HashMap<>();
+        KvSnapshotLeaseManager.findMaxBucketNum(
+                tableIdToLeaseBucket, maxBucketNum, maxBucketNumOfPt);
+
+        assertThat(maxBucketNum).isEmpty();
+        assertThat(maxBucketNumOfPt).containsEntry(new TablePartition(tableId, partitionId1), 3);
+        assertThat(maxBucketNumOfPt).containsEntry(new TablePartition(tableId, partitionId2), 5);
+    }
+
+    @Test
+    void testFindMaxBucketNumMixed() {
+        Map<Long, List<TableBucketSnapshot>> tableIdToLeaseBucket = new HashMap<>();
+        // Non-partitioned table 1: buckets 5, 1, 3 → max bucket num = 6
+        tableIdToLeaseBucket.put(
+                1L,
+                Arrays.asList(
+                        new TableBucketSnapshot(new TableBucket(1L, 5), 0L),
+                        new TableBucketSnapshot(new TableBucket(1L, 1), 0L),
+                        new TableBucketSnapshot(new TableBucket(1L, 3), 0L)));
+        // Partitioned table 2: partition 100 buckets 0, 2 → max bucket num = 3
+        long partitionId = 100L;
+        tableIdToLeaseBucket.put(
+                2L,
+                Arrays.asList(
+                        new TableBucketSnapshot(new TableBucket(2L, partitionId, 0), 0L),
+                        new TableBucketSnapshot(new TableBucket(2L, partitionId, 2), 0L)));
+
+        Map<Long, Integer> maxBucketNum = new HashMap<>();
+        Map<TablePartition, Integer> maxBucketNumOfPt = new HashMap<>();
+        KvSnapshotLeaseManager.findMaxBucketNum(
+                tableIdToLeaseBucket, maxBucketNum, maxBucketNumOfPt);
+
+        assertThat(maxBucketNum).hasSize(1).containsEntry(1L, 6);
+        assertThat(maxBucketNumOfPt)
+                .hasSize(1)
+                .containsEntry(new TablePartition(2L, partitionId), 3);
+    }
+
     private Map<Long, List<TableBucketSnapshot>> initRegisterBuckets() {
         Map<Long, List<TableBucketSnapshot>> tableIdToRegisterBucket = new HashMap<>();
         tableIdToRegisterBucket.put(
@@ -431,9 +514,10 @@ public class KvSnapshotLeaseManagerTest {
     }
 
     private long acquire(
-            KvSnapshotLeaseHandler kvSnapshotLeasehandle, TableBucketSnapshot leaseForBucket) {
-        return kvSnapshotLeasehandle.acquireBucket(
-                leaseForBucket.getTableBucket(), leaseForBucket.getSnapshotId());
+            KvSnapshotLeaseHandler kvSnapshotLeaseHandle, TableBucketSnapshot leaseForBucket) {
+        TableBucket tableBucket = leaseForBucket.getTableBucket();
+        return kvSnapshotLeaseHandle.acquireBucket(
+                tableBucket, leaseForBucket.getSnapshotId(), tableBucket.getBucket() + 1);
     }
 
     // ------------------------------------------------------------------------

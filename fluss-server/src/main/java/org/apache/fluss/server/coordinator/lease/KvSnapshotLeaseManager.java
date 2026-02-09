@@ -20,6 +20,7 @@ package org.apache.fluss.server.coordinator.lease;
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableBucketSnapshot;
+import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metrics.MetricNames;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
 import org.apache.fluss.server.metrics.group.CoordinatorMetricGroup;
@@ -199,6 +200,10 @@ public class KvSnapshotLeaseManager {
                                         }
                                     });
 
+                    Map<Long, Integer> maxBucketNumMap = new HashMap<>();
+                    Map<TablePartition, Integer> maxBucketNumOfPtMap = new HashMap<>();
+                    findMaxBucketNum(tableIdToLeaseBucket, maxBucketNumMap, maxBucketNumOfPtMap);
+
                     for (Map.Entry<Long, List<TableBucketSnapshot>> entry :
                             tableIdToLeaseBucket.entrySet()) {
                         List<TableBucketSnapshot> buckets = entry.getValue();
@@ -209,8 +214,19 @@ public class KvSnapshotLeaseManager {
                             // unavailable snapshots. Trace by:
                             // https://github.com/apache/fluss/issues/2600
 
+                            int maxBucketNum;
+                            if (tableBucket.getPartitionId() == null) {
+                                maxBucketNum = maxBucketNumMap.get(tableBucket.getTableId());
+                            } else {
+                                maxBucketNum =
+                                        maxBucketNumOfPtMap.get(
+                                                new TablePartition(
+                                                        tableBucket.getTableId(),
+                                                        tableBucket.getPartitionId()));
+                            }
                             long originalSnapshotId =
-                                    kvSnapshotLeaseHandle.acquireBucket(tableBucket, kvSnapshotId);
+                                    kvSnapshotLeaseHandle.acquireBucket(
+                                            tableBucket, kvSnapshotId, maxBucketNum);
                             if (originalSnapshotId == -1L) {
                                 leasedBucketCount.incrementAndGet();
                             } else {
@@ -261,6 +277,16 @@ public class KvSnapshotLeaseManager {
                         metadataManager.updateLease(leaseId, lease);
                     }
                 });
+    }
+
+    /**
+     * Get kv snapshot lease.
+     *
+     * @param leaseId the lease id
+     * @return the kv snapshot lease handle
+     */
+    public Optional<KvSnapshotLeaseHandler> getLease(String leaseId) throws Exception {
+        return inReadLock(managerLock, () -> metadataManager.getLease(leaseId));
     }
 
     /**
@@ -400,6 +426,35 @@ public class KvSnapshotLeaseManager {
         // TODO register as table or bucket level.
         coordinatorMetricGroup.gauge(
                 MetricNames.LEASED_KV_SNAPSHOT_COUNT, this::getLeasedBucketCount);
+    }
+
+    @VisibleForTesting
+    static void findMaxBucketNum(
+            Map<Long, List<TableBucketSnapshot>> tableIdToLeaseBucket,
+            Map<Long, Integer> maxBucketNum,
+            Map<TablePartition, Integer> maxBucketNumOfPartitionedTable) {
+        for (Map.Entry<Long, List<TableBucketSnapshot>> entry : tableIdToLeaseBucket.entrySet()) {
+            List<TableBucketSnapshot> buckets = entry.getValue();
+            for (TableBucketSnapshot bucket : buckets) {
+                TableBucket tableBucket = bucket.getTableBucket();
+                Long partitionId = tableBucket.getPartitionId();
+                if (partitionId == null) {
+                    maxBucketNum.merge(
+                            tableBucket.getTableId(), tableBucket.getBucket() + 1, Math::max);
+                } else {
+                    maxBucketNumOfPartitionedTable.merge(
+                            new TablePartition(tableBucket.getTableId(), partitionId),
+                            tableBucket.getBucket() + 1,
+                            Math::max);
+                }
+            }
+        }
+    }
+
+    public void close() {
+        if (scheduledExecutor != null) {
+            scheduledExecutor.shutdown();
+        }
     }
 
     @VisibleForTesting

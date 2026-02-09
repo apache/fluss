@@ -107,7 +107,6 @@ public class FlinkSourceEnumerator
     private final boolean hasPrimaryKey;
     private final boolean isPartitioned;
     private final Configuration flussConf;
-    private final boolean isStreaming;
 
     private final SplitEnumeratorContext<SourceSplitBase> context;
 
@@ -260,7 +259,6 @@ public class FlinkSourceEnumerator
         this.lakeSource = lakeSource;
         this.workerExecutor = workerExecutor;
         this.leaseContext = leaseContext;
-        this.isStreaming = streaming;
     }
 
     @Override
@@ -581,7 +579,6 @@ public class FlinkSourceEnumerator
                         kvSnapshotLeaseId,
                         PhysicalTablePath.of(tablePath, partitionName));
                 long kvSnapshotLeaseDurationMs = leaseContext.getKvSnapshotLeaseDurationMs();
-                checkNotNull(kvSnapshotLeaseDurationMs, "kv snapshot lease duration is null.");
                 Set<TableBucket> unavailableTableBucketSet =
                         flussAdmin
                                 .createKvSnapshotLease(kvSnapshotLeaseId, kvSnapshotLeaseDurationMs)
@@ -589,7 +586,7 @@ public class FlinkSourceEnumerator
                                 .get()
                                 .getUnavailableTableBucketSet();
                 if (!unavailableTableBucketSet.isEmpty()) {
-                    LOG.info(
+                    LOG.error(
                             "Failed to acquire kv snapshot lease for table {}: {}.",
                             tablePath,
                             unavailableTableBucketSet);
@@ -1056,7 +1053,9 @@ public class FlinkSourceEnumerator
         try {
             closed = true;
 
-            if (!isStreaming) {
+            if (!streaming
+                    && hasPrimaryKey
+                    && startingOffsetsInitializer instanceof SnapshotOffsetsInitializer) {
                 // drop the kv snapshot lease for the batch mode.
                 flussAdmin
                         .createKvSnapshotLease(

@@ -58,15 +58,15 @@ public class KvSnapshotLeaseHandler {
     }
 
     /**
-     * Acquire a bucket to the lease id. If the bucket array already exists but is too small to
-     * accommodate the given bucket id, the array will be dynamically expanded to {@code bucketId +
-     * 1}.
+     * Acquire a bucket to the lease id. If the bucket array already exists but is smaller than
+     * maxBucketNum, the array will be dynamically expanded to {@code maxBucketNum}.
      *
      * @param tableBucket table bucket
      * @param snapshotId snapshot id
+     * @param maxBucketNum the max bucket num
      * @return the original registered snapshotId. if -1 means the bucket is new registered
      */
-    public long acquireBucket(TableBucket tableBucket, long snapshotId) {
+    public long acquireBucket(TableBucket tableBucket, long snapshotId, int maxBucketNum) {
         Long[] bucketSnapshot;
         Long partitionId = tableBucket.getPartitionId();
         long tableId = tableBucket.getTableId();
@@ -77,15 +77,15 @@ public class KvSnapshotLeaseHandler {
                     tableIdToTableLease.computeIfAbsent(
                             tableId,
                             k -> {
-                                Long[] array = new Long[bucketId + 1];
+                                Long[] array = new Long[maxBucketNum];
                                 Arrays.fill(array, -1L);
                                 return new KvSnapshotTableLease(tableId, array);
                             });
             bucketSnapshot = tableLease.getBucketSnapshots();
-            // Dynamically expand the array if the bucket id exceeds the current array size.
+            // Dynamically expand the array if the maxBucketNum exceeds the current array size.
             // This can happen when new buckets are added to an existing table.
-            if (bucketSnapshot != null && bucketId >= bucketSnapshot.length) {
-                bucketSnapshot = expandArray(bucketSnapshot, bucketId + 1);
+            if (bucketSnapshot != null && maxBucketNum > bucketSnapshot.length) {
+                bucketSnapshot = expandArray(bucketSnapshot, maxBucketNum);
                 tableLease.setBucketSnapshots(bucketSnapshot);
             }
         } else {
@@ -101,13 +101,13 @@ public class KvSnapshotLeaseHandler {
                     partitionSnapshots.computeIfAbsent(
                             partitionId,
                             k -> {
-                                Long[] array = new Long[bucketId + 1];
+                                Long[] array = new Long[maxBucketNum];
                                 Arrays.fill(array, -1L);
                                 return array;
                             });
-            // Dynamically expand the array if the bucket id exceeds the current array size.
-            if (bucketId >= bucketSnapshot.length) {
-                bucketSnapshot = expandArray(bucketSnapshot, bucketId + 1);
+            // Dynamically expand the array if the maxBucketNum exceeds the current array size.
+            if (maxBucketNum > bucketSnapshot.length) {
+                bucketSnapshot = expandArray(bucketSnapshot, maxBucketNum);
                 partitionSnapshots.put(partitionId, bucketSnapshot);
             }
         }

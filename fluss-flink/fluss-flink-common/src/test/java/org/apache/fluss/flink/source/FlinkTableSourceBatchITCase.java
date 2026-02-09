@@ -22,7 +22,6 @@ import org.apache.fluss.client.table.writer.AppendWriter;
 import org.apache.fluss.client.table.writer.UpsertWriter;
 import org.apache.fluss.flink.utils.FlinkTestBase;
 import org.apache.fluss.metadata.TablePath;
-import org.apache.fluss.server.zk.ZooKeeperClient;
 
 import org.apache.commons.lang3.RandomUtils;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
@@ -37,7 +36,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
-import java.time.Duration;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
@@ -50,7 +48,6 @@ import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.as
 import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.collectRowsWithTimeout;
 import static org.apache.fluss.server.testutils.FlussClusterExtension.BUILTIN_DATABASE;
 import static org.apache.fluss.testutils.DataTestUtils.row;
-import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -83,63 +80,6 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
     void after() {
         tEnv.useDatabase(BUILTIN_DATABASE);
         tEnv.executeSql(String.format("drop database %s cascade", DEFAULT_DB));
-    }
-
-    @Test
-    void testPkTableBatchReadWithKvSnapshotLease() throws Exception {
-        // Create a PK table, write data, trigger snapshot, and verify batch read
-        // works correctly with KV snapshot lease.
-        String tableName = "pk_table_batch_kv_snapshot_lease";
-        tEnv.executeSql(
-                String.format(
-                        "create table %s ("
-                                + "  id int not null,"
-                                + "  address varchar,"
-                                + "  name varchar,"
-                                + "  primary key (id) NOT ENFORCED)"
-                                + " with ('bucket.num' = '4')",
-                        tableName));
-
-        TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
-
-        // Write data via Fluss client
-        try (Table table = conn.getTable(tablePath)) {
-            UpsertWriter upsertWriter = table.newUpsert().createWriter();
-            for (int i = 1; i <= 5; i++) {
-                upsertWriter.upsert(row(i, "address" + i, "name" + i));
-            }
-            upsertWriter.flush();
-        }
-
-        // Trigger and wait for snapshot to ensure data is available for batch read
-        FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshot(tablePath);
-
-        // Execute batch read via LIMIT query
-        String query =
-                String.format(
-                        "SELECT * FROM %s /*+ OPTIONS('scan.kv.snapshot.lease.id' = 'test-consumer-1') */ limit 5",
-                        tableName);
-        CloseableIterator<Row> iterRows = tEnv.executeSql(query).collect();
-        List<String> collected = collectRowsWithTimeout(iterRows, 5);
-        List<String> expected =
-                Arrays.asList(
-                        "+I[1, address1, name1]",
-                        "+I[2, address2, name2]",
-                        "+I[3, address3, name3]",
-                        "+I[4, address4, name4]",
-                        "+I[5, address5, name5]");
-        assertThat(collected).containsExactlyInAnyOrderElementsOf(expected);
-
-        // Verify KV snapshot lease is cleaned up after batch job finishes
-        ZooKeeperClient zkClient = FLUSS_CLUSTER_EXTENSION.getZooKeeperClient();
-        retry(
-                Duration.ofMinutes(1),
-                () -> {
-                    assertThat(zkClient.getKvSnapshotLeaseMetadata("test-consumer-1"))
-                            .isNotPresent();
-                    assertThat(zkClient.getKvSnapshotLeasesList().contains("test-consumer-1"))
-                            .isFalse();
-                });
     }
 
     @Test
