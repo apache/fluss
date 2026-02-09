@@ -1,4 +1,4 @@
-# Fluss Documentation Generator
+# Apache Fluss Documentation Generator
 
 This module contains utilities to automatically generate documentation parts from the Fluss source code. This ensures that the documentation stays in sync with the actual implementation, default values, and configuration types.
 
@@ -7,13 +7,19 @@ This module contains utilities to automatically generate documentation parts fro
 The `ConfigOptionsDocGenerator` scans the `ConfigOptions` class and generates an MDX partial file containing categorized documentation of all available settings.
 
 ### How it works
-1. It uses reflection to find all `ConfigOption` fields in the `ConfigOptions` class.
-2. It groups options into sections based on the `@ConfigSection` annotation or key prefixes (Server, Client, Table).
-3. It handles special default value formatting via `@ConfigOverrideDefault`.
-4. It cleanses descriptions (escaping characters like `{` or `<`) and normalizes types (e.g., `Int`, `Duration`, `MemorySize`) for MDX compatibility.
-5. It outputs an MDX partial file (`_partial_config.mdx`) with unique anchors (`{#key-name}`) to the `website/docs/_configs/` directory.
+1. MDX Partial Strategy: the tool produces a reusable _partial_config.mdx file. This allows Docusaurus to treat the configuration list as a React component that can be embedded anywhere.
 
-### Running the Generator
+2. Logical Grouping: Uses the @Documentation.Section annotation to categorize options into sections (e.g., Client, Server, Tablet Server) that match the existing Fluss documentation hierarchy.
+
+3. Environment-Agnostic Defaults: Implements @Documentation.OverrideDefault to replace system-specific values (like local /tmp paths) with documentation-friendly placeholders.
+
+4. Type Awareness: Automatically extracts and formats complex types such as Duration, MemorySize, and Boolean.
+
+5. JSX Safety: Handles character escaping for symbols like { and < to prevent React hydration errors during the website build.
+
+6. Output: It produces an MDX partial file (`_partial_config.mdx`) with unique anchors (`{#key-name}`) to the `website/docs/_configs/` directory.
+
+### Running the Generator   
 
 To update the configuration documentation, run the following command from the project root:
 
