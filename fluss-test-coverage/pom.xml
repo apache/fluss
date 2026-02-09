@@ -378,6 +378,7 @@
                                         <exclude>org.apache.fluss.config.cluster.AlterConfig</exclude>
                                         <!-- can be removed once we upgrade arrow to 16.0+ -->
                                         <exclude>org.apache.fluss.shaded.arrow.org.apache.arrow.vector.util.*</exclude>
+                                        <exclude>org.apache.fluss.security.auth.sasl.jaas.DefaultLogin.KerberosRefreshThread</exclude>
                                         <!-- start exclude for flink-connector -->
                                         <exclude>org.apache.fluss.flink.utils.*</exclude>
                                         <exclude>org.apache.fluss.flink.source.*

@@ -30,8 +30,10 @@ import org.apache.fluss.security.acl.FlussPrincipal;
 import org.apache.fluss.security.acl.OperationType;
 import org.apache.fluss.security.acl.PermissionType;
 import org.apache.fluss.security.acl.Resource;
+import org.apache.fluss.security.auth.sasl.gssapi.FlussMiniKdc;
 import org.apache.fluss.security.auth.sasl.jaas.LoginManager;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
+import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.ParentResourceBlockingClassLoader;
 import org.apache.fluss.utils.TemporaryClassLoaderContext;
 
@@ -41,6 +43,7 @@ import org.apache.flink.table.api.TableEnvironment;
 import org.apache.flink.test.util.AbstractTestBase;
 import org.apache.flink.types.Row;
 import org.apache.flink.util.CollectionUtil;
+import org.apache.hadoop.minikdc.MiniKdc;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -49,10 +52,16 @@ import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
+import java.io.File;
 import java.net.URL;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.List;
+import java.util.Properties;
+import java.util.UUID;
 import java.util.concurrent.ExecutionException;
 
 import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.assertQueryResultExactOrder;
@@ -130,6 +139,208 @@ abstract class FlinkAuthorizationITCase extends AbstractTestBase {
     @AfterEach
     void after() throws ExecutionException, InterruptedException {
         dropAcl(Resource.any(), OperationType.ANY);
+    }
+
+    /** Tests Kerberos (GSSAPI) authorization. */
+    @Test
+    void testKerberosAuthorization() throws Exception {
+        // Initialize and start a MiniKDC
+        Properties kdcConf = MiniKdc.createConf();
+        FlussMiniKdc kdc = new FlussMiniKdc(kdcConf);
+        kdc.start();
+
+        // Prepare workspace for keytab and krb5.conf
+        Path tempDir = Files.createTempDirectory("fluss-gssapi-test-" + UUID.randomUUID());
+        File workDir = tempDir.toFile();
+        File keytab = new File(workDir, "fluss.keytab");
+        File krb5Conf = kdc.getKrb5Conf();
+
+        try {
+            // Create principal for server and client
+            // Format
+            // - server: service/hostname
+            // - client: username
+            kdc.createPrincipal(keytab, "fluss/127.0.0.1", "client");
+
+            // Customize krb5.conf to enforce TCP and correct realm settings if necessary.
+            if (krb5Conf.exists()) {
+                String krb5Content =
+                        "[libdefaults]\n"
+                                + "    default_realm = "
+                                + kdc.getRealm()
+                                + "\n"
+                                + "    udp_preference_limit = 1\n"
+                                + "    kdc_tcp_port = "
+                                + kdc.getPort()
+                                + "\n"
+                                + "\n"
+                                + "[realms]\n"
+                                + "    "
+                                + kdc.getRealm()
+                                + " = {\n"
+                                + "        kdc = 127.0.0.1:"
+                                + kdc.getPort()
+                                + "\n"
+                                + "        admin_server = 127.0.0.1:"
+                                + kdc.getPort()
+                                + "\n"
+                                + "    }\n";
+
+                File customKrb5Conf =
+                        new File(workDir, "krb5-custom-" + UUID.randomUUID() + ".conf");
+                Files.write(customKrb5Conf.toPath(), krb5Content.getBytes());
+                System.setProperty("java.security.krb5.conf", customKrb5Conf.getAbsolutePath());
+            }
+
+            String realm = kdc.getRealm();
+            String serverPrincipal = String.format("fluss/127.0.0.1@%s", realm);
+            String clientPrincipal = String.format("client@%s", realm);
+
+            // Configure Fluss Cluster
+            Configuration serverConf = initConfig();
+            serverConf.setString(ConfigOptions.SERVER_SECURITY_PROTOCOL_MAP.key(), "CLIENT:sasl");
+            serverConf.setString(
+                    ConfigOptions.SERVER_SASL_ENABLED_MECHANISMS_CONFIG.key(), "GSSAPI");
+
+            String serverJaas =
+                    String.format(
+                            "com.sun.security.auth.module.Krb5LoginModule required "
+                                    + "useKeyTab=true storeKey=true useTicketCache=false "
+                                    + "keyTab=\"%s\" principal=\"%s\";",
+                            keytab.getAbsolutePath(), serverPrincipal);
+            serverConf.setString("security.sasl.gssapi.jaas.config", serverJaas);
+
+            // Grant Super User privileges to client principal
+            serverConf.set(
+                    ConfigOptions.SUPER_USERS,
+                    "User:"
+                            + clientPrincipal
+                            + ";User:"
+                            + clientPrincipal.toLowerCase()
+                            + ";User:client");
+            // Enable authorization to ensure permissions are actually checked.
+            serverConf.set(ConfigOptions.AUTHORIZER_ENABLED, true);
+
+            // Create Fluss cluster with the secure configuration
+            final FlussClusterExtension kerberosFluss =
+                    FlussClusterExtension.builder()
+                            .setNumOfTabletServers(3)
+                            // Use 127.0.0.1 listeners to match kerberos service principal hostname
+                            .setCoordinatorServerListeners(
+                                    "FLUSS://127.0.0.1:0, CLIENT://127.0.0.1:0")
+                            .setTabletServerListeners("FLUSS://127.0.0.1:0, CLIENT://127.0.0.1:0")
+                            .setClusterConf(serverConf)
+                            .build();
+            try {
+                // Start Fluss cluster
+                kerberosFluss.start();
+
+                Configuration clientConf = kerberosFluss.getClientConfig("CLIENT");
+                String bootstrapServers =
+                        String.join(",", clientConf.get(ConfigOptions.BOOTSTRAP_SERVERS));
+
+                TableEnvironment tEnv =
+                        TableEnvironment.create(EnvironmentSettings.inStreamingMode());
+
+                String clientJaas =
+                        String.format(
+                                "com.sun.security.auth.module.Krb5LoginModule required "
+                                        + "useKeyTab=true storeKey=true useTicketCache=false "
+                                        + "keyTab=\"%s\" principal=\"%s\";",
+                                keytab.getAbsolutePath(), clientPrincipal);
+
+                // Create a Flink catalog configured with Kerberos credentials.
+                String createCatalogDDL =
+                        String.format(
+                                "create catalog kerberos_catalog with ( \n"
+                                        + "'type' = 'fluss', \n"
+                                        + "'bootstrap.servers' = '%s', \n"
+                                        + "'client.security.protocol' = 'sasl', \n"
+                                        + "'client.security.sasl.mechanism' = 'GSSAPI', \n"
+                                        + "'client.security.sasl.jaas.config' = '%s' \n"
+                                        + ")",
+                                bootstrapServers, clientJaas);
+                tEnv.executeSql(createCatalogDDL).await();
+                tEnv.executeSql("use catalog kerberos_catalog").await();
+
+                // Perform a privileged operation. This verifies that the client is authenticated
+                // AND authorized
+                String testDB = "test_auth_db";
+                tEnv.executeSql("create database " + testDB).await();
+
+                // Verify the operation by listing databases.
+                org.apache.fluss.testutils.common.CommonTestUtils.retry(
+                        java.time.Duration.ofSeconds(60), // Rerty timeout 60s
+                        () -> {
+                            List<Row> databases =
+                                    CollectionUtil.iteratorToList(
+                                            tEnv.executeSql("show databases").collect());
+                            assertThat(databases).contains(Row.of(testDB));
+                        });
+
+                // Test: Invalid credentials should fail
+                String invalidPrincipal = String.format("nonexistent@%s", realm);
+                String invalidJaas =
+                        String.format(
+                                "com.sun.security.auth.module.Krb5LoginModule required "
+                                        + "useKeyTab=true storeKey=true useTicketCache=false "
+                                        + "keyTab=\"%s\" principal=\"%s\";",
+                                keytab.getAbsolutePath(), invalidPrincipal);
+
+                String createInvalidCatalogDDL =
+                        String.format(
+                                "create catalog invalid_kerberos_catalog with ( \n"
+                                        + "'type' = 'fluss', \n"
+                                        + "'bootstrap.servers' = '%s', \n"
+                                        + "'client.security.protocol' = 'sasl', \n"
+                                        + "'client.security.sasl.mechanism' = 'GSSAPI', \n"
+                                        + "'client.security.sasl.jaas.config' = '%s' \n"
+                                        + ")",
+                                bootstrapServers, invalidJaas);
+
+                assertThatThrownBy(
+                                () -> {
+                                    tEnv.executeSql(createInvalidCatalogDDL).await();
+                                    tEnv.executeSql("use catalog invalid_kerberos_catalog").await();
+                                    tEnv.executeSql("show databases").await();
+                                })
+                        .hasRootCauseInstanceOf(javax.security.auth.login.LoginException.class);
+
+                // Test: keytab/principal config options
+                String keytabPrincipalCatalogDDL =
+                        String.format(
+                                "create catalog keytab_principal_catalog with ( \n"
+                                        + "'type' = 'fluss', \n"
+                                        + "'bootstrap.servers' = '%s', \n"
+                                        + "'client.security.protocol' = 'sasl', \n"
+                                        + "'client.security.sasl.mechanism' = 'GSSAPI', \n"
+                                        + "'client.security.kerberos.keytab' = '%s', \n"
+                                        + "'client.security.kerberos.principal' = '%s' \n"
+                                        + ")",
+                                bootstrapServers, keytab.getAbsolutePath(), clientPrincipal);
+
+                tEnv.executeSql(keytabPrincipalCatalogDDL).await();
+                tEnv.executeSql("use catalog keytab_principal_catalog").await();
+
+                String keytabTestDB = "test_keytab_principal_db";
+                tEnv.executeSql("create database " + keytabTestDB).await();
+
+                org.apache.fluss.testutils.common.CommonTestUtils.retry(
+                        java.time.Duration.ofSeconds(60),
+                        () -> {
+                            List<Row> databases =
+                                    CollectionUtil.iteratorToList(
+                                            tEnv.executeSql("show databases").collect());
+                            assertThat(databases).contains(Row.of(keytabTestDB));
+                        });
+            } finally {
+                kerberosFluss.close();
+            }
+        } finally {
+            kdc.stop();
+            System.clearProperty("java.security.krb5.conf");
+            FileUtils.deleteDirectory(workDir);
+        }
     }
 
     @Test

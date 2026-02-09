@@ -246,6 +246,22 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
                     }
                 });
 
+        // generate JAAS config if keytab and principal are present in flink table options
+        String keytab = tableOptions.get(FlinkConnectorOptions.CLIENT_KERBEROS_KEYTAB.key());
+        String principal = tableOptions.get(FlinkConnectorOptions.CLIENT_KERBEROS_PRINCIPAL.key());
+
+        if (keytab != null
+                && principal != null
+                && !flussConfig.containsKey(ConfigOptions.CLIENT_SASL_JAAS_CONFIG.key())) {
+            String jaasConfig =
+                    String.format(
+                            "com.sun.security.auth.module.Krb5LoginModule required "
+                                    + "useKeyTab=true storeKey=true useTicketCache=false "
+                                    + "keyTab=\"%s\" principal=\"%s\";",
+                            keytab, principal);
+            flussConfig.setString(ConfigOptions.CLIENT_SASL_JAAS_CONFIG.key(), jaasConfig);
+        }
+
         // Todo support LookupOptions.MAX_RETRIES. Currently, Fluss doesn't support connector level
         // retry. The option 'client.lookup.max-retries' is only for dealing with the
         // RetriableException return by server not all exceptions. Trace by:

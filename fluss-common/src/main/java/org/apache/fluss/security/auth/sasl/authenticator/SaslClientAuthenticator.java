@@ -25,11 +25,14 @@ import org.apache.fluss.security.auth.sasl.jaas.LoginManager;
 import org.apache.fluss.security.auth.sasl.plain.PlainSaslServer;
 
 import javax.annotation.Nullable;
+import javax.security.auth.Subject;
 import javax.security.auth.login.LoginException;
 import javax.security.sasl.SaslClient;
 
+import java.security.PrivilegedExceptionAction;
 import java.util.Map;
 
+import static org.apache.fluss.config.ConfigOptions.CLIENT_KERBEROS_SERVICE_NAME;
 import static org.apache.fluss.config.ConfigOptions.CLIENT_SASL_JAAS_CONFIG;
 import static org.apache.fluss.config.ConfigOptions.CLIENT_SASL_JAAS_PASSWORD;
 import static org.apache.fluss.config.ConfigOptions.CLIENT_SASL_JAAS_USERNAME;
@@ -43,12 +46,14 @@ public class SaslClientAuthenticator implements ClientAuthenticator {
     private final String mechanism;
     private final Map<String, String> pros;
     private final String jaasConfig;
+    private final String serviceName;
 
     private SaslClient saslClient;
     private LoginManager loginManager;
 
     public SaslClientAuthenticator(Configuration configuration) {
         this.mechanism = configuration.get(CLIENT_SASL_MECHANISM).toUpperCase();
+        this.serviceName = configuration.get(CLIENT_KERBEROS_SERVICE_NAME);
         String jaasConfigStr = configuration.getString(CLIENT_SASL_JAAS_CONFIG);
         if (jaasConfigStr == null && mechanism.equals(PlainSaslServer.PLAIN_MECHANISM)) {
             String username = configuration.get(CLIENT_SASL_JAAS_USERNAME);
@@ -77,7 +82,15 @@ public class SaslClientAuthenticator implements ClientAuthenticator {
     @Override
     public byte[] authenticate(byte[] data) throws AuthenticationException {
         try {
-            return saslClient.evaluateChallenge(data);
+            // Use Subject.doAs to bind the login subject to the current AccessControlContext.
+            // This is required for Kerberos (GSSAPI) authentication because:
+            // - GssKrb5Client.evaluateChallenge() -> GSSContextImpl.initSecContext()
+            //   retrieves the Subject via Subject.getSubject(AccessController.getContext())
+            //   to obtain Kerberos credentials (TGT and service tickets).
+            // - Without Subject.doAs, GSSAPI cannot find the credentials and authentication fails.
+            return Subject.doAs(
+                    loginManager.subject(),
+                    (PrivilegedExceptionAction<byte[]>) () -> saslClient.evaluateChallenge(data));
         } catch (Exception e) {
             throw new AuthenticationException("Failed to evaluate SASL challenge", e);
         }
@@ -105,7 +118,7 @@ public class SaslClientAuthenticator implements ClientAuthenticator {
         }
 
         try {
-            saslClient = createSaslClient(mechanism, hostAddress, pros, loginManager);
+            saslClient = createSaslClient(mechanism, hostAddress, pros, loginManager, serviceName);
         } catch (Exception e) {
             throw new AuthenticationException("Failed to create SASL client", e);
         }

@@ -180,6 +180,21 @@ public class FlinkCatalog extends AbstractCatalog {
         flussConfigs.put(ConfigOptions.BOOTSTRAP_SERVERS.key(), bootstrapServers);
         flussConfigs.putAll(securityConfigs);
 
+        // Generate JAAS config if keytab and principal are present but jaas.config is not
+        String keytab = securityConfigs.get("client.security.kerberos.keytab");
+        String principal = securityConfigs.get("client.security.kerberos.principal");
+        if (keytab != null
+                && principal != null
+                && !flussConfigs.containsKey(ConfigOptions.CLIENT_SASL_JAAS_CONFIG.key())) {
+            String jaasConfig =
+                    String.format(
+                            "com.sun.security.auth.module.Krb5LoginModule required "
+                                    + "useKeyTab=true storeKey=true useTicketCache=false "
+                                    + "keyTab=\"%s\" principal=\"%s\";",
+                            keytab, principal);
+            flussConfigs.put(ConfigOptions.CLIENT_SASL_JAAS_CONFIG.key(), jaasConfig);
+        }
+
         connection = ConnectionFactory.createConnection(Configuration.fromMap(flussConfigs));
         admin = connection.getAdmin();
         if (!databaseExists(defaultDatabase)) {

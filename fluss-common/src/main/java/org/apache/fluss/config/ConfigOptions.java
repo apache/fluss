@@ -1232,7 +1232,8 @@ public class ConfigOptions {
                     .stringType()
                     .defaultValue("PLAIN")
                     .withDescription(
-                            "SASL mechanism to use for authentication.Currently, we only support plain.");
+                            "SASL mechanism to use for authentication. "
+                                    + "Currently, we only support PLAIN and GSSAPI (Kerberos).");
 
     public static final ConfigOption<String> CLIENT_SASL_JAAS_CONFIG =
             key("client.security.sasl.jaas.config")
@@ -1259,6 +1260,14 @@ public class ConfigOptions {
                             "The username to use for client-side SASL JAAS authentication. "
                                     + "This is used when the client connects to the Fluss cluster with SASL authentication enabled. "
                                     + "If not provided, the password will be read from the JAAS configuration string specified by `client.security.sasl.jaas.config`.");
+
+    public static final ConfigOption<String> CLIENT_KERBEROS_SERVICE_NAME =
+            key("client.security.kerberos.service.name")
+                    .stringType()
+                    .defaultValue("fluss")
+                    .withDescription(
+                            "The Kerberos principal name that the server runs as. This can be defined either in "
+                                    + "Fluss's JAAS config or in Fluss's config.");
 
     // ------------------------------------------------------------------------
     //  ConfigOptions for Fluss Table
