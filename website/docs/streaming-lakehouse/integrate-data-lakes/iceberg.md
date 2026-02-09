@@ -56,6 +56,46 @@ datalake.iceberg.catalog-impl: <your_iceberg_catalog_impl_class_name>
 datalake.iceberg.catalog-impl: org.apache.iceberg.snowflake.SnowflakeCatalog
 ```
 
+#### Example: Hive Metastore Catalog
+
+**Server Configuration (`server.yaml`):**
+```yaml
+datalake.format: iceberg
+datalake.iceberg.type: hive
+datalake.iceberg.uri: thrift://<hive-metastore-host>:9083
+datalake.iceberg.warehouse: hdfs:///path/to/iceberg/warehouse
+```
+
+**Required Dependencies:**
+
+| Location | JARs |
+|----------|------|
+| `${FLUSS_HOME}/plugins/iceberg/` | `iceberg-hive-metastore-1.10.1.jar` |
+| `${FLINK_HOME}/lib/` (for tiering) | `iceberg-hive-metastore-1.10.1.jar`, Hive client JARs (`hive-metastore-*.jar`, `libfb303-*.jar`) |
+
+```bash
+# Download Iceberg Hive Metastore JAR
+wget https://repo1.maven.org/maven2/org/apache/iceberg/iceberg-hive-metastore/1.10.1/iceberg-hive-metastore-1.10.1.jar \
+    -P ${FLUSS_HOME}/plugins/iceberg/
+```
+
+**Start Tiering Service:**
+```bash
+${FLINK_HOME}/bin/flink run /path/to/fluss-flink-tiering-$FLUSS_VERSION$.jar \
+    --fluss.bootstrap.servers localhost:9123 \
+    --datalake.format iceberg \
+    --datalake.iceberg.type hive \
+    --datalake.iceberg.uri thrift://hive-metastore:9083 \
+    --datalake.iceberg.warehouse hdfs:///iceberg/warehouse
+```
+
+**Quick Troubleshooting:**
+
+| Error | Fix |
+|-------|-----|
+| `NoClassDefFoundError: IMetaStoreClient` | Add `hive-metastore-*.jar` to classpath |
+| `Could not connect to meta store` | Verify HMS URI and network connectivity |
+
 #### Prerequisites
 
 ##### 1. Hadoop Dependencies Configuration
