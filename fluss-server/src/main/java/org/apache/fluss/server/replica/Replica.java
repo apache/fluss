@@ -593,6 +593,27 @@ public final class Replica {
                 isDataLakeEnabled);
     }
 
+    /**
+     * Update the number of log segments to retain in local storage. This method is called when the
+     * table configuration is altered.
+     *
+     * @param tieredLogLocalSegments the new number of segments to retain locally
+     */
+    public void updateTieredLogLocalSegments(int tieredLogLocalSegments) {
+        int oldValue = logTablet.getTieredLogLocalSegments();
+        if (oldValue == tieredLogLocalSegments) {
+            return;
+        }
+
+        logTablet.updateTieredLogLocalSegments(tieredLogLocalSegments);
+
+        LOG.info(
+                "Replica for {} tieredLogLocalSegments changed from {} to {}",
+                tableBucket,
+                oldValue,
+                tieredLogLocalSegments);
+    }
+
     private void createKv() {
         try {
             // create a closeable registry for the closable related to kv

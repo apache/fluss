@@ -476,16 +476,24 @@ public class ReplicaManager {
 
     private void updateReplicaTableConfig(ClusterMetadata clusterMetadata) {
         Map<Long, Boolean> tableIdToLakeFlag = new HashMap<>();
+        Map<Long, Integer> tableIdToTieredLogLocalSegments = new HashMap<>();
+
         for (TableMetadata tableMetadata : clusterMetadata.getTableMetadataList()) {
             TableInfo tableInfo = tableMetadata.getTableInfo();
+            long tableId = tableInfo.getTableId();
+
+            // Collect datalake enabled configuration
             if (tableInfo.getTableConfig().getDataLakeFormat().isPresent()) {
-                long tableId = tableInfo.getTableId();
                 boolean dataLakeEnabled = tableInfo.getTableConfig().isDataLakeEnabled();
                 tableIdToLakeFlag.put(tableId, dataLakeEnabled);
             }
+
+            // Collect tiered log local segments configuration
+            int tieredLogLocalSegments = tableInfo.getTableConfig().getTieredLogLocalSegments();
+            tableIdToTieredLogLocalSegments.put(tableId, tieredLogLocalSegments);
         }
 
-        if (tableIdToLakeFlag.isEmpty()) {
+        if (tableIdToLakeFlag.isEmpty() && tableIdToTieredLogLocalSegments.isEmpty()) {
             return;
         }
 
@@ -494,8 +502,16 @@ public class ReplicaManager {
             if (hostedReplica instanceof OnlineReplica) {
                 Replica replica = ((OnlineReplica) hostedReplica).getReplica();
                 long tableId = replica.getTableBucket().getTableId();
+
+                // Update datalake enabled configuration
                 if (tableIdToLakeFlag.containsKey(tableId)) {
                     replica.updateIsDataLakeEnabled(tableIdToLakeFlag.get(tableId));
+                }
+
+                // Update tiered log local segments configuration
+                if (tableIdToTieredLogLocalSegments.containsKey(tableId)) {
+                    replica.updateTieredLogLocalSegments(
+                            tableIdToTieredLogLocalSegments.get(tableId));
                 }
             }
         }
