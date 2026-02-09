@@ -186,8 +186,17 @@ public class ClientRpcMessageUtils {
     }
 
     public static LookupRequest makeLookupRequest(
-            long tableId, Collection<LookupBatch> lookupBatches) {
+            long tableId,
+            Collection<LookupBatch> lookupBatches,
+            boolean insertIfNotExists,
+            short acks,
+            int timeoutMs) {
         LookupRequest request = new LookupRequest().setTableId(tableId);
+        if (insertIfNotExists) {
+            request.setInsertIfNotExists(true);
+            request.setAcks(acks);
+            request.setTimeoutMs(timeoutMs);
+        }
         lookupBatches.forEach(
                 (batch) -> {
                     TableBucket tb = batch.tableBucket();

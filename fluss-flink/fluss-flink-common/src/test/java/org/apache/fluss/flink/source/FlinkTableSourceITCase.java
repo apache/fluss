@@ -966,6 +966,86 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
                 .hasMessage("Full lookup caching is not supported yet.");
     }
 
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testLookupInsertIfNotExists(boolean async) throws Exception {
+        // use single parallelism to make result ordering stable
+        tEnv.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 1);
+
+        String uidMappingTable = String.format("uid_mapping_%s", async ? "async" : "sync");
+        // Create uid_mapping table: uid (STRING, PK), uid_int32 (INT, auto-increment)
+        tEnv.executeSql(
+                String.format(
+                        "create table %s ("
+                                + " uid varchar not null,"
+                                + " uid_int32 int,"
+                                + " primary key (uid) NOT ENFORCED"
+                                + ") with ('auto-increment.fields' = 'uid_int32', 'bucket.num' = '1')",
+                        uidMappingTable));
+
+        // Create ods_table as a Flink temporary source table
+        List<Row> odsData =
+                Arrays.asList(
+                        Row.of("CN", "Beijing", "Haidian", "2025-01-01", "user_a"),
+                        Row.of("CN", "Shanghai", "Pudong", "2025-01-02", "user_b"),
+                        Row.of("US", "California", "LA", "2025-01-03", "user_a"),
+                        Row.of("JP", "Tokyo", "Shibuya", "2025-01-04", "user_c"));
+
+        Schema odsSchema =
+                Schema.newBuilder()
+                        .column("country", DataTypes.STRING())
+                        .column("prov", DataTypes.STRING())
+                        .column("city", DataTypes.STRING())
+                        .column("ymd", DataTypes.STRING())
+                        .column("uid", DataTypes.STRING())
+                        .columnByExpression("proctime", "PROCTIME()")
+                        .build();
+        RowTypeInfo odsTypeInfo =
+                new RowTypeInfo(
+                        new TypeInformation[] {
+                            Types.STRING, Types.STRING, Types.STRING, Types.STRING, Types.STRING
+                        },
+                        new String[] {"country", "prov", "city", "ymd", "uid"});
+        DataStream<Row> odsDs = execEnv.fromCollection(odsData).returns(odsTypeInfo);
+        tEnv.dropTemporaryView("ods_src");
+        tEnv.createTemporaryView("ods_src", tEnv.fromDataStream(odsDs, odsSchema));
+
+        // Perform lookup join with insertIfNotExists hint
+        String lookupAsyncOption = async ? "'lookup.async' = 'true'" : "'lookup.async' = 'false'";
+        String joinQuery =
+                String.format(
+                        "SELECT ods.country, ods.prov, ods.city, ods.ymd, ods.uid, dim.uid_int32 "
+                                + "FROM ods_src AS ods "
+                                + "JOIN %s /*+ OPTIONS('lookup.insert-if-not-exists' = 'true', %s) */ "
+                                + "FOR SYSTEM_TIME AS OF ods.proctime AS dim "
+                                + "ON dim.uid = ods.uid",
+                        uidMappingTable, lookupAsyncOption);
+
+        CloseableIterator<Row> joinResult = tEnv.executeSql(joinQuery).collect();
+
+        // user_a appears twice, user_b and user_c appear once each
+        // With insertIfNotExists, uid_mapping should auto-create entries:
+        // user_a -> uid_int32=1, user_b -> uid_int32=2, user_a (2nd) reuses uid_int32=1,
+        // user_c -> uid_int32=3
+        List<String> expectedJoinResults =
+                Arrays.asList(
+                        "+I[CN, Beijing, Haidian, 2025-01-01, user_a, 1]",
+                        "+I[CN, Shanghai, Pudong, 2025-01-02, user_b, 2]",
+                        "+I[US, California, LA, 2025-01-03, user_a, 1]",
+                        "+I[JP, Tokyo, Shibuya, 2025-01-04, user_c, 3]");
+        assertResultsIgnoreOrder(joinResult, expectedJoinResults, true);
+
+        // Verify uid_mapping table has the correct data
+        List<String> expectedUidMappingResults =
+                Arrays.asList("+I[user_a, 1]", "+I[user_b, 2]", "+I[user_c, 3]");
+        assertQueryResultExactOrder(
+                tEnv,
+                String.format(
+                        "SELECT uid, uid_int32 FROM %s /*+ OPTIONS('scan.startup.mode' = 'earliest') */",
+                        uidMappingTable),
+                expectedUidMappingResults);
+    }
+
     @Test
     void testStreamingReadSinglePartitionPushDown() throws Exception {
         tEnv.executeSql(

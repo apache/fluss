@@ -59,6 +59,11 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: status.hostIP
+          ports:
+            - name: internal
+              containerPort: {{ .Values.listeners.internal.port }}
+            - name: client
+              containerPort: {{ .Values.listeners.client.port }}
           command:
             - "/bin/sh"
             - "-c"
@@ -66,9 +71,12 @@ spec:
               export FLUSS_SERVER_ID=${POD_NAME##*-} && \
               cp /opt/conf/server.yaml $FLUSS_HOME/conf && \
 
+              BIND_LISTENERS="INTERNAL://${POD_IP}:{{ .Values.listeners.internal.port }}, CLIENT://${POD_IP}:{{ .Values.listeners.client.port }}" && \
+              ADVERTISED_LISTENERS="CLIENT://${POD_NAME}.coordinator-server-hs.${POD_NAMESPACE}.svc.cluster.local:{{ .Values.listeners.client.port }}" && \
+
               echo "" >> $FLUSS_HOME/conf/server.yaml && \
-              echo "bind.listeners: INTERNAL://0.0.0.0:{{ .Values.appConfig.internalPort }}, CLIENT://0.0.0.0:{{ .Values.appConfig.externalPort }}" >> $FLUSS_HOME/conf/server.yaml && \
-              echo "advertised.listeners: CLIENT://${POD_NAME}.coordinator-server-hs.${POD_NAMESPACE}.svc.cluster.local:{{ .Values.appConfig.externalPort }}" >> $FLUSS_HOME/conf/server.yaml && \
+              echo "bind.listeners: ${BIND_LISTENERS}" >> $FLUSS_HOME/conf/server.yaml && \
+              echo "advertised.listeners: ${ADVERTISED_LISTENERS}" >> $FLUSS_HOME/conf/server.yaml && \
 
               bin/coordinator-server.sh start-foreground
           livenessProbe:
@@ -77,14 +85,14 @@ spec:
             initialDelaySeconds: 10
             periodSeconds: 3
             tcpSocket:
-              port: {{.Values.appConfig.externalPort}}
+              port: {{ .Values.listeners.client.port }}
           readinessProbe:
             failureThreshold: 100
             timeoutSeconds: 1
             initialDelaySeconds: 10
             periodSeconds: 3
             tcpSocket:
-              port: {{.Values.appConfig.externalPort}}
+              port: {{ .Values.listeners.client.port }}
           resources:
             {{- toYaml .Values.resources.tabletServer | nindent 12 }}
           volumeMounts:

@@ -77,16 +77,24 @@ class LookupSender implements Runnable {
 
     private final int maxRetries;
 
+    private final int maxRequestTimeoutMs;
+
+    private final short acks;
+
     LookupSender(
             MetadataUpdater metadataUpdater,
             LookupQueue lookupQueue,
             int maxFlightRequests,
-            int maxRetries) {
+            int maxRetries,
+            short acks,
+            int maxRequestTimeoutMs) {
         this.metadataUpdater = metadataUpdater;
         this.lookupQueue = lookupQueue;
         this.maxInFlightReuqestsSemaphore = new Semaphore(maxFlightRequests);
         this.maxRetries = maxRetries;
         this.running = true;
+        this.acks = acks;
+        this.maxRequestTimeoutMs = maxRequestTimeoutMs;
     }
 
     @Override
@@ -178,7 +186,9 @@ class LookupSender implements Runnable {
     void sendLookups(
             int destination, LookupType lookupType, List<AbstractLookupQuery<?>> lookupBatches) {
         if (lookupType == LookupType.LOOKUP) {
-            sendLookupRequest(destination, lookupBatches);
+            sendLookupRequest(destination, lookupBatches, false);
+        } else if (lookupType == LookupType.LOOKUP_WITH_INSERT_IF_NOT_EXISTS) {
+            sendLookupRequest(destination, lookupBatches, true);
         } else if (lookupType == LookupType.PREFIX_LOOKUP) {
             sendPrefixLookupRequest(destination, lookupBatches);
         } else {
@@ -186,7 +196,8 @@ class LookupSender implements Runnable {
         }
     }
 
-    private void sendLookupRequest(int destination, List<AbstractLookupQuery<?>> lookups) {
+    private void sendLookupRequest(
+            int destination, List<AbstractLookupQuery<?>> lookups, boolean insertIfNotExists) {
         // table id -> (bucket -> lookups)
         Map<Long, Map<TableBucket, LookupBatch>> lookupByTableId = new HashMap<>();
         for (AbstractLookupQuery<?> abstractLookupQuery : lookups) {
@@ -218,7 +229,12 @@ class LookupSender implements Runnable {
                         sendLookupRequestAndHandleResponse(
                                 destination,
                                 gateway,
-                                makeLookupRequest(tableId, lookupsByBucket.values()),
+                                makeLookupRequest(
+                                        tableId,
+                                        lookupsByBucket.values(),
+                                        insertIfNotExists,
+                                        acks,
+                                        maxRequestTimeoutMs),
                                 tableId,
                                 lookupsByBucket));
     }

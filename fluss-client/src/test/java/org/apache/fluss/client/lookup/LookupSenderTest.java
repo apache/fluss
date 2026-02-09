@@ -95,7 +95,13 @@ public class LookupSenderTest {
         lookupQueue = new LookupQueue(conf);
 
         lookupSender =
-                new LookupSender(metadataUpdater, lookupQueue, MAX_INFLIGHT_REQUESTS, MAX_RETRIES);
+                new LookupSender(
+                        metadataUpdater,
+                        lookupQueue,
+                        MAX_INFLIGHT_REQUESTS,
+                        MAX_RETRIES,
+                        (short) -1,
+                        1000);
 
         senderThread = new Thread(lookupSender);
         senderThread.start();

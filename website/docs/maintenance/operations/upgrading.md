@@ -80,10 +80,11 @@ Once this process is complete, the server upgrade will be finished.
 The compatibility between the Fluss client and the Fluss server is described in the following table:
 
 
-|            | Server 0.7 | Server 0.8 | Limitations |
-|------------|------------|------------|-------------|
-| Client 0.7 | ✔️         | ✔️         |             |
-| Client 0.8 | ✔️         | ✔️         |             |
+|            | Server 0.7 | Server 0.8 | Server 0.9 | Limitations |
+|------------|------------|------------|------------|-------------|
+| Client 0.7 | ✔️         | ✔️         | ✔️         |             |
+| Client 0.8 | ✔️         | ✔️         | ✔️         |             |
+| Client 0.9 | ✔️         | ✔️         | ✔️         |             |
 
 ## Upgrading Fluss datalake tiering service
 

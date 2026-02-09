@@ -95,6 +95,16 @@ public interface Lookup {
     }
 
     /**
+     * Enables insert-if-not-exists behavior for the lookup operation. When enabled, if a lookup
+     * does not find a matching row, a new row will be inserted with the lookup key values. This
+     * feature cannot be used on tables that contain non-nullable columns other than the primary key
+     * or auto-increment columns.
+     *
+     * @return a new Lookup instance with insert-if-not-exists enabled
+     */
+    Lookup enableInsertIfNotExists();
+
+    /**
      * Creates a {@link Lookuper} instance to lookup rows of a primary key table by the specified
      * lookup columns. By default, the lookup columns are the primary key columns, but can be
      * changed with ({@link #lookupBy(List)}) method.

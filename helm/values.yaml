@@ -23,14 +23,9 @@
 image:
   registry: ""
   repository: apache/fluss
-  tag: "0.9.0-incubating"
+  tag: "0.10.0-incubating"
   pullPolicy: IfNotPresent
   pullSecrets: []
-
-appConfig:
-  internalPort: 9123
-  externalPort: 9124
-
 
 # Fluss server configuration options
 configurationOverrides:
@@ -55,6 +50,13 @@ coordinator:
     enabled: false
     size: 1Gi
     storageClass:
+
+# Fluss listener configurations
+listeners:
+  internal:
+    port: 9123
+  client:
+    port: 9124
 
 resources: {}
   # We usually recommend not to specify default resources and to leave this as a conscious

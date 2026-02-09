@@ -86,6 +86,16 @@ public class FlinkConnectorOptions {
                     .defaultValue(true)
                     .withDescription("Whether to set async lookup. Default is true.");
 
+    public static final ConfigOption<Boolean> LOOKUP_INSERT_IF_NOT_EXISTS =
+            ConfigOptions.key("lookup.insert-if-not-exists")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription(
+                            "Whether to enable insert-if-not-exists behavior for the lookup operation. "
+                                    + "When enabled, if a lookup does not find a matching row, a new row will be inserted "
+                                    + "with the lookup key values. This feature cannot be used with PREFIX_LOOKUP type. "
+                                    + "Default is false.");
+
     // --------------------------------------------------------------------------------------------
     // Scan specific options
     // --------------------------------------------------------------------------------------------
