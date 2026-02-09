@@ -29,8 +29,10 @@ import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.utils.clock.ManualClock;
 
+import org.apache.flink.core.execution.SavepointFormatType;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.table.api.EnvironmentSettings;
+import org.apache.flink.table.api.TableResult;
 import org.apache.flink.table.api.bridge.java.StreamTableEnvironment;
 import org.apache.flink.table.api.config.ExecutionConfigOptions;
 import org.apache.flink.test.util.AbstractTestBase;
@@ -41,7 +43,11 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
+import org.junit.jupiter.api.io.TempDir;
 
+import javax.annotation.Nullable;
+
+import java.io.File;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -59,6 +65,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 abstract class ChangelogVirtualTableITCase extends AbstractTestBase {
 
     protected static final ManualClock CLOCK = new ManualClock();
+    @TempDir public static File savepointDir;
 
     @RegisterExtension
     public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION =
@@ -108,6 +115,32 @@ abstract class ChangelogVirtualTableITCase extends AbstractTestBase {
     void after() {
         tEnv.useDatabase(BUILTIN_DATABASE);
         tEnv.executeSql(String.format("drop database %s cascade", DEFAULT_DB));
+    }
+
+    // init table environment from savepointPath
+    private StreamTableEnvironment initTableEnvironment(@Nullable String savepointPath) {
+        org.apache.flink.configuration.Configuration conf =
+                new org.apache.flink.configuration.Configuration();
+        if (savepointPath != null) {
+            conf.setString("execution.savepoint.path", savepointPath);
+        }
+        StreamExecutionEnvironment execEnv =
+                StreamExecutionEnvironment.getExecutionEnvironment(conf);
+        execEnv.setParallelism(1);
+        StreamTableEnvironment tEnv =
+                StreamTableEnvironment.create(execEnv, EnvironmentSettings.inStreamingMode());
+        String bootstrapServers = String.join(",", clientConf.get(ConfigOptions.BOOTSTRAP_SERVERS));
+        // crate catalog using sql
+        tEnv.executeSql(
+                String.format(
+                        "create catalog %s with ('type' = 'fluss', '%s' = '%s')",
+                        CATALOG_NAME, BOOTSTRAP_SERVERS.key(), bootstrapServers));
+        tEnv.executeSql("use catalog " + CATALOG_NAME);
+        tEnv.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 2);
+        tEnv.executeSql("create database " + DEFAULT_DB);
+        tEnv.useDatabase(DEFAULT_DB);
+
+        return tEnv;
     }
 
     /** Deletes rows from a primary key table using the proper delete API. */
@@ -378,6 +411,66 @@ abstract class ChangelogVirtualTableITCase extends AbstractTestBase {
                 .containsExactly(
                         "+I[insert, 3, 1970-01-01T00:00:00.200Z, 4, v4]",
                         "+I[insert, 4, 1970-01-01T00:00:00.200Z, 5, v5]");
+        // 3. Test scan.startup.mode='latest' - should only read new records after subscription
+        // Create a new source table with 1 bucket for consistent log_offset numbers
+        tEnv.executeSql(
+                "CREATE TABLE startup_mode_test_mode_latest ("
+                        + "  id INT NOT NULL,"
+                        + "  name STRING,"
+                        + "  PRIMARY KEY (id) NOT ENFORCED"
+                        + ") WITH ('bucket.num' = '1')");
+        tablePath = TablePath.of(DEFAULT_DB, "startup_mode_test_mode_latest");
+        // Pre-populate the new source table with some existing records.
+        TableResult insertResult =
+                tEnv.executeSql(
+                        "INSERT INTO "
+                                + tablePath.getTableName()
+                                + " SELECT * FROM startup_mode_test");
+        // Stop the job with save point
+        String savepointPath =
+                insertResult
+                        .getJobClient()
+                        .get()
+                        .stopWithSavepoint(
+                                false,
+                                savepointDir.getAbsolutePath(),
+                                SavepointFormatType.CANONICAL)
+                        .get();
+        // Init env with savepoint Path
+        tEnv = initTableEnvironment(savepointPath);
+        // Recreate a table
+        tEnv.executeSql(
+                "CREATE TABLE startup_mode_test_mode_latest ("
+                        + " id INT NOT NULL,"
+                        + " name STRING,"
+                        + " PRIMARY KEY (id) NOT ENFORCED"
+                        + ") WITH ('bucket.num' = '1')");
+        // Write a new record into the source table
+        tablePath = TablePath.of(DEFAULT_DB, "startup_mode_test_mode_latest");
+        CLOCK.advanceTime(Duration.ofMillis(100));
+        writeRows(conn, tablePath, Arrays.asList(row(6, "v6")), false);
+
+        // Recreate a table
+        tEnv.executeSql(
+                "CREATE TABLE "
+                        + tablePath.getTableName()
+                        + " ("
+                        + " id INT NOT NULL,"
+                        + " name STRING,"
+                        + " PRIMARY KEY (id) NOT ENFORCED"
+                        + ") WITH ('bucket.num' = '1')");
+
+        String optionsLatest = " /*+ OPTIONS('scan.startup.mode' = 'latest') */";
+        String queryLatest =
+                "SELECT _change_type, id, name FROM "
+                        + tablePath.getTableName()
+                        + "$changelog"
+                        + optionsLatest;
+        CloseableIterator<Row> rowIterLatest = tEnv.executeSql(queryLatest).collect();
+
+        List<String> latestResults = collectRowsWithTimeout(rowIterLatest, 1, true);
+        assertThat(latestResults).hasSize(1);
+        assertThat(latestResults.get(0)).isEqualTo("+I[insert, 6, v6]");
     }
 
     @Test
