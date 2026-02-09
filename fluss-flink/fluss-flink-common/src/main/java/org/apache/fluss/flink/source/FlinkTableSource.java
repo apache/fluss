@@ -490,17 +490,21 @@ public class FlinkTableSource
                 lookupRow.setField(keyRowProjection[fieldEqual.fieldIndex], fieldEqual.equalValue);
                 visitedPkFields.add(fieldEqual.fieldIndex);
             }
-            // if not all primary key fields are in condition, we skip to pushdown
-            if (!visitedPkFields.equals(primaryKeyTypes.keySet())) {
-                return Result.of(Collections.emptyList(), filters);
-            }
-            singleRowFilter = lookupRow;
+            // if not all primary key fields are in condition, meaning can not push down single row
+            // filter, determine whether to push down partition filter later
 
-            // FLINK-38635 We cannot determine whether this source will ultimately be used as a scan
-            // source or a lookup source. Since fluss lookup sources cannot accept filters yet, to
-            // be safe, we return all filters to the Flink planner.
-            return Result.of(acceptedFilters, filters);
-        } else if (isPartitioned()) {
+            if (visitedPkFields.equals(primaryKeyTypes.keySet())) {
+                singleRowFilter = lookupRow;
+                // FLINK-38635 We cannot determine whether this source will ultimately be used as a
+                // scan
+                // source or a lookup source. Since fluss lookup sources cannot accept filters yet,
+                // to
+                // be safe, we return all filters to the Flink planner.
+                return Result.of(acceptedFilters, filters);
+            }
+        }
+
+        if (isPartitioned()) {
             // apply partition filter pushdown
             List<Predicate> converted = new ArrayList<>();
 

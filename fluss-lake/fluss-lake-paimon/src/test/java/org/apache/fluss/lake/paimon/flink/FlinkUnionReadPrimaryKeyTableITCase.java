@@ -60,6 +60,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
@@ -67,6 +68,7 @@ import java.util.stream.Collectors;
 
 import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.assertResultsExactOrder;
 import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.assertRowResultsIgnoreOrder;
+import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.collectBatchRows;
 import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.collectRowsWithTimeout;
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
@@ -95,7 +97,7 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
         long tableId =
                 preparePKTableFullType(t1, DEFAULT_BUCKET_NUM, isPartitioned, bucketLogEndOffset);
 
-        // wait unit records have been synced
+        // wait until records have been synced
         waitUntilBucketSynced(t1, tableId, DEFAULT_BUCKET_NUM, isPartitioned);
 
         // check the status of replica after synced
@@ -523,7 +525,7 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
         bucketLogEndOffset.put(new TableBucket(tableId, 1), 1L);
         bucketLogEndOffset.put(new TableBucket(tableId, 2), 1L);
 
-        // wait unit records have been synced
+        // wait until records have been synced
         waitUntilBucketsSynced(bucketLogEndOffset.keySet());
 
         // check the status of replica after synced
@@ -558,7 +560,7 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
         long tableId =
                 preparePKTableFullType(t1, DEFAULT_BUCKET_NUM, isPartitioned, bucketLogEndOffset);
 
-        // wait unit records have been synced
+        // wait until records have been synced
         waitUntilBucketSynced(t1, tableId, DEFAULT_BUCKET_NUM, isPartitioned);
 
         // check the status of replica after synced
@@ -1115,6 +1117,77 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
 
         // cancel the tiering job
         jobClient.cancel().get();
+    }
+
+    @Test
+    void testPartitionFilterOnPartitionedTableInBatch() throws Exception {
+        // first of all, start tiering
+        JobClient jobClient = buildTieringJob(execEnv);
+
+        String tableName = "stream_pk_table_full";
+        TablePath t1 = TablePath.of(DEFAULT_DB, tableName);
+        Map<TableBucket, Long> bucketLogEndOffset = new HashMap<>();
+        // create table & write initial data
+        long tableId = preparePKTableFullType(t1, DEFAULT_BUCKET_NUM, true, bucketLogEndOffset);
+
+        // wait unit records have been synced
+        waitUntilBucketSynced(t1, tableId, DEFAULT_BUCKET_NUM, true);
+
+        // check the status of replica after synced
+        assertReplicaStatus(bucketLogEndOffset);
+        // Stop tiering to ensure we read from Paimon snapshot
+        jobClient.cancel().get();
+
+        TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
+        Map<Long, String> partitionNameById =
+                waitUntilPartitions(FLUSS_CLUSTER_EXTENSION.getZooKeeperClient(), tablePath);
+        Iterator<String> partitionIterator =
+                partitionNameById.values().stream().sorted().iterator();
+        String partition1 = partitionIterator.next();
+        String partition2 = partitionIterator.next();
+        String query =
+                String.format(
+                        "SELECT c1, c2, c3, c19 FROM %s WHERE c19 between '%s' and '%s'",
+                        tableName, partition1, partition2);
+
+        assertThat(batchTEnv.explainSql(query))
+                .contains(
+                        String.format(
+                                "TableSourceScan(table=[[testcatalog, %s, %s, "
+                                        + "filter=[and(>=(c19, _UTF-16LE'%s'), <=(c19, _UTF-16LE'%s'))], "
+                                        + "project=[c1, c2, c3, c19]]], "
+                                        + "fields=[c1, c2, c3, c19])",
+                                DEFAULT_DB, tableName, partition1, partition2));
+
+        CloseableIterator<Row> collected = batchTEnv.executeSql(query).collect();
+        List<String> expected =
+                Arrays.asList(
+                        String.format("+I[false, 1, 2, %s]", partition1),
+                        String.format("+I[true, 10, 20, %s]", partition1),
+                        String.format("+I[false, 1, 2, %s]", partition2),
+                        String.format("+I[true, 10, 20, %s]", partition2));
+        List<String> actual = collectBatchRows(collected);
+        assertThat(actual).containsExactlyInAnyOrderElementsOf(expected);
+
+        query =
+                String.format(
+                        "SELECT c1, c2, c3, c19 FROM %s WHERE c19 = '%s'", tableName, partition2);
+
+        assertThat(batchTEnv.explainSql(query))
+                .contains(
+                        String.format(
+                                "TableSourceScan(table=[[testcatalog, %s, %s, "
+                                        + "filter=[=(c19, _UTF-16LE'%s':VARCHAR(2147483647) CHARACTER SET \"UTF-16LE\")], "
+                                        + "project=[c1, c2, c3, c19]]], "
+                                        + "fields=[c1, c2, c3, c19])",
+                                DEFAULT_DB, tableName, partition2));
+        collected = batchTEnv.executeSql(query).collect();
+        actual = collectBatchRows(collected);
+        expected =
+                Arrays.asList(
+                        String.format("+I[false, 1, 2, %s]", partition2),
+                        String.format("+I[true, 10, 20, %s]", partition2));
+        assertThat(actual).containsExactlyInAnyOrderElementsOf(expected);
     }
 
     private List<Row> sortedRows(List<Row> rows) {
