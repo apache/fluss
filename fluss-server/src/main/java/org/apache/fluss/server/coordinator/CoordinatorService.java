@@ -52,6 +52,8 @@ import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.gateway.CoordinatorGateway;
+import org.apache.fluss.rpc.messages.AcquireKvSnapshotLeaseRequest;
+import org.apache.fluss.rpc.messages.AcquireKvSnapshotLeaseResponse;
 import org.apache.fluss.rpc.messages.AddServerTagRequest;
 import org.apache.fluss.rpc.messages.AddServerTagResponse;
 import org.apache.fluss.rpc.messages.AdjustIsrRequest;
@@ -84,6 +86,8 @@ import org.apache.fluss.rpc.messages.DropAclsRequest;
 import org.apache.fluss.rpc.messages.DropAclsResponse;
 import org.apache.fluss.rpc.messages.DropDatabaseRequest;
 import org.apache.fluss.rpc.messages.DropDatabaseResponse;
+import org.apache.fluss.rpc.messages.DropKvSnapshotLeaseRequest;
+import org.apache.fluss.rpc.messages.DropKvSnapshotLeaseResponse;
 import org.apache.fluss.rpc.messages.DropPartitionRequest;
 import org.apache.fluss.rpc.messages.DropPartitionResponse;
 import org.apache.fluss.rpc.messages.DropTableRequest;
@@ -99,8 +103,10 @@ import org.apache.fluss.rpc.messages.MetadataResponse;
 import org.apache.fluss.rpc.messages.PbAlterConfig;
 import org.apache.fluss.rpc.messages.PbHeartbeatReqForTable;
 import org.apache.fluss.rpc.messages.PbHeartbeatRespForTable;
+import org.apache.fluss.rpc.messages.PbKvSnapshotLeaseForTable;
 import org.apache.fluss.rpc.messages.PbPrepareLakeTableRespForTable;
 import org.apache.fluss.rpc.messages.PbProducerTableOffsets;
+import org.apache.fluss.rpc.messages.PbTableBucket;
 import org.apache.fluss.rpc.messages.PbTableOffsets;
 import org.apache.fluss.rpc.messages.PrepareLakeTableSnapshotRequest;
 import org.apache.fluss.rpc.messages.PrepareLakeTableSnapshotResponse;
@@ -108,6 +114,8 @@ import org.apache.fluss.rpc.messages.RebalanceRequest;
 import org.apache.fluss.rpc.messages.RebalanceResponse;
 import org.apache.fluss.rpc.messages.RegisterProducerOffsetsRequest;
 import org.apache.fluss.rpc.messages.RegisterProducerOffsetsResponse;
+import org.apache.fluss.rpc.messages.ReleaseKvSnapshotLeaseRequest;
+import org.apache.fluss.rpc.messages.ReleaseKvSnapshotLeaseResponse;
 import org.apache.fluss.rpc.messages.RemoveServerTagRequest;
 import org.apache.fluss.rpc.messages.RemoveServerTagResponse;
 import org.apache.fluss.rpc.netty.server.Session;
@@ -135,6 +143,8 @@ import org.apache.fluss.server.coordinator.event.EventManager;
 import org.apache.fluss.server.coordinator.event.ListRebalanceProgressEvent;
 import org.apache.fluss.server.coordinator.event.RebalanceEvent;
 import org.apache.fluss.server.coordinator.event.RemoveServerTagEvent;
+import org.apache.fluss.server.coordinator.lease.KvSnapshotLeaseHandler;
+import org.apache.fluss.server.coordinator.lease.KvSnapshotLeaseManager;
 import org.apache.fluss.server.coordinator.producer.ProducerOffsetsManager;
 import org.apache.fluss.server.coordinator.rebalance.goal.Goal;
 import org.apache.fluss.server.entity.CommitKvSnapshotData;
@@ -183,11 +193,14 @@ import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toAclBindings;
 import static org.apache.fluss.server.coordinator.rebalance.goal.GoalUtils.getGoalByType;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.addTableOffsetsToResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.fromTablePath;
+import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getAcquireKvSnapshotLeaseData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getAdjustIsrData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getCommitLakeTableSnapshotData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getCommitRemoteLogManifestData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getPartitionSpec;
+import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getReleaseKvSnapshotLeaseData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.groupOffsetsByTableId;
+import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeAcquireKvSnapshotLeaseResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeCreateAclsResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeDropAclsResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toAlterTableConfigChanges;
@@ -216,6 +229,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     private final ExecutorService ioExecutor;
     private final LakeTableHelper lakeTableHelper;
     private final ProducerOffsetsManager producerOffsetsManager;
+    private final KvSnapshotLeaseManager kvSnapshotLeaseManager;
 
     public CoordinatorService(
             Configuration conf,
@@ -228,7 +242,8 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
             LakeCatalogDynamicLoader lakeCatalogDynamicLoader,
             LakeTableTieringManager lakeTableTieringManager,
             DynamicConfigManager dynamicConfigManager,
-            ExecutorService ioExecutor) {
+            ExecutorService ioExecutor,
+            KvSnapshotLeaseManager kvSnapshotLeaseManager) {
         super(
                 remoteFileSystem,
                 ServerType.COORDINATOR,
@@ -255,6 +270,8 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         // Initialize and start the producer snapshot manager
         this.producerOffsetsManager = new ProducerOffsetsManager(conf, zkClient);
         this.producerOffsetsManager.start();
+
+        this.kvSnapshotLeaseManager = kvSnapshotLeaseManager;
     }
 
     @Override
@@ -854,6 +871,108 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                                 request.getTabletServerEpoch(),
                                 response));
         return response;
+    }
+
+    @Override
+    public CompletableFuture<AcquireKvSnapshotLeaseResponse> acquireKvSnapshotLease(
+            AcquireKvSnapshotLeaseRequest request) {
+        // Authorization: require WRITE permission on all tables in the request
+        if (authorizer != null) {
+            for (PbKvSnapshotLeaseForTable kvSnapshotLeaseForTable :
+                    request.getSnapshotsToLeasesList()) {
+                long tableId = kvSnapshotLeaseForTable.getTableId();
+                authorizeTable(OperationType.READ, tableId);
+            }
+        }
+
+        String leaseId = request.getLeaseId();
+        return CompletableFuture.supplyAsync(
+                () -> {
+                    try {
+                        return makeAcquireKvSnapshotLeaseResponse(
+                                kvSnapshotLeaseManager.acquireLease(
+                                        leaseId,
+                                        request.getLeaseDurationMs(),
+                                        getAcquireKvSnapshotLeaseData(request)));
+                    } catch (ApiException e) {
+                        // Re-throw ApiExceptions as-is to preserve exception type for client
+                        throw e;
+                    } catch (Exception e) {
+                        throw new UnknownServerException(
+                                "Failed to acquire kv snapshot lease for" + leaseId, e);
+                    }
+                },
+                ioExecutor);
+    }
+
+    @Override
+    public CompletableFuture<ReleaseKvSnapshotLeaseResponse> releaseKvSnapshotLease(
+            ReleaseKvSnapshotLeaseRequest request) {
+        // Authorization: require WRITE permission on all tables in the request
+        if (authorizer != null) {
+            for (PbTableBucket tableBucket : request.getBucketsToReleasesList()) {
+                long tableId = tableBucket.getTableId();
+                authorizeTable(OperationType.READ, tableId);
+            }
+        }
+
+        String leaseId = request.getLeaseId();
+        return CompletableFuture.supplyAsync(
+                () -> {
+                    try {
+                        ReleaseKvSnapshotLeaseResponse response =
+                                new ReleaseKvSnapshotLeaseResponse();
+                        kvSnapshotLeaseManager.release(
+                                leaseId, getReleaseKvSnapshotLeaseData(request));
+                        return response;
+                    } catch (ApiException e) {
+                        // Re-throw ApiExceptions as-is to preserve exception type for client
+                        throw e;
+                    } catch (Exception e) {
+                        throw new UnknownServerException(
+                                "Failed to release kv snapshot lease for" + leaseId, e);
+                    }
+                },
+                ioExecutor);
+    }
+
+    @Override
+    public CompletableFuture<DropKvSnapshotLeaseResponse> dropKvSnapshotLease(
+            DropKvSnapshotLeaseRequest request) {
+        String leaseId = request.getLeaseId();
+        // Capture session before entering async block since currentSession() is thread-local
+        Session session = authorizer != null ? currentSession() : null;
+        return CompletableFuture.supplyAsync(
+                () -> {
+                    try {
+                        // Authorization: require READ permission on all tables acquired by this
+                        // lease.
+                        if (authorizer != null) {
+                            Optional<KvSnapshotLeaseHandler> leaseHandlerOpt =
+                                    kvSnapshotLeaseManager.getLease(leaseId);
+
+                            if (leaseHandlerOpt.isPresent()) {
+                                KvSnapshotLeaseHandler leaseHandler = leaseHandlerOpt.get();
+                                Set<Long> tableIds = leaseHandler.getTableIdToTableLease().keySet();
+                                // Check WRITE permission for each table.
+                                for (Long tableId : tableIds) {
+                                    authorizeTableWithSession(session, OperationType.READ, tableId);
+                                }
+                            }
+                        }
+
+                        DropKvSnapshotLeaseResponse response = new DropKvSnapshotLeaseResponse();
+                        kvSnapshotLeaseManager.dropLease(leaseId);
+                        return response;
+                    } catch (ApiException e) {
+                        // Re-throw ApiExceptions as-is to preserve exception type for client
+                        throw e;
+                    } catch (Exception e) {
+                        throw new UnknownServerException(
+                                "Failed to drop kv snapshot lease for" + leaseId, e);
+                    }
+                },
+                ioExecutor);
     }
 
     @Override

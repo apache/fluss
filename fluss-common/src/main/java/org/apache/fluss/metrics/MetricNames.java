@@ -54,6 +54,11 @@ public class MetricNames {
     public static final String KV_ALL_SNAPSHOT_SIZE = "allKvSnapshotSize";
     public static final String SERVER_PHYSICAL_STORAGE_REMOTE_KV_SIZE = "remoteKvSize";
 
+    // for kv snapshot lease.
+    // TODO implemented it at the table level. Trace by: https://github.com/apache/fluss/issues/2297
+    public static final String KV_SNAPSHOT_LEASE_COUNT = "kvSnapshotLeaseCount";
+    public static final String LEASED_KV_SNAPSHOT_COUNT = "leasedKvSnapshotCount";
+
     // --------------------------------------------------------------------------------------------
     // metrics for tablet server
     // --------------------------------------------------------------------------------------------

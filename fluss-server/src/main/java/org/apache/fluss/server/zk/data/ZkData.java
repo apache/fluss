@@ -26,6 +26,8 @@ import org.apache.fluss.security.acl.Resource;
 import org.apache.fluss.security.acl.ResourceType;
 import org.apache.fluss.server.zk.data.lake.LakeTable;
 import org.apache.fluss.server.zk.data.lake.LakeTableJsonSerde;
+import org.apache.fluss.server.zk.data.lease.KvSnapshotLeaseMetadata;
+import org.apache.fluss.server.zk.data.lease.KvSnapshotLeaseMetadataJsonSerde;
 import org.apache.fluss.server.zk.data.producer.ProducerOffsets;
 import org.apache.fluss.server.zk.data.producer.ProducerOffsetsJsonSerde;
 import org.apache.fluss.utils.json.JsonSerdeUtils;
@@ -904,6 +906,40 @@ public final class ZkData {
          */
         public static ProducerOffsets decode(byte[] json) {
             return JsonSerdeUtils.readValue(json, ProducerOffsetsJsonSerde.INSTANCE);
+        }
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // ZNodes for Consumers.
+    // ------------------------------------------------------------------------------------------
+
+    /** The root znode for leases. It will record all the info of fluss leases. */
+    public static final class LeasesNode {
+        public static String path() {
+            return "/leases";
+        }
+    }
+
+    /** The root znode for kv snapshot leases. */
+    public static final class KvSnapshotLeasesZNode {
+        public static String path() {
+            return LeasesNode.path() + "/kv_snapshot";
+        }
+    }
+
+    /** The znode for kv snapshot lease zk data. */
+    public static final class KvSnapshotLeaseZNode {
+        public static String path(String leaseId) {
+            return KvSnapshotLeasesZNode.path() + "/" + leaseId;
+        }
+
+        public static byte[] encode(KvSnapshotLeaseMetadata kvSnapshotLeaseMetadata) {
+            return JsonSerdeUtils.writeValueAsBytes(
+                    kvSnapshotLeaseMetadata, KvSnapshotLeaseMetadataJsonSerde.INSTANCE);
+        }
+
+        public static KvSnapshotLeaseMetadata decode(byte[] json) {
+            return JsonSerdeUtils.readValue(json, KvSnapshotLeaseMetadataJsonSerde.INSTANCE);
         }
     }
 }

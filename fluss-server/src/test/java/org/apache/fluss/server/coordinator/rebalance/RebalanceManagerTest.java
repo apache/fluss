@@ -26,6 +26,7 @@ import org.apache.fluss.server.coordinator.LakeCatalogDynamicLoader;
 import org.apache.fluss.server.coordinator.LakeTableTieringManager;
 import org.apache.fluss.server.coordinator.MetadataManager;
 import org.apache.fluss.server.coordinator.TestCoordinatorChannelManager;
+import org.apache.fluss.server.coordinator.lease.KvSnapshotLeaseManager;
 import org.apache.fluss.server.metadata.CoordinatorMetadataCache;
 import org.apache.fluss.server.metrics.group.TestingMetricGroups;
 import org.apache.fluss.server.zk.NOPErrorHandler;
@@ -33,6 +34,7 @@ import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperExtension;
 import org.apache.fluss.server.zk.data.RebalanceTask;
 import org.apache.fluss.testutils.common.AllCallbackWrapper;
+import org.apache.fluss.utils.clock.SystemClock;
 import org.apache.fluss.utils.concurrent.ExecutorThreadFactory;
 
 import org.junit.jupiter.api.AfterEach;
@@ -41,6 +43,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 
+import java.time.Duration;
 import java.util.HashMap;
 import java.util.concurrent.Executors;
 
@@ -63,6 +66,7 @@ public class RebalanceManagerTest {
     private AutoPartitionManager autoPartitionManager;
     private LakeTableTieringManager lakeTableTieringManager;
     private RebalanceManager rebalanceManager;
+    private KvSnapshotLeaseManager kvSnapshotLeaseManager;
 
     @BeforeAll
     static void baseBeforeAll() {
@@ -76,6 +80,17 @@ public class RebalanceManagerTest {
     void beforeEach() {
         serverMetadataCache = new CoordinatorMetadataCache();
         testCoordinatorChannelManager = new TestCoordinatorChannelManager();
+
+        String remoteDataDir = "/tmp/fluss/remote-data";
+        kvSnapshotLeaseManager =
+                new KvSnapshotLeaseManager(
+                        Duration.ofMinutes(10).toMillis(),
+                        zookeeperClient,
+                        remoteDataDir,
+                        SystemClock.getInstance(),
+                        TestingMetricGroups.COORDINATOR_METRICS);
+        kvSnapshotLeaseManager.start();
+
         autoPartitionManager =
                 new AutoPartitionManager(serverMetadataCache, metadataManager, new Configuration());
         lakeTableTieringManager = new LakeTableTieringManager();
@@ -126,6 +141,7 @@ public class RebalanceManagerTest {
                 TestingMetricGroups.COORDINATOR_METRICS,
                 new Configuration(),
                 Executors.newFixedThreadPool(1, new ExecutorThreadFactory("test-coordinator-io")),
-                metadataManager);
+                metadataManager,
+                kvSnapshotLeaseManager);
     }
 }

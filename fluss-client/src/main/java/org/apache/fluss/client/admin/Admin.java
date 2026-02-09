@@ -429,6 +429,15 @@ public interface Admin extends AutoCloseable {
             TableBucket bucket, long snapshotId);
 
     /**
+     * Creates a new KV snapshot lease with the given ID and duration.
+     *
+     * @param leaseId the unique identifier for the lease
+     * @param leaseDurationMs the lease duration in milliseconds
+     * @return a {@link KvSnapshotLease} instance representing the created lease
+     */
+    KvSnapshotLease createKvSnapshotLease(String leaseId, long leaseDurationMs);
+
+    /**
      * Get table lake snapshot info of the given table asynchronously.
      *
      * <p>It'll get the latest snapshot for all the buckets of the table.

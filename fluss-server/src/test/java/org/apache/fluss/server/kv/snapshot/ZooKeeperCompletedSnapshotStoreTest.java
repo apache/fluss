@@ -139,6 +139,7 @@ class ZooKeeperCompletedSnapshotStoreTest {
                 sharedKvFileRegistry,
                 Collections.emptyList(),
                 snapshotsInZooKeeper,
-                Executors.directExecutor());
+                Executors.directExecutor(),
+                (consumeKvSnapshotForBucket) -> false); // only retain the latest snapshot.
     }
 }

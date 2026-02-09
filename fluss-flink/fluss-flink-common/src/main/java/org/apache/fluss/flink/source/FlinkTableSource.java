@@ -25,6 +25,7 @@ import org.apache.fluss.flink.source.deserializer.RowDataDeserializationSchema;
 import org.apache.fluss.flink.source.lookup.FlinkAsyncLookupFunction;
 import org.apache.fluss.flink.source.lookup.FlinkLookupFunction;
 import org.apache.fluss.flink.source.lookup.LookupNormalizer;
+import org.apache.fluss.flink.source.reader.LeaseContext;
 import org.apache.fluss.flink.utils.FlinkConnectorOptionsUtils;
 import org.apache.fluss.flink.utils.FlinkConversions;
 import org.apache.fluss.flink.utils.PushdownUtils;
@@ -128,6 +129,8 @@ public class FlinkTableSource
 
     private final long scanPartitionDiscoveryIntervalMs;
     private final boolean isDataLakeEnabled;
+    private final LeaseContext leaseContext;
+
     @Nullable private final MergeEngineType mergeEngineType;
 
     // output type after projection pushdown
@@ -167,7 +170,8 @@ public class FlinkTableSource
             long scanPartitionDiscoveryIntervalMs,
             boolean isDataLakeEnabled,
             @Nullable MergeEngineType mergeEngineType,
-            Map<String, String> tableOptions) {
+            Map<String, String> tableOptions,
+            LeaseContext leaseContext) {
         this.tablePath = tablePath;
         this.flussConfig = flussConfig;
         this.tableOutputType = tableOutputType;
@@ -184,6 +188,7 @@ public class FlinkTableSource
 
         this.scanPartitionDiscoveryIntervalMs = scanPartitionDiscoveryIntervalMs;
         this.isDataLakeEnabled = isDataLakeEnabled;
+        this.leaseContext = leaseContext;
         this.mergeEngineType = mergeEngineType;
         this.tableOptions = tableOptions;
         if (isDataLakeEnabled) {
@@ -340,7 +345,8 @@ public class FlinkTableSource
                         new RowDataDeserializationSchema(),
                         streaming,
                         partitionFilters,
-                        enableLakeSource ? lakeSource : null);
+                        enableLakeSource ? lakeSource : null,
+                        leaseContext);
 
         if (!streaming) {
             // return a bounded source provide to make planner happy,
@@ -430,7 +436,8 @@ public class FlinkTableSource
                         scanPartitionDiscoveryIntervalMs,
                         isDataLakeEnabled,
                         mergeEngineType,
-                        tableOptions);
+                        tableOptions,
+                        leaseContext);
         source.producedDataType = producedDataType;
         source.projectedFields = projectedFields;
         source.singleRowFilter = singleRowFilter;

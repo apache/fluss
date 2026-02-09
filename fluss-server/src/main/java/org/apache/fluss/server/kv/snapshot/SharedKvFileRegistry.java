@@ -23,11 +23,13 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.Executor;
 
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
@@ -127,10 +129,31 @@ public class SharedKvFileRegistry implements AutoCloseable {
     }
 
     public void unregisterUnusedKvFile(long lowestSnapshotID) {
+        unregisterUnusedKvFile(lowestSnapshotID, Collections.emptySet());
+    }
+
+    /**
+     * Unregister and delete KV files that are no longer used by any retained or still-in-use
+     * (leased) snapshot.
+     *
+     * <p>A KV file is safe to delete only if:
+     *
+     * <ol>
+     *   <li>Its {@code lastUsedSnapshotID < lowestSnapshotID} (not used by any retained snapshot)
+     *   <li>No snapshot in {@code stillInUseSnapshotIds} falls within the file's referencing range
+     *       [{@code createdBySnapshotID}, {@code lastUsedSnapshotID}]
+     * </ol>
+     *
+     * @param lowestSnapshotID the effective lowest snapshot ID from retained (non-leased) snapshots
+     * @param stillInUseSnapshotIds snapshot IDs that are protected by leases
+     */
+    public void unregisterUnusedKvFile(long lowestSnapshotID, Set<Long> stillInUseSnapshotIds) {
         // delete kv files that aren't used
         LOG.debug(
-                "Discard kv files created before snapshot {} and not used afterwards",
-                lowestSnapshotID);
+                "Discard kv files created before snapshot {} and not used afterwards, "
+                        + "stillInUse snapshots: {}",
+                lowestSnapshotID,
+                stillInUseSnapshotIds);
         List<KvFileHandle> subsumed = new ArrayList<>();
         // Iterate over all the registered kv file handles.
         // Using a simple loop and NOT index by snapshotID because:
@@ -140,7 +163,8 @@ public class SharedKvFileRegistry implements AutoCloseable {
             Iterator<SharedKvEntry> it = registeredKvEntries.values().iterator();
             while (it.hasNext()) {
                 SharedKvEntry entry = it.next();
-                if (entry.lastUsedSnapshotID < lowestSnapshotID) {
+                if (entry.lastUsedSnapshotID < lowestSnapshotID
+                        && !isReferencedByStillInUse(entry, stillInUseSnapshotIds)) {
                     subsumed.add(entry.kvFileHandle);
                     it.remove();
                     fileSize -= entry.kvFileHandle.getSize();
@@ -151,6 +175,23 @@ public class SharedKvFileRegistry implements AutoCloseable {
         for (KvFileHandle handle : subsumed) {
             scheduleAsyncDelete(handle);
         }
+    }
+
+    /**
+     * Check if a KV file entry is referenced by any still-in-use (leased) snapshot. A file is
+     * referenced by a snapshot if the snapshot ID falls within the file's usage range [{@code
+     * createdBySnapshotID}, {@code lastUsedSnapshotID}].
+     *
+     * <p>Note: {@code createdBySnapshotID} serves as the first snapshot ID that uses this file
+     * (i.e., firstUsedSnapshotID), while {@code lastUsedSnapshotID} is the last.
+     */
+    private boolean isReferencedByStillInUse(SharedKvEntry entry, Set<Long> stillInUseSnapshotIds) {
+        for (Long snapshotId : stillInUseSnapshotIds) {
+            if (snapshotId >= entry.createdBySnapshotID && snapshotId <= entry.lastUsedSnapshotID) {
+                return true;
+            }
+        }
+        return false;
     }
 
     public void registerAll(KvSnapshotHandle kvSnapshotHandle, long snapshotID) {
@@ -211,7 +252,17 @@ public class SharedKvFileRegistry implements AutoCloseable {
 
     private static final class SharedKvEntry {
 
+        /**
+         * The snapshot ID that first created/registered this KV file. This effectively serves as
+         * {@code firstUsedSnapshotID} — the lower bound of the snapshot range referencing this
+         * file.
+         */
         private final long createdBySnapshotID;
+
+        /**
+         * The snapshot ID that last referenced this KV file — the upper bound of the snapshot range
+         * referencing this file.
+         */
         private long lastUsedSnapshotID;
         /** The shared kv file handle. */
         KvFileHandle kvFileHandle;

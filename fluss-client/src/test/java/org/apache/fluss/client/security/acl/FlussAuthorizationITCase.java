@@ -22,6 +22,7 @@ import org.apache.fluss.client.ConnectionFactory;
 import org.apache.fluss.client.FlussConnection;
 import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.client.admin.FlussAdmin;
+import org.apache.fluss.client.admin.KvSnapshotLease;
 import org.apache.fluss.client.table.Table;
 import org.apache.fluss.client.table.scanner.batch.BatchScanner;
 import org.apache.fluss.client.table.writer.AppendWriter;
@@ -55,6 +56,7 @@ import org.apache.fluss.rpc.messages.GetKvSnapshotMetadataRequest;
 import org.apache.fluss.rpc.messages.InitWriterRequest;
 import org.apache.fluss.rpc.messages.InitWriterResponse;
 import org.apache.fluss.rpc.messages.MetadataRequest;
+import org.apache.fluss.rpc.messages.ReleaseKvSnapshotLeaseRequest;
 import org.apache.fluss.rpc.metrics.TestingClientMetricGroup;
 import org.apache.fluss.security.acl.AccessControlEntry;
 import org.apache.fluss.security.acl.AccessControlEntryFilter;
@@ -1058,6 +1060,136 @@ public class FlussAuthorizationITCase {
             // Cleanup the table for the next iteration.
             rootAdmin.dropTable(transientTable, true).get();
         }
+    }
+
+    // ------------------------------------------------------------------------
+    //  KV Snapshot Lease Authorization Tests
+    // ------------------------------------------------------------------------
+
+    @Test
+    void testAcquireKvSnapshotLease() throws Exception {
+        TableInfo tableInfo = rootAdmin.getTableInfo(DATA1_TABLE_PATH_PK).get();
+        long tableId = tableInfo.getTableId();
+        FLUSS_CLUSTER_EXTENSION.waitUntilTableReady(tableId);
+
+        KvSnapshotLease kvSnapshotLease =
+                guestAdmin.createKvSnapshotLease(
+                        "test-acquire-lease", Duration.ofDays(1).toMillis());
+        Map<TableBucket, Long> snapshotIds = new HashMap<>();
+        snapshotIds.put(new TableBucket(tableId, 0), 0L);
+
+        // test acquireKvSnapshotLease without READ permission on table resource
+        assertThatThrownBy(() -> kvSnapshotLease.acquireSnapshots(snapshotIds).get())
+                .rootCause()
+                .isInstanceOf(AuthorizationException.class)
+                .hasMessageContaining(
+                        String.format(
+                                "Principal %s have no authorization to operate READ on resource Resource{type=TABLE, name='%s'}",
+                                guestPrincipal, DATA1_TABLE_PATH_PK));
+
+        // add READ permission to guest user on table resource
+        List<AclBinding> aclBindings =
+                Collections.singletonList(
+                        new AclBinding(
+                                Resource.table(DATA1_TABLE_PATH_PK),
+                                new AccessControlEntry(
+                                        guestPrincipal, "*", READ, PermissionType.ALLOW)));
+        rootAdmin.createAcls(aclBindings).all().get();
+        FLUSS_CLUSTER_EXTENSION.waitUntilAuthenticationSync(aclBindings, true);
+
+        // test acquireKvSnapshotLease with READ permission should succeed
+        // (no AuthorizationException should be thrown)
+        kvSnapshotLease.acquireSnapshots(snapshotIds).get();
+
+        // cleanup: drop the lease using root admin
+        guestAdmin
+                .createKvSnapshotLease("test-acquire-lease", Duration.ofDays(1).toMillis())
+                .dropLease()
+                .get();
+    }
+
+    @Test
+    void testReleaseKvSnapshotLease() throws Exception {
+        TableInfo tableInfo = rootAdmin.getTableInfo(DATA1_TABLE_PATH_PK).get();
+        long tableId = tableInfo.getTableId();
+        FLUSS_CLUSTER_EXTENSION.waitUntilTableReady(tableId);
+
+        AdminGateway guestGateway = ((FlussAdmin) guestAdmin).getAdminGateway();
+        ReleaseKvSnapshotLeaseRequest request =
+                ClientRpcMessageUtils.makeReleaseKvSnapshotLeaseRequest(
+                        "test-release-lease", Collections.singleton(new TableBucket(tableId, 0)));
+
+        // test releaseKvSnapshotLease without READ permission on table resource
+        assertThatThrownBy(() -> guestGateway.releaseKvSnapshotLease(request).get())
+                .rootCause()
+                .isInstanceOf(AuthorizationException.class)
+                .hasMessageContaining(
+                        String.format(
+                                "Principal %s have no authorization to operate READ on resource Resource{type=TABLE, name='%s'}",
+                                guestPrincipal, DATA1_TABLE_PATH_PK));
+
+        // add READ permission to guest user on table resource
+        List<AclBinding> aclBindings =
+                Collections.singletonList(
+                        new AclBinding(
+                                Resource.table(DATA1_TABLE_PATH_PK),
+                                new AccessControlEntry(
+                                        guestPrincipal, "*", READ, PermissionType.ALLOW)));
+        rootAdmin.createAcls(aclBindings).all().get();
+        FLUSS_CLUSTER_EXTENSION.waitUntilAuthenticationSync(aclBindings, true);
+
+        // test releaseKvSnapshotLease with READ permission should succeed
+        // (the lease doesn't exist, but no AuthorizationException should be thrown)
+        guestGateway.releaseKvSnapshotLease(request).get();
+    }
+
+    @Test
+    void testDropKvSnapshotLease() throws Exception {
+        TableInfo tableInfo = rootAdmin.getTableInfo(DATA1_TABLE_PATH_PK).get();
+        long tableId = tableInfo.getTableId();
+        FLUSS_CLUSTER_EXTENSION.waitUntilTableReady(tableId);
+
+        KvSnapshotLease kvSnapshotLease =
+                guestAdmin.createKvSnapshotLease("test-drop-lease", Duration.ofDays(1).toMillis());
+        Map<TableBucket, Long> snapshotIds = new HashMap<>();
+        snapshotIds.put(new TableBucket(tableId, 0), 0L);
+
+        // this there is no lease exists, so no AuthorizationException should be thrown
+        kvSnapshotLease.dropLease().get();
+
+        // add READ permission to guest user on table resource
+        List<AclBinding> aclBindings =
+                Collections.singletonList(
+                        new AclBinding(
+                                Resource.table(DATA1_TABLE_PATH_PK),
+                                new AccessControlEntry(
+                                        guestPrincipal, "*", READ, PermissionType.ALLOW)));
+        rootAdmin.createAcls(aclBindings).all().get();
+        FLUSS_CLUSTER_EXTENSION.waitUntilAuthenticationSync(aclBindings, true);
+
+        // test acquireKvSnapshotLease with READ permission should succeed
+        // (no AuthorizationException should be thrown)
+        kvSnapshotLease.acquireSnapshots(snapshotIds).get();
+
+        // remove the READ permission to guest user on table resource
+        rootAdmin.dropAcls(Collections.singletonList(AclBindingFilter.ANY)).all().get();
+
+        // After removing the READ permission, AuthorizationException should be thrown
+        assertThatThrownBy(() -> kvSnapshotLease.dropLease().get())
+                .rootCause()
+                .isInstanceOf(AuthorizationException.class)
+                .hasMessageContaining(
+                        String.format(
+                                "Principal %s have no authorization to operate READ on resource Resource{type=TABLE, name='%s'}",
+                                guestPrincipal, DATA1_TABLE_PATH_PK));
+
+        // add READ permission to guest user on table resource
+        rootAdmin.createAcls(aclBindings).all().get();
+        FLUSS_CLUSTER_EXTENSION.waitUntilAuthenticationSync(aclBindings, true);
+
+        // test dropKvSnapshotLease with READ permission should succeed
+        // (no AuthorizationException should be thrown)
+        kvSnapshotLease.dropLease().get();
     }
 
     // ------------------------------------------------------------------------

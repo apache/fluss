@@ -97,6 +97,10 @@ public final class TestData {
                     currentMillis);
 
     // for log table / partition table
+    public static final TablePath PARTITION_TABLE_PATH =
+            new TablePath("test_db_1", "test_partition_table");
+    public static final long PARTITION_TABLE_ID = 150008L;
+
     public static final TableDescriptor DATA1_PARTITIONED_TABLE_DESCRIPTOR =
             TableDescriptor.builder()
                     .schema(DATA1_SCHEMA)
@@ -107,6 +111,16 @@ public final class TestData {
                             ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT,
                             AutoPartitionTimeUnit.YEAR)
                     .build();
+
+    public static final TableInfo PARTITION_TABLE_INFO =
+            TableInfo.of(
+                    PARTITION_TABLE_PATH,
+                    PARTITION_TABLE_ID,
+                    1,
+                    DATA1_PARTITIONED_TABLE_DESCRIPTOR,
+                    System.currentTimeMillis(),
+                    System.currentTimeMillis());
+
     public static final PhysicalTablePath DATA1_PHYSICAL_TABLE_PATH_PA_2024 =
             PhysicalTablePath.of(DATA1_TABLE_PATH, "2024");
 

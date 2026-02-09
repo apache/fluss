@@ -401,6 +401,11 @@ public class FlussAdmin implements Admin {
     }
 
     @Override
+    public KvSnapshotLease createKvSnapshotLease(String leaseId, long leaseDurationMs) {
+        return new KvSnapshotLeaseImpl(leaseId, leaseDurationMs, gateway);
+    }
+
+    @Override
     public CompletableFuture<LakeSnapshot> getLatestLakeSnapshot(TablePath tablePath) {
         GetLatestLakeSnapshotRequest request = new GetLatestLakeSnapshotRequest();
         request.setTablePath()

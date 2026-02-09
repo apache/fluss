@@ -23,6 +23,7 @@ import org.apache.fluss.cluster.rebalance.RebalancePlanForBucket;
 import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.DatabaseSummary;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.SchemaInfo;
@@ -41,6 +42,7 @@ import org.apache.fluss.server.zk.data.ServerTags;
 import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.server.zk.data.TabletServerRegistration;
+import org.apache.fluss.server.zk.data.lease.KvSnapshotLeaseMetadata;
 import org.apache.fluss.shaded.curator5.org.apache.curator.CuratorZookeeperClient;
 import org.apache.fluss.shaded.curator5.org.apache.curator.framework.CuratorFramework;
 import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException;
@@ -487,6 +489,36 @@ class ZooKeeperClientTest {
         zookeeperClient.deleteTableBucketSnapshot(table1Bucket2, 2);
         assertThat(zookeeperClient.getTableBucketAllSnapshotAndIds(table1Bucket2)).isEmpty();
         assertThat(zookeeperClient.getTableBucketSnapshot(table1Bucket2, 1)).isEmpty();
+    }
+
+    @Test
+    void testKvSnapshotLease() throws Exception {
+        Map<Long, FsPath> tableIdToRemotePath = new HashMap<>();
+        tableIdToRemotePath.put(150002L, new FsPath("/test/cp1"));
+        KvSnapshotLeaseMetadata leaseMetadata =
+                new KvSnapshotLeaseMetadata(1000L, tableIdToRemotePath);
+
+        assertThat(zookeeperClient.getKvSnapshotLeasesList()).isEmpty();
+        zookeeperClient.registerKvSnapshotLeaseMetadata("lease1", leaseMetadata);
+        assertThat(zookeeperClient.getKvSnapshotLeasesList()).containsExactly("lease1");
+
+        Optional<KvSnapshotLeaseMetadata> metadataOpt =
+                zookeeperClient.getKvSnapshotLeaseMetadata("lease1");
+        assertThat(metadataOpt.isPresent()).isTrue();
+        assertThat(metadataOpt.get()).isEqualTo(leaseMetadata);
+
+        tableIdToRemotePath = new HashMap<>();
+        tableIdToRemotePath.put(150002L, new FsPath("/test/cp2"));
+        leaseMetadata = new KvSnapshotLeaseMetadata(1000L, tableIdToRemotePath);
+        zookeeperClient.updateKvSnapshotLeaseMetadata("lease1", leaseMetadata);
+
+        metadataOpt = zookeeperClient.getKvSnapshotLeaseMetadata("lease1");
+        assertThat(metadataOpt.isPresent()).isTrue();
+        assertThat(metadataOpt.get()).isEqualTo(leaseMetadata);
+
+        zookeeperClient.deleteKvSnapshotLease("lease1");
+        metadataOpt = zookeeperClient.getKvSnapshotLeaseMetadata("lease1");
+        assertThat(metadataOpt).isNotPresent();
     }
 
     @Test

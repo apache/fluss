@@ -378,6 +378,29 @@ message GetKvSnapshotMetadataResponse {
   repeated PbRemotePathAndLocalFile snapshot_files = 2;
 }
 
+message AcquireKvSnapshotLeaseRequest {
+  required string lease_id = 1;
+  required int64 lease_duration_ms = 2;
+  repeated PbKvSnapshotLeaseForTable snapshots_to_lease = 3;
+}
+
+message AcquireKvSnapshotLeaseResponse {
+  repeated PbKvSnapshotLeaseForTable unavailable_snapshots = 1;
+}
+
+message ReleaseKvSnapshotLeaseRequest {
+  required string lease_id = 1;
+  repeated PbTableBucket buckets_to_release = 2;
+}
+
+message ReleaseKvSnapshotLeaseResponse {}
+
+message DropKvSnapshotLeaseRequest {
+  required string lease_id = 1;
+}
+
+message DropKvSnapshotLeaseResponse {}
+
 message GetLatestLakeSnapshotRequest {
   required PbTablePath table_path = 1;
 }
@@ -1138,4 +1161,15 @@ message PbDatabaseSummary {
   required string database_name = 1;
   required int64 created_time = 2;
   required int32 table_count = 3;
+}
+
+message PbKvSnapshotLeaseForTable {
+  required int64 table_id = 1;
+  repeated PbKvSnapshotLeaseForBucket bucket_snapshots = 2;
+}
+
+message PbKvSnapshotLeaseForBucket {
+  optional int64 partition_id = 1;
+  required int32 bucket_id = 2;
+  required int64 snapshot_id = 3;
 }

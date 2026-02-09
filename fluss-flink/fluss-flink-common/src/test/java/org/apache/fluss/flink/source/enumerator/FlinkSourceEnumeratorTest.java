@@ -27,6 +27,7 @@ import org.apache.fluss.flink.lake.split.LakeSnapshotAndFlussLogSplit;
 import org.apache.fluss.flink.lake.split.LakeSnapshotSplit;
 import org.apache.fluss.flink.source.event.PartitionBucketsUnsubscribedEvent;
 import org.apache.fluss.flink.source.event.PartitionsRemovedEvent;
+import org.apache.fluss.flink.source.reader.LeaseContext;
 import org.apache.fluss.flink.source.split.HybridSnapshotLogSplit;
 import org.apache.fluss.flink.source.split.LogSplit;
 import org.apache.fluss.flink.source.split.SnapshotSplit;
@@ -113,7 +114,8 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
                             DEFAULT_SCAN_PARTITION_DISCOVERY_INTERVAL_MS,
                             streaming,
                             null,
-                            null);
+                            null,
+                            LeaseContext.DEFAULT);
 
             enumerator.start();
 
@@ -161,7 +163,8 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
                             DEFAULT_SCAN_PARTITION_DISCOVERY_INTERVAL_MS,
                             streaming,
                             null,
-                            null);
+                            null,
+                            LeaseContext.DEFAULT);
             enumerator.start();
             // register all read
             for (int i = 0; i < numSubtasks; i++) {
@@ -233,7 +236,8 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
                             DEFAULT_SCAN_PARTITION_DISCOVERY_INTERVAL_MS,
                             streaming,
                             null,
-                            null);
+                            null,
+                            LeaseContext.DEFAULT);
 
             enumerator.start();
 
@@ -280,7 +284,8 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
                             DEFAULT_SCAN_PARTITION_DISCOVERY_INTERVAL_MS,
                             streaming,
                             null,
-                            null);
+                            null,
+                            LeaseContext.DEFAULT);
 
             enumerator.start();
 
@@ -317,7 +322,8 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
                             DEFAULT_SCAN_PARTITION_DISCOVERY_INTERVAL_MS,
                             streaming,
                             null,
-                            null);
+                            null,
+                            LeaseContext.DEFAULT);
 
             enumerator.start();
 
@@ -378,7 +384,8 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
                             DEFAULT_SCAN_PARTITION_DISCOVERY_INTERVAL_MS,
                             streaming,
                             null,
-                            null);
+                            null,
+                            LeaseContext.DEFAULT);
 
             enumerator.start();
             assertThat(context.getSplitsAssignmentSequence()).isEmpty();
@@ -427,7 +434,9 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
                                 streaming,
                                 null,
                                 null,
-                                workExecutor)) {
+                                workExecutor,
+                                LeaseContext.DEFAULT)) {
+
             Map<Long, String> partitionNameByIds =
                     waitUntilPartitions(zooKeeperClient, DEFAULT_TABLE_PATH);
             enumerator.start();
@@ -543,7 +552,8 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
                                 DEFAULT_SCAN_PARTITION_DISCOVERY_INTERVAL_MS,
                                 streaming,
                                 null,
-                                null)) {
+                                null,
+                                LeaseContext.DEFAULT)) {
 
             // test splits for same non-partitioned bucket, should assign to same task
             TableBucket t1 = new TableBucket(tableId, 0);
@@ -656,7 +666,8 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
                                 streaming,
                                 null,
                                 lakeSource,
-                                workExecutor)) {
+                                workExecutor,
+                                LeaseContext.DEFAULT)) {
             enumerator.start();
 
             // Remove the hybrid partition to mock expire after enumerator start

@@ -505,6 +505,226 @@ class CompletedSnapshotStoreTest {
         }
     }
 
+    @Test
+    void testLeasedSnapshotDoesNotBlockSubsumedSnapshotCleanup() throws Exception {
+        // Simulate that snapshot 1 has a lease and cannot be subsumed.
+        // The snapshotInUse checker returns true for snapshot 1, meaning it is in-use.
+        CompletedSnapshotStore store =
+                createCompletedSnapshotStore(
+                        1,
+                        defaultHandleStore,
+                        Collections.emptyList(),
+                        bucket -> bucket.getSnapshotID() == 1L);
+
+        CompletedSnapshot cp1 = getSnapshot(1L);
+        CompletedSnapshot cp2 = getSnapshot(2L);
+        CompletedSnapshot cp3 = getSnapshot(3L);
+
+        store.add(cp1);
+        assertThat(store.getAllSnapshots()).hasSize(1);
+        assertThat(store.getAllSnapshots().get(0).getSnapshotID()).isEqualTo(1L);
+        assertThat(store.stillInUseSnapshots).isEmpty();
+
+        store.add(cp2);
+
+        // After adding cp1 and cp2 with maxRetain=1:
+        // cp1 can't be subsumed (leased) → moved to stillInUseSnapshots
+        // cp2 is latest → retained in completedSnapshots
+        assertThat(store.getAllSnapshots()).hasSize(1);
+        assertThat(store.getAllSnapshots().get(0).getSnapshotID()).isEqualTo(2L);
+        assertThat(store.stillInUseSnapshots).containsKey(1L);
+
+        store.add(cp3);
+
+        // After adding cp3 with maxRetain=1:
+        // cp1 is still in stillInUseSnapshots (lease not expired)
+        // cp2 CAN be subsumed → subsumed and cleaned.
+        //   With the fix, cleanSubsumedSnapshots uses upTo = snapshot.getSnapshotID() + 1 = 4,
+        //   and stillInUseIds = {1L}, so cp2 (ID=2, not in stillInUse) will be properly cleaned.
+        // cp3 is latest → retained in completedSnapshots
+        List<CompletedSnapshot> remaining = store.getAllSnapshots();
+        assertThat(remaining).hasSize(1);
+        assertThat(remaining.get(0).getSnapshotID()).isEqualTo(3L);
+        assertThat(store.stillInUseSnapshots).containsKey(1L);
+    }
+
+    @Test
+    void testLeasedSnapshotSSTFileCleanupWithStillInUse() throws Exception {
+        // Lease protects snapshot 1.
+        SharedKvFileRegistry registry = new SharedKvFileRegistry();
+
+        TestKvHandle fileA = new TestKvHandle("fileA");
+        TestKvHandle fileB = new TestKvHandle("fileB");
+        TestKvHandle fileC = new TestKvHandle("fileC");
+        TestKvHandle fileD = new TestKvHandle("fileD");
+        TestKvHandle fileE = new TestKvHandle("fileE");
+        TestKvHandle fileF = new TestKvHandle("fileF");
+
+        // Snapshot 1: fileA (new), fileB (new)
+        CompletedSnapshot cp1 =
+                getSnapshotWithSharedFiles(
+                        1L,
+                        Arrays.asList(
+                                KvFileHandleAndLocalPath.of(fileA, "a.sst"),
+                                KvFileHandleAndLocalPath.of(fileB, "b.sst")));
+        // Snapshot 2: fileA (placeholder), fileC (new)
+        CompletedSnapshot cp2 =
+                getSnapshotWithSharedFiles(
+                        2L,
+                        Arrays.asList(
+                                KvFileHandleAndLocalPath.of(
+                                        new PlaceholderKvFileHandler(fileA), "a.sst"),
+                                KvFileHandleAndLocalPath.of(fileC, "c.sst")));
+        // Snapshot 3: fileA (placeholder), fileD (new)
+        CompletedSnapshot cp3 =
+                getSnapshotWithSharedFiles(
+                        3L,
+                        Arrays.asList(
+                                KvFileHandleAndLocalPath.of(
+                                        new PlaceholderKvFileHandler(fileA), "a.sst"),
+                                KvFileHandleAndLocalPath.of(fileD, "d.sst")));
+        // Snapshot 4: fileA (placeholder), fileE (new)
+        CompletedSnapshot cp4 =
+                getSnapshotWithSharedFiles(
+                        4L,
+                        Arrays.asList(
+                                KvFileHandleAndLocalPath.of(
+                                        new PlaceholderKvFileHandler(fileA), "a.sst"),
+                                KvFileHandleAndLocalPath.of(fileE, "e.sst")));
+        // Snapshot 5: fileA (placeholder), fileF (new)
+        CompletedSnapshot cp5 =
+                getSnapshotWithSharedFiles(
+                        5L,
+                        Arrays.asList(
+                                KvFileHandleAndLocalPath.of(
+                                        new PlaceholderKvFileHandler(fileA), "a.sst"),
+                                KvFileHandleAndLocalPath.of(fileF, "f.sst")));
+
+        CompletedSnapshotStore store =
+                new CompletedSnapshotStore(
+                        2,
+                        registry,
+                        Collections.emptyList(),
+                        defaultHandleStore,
+                        executorService,
+                        bucket -> bucket.getSnapshotID() == 1L);
+
+        store.add(cp1);
+        store.add(cp2);
+        store.add(cp3);
+        store.add(cp4);
+        store.add(cp5);
+
+        // Wait for async cleanup
+        Thread.sleep(200);
+
+        // Verify snapshot state: completedSnapshots = [4, 5], stillInUse = {1}
+        assertThat(store.getAllSnapshots()).hasSize(2);
+        assertThat(
+                        store.getAllSnapshots().stream()
+                                .map(CompletedSnapshot::getSnapshotID)
+                                .collect(Collectors.toList()))
+                .containsExactly(4L, 5L);
+        assertThat(store.stillInUseSnapshots).hasSize(1);
+        assertThat(store.stillInUseSnapshots).containsKey(1L);
+
+        // Verify SST file cleanup:
+        // fileA: shared across all, lastUsed=5, NOT deleted
+        assertThat(fileA.discarded).isFalse();
+        // fileB: exclusive to snapshot 1, protected by lease
+        assertThat(fileB.discarded).isFalse();
+        // fileC: exclusive to snapshot 2, not protected, DELETED
+        assertThat(fileC.discarded).isTrue();
+        // fileD: exclusive to snapshot 3, not protected, DELETED
+        assertThat(fileD.discarded).isTrue();
+        // fileE: exclusive to snapshot 4, still in retention window, NOT deleted
+        assertThat(fileE.discarded).isFalse();
+        // fileF: exclusive to snapshot 5, still in retention window, NOT deleted
+        assertThat(fileF.discarded).isFalse();
+    }
+
+    @Test
+    void testLeaseExpirySSTCleanup() throws Exception {
+        // Use a mutable set to control which snapshots are leased.
+        Set<Long> leasedSnapshotIds = new HashSet<>();
+        leasedSnapshotIds.add(1L);
+
+        SharedKvFileRegistry registry = new SharedKvFileRegistry();
+
+        TestKvHandle fileA = new TestKvHandle("fileA");
+        TestKvHandle fileB = new TestKvHandle("fileB"); // exclusive to snapshot 1
+
+        CompletedSnapshot cp1 =
+                getSnapshotWithSharedFiles(
+                        1L,
+                        Arrays.asList(
+                                KvFileHandleAndLocalPath.of(fileA, "a.sst"),
+                                KvFileHandleAndLocalPath.of(fileB, "b.sst")));
+        CompletedSnapshot cp2 =
+                getSnapshotWithSharedFiles(
+                        2L,
+                        Collections.singletonList(
+                                KvFileHandleAndLocalPath.of(
+                                        new PlaceholderKvFileHandler(fileA), "a.sst")));
+
+        CompletedSnapshotStore store =
+                new CompletedSnapshotStore(
+                        1,
+                        registry,
+                        Collections.emptyList(),
+                        defaultHandleStore,
+                        executorService,
+                        bucket -> leasedSnapshotIds.contains(bucket.getSnapshotID()));
+
+        store.add(cp1);
+        store.add(cp2);
+
+        // cp1 leased → moved to stillInUseSnapshots, completedSnapshots = [2]
+        assertThat(store.stillInUseSnapshots).containsKey(1L);
+        assertThat(store.getAllSnapshots()).hasSize(1);
+        // fileB is protected by lease
+        assertThat(fileB.discarded).isFalse();
+
+        // Simulate lease expiry.
+        leasedSnapshotIds.remove(1L);
+
+        // Add a new snapshot to trigger the release check.
+        CompletedSnapshot cp3 =
+                getSnapshotWithSharedFiles(
+                        3L,
+                        Collections.singletonList(
+                                KvFileHandleAndLocalPath.of(
+                                        new PlaceholderKvFileHandler(fileA), "a.sst")));
+        store.add(cp3);
+        Thread.sleep(200);
+
+        // After lease expiry: stillInUseSnapshots should be empty
+        assertThat(store.stillInUseSnapshots).isEmpty();
+        assertThat(store.getAllSnapshots()).hasSize(1);
+        assertThat(store.getAllSnapshots().get(0).getSnapshotID()).isEqualTo(3L);
+
+        // fileB should now be cleaned up (no longer protected)
+        assertThat(fileB.discarded).isTrue();
+        // fileA is still used by the latest snapshot
+        assertThat(fileA.discarded).isFalse();
+    }
+
+    private CompletedSnapshotStore createCompletedSnapshotStore(
+            int numToRetain,
+            CompletedSnapshotHandleStore snapshotHandleStore,
+            Collection<CompletedSnapshot> completedSnapshots,
+            CompletedSnapshotStore.SnapshotInUseChecker snapshotInUseChecker) {
+
+        SharedKvFileRegistry sharedKvFileRegistry = new SharedKvFileRegistry();
+        return new CompletedSnapshotStore(
+                numToRetain,
+                sharedKvFileRegistry,
+                completedSnapshots,
+                snapshotHandleStore,
+                executorService,
+                snapshotInUseChecker);
+    }
+
     private List<CompletedSnapshot> mapToCompletedSnapshot(
             List<Tuple2<CompletedSnapshotHandle, String>> snapshotHandles) {
         return snapshotHandles.stream()
@@ -527,6 +747,16 @@ class CompletedSnapshotStoreTest {
                 id,
                 new FsPath(tempDir.toString(), "test_snapshot"),
                 new KvSnapshotHandle(Collections.emptyList(), Collections.emptyList(), 0));
+    }
+
+    private CompletedSnapshot getSnapshotWithSharedFiles(
+            long id, List<KvFileHandleAndLocalPath> sharedFiles) {
+        TableBucket tableBucket = new TableBucket(1, 1);
+        return new CompletedSnapshot(
+                tableBucket,
+                id,
+                new FsPath(tempDir.toString(), "snapshot_" + id),
+                new KvSnapshotHandle(sharedFiles, Collections.emptyList(), 0));
     }
 
     private void testSnapshotRetention(
@@ -557,7 +787,8 @@ class CompletedSnapshotStoreTest {
                 sharedKvFileRegistry,
                 completedSnapshots,
                 snapshotHandleStore,
-                executorService);
+                executorService,
+                bucket -> false);
     }
 
     private List<Tuple2<CompletedSnapshotHandle, String>> createSnapshotHandles(int num) {
@@ -581,5 +812,22 @@ class CompletedSnapshotStoreTest {
             stateHandles.add(new Tuple2<>(snapshotStateHandle, String.valueOf(i)));
         }
         return stateHandles;
+    }
+
+    /** A test KvFileHandle that tracks whether it has been discarded. */
+    private static class TestKvHandle extends KvFileHandle {
+
+        private static final long serialVersionUID = 1L;
+
+        boolean discarded;
+
+        TestKvHandle(String path) {
+            super(path, 10);
+        }
+
+        @Override
+        public void discard() throws Exception {
+            this.discarded = true;
+        }
     }
 }

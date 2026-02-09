@@ -407,6 +407,9 @@
                                         <exclude>
                                             org.apache.fluss.flink.metrics.*
                                         </exclude>
+                                        <exclude>
+                                            org.apache.fluss.flink.procedure.*
+                                        </exclude>
                                         <!-- end exclude for flink-connector -->
                                         <!-- exclude flink 1.18 compatibility class for sink -->
                                         <exclude>org.apache.flink.streaming.api.functions.sink.v2.*</exclude>

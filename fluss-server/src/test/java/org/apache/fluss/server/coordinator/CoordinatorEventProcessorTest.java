@@ -48,6 +48,7 @@ import org.apache.fluss.server.coordinator.event.AdjustIsrReceivedEvent;
 import org.apache.fluss.server.coordinator.event.CommitKvSnapshotEvent;
 import org.apache.fluss.server.coordinator.event.CommitRemoteLogManifestEvent;
 import org.apache.fluss.server.coordinator.event.CoordinatorEventManager;
+import org.apache.fluss.server.coordinator.lease.KvSnapshotLeaseManager;
 import org.apache.fluss.server.coordinator.statemachine.BucketState;
 import org.apache.fluss.server.coordinator.statemachine.ReplicaState;
 import org.apache.fluss.server.entity.AdjustIsrResultForBucket;
@@ -78,6 +79,7 @@ import org.apache.fluss.server.zk.data.ZkData.TableIdsZNode;
 import org.apache.fluss.testutils.common.AllCallbackWrapper;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.utils.ExceptionUtils;
+import org.apache.fluss.utils.clock.SystemClock;
 import org.apache.fluss.utils.concurrent.ExecutorThreadFactory;
 import org.apache.fluss.utils.types.Tuple2;
 
@@ -154,6 +156,7 @@ class CoordinatorEventProcessorTest {
     private LakeTableTieringManager lakeTableTieringManager;
     private CompletedSnapshotStoreManager completedSnapshotStoreManager;
     private CoordinatorMetadataCache serverMetadataCache;
+    private KvSnapshotLeaseManager kvSnapshotLeaseManager;
 
     @BeforeAll
     static void baseBeforeAll() throws Exception {
@@ -193,7 +196,17 @@ class CoordinatorEventProcessorTest {
                 new AutoPartitionManager(serverMetadataCache, metadataManager, new Configuration());
         lakeTableTieringManager = new LakeTableTieringManager();
         Configuration conf = new Configuration();
-        conf.setString(ConfigOptions.REMOTE_DATA_DIR, "/tmp/fluss/remote-data");
+        String remoteDataDir = "/tmp/fluss/remote-data";
+        conf.setString(ConfigOptions.REMOTE_DATA_DIR, remoteDataDir);
+        kvSnapshotLeaseManager =
+                new KvSnapshotLeaseManager(
+                        Duration.ofMinutes(10).toMillis(),
+                        zookeeperClient,
+                        remoteDataDir,
+                        SystemClock.getInstance(),
+                        TestingMetricGroups.COORDINATOR_METRICS);
+        kvSnapshotLeaseManager.start();
+
         eventProcessor = buildCoordinatorEventProcessor();
         eventProcessor.startup();
         metadataManager.createDatabase(
@@ -1051,7 +1064,8 @@ class CoordinatorEventProcessorTest {
                 TestingMetricGroups.COORDINATOR_METRICS,
                 new Configuration(),
                 Executors.newFixedThreadPool(1, new ExecutorThreadFactory("test-coordinator-io")),
-                metadataManager);
+                metadataManager,
+                kvSnapshotLeaseManager);
     }
 
     private void initCoordinatorChannel() throws Exception {

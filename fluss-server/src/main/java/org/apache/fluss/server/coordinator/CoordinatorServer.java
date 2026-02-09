@@ -33,6 +33,7 @@ import org.apache.fluss.server.DynamicConfigManager;
 import org.apache.fluss.server.ServerBase;
 import org.apache.fluss.server.authorizer.Authorizer;
 import org.apache.fluss.server.authorizer.AuthorizerLoader;
+import org.apache.fluss.server.coordinator.lease.KvSnapshotLeaseManager;
 import org.apache.fluss.server.coordinator.rebalance.RebalanceManager;
 import org.apache.fluss.server.metadata.CoordinatorMetadataCache;
 import org.apache.fluss.server.metadata.ServerMetadataCache;
@@ -44,6 +45,8 @@ import org.apache.fluss.server.zk.data.CoordinatorAddress;
 import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException;
 import org.apache.fluss.utils.ExceptionUtils;
 import org.apache.fluss.utils.ExecutorUtils;
+import org.apache.fluss.utils.clock.Clock;
+import org.apache.fluss.utils.clock.SystemClock;
 import org.apache.fluss.utils.concurrent.ExecutorThreadFactory;
 import org.apache.fluss.utils.concurrent.FutureUtils;
 
@@ -85,6 +88,7 @@ public class CoordinatorServer extends ServerBase {
     private final CompletableFuture<Result> terminationFuture;
 
     private final AtomicBoolean isShutDown = new AtomicBoolean(false);
+    private final Clock clock;
 
     @GuardedBy("lock")
     private String serverId;
@@ -141,10 +145,18 @@ public class CoordinatorServer extends ServerBase {
     @GuardedBy("lock")
     private LakeCatalogDynamicLoader lakeCatalogDynamicLoader;
 
+    @GuardedBy("lock")
+    private KvSnapshotLeaseManager kvSnapshotLeaseManager;
+
     public CoordinatorServer(Configuration conf) {
+        this(conf, SystemClock.getInstance());
+    }
+
+    public CoordinatorServer(Configuration conf, Clock clock) {
         super(conf);
         validateConfigs(conf);
         this.terminationFuture = new CompletableFuture<>();
+        this.clock = clock;
     }
 
     public static void main(String[] args) {
@@ -196,6 +208,18 @@ public class CoordinatorServer extends ServerBase {
                     Executors.newFixedThreadPool(
                             conf.get(ConfigOptions.SERVER_IO_POOL_SIZE),
                             new ExecutorThreadFactory("coordinator-io"));
+
+            // Initialize and start the kv snapshot lease manager
+            this.kvSnapshotLeaseManager =
+                    new KvSnapshotLeaseManager(
+                            conf.get(ConfigOptions.KV_SNAPSHOT_LEASE_EXPIRATION_CHECK_INTERVAL)
+                                    .toMillis(),
+                            zkClient,
+                            conf.getString(ConfigOptions.REMOTE_DATA_DIR),
+                            clock,
+                            serverMetricGroup);
+            kvSnapshotLeaseManager.start();
+
             this.coordinatorService =
                     new CoordinatorService(
                             conf,
@@ -208,7 +232,8 @@ public class CoordinatorServer extends ServerBase {
                             lakeCatalogDynamicLoader,
                             lakeTableTieringManager,
                             dynamicConfigManager,
-                            ioExecutor);
+                            ioExecutor,
+                            kvSnapshotLeaseManager);
 
             this.rpcServer =
                     RpcServer.create(
@@ -250,7 +275,8 @@ public class CoordinatorServer extends ServerBase {
                             serverMetricGroup,
                             conf,
                             ioExecutor,
-                            metadataManager);
+                            metadataManager,
+                            kvSnapshotLeaseManager);
             coordinatorEventProcessor.startup();
 
             createDefaultDatabase();
@@ -449,6 +475,11 @@ public class CoordinatorServer extends ServerBase {
                 if (lakeCatalogDynamicLoader != null) {
                     lakeCatalogDynamicLoader.close();
                 }
+
+                if (kvSnapshotLeaseManager != null) {
+                    kvSnapshotLeaseManager.close();
+                }
+
             } catch (Throwable t) {
                 exception = ExceptionUtils.firstOrSuppressed(t, exception);
             }
