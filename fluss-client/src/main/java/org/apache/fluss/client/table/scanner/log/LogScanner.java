@@ -107,6 +107,16 @@ public interface LogScanner extends AutoCloseable {
     void unsubscribe(long partitionId, int bucket);
 
     /**
+     * Unsubscribe from the given bucket of a non-partitioned table dynamically.
+     *
+     * <p>Please use {@link #unsubscribe(long, int)} to unsubscribe a partitioned table.
+     *
+     * @param bucket the table bucket to unsubscribe.
+     * @throws java.lang.IllegalStateException if the table is a partitioned table.
+     */
+    void unsubscribe(int bucket);
+
+    /**
      * Subscribe to the given partitioned table bucket from beginning dynamically. If the table
      * bucket is already subscribed, the start offset will be updated.
      *

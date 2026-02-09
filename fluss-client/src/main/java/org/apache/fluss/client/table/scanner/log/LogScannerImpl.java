@@ -226,6 +226,23 @@ public class LogScannerImpl implements LogScanner {
     }
 
     @Override
+    public void unsubscribe(int bucket) {
+        if (isPartitionedTable) {
+            throw new IllegalStateException(
+                    "The table is a partitioned table, please use "
+                            + "\"unsubscribe(long partitionId, int bucket)\" to "
+                            + "unsubscribe a partitioned bucket instead.");
+        }
+        acquireAndEnsureOpen();
+        try {
+            TableBucket tableBucket = new TableBucket(tableId, bucket);
+            this.logScannerStatus.unassignScanBuckets(Collections.singletonList(tableBucket));
+        } finally {
+            release();
+        }
+    }
+
+    @Override
     public void wakeup() {
         logFetcher.wakeup();
     }
