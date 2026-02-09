@@ -788,7 +788,7 @@ class CompletedSnapshotStoreTest {
                 completedSnapshots,
                 snapshotHandleStore,
                 executorService,
-                bucket -> true);
+                bucket -> false);
     }
 
     private List<Tuple2<CompletedSnapshotHandle, String>> createSnapshotHandles(int num) {
