@@ -18,6 +18,7 @@
 package org.apache.fluss.server.log;
 
 import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
@@ -78,6 +79,7 @@ final class LogManagerTest extends LogTestBase {
     private TableBucket tableBucket1;
     private TableBucket tableBucket2;
     private LogManager logManager;
+    private FsPath remoteDataDir;
 
     // TODO add more tests refer to kafka's LogManagerTest.
 
@@ -94,6 +96,8 @@ final class LogManagerTest extends LogTestBase {
         super.before();
         conf.setString(ConfigOptions.DATA_DIR, tempDir.getAbsolutePath());
         conf.setString(ConfigOptions.COORDINATOR_HOST, "localhost");
+
+        remoteDataDir = zkClient.getDefaultRemoteDataDir();
 
         String dbName = "db1";
         tablePath1 = TablePath.of(dbName, "t1");
@@ -113,10 +117,12 @@ final class LogManagerTest extends LogTestBase {
     private void registerTableInZkClient() throws Exception {
         ZOO_KEEPER_EXTENSION_WRAPPER.getCustomExtension().cleanupRoot();
         zkClient.registerTable(
-                tablePath1, TableRegistration.newTable(DATA1_TABLE_ID, DATA1_TABLE_DESCRIPTOR));
+                tablePath1,
+                TableRegistration.newTable(DATA1_TABLE_ID, remoteDataDir, DATA1_TABLE_DESCRIPTOR));
         zkClient.registerFirstSchema(tablePath1, DATA1_SCHEMA);
         zkClient.registerTable(
-                tablePath2, TableRegistration.newTable(DATA2_TABLE_ID, DATA2_TABLE_DESCRIPTOR));
+                tablePath2,
+                TableRegistration.newTable(DATA2_TABLE_ID, remoteDataDir, DATA2_TABLE_DESCRIPTOR));
         zkClient.registerFirstSchema(tablePath2, DATA2_SCHEMA);
     }
 

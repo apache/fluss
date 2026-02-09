@@ -19,6 +19,7 @@ package org.apache.fluss.lake.iceberg.tiering;
 
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.lake.committer.CommitterInitContext;
 import org.apache.fluss.lake.committer.LakeCommitter;
 import org.apache.fluss.lake.serializer.SimpleVersionedSerializer;
@@ -88,6 +89,7 @@ class IcebergTieringTest {
     private @TempDir File tempWarehouseDir;
     private IcebergLakeTieringFactory icebergLakeTieringFactory;
     private Catalog icebergCatalog;
+    private FsPath remoteDataDir;
 
     @BeforeEach
     void beforeEach() {
@@ -99,6 +101,8 @@ class IcebergTieringTest {
         icebergCatalog = provider.get();
 
         icebergLakeTieringFactory = new IcebergLakeTieringFactory(configuration);
+
+        remoteDataDir = new FsPath("/tmp/remote_data");
     }
 
     private static Stream<Arguments> tieringWriteArgs() {
@@ -134,7 +138,7 @@ class IcebergTieringTest {
                         .distributedBy(BUCKET_NUM)
                         .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
                         .build();
-        TableInfo tableInfo = TableInfo.of(tablePath, 0, 1, descriptor, 1L, 1L);
+        TableInfo tableInfo = TableInfo.of(tablePath, 0, 1, descriptor, remoteDataDir, 1L, 1L);
 
         Table icebergTable = icebergCatalog.loadTable(toIceberg(tablePath));
 

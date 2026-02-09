@@ -530,6 +530,7 @@ public class ServerRpcMessageUtils {
                         .setTableId(tableInfo.getTableId())
                         .setSchemaId(tableInfo.getSchemaId())
                         .setTableJson(tableInfo.toTableDescriptor().toJsonBytes())
+                        .setRemoteDataDir(tableInfo.getRemoteDataDir().toString())
                         .setCreatedTime(tableInfo.getCreatedTime())
                         .setModifiedTime(tableInfo.getModifiedTime());
         TablePath tablePath = tableInfo.getTablePath();
@@ -588,6 +589,7 @@ public class ServerRpcMessageUtils {
                         tableId,
                         pbTableMetadata.getSchemaId(),
                         TableDescriptor.fromJsonBytes(pbTableMetadata.getTableJson()),
+                        new FsPath(pbTableMetadata.getRemoteDataDir()),
                         pbTableMetadata.getCreatedTime(),
                         pbTableMetadata.getModifiedTime());
 

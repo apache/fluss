@@ -20,6 +20,7 @@ package org.apache.fluss.server.zk.data;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.TableConfig;
+import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableDescriptor;
@@ -52,6 +53,17 @@ public class TableRegistration {
     public final int bucketCount;
     public final Map<String, String> properties;
     public final Map<String, String> customProperties;
+
+    /**
+     * The remote data directory of the table. It is null if and only if it is deserialized by
+     * {@link TableRegistrationJsonSerde} from an existing node produced by an older version that
+     * does not support multiple remote paths. But immediately after that, we will set it as the
+     * default remote file path configured by {@link ConfigOptions#REMOTE_DATA_DIR} (see {@link
+     * org.apache.fluss.server.zk.ZooKeeperClient#getTable}). This unifies subsequent usage and
+     * eliminates the need to account for differences between versions.
+     */
+    public final FsPath remoteDataDir;
+
     public final long createdTime;
     public final long modifiedTime;
 
@@ -62,6 +74,7 @@ public class TableRegistration {
             TableDistribution tableDistribution,
             Map<String, String> properties,
             Map<String, String> customProperties,
+            FsPath remoteDataDir,
             long createdTime,
             long modifiedTime) {
         checkArgument(
@@ -74,6 +87,7 @@ public class TableRegistration {
         this.bucketKeys = tableDistribution.getBucketKeys();
         this.properties = properties;
         this.customProperties = customProperties;
+        this.remoteDataDir = remoteDataDir;
         this.createdTime = createdTime;
         this.modifiedTime = modifiedTime;
     }
@@ -111,12 +125,14 @@ public class TableRegistration {
                 this.bucketCount,
                 properties,
                 Configuration.fromMap(this.customProperties),
+                this.remoteDataDir,
                 this.comment,
                 this.createdTime,
                 this.modifiedTime);
     }
 
-    public static TableRegistration newTable(long tableId, TableDescriptor tableDescriptor) {
+    public static TableRegistration newTable(
+            long tableId, FsPath remoteDataDir, TableDescriptor tableDescriptor) {
         checkArgument(
                 tableDescriptor.getTableDistribution().isPresent(),
                 "Table distribution is required for table registration.");
@@ -128,6 +144,7 @@ public class TableRegistration {
                 tableDescriptor.getTableDistribution().get(),
                 tableDescriptor.getProperties(),
                 tableDescriptor.getCustomProperties(),
+                remoteDataDir,
                 currentMillis,
                 currentMillis);
     }
@@ -142,8 +159,30 @@ public class TableRegistration {
                 new TableDistribution(bucketCount, bucketKeys),
                 newProperties,
                 newCustomProperties,
+                remoteDataDir,
                 createdTime,
                 currentMillis);
+    }
+
+    /**
+     * Returns a new registration with the given remote data directory. Should only be called by
+     * {@link org.apache.fluss.server.zk.ZooKeeperClient#getTable} when deserialize an old
+     * TableRegistration node without remote data dir configured.
+     *
+     * @param remoteDataDir the remote data directory
+     * @return a new registration with the given remote data directory
+     */
+    public TableRegistration newRemoteDataDir(FsPath remoteDataDir) {
+        return new TableRegistration(
+                tableId,
+                comment,
+                partitionKeys,
+                new TableDistribution(bucketCount, bucketKeys),
+                properties,
+                customProperties,
+                remoteDataDir,
+                createdTime,
+                modifiedTime);
     }
 
     @Override
@@ -164,7 +203,8 @@ public class TableRegistration {
                 && Objects.equals(bucketCount, that.bucketCount)
                 && Objects.equals(bucketKeys, that.bucketKeys)
                 && Objects.equals(properties, that.properties)
-                && Objects.equals(customProperties, that.customProperties);
+                && Objects.equals(customProperties, that.customProperties)
+                && Objects.equals(remoteDataDir, that.remoteDataDir);
     }
 
     @Override
@@ -177,6 +217,7 @@ public class TableRegistration {
                 bucketKeys,
                 properties,
                 customProperties,
+                remoteDataDir,
                 createdTime,
                 modifiedTime);
     }
@@ -199,6 +240,8 @@ public class TableRegistration {
                 + properties
                 + ", customProperties="
                 + customProperties
+                + ", remoteDataDir="
+                + remoteDataDir
                 + ", createdTime="
                 + createdTime
                 + ", modifiedTime="

@@ -19,6 +19,7 @@ package org.apache.fluss.server.metadata;
 
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.SchemaNotExistException;
+import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.SchemaInfo;
@@ -27,8 +28,11 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.coordinator.LakeCatalogDynamicLoader;
 import org.apache.fluss.server.coordinator.MetadataManager;
 
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
+import java.io.File;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
@@ -46,6 +50,14 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link ServerSchemaCache}. */
 public class ServerSchemaCacheTest {
+
+    private static @TempDir File tempDir;
+    private static FsPath remoteDataDir;
+
+    @BeforeAll
+    static void beforeAll() {
+        remoteDataDir = FsPath.fromLocalFile(tempDir);
+    }
 
     @Test
     void testPublishAndSubscribeSchemaChange() {
@@ -89,6 +101,7 @@ public class ServerSchemaCacheTest {
                         DATA1_TABLE_ID,
                         2,
                         DATA2_TABLE_DESCRIPTOR,
+                        remoteDataDir,
                         System.currentTimeMillis(),
                         System.currentTimeMillis());
         ServerSchemaCache manager =

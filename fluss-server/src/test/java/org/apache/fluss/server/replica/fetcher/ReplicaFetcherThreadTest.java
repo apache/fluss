@@ -22,6 +22,7 @@ import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.FlussRuntimeException;
+import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.rpc.RpcClient;
@@ -93,6 +94,7 @@ public class ReplicaFetcherThreadTest {
     private static ZooKeeperClient zkClient;
     private ManualClock manualClock;
     private @TempDir File tempDir;
+    private FsPath remoteDataDir;
     private TableBucket tb;
     private final int leaderServerId = 1;
     private final int followerServerId = 2;
@@ -115,6 +117,7 @@ public class ReplicaFetcherThreadTest {
         ZOO_KEEPER_EXTENSION_WRAPPER.getCustomExtension().cleanupRoot();
         manualClock = new ManualClock(System.currentTimeMillis());
         Configuration conf = new Configuration();
+        remoteDataDir = new FsPath(tempDir.getAbsolutePath() + "/remote_data_dir");
         tb = new TableBucket(DATA1_TABLE_ID, 0);
         leaderRM = createReplicaManager(leaderServerId);
         followerRM = createReplicaManager(followerServerId);
@@ -377,7 +380,7 @@ public class ReplicaFetcherThreadTest {
         ZOO_KEEPER_EXTENSION_WRAPPER.getCustomExtension().cleanupRoot();
         zkClient.registerTable(
                 DATA1_TABLE_PATH,
-                TableRegistration.newTable(DATA1_TABLE_ID, DATA1_TABLE_DESCRIPTOR));
+                TableRegistration.newTable(DATA1_TABLE_ID, remoteDataDir, DATA1_TABLE_DESCRIPTOR));
         zkClient.registerFirstSchema(DATA1_TABLE_PATH, DATA1_SCHEMA);
     }
 
