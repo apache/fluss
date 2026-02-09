@@ -17,41 +17,37 @@
 
 package org.apache.fluss.server.coordinator.event.watcher;
 
-import org.apache.fluss.cluster.ServerType;
-import org.apache.fluss.server.coordinator.event.DeadTabletServerEvent;
+import org.apache.fluss.server.coordinator.event.DeadCoordinatorEvent;
 import org.apache.fluss.server.coordinator.event.EventManager;
-import org.apache.fluss.server.coordinator.event.NewTabletServerEvent;
-import org.apache.fluss.server.metadata.ServerInfo;
+import org.apache.fluss.server.coordinator.event.NewCoordinatorEvent;
 import org.apache.fluss.server.zk.ZooKeeperClient;
-import org.apache.fluss.server.zk.data.TabletServerRegistration;
-import org.apache.fluss.server.zk.data.ZkData.ServerIdZNode;
-import org.apache.fluss.server.zk.data.ZkData.ServerIdsZNode;
+import org.apache.fluss.server.zk.data.ZkData;
 import org.apache.fluss.shaded.curator5.org.apache.curator.framework.recipes.cache.ChildData;
 import org.apache.fluss.shaded.curator5.org.apache.curator.framework.recipes.cache.CuratorCacheListener;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-/** A watcher to watch the tablet server changes(new/delete) in zookeeper. */
-public class TabletServerChangeWatcher extends ServerBaseChangeWatcher {
+/** A watcher to watch the coordinator server changes(new/delete) in zookeeper. */
+public class CoordinatorChangeWatcher extends ServerBaseChangeWatcher {
 
-    private static final Logger LOG = LoggerFactory.getLogger(TabletServerChangeWatcher.class);
+    private static final Logger LOG = LoggerFactory.getLogger(CoordinatorChangeWatcher.class);
 
-    public TabletServerChangeWatcher(ZooKeeperClient zooKeeperClient, EventManager eventManager) {
-        super(zooKeeperClient, eventManager, ServerIdsZNode.path());
+    public CoordinatorChangeWatcher(ZooKeeperClient zooKeeperClient, EventManager eventManager) {
+        super(zooKeeperClient, eventManager, ZkData.CoordinatorIdsZNode.path());
     }
 
     @Override
     protected CuratorCacheListener createListener() {
-        return new TabletServerChangeListener();
+        return new CoordinatorChangeListener();
     }
 
     @Override
     protected String getWatcherName() {
-        return "TabletServerChangeWatcher";
+        return "CoordinatorChangeWatcher";
     }
 
-    private final class TabletServerChangeListener implements CuratorCacheListener {
+    private final class CoordinatorChangeListener implements CuratorCacheListener {
 
         @Override
         public void event(Type type, ChildData oldData, ChildData newData) {
@@ -66,16 +62,8 @@ public class TabletServerChangeWatcher extends ServerBaseChangeWatcher {
                     {
                         if (newData != null && newData.getData().length > 0) {
                             int serverId = getServerIdFromEvent(newData);
-                            TabletServerRegistration registration =
-                                    ServerIdZNode.decode(newData.getData());
                             LOG.info("Received CHILD_ADDED event for server {}.", serverId);
-                            eventManager.put(
-                                    new NewTabletServerEvent(
-                                            new ServerInfo(
-                                                    serverId,
-                                                    registration.getRack(),
-                                                    registration.getEndpoints(),
-                                                    ServerType.TABLET_SERVER)));
+                            eventManager.put(new NewCoordinatorEvent(serverId));
                         }
                         break;
                     }
@@ -84,7 +72,7 @@ public class TabletServerChangeWatcher extends ServerBaseChangeWatcher {
                         if (oldData != null && oldData.getData().length > 0) {
                             int serverId = getServerIdFromEvent(oldData);
                             LOG.info("Received CHILD_REMOVED event for server {}.", serverId);
-                            eventManager.put(new DeadTabletServerEvent(serverId));
+                            eventManager.put(new DeadCoordinatorEvent(serverId));
                         }
                         break;
                     }

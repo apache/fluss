@@ -35,7 +35,7 @@ public class CoordinatorAddressJsonSerde
 
     public static final CoordinatorAddressJsonSerde INSTANCE = new CoordinatorAddressJsonSerde();
     private static final String VERSION_KEY = "version";
-    private static final int VERSION = 2;
+    private static final int VERSION = 3;
 
     private static final String ID = "id";
     private static final String HOST = "host";
@@ -51,7 +51,7 @@ public class CoordinatorAddressJsonSerde
             throws IOException {
         generator.writeStartObject();
         writeVersion(generator);
-        generator.writeStringField(ID, coordinatorAddress.getId());
+        generator.writeNumberField(ID, coordinatorAddress.getId());
         generator.writeStringField(
                 LISTENERS, Endpoint.toListenersString(coordinatorAddress.getEndpoints()));
         generator.writeEndObject();
@@ -60,13 +60,18 @@ public class CoordinatorAddressJsonSerde
     @Override
     public CoordinatorAddress deserialize(JsonNode node) {
         int version = node.get(VERSION_KEY).asInt();
-        String id = node.get(ID).asText();
+        int id;
         List<Endpoint> endpoints;
         if (version == 1) {
+            id = Integer.parseInt(node.get(ID).asText());
             String host = node.get(HOST).asText();
             int port = node.get(PORT).asInt();
             endpoints = Collections.singletonList(new Endpoint(host, port, "CLIENT"));
+        } else if (version == 2) {
+            id = Integer.parseInt(node.get(ID).asText());
+            endpoints = Endpoint.fromListenersString(node.get(LISTENERS).asText());
         } else {
+            id = node.get(ID).asInt();
             endpoints = Endpoint.fromListenersString(node.get(LISTENERS).asText());
         }
         return new CoordinatorAddress(id, endpoints);

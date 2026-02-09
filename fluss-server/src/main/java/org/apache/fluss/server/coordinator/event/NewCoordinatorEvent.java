@@ -15,51 +15,42 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.server.zk.data;
+package org.apache.fluss.server.coordinator.event;
 
-import org.apache.fluss.cluster.Endpoint;
-
-import java.util.List;
 import java.util.Objects;
 
-/**
- * The address information of an active coordinator stored in {@link ZkData.CoordinatorLeaderZNode}.
- *
- * @see CoordinatorAddressJsonSerde for json serialization and deserialization.
- */
-public class CoordinatorAddress {
-    private final int id;
-    private final List<Endpoint> endpoints;
+/** An event for new coordinator server. */
+public class NewCoordinatorEvent implements CoordinatorEvent {
 
-    public CoordinatorAddress(int id, List<Endpoint> endpoints) {
-        this.id = id;
-        this.endpoints = endpoints;
+    private final int serverId;
+
+    public NewCoordinatorEvent(int serverId) {
+        this.serverId = serverId;
     }
 
-    public int getId() {
-        return id;
-    }
-
-    public List<Endpoint> getEndpoints() {
-        return endpoints;
+    public int getServerId() {
+        return serverId;
     }
 
     @Override
     public boolean equals(Object o) {
+        if (this == o) {
+            return true;
+        }
         if (o == null || getClass() != o.getClass()) {
             return false;
         }
-        CoordinatorAddress that = (CoordinatorAddress) o;
-        return Objects.equals(id, that.id) && Objects.equals(endpoints, that.endpoints);
+        NewCoordinatorEvent that = (NewCoordinatorEvent) o;
+        return serverId == that.serverId;
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(id, endpoints);
+        return Objects.hash(serverId);
     }
 
     @Override
     public String toString() {
-        return "CoordinatorAddress{" + "id='" + id + '\'' + ", endpoints=" + endpoints + '}';
+        return "NewCoordinatorEvent{" + "serverId=" + serverId + '}';
     }
 }

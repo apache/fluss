@@ -1917,6 +1917,11 @@ public class ReplicaManager {
         return serverMetricGroup;
     }
 
+    @VisibleForTesting
+    public void resetCoordinatorEpoch() {
+        this.coordinatorEpoch = CoordinatorContext.INITIAL_COORDINATOR_EPOCH;
+    }
+
     /**
      * Interface to represent the state of hosted {@link Replica}. We create a concrete (active)
      * {@link Replica} instance when the TabletServer receives a createLogLeader request or
