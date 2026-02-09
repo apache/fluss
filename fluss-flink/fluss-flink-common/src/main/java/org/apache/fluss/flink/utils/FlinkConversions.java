@@ -691,7 +691,7 @@ public class FlinkConversions {
         // Parse and add aggregation function if needed
         if (parseAggFunction) {
             Optional<AggFunction> aggFunction =
-                    FlinkAggFunctionParser.parseAggFunction(columnName, tableConf);
+                    FlinkAggFunctionParser.parseAggFunction(columnName, flussDataType, tableConf);
             if (aggFunction.isPresent()) {
                 schemaBuilder.column(columnName, flussDataType, aggFunction.get());
             } else {

@@ -18,9 +18,8 @@
 package org.apache.fluss.metadata;
 
 import org.apache.fluss.annotation.PublicEvolving;
-import org.apache.fluss.types.BooleanType;
 import org.apache.fluss.types.DataType;
-import org.apache.fluss.types.DataTypeFamily;
+import org.apache.fluss.types.DataTypeRoot;
 
 import java.util.Arrays;
 import java.util.Collections;
@@ -38,47 +37,93 @@ import static org.apache.fluss.utils.Preconditions.checkArgument;
 @PublicEvolving
 public enum AggFunctionType {
     // Numeric aggregation
-    SUM,
-    PRODUCT,
-    MAX,
-    MIN,
+    SUM(
+            Collections.emptySet(),
+            new DataTypeRoot[] {
+                DataTypeRoot.TINYINT,
+                DataTypeRoot.SMALLINT,
+                DataTypeRoot.INTEGER,
+                DataTypeRoot.BIGINT,
+                DataTypeRoot.FLOAT,
+                DataTypeRoot.DOUBLE,
+                DataTypeRoot.DECIMAL
+            }),
+    PRODUCT(
+            Collections.emptySet(),
+            new DataTypeRoot[] {
+                DataTypeRoot.TINYINT,
+                DataTypeRoot.SMALLINT,
+                DataTypeRoot.INTEGER,
+                DataTypeRoot.BIGINT,
+                DataTypeRoot.FLOAT,
+                DataTypeRoot.DOUBLE,
+                DataTypeRoot.DECIMAL
+            }),
+    MAX(
+            Collections.emptySet(),
+            new DataTypeRoot[] {
+                DataTypeRoot.CHAR,
+                DataTypeRoot.STRING,
+                DataTypeRoot.TINYINT,
+                DataTypeRoot.SMALLINT,
+                DataTypeRoot.INTEGER,
+                DataTypeRoot.BIGINT,
+                DataTypeRoot.FLOAT,
+                DataTypeRoot.DOUBLE,
+                DataTypeRoot.DECIMAL,
+                DataTypeRoot.DATE,
+                DataTypeRoot.TIME_WITHOUT_TIME_ZONE,
+                DataTypeRoot.TIMESTAMP_WITHOUT_TIME_ZONE,
+                DataTypeRoot.TIMESTAMP_WITH_LOCAL_TIME_ZONE
+            }),
+    MIN(
+            Collections.emptySet(),
+            new DataTypeRoot[] {
+                DataTypeRoot.CHAR,
+                DataTypeRoot.STRING,
+                DataTypeRoot.TINYINT,
+                DataTypeRoot.SMALLINT,
+                DataTypeRoot.INTEGER,
+                DataTypeRoot.BIGINT,
+                DataTypeRoot.FLOAT,
+                DataTypeRoot.DOUBLE,
+                DataTypeRoot.DECIMAL,
+                DataTypeRoot.DATE,
+                DataTypeRoot.TIME_WITHOUT_TIME_ZONE,
+                DataTypeRoot.TIMESTAMP_WITHOUT_TIME_ZONE,
+                DataTypeRoot.TIMESTAMP_WITH_LOCAL_TIME_ZONE
+            }),
 
     // Value selection
-    LAST_VALUE,
-    LAST_VALUE_IGNORE_NULLS,
-    FIRST_VALUE,
-    FIRST_VALUE_IGNORE_NULLS,
+    LAST_VALUE(Collections.emptySet(), DataTypeRoot.values()),
+    LAST_VALUE_IGNORE_NULLS(Collections.emptySet(), DataTypeRoot.values()),
+    FIRST_VALUE(Collections.emptySet(), DataTypeRoot.values()),
+    FIRST_VALUE_IGNORE_NULLS(Collections.emptySet(), DataTypeRoot.values()),
 
     // String aggregation
-    LISTAGG,
-    STRING_AGG, // Alias for LISTAGG - maps to same factory
+    LISTAGG(
+            Collections.singleton(AggFunctions.PARAM_DELIMITER),
+            new DataTypeRoot[] {DataTypeRoot.STRING, DataTypeRoot.CHAR}),
+    // Alias for LISTAGG - maps to same factory
+    STRING_AGG(
+            Collections.singleton(AggFunctions.PARAM_DELIMITER),
+            new DataTypeRoot[] {DataTypeRoot.STRING, DataTypeRoot.CHAR}),
 
     // Boolean aggregation
-    BOOL_AND,
-    BOOL_OR,
+    BOOL_AND(Collections.emptySet(), new DataTypeRoot[] {DataTypeRoot.BOOLEAN}),
+    BOOL_OR(Collections.emptySet(), new DataTypeRoot[] {DataTypeRoot.BOOLEAN}),
 
     // Roaring bitmap aggregation
-    RBM32,
-    RBM64;
+    RBM32(Collections.emptySet(), new DataTypeRoot[] {DataTypeRoot.BYTES}),
+    RBM64(Collections.emptySet(), new DataTypeRoot[] {DataTypeRoot.BYTES});
 
-    /** Parameter name for delimiter used in LISTAGG and STRING_AGG functions. */
-    public static final String PARAM_DELIMITER = "delimiter";
+    private final Set<String> supportedParameters;
 
-    /**
-     * Returns the set of supported parameter names for this aggregation function.
-     *
-     * @return an immutable set of parameter names
-     */
-    public Set<String> getSupportedParameters() {
-        switch (this) {
-            case LISTAGG:
-            case STRING_AGG:
-                // LISTAGG and STRING_AGG support optional "delimiter" parameter
-                return Collections.singleton(PARAM_DELIMITER);
-            default:
-                // All other functions do not accept parameters
-                return Collections.emptySet();
-        }
+    private final DataTypeRoot[] supportedDataTypeRoots;
+
+    AggFunctionType(Set<String> supportedParameters, DataTypeRoot[] supportedDataTypeRoots) {
+        this.supportedParameters = supportedParameters;
+        this.supportedDataTypeRoots = supportedDataTypeRoots;
     }
 
     /**
@@ -90,23 +135,23 @@ public enum AggFunctionType {
      */
     public void validateParameter(String parameterName, String parameterValue) {
         // Check if parameter is supported
-        if (!getSupportedParameters().contains(parameterName)) {
+        if (!this.supportedParameters.contains(parameterName)) {
             throw new IllegalArgumentException(
                     String.format(
                             "Parameter '%s' is not supported for aggregation function '%s'. "
                                     + "Supported parameters: %s",
                             parameterName,
                             this,
-                            getSupportedParameters().isEmpty()
+                            this.supportedParameters.isEmpty()
                                     ? "none"
-                                    : getSupportedParameters()));
+                                    : this.supportedParameters));
         }
 
         // Validate parameter value based on function type and parameter name
         switch (this) {
             case LISTAGG:
             case STRING_AGG:
-                if (PARAM_DELIMITER.equals(parameterName)) {
+                if (AggFunctions.PARAM_DELIMITER.equals(parameterName)) {
                     if (parameterValue == null || parameterValue.isEmpty()) {
                         throw new IllegalArgumentException(
                                 String.format(
@@ -128,51 +173,12 @@ public enum AggFunctionType {
      * @throws IllegalArgumentException if the data type is invalid
      */
     public void validateDataType(DataType fieldType) {
-        switch (this) {
-                // The bool_and and bool_or don't have specific DataFamily, validate them by
-                // dataType directly.
-            case BOOL_AND:
-            case BOOL_OR:
-                checkArgument(
-                        fieldType instanceof BooleanType,
-                        "Data type for %s column must be 'BooleanType' but was '%s'.",
-                        toString(),
-                        fieldType);
-                break;
-            default:
-                DataTypeFamily[] dataTypeFamilies = getSupportedDataFamilies();
-                checkArgument(
-                        fieldType.isAnyOf(dataTypeFamilies),
-                        "Data type for %s column must be part of %s but was '%s'.",
-                        toString(),
-                        Arrays.deepToString(dataTypeFamilies),
-                        fieldType);
-                break;
-        }
-    }
-
-    private DataTypeFamily[] getSupportedDataFamilies() {
-        switch (this) {
-            case SUM:
-            case PRODUCT:
-                return new DataTypeFamily[] {DataTypeFamily.NUMERIC};
-            case MAX:
-            case MIN:
-                return new DataTypeFamily[] {
-                    DataTypeFamily.CHARACTER_STRING, DataTypeFamily.NUMERIC, DataTypeFamily.DATETIME
-                };
-            case LAST_VALUE:
-            case LAST_VALUE_IGNORE_NULLS:
-            case FIRST_VALUE:
-            case FIRST_VALUE_IGNORE_NULLS:
-                return DataTypeFamily.values();
-            case LISTAGG:
-            case STRING_AGG:
-                return new DataTypeFamily[] {DataTypeFamily.CHARACTER_STRING};
-            default:
-                throw new IllegalArgumentException(
-                        String.format("%s doesn't support any data type", this));
-        }
+        checkArgument(
+                fieldType.isAnyOf(this.supportedDataTypeRoots),
+                "Data type for %s column must be part of %s but was '%s'.",
+                toString(),
+                Arrays.deepToString(this.supportedDataTypeRoots),
+                fieldType);
     }
 
     /**
@@ -217,5 +223,9 @@ public enum AggFunctionType {
     @Override
     public String toString() {
         return name().toLowerCase(Locale.ROOT);
+    }
+
+    public DataTypeRoot[] getSupportedDataTypeRoots() {
+        return supportedDataTypeRoots;
     }
 }

@@ -350,4 +350,36 @@ class TableDescriptorTest {
                 .hasMessageContaining("some_param")
                 .hasMessageContaining("not supported");
     }
+
+    @Test
+    void testValidateAggFunctionWithDataType() {
+        Map<String, String> params = new HashMap<>();
+
+        // invalid case
+        assertThatThrownBy(
+                        () ->
+                                AggFunctions.of(AggFunctionType.BOOL_AND, params)
+                                        .validateDataType(DataTypes.STRING()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("column must be 'BooleanType' but was 'STRING'");
+
+        assertThatThrownBy(
+                        () ->
+                                AggFunctions.of(AggFunctionType.SUM, params)
+                                        .validateDataType(DataTypes.STRING()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("column must be part of [NUMERIC]");
+
+        assertThatThrownBy(
+                        () ->
+                                AggFunctions.of(AggFunctionType.MAX, params)
+                                        .validateDataType(DataTypes.BOOLEAN()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining(
+                        "column must be part of [CHARACTER_STRING, NUMERIC, DATETIME]");
+
+        // valid case
+        AggFunctions.of(AggFunctionType.LAST_VALUE, params).validateDataType(DataTypes.STRING());
+        AggFunctions.of(AggFunctionType.LISTAGG, params).validateDataType(DataTypes.STRING());
+    }
 }

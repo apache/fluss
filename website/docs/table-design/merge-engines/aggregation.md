@@ -831,7 +831,7 @@ TableDescriptor.builder()
 
 Aggregates serialized 32-bit RoaringBitmap values by union.
 
-- **Supported Data Types**: BYTES
+- **Supported Data Types**: `BYTES`
 - **Behavior**: ORs incoming bitmaps with the accumulator
 - **Null Handling**: Null values are ignored
 
@@ -868,7 +868,7 @@ Schema schema = Schema.newBuilder()
 
 Aggregates serialized 64-bit RoaringBitmap values by union.
 
-- **Supported Data Types**: BYTES
+- **Supported Data Types**: `BYTES`
 - **Behavior**: ORs incoming bitmaps with the accumulator
 - **Null Handling**: Null values are ignored
 
