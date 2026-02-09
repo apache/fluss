@@ -19,6 +19,7 @@ package org.apache.fluss.flink.utils;
 
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.flink.catalog.TestSchemaResolver;
+import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
@@ -63,6 +64,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link FlinkConversions}. */
 public class FlinkConversionsTest {
+
+    private static final FsPath REMOTE_DATA_DIR = new FsPath("/tmp/remote-data-dir");
 
     @Test
     void testTypeConversion() {
@@ -257,6 +260,7 @@ public class FlinkConversionsTest {
                         1L,
                         1,
                         flussTable.withBucketCount(1),
+                        REMOTE_DATA_DIR,
                         currentMillis,
                         currentMillis);
         // get the converted flink table
@@ -446,6 +450,7 @@ public class FlinkConversionsTest {
                         1L,
                         1,
                         flussTable.withBucketCount(1),
+                        REMOTE_DATA_DIR,
                         currentMillis,
                         currentMillis);
         // get the converted flink table
@@ -508,6 +513,7 @@ public class FlinkConversionsTest {
                         1L,
                         1,
                         flussTable.withBucketCount(1),
+                        REMOTE_DATA_DIR,
                         currentMillis,
                         currentMillis);
         CatalogTable convertedFlinkTable = (CatalogTable) FlinkConversions.toFlinkTable(tableInfo);

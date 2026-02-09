@@ -20,6 +20,7 @@ package org.apache.fluss.metadata;
 import org.apache.fluss.annotation.PublicEvolving;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.TableConfig;
+import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.types.RowType;
 
 import javax.annotation.Nullable;
@@ -59,6 +60,7 @@ public final class TableInfo {
     private final Configuration properties;
     private final TableConfig tableConfig;
     private final Configuration customProperties;
+    private final FsPath remoteDataDir;
     private final @Nullable String comment;
 
     private final long createdTime;
@@ -74,6 +76,7 @@ public final class TableInfo {
             int numBuckets,
             Configuration properties,
             Configuration customProperties,
+            FsPath remoteDataDir,
             @Nullable String comment,
             long createdTime,
             long modifiedTime) {
@@ -90,6 +93,7 @@ public final class TableInfo {
         this.properties = properties;
         this.tableConfig = new TableConfig(properties);
         this.customProperties = customProperties;
+        this.remoteDataDir = remoteDataDir;
         this.comment = comment;
         this.createdTime = createdTime;
         this.modifiedTime = modifiedTime;
@@ -263,6 +267,11 @@ public final class TableInfo {
         return customProperties;
     }
 
+    /** Returns the remote data directory of the table. */
+    public FsPath getRemoteDataDir() {
+        return remoteDataDir;
+    }
+
     /** Returns the comment/description of the table. */
     public Optional<String> getComment() {
         return Optional.ofNullable(comment);
@@ -314,6 +323,7 @@ public final class TableInfo {
             long tableId,
             int schemaId,
             TableDescriptor tableDescriptor,
+            FsPath remoteDataDir,
             long createdTime,
             long modifiedTime) {
         Schema schema = tableDescriptor.getSchema();
@@ -335,6 +345,7 @@ public final class TableInfo {
                 numBuckets,
                 Configuration.fromMap(tableDescriptor.getProperties()),
                 Configuration.fromMap(tableDescriptor.getCustomProperties()),
+                remoteDataDir,
                 tableDescriptor.getComment().orElse(null),
                 createdTime,
                 modifiedTime);
@@ -358,6 +369,7 @@ public final class TableInfo {
                 && Objects.equals(partitionKeys, that.partitionKeys)
                 && Objects.equals(properties, that.properties)
                 && Objects.equals(customProperties, that.customProperties)
+                && Objects.equals(remoteDataDir, that.remoteDataDir)
                 && Objects.equals(comment, that.comment);
     }
 
@@ -376,6 +388,7 @@ public final class TableInfo {
                 numBuckets,
                 properties,
                 customProperties,
+                remoteDataDir,
                 comment);
     }
 
@@ -402,6 +415,8 @@ public final class TableInfo {
                 + properties
                 + ", customProperties="
                 + customProperties
+                + ", remoteDataDir="
+                + remoteDataDir
                 + ", comment='"
                 + comment
                 + '\''

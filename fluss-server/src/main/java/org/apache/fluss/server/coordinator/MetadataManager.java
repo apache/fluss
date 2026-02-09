@@ -34,6 +34,7 @@ import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.exception.TableNotPartitionedException;
 import org.apache.fluss.exception.TooManyBucketsException;
 import org.apache.fluss.exception.TooManyPartitionsException;
+import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.lake.lakestorage.LakeCatalog;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.DatabaseInfo;
@@ -51,6 +52,7 @@ import org.apache.fluss.server.entity.TablePropertyChanges;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.DatabaseRegistration;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
+import org.apache.fluss.server.zk.data.PartitionRegistration;
 import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException;
@@ -275,6 +277,7 @@ public class MetadataManager {
      * Returns -1 if the table already exists and ignoreIfExists is true.
      *
      * @param tablePath the table path
+     * @param remoteDataDir the remote data directory
      * @param tableToCreate the table descriptor describing the table to create
      * @param tableAssignment the table assignment, will be null when the table is partitioned table
      * @param ignoreIfExists whether to ignore if the table already exists
@@ -282,6 +285,7 @@ public class MetadataManager {
      */
     public long createTable(
             TablePath tablePath,
+            FsPath remoteDataDir,
             TableDescriptor tableToCreate,
             @Nullable TableAssignment tableAssignment,
             boolean ignoreIfExists)
@@ -323,7 +327,9 @@ public class MetadataManager {
                     }
                     // register the table
                     zookeeperClient.registerTable(
-                            tablePath, TableRegistration.newTable(tableId, tableToCreate), false);
+                            tablePath,
+                            TableRegistration.newTable(tableId, remoteDataDir, tableToCreate),
+                            false);
                     return tableId;
                 },
                 "Fail to create table " + tablePath);
@@ -692,6 +698,7 @@ public class MetadataManager {
     public void createPartition(
             TablePath tablePath,
             long tableId,
+            FsPath remoteDataDir,
             PartitionAssignment partitionAssignment,
             ResolvedPartitionSpec partition,
             boolean ignoreIfExists) {
@@ -751,7 +758,12 @@ public class MetadataManager {
             long partitionId = zookeeperClient.getPartitionIdAndIncrement();
             // register partition assignments and partition metadata to zk in transaction
             zookeeperClient.registerPartitionAssignmentAndMetadata(
-                    partitionId, partitionName, partitionAssignment, tablePath, tableId);
+                    partitionId,
+                    partitionName,
+                    partitionAssignment,
+                    remoteDataDir,
+                    tablePath,
+                    tableId);
             LOG.info(
                     "Register partition {} to zookeeper for table [{}].", partitionName, tablePath);
         } catch (KeeperException.NodeExistsException nodeExistsException) {
@@ -800,7 +812,9 @@ public class MetadataManager {
     private Optional<TablePartition> getOptionalTablePartition(
             TablePath tablePath, String partitionName) {
         try {
-            return zookeeperClient.getPartition(tablePath, partitionName);
+            return zookeeperClient
+                    .getPartition(tablePath, partitionName)
+                    .map(PartitionRegistration::toTablePartition);
         } catch (Exception e) {
             throw new FlussRuntimeException(
                     String.format(

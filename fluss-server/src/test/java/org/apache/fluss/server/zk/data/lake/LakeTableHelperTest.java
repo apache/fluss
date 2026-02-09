@@ -82,7 +82,8 @@ class LakeTableHelperTest {
         conf.setString(
                 ConfigOptions.ZOOKEEPER_ADDRESS,
                 ZOO_KEEPER_EXTENSION_WRAPPER.getCustomExtension().getConnectString());
-        LakeTableHelper lakeTableHelper = new LakeTableHelper(zookeeperClient, tempDir.toString());
+        conf.setString(ConfigOptions.REMOTE_DATA_DIR, tempDir.toString());
+        LakeTableHelper lakeTableHelper = new LakeTableHelper(zookeeperClient);
         try (ZooKeeperClient zooKeeperClient =
                 ZooKeeperUtils.startZookeeperClient(conf, NOPErrorHandler.INSTANCE)) {
             // first create a table
@@ -97,6 +98,7 @@ class LakeTableHelperTest {
                                     1, Collections.singletonList("a")),
                             Collections.emptyMap(),
                             Collections.emptyMap(),
+                            new FsPath(tempDir.toString()),
                             System.currentTimeMillis(),
                             System.currentTimeMillis());
             zookeeperClient.registerTable(tablePath, tableReg);
@@ -128,7 +130,9 @@ class LakeTableHelperTest {
             long snapshot2Id = 2L;
             FsPath tieredOffsetsPath =
                     lakeTableHelper.storeLakeTableOffsetsFile(
-                            tablePath, new TableBucketOffsets(tableId, newBucketLogEndOffset));
+                            tableReg.remoteDataDir,
+                            tablePath,
+                            new TableBucketOffsets(tableId, newBucketLogEndOffset));
             lakeTableHelper.registerLakeTableSnapshotV2(
                     tableId,
                     new LakeTable.LakeSnapshotMetadata(
@@ -163,7 +167,9 @@ class LakeTableHelperTest {
             long snapshot3Id = 3L;
             tieredOffsetsPath =
                     lakeTableHelper.storeLakeTableOffsetsFile(
-                            tablePath, new TableBucketOffsets(tableId, newBucketLogEndOffset));
+                            tableReg.remoteDataDir,
+                            tablePath,
+                            new TableBucketOffsets(tableId, newBucketLogEndOffset));
             lakeTableHelper.registerLakeTableSnapshotV2(
                     tableId,
                     new LakeTable.LakeSnapshotMetadata(
