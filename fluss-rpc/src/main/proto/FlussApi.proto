@@ -40,6 +40,7 @@ message ApiVersionsRequest {
 
 message ApiVersionsResponse {
   repeated PbApiVersion api_versions = 1;
+  optional int32 server_type = 2;
 }
 
 // get schema request and response

@@ -19,8 +19,10 @@ package org.apache.fluss.rpc.netty.client;
 
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.cluster.ServerNode;
+import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.exception.DisconnectException;
 import org.apache.fluss.exception.FlussRuntimeException;
+import org.apache.fluss.exception.InvalidServerTypeException;
 import org.apache.fluss.exception.NetworkException;
 import org.apache.fluss.exception.RetriableAuthenticationException;
 import org.apache.fluss.rpc.messages.ApiMessage;
@@ -370,6 +372,26 @@ final class ServerConnection {
         if (!(response instanceof ApiVersionsResponse)) {
             close(new IllegalStateException("Unexpected response type " + response.getClass()));
             return;
+        }
+
+        if (((ApiVersionsResponse) response).hasServerType()) {
+            ServerType serverType =
+                    ServerType.forId(((ApiVersionsResponse) response).getServerType());
+            if (serverType != node.serverType()) {
+                LOG.warn(
+                        "Server type mismatch, expected: {}, actual: {}",
+                        node.serverType(),
+                        serverType);
+                close(
+                        new InvalidServerTypeException(
+                                "Server type mismatch, expected: "
+                                        + node.serverType()
+                                        + ", actual: "
+                                        + serverType
+                                        + ", node: "
+                                        + node));
+                return;
+            }
         }
 
         synchronized (lock) {

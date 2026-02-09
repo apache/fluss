@@ -54,6 +54,7 @@ public class TestingGatewayService extends RpcGatewayService {
         }
         ApiVersionsResponse response = new ApiVersionsResponse();
         response.addAllApiVersions(apiVersions);
+        response.setServerType(providerType() == ServerType.COORDINATOR ? 0 : 1);
         processorThreadNames.add(Thread.currentThread().getName());
         return CompletableFuture.completedFuture(response);
     }

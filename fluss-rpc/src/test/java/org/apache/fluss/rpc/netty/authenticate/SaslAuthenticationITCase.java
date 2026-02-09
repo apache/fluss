@@ -204,7 +204,7 @@ public class SaslAuthenticationITCase {
             // use client listener to connect to server
             ServerNode serverNode =
                     new ServerNode(
-                            1, "localhost", availablePort1.getPort(), ServerType.COORDINATOR);
+                            1, "localhost", availablePort1.getPort(), ServerType.TABLET_SERVER);
             try (NettyClient nettyClient =
                     new NettyClient(clientConfig, TestingClientMetricGroup.newInstance(), false)) {
                 ListTablesRequest request =

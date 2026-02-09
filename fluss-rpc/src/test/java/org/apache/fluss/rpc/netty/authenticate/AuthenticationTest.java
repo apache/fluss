@@ -250,10 +250,10 @@ public class AuthenticationTest {
             // use client listener to connect to server
             mutualAuthServerNode =
                     new ServerNode(
-                            1, "localhost", availablePort1.getPort(), ServerType.COORDINATOR);
+                            1, "localhost", availablePort1.getPort(), ServerType.TABLET_SERVER);
             usernamePasswordServerNode =
                     new ServerNode(
-                            2, "localhost", availablePort2.getPort(), ServerType.COORDINATOR);
+                            2, "localhost", availablePort2.getPort(), ServerType.TABLET_SERVER);
         }
     }
 
