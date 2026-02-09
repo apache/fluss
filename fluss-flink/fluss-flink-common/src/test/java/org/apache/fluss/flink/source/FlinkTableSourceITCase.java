@@ -401,6 +401,38 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
                 });
     }
 
+    @Test
+    void testReadWithKvSnapshotLeaseNoCheckpoint() throws Exception {
+        tEnv.executeSql(
+                "create table pk_table_with_kv_snapshot_lease2 (a int not null primary key not enforced, b varchar)");
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "pk_table_with_kv_snapshot_lease2");
+
+        List<InternalRow> rows = Arrays.asList(row(1, "v1"), row(2, "v2"), row(3, "v3"));
+
+        // write records
+        writeRows(conn, tablePath, rows, false);
+
+        FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshot(tablePath);
+
+        List<String> expectedRows = Arrays.asList("+I[1, v1]", "+I[2, v2]", "+I[3, v3]");
+        org.apache.flink.util.CloseableIterator<Row> rowIter =
+                tEnv.executeSql(
+                                "select * from pk_table_with_kv_snapshot_lease2 /*+ OPTIONS('scan.kv.snapshot.lease.id' = 'test-consumer-2') */")
+                        .collect();
+        assertResultsIgnoreOrder(rowIter, expectedRows, true);
+
+        // check lease will be dropped after job finished.
+        ZooKeeperClient zkClient = FLUSS_CLUSTER_EXTENSION.getZooKeeperClient();
+        retry(
+                Duration.ofMinutes(1),
+                () -> {
+                    assertThat(zkClient.getKvSnapshotLeaseMetadata("test-consumer-2"))
+                            .isNotPresent();
+                    assertThat(zkClient.getKvSnapshotLeasesList().contains("test-consumer-2"))
+                            .isFalse();
+                });
+    }
+
     // -------------------------------------------------------------------------------------
     // Fluss scan start mode tests
     // -------------------------------------------------------------------------------------

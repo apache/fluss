@@ -31,6 +31,7 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.lake.LakeSplitGenerator;
 import org.apache.fluss.flink.lake.split.LakeSnapshotAndFlussLogSplit;
 import org.apache.fluss.flink.lake.split.LakeSnapshotSplit;
+import org.apache.fluss.flink.source.FlinkSource;
 import org.apache.fluss.flink.source.event.FinishedKvSnapshotConsumeEvent;
 import org.apache.fluss.flink.source.event.PartitionBucketsUnsubscribedEvent;
 import org.apache.fluss.flink.source.event.PartitionsRemovedEvent;
@@ -156,6 +157,27 @@ public class FlinkSourceEnumerator
 
     private volatile boolean closed = false;
 
+    /**
+     * Whether a checkpoint has been successfully completed before.
+     *
+     * <p>This flag is used in {@link #close()} to decide whether the kv snapshot lease should be
+     * dropped:
+     *
+     * <ul>
+     *   <li>If {@code false} (no checkpoint completed), the lease ID has not been persisted to
+     *       checkpoint state, so it is safe to drop the lease on close — no future restore will
+     *       reference it.
+     *   <li>If {@code true} (at least one checkpoint completed), the lease ID has been persisted
+     *       and may be restored via {@link FlinkSource#restoreEnumerator}. Dropping the lease on
+     *       close would invalidate the restored lease, so it must be kept.
+     * </ul>
+     *
+     * <p>This field is initialized to {@code true} when restoring from a checkpoint (i.e., {@code
+     * assignedTableBuckets} is non-empty), and set to {@code true} in {@link
+     * #notifyCheckpointComplete(long)} upon the first successful checkpoint.
+     */
+    private volatile boolean checkpointTriggeredBefore;
+
     @Nullable private final Predicate partitionFilters;
 
     @Nullable private final LakeSource<LakeSplit> lakeSource;
@@ -171,7 +193,8 @@ public class FlinkSourceEnumerator
             boolean streaming,
             @Nullable Predicate partitionFilters,
             @Nullable LakeSource<LakeSplit> lakeSource,
-            LeaseContext leaseContext) {
+            LeaseContext leaseContext,
+            boolean checkpointTriggeredBefore) {
         this(
                 tablePath,
                 flussConf,
@@ -186,7 +209,8 @@ public class FlinkSourceEnumerator
                 streaming,
                 partitionFilters,
                 lakeSource,
-                leaseContext);
+                leaseContext,
+                checkpointTriggeredBefore);
     }
 
     public FlinkSourceEnumerator(
@@ -203,7 +227,8 @@ public class FlinkSourceEnumerator
             boolean streaming,
             @Nullable Predicate partitionFilters,
             @Nullable LakeSource<LakeSplit> lakeSource,
-            LeaseContext leaseContext) {
+            LeaseContext leaseContext,
+            boolean checkpointTriggeredBefore) {
         this(
                 tablePath,
                 flussConf,
@@ -219,7 +244,8 @@ public class FlinkSourceEnumerator
                 partitionFilters,
                 lakeSource,
                 new WorkerExecutor(context),
-                leaseContext);
+                leaseContext,
+                checkpointTriggeredBefore);
     }
 
     FlinkSourceEnumerator(
@@ -237,7 +263,8 @@ public class FlinkSourceEnumerator
             @Nullable Predicate partitionFilters,
             @Nullable LakeSource<LakeSplit> lakeSource,
             WorkerExecutor workerExecutor,
-            LeaseContext leaseContext) {
+            LeaseContext leaseContext,
+            boolean checkpointTriggeredBefore) {
         this.tablePath = checkNotNull(tablePath);
         this.flussConf = checkNotNull(flussConf);
         this.hasPrimaryKey = hasPrimaryKey;
@@ -259,6 +286,7 @@ public class FlinkSourceEnumerator
         this.lakeSource = lakeSource;
         this.workerExecutor = workerExecutor;
         this.leaseContext = leaseContext;
+        this.checkpointTriggeredBefore = checkpointTriggeredBefore;
     }
 
     @Override
@@ -1007,6 +1035,8 @@ public class FlinkSourceEnumerator
 
     @Override
     public void notifyCheckpointComplete(long checkpointId) throws Exception {
+        checkpointTriggeredBefore = true;
+
         // lower than this checkpoint id.
         Set<TableBucket> consumedKvSnapshots = getAndRemoveConsumedBucketsUpTo(checkpointId);
 
@@ -1053,24 +1083,43 @@ public class FlinkSourceEnumerator
         try {
             closed = true;
 
-            if (!streaming
-                    && hasPrimaryKey
-                    && startingOffsetsInitializer instanceof SnapshotOffsetsInitializer) {
-                // drop the kv snapshot lease for the batch mode.
-                flussAdmin
-                        .createKvSnapshotLease(
-                                leaseContext.getKvSnapshotLeaseId(),
-                                leaseContext.getKvSnapshotLeaseDurationMs())
-                        .dropLease()
-                        .get();
-            }
-
             if (workerExecutor != null) {
                 workerExecutor.close();
             }
+
             if (flussAdmin != null) {
+                if (!streaming
+                        && hasPrimaryKey
+                        && startingOffsetsInitializer instanceof SnapshotOffsetsInitializer) {
+                    // Drop the kv snapshot lease for the batch mode.
+                    LOG.info(
+                            "Dropping kv snapshot lease {} for batch mode.",
+                            leaseContext.getKvSnapshotLeaseId());
+                    flussAdmin
+                            .createKvSnapshotLease(
+                                    leaseContext.getKvSnapshotLeaseId(),
+                                    leaseContext.getKvSnapshotLeaseDurationMs())
+                            .dropLease()
+                            .get();
+                } else if (streaming && !checkpointTriggeredBefore) {
+                    // For streaming mode, if no checkpoint was triggered, the lease ID
+                    // has not been persisted to state. It won't be restored on restart,
+                    // so it's safe to drop it now.
+                    LOG.info(
+                            "Dropping kv snapshot lease {} for streaming mode"
+                                    + " (no checkpoint was triggered).",
+                            leaseContext.getKvSnapshotLeaseId());
+                    flussAdmin
+                            .createKvSnapshotLease(
+                                    leaseContext.getKvSnapshotLeaseId(),
+                                    leaseContext.getKvSnapshotLeaseDurationMs())
+                            .dropLease()
+                            .get();
+                }
+
                 flussAdmin.close();
             }
+
             if (connection != null) {
                 connection.close();
             }

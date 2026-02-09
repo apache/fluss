@@ -150,7 +150,8 @@ public class FlinkSource<OUT>
                 streaming,
                 partitionFilters,
                 lakeSource,
-                leaseContext);
+                leaseContext,
+                false);
     }
 
     @Override
@@ -173,7 +174,8 @@ public class FlinkSource<OUT>
                 lakeSource,
                 new LeaseContext(
                         sourceEnumeratorState.getLeaseId(),
-                        leaseContext.getKvSnapshotLeaseDurationMs()));
+                        leaseContext.getKvSnapshotLeaseDurationMs()),
+                true);
     }
 
     @Override
