@@ -18,6 +18,10 @@ All commands were tested with Docker version 27.4.0 and Docker Compose version v
 We encourage you to use a recent version of Docker and [Compose v2](https://docs.docker.com/compose/releases/migrate/) (however, Compose v1 might work with a few adaptions).
 :::
 
+:::tip
+RustFS is used as replacement for S3 in this quickstart example, for your production setup you may want to configure this to use cloud file system. See [here](/maintenance/filesystems/overview.md) for information on how to setup cloud file systems
+:::
+
 ### Starting required components
 
 <Tabs groupId="lake-tabs">
@@ -117,7 +121,7 @@ services:
         datalake.paimon.s3.secret-key: rustfsadmin
         datalake.paimon.s3.path.style.access: true
     volumes:
-      - ./lib/paimon-s3-1.3.1.jar:/opt/fluss/plugins/paimon/paimon-s3-1.3.1.jar
+      - ./lib/paimon-s3-$PAIMON_VERSION$.jar:/opt/fluss/plugins/paimon/paimon-s3-$PAIMON_VERSION$.jar
   tablet-server:
     image: apache/fluss:$FLUSS_DOCKER_VERSION$
     command: tabletServer
@@ -143,7 +147,7 @@ services:
         datalake.paimon.s3.secret-key: rustfsadmin
         datalake.paimon.s3.path.style.access: true
     volumes:
-      - ./lib/paimon-s3-1.3.1.jar:/opt/fluss/plugins/paimon/paimon-s3-1.3.1.jar
+      - ./lib/paimon-s3-$PAIMON_VERSION$.jar:/opt/fluss/plugins/paimon/paimon-s3-$PAIMON_VERSION$.jar
   zookeeper:
     restart: always
     image: zookeeper:3.9.2
@@ -153,8 +157,7 @@ services:
       - "8083:8081"
     entrypoint: ["/bin/bash", "-c"]
     command: >
-      "sed -i 's/exec $(drop_privs_cmd)//g' /docker-entrypoint.sh &&
-       cp /tmp/jars/*.jar /opt/flink/lib/ 2>/dev/null || true;
+      "cp /tmp/jars/*.jar /opt/flink/lib/ 2>/dev/null || true;
        cp /tmp/opt/*.jar /opt/flink/opt/ 2>/dev/null || true;
        /docker-entrypoint.sh jobmanager"
     environment:
@@ -170,8 +173,7 @@ services:
       - jobmanager
     entrypoint: ["/bin/bash", "-c"]
     command: >
-      "sed -i 's/exec $(drop_privs_cmd)//g' /docker-entrypoint.sh &&
-       cp /tmp/jars/*.jar /opt/flink/lib/ 2>/dev/null || true;
+      "cp /tmp/jars/*.jar /opt/flink/lib/ 2>/dev/null || true;
        cp /tmp/opt/*.jar /opt/flink/opt/ 2>/dev/null || true;
        /docker-entrypoint.sh taskmanager"
     environment:
@@ -353,8 +355,7 @@ services:
       - "8083:8081"
     entrypoint: ["/bin/bash", "-c"]
     command: >
-      "sed -i 's/exec $(drop_privs_cmd)//g' /docker-entrypoint.sh &&
-       cp /tmp/jars/*.jar /opt/flink/lib/ 2>/dev/null || true;
+      "cp /tmp/jars/*.jar /opt/flink/lib/ 2>/dev/null || true;
        cp /tmp/opt/*.jar /opt/flink/opt/ 2>/dev/null || true;
        /docker-entrypoint.sh jobmanager"
     environment:
@@ -374,8 +375,7 @@ services:
       - jobmanager
     entrypoint: ["/bin/bash", "-c"]
     command: >
-      "sed -i 's/exec $(drop_privs_cmd)//g' /docker-entrypoint.sh &&
-       cp /tmp/jars/*.jar /opt/flink/lib/ 2>/dev/null || true;
+      "cp /tmp/jars/*.jar /opt/flink/lib/ 2>/dev/null || true;
        cp /tmp/opt/*.jar /opt/flink/opt/ 2>/dev/null || true;
        /docker-entrypoint.sh taskmanager"
     environment:
@@ -997,78 +997,19 @@ The files adhere to Iceberg's standard format, enabling seamless querying with o
   </TabItem>
 </Tabs>
 
+### Quitting Sql Client
+
+The following command allows you to quit Flink SQL Client.
+```sql title="Flink SQL"
+quit;
+```
+
 ### Tiered Storage
 
-You can use the following command to view the files stored on RustFS:
-
-```shell
-docker run --rm --net=host \
--e MC_HOST_rustfs=http://rustfsadmin:rustfsadmin@localhost:9000 \
-minio/mc ls --recursive rustfs/fluss/                
-```
-
-<Tabs groupId="lake-tabs">
-  <TabItem value="paimon" label="Paimon" default>
-
-Sample output:
-
-```shell
-[2026-02-08 14:04:38 UTC]     0B STANDARD paimon/default.db/
-[2026-02-08 14:03:49 UTC]  18KiB STANDARD paimon/fluss.db/datalake_enriched_orders/bucket-0/changelog-05cec7e1-241b-4eb2-98f6-7cba7b028044-0.parquet
-[2026-02-08 14:04:49 UTC]  17KiB STANDARD paimon/fluss.db/datalake_enriched_orders/bucket-0/changelog-5b4af110-753a-4a90-a88c-575a358172cd-0.parquet
-[2026-02-08 14:03:49 UTC]  18KiB STANDARD paimon/fluss.db/datalake_enriched_orders/bucket-0/data-05cec7e1-241b-4eb2-98f6-7cba7b028044-1.parquet
-[2026-02-08 14:04:49 UTC]  17KiB STANDARD paimon/fluss.db/datalake_enriched_orders/bucket-0/data-5b4af110-753a-4a90-a88c-575a358172cd-1.parquet
-[2026-02-08 14:03:50 UTC] 2.3KiB STANDARD paimon/fluss.db/datalake_enriched_orders/manifest/manifest-682241ff-2c6e-4e2b-97d1-812a5c8c6513-0
-[2026-02-08 14:03:50 UTC] 2.3KiB STANDARD paimon/fluss.db/datalake_enriched_orders/manifest/manifest-682241ff-2c6e-4e2b-97d1-812a5c8c6513-1
-[2026-02-08 14:04:49 UTC] 2.3KiB STANDARD paimon/fluss.db/datalake_enriched_orders/manifest/manifest-e9a4dee4-9a39-4cf7-8711-37e971f3a992-0
-[2026-02-08 14:04:49 UTC] 2.3KiB STANDARD paimon/fluss.db/datalake_enriched_orders/manifest/manifest-e9a4dee4-9a39-4cf7-8711-37e971f3a992-1
-[2026-02-08 14:03:50 UTC]   884B STANDARD paimon/fluss.db/datalake_enriched_orders/manifest/manifest-list-5838d008-153a-47c2-b137-343e52c36cf6-0
-[2026-02-08 14:03:50 UTC]   989B STANDARD paimon/fluss.db/datalake_enriched_orders/manifest/manifest-list-5838d008-153a-47c2-b137-343e52c36cf6-1
-[2026-02-08 14:03:50 UTC]   985B STANDARD paimon/fluss.db/datalake_enriched_orders/manifest/manifest-list-5838d008-153a-47c2-b137-343e52c36cf6-2
-[2026-02-08 14:04:49 UTC]   989B STANDARD paimon/fluss.db/datalake_enriched_orders/manifest/manifest-list-5c48f649-66a5-42a2-aa0c-f73f033dec12-0
-[2026-02-08 14:04:49 UTC]   983B STANDARD paimon/fluss.db/datalake_enriched_orders/manifest/manifest-list-5c48f649-66a5-42a2-aa0c-f73f033dec12-1
-[2026-02-08 14:04:49 UTC]   984B STANDARD paimon/fluss.db/datalake_enriched_orders/manifest/manifest-list-5c48f649-66a5-42a2-aa0c-f73f033dec12-2
-[2026-02-08 14:02:55 UTC] 1.6KiB STANDARD paimon/fluss.db/datalake_enriched_orders/schema/schema-0
-[2026-02-08 14:04:49 UTC]     1B STANDARD paimon/fluss.db/datalake_enriched_orders/snapshot/LATEST
-[2026-02-08 14:03:50 UTC]   830B STANDARD paimon/fluss.db/datalake_enriched_orders/snapshot/snapshot-1
-[2026-02-08 14:04:49 UTC]   831B STANDARD paimon/fluss.db/datalake_enriched_orders/snapshot/snapshot-2
-[2026-02-08 14:04:49 UTC]    50B STANDARD remote-data/lake/fluss/datalake_enriched_orders-3/metadata/ad03c401-2002-414f-8545-de9512a60f44.offsets
-```
-  </TabItem>
-
-  <TabItem value="iceberg" label="Iceberg">
-
-Sample output:
-
-```shell
-[2026-02-06 20:11:52 UTC] 9.7KiB STANDARD iceberg/fluss/datalake_enriched_orders/data/__bucket=0/00000-0-315417a0-d83b-4a54-a706-58154f2f049a-00001.parquet
-[2026-02-06 20:11:22 UTC] 9.5KiB STANDARD iceberg/fluss/datalake_enriched_orders/data/__bucket=0/00000-0-a5cc57b7-72f0-415a-b817-f6fe29ed17c2-00001.parquet
-[2026-02-06 20:10:52 UTC]  14KiB STANDARD iceberg/fluss/datalake_enriched_orders/data/__bucket=0/00000-0-c555c8f6-e200-415e-97c2-4bf5cf283ab5-00001.parquet
-[2026-02-06 20:09:53 UTC]  15KiB STANDARD iceberg/fluss/datalake_enriched_orders/data/__bucket=0/00000-0-df6952fd-ecb3-4f9f-afea-60e176c0c69f-00001.parquet
-[2026-02-06 20:10:52 UTC] 8.1KiB STANDARD iceberg/fluss/datalake_enriched_orders/metadata/014f763d-a7e4-4716-bd9c-5fede24c2f27-m0.avro
-[2026-02-06 20:09:53 UTC] 8.1KiB STANDARD iceberg/fluss/datalake_enriched_orders/metadata/50786e7f-d4b6-4821-a173-1927f67017a5-m0.avro
-[2026-02-06 20:11:22 UTC] 8.1KiB STANDARD iceberg/fluss/datalake_enriched_orders/metadata/be02a347-7781-4195-82e3-5c5dbcef06e5-m0.avro
-[2026-02-06 20:11:52 UTC] 8.1KiB STANDARD iceberg/fluss/datalake_enriched_orders/metadata/c606fd42-9452-46d9-a258-d731332ba3af-m0.avro
-[2026-02-06 20:09:53 UTC] 4.4KiB STANDARD iceberg/fluss/datalake_enriched_orders/metadata/snap-2826026129110087788-1-50786e7f-d4b6-4821-a173-1927f67017a5.avro
-[2026-02-06 20:11:22 UTC] 4.5KiB STANDARD iceberg/fluss/datalake_enriched_orders/metadata/snap-4708533898857736722-1-be02a347-7781-4195-82e3-5c5dbcef06e5.avro
-[2026-02-06 20:11:52 UTC] 4.5KiB STANDARD iceberg/fluss/datalake_enriched_orders/metadata/snap-5039287922324762391-1-c606fd42-9452-46d9-a258-d731332ba3af.avro
-[2026-02-06 20:10:52 UTC] 4.4KiB STANDARD iceberg/fluss/datalake_enriched_orders/metadata/snap-7111191572558807319-1-014f763d-a7e4-4716-bd9c-5fede24c2f27.avro
-[2026-02-06 20:09:01 UTC] 1.8KiB STANDARD iceberg/fluss/datalake_enriched_orders/metadata/v1.metadata.json
-[2026-02-06 20:09:53 UTC] 2.8KiB STANDARD iceberg/fluss/datalake_enriched_orders/metadata/v2.metadata.json
-[2026-02-06 20:10:52 UTC] 3.8KiB STANDARD iceberg/fluss/datalake_enriched_orders/metadata/v3.metadata.json
-[2026-02-06 20:11:22 UTC] 4.8KiB STANDARD iceberg/fluss/datalake_enriched_orders/metadata/v4.metadata.json
-[2026-02-06 20:11:52 UTC] 5.8KiB STANDARD iceberg/fluss/datalake_enriched_orders/metadata/v5.metadata.json
-[2026-02-06 20:11:52 UTC]     1B STANDARD iceberg/fluss/datalake_enriched_orders/metadata/version-hint.text
-[2026-02-06 20:11:52 UTC]    50B STANDARD remote-data/lake/fluss/datalake_enriched_orders-3/metadata/b47da549-c4d7-4443-be56-b99e917ce267.offsets
-```
-
-  </TabItem>
-</Tabs>
-
+You can visit http://localhost:9001/ and sign in with rustfsadmin / rustfsadmin to view the files stored on tiered storage.
 
 ## Clean up
-After finishing the tutorial, run `exit` to exit Flink SQL CLI Container and then run 
+Run the following to stop all containers.
 ```shell
 docker compose down -v
 ```
-to stop all containers.
