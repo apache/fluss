@@ -46,10 +46,27 @@ import static org.apache.fluss.lake.iceberg.utils.IcebergConversions.toIceberg;
 /** Iceberg lake source. */
 public class IcebergLakeSource implements LakeSource<IcebergSplit> {
     private static final long serialVersionUID = 1L;
+
+    /**
+     * Config key for table cache TTL in milliseconds. After this duration, the cached table is
+     * reloaded on next use. Set to 0 to disable TTL (cache never expires). Default: 5 minutes.
+     */
+    public static final String TABLE_CACHE_TTL_MS_KEY = "iceberg.catalog.table-cache-ttl-ms";
+
+    private static final long DEFAULT_TABLE_CACHE_TTL_MS = 5 * 60 * 1000L;
+
     private final Configuration icebergConfig;
     private final TablePath tablePath;
     private @Nullable int[][] project;
     private @Nullable Expression filter;
+
+    /** Cached catalog and table; not serialized, lazily initialized per task. */
+    private transient volatile Catalog catalog;
+
+    private transient volatile Table table;
+
+    /** When the table was loaded (ms); used for TTL. */
+    private transient volatile long tableLoadedAtMs;
 
     public IcebergLakeSource(Configuration icebergConfig, TablePath tablePath) {
         this.icebergConfig = icebergConfig;
@@ -95,8 +112,7 @@ public class IcebergLakeSource implements LakeSource<IcebergSplit> {
 
     @Override
     public RecordReader createRecordReader(ReaderContext<IcebergSplit> context) throws IOException {
-        Catalog catalog = IcebergCatalogUtils.createIcebergCatalog(icebergConfig);
-        Table table = catalog.loadTable(toIceberg(tablePath));
+        Table table = getOrLoadTable();
         return new IcebergRecordReader(context.lakeSplit().fileScanTask(), table, project);
     }
 
@@ -106,7 +122,53 @@ public class IcebergLakeSource implements LakeSource<IcebergSplit> {
     }
 
     private Schema getSchema(TablePath tablePath) {
-        Catalog catalog = IcebergCatalogUtils.createIcebergCatalog(icebergConfig);
-        return catalog.loadTable(toIceberg(tablePath)).schema();
+        Table t = table;
+        if (t != null) {
+            return t.schema();
+        }
+        Catalog c = IcebergCatalogUtils.createIcebergCatalog(icebergConfig);
+        return c.loadTable(toIceberg(tablePath)).schema();
+    }
+
+    /**
+     * Returns the cached table or loads it (and caches). Respects TTL: if cache is stale, reloads.
+     */
+    private Table getOrLoadTable() throws IOException {
+        long ttlMs = getTableCacheTtlMs();
+        Table t = table;
+        if (t != null && (ttlMs <= 0 || System.currentTimeMillis() - tableLoadedAtMs <= ttlMs)) {
+            return t;
+        }
+        synchronized (this) {
+            t = table;
+            if (t != null
+                    && (ttlMs <= 0 || System.currentTimeMillis() - tableLoadedAtMs <= ttlMs)) {
+                return t;
+            }
+            if (ttlMs > 0 && t != null && System.currentTimeMillis() - tableLoadedAtMs > ttlMs) {
+                catalog = null;
+                table = null;
+            }
+            catalog = IcebergCatalogUtils.createIcebergCatalog(icebergConfig);
+            table = catalog.loadTable(toIceberg(tablePath));
+            tableLoadedAtMs = System.currentTimeMillis();
+            return table;
+        }
+    }
+
+    private long getTableCacheTtlMs() {
+        Optional<Object> raw = icebergConfig.getRawValue(TABLE_CACHE_TTL_MS_KEY);
+        if (!raw.isPresent()) {
+            return DEFAULT_TABLE_CACHE_TTL_MS;
+        }
+        Object v = raw.get();
+        if (v instanceof Number) {
+            return ((Number) v).longValue();
+        }
+        try {
+            return Long.parseLong(v.toString());
+        } catch (NumberFormatException e) {
+            return DEFAULT_TABLE_CACHE_TTL_MS;
+        }
     }
 }
