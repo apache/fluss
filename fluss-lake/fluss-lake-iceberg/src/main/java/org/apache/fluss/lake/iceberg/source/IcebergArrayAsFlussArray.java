@@ -29,7 +29,9 @@ import org.apache.fluss.utils.BytesUtils;
 
 import java.math.BigDecimal;
 import java.nio.ByteBuffer;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.LocalTime;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Map;
@@ -72,7 +74,14 @@ public class IcebergArrayAsFlussArray implements InternalArray {
 
     @Override
     public int getInt(int pos) {
-        return (Integer) icebergList.get(pos);
+        Object value = icebergList.get(pos);
+        if (value instanceof LocalDate) {
+            return (int) ((LocalDate) value).toEpochDay();
+        }
+        if (value instanceof LocalTime) {
+            return (int) ((LocalTime) value).toNanoOfDay() / 1_000_000;
+        }
+        return (Integer) value;
     }
 
     @Override

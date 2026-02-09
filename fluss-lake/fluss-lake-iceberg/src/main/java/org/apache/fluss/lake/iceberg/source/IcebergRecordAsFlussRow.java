@@ -31,7 +31,9 @@ import org.apache.iceberg.data.Record;
 
 import java.math.BigDecimal;
 import java.nio.ByteBuffer;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.LocalTime;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Map;
@@ -86,6 +88,14 @@ public class IcebergRecordAsFlussRow implements InternalRow {
     @Override
     public int getInt(int pos) {
         Object value = icebergRecord.get(pos);
+        // Iceberg returns LocalDate for DATE columns and LocalTime for TIME columns,
+        // but Fluss InternalRow uses getInt() for both (epoch days and millis-of-day).
+        if (value instanceof LocalDate) {
+            return (int) ((LocalDate) value).toEpochDay();
+        }
+        if (value instanceof LocalTime) {
+            return (int) ((LocalTime) value).toNanoOfDay() / 1_000_000;
+        }
         return (Integer) value;
     }
 

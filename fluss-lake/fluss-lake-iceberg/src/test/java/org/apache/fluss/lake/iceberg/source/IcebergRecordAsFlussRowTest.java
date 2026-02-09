@@ -18,6 +18,7 @@
 
 package org.apache.fluss.lake.iceberg.source;
 
+import org.apache.fluss.row.InternalArray;
 import org.apache.fluss.row.InternalRow;
 
 import org.apache.iceberg.Schema;
@@ -29,9 +30,12 @@ import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
 import java.nio.ByteBuffer;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.LocalTime;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -87,7 +91,16 @@ class IcebergRecordAsFlussRowTest {
                                 "map_field",
                                 Types.MapType.ofOptional(
                                         20, 21, Types.StringType.get(), Types.IntegerType.get())),
-                        // System columns
+                        optional(25, "date_field", Types.DateType.get()),
+                        optional(26, "time_field", Types.TimeType.get()),
+                        optional(
+                                27,
+                                "date_array",
+                                Types.ListType.ofOptional(28, Types.DateType.get())),
+                        optional(
+                                29,
+                                "time_array",
+                                Types.ListType.ofOptional(30, Types.TimeType.get())),
                         required(22, "__bucket", Types.IntegerType.get()),
                         required(23, "__offset", Types.LongType.get()),
                         required(24, "__timestamp", Types.TimestampType.withZone()));
@@ -107,8 +120,7 @@ class IcebergRecordAsFlussRowTest {
 
         icebergRecordAsFlussRow.replaceIcebergRecord(record);
 
-        // Should return count excluding system columns (3 system columns)
-        assertThat(icebergRecordAsFlussRow.getFieldCount()).isEqualTo(15);
+        assertThat(icebergRecordAsFlussRow.getFieldCount()).isEqualTo(19);
     }
 
     @Test
@@ -170,8 +182,33 @@ class IcebergRecordAsFlussRowTest {
         assertThat(icebergRecordAsFlussRow.getChar(12, 10).toString())
                 .isEqualTo("Hello"); // char_data
 
-        // Test field count (excluding system columns)
-        assertThat(icebergRecordAsFlussRow.getFieldCount()).isEqualTo(15);
+        assertThat(icebergRecordAsFlussRow.getFieldCount()).isEqualTo(19);
+    }
+
+    @Test
+    void testGetIntWithLocalDateAndLocalTime() {
+        LocalDate date = LocalDate.of(2020, 6, 15);
+        LocalTime time = LocalTime.of(14, 30, 0);
+
+        record.setField("id", 1L);
+        record.setField("date_field", date);
+        record.setField("time_field", time);
+        record.setField("date_array", Arrays.asList(date));
+        record.setField("time_array", Arrays.asList(time));
+        record.setField("__bucket", 1);
+        record.setField("__offset", 100L);
+        record.setField("__timestamp", OffsetDateTime.now(ZoneOffset.UTC));
+
+        icebergRecordAsFlussRow.replaceIcebergRecord(record);
+
+        assertThat(icebergRecordAsFlussRow.getInt(15)).isEqualTo((int) date.toEpochDay());
+        assertThat(icebergRecordAsFlussRow.getInt(16))
+                .isEqualTo((int) time.toNanoOfDay() / 1_000_000);
+
+        InternalArray dateArray = icebergRecordAsFlussRow.getArray(17);
+        InternalArray timeArray = icebergRecordAsFlussRow.getArray(18);
+        assertThat(dateArray.getInt(0)).isEqualTo((int) date.toEpochDay());
+        assertThat(timeArray.getInt(0)).isEqualTo((int) time.toNanoOfDay() / 1_000_000);
     }
 
     @Test
