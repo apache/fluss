@@ -115,7 +115,10 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
         FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshot(tablePath);
 
         // Execute batch read via LIMIT query
-        String query = String.format("SELECT * FROM %s limit 5", tableName);
+        String query =
+                String.format(
+                        "SELECT * FROM %s /*+ OPTIONS('scan.kv.snapshot.lease.id' = 'test-consumer-1') */ limit 5",
+                        tableName);
         CloseableIterator<Row> iterRows = tEnv.executeSql(query).collect();
         List<String> collected = collectRowsWithTimeout(iterRows, 5);
         List<String> expected =
@@ -131,7 +134,12 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
         ZooKeeperClient zkClient = FLUSS_CLUSTER_EXTENSION.getZooKeeperClient();
         retry(
                 Duration.ofMinutes(1),
-                () -> assertThat(zkClient.getKvSnapshotLeasesList().isEmpty()).isTrue());
+                () -> {
+                    assertThat(zkClient.getKvSnapshotLeaseMetadata("test-consumer-1"))
+                            .isNotPresent();
+                    assertThat(zkClient.getKvSnapshotLeasesList().contains("test-consumer-1"))
+                            .isFalse();
+                });
     }
 
     @Test
