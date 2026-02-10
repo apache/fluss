@@ -101,8 +101,10 @@ services:
     image: apache/fluss:$FLUSS_DOCKER_VERSION$
     command: coordinatorServer
     depends_on:
-      - zookeeper
-      - rustfs-init
+      zookeeper:
+        condition: service_started
+      rustfs-init:
+        condition: service_completed_successfully
     environment:
       - |
         FLUSS_PROPERTIES=
@@ -238,19 +240,21 @@ mkdir -p lib opt
 # Flink connectors
 curl -fL -o lib/flink-faker-0.5.3.jar https://github.com/knaufk/flink-faker/releases/download/v0.5.3/flink-faker-0.5.3.jar
 curl -fL -o "lib/fluss-flink-1.20-$FLUSS_DOCKER_VERSION$.jar" "https://repo1.maven.org/maven2/org/apache/fluss/fluss-flink-1.20/$FLUSS_DOCKER_VERSION$/fluss-flink-1.20-$FLUSS_DOCKER_VERSION$.jar"
-curl -fL -o lib/iceberg-flink-runtime-1.20-1.10.1.jar "https://repo1.maven.org/maven2/org/apache/iceberg/iceberg-flink-runtime-1.20/1.10.1/iceberg-flink-runtime-1.20-1.10.1.jar"
+curl -fL -o lib/iceberg-flink-runtime-1.20-1.10.1.jar https://repo1.maven.org/maven2/org/apache/iceberg/iceberg-flink-runtime-1.20/1.10.1/iceberg-flink-runtime-1.20-1.10.1.jar
 
 # Fluss lake plugin
 curl -fL -o "lib/fluss-lake-iceberg-$FLUSS_DOCKER_VERSION$.jar" "https://repo1.maven.org/maven2/org/apache/fluss/fluss-lake-iceberg/$FLUSS_DOCKER_VERSION$/fluss-lake-iceberg-$FLUSS_DOCKER_VERSION$.jar"
 
-# Hadoop filesystem support
+# Iceberg AWS support (S3FileIO + AWS SDK)
+curl -fL -o lib/iceberg-aws-1.10.1.jar https://repo1.maven.org/maven2/org/apache/iceberg/iceberg-aws/1.10.1/iceberg-aws-1.10.1.jar
+curl -fL -o lib/iceberg-aws-bundle-1.10.1.jar https://repo1.maven.org/maven2/org/apache/iceberg/iceberg-aws-bundle/1.10.1/iceberg-aws-bundle-1.10.1.jar
+
+# JDBC catalog driver
+curl -fL -o lib/postgresql-42.7.4.jar https://repo1.maven.org/maven2/org/postgresql/postgresql/42.7.4/postgresql-42.7.4.jar
+
+# Hadoop client (required by Iceberg's Flink integration)
 curl -fL -o lib/hadoop-client-api-3.3.5.jar https://repo1.maven.org/maven2/org/apache/hadoop/hadoop-client-api/3.3.5/hadoop-client-api-3.3.5.jar
 curl -fL -o lib/hadoop-client-runtime-3.3.5.jar https://repo1.maven.org/maven2/org/apache/hadoop/hadoop-client-runtime/3.3.5/hadoop-client-runtime-3.3.5.jar
-curl -fL -o lib/commons-logging-1.2.jar https://repo1.maven.org/maven2/commons-logging/commons-logging/1.2/commons-logging-1.2.jar
-
-# AWS S3 support (s3a:// scheme)
-curl -fL -o lib/hadoop-aws-3.3.5.jar https://repo1.maven.org/maven2/org/apache/hadoop/hadoop-aws/3.3.5/hadoop-aws-3.3.5.jar
-curl -fL -o lib/aws-java-sdk-bundle-1.12.367.jar https://repo1.maven.org/maven2/com/amazonaws/aws-java-sdk-bundle/1.12.367/aws-java-sdk-bundle-1.12.367.jar
 
 # Tiering service
 curl -fL -o "opt/fluss-flink-tiering-$FLUSS_DOCKER_VERSION$.jar" "https://repo1.maven.org/maven2/org/apache/fluss/fluss-flink-tiering/$FLUSS_DOCKER_VERSION$/fluss-flink-tiering-$FLUSS_DOCKER_VERSION$.jar"
@@ -258,7 +262,6 @@ curl -fL -o "opt/fluss-flink-tiering-$FLUSS_DOCKER_VERSION$.jar" "https://repo1.
 
 :::info
 You can add more jars to this `lib` directory based on your requirements:
-- **Custom Hadoop configurations**: Add jars for specific HDFS distributions or custom authentication mechanisms
 - **Other catalog backends**: Add jars needed for alternative Iceberg catalog implementations (e.g., Rest, Hive, Glue)
 :::
 
@@ -292,12 +295,27 @@ services:
       mc mb --ignore-existing rustfs/fluss;
       "
   #end
+  postgres:
+    image: postgres:17
+    environment:
+      - POSTGRES_USER=iceberg
+      - POSTGRES_PASSWORD=iceberg
+      - POSTGRES_DB=iceberg
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U iceberg"]
+      interval: 3s
+      timeout: 3s
+      retries: 5
   coordinator-server:
     image: apache/fluss:$FLUSS_DOCKER_VERSION$
     command: coordinatorServer
     depends_on:
-      - zookeeper
-      - rustfs-init
+      postgres:
+        condition: service_healthy
+      zookeeper:
+        condition: service_started
+      rustfs-init:
+        condition: service_completed_successfully
     environment:
       - |
         FLUSS_PROPERTIES=
@@ -309,19 +327,23 @@ services:
         s3.secret-key: rustfsadmin
         s3.path.style.access: true
         datalake.format: iceberg
-        datalake.iceberg.type: hadoop
-        datalake.iceberg.warehouse: s3a://fluss/iceberg
-        datalake.iceberg.iceberg.hadoop.fs.s3a.endpoint: http://rustfs:9000
-        datalake.iceberg.iceberg.hadoop.fs.s3a.access.key: rustfsadmin
-        datalake.iceberg.iceberg.hadoop.fs.s3a.secret.key: rustfsadmin
-        datalake.iceberg.iceberg.hadoop.fs.s3a.path.style.access: true
+        datalake.iceberg.catalog-impl: org.apache.iceberg.jdbc.JdbcCatalog
+        datalake.iceberg.name: fluss_catalog
+        datalake.iceberg.uri: jdbc:postgresql://postgres:5432/iceberg
+        datalake.iceberg.jdbc.user: iceberg
+        datalake.iceberg.jdbc.password: iceberg
+        datalake.iceberg.warehouse: s3://fluss/iceberg
+        datalake.iceberg.io-impl: org.apache.iceberg.aws.s3.S3FileIO
+        datalake.iceberg.s3.endpoint: http://rustfs:9000
+        datalake.iceberg.s3.access-key-id: rustfsadmin
+        datalake.iceberg.s3.secret-access-key: rustfsadmin
+        datalake.iceberg.s3.path-style-access: true
+        datalake.iceberg.client.region: us-east-1
     volumes:
       - ./lib/fluss-lake-iceberg-$FLUSS_DOCKER_VERSION$.jar:/opt/fluss/plugins/iceberg/fluss-lake-iceberg-$FLUSS_DOCKER_VERSION$.jar
-      - ./lib/hadoop-client-api-3.3.5.jar:/opt/fluss/plugins/iceberg/hadoop-client-api-3.3.5.jar
-      - ./lib/hadoop-client-runtime-3.3.5.jar:/opt/fluss/plugins/iceberg/hadoop-client-runtime-3.3.5.jar
-      - ./lib/hadoop-aws-3.3.5.jar:/opt/fluss/plugins/iceberg/hadoop-aws-3.3.5.jar
-      - ./lib/aws-java-sdk-bundle-1.12.367.jar:/opt/fluss/plugins/iceberg/aws-java-sdk-bundle-1.12.367.jar
-      - ./lib/commons-logging-1.2.jar:/opt/fluss/plugins/iceberg/commons-logging-1.2.jar
+      - ./lib/iceberg-aws-1.10.1.jar:/opt/fluss/plugins/iceberg/iceberg-aws-1.10.1.jar
+      - ./lib/iceberg-aws-bundle-1.10.1.jar:/opt/fluss/plugins/iceberg/iceberg-aws-bundle-1.10.1.jar
+      - ./lib/postgresql-42.7.4.jar:/opt/fluss/plugins/iceberg/postgresql-42.7.4.jar
   tablet-server:
     image: apache/fluss:$FLUSS_DOCKER_VERSION$
     command: tabletServer
@@ -340,12 +362,18 @@ services:
         s3.secret-key: rustfsadmin
         s3.path.style.access: true
         datalake.format: iceberg
-        datalake.iceberg.type: hadoop
-        datalake.iceberg.warehouse: s3a://fluss/iceberg
-        datalake.iceberg.iceberg.hadoop.fs.s3a.endpoint: http://rustfs:9000
-        datalake.iceberg.iceberg.hadoop.fs.s3a.access.key: rustfsadmin
-        datalake.iceberg.iceberg.hadoop.fs.s3a.secret.key: rustfsadmin
-        datalake.iceberg.iceberg.hadoop.fs.s3a.path.style.access: true
+        datalake.iceberg.catalog-impl: org.apache.iceberg.jdbc.JdbcCatalog
+        datalake.iceberg.name: fluss_catalog
+        datalake.iceberg.uri: jdbc:postgresql://postgres:5432/iceberg
+        datalake.iceberg.jdbc.user: iceberg
+        datalake.iceberg.jdbc.password: iceberg
+        datalake.iceberg.warehouse: s3://fluss/iceberg
+        datalake.iceberg.io-impl: org.apache.iceberg.aws.s3.S3FileIO
+        datalake.iceberg.s3.endpoint: http://rustfs:9000
+        datalake.iceberg.s3.access-key-id: rustfsadmin
+        datalake.iceberg.s3.secret-access-key: rustfsadmin
+        datalake.iceberg.s3.path-style-access: true
+        datalake.iceberg.client.region: us-east-1
   zookeeper:
     restart: always
     image: zookeeper:3.9.2
@@ -359,13 +387,9 @@ services:
        cp /tmp/opt/*.jar /opt/flink/opt/ 2>/dev/null || true;
        /docker-entrypoint.sh jobmanager"
     environment:
-      - AWS_ACCESS_KEY_ID=rustfsadmin
-      - AWS_SECRET_ACCESS_KEY=rustfsadmin
       - |
         FLINK_PROPERTIES=
         jobmanager.rpc.address: jobmanager
-        flink.hadoop.fs.s3a.endpoint: http://rustfs:9000
-        flink.hadoop.fs.s3a.path.style.access: true
     volumes:
       - ./lib:/tmp/jars
       - ./opt:/tmp/opt
@@ -379,16 +403,12 @@ services:
        cp /tmp/opt/*.jar /opt/flink/opt/ 2>/dev/null || true;
        /docker-entrypoint.sh taskmanager"
     environment:
-      - AWS_ACCESS_KEY_ID=rustfsadmin
-      - AWS_SECRET_ACCESS_KEY=rustfsadmin
       - |
         FLINK_PROPERTIES=
         jobmanager.rpc.address: jobmanager
         taskmanager.numberOfTaskSlots: 10
         taskmanager.memory.process.size: 2048m
         taskmanager.memory.task.off-heap.size: 128m
-        flink.hadoop.fs.s3a.endpoint: http://rustfs:9000
-        flink.hadoop.fs.s3a.path.style.access: true
     volumes:
       - ./lib:/tmp/jars
       - ./opt:/tmp/opt
@@ -400,6 +420,7 @@ volumes:
 The Docker Compose environment consists of the following containers:
 - **Fluss Cluster:** a Fluss `CoordinatorServer`, a Fluss `TabletServer` and a `ZooKeeper` server.
 - **Flink Cluster**: a Flink `JobManager` and a Flink `TaskManager` container to execute queries.
+- **PostgreSQL**: stores Iceberg catalog metadata (used by `JdbcCatalog`).
 
 4. To start all containers, run:
 ```shell
@@ -594,7 +615,10 @@ CREATE CATALOG fluss_catalog WITH (
 ```sql title="Flink SQL"
 CREATE CATALOG fluss_catalog WITH (
     'type' = 'fluss',
-    'bootstrap.servers' = 'coordinator-server:9123'
+    'bootstrap.servers' = 'coordinator-server:9123',
+    'iceberg.jdbc.password' = 'iceberg',
+    'iceberg.s3.access-key-id' = 'rustfsadmin',
+    'iceberg.s3.secret-access-key' = 'rustfsadmin'
 );
 ```
   </TabItem>
@@ -735,12 +759,18 @@ docker compose exec jobmanager \
     /opt/flink/opt/fluss-flink-tiering-$FLUSS_VERSION$.jar \
     --fluss.bootstrap.servers coordinator-server:9123 \
     --datalake.format iceberg \
-    --datalake.iceberg.type hadoop \
-    --datalake.iceberg.warehouse s3a://fluss/iceberg \
-    --datalake.iceberg.iceberg.hadoop.fs.s3a.endpoint http://rustfs:9000 \
-    --datalake.iceberg.iceberg.hadoop.fs.s3a.access.key rustfsadmin \
-    --datalake.iceberg.iceberg.hadoop.fs.s3a.secret.key rustfsadmin \
-    --datalake.iceberg.iceberg.hadoop.fs.s3a.path.style.access true
+    --datalake.iceberg.catalog-impl org.apache.iceberg.jdbc.JdbcCatalog \
+    --datalake.iceberg.name fluss_catalog \
+    --datalake.iceberg.uri "jdbc:postgresql://postgres:5432/iceberg" \
+    --datalake.iceberg.jdbc.user iceberg \
+    --datalake.iceberg.jdbc.password iceberg \
+    --datalake.iceberg.warehouse "s3://fluss/iceberg" \
+    --datalake.iceberg.io-impl org.apache.iceberg.aws.s3.S3FileIO \
+    --datalake.iceberg.s3.endpoint "http://rustfs:9000" \
+    --datalake.iceberg.s3.access-key-id rustfsadmin \
+    --datalake.iceberg.s3.secret-access-key rustfsadmin \
+    --datalake.iceberg.s3.path-style-access true \
+    --datalake.iceberg.client.region us-east-1
 ```
 You should see a Flink Job to tier data from Fluss to Iceberg running in the [Flink Web UI](http://localhost:8083/).
 
