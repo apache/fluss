@@ -374,10 +374,11 @@ final class ServerConnection {
             return;
         }
 
-        if (((ApiVersionsResponse) response).hasServerType()) {
-            ServerType serverType =
-                    ServerType.forId(((ApiVersionsResponse) response).getServerType());
-            if (serverType != node.serverType()) {
+        ApiVersionsResponse apiVersion = (ApiVersionsResponse) response;
+        if (apiVersion.hasServerType()) {
+            ServerType serverType = ServerType.fromTypeId(apiVersion.getServerType());
+            // bootstrap servers are set to unknown type, because they may coordinator or tablet.
+            if (node.serverType() != ServerType.UNKNOWN && serverType != node.serverType()) {
                 LOG.warn(
                         "Server type mismatch, expected: {}, actual: {}",
                         node.serverType(),
