@@ -80,7 +80,7 @@ This assumes, that Zookeeper is reachable at `zk-zookeeper.<your-namespace>.svc.
 
 ```bash
 helm install fluss ./fluss-helm \
-  --set zookeeper.address=<your-zk-address>
+  --set configurationOverrides.zookeeper.address=<your-zk-address>
 ```
 
 ## Configuration reference

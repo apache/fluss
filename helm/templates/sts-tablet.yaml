@@ -82,6 +82,11 @@ spec:
               echo "client.security.protocol: SASL" >> $FLUSS_HOME/conf/server.yaml && \
               echo "client.security.sasl.mechanism: PLAIN" >> $FLUSS_HOME/conf/server.yaml && \
               {{ end }}
+              {{- end }}
+              {{- if (include "fluss.zookeeper.sasl.enabled" .) }}
+              echo "zookeeper.client.config-path: /etc/fluss/conf/zookeeper-client.properties" >> $FLUSS_HOME/conf/server.yaml && \
+              {{- end }}
+              {{- if (include "fluss.jaas.required" .) }}
               export FLUSS_ENV_JAVA_OPTS="-Djava.security.auth.login.config=/etc/fluss/conf/jaas.conf ${FLUSS_ENV_JAVA_OPTS}" && \
               {{- end }}
 
@@ -107,7 +112,7 @@ spec:
               mountPath: /opt/conf
             - name: data
               mountPath: /tmp/fluss/data
-            {{- if (include "fluss.sasl.enabled" .) }}
+            {{- if (include "fluss.jaas.required" .) }}
             - name: sasl-config
               mountPath: /etc/fluss/conf
               readOnly: true
@@ -120,7 +125,7 @@ spec:
         - name: data
           emptyDir: {}
         {{- end }}
-        {{- if (include "fluss.sasl.enabled" .) }}
+        {{- if (include "fluss.jaas.required" .) }}
         - name: sasl-config
           secret:
             secretName: {{ include "fluss.fullname" . }}-sasl-jaas-config

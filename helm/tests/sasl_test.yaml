@@ -201,3 +201,74 @@ tests:
       - matchRegex:
           path: spec.template.spec.containers[0].command[2]
           pattern: '>> \$FLUSS_HOME/conf/server\.yaml'
+---
+
+suite: zookeeper-sasl-enabled-secret
+templates:
+  - templates/secret-jaas-config.yaml
+tests:
+  - it: renders zookeeper client JAAS block when zookeeper sasl is enabled
+    set:
+      listeners.internal.protocol: PLAINTEXT
+      listeners.client.protocol: PLAINTEXT
+      security.zookeeper_sasl.username: zk-username
+      security.zookeeper_sasl.password: zk-password
+    asserts:
+      - hasDocuments:
+          count: 1
+      - matchRegex:
+          path: stringData["jaas.conf"]
+          pattern: 'ZookeeperClient\s*\{'
+      - notMatchRegex:
+          path: stringData["jaas.conf"]
+          pattern: '^\s*Client\s*\{'
+      - notMatchRegex:
+          path: stringData["jaas.conf"]
+          pattern: 'FlussServer\s*\{'
+      - equal:
+          path: stringData["zookeeper-client.properties"]
+          value: |
+            zookeeper.sasl.client=true
+            zookeeper.sasl.clientconfig=ZookeeperClient
+---
+
+suite: zookeeper-sasl-enabled-statefulset
+templates:
+  - templates/sts-coordinator.yaml
+tests:
+  - it: wires jaas and zookeeper client config path for zookeeper sasl
+    set:
+      listeners.internal.protocol: PLAINTEXT
+      listeners.client.protocol: PLAINTEXT
+      security.zookeeper_sasl.username: zk-username
+      security.zookeeper_sasl.password: zk-password
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: sasl-config
+            secret:
+              secretName: RELEASE-NAME-fluss-sasl-jaas-config
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'zookeeper\.client\.config-path: /etc/fluss/conf/zookeeper-client\.properties'
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'FLUSS_ENV_JAVA_OPTS="-Djava\.security\.auth\.login\.config=/etc/fluss/conf/jaas\.conf \$\{FLUSS_ENV_JAVA_OPTS\}"'
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'security\.sasl\.enabled\.mechanisms: PLAIN'
+---
+
+suite: zookeeper-sasl-missing-credentials-fails
+templates:
+  - templates/secret-jaas-config.yaml
+tests:
+  - it: fails when zookeeper sasl credentials are missing
+    set:
+      listeners.internal.protocol: PLAINTEXT
+      listeners.client.protocol: PLAINTEXT
+      security.zookeeper_sasl.username: zk-username
+    asserts:
+      - failedTemplate:
+          errorMessage: security.zookeeper_sasl.username and security.zookeeper_sasl.password must be set together

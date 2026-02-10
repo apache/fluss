@@ -230,6 +230,8 @@ The following table lists the configurable parameters of the Fluss chart, and th
 | Parameter | Description | Default |
 |-----------|-------------|---------|
 | `security.sasl_plain.users` | User list for SASL/PLAIN authentication | `[{username: admin, password: password}]` |
+| `security.zookeeper_sasl.username` | ZooKeeper SASL username for Digest authentication | `""` |
+| `security.zookeeper_sasl.password` | ZooKeeper SASL password for Digest authentication | `""` |
 
 ## Advanced Configuration
 
@@ -290,6 +292,19 @@ security:
 ```
 
 The `security.sasl_plain.users` field defines the list of usernames and passwords for SASL/PLAIN authentication. When the internal listener protocol uses SASL, the first user in the list is used for internal client authentication. The authentication mechanism is fixed to `PLAIN`.
+
+### Enabling ZooKeeper SASL Authentication
+
+If your ZooKeeper requires SASL authentication, configure the Fluss chart values as following:
+
+```yaml
+security:
+  zookeeper_sasl:
+    username: zk-username
+    password: zk-password
+```
+
+When both `username` and `password` are set, the chart generates ZooKeeper client JAAS config and sets `zookeeper.client.config-path` automatically. These fields must be set together.
 
 ### Storage Configuration
 
