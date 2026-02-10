@@ -38,14 +38,14 @@ public class AzureDelegationTokenProviderTest {
     private static final String TEST_CLIENT_SECRET = "testClientSecret";
 
     private static final String TEST_ENDPOINT_PREFIX = "http://localhost:";
-    private static String TEST_ENDPOINT;
+    private static String testEndpoint;
 
     private static MockAuthServer mockAuthServer;
 
     @BeforeAll
     static void setup() {
         mockAuthServer = MockAuthServer.create();
-        TEST_ENDPOINT = TEST_ENDPOINT_PREFIX + mockAuthServer.getPort();
+        testEndpoint = TEST_ENDPOINT_PREFIX + mockAuthServer.getPort();
     }
 
     @Test
@@ -53,7 +53,7 @@ public class AzureDelegationTokenProviderTest {
         Configuration configuration = new Configuration();
         configuration.set(CLIENT_ID, TEST_CLIENT_ID);
         configuration.set(CLIENT_SECRET, TEST_CLIENT_SECRET);
-        configuration.set(ENDPOINT_KEY, TEST_ENDPOINT);
+        configuration.set(ENDPOINT_KEY, testEndpoint);
         AzureDelegationTokenProvider azureDelegationTokenProvider =
                 new AzureDelegationTokenProvider("abfs", configuration);
         ObtainedSecurityToken obtainedSecurityToken =
