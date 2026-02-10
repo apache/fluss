@@ -51,7 +51,6 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -160,15 +159,18 @@ public class DvTableReadableSnapshotRetriever implements AutoCloseable {
             return null;
         }
 
+        // todo: optimize in #2626, if the compacted snapshot exists in zk, we can
+        // skip the follow check
+
         Map<TableBucket, Long> readableOffsets = new HashMap<>();
 
         FlussTableBucketMapper flussTableBucketMapper = new FlussTableBucketMapper();
 
         // get all the bucket without l0 files and with l0 files
-        Tuple2<Set<PartitionBucket>, Set<PartitionBucket>> bucketsWithoutL0AndWithL0 =
-                getBucketsWithAndWithoutL0AndWithL0(latestCompactedSnapshot);
-        Set<PartitionBucket> bucketsWithoutL0 = bucketsWithoutL0AndWithL0.f0;
-        Set<PartitionBucket> bucketsWithL0 = bucketsWithoutL0AndWithL0.f1;
+        Tuple2<Set<PaimonPartitionBucket>, Set<PaimonPartitionBucket>> bucketsWithoutL0AndWithL0 =
+                getBucketsWithoutL0AndWithL0(latestCompactedSnapshot);
+        Set<PaimonPartitionBucket> bucketsWithoutL0 = bucketsWithoutL0AndWithL0.f0;
+        Set<PaimonPartitionBucket> bucketsWithL0 = bucketsWithoutL0AndWithL0.f1;
 
         // Track the earliest previousAppendSnapshot ID that was accessed
         // This represents the oldest snapshot that might still be needed
@@ -180,13 +182,16 @@ public class DvTableReadableSnapshotRetriever implements AutoCloseable {
             try {
                 latestTieredSnapshot = flussAdmin.getLatestLakeSnapshot(tablePath).get();
             } catch (Exception e) {
-                throw new IOException(
-                        "Failed to read lake snapshot from Fluss server for snapshot "
-                                + latestCompactedSnapshot.id(),
+                LOG.warn(
+                        "Failed to get latest lake snapshot from Fluss server for compacted snapshot {}; "
+                                + "skipping readable snapshot update.",
+                        latestCompactedSnapshot.id(),
                         e);
+                return null;
             }
+            checkTableConsistent(latestTieredSnapshot);
             // for all buckets without l0, we can use the latest tiered offsets
-            for (PartitionBucket bucket : bucketsWithoutL0) {
+            for (PaimonPartitionBucket bucket : bucketsWithoutL0) {
                 TableBucket tableBucket = flussTableBucketMapper.toTableBucket(bucket);
                 if (tableBucket == null) {
                     // can't map such paimon bucket to fluss, just ignore
@@ -200,7 +205,11 @@ public class DvTableReadableSnapshotRetriever implements AutoCloseable {
         // for all buckets with l0, we need to find the latest compacted snapshot which flushed
         // the buckets, the per-bucket offset should be updated to the corresponding compacted
         // snapshot offsets
-        Set<PartitionBucket> allBucketsToAdvance = new HashSet<>(bucketsWithL0);
+        Set<PaimonPartitionBucket> allBucketsToAdvance = new HashSet<>(bucketsWithL0);
+
+        // Cache LakeSnapshot by snapshot ID to avoid repeated getLakeSnapshot RPCs when many
+        // buckets share the same snapshot.
+        Map<Long, LakeSnapshot> lakeSnapshotBySnapshotId = new HashMap<>();
 
         long earliestSnapshotId = checkNotNull(snapshotManager.earliestSnapshotId());
         // From latestCompacted forward traverse compacted snapshots
@@ -217,9 +226,9 @@ public class DvTableReadableSnapshotRetriever implements AutoCloseable {
                 continue;
             }
             // Get buckets flushed by current compacted snapshot
-            Set<PartitionBucket> flushedBuckets = getBucketsWithFlushedL0(currentSnapshot);
+            Set<PaimonPartitionBucket> flushedBuckets = getBucketsWithFlushedL0(currentSnapshot);
             // For each flushed bucket, if offset not set yet, set it
-            for (PartitionBucket partitionBucket : flushedBuckets) {
+            for (PaimonPartitionBucket partitionBucket : flushedBuckets) {
                 TableBucket tb = flussTableBucketMapper.toTableBucket(partitionBucket);
                 if (tb == null) {
                     // can't map such paimon bucket to fluss,just ignore
@@ -284,27 +293,21 @@ public class DvTableReadableSnapshotRetriever implements AutoCloseable {
                         earliestSnapshotIdToKeep = previousAppendSnapshot.id();
                     }
 
-                    try {
-                        LakeSnapshot lakeSnapshot =
-                                flussAdmin
-                                        .getLakeSnapshot(tablePath, previousAppendSnapshot.id())
-                                        .get();
-                        Long offset = lakeSnapshot.getTableBucketsOffset().get(tb);
-                        if (offset != null) {
-                            readableOffsets.put(tb, offset);
-                            allBucketsToAdvance.remove(partitionBucket);
-                        } else {
-                            LOG.error(
-                                    "Could not find offset for bucket {} in snapshot {}, skip advancing readable snapshot.",
-                                    tb,
-                                    previousAppendSnapshot.id());
-                            return null;
-                        }
-                    } catch (Exception e) {
+                    long snapshotId = previousAppendSnapshot.id();
+                    LakeSnapshot lakeSnapshot =
+                            getOrFetchLakeSnapshot(snapshotId, lakeSnapshotBySnapshotId);
+                    if (lakeSnapshot == null) {
+                        return null;
+                    }
+                    Long offset = lakeSnapshot.getTableBucketsOffset().get(tb);
+                    if (offset != null) {
+                        readableOffsets.put(tb, offset);
+                        allBucketsToAdvance.remove(partitionBucket);
+                    } else {
                         LOG.error(
-                                "Failed to read lake snapshot {} from Fluss server, skip update readable snapshot and offset.",
-                                previousAppendSnapshot.id(),
-                                e);
+                                "Could not find offset for bucket {} in snapshot {}, skip advancing readable snapshot.",
+                                tb,
+                                snapshotId);
                         return null;
                     }
                 }
@@ -345,23 +348,13 @@ public class DvTableReadableSnapshotRetriever implements AutoCloseable {
             return null;
         }
 
-        Map<TableBucket, Long> tieredOffsets;
-        try {
-            tieredOffsets =
-                    flussAdmin
-                            .getLakeSnapshot(tablePath, previousSnapshot.id())
-                            .get()
-                            .getTableBucketsOffset();
-        } catch (Exception e) {
-            // we can't get tieredOffsets, just skip it
-            LOG.error(
-                    "Failed to retrieve lake snapshot {} from Fluss server for table {}. "
-                            + "The readable snapshot advancement will be skipped.",
-                    previousSnapshot.id(),
-                    tablePath,
-                    e);
+        long previousSnapshotId = previousSnapshot.id();
+        LakeSnapshot tieredLakeSnapshot =
+                getOrFetchLakeSnapshot(previousSnapshotId, lakeSnapshotBySnapshotId);
+        if (tieredLakeSnapshot == null) {
             return null;
         }
+        Map<TableBucket, Long> tieredOffsets = tieredLakeSnapshot.getTableBucketsOffset();
 
         // Return the latest compacted snapshot ID as the unified readable snapshot
         // All buckets can read from this snapshot's base files, then continue from their
@@ -376,6 +369,58 @@ public class DvTableReadableSnapshotRetriever implements AutoCloseable {
     }
 
     /**
+     * Checks that the given lake snapshot belongs to the current table (same table id). Throws when
+     * the table may have been dropped and re-created with a different id; the tiering committer
+     * operator will handle the exception.
+     *
+     * @param lakeSnapshot the snapshot from Fluss
+     * @throws IllegalStateException if the snapshot's table id does not match the current table id
+     */
+    private void checkTableConsistent(LakeSnapshot lakeSnapshot) {
+        if (lakeSnapshot.getTableBucketsOffset().isEmpty()) {
+            return;
+        }
+        long snapshotTableId =
+                lakeSnapshot.getTableBucketsOffset().keySet().iterator().next().getTableId();
+        if (snapshotTableId != tableId) {
+            throw new IllegalStateException(
+                    String.format(
+                            "Table id mismatch: Fluss snapshot is for table %s but current tiering table is %s. "
+                                    + "Table may have been re-created.",
+                            snapshotTableId, tableId));
+        }
+    }
+
+    /**
+     * Gets a lake snapshot by id, using the cache to avoid repeated RPCs. On cache miss, fetches
+     * from Fluss, checks table consistency, and puts the result in the cache.
+     *
+     * @param snapshotId the snapshot id
+     * @param cache cache keyed by snapshot id (mutated on miss)
+     * @return the snapshot, or null if fetch fails (logs on failure)
+     */
+    @Nullable
+    private LakeSnapshot getOrFetchLakeSnapshot(long snapshotId, Map<Long, LakeSnapshot> cache) {
+        LakeSnapshot snapshot = cache.get(snapshotId);
+        if (snapshot != null) {
+            return snapshot;
+        }
+        try {
+            snapshot = flussAdmin.getLakeSnapshot(tablePath, snapshotId).get();
+        } catch (Exception e) {
+            LOG.error(
+                    "Failed to retrieve lake snapshot {} from Fluss server for table {}; skipping readable snapshot update.",
+                    tablePath,
+                    snapshotId,
+                    e);
+            return null;
+        }
+        checkTableConsistent(snapshot);
+        cache.put(snapshotId, snapshot);
+        return snapshot;
+    }
+
+    /**
      * Get buckets (with partition info) that have no L0 files in the given snapshot.
      *
      * <p>For Paimon DV tables, we check the snapshot's data files to determine which buckets have
@@ -387,10 +432,10 @@ public class DvTableReadableSnapshotRetriever implements AutoCloseable {
      * @param snapshot the snapshot to check
      * @return set of TableBucket that have no L0 files
      */
-    private Tuple2<Set<PartitionBucket>, Set<PartitionBucket>> getBucketsWithAndWithoutL0AndWithL0(
-            Snapshot snapshot) {
-        Set<PartitionBucket> bucketsWithoutL0 = new HashSet<>();
-        Set<PartitionBucket> bucketsWithL0 = new HashSet<>();
+    private Tuple2<Set<PaimonPartitionBucket>, Set<PaimonPartitionBucket>>
+            getBucketsWithoutL0AndWithL0(Snapshot snapshot) {
+        Set<PaimonPartitionBucket> bucketsWithoutL0 = new HashSet<>();
+        Set<PaimonPartitionBucket> bucketsWithL0 = new HashSet<>();
 
         // Scan the snapshot to get all splits including level0
         Map<String, String> scanOptions = new HashMap<>();
@@ -414,9 +459,10 @@ public class DvTableReadableSnapshotRetriever implements AutoCloseable {
                                 manifestEntry ->
                                         manifestEntry.kind() != FileKind.DELETE
                                                 && manifestEntry.file().level() > 0)) {
-                    bucketsWithoutL0.add(new PartitionBucket(partition, bucketEntry.getKey()));
+                    bucketsWithoutL0.add(
+                            new PaimonPartitionBucket(partition, bucketEntry.getKey()));
                 } else {
-                    bucketsWithL0.add(new PartitionBucket(partition, bucketEntry.getKey()));
+                    bucketsWithL0.add(new PaimonPartitionBucket(partition, bucketEntry.getKey()));
                 }
             }
         }
@@ -428,11 +474,11 @@ public class DvTableReadableSnapshotRetriever implements AutoCloseable {
      * snapshot's delta.
      *
      * @param compactedSnapshot the compacted snapshot to check
-     * @return set of PartitionBucket whose L0 files were flushed
+     * @return set of PaimonPartitionBucket whose L0 files were flushed
      */
-    private Set<PartitionBucket> getBucketsWithFlushedL0(Snapshot compactedSnapshot) {
+    private Set<PaimonPartitionBucket> getBucketsWithFlushedL0(Snapshot compactedSnapshot) {
         checkState(compactedSnapshot.commitKind() == Snapshot.CommitKind.COMPACT);
-        Set<PartitionBucket> flushedBuckets = new HashSet<>();
+        Set<PaimonPartitionBucket> flushedBuckets = new HashSet<>();
 
         // Scan the compacted snapshot's delta to find deleted L0 files
         List<ManifestEntry> manifestEntries =
@@ -447,7 +493,8 @@ public class DvTableReadableSnapshotRetriever implements AutoCloseable {
         for (ManifestEntry manifestEntry : manifestEntries) {
             if (manifestEntry.level() == 0) {
                 flushedBuckets.add(
-                        new PartitionBucket(manifestEntry.partition(), manifestEntry.bucket()));
+                        new PaimonPartitionBucket(
+                                manifestEntry.partition(), manifestEntry.bucket()));
             }
         }
 
@@ -560,30 +607,6 @@ public class DvTableReadableSnapshotRetriever implements AutoCloseable {
         }
     }
 
-    private static final class PartitionBucket {
-        private final BinaryRow partition;
-        private final Integer bucket;
-
-        public PartitionBucket(BinaryRow partition, Integer bucket) {
-            this.partition = partition;
-            this.bucket = bucket;
-        }
-
-        @Override
-        public boolean equals(Object o) {
-            if (o == null || getClass() != o.getClass()) {
-                return false;
-            }
-            PartitionBucket that = (PartitionBucket) o;
-            return Objects.equals(partition, that.partition) && Objects.equals(bucket, that.bucket);
-        }
-
-        @Override
-        public int hashCode() {
-            return Objects.hash(partition, bucket);
-        }
-    }
-
     private final class FlussTableBucketMapper {
         private final Map<String, Long> partitionNameToIdMapping;
 
@@ -596,13 +619,14 @@ public class DvTableReadableSnapshotRetriever implements AutoCloseable {
         }
 
         @Nullable
-        private TableBucket toTableBucket(PartitionBucket partitionBucket) {
-            if (partitionBucket.partition.getFieldCount() == 0) {
+        private TableBucket toTableBucket(PaimonPartitionBucket partitionBucket) {
+            if (partitionBucket.getPartition().getFieldCount() == 0) {
                 // Non-partitioned table: BinaryRow.EMPTY_ROW has 0 fields
-                return new TableBucket(tableId, partitionBucket.bucket);
+                return new TableBucket(tableId, partitionBucket.getBucket());
             } else {
                 // Partitioned table: convert partition name to partition id
-                String partitionName = getPartitionNameFromBinaryRow(partitionBucket.partition);
+                String partitionName =
+                        getPartitionNameFromBinaryRow(partitionBucket.getPartition());
                 Long partitionId = partitionNameToIdMapping.get(partitionName);
                 if (partitionId == null) {
                     LOG.warn(
@@ -613,7 +637,7 @@ public class DvTableReadableSnapshotRetriever implements AutoCloseable {
                             partitionNameToIdMapping.keySet());
                     return null;
                 }
-                return new TableBucket(tableId, partitionId, partitionBucket.bucket);
+                return new TableBucket(tableId, partitionId, partitionBucket.getBucket());
             }
         }
     }

@@ -165,10 +165,15 @@ public class FlussTableLakeSnapshotCommitter implements AutoCloseable {
                         prepareLakeSnapshot(
                                 tableId, tablePath, readableSnapshot.getReadableLogEndOffsets());
 
-                // prepare a tiered bucket offset file for the readable snapshot
+                // reuse tiered path when readable snapshot is the committed snapshot
                 String readableSnapshotTieredOffsetsPath =
-                        prepareLakeSnapshot(
-                                tableId, tablePath, readableSnapshot.getTieredLogEndOffsets());
+                        readableSnapshot.getReadableSnapshotId()
+                                        == lakeCommitResult.getCommittedSnapshotId()
+                                ? lakeBucketTieredOffsetsPath
+                                : prepareLakeSnapshot(
+                                        tableId,
+                                        tablePath,
+                                        readableSnapshot.getTieredLogEndOffsets());
                 // commit the readable snapshot
                 commit(
                         tableId,
@@ -278,7 +283,9 @@ public class FlussTableLakeSnapshotCommitter implements AutoCloseable {
      *     stored
      * @param logEndOffsets the log end offsets for each bucket
      * @param logMaxTieredTimestamps the max tiered timestamps for each bucket
-     * @param earliestSnapshotIDToKeep the earliest snapshot id to keep
+     * @param earliestSnapshotIDToKeep the earliest snapshot ID to keep. Null means keep only the
+     *     latest (discard all previous). -1 ({@link LakeCommitResult#KEEP_ALL_PREVIOUS}) means keep
+     *     all previous snapshots (infinite retention).
      * @return the commit request
      */
     private CommitLakeTableSnapshotRequest toCommitLakeTableSnapshotRequest(

@@ -23,6 +23,7 @@ import org.apache.fluss.exception.TableAlreadyExistException;
 import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.lake.committer.CommittedLakeSnapshot;
 import org.apache.fluss.lake.committer.CommitterInitContext;
+import org.apache.fluss.lake.committer.LakeCommitResult;
 import org.apache.fluss.lake.committer.LakeCommitter;
 import org.apache.fluss.lake.lakestorage.LakeCatalog;
 import org.apache.fluss.lake.lakestorage.LakeStorage;
@@ -241,11 +242,11 @@ public class TestingPaimonStoragePlugin implements LakeStoragePlugin {
         }
 
         @Override
-        public long commit(
+        public LakeCommitResult commit(
                 TestPaimonCommittable committable, Map<String, String> snapshotProperties)
                 throws IOException {
             // do nothing, and always return 1 as committed snapshot
-            return 1;
+            return LakeCommitResult.committedIsReadable(1);
         }
 
         @Override

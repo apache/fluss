@@ -23,6 +23,7 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.fs.local.LocalFileSystem;
+import org.apache.fluss.lake.committer.LakeCommitResult;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
@@ -178,12 +179,14 @@ class LakeTableHelperTest {
         // 1. Create Snapshot 1 (ID=1)
         FsPath path1 = storeOffsetFile(lakeTableHelper, tablePath, tableId, 100L);
         LakeTable.LakeSnapshotMetadata meta1 = new LakeTable.LakeSnapshotMetadata(1L, path1, path1);
-        lakeTableHelper.registerLakeTableSnapshotV2(tableId, meta1, -1L); // -1: Keep all history
+        lakeTableHelper.registerLakeTableSnapshotV2(
+                tableId, meta1, LakeCommitResult.KEEP_ALL_PREVIOUS);
 
         // 2. Create Snapshot 2 (ID=2)
         FsPath path2 = storeOffsetFile(lakeTableHelper, tablePath, tableId, 200L);
         LakeTable.LakeSnapshotMetadata meta2 = new LakeTable.LakeSnapshotMetadata(2L, path2, path2);
-        lakeTableHelper.registerLakeTableSnapshotV2(tableId, meta2, -1L); // -1: Keep all history
+        lakeTableHelper.registerLakeTableSnapshotV2(
+                tableId, meta2, LakeCommitResult.KEEP_ALL_PREVIOUS);
 
         List<LakeTable.LakeSnapshotMetadata> metadatasAfterStep2 =
                 zookeeperClient.getLakeTable(tableId).get().getLakeSnapshotMetadatas();
@@ -192,12 +195,12 @@ class LakeTableHelperTest {
                 .extracting(LakeTable.LakeSnapshotMetadata::getSnapshotId)
                 .containsExactly(1L, 2L);
 
-        // --- Scenario A: earliestSnapshotIDToKeep = null (Aggressive Cleanup) ---
+        // --- Scenario A: earliestSnapshotIDToKeep = KEEP_LATEST (Aggressive Cleanup) ---
         // Expected behavior: Only the latest snapshot is retained; all previous ones are discarded.
         FsPath path3 = storeOffsetFile(lakeTableHelper, tablePath, tableId, 300L);
         LakeTable.LakeSnapshotMetadata meta3 = new LakeTable.LakeSnapshotMetadata(3L, path3, path3);
 
-        lakeTableHelper.registerLakeTableSnapshotV2(tableId, meta3, null);
+        lakeTableHelper.registerLakeTableSnapshotV2(tableId, meta3, LakeCommitResult.KEEP_LATEST);
 
         // Verify physical files: 1 and 2 should be deleted, 3 must exist.
         assertThat(fs.exists(path1)).isFalse();
@@ -207,12 +210,13 @@ class LakeTableHelperTest {
         assertThat(zookeeperClient.getLakeTable(tableId).get().getLakeSnapshotMetadatas())
                 .hasSize(1);
 
-        // --- Scenario B: earliestSnapshotIDToKeep = -1 (Infinite Retention) ---
+        // --- Scenario B: earliestSnapshotIDToKeep = KEEP_ALL_PREVIOUS (Infinite Retention) ---
         // Expected behavior: No previous snapshots are discarded regardless of history size.
         FsPath path4 = storeOffsetFile(lakeTableHelper, tablePath, tableId, 400L);
         LakeTable.LakeSnapshotMetadata meta4 = new LakeTable.LakeSnapshotMetadata(4L, path4, path4);
 
-        lakeTableHelper.registerLakeTableSnapshotV2(tableId, meta4, -1L);
+        lakeTableHelper.registerLakeTableSnapshotV2(
+                tableId, meta4, LakeCommitResult.KEEP_ALL_PREVIOUS);
 
         // Verify both snapshots 3 and 4 are preserved.
         assertThat(fs.exists(path3)).isTrue();
@@ -224,7 +228,8 @@ class LakeTableHelperTest {
         // Setup: Current history [3, 4], adding [5, 6].
         FsPath path5 = storeOffsetFile(lakeTableHelper, tablePath, tableId, 500L);
         LakeTable.LakeSnapshotMetadata meta5 = new LakeTable.LakeSnapshotMetadata(5L, path5, path5);
-        lakeTableHelper.registerLakeTableSnapshotV2(tableId, meta5, -1L);
+        lakeTableHelper.registerLakeTableSnapshotV2(
+                tableId, meta5, LakeCommitResult.KEEP_ALL_PREVIOUS);
 
         FsPath path6 = storeOffsetFile(lakeTableHelper, tablePath, tableId, 600L);
         LakeTable.LakeSnapshotMetadata meta6 = new LakeTable.LakeSnapshotMetadata(6L, path6, path6);

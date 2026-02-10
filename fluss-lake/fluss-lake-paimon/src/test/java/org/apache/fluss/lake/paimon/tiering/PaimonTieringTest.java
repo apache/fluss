@@ -758,8 +758,8 @@ class PaimonTieringTest {
                     }
 
                     @Override
-                    public Configuration flussConfig() {
-                        // don't care about fluss config
+                    public Configuration flussClientConfig() {
+                        // don't care about fluss client config
                         return new Configuration();
                     }
                 });

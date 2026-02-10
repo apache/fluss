@@ -36,7 +36,7 @@ public class CommitLakeTableSnapshotEvent implements CoordinatorEvent {
         this.respCallback = respCallback;
     }
 
-    public CommitLakeTableSnapshotsData getCommitLakeTableSnapshotData() {
+    public CommitLakeTableSnapshotsData getCommitLakeTableSnapshotsData() {
         return commitLakeTableSnapshotsData;
     }
 

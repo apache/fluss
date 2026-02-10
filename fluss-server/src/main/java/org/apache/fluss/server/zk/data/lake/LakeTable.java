@@ -97,6 +97,9 @@ public class LakeTable {
     @Nullable
     public LakeSnapshotMetadata getLatestLakeSnapshotMetadata() {
         if (lakeSnapshotMetadatas != null && !lakeSnapshotMetadatas.isEmpty()) {
+            // the last one snapshot may be a compacted snapshot which is
+            // not latest snapshot. todo: fix to return the real latest snapshot in
+            // #2625
             return lakeSnapshotMetadatas.get(lakeSnapshotMetadatas.size() - 1);
         }
         return null;

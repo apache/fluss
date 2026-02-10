@@ -61,7 +61,7 @@ public class PaimonLakeCommitter implements LakeCommitter<PaimonWriteResult, Pai
     private final FileStoreTable fileStoreTable;
     private final TablePath tablePath;
     private final long tableId;
-    private final Configuration flussConfig;
+    private final Configuration flussClientConfig;
     private TableCommitImpl tableCommit;
 
     private static final ThreadLocal<Long> currentCommitSnapshotId = new ThreadLocal<>();
@@ -72,7 +72,7 @@ public class PaimonLakeCommitter implements LakeCommitter<PaimonWriteResult, Pai
         this.paimonCatalog = paimonCatalogProvider.get();
         this.tablePath = committerInitContext.tablePath();
         this.tableId = committerInitContext.tableInfo().getTableId();
-        this.flussConfig = committerInitContext.flussConfig();
+        this.flussClientConfig = committerInitContext.flussClientConfig();
         this.fileStoreTable =
                 getTable(
                         committerInitContext.tablePath(),
@@ -119,7 +119,7 @@ public class PaimonLakeCommitter implements LakeCommitter<PaimonWriteResult, Pai
                 // retrive the readable snapshot during commit
                 try (DvTableReadableSnapshotRetriever retriever =
                         new DvTableReadableSnapshotRetriever(
-                                tablePath, tableId, fileStoreTable, flussConfig)) {
+                                tablePath, tableId, fileStoreTable, flussClientConfig)) {
                     DvTableReadableSnapshotRetriever.ReadableSnapshotResult readableSnapshotResult =
                             retriever.getReadableSnapshotAndOffsets(committedSnapshotId);
                     if (readableSnapshotResult == null) {

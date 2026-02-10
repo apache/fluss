@@ -41,7 +41,10 @@ import java.util.Objects;
 @PublicEvolving
 public class LakeCommitResult {
 
-    // -1 to enforce to keep all previous snapshots
+    /** Keep only the latest snapshot; discard all previous ones. */
+    public static final Long KEEP_LATEST = null;
+
+    /** Keep all previous snapshots (infinite retention). */
     public static final Long KEEP_ALL_PREVIOUS = -1L;
 
     // The snapshot ID that was just committed
@@ -49,7 +52,8 @@ public class LakeCommitResult {
 
     private final boolean committedIsReadable;
 
-    // The earliest snapshot ID to keep, null means not to keep any previous snapshot
+    // The earliest snapshot ID to keep. KEEP_LATEST (null) means keep only the latest (discard all
+    // previous). KEEP_ALL_PREVIOUS (-1) means keep all previous snapshots (infinite retention).
     @Nullable private final Long earliestSnapshotIDToKeep;
 
     // the readable snapshot, null if
@@ -69,7 +73,7 @@ public class LakeCommitResult {
     }
 
     public static LakeCommitResult committedIsReadable(long committedSnapshotId) {
-        return new LakeCommitResult(committedSnapshotId, true, null, null);
+        return new LakeCommitResult(committedSnapshotId, true, null, KEEP_LATEST);
     }
 
     public static LakeCommitResult unknownReadableSnapshot(long committedSnapshotId) {

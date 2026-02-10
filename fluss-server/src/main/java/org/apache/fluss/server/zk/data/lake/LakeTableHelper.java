@@ -85,7 +85,8 @@ public class LakeTableHelper {
      * @param tableId the table ID
      * @param lakeSnapshotMetadata the new snapshot metadata to register
      * @param earliestSnapshotIDToKeep the earliest snapshot ID to keep. If null, only the latest
-     *     snapshot will be kept.
+     *     snapshot will be kept. If -1, all snapshots are kept (infinite retention); no previous
+     *     snapshots are discarded.
      * @throws Exception if the operation fails
      */
     public void registerLakeTableSnapshotV2(

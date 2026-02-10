@@ -457,17 +457,26 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
         TablePath tablePath = toTablePath(request.getTablePath());
         authorizeTable(OperationType.DESCRIBE, tablePath);
 
+        boolean requestReadableSnapshot = request.hasReadable() && request.isReadable();
+        if (requestReadableSnapshot && request.hasSnapshotId()) {
+            CompletableFuture<GetLakeSnapshotResponse> failed = new CompletableFuture<>();
+            failed.completeExceptionally(
+                    new IllegalArgumentException(
+                            "GetLakeSnapshotRequest cannot set both snapshot_id and readable=true; "
+                                    + "use one or the other to specify either a snapshot by id or the latest readable snapshot."));
+            return failed;
+        }
+
         // get table info
         TableInfo tableInfo = metadataManager.getTable(tablePath);
         // get table id
         long tableId = tableInfo.getTableId();
         CompletableFuture<GetLakeSnapshotResponse> resultFuture = new CompletableFuture<>();
-        boolean readableSnapshot = request.hasReadable() && request.isReadable();
         ioExecutor.execute(
                 () -> {
                     try {
                         Optional<LakeTableSnapshot> optSnapshot =
-                                readableSnapshot
+                                requestReadableSnapshot
                                         ? zkClient.getLatestReadableLakeTableSnapshot(tableId)
                                         : zkClient.getLakeTableSnapshot(
                                                 tableId,
@@ -479,7 +488,7 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
                                     makeGetLakeSnapshotResponse(tableId, optSnapshot.get()));
                         } else {
                             String snapshotType =
-                                    readableSnapshot ? "readable snapshot" : "snapshot";
+                                    requestReadableSnapshot ? "readable snapshot" : "snapshot";
                             StringBuilder errorMsg =
                                     new StringBuilder()
                                             .append("Lake table ")
@@ -488,7 +497,7 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
                                             .append(tablePath)
                                             .append(", table id: ")
                                             .append(tableId);
-                            if (!readableSnapshot && request.hasSnapshotId()) {
+                            if (!requestReadableSnapshot && request.hasSnapshotId()) {
                                 errorMsg.append(", snapshot id: ").append(request.getSnapshotId());
                             }
                             resultFuture.completeExceptionally(

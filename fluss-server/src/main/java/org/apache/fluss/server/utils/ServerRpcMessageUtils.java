@@ -29,6 +29,7 @@ import org.apache.fluss.config.cluster.ColumnPositionType;
 import org.apache.fluss.config.cluster.ConfigEntry;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.fs.token.ObtainedSecurityToken;
+import org.apache.fluss.lake.committer.LakeCommitResult;
 import org.apache.fluss.metadata.DatabaseSummary;
 import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.PhysicalTablePath;
@@ -1634,7 +1635,7 @@ public class ServerRpcMessageUtils {
                     entry.getValue(),
                     tableBucketsMaxTimestamp.get(tableId),
                     null, // no metadata for V1
-                    null); // no earliestSnapshotIDToKeep for V1
+                    LakeCommitResult.KEEP_LATEST); // V1: keep only latest snapshot
         }
 
         // Add V2 format snapshots (current)

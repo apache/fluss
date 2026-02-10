@@ -443,6 +443,13 @@ public interface Admin extends AutoCloseable {
      * <p>This returns the most recent snapshot regardless of its visibility or compaction status.
      * It includes the latest tiered offsets for all buckets.
      *
+     * <p><b>NOTE: This API is not intended for union reads and should be considered internal.</b>
+     * For union read operations (e.g. Flink/Spark reading from Fluss + lake), use {@link
+     * #getReadableLakeSnapshot(TablePath)} instead. Using this method for union reads can lead to
+     * data loss when the latest tiered snapshot is not yet readable (e.g. Paimon DV tables with
+     * un-compacted L0 data). This method remains for internal use cases such as tiering commit and
+     * readable-offset resolution.
+     *
      * <p>Exceptions expected when calling {@code get()} on the returned future:
      *
      * <ul>

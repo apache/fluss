@@ -268,7 +268,7 @@ class IcebergTieringTest {
                     }
 
                     @Override
-                    public Configuration flussConfig() {
+                    public Configuration flussClientConfig() {
                         return new Configuration();
                     }
                 });

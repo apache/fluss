@@ -244,7 +244,7 @@ public class TieringCommitOperator<WriteResult, Committable>
             LakeCommitResult lakeCommitResult =
                     lakeCommitter.commit(committable, snapshotProperties);
             // commit to fluss
-            commitToFluss(
+            flussTableLakeSnapshotCommitter.commit(
                     tableId,
                     tablePath,
                     lakeCommitResult,
@@ -252,73 +252,6 @@ public class TieringCommitOperator<WriteResult, Committable>
                     logEndOffsets,
                     logMaxTieredTimestamps);
             return committable;
-        }
-    }
-
-    private void commitToFluss(
-            long tableId,
-            TablePath tablePath,
-            LakeCommitResult lakeCommitResult,
-            String lakeBucketTieredOffsetsFile,
-            Map<TableBucket, Long> logTieredEndOffsets,
-            Map<TableBucket, Long> logMaxTieredTimestamps)
-            throws Exception {
-        Long earliestSnapshotIDToKeep = lakeCommitResult.getEarliestSnapshotIDToKeep();
-        if (lakeCommitResult.committedIsReadable()) {
-            flussTableLakeSnapshotCommitter.commit(
-                    tableId,
-                    lakeCommitResult.getCommittedSnapshotId(),
-                    lakeBucketTieredOffsetsFile,
-                    lakeBucketTieredOffsetsFile,
-                    logTieredEndOffsets,
-                    logMaxTieredTimestamps,
-                    earliestSnapshotIDToKeep);
-        } else {
-            LakeCommitResult.ReadableSnapshot readableSnapshot =
-                    lakeCommitResult.getReadableSnapshot();
-            long committedSnapshotId = lakeCommitResult.getCommittedSnapshotId();
-            if (readableSnapshot == null) {
-                flussTableLakeSnapshotCommitter.commit(
-                        tableId,
-                        committedSnapshotId,
-                        lakeBucketTieredOffsetsFile,
-                        null,
-                        logTieredEndOffsets,
-                        logMaxTieredTimestamps,
-                        earliestSnapshotIDToKeep);
-            } else {
-                // commit readable snapshot
-                String readableSnapshotTieredLogEndOffsetFile =
-                        readableSnapshot.getReadableSnapshotId() == committedSnapshotId
-                                ? lakeBucketTieredOffsetsFile
-                                : flussTableLakeSnapshotCommitter.prepareLakeSnapshot(
-                                        tableId,
-                                        tablePath,
-                                        readableSnapshot.getTieredLogEndOffsets());
-
-                String readableSnapshotReadableLogEndOffsetFile =
-                        flussTableLakeSnapshotCommitter.prepareLakeSnapshot(
-                                tableId, tablePath, readableSnapshot.getReadableLogEndOffsets());
-                flussTableLakeSnapshotCommitter.commit(
-                        tableId,
-                        readableSnapshot.getReadableSnapshotId(),
-                        readableSnapshotTieredLogEndOffsetFile,
-                        readableSnapshotReadableLogEndOffsetFile,
-                        Collections.emptyMap(),
-                        Collections.emptyMap(),
-                        earliestSnapshotIDToKeep);
-
-                // commit tiered snapshot
-                flussTableLakeSnapshotCommitter.commit(
-                        tableId,
-                        lakeCommitResult.getCommittedSnapshotId(),
-                        lakeBucketTieredOffsetsFile,
-                        // no readable snapshot
-                        null,
-                        logTieredEndOffsets,
-                        logMaxTieredTimestamps,
-                        earliestSnapshotIDToKeep);
-            }
         }
     }
 

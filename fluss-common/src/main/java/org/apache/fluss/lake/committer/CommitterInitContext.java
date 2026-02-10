@@ -53,9 +53,10 @@ public interface CommitterInitContext {
     Configuration lakeTieringConfig();
 
     /**
-     * Returns the fluss config.
+     * Returns the Fluss client configuration. This configuration can be used to build a Fluss
+     * client, such as a Connection.
      *
-     * @return the fluss config
+     * @return the Fluss client configuration
      */
-    Configuration flussConfig();
+    Configuration flussClientConfig();
 }

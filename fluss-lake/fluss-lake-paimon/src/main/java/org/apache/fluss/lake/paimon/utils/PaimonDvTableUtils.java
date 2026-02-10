@@ -18,11 +18,8 @@
 
 package org.apache.fluss.lake.paimon.utils;
 
-import org.apache.fluss.utils.types.Tuple2;
-
 import org.apache.paimon.CoreOptions;
 import org.apache.paimon.Snapshot;
-import org.apache.paimon.data.BinaryRow;
 import org.apache.paimon.io.DataFileMeta;
 import org.apache.paimon.manifest.FileKind;
 import org.apache.paimon.manifest.ManifestEntry;
@@ -74,7 +71,7 @@ public class PaimonDvTableUtils {
         SnapshotManager snapshotManager = fileStoreTable.snapshotManager();
         checkState(compactedSnapshot.commitKind() == Snapshot.CommitKind.COMPACT);
         // Get deleted L0 files from the compacted snapshot's delta
-        Map<Tuple2<BinaryRow, Integer>, Set<String>> deletedL0FilesByBucket =
+        Map<PaimonPartitionBucket, Set<String>> deletedL0FilesByBucket =
                 getDeletedL0FilesByBucket(fileStoreTable, compactedSnapshot);
 
         if (deletedL0FilesByBucket.isEmpty()) {
@@ -105,9 +102,9 @@ public class PaimonDvTableUtils {
      * @param compactedSnapshot the compacted snapshot
      * @return a map from bucket ID to set of deleted L0 file names
      */
-    private static Map<Tuple2<BinaryRow, Integer>, Set<String>> getDeletedL0FilesByBucket(
+    private static Map<PaimonPartitionBucket, Set<String>> getDeletedL0FilesByBucket(
             FileStoreTable fileStoreTable, Snapshot compactedSnapshot) {
-        Map<Tuple2<BinaryRow, Integer>, Set<String>> deletedL0FilesByBucket = new HashMap<>();
+        Map<PaimonPartitionBucket, Set<String>> deletedL0FilesByBucket = new HashMap<>();
         List<ManifestEntry> manifestEntries =
                 fileStoreTable
                         .store()
@@ -120,7 +117,8 @@ public class PaimonDvTableUtils {
             if (manifestEntry.level() == 0) {
                 deletedL0FilesByBucket
                         .computeIfAbsent(
-                                Tuple2.of(manifestEntry.partition(), manifestEntry.bucket()),
+                                new PaimonPartitionBucket(
+                                        manifestEntry.partition(), manifestEntry.bucket()),
                                 k -> new HashSet<>())
                         .add(manifestEntry.fileName());
             }
@@ -139,12 +137,12 @@ public class PaimonDvTableUtils {
     private static boolean matchesDeletedL0Files(
             FileStoreTable fileStoreTable,
             Snapshot candidateSnapshot,
-            Map<Tuple2<BinaryRow, Integer>, Set<String>> deletedL0FilesByBucket) {
+            Map<PaimonPartitionBucket, Set<String>> deletedL0FilesByBucket) {
         // Get L0 files from the candidate snapshot, grouped by bucket
-        Map<Tuple2<BinaryRow, Integer>, Set<String>> candidateL0FilesByBucket =
+        Map<PaimonPartitionBucket, Set<String>> candidateL0FilesByBucket =
                 getL0FilesByBucket(fileStoreTable, candidateSnapshot);
 
-        for (Map.Entry<Tuple2<BinaryRow, Integer>, Set<String>> deleteL0Entry :
+        for (Map.Entry<PaimonPartitionBucket, Set<String>> deleteL0Entry :
                 deletedL0FilesByBucket.entrySet()) {
             Set<String> deleteL0Files = candidateL0FilesByBucket.get(deleteL0Entry.getKey());
             if (deleteL0Files == null || !deleteL0Files.equals(deleteL0Entry.getValue())) {
@@ -162,9 +160,9 @@ public class PaimonDvTableUtils {
      * @param snapshot the snapshot to get L0 files from
      * @return a map from bucket ID to set of L0 file names that exist in the snapshot
      */
-    private static Map<Tuple2<BinaryRow, Integer>, Set<String>> getL0FilesByBucket(
+    private static Map<PaimonPartitionBucket, Set<String>> getL0FilesByBucket(
             FileStoreTable fileStoreTable, Snapshot snapshot) {
-        Map<Tuple2<BinaryRow, Integer>, Set<String>> l0FilesByBucket = new HashMap<>();
+        Map<PaimonPartitionBucket, Set<String>> l0FilesByBucket = new HashMap<>();
 
         // Use scan API to get all splits including L0 files
         Map<String, String> scanOptions = new HashMap<>();
@@ -181,7 +179,8 @@ public class PaimonDvTableUtils {
                 if (dataFileMeta.level() == 0) {
                     l0FilesByBucket
                             .computeIfAbsent(
-                                    Tuple2.of(dataSplit.partition(), dataSplit.bucket()),
+                                    new PaimonPartitionBucket(
+                                            dataSplit.partition(), dataSplit.bucket()),
                                     k -> new HashSet<>())
                             .add(dataFileMeta.fileName());
                 }

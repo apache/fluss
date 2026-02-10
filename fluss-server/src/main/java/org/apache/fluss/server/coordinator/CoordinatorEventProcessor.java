@@ -1847,7 +1847,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
             CommitLakeTableSnapshotEvent commitLakeTableSnapshotEvent,
             CompletableFuture<CommitLakeTableSnapshotResponse> callback) {
         CommitLakeTableSnapshotsData commitLakeTableSnapshotsData =
-                commitLakeTableSnapshotEvent.getCommitLakeTableSnapshotData();
+                commitLakeTableSnapshotEvent.getCommitLakeTableSnapshotsData();
         if (commitLakeTableSnapshotsData.getLakeTableSnapshotMetadatas().isEmpty()) {
             handleCommitLakeTableSnapshotV1(commitLakeTableSnapshotEvent, callback);
         } else {
@@ -1860,7 +1860,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
             CompletableFuture<CommitLakeTableSnapshotResponse> callback) {
         // commit the lake table snapshot asynchronously
         CommitLakeTableSnapshotsData commitLakeTableSnapshotsData =
-                commitLakeTableSnapshotEvent.getCommitLakeTableSnapshotData();
+                commitLakeTableSnapshotEvent.getCommitLakeTableSnapshotsData();
         Map<Long, LakeTableSnapshot> lakeTableSnapshots =
                 commitLakeTableSnapshotsData.getLakeTableSnapshot();
         Map<Long, TablePath> tablePathById = new HashMap<>();
@@ -1934,7 +1934,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
             CommitLakeTableSnapshotEvent commitLakeTableSnapshotEvent,
             CompletableFuture<CommitLakeTableSnapshotResponse> callback) {
         CommitLakeTableSnapshotsData commitLakeTableSnapshotsData =
-                commitLakeTableSnapshotEvent.getCommitLakeTableSnapshotData();
+                commitLakeTableSnapshotEvent.getCommitLakeTableSnapshotsData();
         ioExecutor.execute(
                 () -> {
                     try {

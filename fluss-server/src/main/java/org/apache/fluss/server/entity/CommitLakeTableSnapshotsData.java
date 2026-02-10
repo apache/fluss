@@ -146,7 +146,7 @@ public class CommitLakeTableSnapshotsData {
         // the following field only non-empty since 0.9
         @Nullable private final LakeTable.LakeSnapshotMetadata lakeSnapshotMetadata;
 
-        // The earliest snapshot ID to keep for DV tables. Null for non-DV tables.
+        // The earliest snapshot ID to keep for Paimon DV tables. Null for non-Paimon-DV tables.
         @Nullable private final Long earliestSnapshotIDToKeep;
 
         public CommitLakeTableSnapshot(

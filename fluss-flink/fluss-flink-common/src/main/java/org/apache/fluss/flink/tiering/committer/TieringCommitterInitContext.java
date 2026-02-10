@@ -29,17 +29,17 @@ public class TieringCommitterInitContext implements CommitterInitContext {
     private final TablePath tablePath;
     private final TableInfo tableInfo;
     private final Configuration lakeTieringConfig;
-    private final Configuration flussConfig;
+    private final Configuration flussClientConfig;
 
     public TieringCommitterInitContext(
             TablePath tablePath,
             TableInfo tableInfo,
             Configuration lakeTieringConfig,
-            Configuration flussConfig) {
+            Configuration flussClientConfig) {
         this.tablePath = tablePath;
         this.tableInfo = tableInfo;
         this.lakeTieringConfig = lakeTieringConfig;
-        this.flussConfig = flussConfig;
+        this.flussClientConfig = flussClientConfig;
     }
 
     @Override
@@ -58,7 +58,7 @@ public class TieringCommitterInitContext implements CommitterInitContext {
     }
 
     @Override
-    public Configuration flussConfig() {
-        return flussConfig;
+    public Configuration flussClientConfig() {
+        return flussClientConfig;
     }
 }
