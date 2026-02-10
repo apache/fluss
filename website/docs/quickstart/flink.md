@@ -22,10 +22,6 @@ All commands were tested with Docker version 27.4.0 and Docker Compose version v
 We encourage you to use a recent version of Docker and [Compose v2](https://docs.docker.com/compose/releases/migrate/) (however, Compose v1 might work with a few adaptions).
 :::
 
-:::tip
-RustFS is used as replacement for S3 in this quickstart example, for your production setup you may want to configure this to use cloud file system. See [here](/maintenance/filesystems/overview.md) for information on how to setup cloud file systems
-:::
-
 ### Starting required components
 
 We will use `docker compose` to spin up the required components for this tutorial.
@@ -168,6 +164,10 @@ The Docker Compose environment consists of the following containers:
    - Snapshot interval `kv.snapshot.interval` is configured as 60 seconds. You may want to configure this differently for production systems
    - Credentials are configured directly with `s3.access-key` and `s3.secret-key`. Production systems should use CredentialsProvider chain specific to cloud environments.
 - **Flink Cluster**: a Flink `JobManager`, a Flink `TaskManager`, and a Flink SQL client container to execute queries.
+
+:::tip
+[RustFS](https://github.com/rustfs/rustfs) is used as replacement for S3 in this quickstart example, for your production setup you may want to configure this to use cloud file system. See [here](/maintenance/filesystems/overview.md) for information on how to setup cloud file systems
+:::
 
 4. To start all containers, run:
 ```shell

@@ -18,10 +18,6 @@ All commands were tested with Docker version 27.4.0 and Docker Compose version v
 We encourage you to use a recent version of Docker and [Compose v2](https://docs.docker.com/compose/releases/migrate/) (however, Compose v1 might work with a few adaptions).
 :::
 
-:::tip
-RustFS is used as replacement for S3 in this quickstart example, for your production setup you may want to configure this to use cloud file system. See [here](/maintenance/filesystems/overview.md) for information on how to setup cloud file systems
-:::
-
 ### Starting required components
 
 <Tabs groupId="lake-tabs">
@@ -196,6 +192,12 @@ volumes:
 The Docker Compose environment consists of the following containers:
 - **Fluss Cluster:** a Fluss `CoordinatorServer`, a Fluss `TabletServer` and a `ZooKeeper` server.
 - **Flink Cluster**: a Flink `JobManager` and a Flink `TaskManager` container to execute queries.
+- **RustFS**: an S3-compatible storage system used both as Fluss remote storage and Paimon's filesystem warehouse.
+
+
+:::tip
+[RustFS](https://github.com/rustfs/rustfs) is used as replacement for S3 in this quickstart example, for your production setup you may want to configure this to use cloud file system. See [here](/maintenance/filesystems/overview.md) for information on how to setup cloud file systems
+:::
 
 4. To start all containers, run:
 ```shell
@@ -421,6 +423,11 @@ The Docker Compose environment consists of the following containers:
 - **Fluss Cluster:** a Fluss `CoordinatorServer`, a Fluss `TabletServer` and a `ZooKeeper` server.
 - **Flink Cluster**: a Flink `JobManager` and a Flink `TaskManager` container to execute queries.
 - **PostgreSQL**: stores Iceberg catalog metadata (used by `JdbcCatalog`).
+- **RustFS**: an S3-compatible storage system used both as Fluss remote storage and Iceberg's filesystem warehouse.
+
+:::tip
+[RustFS](https://github.com/rustfs/rustfs) is used as replacement for S3 in this quickstart example, for your production setup you may want to configure this to use cloud file system. See [here](/maintenance/filesystems/overview.md) for information on how to setup cloud file systems
+:::
 
 4. To start all containers, run:
 ```shell
@@ -1036,7 +1043,7 @@ quit;
 
 ### Tiered Storage
 
-You can visit http://localhost:9001/ and sign in with rustfsadmin / rustfsadmin to view the files stored on tiered storage.
+You can visit http://localhost:9001/ and sign in with `rustfsadmin` / `rustfsadmin` to view the files stored on tiered storage.
 
 ## Clean up
 Run the following to stop all containers.
