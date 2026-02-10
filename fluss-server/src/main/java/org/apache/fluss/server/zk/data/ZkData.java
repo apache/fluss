@@ -20,7 +20,6 @@ package org.apache.fluss.server.zk.data;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
-import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.security.acl.Resource;
 import org.apache.fluss.security.acl.ResourceType;
@@ -236,12 +235,13 @@ public final class ZkData {
             return PartitionsZNode.path(tablePath) + "/" + partitionName;
         }
 
-        public static byte[] encode(TablePartition partition) {
-            return partition.toJsonBytes();
+        public static byte[] encode(PartitionRegistration partitionRegistration) {
+            return JsonSerdeUtils.writeValueAsBytes(
+                    partitionRegistration, PartitionRegistrationJsonSerde.INSTANCE);
         }
 
-        public static TablePartition decode(byte[] json) {
-            return TablePartition.fromJsonBytes(json);
+        public static PartitionRegistration decode(byte[] json) {
+            return JsonSerdeUtils.readValue(json, PartitionRegistrationJsonSerde.INSTANCE);
         }
     }
 

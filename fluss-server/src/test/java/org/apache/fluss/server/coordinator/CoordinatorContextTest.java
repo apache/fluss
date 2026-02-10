@@ -18,6 +18,7 @@
 package org.apache.fluss.server.coordinator;
 
 import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
@@ -33,6 +34,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test for {@link CoordinatorContext}. */
 class CoordinatorContextTest {
+
+    private static final FsPath DEFAULT_REMOTE_DATA_DIR = new FsPath("/tmp/remote-data-dir");
 
     @Test
     void testGetLakeTableCount() {
@@ -82,6 +85,7 @@ class CoordinatorContextTest {
                 tableId,
                 1,
                 tableDescriptor,
+                DEFAULT_REMOTE_DATA_DIR,
                 System.currentTimeMillis(),
                 System.currentTimeMillis());
     }

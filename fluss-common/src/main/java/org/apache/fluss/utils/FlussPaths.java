@@ -410,6 +410,23 @@ public class FlussPaths {
     }
 
     // ----------------------------------------------------------------------------------------
+    // Remote Data Paths
+    // ----------------------------------------------------------------------------------------
+
+    /**
+     * Returns the remote root directory path for storing data files.
+     *
+     * <p>The path contract:
+     *
+     * <pre>
+     * {$remote.data.dir}
+     * </pre>
+     */
+    public static FsPath remoteDataDir(Configuration conf) {
+        return new FsPath(conf.get(ConfigOptions.REMOTE_DATA_DIR));
+    }
+
+    // ----------------------------------------------------------------------------------------
     // Remote Log Paths
     // ----------------------------------------------------------------------------------------
 
@@ -424,6 +441,19 @@ public class FlussPaths {
      */
     public static FsPath remoteLogDir(Configuration conf) {
         return new FsPath(conf.get(ConfigOptions.REMOTE_DATA_DIR) + "/" + REMOTE_LOG_DIR_NAME);
+    }
+
+    /**
+     * Returns the remote root directory path for storing log files.
+     *
+     * <p>The path contract:
+     *
+     * <pre>
+     * {$remote.data.dir}/log
+     * </pre>
+     */
+    public static FsPath remoteLogDir(FsPath remoteDataDir) {
+        return new FsPath(remoteDataDir, REMOTE_LOG_DIR_NAME);
     }
 
     /**
@@ -593,6 +623,19 @@ public class FlussPaths {
     }
 
     /**
+     * Returns the remote root directory path for storing kv snapshot files.
+     *
+     * <p>The path contract:
+     *
+     * <pre>
+     * {$remote.data.dir}/kv
+     * </pre>
+     */
+    public static FsPath remoteKvDir(FsPath remoteDataDir) {
+        return new FsPath(remoteDataDir, REMOTE_KV_DIR_NAME);
+    }
+
+    /**
      * Returns the remote directory path for storing kv snapshot files for a kv tablet.
      *
      * <p>The path contract:
@@ -701,11 +744,11 @@ public class FlussPaths {
      * </pre>
      */
     public static FsPath remoteLakeTableSnapshotDir(
-            String remoteDataDir, TablePath tablePath, long tableId) {
+            FsPath remoteDataDir, TablePath tablePath, long tableId) {
         return new FsPath(
+                remoteDataDir,
                 String.format(
-                        "%s/%s/%s/%s-%d",
-                        remoteDataDir,
+                        "%s/%s/%s-%d",
                         REMOTE_LAKE_DIR_NAME,
                         tablePath.getDatabaseName(),
                         tablePath.getTableName(),
@@ -722,12 +765,10 @@ public class FlussPaths {
      * </pre>
      */
     public static FsPath remoteLakeTableSnapshotOffsetPath(
-            String remoteDataDir, TablePath tablePath, long tableId) {
+            FsPath remoteDataDir, TablePath tablePath, long tableId) {
         return new FsPath(
-                String.format(
-                        "%s/metadata/%s.offsets",
-                        remoteLakeTableSnapshotDir(remoteDataDir, tablePath, tableId),
-                        UUID.randomUUID()));
+                remoteLakeTableSnapshotDir(remoteDataDir, tablePath, tableId),
+                String.format("metadata/%s.offsets", UUID.randomUUID()));
     }
 
     /**

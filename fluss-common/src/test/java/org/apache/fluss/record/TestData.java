@@ -19,6 +19,7 @@ package org.apache.fluss.record;
 
 import org.apache.fluss.config.AutoPartitionTimeUnit;
 import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableDescriptor;
@@ -39,6 +40,7 @@ public final class TestData {
     public static final short DEFAULT_SCHEMA_ID = 1;
     public static final long BASE_OFFSET = 0L;
     public static final byte DEFAULT_MAGIC = CURRENT_LOG_MAGIC_VALUE;
+    public static final FsPath DEFAULT_REMOTE_DATA_DIR = new FsPath("/tmp/remote-data-dir");
     // ---------------------------- data1 and related table info begin ---------------------------
     public static final List<Object[]> DATA1 =
             Arrays.asList(
@@ -93,6 +95,7 @@ public final class TestData {
                     DATA1_TABLE_ID,
                     1,
                     DATA1_TABLE_DESCRIPTOR,
+                    DEFAULT_REMOTE_DATA_DIR,
                     currentMillis,
                     currentMillis);
 
@@ -118,6 +121,7 @@ public final class TestData {
                     PARTITION_TABLE_ID,
                     1,
                     DATA1_PARTITIONED_TABLE_DESCRIPTOR,
+                    DEFAULT_REMOTE_DATA_DIR,
                     System.currentTimeMillis(),
                     System.currentTimeMillis());
 
@@ -148,6 +152,7 @@ public final class TestData {
                     DATA1_TABLE_ID_PK,
                     1,
                     DATA1_TABLE_DESCRIPTOR_PK,
+                    DEFAULT_REMOTE_DATA_DIR,
                     currentMillis,
                     currentMillis);
 
@@ -217,6 +222,7 @@ public final class TestData {
                     DATA2_TABLE_ID,
                     1,
                     DATA2_TABLE_DESCRIPTOR,
+                    DEFAULT_REMOTE_DATA_DIR,
                     System.currentTimeMillis(),
                     System.currentTimeMillis());
     // -------------------------------- data2 info end ------------------------------------

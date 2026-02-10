@@ -123,6 +123,7 @@ import static org.apache.fluss.record.TestData.DATA3_SCHEMA_PK_AUTO_INC;
 import static org.apache.fluss.record.TestData.DATA3_TABLE_ID_PK_AUTO_INC;
 import static org.apache.fluss.record.TestData.DATA3_TABLE_PATH_PK_AUTO_INC;
 import static org.apache.fluss.record.TestData.DATA_1_WITH_KEY_AND_VALUE;
+import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
 import static org.apache.fluss.record.TestData.DEFAULT_SCHEMA_ID;
 import static org.apache.fluss.record.TestData.EXPECTED_LOG_RESULTS_FOR_DATA_1_WITH_PK;
 import static org.apache.fluss.server.coordinator.CoordinatorContext.INITIAL_COORDINATOR_EPOCH;
@@ -1250,7 +1251,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
     void testListOffsets(boolean isPartitioned) throws Exception {
-        TableBucket tb = new TableBucket(DATA1_TABLE_ID, isPartitioned ? 10L : null, 1);
+        TableBucket tb = makeTableBucket(DATA1_TABLE_ID, isPartitioned ? 10L : null, false);
         makeLogTableAsLeader(tb, isPartitioned);
 
         // produce one batch to this bucket.
@@ -1903,6 +1904,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
                         nonePartitionTableId,
                         1,
                         DATA1_TABLE_DESCRIPTOR,
+                        remoteDataDir,
                         System.currentTimeMillis(),
                         System.currentTimeMillis());
         TableInfo partitionTableInfo =
@@ -1911,6 +1913,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
                         partitionTableId,
                         1,
                         DATA1_PARTITIONED_TABLE_DESCRIPTOR,
+                        remoteDataDir,
                         System.currentTimeMillis(),
                         System.currentTimeMillis());
         TableMetadata tableMetadata1 =
@@ -1935,11 +1938,13 @@ class ReplicaManagerTest extends ReplicaTestBase {
         // register table to zk.
         zkClient.registerTable(
                 nonePartitionTablePath,
-                TableRegistration.newTable(nonePartitionTableId, DATA1_TABLE_DESCRIPTOR));
+                TableRegistration.newTable(
+                        nonePartitionTableId, remoteDataDir, DATA1_TABLE_DESCRIPTOR));
         zkClient.registerFirstSchema(nonePartitionTablePath, DATA1_TABLE_DESCRIPTOR.getSchema());
         zkClient.registerTable(
                 partitionTablePath,
-                TableRegistration.newTable(partitionTableId, DATA1_PARTITIONED_TABLE_DESCRIPTOR));
+                TableRegistration.newTable(
+                        partitionTableId, remoteDataDir, DATA1_PARTITIONED_TABLE_DESCRIPTOR));
         zkClient.registerFirstSchema(
                 partitionTablePath, DATA1_PARTITIONED_TABLE_DESCRIPTOR.getSchema());
 
@@ -1978,6 +1983,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
                                                 DELETED_TABLE_ID, // mark as deleted.
                                                 1,
                                                 DATA1_TABLE_DESCRIPTOR,
+                                                remoteDataDir,
                                                 System.currentTimeMillis(),
                                                 System.currentTimeMillis()),
                                         Collections.emptyList())),
@@ -2065,6 +2071,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
                         tableId,
                         1,
                         DATA1_TABLE_DESCRIPTOR,
+                        DEFAULT_REMOTE_DATA_DIR,
                         System.currentTimeMillis(),
                         System.currentTimeMillis());
         TableBucket tableBucket1 = new TableBucket(tableId, 1);

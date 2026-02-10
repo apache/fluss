@@ -90,6 +90,7 @@ public class DefaultAuthorizerTest {
                 ZOO_KEEPER_EXTENSION_WRAPPER.getCustomExtension().getConnectString());
         configuration.setString(ConfigOptions.SUPER_USERS, "USER:" + ROOT_USER);
         configuration.set(ConfigOptions.AUTHORIZER_ENABLED, true);
+        configuration.set(ConfigOptions.REMOTE_DATA_DIR, "/tmp/remote-data-dir");
         zooKeeperClient = ZooKeeperUtils.startZookeeperClient(configuration, new NOPErrorHandler());
         authorizer =
                 (DefaultAuthorizer)

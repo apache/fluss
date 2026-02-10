@@ -35,7 +35,9 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
+import org.junit.jupiter.api.io.TempDir;
 
+import java.io.File;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.Collections;
@@ -56,6 +58,7 @@ public class DynamicConfigChangeTest {
     public static AllCallbackWrapper<ZooKeeperExtension> zooKeeperExtensionWrapper =
             new AllCallbackWrapper<>(new ZooKeeperExtension());
 
+    protected static @TempDir File tempDir;
     protected static ZooKeeperClient zookeeperClient;
 
     @BeforeAll
@@ -64,6 +67,7 @@ public class DynamicConfigChangeTest {
         configuration.setString(
                 ConfigOptions.ZOOKEEPER_ADDRESS,
                 zooKeeperExtensionWrapper.getCustomExtension().getConnectString());
+        configuration.set(ConfigOptions.REMOTE_DATA_DIR, tempDir.getAbsolutePath());
         zookeeperClient =
                 ZooKeeperUtils.startZookeeperClient(configuration, NOPErrorHandler.INSTANCE);
     }
