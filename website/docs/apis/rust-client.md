@@ -6,167 +6,139 @@ sidebar_position: 4
 # Fluss Rust Client
 
 ## Overview
-The Fluss Rust Client provides a high-performance, asynchronous interface for interacting with Fluss clusters. Built on top of the Tokio runtime, it serves as the core engine for other language bindings.
+The Fluss Rust Client is a high-performance, asynchronous library powered by the `tokio` runtime. It provides a native interface for interacting with Fluss clusters with minimal overhead.
 
 The client provides two main APIs:
-* **Admin API**: For managing databases, tables, and retrieving metadata.
-* **Table API**: For high-performance data reading and writing.
+* **Admin API**: For managing databases, tables, and partitions.
+* **Table API**: For high-throughput reading (Scanners/Lookups) and writing (Writers).
 
 ## Installation
-The Fluss Rust client is currently available via the official Git repository. To use it, add the following to your `Cargo.toml`:
+The Fluss Rust client is published to [crates.io](https://crates.io/crates/fluss-rs) as `fluss-rs`. Note that the library name for imports is `fluss`.
+
+Add the following to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-# Install directly from the official Apache repository
-fluss-client = { git = "https://github.com/apache/fluss-rust.git" }
-tokio = { version = "1.0", features = ["full"] }
+fluss-rs = "0.1"
+tokio = { version = "1", features = ["full"] }
 ```
+
+:::tip
+This page provides a lightweight introduction to the Fluss Rust Client.
+
+For a complete and up-to-date Rust client reference, including advanced APIs and examples, see the
+[official Rust client documentation](https://github.com/apache/fluss-rust/blob/main/docs/rust-client.md).
+:::
+
 
 ## Initialization
 
-The `Connection` object is the entry point for interacting with Fluss. It is created using `Connection::create()` and requires a `Configuration` object.
-
-The `Connection` object is thread-safe and can be shared across multiple tasks. It is recommended to create a single `Connection` instance per application and use it to create multiple `Admin` and `Table` instances.
+The FlussConnection is the entry point for interacting with a cluster. It is thread-safe and should be reused across your application
 
 ```rust
-use fluss_client::connection::Connection;
-use fluss_client::config::Configuration;
+use fluss::client::FlussConnection;
+use fluss::config::Config;
+use fluss::error::Result;
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut conf = Configuration::new();
-    // Adjust according to where your Fluss cluster is running
-    conf.set_string("bootstrap.servers", "localhost:9123");
+async fn main() -> Result<()> {
+    let mut config = Config::default();
+    config.bootstrap_server = "127.0.0.1:9123".to_string();
 
-    let connection = Connection::new(conf).await?;
+    let conn = FlussConnection::new(config).await?;
     
-    // Obtain Admin instance
-    let admin = connection.admin().await;
+    // Obtain Admin interface
+    let admin = conn.get_admin().await?;
     
     Ok(())
 }
 ```
 
-## Async Operations
-All operations in the Fluss Rust client are asynchronous and return a `Future`. You should use the `.await` syntax to wait for the result of an operation. The client is designed to work with the `tokio` runtime.
-
 ## Admin API
 
-The `Admin` API allows you to manage databases and tables.
-
-### Creating a Database
-
-```rust
-use fluss_client::admin::DatabaseDescriptor;
-
-let mut descriptor = DatabaseDescriptor::new();
-descriptor.set_comment("Test database");
-
-admin.create_database("my_db", descriptor, true).await?;
-```
+The Admin interface allows you to manage the lifecycle of your data.
 
 ### Creating a Table
 
 ```rust
-use fluss_client::metadata::{Schema, TableDescriptor};
-use fluss_client::types::DataType;
+use fluss::metadata::{DataTypes, Schema, TableDescriptor, TablePath};
 
 let schema = Schema::builder()
-    .column("id", DataType::String)
-    .column("value", DataType::Int)
-    .primary_key(vec!["id"])
-    .build();
+.column("id", DataTypes::int())
+.column("name", DataTypes::string())
+.column("score", DataTypes::float())
+.primary_key(vec!["id"])
+.build()?;
 
-let table_descriptor = TableDescriptor::builder()
-    .schema(schema)
-    .distributed_by(1, vec!["id"])
-    .build();
+let descriptor = TableDescriptor::builder()
+.schema(schema)
+.bucket_count(3)
+.build()?;
 
-admin.create_table("my_db.my_table", table_descriptor, false).await?;
+let table_path = TablePath::new("my_db", "my_table");
+admin.create_table(&table_path, &descriptor, true).await?;
 ```
 
 ## Table API
 
 ### Writers
 
-To write data, first obtain a `Table` instance. Fluss supports `UpsertWriter` for Primary Key tables and `AppendWriter` for Log tables.
+Fluss writers use a fire-and-forget pattern. Use flush() to ensure batch persistence or await the append call for per-record acknowledgment
 
 ```rust
-let table = connection.get_table("my_db.my_table").await?;
+use fluss::row::GenericRow;
+
+let table = conn.get_table(&table_path).await?;
+let writer = table.new_append()?.create_writer()?;
+
+// Prepare a row with 3 fields
+let mut row = GenericRow::new(3);
+row.set_field(0, 1);            // id (int)
+row.set_field(1, "Alice");      // name (string)
+row.set_field(2, 95.5f32);      // score (float)
+
+// Queue the write
+writer.append(&row)?;
+
+// Ensure it is sent to the server
+writer.flush().await?;
 ```
 
 #### Writing to a Primary Key Table
 
 ```rust
-use fluss_client::row::Row;
-use fluss_client::types::{Timestamp, TimestampNtz};
-use std::time::SystemTime;
+let table = conn.get_table(&table_path).await?;
+let upsert_writer = table.new_upsert()?.create_writer()?;
 
-// Create writer
-let mut writer = table.new_upsert().create_writer().await?;
+let mut row = GenericRow::new(3);
+row.set_field(0, 1);            // id (PK)
+row.set_field(1, "Bob");
+row.set_field(2, 88.0f32);
 
-// Prepare data
-// Note: Data must be passed as a Row object matching the schema
-let row1 = Row::new()
-    .set("id", "1")
-    .set("age", 20)
-    .set("created_at", TimestampNtz::from(SystemTime::now()))
-    .set("is_active", true);
-
-let row2 = Row::new()
-    .set("id", "2")
-    .set("age", 22)
-    .set("created_at", TimestampNtz::from(SystemTime::now()))
-    .set("is_active", true);
-
-// Upsert data
-writer.upsert(row1).await?;
-writer.upsert(row2).await?;
-
-// Flush to ensure data is sent
-writer.flush().await?;
-```
-
-#### Writing to a Log Table
-
-```rust
-// Create append writer
-let mut writer = table.new_append().create_writer().await?;
-
-// Append data
-let row = Row::new()
-    .set("user_id", "user_log_1")
-    .set("event", "login_event");
-    
-writer.append(row).await?;
-writer.flush().await?;
+// Upsert logic: inserts if new, updates if ID exists
+upsert_writer.upsert(&row)?;
+upsert_writer.flush().await?;
 ```
 
 ### Scanner
 
-To read data, create a `LogScanner` and subscribe to buckets.
+To read data, create a LogScanner. The poll method returns ScanRecords, which requires nested iteration.
 
 ```rust
-use fluss_client::scanner::ScanRecord;
 use std::time::Duration;
+use fluss::client::EARLIEST_OFFSET;
 
-// Create scanner
-let mut scanner = table.new_scan().create_log_scanner().await?;
+let mut scanner = table.new_scan().create_log_scanner()?;
+scanner.subscribe(0, EARLIEST_OFFSET).await?;
 
-// Subscribe to all buckets from the beginning
-let num_buckets = table.get_table_info().num_buckets();
-for i in 0..num_buckets {
-    scanner.subscribe_from_beginning(i);
-}
-
-// Poll for records
 loop {
-    let scan_records = scanner.poll(Duration::from_millis(1000)).await?;
-    for bucket in scan_records.buckets() {
-        let records = scan_records.records(bucket);
-        for record in records {
-            let row = record.get_row();
-            println!("Received row: {:?}", row);
+    let records = scanner.poll(Duration::from_secs(5)).await?;
+    
+    // Iterate through bucket groups
+    for (_bucket, bucket_records) in records.records_by_buckets() {
+        for record in bucket_records {
+            let row = record.row();
+            println!("Received row: {:?} at offset {}", row, record.offset());
         }
     }
 }
@@ -174,20 +146,18 @@ loop {
 
 ### Lookup
 
-You can perform key-based lookups on Primary Key tables.
+Perform point lookups on Primary Key tables using a key row.
 
 ```rust
-// Create lookuper
-let lookuper = table.new_lookup().create_lookuper().await?;
+let mut lookuper = table.new_lookup()?.create_lookuper()?;
 
-// Lookup by key
-// Key must be passed as a Row with PK columns
-let key = Row::new().set("id", "1");
-let result_row = lookuper.lookup(key).await?;
+// Key row must only contain Primary Key columns
+let mut key = GenericRow::new(1);
+key.set_field(0, 1); 
 
-match result_row {
-    Some(row) => println!("Found row: {:?}", row),
-    None => println!("Row not found"),
+let result = lookuper.lookup(&key).await?;
+if let Some(row) = result.get_single_row()? {
+    println!("Found: id={}, name={}", row.get_int(0), row.get_string(1));
 }
 ```
 
@@ -195,17 +165,13 @@ match result_row {
 
 The Rust client maps Fluss types to Rust types as follows:
 
-| Fluss Type | Rust Type |
-|---|---|
-| INT | i32 |
-| BIGINT | i64 |
-| STRING | String |
-| BOOLEAN | bool |
-| FLOAT | f32 |
-| DOUBLE | f64 |
-| DECIMAL | rust_decimal::Decimal |
-| DATE | chrono::NaiveDate |
-| TIME | chrono::NaiveTime |
-| TIMESTAMP | chrono::NaiveDateTime |
-| TIMESTAMP_LTZ | `chrono::DateTime<Utc>` |
-| BINARY / BYTES | `Vec<u8>` |
+| Fluss Type | Rust Type | Method Example |
+|-----------|-----------|----------------|
+| `INT` | `i32` | `row.get_int(idx)` |
+| `BIGINT` | `i64` | `row.get_long(idx)` |
+| `STRING` | `&str` | `row.get_string(idx)` |
+| `BOOLEAN` | `bool` | `row.get_boolean(idx)` |
+| `FLOAT` | `f32` | `row.get_float(idx)` |
+| `DOUBLE` | `f64` | `row.get_double(idx)` |
+| `BYTES` | `&[u8]` | `row.get_bytes(idx)` |
+
