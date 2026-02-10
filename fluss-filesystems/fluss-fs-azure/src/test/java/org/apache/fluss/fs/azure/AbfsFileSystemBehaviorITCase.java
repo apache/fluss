@@ -38,7 +38,7 @@ class AbfsFileSystemBehaviorITCase extends FileSystemBehaviorTestSuite {
     private static final String CLIENT_SECRET = "testClientSecret";
 
     private static final String AZURE_ACCOUNT_KEY = "ZmFrZS1rZXkK";
-    private static final String ENDPOINT_KEY = "http://localhost:8080";
+    private static final String ENDPOINT_PREFIX = "http://localhost:";
     public static final String ABFS_FS_PATH = "abfs://flus@test.dfs.core.windows.net/test";
 
     private static MockAuthServer mockAuthServer;
@@ -49,7 +49,9 @@ class AbfsFileSystemBehaviorITCase extends FileSystemBehaviorTestSuite {
         final Configuration configuration = new Configuration();
         configuration.setString(CONFIG_PREFIX + ".oauth2.client.id", CLIENT_ID);
         configuration.setString(CONFIG_PREFIX + ".oauth2.client.secret", CLIENT_SECRET);
-        configuration.setString(CONFIG_PREFIX + ".oauth2.client.endpoint", ENDPOINT_KEY);
+        configuration.setString(
+                CONFIG_PREFIX + ".oauth2.client.endpoint",
+                ENDPOINT_PREFIX + mockAuthServer.getPort());
         configuration.setString(CONFIG_PREFIX + ".key", AZURE_ACCOUNT_KEY);
         FileSystem.initialize(configuration, null);
     }

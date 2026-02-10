@@ -37,13 +37,15 @@ public class AzureDelegationTokenProviderTest {
     private static final String TEST_CLIENT_ID = "testClientId";
     private static final String TEST_CLIENT_SECRET = "testClientSecret";
 
-    private static final String TEST_ENDPOINT = "http://localhost:8080";
+    private static final String TEST_ENDPOINT_PREFIX = "http://localhost:";
+    private static String TEST_ENDPOINT;
 
     private static MockAuthServer mockAuthServer;
 
     @BeforeAll
     static void setup() {
         mockAuthServer = MockAuthServer.create();
+        TEST_ENDPOINT = TEST_ENDPOINT_PREFIX + mockAuthServer.getPort();
     }
 
     @Test
