@@ -87,7 +87,7 @@ public class LakeSplitGenerator {
     public List<SourceSplitBase> generateHybridLakeFlussSplits() throws Exception {
         LakeSnapshot lakeSnapshotInfo;
         try {
-            lakeSnapshotInfo = flussAdmin.getLatestLakeSnapshot(tableInfo.getTablePath()).get();
+            lakeSnapshotInfo = flussAdmin.getReadableLakeSnapshot(tableInfo.getTablePath()).get();
         } catch (Exception exception) {
             if (ExceptionUtils.stripExecutionException(exception)
                     instanceof LakeTableSnapshotNotExistException) {

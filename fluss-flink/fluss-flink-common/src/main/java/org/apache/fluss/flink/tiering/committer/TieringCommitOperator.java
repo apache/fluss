@@ -28,6 +28,7 @@ import org.apache.fluss.flink.tiering.event.FinishedTieringEvent;
 import org.apache.fluss.flink.tiering.source.TableBucketWriteResult;
 import org.apache.fluss.flink.tiering.source.TieringSource;
 import org.apache.fluss.lake.committer.CommittedLakeSnapshot;
+import org.apache.fluss.lake.committer.LakeCommitResult;
 import org.apache.fluss.lake.committer.LakeCommitter;
 import org.apache.fluss.lake.writer.LakeTieringFactory;
 import org.apache.fluss.lake.writer.LakeWriter;
@@ -201,7 +202,10 @@ public class TieringCommitOperator<WriteResult, Committable>
         try (LakeCommitter<WriteResult, Committable> lakeCommitter =
                 lakeTieringFactory.createLakeCommitter(
                         new TieringCommitterInitContext(
-                                tablePath, currentTableInfo, lakeTieringConfig))) {
+                                tablePath,
+                                admin.getTableInfo(tablePath).get(),
+                                lakeTieringConfig,
+                                flussConfig))) {
             List<WriteResult> writeResults =
                     committableWriteResults.stream()
                             .map(TableBucketWriteResult::writeResult)
@@ -229,20 +233,22 @@ public class TieringCommitOperator<WriteResult, Committable>
                             : flussCurrentLakeSnapshot.getSnapshotId());
 
             // get the lake bucket offsets file storing the log end offsets
-            String lakeBucketOffsetsFile =
+            String lakeBucketTieredOffsetsFile =
                     flussTableLakeSnapshotCommitter.prepareLakeSnapshot(
                             tableId, tablePath, logEndOffsets);
 
             // record the lake snapshot bucket offsets file to snapshot property
-            long committedSnapshotId =
-                    lakeCommitter.commit(
-                            committable,
-                            Collections.singletonMap(
-                                    FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY, lakeBucketOffsetsFile));
+            Map<String, String> snapshotProperties =
+                    Collections.singletonMap(
+                            FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY, lakeBucketTieredOffsetsFile);
+            LakeCommitResult lakeCommitResult =
+                    lakeCommitter.commit(committable, snapshotProperties);
+            // commit to fluss
             flussTableLakeSnapshotCommitter.commit(
                     tableId,
-                    committedSnapshotId,
-                    lakeBucketOffsetsFile,
+                    tablePath,
+                    lakeCommitResult,
+                    lakeBucketTieredOffsetsFile,
                     logEndOffsets,
                     logMaxTieredTimestamps);
             return committable;
@@ -316,11 +322,14 @@ public class TieringCommitOperator<WriteResult, Committable>
                     tableId,
                     missingCommittedSnapshot.getLakeSnapshotId(),
                     lakeSnapshotOffsetPath,
+                    // don't care readable snapshot and offsets,
+                    null,
                     // use empty log offsets, log max timestamp, since we can't know that
                     // in last tiering, it doesn't matter for they are just used to
                     // report metrics
                     Collections.emptyMap(),
-                    Collections.emptyMap());
+                    Collections.emptyMap(),
+                    LakeCommitResult.KEEP_ALL_PREVIOUS);
             // abort this committable to delete the written files
             lakeCommitter.abort(committable);
             throw new IllegalStateException(

@@ -438,20 +438,73 @@ public interface Admin extends AutoCloseable {
     KvSnapshotLease createKvSnapshotLease(String leaseId, long leaseDurationMs);
 
     /**
-     * Get table lake snapshot info of the given table asynchronously.
+     * Retrieves the absolute latest lake snapshot metadata for a table asynchronously.
      *
-     * <p>It'll get the latest snapshot for all the buckets of the table.
+     * <p>This returns the most recent snapshot regardless of its visibility or compaction status.
+     * It includes the latest tiered offsets for all buckets.
      *
-     * <p>The following exceptions can be anticipated when calling {@code get()} on returned future.
+     * <p><b>NOTE: This API is not intended for union reads and should be considered internal.</b>
+     * For union read operations (e.g. Flink/Spark reading from Fluss + lake), use {@link
+     * #getReadableLakeSnapshot(TablePath)} instead. Using this method for union reads can lead to
+     * data loss when the latest tiered snapshot is not yet readable (e.g. Paimon DV tables with
+     * un-compacted L0 data). This method remains for internal use cases such as tiering commit and
+     * readable-offset resolution.
+     *
+     * <p>Exceptions expected when calling {@code get()} on the returned future:
      *
      * <ul>
-     *   <li>{@link TableNotExistException} if the table does not exist.
-     *   <li>{@link LakeTableSnapshotNotExistException} if no any lake snapshot exist.
+     *   <li>{@link TableNotExistException}: If the table does not exist.
+     *   <li>{@link LakeTableSnapshotNotExistException}: If no any snapshots.
      * </ul>
      *
-     * @param tablePath the table path of the table.
+     * @param tablePath The path of the target table.
+     * @return A future returning the latest tiered snapshot.
      */
     CompletableFuture<LakeSnapshot> getLatestLakeSnapshot(TablePath tablePath);
+
+    /**
+     * Retrieves a specific historical lake snapshot by its ID asynchronously.
+     *
+     * <p>It provides the tiered bucket offsets as they existed at the moment the specified snapshot
+     * was committed.
+     *
+     * <p>Exceptions expected when calling {@code get()} on the returned future:
+     *
+     * <ul>
+     *   <li>{@link TableNotExistException}: If the table does not exist.
+     *   <li>{@link LakeTableSnapshotNotExistException}: If the specified snapshot ID is missing in
+     *       Fluss
+     * </ul>
+     *
+     * @param tablePath The path of the target table.
+     * @param snapshotId The unique identifier of the snapshot.
+     * @return A future returning the specific lake snapshot.
+     */
+    CompletableFuture<LakeSnapshot> getLakeSnapshot(TablePath tablePath, long snapshotId);
+
+    /**
+     * Retrieves the latest readable lake snapshot and its corresponding readable log offsets.
+     *
+     * <p>For Paimon DV tables, the tiered log offset may not be readable because the corresponding
+     * data might be in the L0 layer. Using tiered offset directly can lead to data loss. This
+     * method returns a readable snapshot (where L0 data has been compacted) and its corresponding
+     * readable offsets, which represent safe log offsets that can be read without data loss.
+     *
+     * <p>For union read operations, use this method instead of {@link
+     * #getLatestLakeSnapshot(TablePath)} to ensure data safety and avoid data loss.
+     *
+     * <p>Exceptions expected when calling {@code get()} on the returned future:
+     *
+     * <ul>
+     *   <li>{@link TableNotExistException}: If the table does not exist.
+     *   <li>{@link LakeTableSnapshotNotExistException}: If no readable snapshot exists yet.
+     * </ul>
+     *
+     * @param tablePath The path of the target table.
+     * @return A future returning a {@link LakeSnapshot} containing the readable snapshot ID and
+     *     readable log offsets for each bucket.
+     */
+    CompletableFuture<LakeSnapshot> getReadableLakeSnapshot(TablePath tablePath);
 
     /**
      * List offset for the specified buckets. This operation enables to find the beginning offset,

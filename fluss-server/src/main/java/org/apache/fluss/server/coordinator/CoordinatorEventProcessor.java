@@ -95,7 +95,7 @@ import org.apache.fluss.server.coordinator.statemachine.ReplicaLeaderElection.Re
 import org.apache.fluss.server.coordinator.statemachine.ReplicaStateMachine;
 import org.apache.fluss.server.coordinator.statemachine.TableBucketStateMachine;
 import org.apache.fluss.server.entity.AdjustIsrResultForBucket;
-import org.apache.fluss.server.entity.CommitLakeTableSnapshotData;
+import org.apache.fluss.server.entity.CommitLakeTableSnapshotsData;
 import org.apache.fluss.server.entity.CommitRemoteLogManifestData;
 import org.apache.fluss.server.entity.DeleteReplicaResultForBucket;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrResultForBucket;
@@ -116,7 +116,6 @@ import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.server.zk.data.TabletServerRegistration;
 import org.apache.fluss.server.zk.data.ZkData.PartitionIdsZNode;
 import org.apache.fluss.server.zk.data.ZkData.TableIdsZNode;
-import org.apache.fluss.server.zk.data.lake.LakeTable;
 import org.apache.fluss.server.zk.data.lake.LakeTableHelper;
 import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
 import org.apache.fluss.utils.types.Tuple2;
@@ -1847,9 +1846,9 @@ public class CoordinatorEventProcessor implements EventProcessor {
     private void tryProcessCommitLakeTableSnapshot(
             CommitLakeTableSnapshotEvent commitLakeTableSnapshotEvent,
             CompletableFuture<CommitLakeTableSnapshotResponse> callback) {
-        CommitLakeTableSnapshotData commitLakeTableSnapshotData =
-                commitLakeTableSnapshotEvent.getCommitLakeTableSnapshotData();
-        if (commitLakeTableSnapshotData.getLakeTableSnapshotMetadatas().isEmpty()) {
+        CommitLakeTableSnapshotsData commitLakeTableSnapshotsData =
+                commitLakeTableSnapshotEvent.getCommitLakeTableSnapshotsData();
+        if (commitLakeTableSnapshotsData.getLakeTableSnapshotMetadatas().isEmpty()) {
             handleCommitLakeTableSnapshotV1(commitLakeTableSnapshotEvent, callback);
         } else {
             handleCommitLakeTableSnapshotV2(commitLakeTableSnapshotEvent, callback);
@@ -1860,10 +1859,10 @@ public class CoordinatorEventProcessor implements EventProcessor {
             CommitLakeTableSnapshotEvent commitLakeTableSnapshotEvent,
             CompletableFuture<CommitLakeTableSnapshotResponse> callback) {
         // commit the lake table snapshot asynchronously
-        CommitLakeTableSnapshotData commitLakeTableSnapshotData =
-                commitLakeTableSnapshotEvent.getCommitLakeTableSnapshotData();
+        CommitLakeTableSnapshotsData commitLakeTableSnapshotsData =
+                commitLakeTableSnapshotEvent.getCommitLakeTableSnapshotsData();
         Map<Long, LakeTableSnapshot> lakeTableSnapshots =
-                commitLakeTableSnapshotData.getLakeTableSnapshot();
+                commitLakeTableSnapshotsData.getLakeTableSnapshot();
         Map<Long, TablePath> tablePathById = new HashMap<>();
         for (Map.Entry<Long, LakeTableSnapshot> lakeTableSnapshotEntry :
                 lakeTableSnapshots.entrySet()) {
@@ -1907,17 +1906,10 @@ public class CoordinatorEventProcessor implements EventProcessor {
                             }
                         }
 
-                        // remove failed tables
-                        Map<Long, LakeTableSnapshot> commitlakeTableSnapshots =
-                                commitLakeTableSnapshotData.getLakeTableSnapshot();
-                        commitlakeTableSnapshots.keySet().removeAll(failedTableIds);
-                        Map<Long, Map<TableBucket, Long>> tableMaxTieredTimestamps =
-                                commitLakeTableSnapshotData.getTableMaxTieredTimestamps();
-                        tableMaxTieredTimestamps.keySet().removeAll(failedTableIds);
-
-                        coordinatorEventManager.put(
-                                new NotifyLakeTableOffsetEvent(
-                                        commitlakeTableSnapshots, tableMaxTieredTimestamps));
+                        notifyLakeTableOffsets(
+                                commitLakeTableSnapshotsData.getLakeTableSnapshot(),
+                                commitLakeTableSnapshotsData.getTableMaxTieredTimestamps(),
+                                failedTableIds);
                         callback.complete(response);
                     } catch (Exception e) {
                         callback.completeExceptionally(e);
@@ -1925,45 +1917,60 @@ public class CoordinatorEventProcessor implements EventProcessor {
                 });
     }
 
+    private void notifyLakeTableOffsets(
+            Map<Long, LakeTableSnapshot> committedLakeTableSnapshots,
+            Map<Long, Map<TableBucket, Long>> tableMaxTieredTimestamps,
+            Set<Long> failedTableIds) {
+        committedLakeTableSnapshots.keySet().removeAll(failedTableIds);
+        tableMaxTieredTimestamps.keySet().removeAll(failedTableIds);
+        if (!committedLakeTableSnapshots.isEmpty()) {
+            coordinatorEventManager.put(
+                    new NotifyLakeTableOffsetEvent(
+                            committedLakeTableSnapshots, tableMaxTieredTimestamps));
+        }
+    }
+
     private void handleCommitLakeTableSnapshotV2(
             CommitLakeTableSnapshotEvent commitLakeTableSnapshotEvent,
             CompletableFuture<CommitLakeTableSnapshotResponse> callback) {
-        CommitLakeTableSnapshotData commitLakeTableSnapshotData =
-                commitLakeTableSnapshotEvent.getCommitLakeTableSnapshotData();
-        Map<Long, LakeTable.LakeSnapshotMetadata> lakeSnapshotMetadatas =
-                commitLakeTableSnapshotData.getLakeTableSnapshotMetadatas();
+        CommitLakeTableSnapshotsData commitLakeTableSnapshotsData =
+                commitLakeTableSnapshotEvent.getCommitLakeTableSnapshotsData();
         ioExecutor.execute(
                 () -> {
                     try {
                         CommitLakeTableSnapshotResponse response =
                                 new CommitLakeTableSnapshotResponse();
                         Set<Long> failedTableIds = new HashSet<>();
-                        for (Map.Entry<Long, LakeTable.LakeSnapshotMetadata>
-                                lakeSnapshotMetadataEntry : lakeSnapshotMetadatas.entrySet()) {
+                        for (Map.Entry<Long, CommitLakeTableSnapshotsData.CommitLakeTableSnapshot>
+                                entry :
+                                        commitLakeTableSnapshotsData
+                                                .getCommitLakeTableSnapshotByTableId()
+                                                .entrySet()) {
                             PbCommitLakeTableSnapshotRespForTable tableResp =
                                     response.addTableResp();
-                            long tableId = lakeSnapshotMetadataEntry.getKey();
+                            long tableId = entry.getKey();
                             tableResp.setTableId(tableId);
                             try {
+                                CommitLakeTableSnapshotsData.CommitLakeTableSnapshot snapshot =
+                                        entry.getValue();
+                                if (snapshot.getLakeSnapshotMetadata() == null) {
+                                    throw new FlussRuntimeException(
+                                            "Lake snapshot metadata is null for table " + tableId);
+                                }
                                 lakeTableHelper.registerLakeTableSnapshotV2(
-                                        tableId, lakeSnapshotMetadataEntry.getValue());
+                                        tableId,
+                                        snapshot.getLakeSnapshotMetadata(),
+                                        snapshot.getEarliestSnapshotIDToKeep());
                             } catch (Exception e) {
                                 failedTableIds.add(tableId);
                                 ApiError error = ApiError.fromThrowable(e);
                                 tableResp.setError(error.error().code(), error.message());
                             }
                         }
-                        // remove failed tables
-                        Map<Long, LakeTableSnapshot> lakeTableSnapshots =
-                                commitLakeTableSnapshotData.getLakeTableSnapshot();
-                        lakeTableSnapshots.keySet().removeAll(failedTableIds);
-                        Map<Long, Map<TableBucket, Long>> tableMaxTieredTimestamps =
-                                commitLakeTableSnapshotData.getTableMaxTieredTimestamps();
-                        tableMaxTieredTimestamps.keySet().removeAll(failedTableIds);
-
-                        coordinatorEventManager.put(
-                                new NotifyLakeTableOffsetEvent(
-                                        lakeTableSnapshots, tableMaxTieredTimestamps));
+                        notifyLakeTableOffsets(
+                                commitLakeTableSnapshotsData.getLakeTableSnapshot(),
+                                commitLakeTableSnapshotsData.getTableMaxTieredTimestamps(),
+                                failedTableIds);
                         callback.complete(response);
                     } catch (Exception e) {
                         callback.completeExceptionally(e);

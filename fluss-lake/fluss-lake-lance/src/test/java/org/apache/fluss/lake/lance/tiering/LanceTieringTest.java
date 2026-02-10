@@ -167,7 +167,10 @@ class LanceTieringTest {
                             committableSerializer.getVersion(), serialized);
             Map<String, String> snapshotProperties =
                     Collections.singletonMap(FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY, "offsets");
-            long snapshot = lakeCommitter.commit(lanceCommittable, snapshotProperties);
+            long snapshot =
+                    lakeCommitter
+                            .commit(lanceCommittable, snapshotProperties)
+                            .getCommittedSnapshotId();
             // lance dataset version starts from 1
             assertThat(snapshot).isEqualTo(2);
         }
@@ -249,6 +252,11 @@ class LanceTieringTest {
 
                     @Override
                     public Configuration lakeTieringConfig() {
+                        return new Configuration();
+                    }
+
+                    @Override
+                    public Configuration flussClientConfig() {
                         return new Configuration();
                     }
                 });

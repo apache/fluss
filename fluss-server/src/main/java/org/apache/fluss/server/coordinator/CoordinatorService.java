@@ -734,6 +734,8 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     public CompletableFuture<PrepareLakeTableSnapshotResponse> prepareLakeTableSnapshot(
             PrepareLakeTableSnapshotRequest request) {
         CompletableFuture<PrepareLakeTableSnapshotResponse> future = new CompletableFuture<>();
+        boolean ignorePreviousBucketOffsets =
+                request.hasIgnorePreviousTableOffsets() && request.isIgnorePreviousTableOffsets();
         ioExecutor.submit(
                 () -> {
                     PrepareLakeTableSnapshotResponse response =
@@ -746,14 +748,17 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                                 long tableId = bucketOffsets.getTableId();
                                 TableBucketOffsets tableBucketOffsets =
                                         toTableBucketOffsets(bucketOffsets);
-                                // get previous lake tables
-                                Optional<LakeTable> optPreviousLakeTable =
-                                        zkClient.getLakeTable(tableId);
-                                if (optPreviousLakeTable.isPresent()) {
-                                    // need to merge with previous lake table
-                                    tableBucketOffsets =
-                                            lakeTableHelper.mergeTableBucketOffsets(
-                                                    optPreviousLakeTable.get(), tableBucketOffsets);
+                                if (!ignorePreviousBucketOffsets) {
+                                    // get previous lake tables
+                                    Optional<LakeTable> optPreviousLakeTable =
+                                            zkClient.getLakeTable(tableId);
+                                    if (optPreviousLakeTable.isPresent()) {
+                                        // need to merge with previous lake table
+                                        tableBucketOffsets =
+                                                lakeTableHelper.mergeTableBucketOffsets(
+                                                        optPreviousLakeTable.get(),
+                                                        tableBucketOffsets);
+                                    }
                                 }
                                 TablePath tablePath = toTablePath(bucketOffsets.getTablePath());
                                 FsPath fsPath =

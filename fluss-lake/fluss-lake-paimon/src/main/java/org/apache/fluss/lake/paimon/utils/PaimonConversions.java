@@ -27,6 +27,7 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.ChangeType;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.types.DataTypeRoot;
 
 import org.apache.paimon.CoreOptions;
 import org.apache.paimon.catalog.Identifier;
@@ -41,6 +42,7 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 
 import static org.apache.fluss.lake.paimon.PaimonLakeCatalog.SYSTEM_COLUMNS;
@@ -220,6 +222,7 @@ public class PaimonConversions {
                     CoreOptions.CHANGELOG_PRODUCER.key(),
                     CoreOptions.ChangelogProducer.INPUT.toString());
         }
+
         // set partition keys
         schemaBuilder.partitionKeys(tableDescriptor.getPartitionKeys());
 
@@ -229,6 +232,25 @@ public class PaimonConversions {
                 .getCustomProperties()
                 .forEach((k, v) -> setFlussPropertyToPaimon(k, v, options));
         schemaBuilder.options(options.toMap());
+
+        // currently we only support string type, todo
+        // consider to support other types
+        if (options.get(CoreOptions.DELETION_VECTORS_ENABLED)) {
+            org.apache.fluss.types.RowType rowType = tableDescriptor.getSchema().getRowType();
+            Optional<String> invalidKey =
+                    tableDescriptor.getPartitionKeys().stream()
+                            .filter(
+                                    key ->
+                                            rowType.getField(key).getType().getTypeRoot()
+                                                    != DataTypeRoot.STRING)
+                            .findFirst();
+            if (invalidKey.isPresent()) {
+                throw new UnsupportedOperationException(
+                        String.format(
+                                "Only support String type as partitioned key when 'deletion-vectors.enabled' is set to true for paimon, found '%s' is not String type.",
+                                invalidKey.get()));
+            }
+        }
 
         // set comment
         tableDescriptor.getComment().ifPresent(schemaBuilder::comment);

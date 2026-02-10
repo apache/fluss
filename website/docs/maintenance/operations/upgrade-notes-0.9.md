@@ -74,6 +74,20 @@ and place it in `$FLINK_HOME/lib/`.
 | Tiering Service | Paimon **1.3** (required)                         |
 | Union Read      | Paimon 1.1, 1.2, 1.3 (tested and verified to work)|
 
+### Partition Key Type Restriction with Deletion Vectors Enabled
+
+In the new version, for **partitioned tables** where the partition key columns are **not of String type**, enabling `table.datalake.enabled` with Paimon format is **no longer allowed** when `paimon.deletion-vectors.enabled` is set to `true`. This combination will result in a **configuration error** at table creation or when enabling the datalake on an existing table.
+
+:::warning
+If you create or alter a Fluss table with Paimon as the datalake format, deletion vectors enabled, and at least one partition key column that is not of String type (e.g. INT, DATE, TIMESTAMP), the operation will fail with an error such as:
+
+`Only support String type as partitioned key when 'deletion-vectors.enabled' is set to true for paimon, found '<column>' is not String type.`
+:::
+
+Non-String partition keys will be supported in a near-future release.
+
+**What you can do**: If your partition keys are already String, no change is required. If not, either keep deletion vectors disabled for that table, or use only String-type columns as partition keys if you need deletion vectors.
+
 ## Deprecation / End of Support
 
 ### Configuration Options Deprecated

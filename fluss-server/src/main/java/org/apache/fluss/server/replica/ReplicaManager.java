@@ -1063,7 +1063,7 @@ public class ReplicaManager {
     private void updateWithLakeTableSnapshot(Replica replica) throws Exception {
         TableBucket tb = replica.getTableBucket();
         Optional<LakeTableSnapshot> optLakeTableSnapshot =
-                zkClient.getLakeTableSnapshot(replica.getTableBucket().getTableId());
+                zkClient.getLakeTableSnapshot(replica.getTableBucket().getTableId(), null);
         if (optLakeTableSnapshot.isPresent()) {
             LakeTableSnapshot lakeTableSnapshot = optLakeTableSnapshot.get();
             long snapshotId = optLakeTableSnapshot.get().getSnapshotId();

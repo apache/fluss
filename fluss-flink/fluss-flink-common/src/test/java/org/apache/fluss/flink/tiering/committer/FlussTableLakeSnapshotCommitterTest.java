@@ -18,7 +18,9 @@
 package org.apache.fluss.flink.tiering.committer;
 
 import org.apache.fluss.client.metadata.LakeSnapshot;
+import org.apache.fluss.exception.LakeTableSnapshotNotExistException;
 import org.apache.fluss.flink.utils.FlinkTestBase;
+import org.apache.fluss.lake.committer.LakeCommitResult;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.messages.CommitLakeTableSnapshotRequest;
@@ -42,6 +44,7 @@ import java.util.Map;
 import static org.apache.fluss.record.TestData.DATA1_PARTITIONED_TABLE_DESCRIPTOR;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link FlussTableLakeSnapshotCommitter}. */
 class FlussTableLakeSnapshotCommitterTest extends FlinkTestBase {
@@ -73,26 +76,95 @@ class FlussTableLakeSnapshotCommitterTest extends FlinkTestBase {
 
         Map<TableBucket, Long> expectedOffsets = mockLogEndOffsets(tableId, partitions);
 
-        long lakeSnapshotId = 3;
+        long snapshotId1 = 1;
 
-        String lakeSnapshotFilePath =
+        String lakeSnapshotFilePath1 =
                 flussTableLakeSnapshotCommitter.prepareLakeSnapshot(
                         tableId, tablePath, expectedOffsets);
 
         // commit offsets
         flussTableLakeSnapshotCommitter.commit(
                 tableId,
-                lakeSnapshotId,
-                lakeSnapshotFilePath,
+                snapshotId1,
+                lakeSnapshotFilePath1,
+                // don't care readable snapshot and offsets,
+                null,
                 // don't care end offsets, maxTieredTimestamps
                 Collections.emptyMap(),
-                Collections.emptyMap());
+                Collections.emptyMap(),
+                // test null which only keep one snapshot
+                null);
         LakeSnapshot lakeSnapshot = admin.getLatestLakeSnapshot(tablePath).get();
-        assertThat(lakeSnapshot.getSnapshotId()).isEqualTo(3);
-
+        assertThat(lakeSnapshot.getSnapshotId()).isEqualTo(snapshotId1);
         // get and check the offsets
         Map<TableBucket, Long> bucketLogOffsets = lakeSnapshot.getTableBucketsOffset();
         assertThat(bucketLogOffsets).isEqualTo(expectedOffsets);
+
+        // verify no any readable lake snapshot
+        assertThatThrownBy(() -> admin.getReadableLakeSnapshot(tablePath).get())
+                .rootCause()
+                .isInstanceOf(LakeTableSnapshotNotExistException.class)
+                .hasMessageContaining(
+                        "Lake table readable snapshot doesn't exist for table: fluss.test_commit");
+
+        // commit with readable snapshot
+        long snapshotId2 = 2;
+        String lakeSnapshotFilePath2 =
+                flussTableLakeSnapshotCommitter.prepareLakeSnapshot(
+                        tableId, tablePath, expectedOffsets);
+        flussTableLakeSnapshotCommitter.commit(
+                tableId,
+                snapshotId2,
+                lakeSnapshotFilePath2,
+                // make readable file path is same to lakeSnapshotFilePath
+                lakeSnapshotFilePath2,
+                // don't care end offsets, maxTieredTimestamps
+                Collections.emptyMap(),
+                Collections.emptyMap(),
+                LakeCommitResult.KEEP_ALL_PREVIOUS);
+
+        // test get readable snapshot
+        LakeSnapshot readLakeSnapshot = admin.getLatestLakeSnapshot(tablePath).get();
+        assertThat(readLakeSnapshot.getSnapshotId()).isEqualTo(snapshotId2);
+        assertThat(readLakeSnapshot.getTableBucketsOffset()).isEqualTo(bucketLogOffsets);
+
+        // verify we can still get snapshot id 1
+        LakeSnapshot lakeSnapshot1 = admin.getLakeSnapshot(tablePath, snapshotId1).get();
+        assertThat(lakeSnapshot1.getSnapshotId()).isEqualTo(snapshotId1);
+        assertThat(lakeSnapshot1.getTableBucketsOffset()).isEqualTo(bucketLogOffsets);
+
+        // commit with readable snapshot again, but update earliest to keep
+        long snapshotId3 = 3L;
+        String lakeSnapshotFilePath3 =
+                flussTableLakeSnapshotCommitter.prepareLakeSnapshot(
+                        tableId, tablePath, expectedOffsets);
+        flussTableLakeSnapshotCommitter.commit(
+                tableId,
+                snapshotId3,
+                lakeSnapshotFilePath3,
+                // make readable file path null
+                null,
+                // don't care end offsets, maxTieredTimestamps
+                Collections.emptyMap(),
+                Collections.emptyMap(),
+                snapshotId2);
+
+        // now, verify we can't get snapshot 1
+        assertThatThrownBy(() -> admin.getLakeSnapshot(tablePath, snapshotId1).get())
+                .rootCause()
+                .isInstanceOf(LakeTableSnapshotNotExistException.class)
+                .hasMessageContaining(
+                        "Lake table snapshot doesn't exist for table: fluss.test_commit")
+                .hasMessageContaining(", snapshot id: 1");
+
+        // verify latest snapshot
+        LakeSnapshot latestLakeSnapshot = admin.getLatestLakeSnapshot(tablePath).get();
+        assertThat(latestLakeSnapshot.getSnapshotId()).isEqualTo(snapshotId3);
+
+        // verify readable snapshot
+        readLakeSnapshot = admin.getReadableLakeSnapshot(tablePath).get();
+        assertThat(readLakeSnapshot.getSnapshotId()).isEqualTo(snapshotId2);
+        assertThat(readLakeSnapshot.getTableBucketsOffset()).isEqualTo(bucketLogOffsets);
     }
 
     @ParameterizedTest

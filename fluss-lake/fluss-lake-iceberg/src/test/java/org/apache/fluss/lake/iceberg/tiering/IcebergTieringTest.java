@@ -195,7 +195,9 @@ class IcebergTieringTest {
                     committableSerializer.deserialize(
                             committableSerializer.getVersion(), serialized);
             long snapshot =
-                    lakeCommitter.commit(icebergCommittable, Collections.singletonMap("k1", "v1"));
+                    lakeCommitter
+                            .commit(icebergCommittable, Collections.singletonMap("k1", "v1"))
+                            .getCommittedSnapshotId();
             icebergTable.refresh();
             Snapshot icebergSnapshot = icebergTable.currentSnapshot();
             assertThat(snapshot).isEqualTo(icebergSnapshot.snapshotId());
@@ -262,6 +264,11 @@ class IcebergTieringTest {
 
                     @Override
                     public Configuration lakeTieringConfig() {
+                        return new Configuration();
+                    }
+
+                    @Override
+                    public Configuration flussClientConfig() {
                         return new Configuration();
                     }
                 });
