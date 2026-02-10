@@ -1081,6 +1081,8 @@ public class FlinkSourceEnumerator
     @Override
     public void close() throws IOException {
         try {
+            maybeDropKvSnapshotLease();
+
             closed = true;
 
             if (workerExecutor != null) {
@@ -1088,35 +1090,6 @@ public class FlinkSourceEnumerator
             }
 
             if (flussAdmin != null) {
-                if (!streaming
-                        && hasPrimaryKey
-                        && startingOffsetsInitializer instanceof SnapshotOffsetsInitializer) {
-                    // Drop the kv snapshot lease for the batch mode.
-                    LOG.info(
-                            "Dropping kv snapshot lease {} for batch mode.",
-                            leaseContext.getKvSnapshotLeaseId());
-                    flussAdmin
-                            .createKvSnapshotLease(
-                                    leaseContext.getKvSnapshotLeaseId(),
-                                    leaseContext.getKvSnapshotLeaseDurationMs())
-                            .dropLease()
-                            .get();
-                } else if (streaming && !checkpointTriggeredBefore) {
-                    // For streaming mode, if no checkpoint was triggered, the lease ID
-                    // has not been persisted to state. It won't be restored on restart,
-                    // so it's safe to drop it now.
-                    LOG.info(
-                            "Dropping kv snapshot lease {} for streaming mode"
-                                    + " (no checkpoint was triggered).",
-                            leaseContext.getKvSnapshotLeaseId());
-                    flussAdmin
-                            .createKvSnapshotLease(
-                                    leaseContext.getKvSnapshotLeaseId(),
-                                    leaseContext.getKvSnapshotLeaseDurationMs())
-                            .dropLease()
-                            .get();
-                }
-
                 flussAdmin.close();
             }
 
@@ -1125,6 +1098,28 @@ public class FlinkSourceEnumerator
             }
         } catch (Exception e) {
             throw new IOException("Failed to close Flink Source enumerator.", e);
+        }
+    }
+
+    private void maybeDropKvSnapshotLease() throws Exception {
+        if (flussAdmin != null
+                && hasPrimaryKey
+                && startingOffsetsInitializer instanceof SnapshotOffsetsInitializer
+                && !checkpointTriggeredBefore) {
+            // 1. Drop the kv snapshot lease for the batch mode.
+            // 2. For streaming mode, if no checkpoint was triggered, the lease ID
+            // has not been persisted to state. It won't be restored on restart,
+            // so it's safe to drop it now.
+            LOG.info(
+                    "Dropping kv snapshot lease {} when source enumerator close. isStreaming {}",
+                    leaseContext.getKvSnapshotLeaseId(),
+                    streaming);
+            flussAdmin
+                    .createKvSnapshotLease(
+                            leaseContext.getKvSnapshotLeaseId(),
+                            leaseContext.getKvSnapshotLeaseDurationMs())
+                    .dropLease()
+                    .get();
         }
     }
 

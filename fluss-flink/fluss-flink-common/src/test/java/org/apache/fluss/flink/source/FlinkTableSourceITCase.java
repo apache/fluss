@@ -372,9 +372,7 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
 
         List<String> expectedRows = Arrays.asList("+I[1, v1]", "+I[2, v2]", "+I[3, v3]");
         org.apache.flink.util.CloseableIterator<Row> rowIter =
-                tEnv.executeSql(
-                                "select * from pk_table_with_kv_snapshot_lease /*+ OPTIONS('scan.kv.snapshot.lease.id' = 'test-consumer-1') */")
-                        .collect();
+                tEnv.executeSql("select * from pk_table_with_kv_snapshot_lease").collect();
         assertResultsIgnoreOrder(rowIter, expectedRows, false);
 
         // now, we put rows to the table again, should read the log
@@ -393,12 +391,7 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
         ZooKeeperClient zkClient = FLUSS_CLUSTER_EXTENSION.getZooKeeperClient();
         retry(
                 Duration.ofMinutes(1),
-                () -> {
-                    assertThat(zkClient.getKvSnapshotLeaseMetadata("test-consumer-1"))
-                            .isNotPresent();
-                    assertThat(zkClient.getKvSnapshotLeasesList().contains("test-consumer-1"))
-                            .isFalse();
-                });
+                () -> assertThat(zkClient.getKvSnapshotLeasesList().isEmpty()).isTrue());
     }
 
     @Test
@@ -416,21 +409,14 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
 
         List<String> expectedRows = Arrays.asList("+I[1, v1]", "+I[2, v2]", "+I[3, v3]");
         org.apache.flink.util.CloseableIterator<Row> rowIter =
-                tEnv.executeSql(
-                                "select * from pk_table_with_kv_snapshot_lease2 /*+ OPTIONS('scan.kv.snapshot.lease.id' = 'test-consumer-2') */")
-                        .collect();
+                tEnv.executeSql("select * from pk_table_with_kv_snapshot_lease2").collect();
         assertResultsIgnoreOrder(rowIter, expectedRows, true);
 
         // check lease will be dropped after job finished.
         ZooKeeperClient zkClient = FLUSS_CLUSTER_EXTENSION.getZooKeeperClient();
         retry(
                 Duration.ofMinutes(1),
-                () -> {
-                    assertThat(zkClient.getKvSnapshotLeaseMetadata("test-consumer-2"))
-                            .isNotPresent();
-                    assertThat(zkClient.getKvSnapshotLeasesList().contains("test-consumer-2"))
-                            .isFalse();
-                });
+                () -> assertThat(zkClient.getKvSnapshotLeasesList().isEmpty()).isTrue());
     }
 
     // -------------------------------------------------------------------------------------
