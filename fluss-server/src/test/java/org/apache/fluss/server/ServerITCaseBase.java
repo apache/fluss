@@ -80,6 +80,10 @@ public abstract class ServerITCaseBase {
             serverProcess =
                     new TestProcessBuilder(getServerClass().getName())
                             .addConfigAsMainClassArgs(configuration)
+                            .addJvmArg("-Djava.io.tmpdir=" + tempFolder.toAbsolutePath())
+                            .addJvmArg(
+                                    "-Dorg.apache.fluss.shaded.netty4.io.netty.native.workdir="
+                                            + tempFolder.toAbsolutePath())
                             .addMainClassArg(
                                     String.format(
                                             "-D%s=%s",
@@ -115,11 +119,11 @@ public abstract class ServerITCaseBase {
         CommonTestUtils.waitUntil(
                 () ->
                         process.getProcessOutput().toString().contains(SERVER_STARTED_MARKER)
-                                || !process.getErrorOutput().toString().isEmpty(),
+                                || !process.getProcess().isAlive(),
                 Duration.ofMinutes(2),
                 null);
-        String errorMsg = process.getErrorOutput().toString();
-        if (!errorMsg.isEmpty()) {
+        if (!process.getProcess().isAlive()) {
+            String errorMsg = process.getErrorOutput().toString();
             throw new IllegalStateException("Server process failed to start: " + errorMsg);
         }
     }

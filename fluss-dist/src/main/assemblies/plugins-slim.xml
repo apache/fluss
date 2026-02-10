@@ -19,18 +19,37 @@
         xmlns="http://maven.apache.org/plugins/maven-assembly-plugin/assembly/1.1.0"
         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
         xsi:schemaLocation="http://maven.apache.org/plugins/maven-assembly-plugin/assembly/1.1.0 http://maven.apache.org/xsd/assembly-1.1.0.xsd">
-    <id>tgz</id>
+    <id>plugins</id>
     <formats>
-        <format>tgz</format>
+        <format>dir</format>
     </formats>
+
+    <includeBaseDirectory>true</includeBaseDirectory>
     <baseDirectory>fluss-${project.version}</baseDirectory>
-    <fileSets>
-        <fileSet>
-            <directory>${project.basedir}/target/${dist.assembly.finalName}/fluss-${project.version}</directory>
-            <outputDirectory>/</outputDirectory>
-            <includes>
-                <include>**/*</include>
-            </includes>
-        </fileSet>
-    </fileSets>
+
+    <files>
+        <!-- filesystem -->
+        <file>
+            <source>../fluss-filesystems/fluss-fs-s3/target/fluss-fs-s3-${project.version}.jar</source>
+            <outputDirectory>plugins/s3/</outputDirectory>
+            <destName>fluss-fs-s3-${project.version}.jar</destName>
+            <fileMode>0644</fileMode>
+        </file>
+
+        <!-- metrics -->
+        <file>
+            <source>../fluss-metrics/fluss-metrics-prometheus/target/fluss-metrics-prometheus-${project.version}.jar</source>
+            <outputDirectory>plugins/prometheus/</outputDirectory>
+            <destName>fluss-metrics-prometheus-${project.version}.jar</destName>
+            <fileMode>0644</fileMode>
+        </file>
+
+        <file>
+            <source>../fluss-metrics/fluss-metrics-jmx/target/fluss-metrics-jmx-${project.version}.jar</source>
+            <outputDirectory>plugins/jmx/</outputDirectory>
+            <destName>fluss-metrics-jmx-${project.version}.jar</destName>
+            <fileMode>0644</fileMode>
+        </file>
+    </files>
+
 </assembly>
