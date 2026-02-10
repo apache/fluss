@@ -464,6 +464,57 @@ public class UndoRecoveryManagerITCase {
                                             }));
                 }
             }
+
+            // Verify zero-offset bucket keys after undo recovery.
+            //
+            // Since checkpoint offset is 0, ALL writes to this bucket are undone.
+            // The undo writer uses partial update (targetColumns = {id, price}) with
+            // OVERWRITE mode, so undo only clears target columns — non-target columns
+            // written by other writers or earlier full writes are unaffected.
+            //
+            // - id < 80: These keys were first written by fullWriter in Phase 1, which
+            //   populated ALL columns (including non-target columns like name, stock).
+            //   Undo clears the target column (price) to null, but the row still exists
+            //   because non-target columns retain their values.
+            //
+            // - id >= 100: These keys were ONLY written by partialWriter in Phase 2,
+            //   which only populated target columns (id, price). Undo clears those
+            //   target columns, leaving no column with data, so the row is effectively
+            //   deleted.
+            for (int id : zeroOffsetBucketKeysAfterCheckpoint) {
+                final int keyId = id;
+                verifyFutures.add(
+                        lookuper.lookup(row(keyId))
+                                .thenAccept(
+                                        r -> {
+                                            if (keyId < 80) {
+                                                // Key has non-target column data from
+                                                // fullWriter (Phase 1), so the row survives
+                                                // undo — only target column (price) is cleared.
+                                                InternalRow result = r.getSingletonRow();
+                                                assertThat(result)
+                                                        .as(
+                                                                "Zero-offset bucket key %d should still exist (non-target columns retain data)",
+                                                                keyId)
+                                                        .isNotNull();
+                                                assertThat(result.isNullAt(2))
+                                                        .as(
+                                                                "Zero-offset bucket key %d price (target column) should be null after undo",
+                                                                keyId)
+                                                        .isTrue();
+                                            } else {
+                                                // Key was only written via partialWriter
+                                                // (target columns only) — undo clears all
+                                                // its data, so the row no longer exists.
+                                                assertThat(r.getSingletonRow())
+                                                        .as(
+                                                                "Zero-offset bucket key %d should not exist (no non-target column data)",
+                                                                keyId)
+                                                        .isNull();
+                                            }
+                                        }));
+            }
+
             CompletableFuture.allOf(verifyFutures.toArray(new CompletableFuture[0])).get();
         }
     }
