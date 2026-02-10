@@ -78,7 +78,7 @@
 | `client.lookup.batch-timeout` | `0 s` | Duration | The maximum time to wait for the lookup batch to full, if this timeout is reached, the lookup batch will be closed to send. |
 | `client.lookup.max-retries` | `2147483647` | Integer | Setting a value greater than zero will cause the client to resend any lookup request that fails with a potentially transient error. |
 | `client.scanner.remote-log.prefetch-num` | `4` | Integer | The number of remote log segments to keep in local temp file for LogScanner, which download from remote storage. The default setting is 4. |
-| `client.scanner.io.tmpdir` | `/var/folders/ck/q6rhkhq9759b3nwc7501p6780000gp/T//fluss` | String | Local directory that is used by client for storing the data files (like kv snapshot, log segment files) to read temporarily |
+| `client.scanner.io.tmpdir` | `/var/folders/40/7ns640wd6r7_yw3cs2gcpp9r0000gp/T//fluss` | String | Local directory that is used by client for storing the data files (like kv snapshot, log segment files) to read temporarily |
 | `client.remote-file.download-thread-num` | `3` | Integer | The number of threads the client uses to download remote files. |
 | `client.filesystem.security.token.renewal.backoff` | `1 hours` | Duration | The time period how long to wait before retrying to obtain new security tokens for filesystem after a failure. |
 | `client.filesystem.security.token.renewal.time-ratio` | `0.75` | Double | Ratio of the token's expiration time when new credentials for access filesystem should be re-obtained. |
