@@ -67,7 +67,7 @@ public class KvTabletSnapshotTarget implements PeriodicSnapshotManager.SnapshotT
     private final int snapshotWriteBufferSize;
     private final FileSystem remoteFileSystem;
     private final SequenceIDCounter snapshotIdCounter;
-    private final Supplier<Long> logOffsetSupplier;
+    private final Supplier<TabletState> tabletStateSupplier;
     private final Consumer<Long> updateMinRetainOffset;
     private final Supplier<Integer> bucketLeaderEpochSupplier;
     private final Supplier<Integer> coordinatorEpochSupplier;
@@ -94,7 +94,7 @@ public class KvTabletSnapshotTarget implements PeriodicSnapshotManager.SnapshotT
             Executor ioExecutor,
             CloseableRegistry cancelStreamRegistry,
             SequenceIDCounter snapshotIdCounter,
-            Supplier<Long> logOffsetSupplier,
+            Supplier<TabletState> tabletStateSupplier,
             Consumer<Long> updateMinRetainOffset,
             Supplier<Integer> bucketLeaderEpochSupplier,
             Supplier<Integer> coordinatorEpochSupplier,
@@ -111,7 +111,7 @@ public class KvTabletSnapshotTarget implements PeriodicSnapshotManager.SnapshotT
                 ioExecutor,
                 cancelStreamRegistry,
                 snapshotIdCounter,
-                logOffsetSupplier,
+                tabletStateSupplier,
                 updateMinRetainOffset,
                 bucketLeaderEpochSupplier,
                 coordinatorEpochSupplier,
@@ -129,7 +129,7 @@ public class KvTabletSnapshotTarget implements PeriodicSnapshotManager.SnapshotT
             Executor ioExecutor,
             CloseableRegistry cancelStreamRegistry,
             SequenceIDCounter snapshotIdCounter,
-            Supplier<Long> logOffsetSupplier,
+            Supplier<TabletState> tabletStateSupplier,
             Consumer<Long> updateMinRetainOffset,
             Supplier<Integer> bucketLeaderEpochSupplier,
             Supplier<Integer> coordinatorEpochSupplier,
@@ -145,7 +145,7 @@ public class KvTabletSnapshotTarget implements PeriodicSnapshotManager.SnapshotT
         this.snapshotWriteBufferSize = snapshotWriteBufferSize;
         this.remoteFileSystem = remoteKvTabletDir.getFileSystem();
         this.snapshotIdCounter = snapshotIdCounter;
-        this.logOffsetSupplier = logOffsetSupplier;
+        this.tabletStateSupplier = tabletStateSupplier;
         this.updateMinRetainOffset = updateMinRetainOffset;
         this.bucketLeaderEpochSupplier = bucketLeaderEpochSupplier;
         this.coordinatorEpochSupplier = coordinatorEpochSupplier;
@@ -168,7 +168,8 @@ public class KvTabletSnapshotTarget implements PeriodicSnapshotManager.SnapshotT
 
     @Override
     public Optional<PeriodicSnapshotManager.SnapshotRunnable> initSnapshot() throws Exception {
-        long logOffset = logOffsetSupplier.get();
+        TabletState tabletState = tabletStateSupplier.get();
+        long logOffset = tabletState.getFlushedLogOffset();
         if (logOffset <= logOffsetOfLatestSnapshot) {
             LOG.debug(
                     "The current offset for the log whose kv data is flushed is {}, "
@@ -187,7 +188,8 @@ public class KvTabletSnapshotTarget implements PeriodicSnapshotManager.SnapshotT
         try {
             PeriodicSnapshotManager.SnapshotRunnable snapshotRunnable =
                     new PeriodicSnapshotManager.SnapshotRunnable(
-                            snapshotRunner.snapshot(currentSnapshotId, logOffset, snapshotLocation),
+                            snapshotRunner.snapshot(
+                                    currentSnapshotId, tabletState, snapshotLocation),
                             currentSnapshotId,
                             coordinatorEpoch,
                             bucketLeaderEpoch,
@@ -220,13 +222,16 @@ public class KvTabletSnapshotTarget implements PeriodicSnapshotManager.SnapshotT
             SnapshotLocation snapshotLocation,
             SnapshotResult snapshotResult)
             throws Throwable {
+        TabletState tabletState = snapshotResult.getTabletState();
         CompletedSnapshot completedSnapshot =
                 new CompletedSnapshot(
                         tableBucket,
                         snapshotId,
                         snapshotResult.getSnapshotPath(),
                         snapshotResult.getKvSnapshotHandle(),
-                        snapshotResult.getLogOffset());
+                        tabletState.getFlushedLogOffset(),
+                        tabletState.getRowCount(),
+                        tabletState.getAutoIncIDRanges());
         try {
             // commit the completed snapshot
             completedKvSnapshotCommitter.commitKvSnapshot(
@@ -270,12 +275,13 @@ public class KvTabletSnapshotTarget implements PeriodicSnapshotManager.SnapshotT
      * minimum offset to retain.
      */
     private void updateStateOnCommitSuccess(long snapshotId, SnapshotResult snapshotResult) {
+        long flushedLogOffset = snapshotResult.getTabletState().getFlushedLogOffset();
         // notify the snapshot complete
         rocksIncrementalSnapshot.notifySnapshotComplete(snapshotId);
-        logOffsetOfLatestSnapshot = snapshotResult.getLogOffset();
+        logOffsetOfLatestSnapshot = flushedLogOffset;
         snapshotSize = snapshotResult.getSnapshotSize();
         // update LogTablet to notify the lowest offset that should be retained
-        updateMinRetainOffset.accept(snapshotResult.getLogOffset());
+        updateMinRetainOffset.accept(flushedLogOffset);
     }
 
     /**

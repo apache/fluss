@@ -200,8 +200,10 @@ public class KvPreWriteBuffer implements AutoCloseable {
      *
      * @param exclusiveUpToLogSequenceNumber the exclusive upper bound of the log sequence number to
      *     be flushed
+     * @return the row count difference of the kv entries in the buffer after flushing.
      */
-    public void flush(long exclusiveUpToLogSequenceNumber) throws IOException {
+    public int flush(long exclusiveUpToLogSequenceNumber) throws IOException {
+        int rowCountDiff = 0;
         int flushedCount = 0;
         for (Iterator<KvEntry> it = allKvEntries.iterator(); it.hasNext(); ) {
             KvEntry entry = it.next();
@@ -218,9 +220,11 @@ public class KvPreWriteBuffer implements AutoCloseable {
             Value value = entry.getValue();
             if (value.value != null) {
                 flushedCount += 1;
+                rowCountDiff += 1;
                 kvBatchWriter.put(entry.getKey().key, value.value);
             } else {
                 flushedCount += 1;
+                rowCountDiff -= 1;
                 kvBatchWriter.delete(entry.getKey().key);
             }
 
@@ -233,6 +237,8 @@ public class KvPreWriteBuffer implements AutoCloseable {
         if (flushedCount > 0) {
             kvBatchWriter.flush();
         }
+
+        return rowCountDiff;
     }
 
     @VisibleForTesting

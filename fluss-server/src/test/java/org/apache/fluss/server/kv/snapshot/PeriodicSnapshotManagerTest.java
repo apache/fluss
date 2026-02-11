@@ -223,8 +223,8 @@ class PeriodicSnapshotManagerTest {
                                 if (exceptionMessage != null) {
                                     throw new FlussRuntimeException(exceptionMessage);
                                 } else {
-                                    final long logOffset = 0;
-                                    return new SnapshotResult(null, snapshotPath, logOffset);
+                                    return new SnapshotResult(
+                                            null, snapshotPath, new TabletState(0, null, null));
                                 }
                             });
             int snapshotId = 1;

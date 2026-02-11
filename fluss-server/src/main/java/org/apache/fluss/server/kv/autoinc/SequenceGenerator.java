@@ -29,4 +29,18 @@ public interface SequenceGenerator {
      * @return the next sequential value of the auto-increment column
      */
     long nextVal();
+
+    /**
+     * Returns the current upper bound of the sequence range that has been allocated. This is useful
+     * for monitoring the current state of the sequence generator.
+     */
+    AutoIncIDRange currentSequenceRange();
+
+    /**
+     * Updates the sequence range with a new range. This method is typically called when the kv
+     * tablet is restored from snapshot.
+     *
+     * @param newRange the new sequence range to be set
+     */
+    void updateSequenceRange(AutoIncIDRange newRange);
 }
