@@ -322,11 +322,13 @@ public class TableDescriptorValidation {
     /**
      * Validates aggregation function parameters in the schema.
      *
-     * <p>This method delegates to {@link AggFunction#validate()} to ensure all parameters are valid
+     * <p>This method delegates to {@link AggFunction#validateParameters()} to ensure all parameters
+     * are valid and {@link AggFunction#validateDataType(DataType)} to ensure data type are valid
      * according to the function's requirements.
      *
      * @param schema the schema to validate
-     * @throws InvalidConfigException if any aggregation function has invalid parameters
+     * @throws InvalidConfigException if any aggregation function has invalid parameters or data
+     *     types
      */
     private static void validateAggregationFunctionParameters(Schema schema) {
         // Get primary key columns for early exit
@@ -343,9 +345,11 @@ public class TableDescriptorValidation {
                 continue;
             }
 
-            // Validate aggregation function parameters
+            // Validate aggregation function parameters and data type
             try {
-                aggFunctionOpt.get().validate();
+                AggFunction aggFunction = aggFunctionOpt.get();
+                aggFunction.validateParameters();
+                aggFunction.validateDataType(column.getDataType());
             } catch (IllegalArgumentException e) {
                 throw new InvalidConfigException(
                         String.format(

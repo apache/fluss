@@ -48,7 +48,7 @@ public class FieldStringAggFactory implements FieldAggregatorFactory {
                 fieldType);
 
         // Get delimiter from function parameters, default to comma
-        String delimiter = aggFunction.getParameter(AggFunctionType.PARAM_DELIMITER);
+        String delimiter = aggFunction.getParameter(AggFunctions.PARAM_DELIMITER);
         if (delimiter == null) {
             delimiter = AggFunctions.DEFAULT_LISTAGG_DELIMITER;
         }

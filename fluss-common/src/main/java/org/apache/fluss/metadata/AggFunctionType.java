@@ -18,10 +18,16 @@
 package org.apache.fluss.metadata;
 
 import org.apache.fluss.annotation.PublicEvolving;
+import org.apache.fluss.types.DataType;
+import org.apache.fluss.types.DataTypeRoot;
 
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.Locale;
 import java.util.Set;
+
+import static org.apache.fluss.metadata.AggFunctions.PARAM_DELIMITER;
+import static org.apache.fluss.utils.Preconditions.checkArgument;
 
 /**
  * Aggregation function type for aggregate merge engine.
@@ -55,8 +61,35 @@ public enum AggFunctionType {
     RBM32,
     RBM64;
 
-    /** Parameter name for delimiter used in LISTAGG and STRING_AGG functions. */
-    public static final String PARAM_DELIMITER = "delimiter";
+    // ------------------------------------------------------------------------------------------
+
+    static final DataTypeRoot[] NUMERIC_TYPES =
+            new DataTypeRoot[] {
+                DataTypeRoot.TINYINT,
+                DataTypeRoot.SMALLINT,
+                DataTypeRoot.INTEGER,
+                DataTypeRoot.BIGINT,
+                DataTypeRoot.FLOAT,
+                DataTypeRoot.DOUBLE,
+                DataTypeRoot.DECIMAL
+            };
+
+    static final DataTypeRoot[] MAX_MIN_TYPES =
+            new DataTypeRoot[] {
+                DataTypeRoot.CHAR,
+                DataTypeRoot.STRING,
+                DataTypeRoot.TINYINT,
+                DataTypeRoot.SMALLINT,
+                DataTypeRoot.INTEGER,
+                DataTypeRoot.BIGINT,
+                DataTypeRoot.FLOAT,
+                DataTypeRoot.DOUBLE,
+                DataTypeRoot.DECIMAL,
+                DataTypeRoot.DATE,
+                DataTypeRoot.TIME_WITHOUT_TIME_ZONE,
+                DataTypeRoot.TIMESTAMP_WITHOUT_TIME_ZONE,
+                DataTypeRoot.TIMESTAMP_WITH_LOCAL_TIME_ZONE
+            };
 
     /**
      * Returns the set of supported parameter names for this aggregation function.
@@ -72,6 +105,41 @@ public enum AggFunctionType {
             default:
                 // All other functions do not accept parameters
                 return Collections.emptySet();
+        }
+    }
+
+    /**
+     * Returns the supported data type roots for this aggregation function.
+     *
+     * @return an array of supported DataTypeRoot values
+     */
+    public DataTypeRoot[] getSupportedDataTypeRoots() {
+        switch (this) {
+            case BOOL_AND:
+            case BOOL_OR:
+                return new DataTypeRoot[] {DataTypeRoot.BOOLEAN};
+            case RBM32:
+            case RBM64:
+                return new DataTypeRoot[] {DataTypeRoot.BYTES};
+            case LISTAGG:
+            case STRING_AGG:
+                return new DataTypeRoot[] {DataTypeRoot.STRING, DataTypeRoot.CHAR};
+            case SUM:
+            case PRODUCT:
+                return NUMERIC_TYPES;
+
+            case MAX:
+            case MIN:
+                return MAX_MIN_TYPES;
+
+            case LAST_VALUE:
+            case LAST_VALUE_IGNORE_NULLS:
+            case FIRST_VALUE:
+            case FIRST_VALUE_IGNORE_NULLS:
+                // all data types are supported
+                return DataTypeRoot.values();
+            default:
+                throw new IllegalStateException("Unsupported aggregation function type: " + this);
         }
     }
 
@@ -100,7 +168,7 @@ public enum AggFunctionType {
         switch (this) {
             case LISTAGG:
             case STRING_AGG:
-                if (PARAM_DELIMITER.equals(parameterName)) {
+                if (AggFunctions.PARAM_DELIMITER.equals(parameterName)) {
                     if (parameterValue == null || parameterValue.isEmpty()) {
                         throw new IllegalArgumentException(
                                 String.format(
@@ -113,6 +181,21 @@ public enum AggFunctionType {
                 // No validation needed for other functions (they don't have parameters)
                 break;
         }
+    }
+
+    /**
+     * Validates a data type for this aggregation function.
+     *
+     * @param fieldType the field data type
+     * @throws IllegalArgumentException if the data type is invalid
+     */
+    public void validateDataType(DataType fieldType) {
+        checkArgument(
+                fieldType.isAnyOf(getSupportedDataTypeRoots()),
+                "Data type for %s column must be part of %s but was '%s'.",
+                toString(),
+                Arrays.deepToString(getSupportedDataTypeRoots()),
+                fieldType);
     }
 
     /**
