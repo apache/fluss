@@ -22,6 +22,7 @@ import org.apache.fluss.compression.ArrowCompressionInfo;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.DeletionDisabledException;
+import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.KvStorageException;
 import org.apache.fluss.exception.SchemaNotExistException;
 import org.apache.fluss.memory.MemorySegmentPool;
@@ -293,6 +294,20 @@ public final class KvTablet {
 
     void setRowCount(long rowCount) {
         this.rowCount = rowCount;
+    }
+
+    // row_count is volatile, so it's safe to read without lock
+    public long getRowCount() {
+        if (rowCount == ROW_COUNT_DISABLED) {
+            throw new InvalidTableException(
+                    String.format(
+                            "Row count is disabled for this table '%s'. This usually happens when the table is"
+                                    + "created before v0.9 or the changelog image is set to WAL, "
+                                    + "as maintaining row count in WAL mode is costly and not necessary for most use cases. "
+                                    + "If you want to enable row count, please set changelog image to FULL.",
+                            getTablePath()));
+        }
+        return rowCount;
     }
 
     /**
@@ -589,7 +604,7 @@ public final class KvTablet {
             throws Exception {
         BinaryValue newValue = autoIncrementUpdater.updateAutoIncrementColumns(currentValue);
         walBuilder.append(ChangeType.INSERT, latestSchemaRow.replaceRow(newValue.row));
-        kvPreWriteBuffer.put(key, newValue.encodeValue(), logOffset);
+        kvPreWriteBuffer.insert(key, newValue.encodeValue(), logOffset);
         return logOffset + 1;
     }
 
@@ -603,12 +618,12 @@ public final class KvTablet {
             throws Exception {
         if (changelogImage == ChangelogImage.WAL) {
             walBuilder.append(ChangeType.UPDATE_AFTER, latestSchemaRow.replaceRow(newValue.row));
-            kvPreWriteBuffer.put(key, newValue.encodeValue(), logOffset);
+            kvPreWriteBuffer.update(key, newValue.encodeValue(), logOffset);
             return logOffset + 1;
         } else {
             walBuilder.append(ChangeType.UPDATE_BEFORE, latestSchemaRow.replaceRow(oldValue.row));
             walBuilder.append(ChangeType.UPDATE_AFTER, latestSchemaRow.replaceRow(newValue.row));
-            kvPreWriteBuffer.put(key, newValue.encodeValue(), logOffset + 1);
+            kvPreWriteBuffer.update(key, newValue.encodeValue(), logOffset + 1);
             return logOffset + 2;
         }
     }
@@ -679,12 +694,18 @@ public final class KvTablet {
     }
 
     /** put key,value,logOffset into pre-write buffer directly. */
-    void putToPreWriteBuffer(byte[] key, @Nullable byte[] value, long logOffset) {
+    void putToPreWriteBuffer(
+            ChangeType changeType, byte[] key, @Nullable byte[] value, long logOffset) {
         KvPreWriteBuffer.Key wrapKey = KvPreWriteBuffer.Key.of(key);
-        if (value == null) {
+        if (changeType == ChangeType.DELETE && value == null) {
             kvPreWriteBuffer.delete(wrapKey, logOffset);
+        } else if (changeType == ChangeType.INSERT) {
+            kvPreWriteBuffer.insert(wrapKey, value, logOffset);
+        } else if (changeType == ChangeType.UPDATE_AFTER) {
+            kvPreWriteBuffer.update(wrapKey, value, logOffset);
         } else {
-            kvPreWriteBuffer.put(wrapKey, value, logOffset);
+            throw new IllegalArgumentException(
+                    "Unsupported change type for putToPreWriteBuffer: " + changeType);
         }
     }
 

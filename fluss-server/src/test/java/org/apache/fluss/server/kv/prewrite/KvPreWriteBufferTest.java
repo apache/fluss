@@ -25,6 +25,8 @@ import org.junit.jupiter.api.Test;
 
 import javax.annotation.Nonnull;
 
+import java.io.IOException;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -36,10 +38,10 @@ class KvPreWriteBufferTest {
         KvPreWriteBuffer buffer =
                 new KvPreWriteBuffer(
                         new NopKvBatchWriter(), TestingMetricGroups.TABLET_SERVER_METRICS);
-        bufferPut(buffer, "key1", "value1", 1);
+        bufferInsert(buffer, "key1", "value1", 1);
         bufferDelete(buffer, "key1", 3);
 
-        assertThatThrownBy(() -> bufferPut(buffer, "key2", "value2", 2))
+        assertThatThrownBy(() -> bufferInsert(buffer, "key2", "value2", 2))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage(
                         "The log sequence number must be non-decreasing. The current "
@@ -61,7 +63,7 @@ class KvPreWriteBufferTest {
 
         // put a series of kv entries
         for (int i = 0; i < 3; i++) {
-            bufferPut(buffer, "key" + i, "value" + i, elementCount++);
+            bufferInsert(buffer, "key" + i, "value" + i, elementCount++);
         }
         // check the key and value;
         for (int i = 0; i < 3; i++) {
@@ -96,7 +98,7 @@ class KvPreWriteBufferTest {
         assertThat(getValue(buffer, "key2")).isNull();
 
         // put key2 again
-        bufferPut(buffer, "key2", "value21", elementCount++);
+        bufferInsert(buffer, "key2", "value21", elementCount++);
         // we can get key2
         assertThat(getValue(buffer, "key2")).isEqualTo("value21");
 
@@ -113,9 +115,9 @@ class KvPreWriteBufferTest {
         }
 
         // put two key3;
-        bufferPut(buffer, "key3", "value31", elementCount++);
-        bufferPut(buffer, "key3", "value32", elementCount++);
-        bufferPut(buffer, "key2", "value22", elementCount++);
+        bufferInsert(buffer, "key3", "value31", elementCount++);
+        bufferInsert(buffer, "key3", "value32", elementCount++);
+        bufferInsert(buffer, "key2", "value22", elementCount++);
         // check get key3 get the latest value
         assertThat(getValue(buffer, "key3")).isEqualTo("value32");
         // check get key2
@@ -144,7 +146,7 @@ class KvPreWriteBufferTest {
 
         // put a series of kv entries
         for (int i = 0; i < 10; i++) {
-            bufferPut(buffer, "key" + i, "value" + i, elementCount++);
+            bufferInsert(buffer, "key" + i, "value" + i, elementCount++);
         }
         // check the key and value;
         for (int i = 0; i < 10; i++) {
@@ -170,8 +172,8 @@ class KvPreWriteBufferTest {
         assertThat(getValue(buffer, "key3")).isNull();
 
         // add update records
-        bufferPut(buffer, "key2", "value2-1", elementCount++);
-        bufferPut(buffer, "key1", "value1-1", elementCount++);
+        bufferInsert(buffer, "key2", "value2-1", elementCount++);
+        bufferInsert(buffer, "key1", "value1-1", elementCount++);
         assertThat(getValue(buffer, "key1")).isEqualTo("value1-1");
         assertThat(buffer.getMaxLSN()).isEqualTo(elementCount - 1);
         buffer.truncateTo(5, TruncateReason.ERROR);
@@ -190,9 +192,60 @@ class KvPreWriteBufferTest {
         assertThat(buffer.getKvEntryMap().size()).isEqualTo(0);
     }
 
-    private static void bufferPut(
+    @Test
+    void testRowCount() throws IOException {
+        KvPreWriteBuffer buffer =
+                new KvPreWriteBuffer(
+                        new NopKvBatchWriter(), TestingMetricGroups.TABLET_SERVER_METRICS);
+        int elementCount = 0;
+
+        // put a series of kv entries
+        for (int i = 0; i < 10; i++) {
+            bufferInsert(buffer, "key" + i, "value" + i, elementCount++);
+        }
+        assertThat(buffer.flush(Long.MAX_VALUE)).isEqualTo(10);
+
+        // delete some keys
+        for (int i = 0; i < 5; i++) {
+            bufferDelete(buffer, "key" + i, elementCount++);
+        }
+        assertThat(buffer.flush(Long.MAX_VALUE)).isEqualTo(-5);
+
+        // put some keys again
+        for (int i = 8; i < 9; i++) {
+            bufferUpdate(buffer, "key" + i, "value" + i, elementCount++);
+        }
+        assertThat(buffer.flush(Long.MAX_VALUE)).isEqualTo(0);
+
+        // put some keys again
+        for (int i = 10; i < 20; i++) {
+            bufferInsert(buffer, "key" + i, "value" + i, elementCount++);
+        }
+        for (int i = 10; i < 13; i++) {
+            bufferDelete(buffer, "key" + i, elementCount++);
+        }
+        // restore to here, so the row count should be 10 - 3 = 7
+        int checkpoint = elementCount;
+        for (int i = 30; i < 35; i++) {
+            bufferInsert(buffer, "key" + i, "value" + i, elementCount++);
+        }
+        for (int i = 30; i < 35; i++) {
+            bufferUpdate(buffer, "key" + i, "value" + i, elementCount++);
+        }
+
+        // truncate to 5
+        buffer.truncateTo(checkpoint, TruncateReason.ERROR);
+        assertThat(buffer.flush(Long.MAX_VALUE)).isEqualTo(7);
+    }
+
+    private static void bufferInsert(
             KvPreWriteBuffer kvPreWriteBuffer, String key, String value, int elementCount) {
-        kvPreWriteBuffer.put(toKey(key), value.getBytes(), elementCount);
+        kvPreWriteBuffer.insert(toKey(key), value.getBytes(), elementCount);
+    }
+
+    private static void bufferUpdate(
+            KvPreWriteBuffer kvPreWriteBuffer, String key, String value, int elementCount) {
+        kvPreWriteBuffer.update(toKey(key), value.getBytes(), elementCount);
     }
 
     private static void bufferDelete(

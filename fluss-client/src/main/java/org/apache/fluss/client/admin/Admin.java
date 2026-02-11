@@ -65,6 +65,7 @@ import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.metadata.TableStats;
 import org.apache.fluss.security.acl.AclBinding;
 import org.apache.fluss.security.acl.AclBindingFilter;
 
@@ -532,6 +533,13 @@ public interface Admin extends AutoCloseable {
             String partitionName,
             Collection<Integer> buckets,
             OffsetSpec offsetSpec);
+
+    /**
+     * Asynchronously gets the statistics of this table.
+     *
+     * @return A future TableStats
+     */
+    CompletableFuture<TableStats> getTableStats(TablePath tablePath);
 
     /**
      * Retrieves ACL entries filtered by principal for the specified resource.

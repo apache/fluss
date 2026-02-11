@@ -17,8 +17,10 @@
 
 package org.apache.fluss.server.kv;
 
+import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.TableConfig;
+import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.InvalidTargetColumnException;
 import org.apache.fluss.exception.OutOfOrderSequenceException;
 import org.apache.fluss.memory.TestingMemorySegmentPool;
@@ -715,16 +717,19 @@ class KvTabletTest {
 
         KvEntry kv1 =
                 KvEntry.of(
+                        ChangeType.INSERT,
                         Key.of("k1".getBytes()),
                         valueOf(compactedRow(baseRowType, new Object[] {1, "v11"})),
                         0);
         KvEntry kv2 =
                 KvEntry.of(
+                        ChangeType.INSERT,
                         Key.of("k2".getBytes()),
                         valueOf(compactedRow(baseRowType, new Object[] {2, "v21"})),
                         1);
         KvEntry kv3 =
                 KvEntry.of(
+                        ChangeType.UPDATE_AFTER,
                         Key.of("k2".getBytes()),
                         valueOf(compactedRow(baseRowType, new Object[] {2, "v23"})),
                         3,
@@ -1663,5 +1668,143 @@ class KvTabletTest {
         assertThat(statistics.getTableReadersMemoryUsage()).isEqualTo(0);
         assertThat(statistics.getBlockCacheMemoryUsage()).isEqualTo(0);
         assertThat(statistics.getBlockCachePinnedUsage()).isEqualTo(0);
+    }
+
+    // ==================== Row Count Tests ====================
+
+    @Test
+    void testRowCountBasic() throws Exception {
+        initLogTabletAndKvTablet(DATA1_SCHEMA_PK, new HashMap<>());
+
+        // Initially row count should be 0
+        assertThat(kvTablet.getRowCount()).isEqualTo(0);
+
+        // Insert 5 records
+        for (int i = 1; i <= 5; i++) {
+            KvRecordBatch batch =
+                    kvRecordBatchFactory.ofRecords(
+                            kvRecordFactory.ofRecord("key" + i, new Object[] {i, "val" + i}));
+            kvTablet.putAsLeader(batch, null);
+        }
+        kvTablet.flush(Long.MAX_VALUE, NOPErrorHandler.INSTANCE);
+
+        // Row count should be 5
+        assertThat(kvTablet.getRowCount()).isEqualTo(5);
+
+        // Delete 2 records
+        for (int i = 1; i <= 2; i++) {
+            KvRecordBatch deleteBatch =
+                    kvRecordBatchFactory.ofRecords(kvRecordFactory.ofRecord("key" + i, null));
+            kvTablet.putAsLeader(deleteBatch, null);
+        }
+        kvTablet.flush(Long.MAX_VALUE, NOPErrorHandler.INSTANCE);
+
+        // Row count should be 3
+        assertThat(kvTablet.getRowCount()).isEqualTo(3);
+
+        kvTablet.close();
+    }
+
+    @Test
+    void testRowCountWithUpsert() throws Exception {
+        initLogTabletAndKvTablet(DATA1_SCHEMA_PK, new HashMap<>());
+
+        // Initially row count should be 0
+        assertThat(kvTablet.getRowCount()).isEqualTo(0);
+
+        // Insert a record
+        KvRecordBatch batch1 =
+                kvRecordBatchFactory.ofRecords(
+                        kvRecordFactory.ofRecord("key1", new Object[] {1, "val1"}));
+        kvTablet.putAsLeader(batch1, null);
+        kvTablet.flush(Long.MAX_VALUE, NOPErrorHandler.INSTANCE);
+        assertThat(kvTablet.getRowCount()).isEqualTo(1);
+
+        // Update the same record (upsert) - row count should not change
+        KvRecordBatch batch2 =
+                kvRecordBatchFactory.ofRecords(
+                        kvRecordFactory.ofRecord("key1", new Object[] {1, "val1_updated"}));
+        kvTablet.putAsLeader(batch2, null);
+        kvTablet.flush(Long.MAX_VALUE, NOPErrorHandler.INSTANCE);
+        assertThat(kvTablet.getRowCount()).isEqualTo(1);
+
+        // Insert another record
+        KvRecordBatch batch3 =
+                kvRecordBatchFactory.ofRecords(
+                        kvRecordFactory.ofRecord("key2", new Object[] {2, "val2"}));
+        kvTablet.putAsLeader(batch3, null);
+        kvTablet.flush(Long.MAX_VALUE, NOPErrorHandler.INSTANCE);
+        assertThat(kvTablet.getRowCount()).isEqualTo(2);
+
+        kvTablet.close();
+    }
+
+    @Test
+    void testRowCountDisabledForWalChangelog() throws Exception {
+        // Create KvTablet with WAL changelog mode
+        Map<String, String> tableConfig = new HashMap<>();
+        tableConfig.put(ConfigOptions.TABLE_CHANGELOG_IMAGE.key(), "WAL");
+        initLogTabletAndKvTablet(DATA1_SCHEMA_PK, tableConfig);
+
+        // Insert some records
+        KvRecordBatch batch =
+                kvRecordBatchFactory.ofRecords(
+                        kvRecordFactory.ofRecord("key1", new Object[] {1, "val1"}));
+        kvTablet.putAsLeader(batch, null);
+        kvTablet.flush(Long.MAX_VALUE, NOPErrorHandler.INSTANCE);
+
+        // Getting row count should throw exception for WAL changelog mode
+        assertThatThrownBy(() -> kvTablet.getRowCount())
+                .isInstanceOf(InvalidTableException.class)
+                .hasMessageContaining("Row count is disabled for this table");
+
+        kvTablet.close();
+    }
+
+    @Test
+    void testRowCountWithMixedOperations() throws Exception {
+        initLogTabletAndKvTablet(DATA1_SCHEMA_PK, new HashMap<>());
+
+        // Initially row count should be 0
+        assertThat(kvTablet.getRowCount()).isEqualTo(0);
+
+        // Batch of mixed operations: insert 10 records
+        List<KvRecord> records = new ArrayList<>();
+        for (int i = 1; i <= 10; i++) {
+            records.add(kvRecordFactory.ofRecord("key" + i, new Object[] {i, "val" + i}));
+        }
+        KvRecordBatch insertBatch = kvRecordBatchFactory.ofRecords(records);
+        kvTablet.putAsLeader(insertBatch, null);
+        kvTablet.flush(Long.MAX_VALUE, NOPErrorHandler.INSTANCE);
+        assertThat(kvTablet.getRowCount()).isEqualTo(10);
+
+        // Delete some, insert new ones, update existing ones in sequence
+        // Delete keys 1-3
+        List<KvRecord> deleteRecords = new ArrayList<>();
+        for (int i = 1; i <= 3; i++) {
+            deleteRecords.add(kvRecordFactory.ofRecord("key" + i, null));
+        }
+        kvTablet.putAsLeader(kvRecordBatchFactory.ofRecords(deleteRecords), null);
+        kvTablet.flush(Long.MAX_VALUE, NOPErrorHandler.INSTANCE);
+        assertThat(kvTablet.getRowCount()).isEqualTo(7);
+
+        // Insert new keys 11-15
+        List<KvRecord> newRecords = new ArrayList<>();
+        for (int i = 11; i <= 15; i++) {
+            newRecords.add(kvRecordFactory.ofRecord("key" + i, new Object[] {i, "val" + i}));
+        }
+        kvTablet.putAsLeader(kvRecordBatchFactory.ofRecords(newRecords), null);
+        kvTablet.flush(Long.MAX_VALUE, NOPErrorHandler.INSTANCE);
+        assertThat(kvTablet.getRowCount()).isEqualTo(12);
+
+        // Update existing key 4 - row count should not change
+        KvRecordBatch updateBatch =
+                kvRecordBatchFactory.ofRecords(
+                        kvRecordFactory.ofRecord("key4", new Object[] {4, "val4_updated"}));
+        kvTablet.putAsLeader(updateBatch, null);
+        kvTablet.flush(Long.MAX_VALUE, NOPErrorHandler.INSTANCE);
+        assertThat(kvTablet.getRowCount()).isEqualTo(12);
+
+        kvTablet.close();
     }
 }

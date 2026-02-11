@@ -20,6 +20,7 @@ package org.apache.fluss.server.kv.prewrite;
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.metrics.Counter;
+import org.apache.fluss.record.ChangeType;
 import org.apache.fluss.server.kv.KvBatchWriter;
 import org.apache.fluss.server.metrics.group.TabletServerMetricGroup;
 import org.apache.fluss.utils.MurmurHashUtils;
@@ -114,7 +115,7 @@ public class KvPreWriteBuffer implements AutoCloseable {
      * @param logSequenceNumber the log sequence number for the delete operation
      */
     public void delete(Key key, long logSequenceNumber) {
-        update(key, Value.of(null), logSequenceNumber);
+        doPut(ChangeType.DELETE, key, Value.of(null), logSequenceNumber);
     }
 
     /**
@@ -122,11 +123,20 @@ public class KvPreWriteBuffer implements AutoCloseable {
      *
      * @param logSequenceNumber the log sequence number for the put operation
      */
-    public void put(Key key, @Nullable byte[] value, long logSequenceNumber) {
-        update(key, Value.of(value), logSequenceNumber);
+    public void insert(Key key, byte[] value, long logSequenceNumber) {
+        doPut(ChangeType.INSERT, key, Value.of(value), logSequenceNumber);
     }
 
-    private void update(Key key, Value value, long lsn) {
+    /**
+     * Put a key-value pair.
+     *
+     * @param logSequenceNumber the log sequence number for the put operation
+     */
+    public void update(Key key, @Nullable byte[] value, long logSequenceNumber) {
+        doPut(ChangeType.UPDATE_AFTER, key, Value.of(value), logSequenceNumber);
+    }
+
+    private void doPut(ChangeType changeType, Key key, Value value, long lsn) {
         if (maxLogSequenceNumber >= lsn) {
             throw new IllegalArgumentException(
                     "The log sequence number must be non-decreasing. "
@@ -142,8 +152,8 @@ public class KvPreWriteBuffer implements AutoCloseable {
                         key,
                         (k, v) ->
                                 v == null
-                                        ? KvEntry.of(key, value, lsn)
-                                        : KvEntry.of(key, value, lsn, v));
+                                        ? KvEntry.of(changeType, key, value, lsn)
+                                        : KvEntry.of(changeType, key, value, lsn, v));
         // append the entry to the tail of the list for all kv entries
         allKvEntries.addLast(kvEntry);
         // update the max lsn
@@ -220,12 +230,17 @@ public class KvPreWriteBuffer implements AutoCloseable {
             Value value = entry.getValue();
             if (value.value != null) {
                 flushedCount += 1;
-                rowCountDiff += 1;
                 kvBatchWriter.put(entry.getKey().key, value.value);
             } else {
                 flushedCount += 1;
-                rowCountDiff -= 1;
                 kvBatchWriter.delete(entry.getKey().key);
+            }
+
+            // for update_after, we don't change the row count
+            if (entry.getChangeType() == ChangeType.INSERT) {
+                rowCountDiff += 1;
+            } else if (entry.getChangeType() == ChangeType.DELETE) {
+                rowCountDiff -= 1;
             }
 
             // if the kv entry to be flushed is equal to the one in the kvEntryMap, we
@@ -271,6 +286,10 @@ public class KvPreWriteBuffer implements AutoCloseable {
         return truncateAsErrorCount;
     }
 
+    // -------------------------------------------------------------------------------------------
+    // Inner classes
+    // -------------------------------------------------------------------------------------------
+
     /**
      * A class to wrap a key-value pair and the sequence number for the key-value pair. If the byte
      * array in the value is null, it means the key in the entry is marked as deleted.
@@ -280,6 +299,7 @@ public class KvPreWriteBuffer implements AutoCloseable {
      */
     public static class KvEntry {
 
+        private final ChangeType changeType;
         private final Key key;
         private final Value value;
         private final long logSequenceNumber;
@@ -287,20 +307,34 @@ public class KvPreWriteBuffer implements AutoCloseable {
         // the previous mapped value in the buffer before this key-value put
         @Nullable private final KvEntry previousEntry;
 
-        public static KvEntry of(Key key, Value value, long sequenceNumber) {
-            return new KvEntry(key, value, sequenceNumber, null);
+        public static KvEntry of(ChangeType changeType, Key key, Value value, long sequenceNumber) {
+            return new KvEntry(changeType, key, value, sequenceNumber, null);
         }
 
-        public static KvEntry of(Key key, Value value, long sequenceNumber, KvEntry previousEntry) {
-            return new KvEntry(key, value, sequenceNumber, previousEntry);
+        public static KvEntry of(
+                ChangeType changeType,
+                Key key,
+                Value value,
+                long sequenceNumber,
+                KvEntry previousEntry) {
+            return new KvEntry(changeType, key, value, sequenceNumber, previousEntry);
         }
 
         private KvEntry(
-                Key key, Value value, long logSequenceNumber, @Nullable KvEntry previousEntry) {
+                ChangeType changeType,
+                Key key,
+                Value value,
+                long logSequenceNumber,
+                @Nullable KvEntry previousEntry) {
+            this.changeType = changeType;
             this.key = key;
             this.value = value;
             this.logSequenceNumber = logSequenceNumber;
             this.previousEntry = previousEntry;
+        }
+
+        public ChangeType getChangeType() {
+            return changeType;
         }
 
         public Key getKey() {
@@ -325,6 +359,7 @@ public class KvPreWriteBuffer implements AutoCloseable {
             }
             KvEntry kvEntry = (KvEntry) o;
             return logSequenceNumber == kvEntry.logSequenceNumber
+                    && changeType == kvEntry.changeType
                     && Objects.equals(key, kvEntry.key)
                     && Objects.equals(value, kvEntry.value)
                     && Objects.equals(previousEntry, kvEntry.previousEntry);
@@ -338,7 +373,9 @@ public class KvPreWriteBuffer implements AutoCloseable {
         @Override
         public String toString() {
             return "KvEntry{"
-                    + "key="
+                    + "changeType="
+                    + changeType
+                    + ", key="
                     + key
                     + ", value="
                     + value

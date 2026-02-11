@@ -54,6 +54,7 @@ import org.apache.fluss.rpc.entity.LookupResultForBucket;
 import org.apache.fluss.rpc.entity.PrefixLookupResultForBucket;
 import org.apache.fluss.rpc.entity.ProduceLogResultForBucket;
 import org.apache.fluss.rpc.entity.PutKvResultForBucket;
+import org.apache.fluss.rpc.entity.TableStatsResultForBucket;
 import org.apache.fluss.rpc.entity.WriteResultForBucket;
 import org.apache.fluss.rpc.gateway.CoordinatorGateway;
 import org.apache.fluss.rpc.messages.NotifyKvSnapshotOffsetResponse;
@@ -1263,6 +1264,23 @@ public class ReplicaManager {
         }
 
         return putResultForBucketMap;
+    }
+
+    public void getTableStats(
+            List<TableBucket> tableBucket,
+            Consumer<List<TableStatsResultForBucket>> responseCallback) {
+        List<TableStatsResultForBucket> results = new ArrayList<>();
+        for (TableBucket tb : tableBucket) {
+            try {
+                Replica replica = getReplicaOrException(tb);
+                long rowCount = replica.getRowCount();
+                results.add(new TableStatsResultForBucket(tb, rowCount));
+            } catch (Exception e) {
+                LOG.error("Error getting table stats on replica {}", tableBucket, e);
+                results.add(new TableStatsResultForBucket(tb, ApiError.fromThrowable(e)));
+            }
+        }
+        responseCallback.accept(results);
     }
 
     public void limitScan(

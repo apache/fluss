@@ -57,6 +57,7 @@ import org.apache.fluss.rpc.entity.LookupResultForBucket;
 import org.apache.fluss.rpc.entity.PrefixLookupResultForBucket;
 import org.apache.fluss.rpc.entity.ProduceLogResultForBucket;
 import org.apache.fluss.rpc.entity.PutKvResultForBucket;
+import org.apache.fluss.rpc.entity.TableStatsResultForBucket;
 import org.apache.fluss.rpc.messages.AcquireKvSnapshotLeaseRequest;
 import org.apache.fluss.rpc.messages.AcquireKvSnapshotLeaseResponse;
 import org.apache.fluss.rpc.messages.AdjustIsrRequest;
@@ -74,6 +75,8 @@ import org.apache.fluss.rpc.messages.GetKvSnapshotMetadataResponse;
 import org.apache.fluss.rpc.messages.GetLakeSnapshotResponse;
 import org.apache.fluss.rpc.messages.GetLatestKvSnapshotsResponse;
 import org.apache.fluss.rpc.messages.GetProducerOffsetsResponse;
+import org.apache.fluss.rpc.messages.GetTableStatsRequest;
+import org.apache.fluss.rpc.messages.GetTableStatsResponse;
 import org.apache.fluss.rpc.messages.InitWriterResponse;
 import org.apache.fluss.rpc.messages.LakeTieringHeartbeatResponse;
 import org.apache.fluss.rpc.messages.LimitScanResponse;
@@ -146,6 +149,8 @@ import org.apache.fluss.rpc.messages.PbTableBucket;
 import org.apache.fluss.rpc.messages.PbTableMetadata;
 import org.apache.fluss.rpc.messages.PbTableOffsets;
 import org.apache.fluss.rpc.messages.PbTablePath;
+import org.apache.fluss.rpc.messages.PbTableStatsReqForBucket;
+import org.apache.fluss.rpc.messages.PbTableStatsRespForBucket;
 import org.apache.fluss.rpc.messages.PbValue;
 import org.apache.fluss.rpc.messages.PbValueList;
 import org.apache.fluss.rpc.messages.PrefixLookupRequest;
@@ -2060,6 +2065,45 @@ public class ServerRpcMessageUtils {
                         leaseForBucket.getBucketId()),
                 leaseForBucket.getSnapshotId());
     }
+
+    // -----------------------------------------------------------------------------------
+    // Table Stats Request and Response
+    // -----------------------------------------------------------------------------------
+
+    public static List<TableBucket> getTableStatsRequestData(GetTableStatsRequest request) {
+        List<TableBucket> tableBuckets = new ArrayList<>();
+        long tableId = request.getTableId();
+        for (PbTableStatsReqForBucket reqForBucket : request.getBucketsReqsList()) {
+            tableBuckets.add(
+                    new TableBucket(
+                            tableId,
+                            reqForBucket.hasPartitionId() ? reqForBucket.getPartitionId() : null,
+                            reqForBucket.getBucketId()));
+        }
+        return tableBuckets;
+    }
+
+    public static GetTableStatsResponse makeGetTableStatsResponse(
+            List<TableStatsResultForBucket> stats) {
+        GetTableStatsResponse response = new GetTableStatsResponse();
+        for (TableStatsResultForBucket statForBucket : stats) {
+            TableBucket tb = statForBucket.getTableBucket();
+            PbTableStatsRespForBucket respForBucket =
+                    response.addBucketsResp().setBucketId(tb.getBucket());
+            if (tb.getPartitionId() != null) {
+                respForBucket.setPartitionId(tb.getPartitionId());
+            }
+            if (statForBucket.failed()) {
+                respForBucket.setError(
+                        statForBucket.getErrorCode(), statForBucket.getErrorMessage());
+            } else {
+                respForBucket.setRowCount(statForBucket.getRowCount());
+            }
+        }
+        return response;
+    }
+
+    // -----------------------------------------------------------------------------------
 
     private static <T> Map<TableBucket, T> mergeResponse(
             Map<TableBucket, T> response, Map<TableBucket, T> errors) {

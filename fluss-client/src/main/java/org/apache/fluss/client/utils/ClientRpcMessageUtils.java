@@ -54,6 +54,7 @@ import org.apache.fluss.rpc.messages.GetKvSnapshotMetadataResponse;
 import org.apache.fluss.rpc.messages.GetLakeSnapshotResponse;
 import org.apache.fluss.rpc.messages.GetLatestKvSnapshotsResponse;
 import org.apache.fluss.rpc.messages.GetProducerOffsetsResponse;
+import org.apache.fluss.rpc.messages.GetTableStatsRequest;
 import org.apache.fluss.rpc.messages.ListDatabasesResponse;
 import org.apache.fluss.rpc.messages.ListOffsetsRequest;
 import org.apache.fluss.rpc.messages.ListPartitionInfosResponse;
@@ -84,6 +85,7 @@ import org.apache.fluss.rpc.messages.PbRebalanceProgressForTable;
 import org.apache.fluss.rpc.messages.PbRemotePathAndLocalFile;
 import org.apache.fluss.rpc.messages.PbRenameColumn;
 import org.apache.fluss.rpc.messages.PbTableBucket;
+import org.apache.fluss.rpc.messages.PbTableStatsReqForBucket;
 import org.apache.fluss.rpc.messages.PrefixLookupRequest;
 import org.apache.fluss.rpc.messages.ProduceLogRequest;
 import org.apache.fluss.rpc.messages.PutKvRequest;
@@ -754,5 +756,30 @@ public class ClientRpcMessageUtils {
         }
 
         return databaseSummaries;
+    }
+
+    public static GetTableStatsRequest makeGetTableStatsRequest(List<TableBucket> buckets) {
+        if (buckets.isEmpty()) {
+            throw new IllegalArgumentException("Buckets list cannot be empty");
+        }
+        long tableId = buckets.get(0).getTableId();
+        List<PbTableStatsReqForBucket> pbBuckets =
+                buckets.stream()
+                        .map(
+                                bucket -> {
+                                    if (bucket.getTableId() != tableId) {
+                                        throw new IllegalArgumentException(
+                                                "All buckets should belong to the same table");
+                                    }
+                                    PbTableStatsReqForBucket pbBucket =
+                                            new PbTableStatsReqForBucket()
+                                                    .setBucketId(bucket.getBucket());
+                                    if (bucket.getPartitionId() != null) {
+                                        pbBucket.setPartitionId(bucket.getPartitionId());
+                                    }
+                                    return pbBucket;
+                                })
+                        .collect(Collectors.toList());
+        return new GetTableStatsRequest().setTableId(tableId).addAllBucketsReqs(pbBuckets);
     }
 }

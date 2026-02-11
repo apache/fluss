@@ -32,6 +32,8 @@ import org.apache.fluss.rpc.entity.ResultForBucket;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.FetchLogRequest;
 import org.apache.fluss.rpc.messages.FetchLogResponse;
+import org.apache.fluss.rpc.messages.GetTableStatsRequest;
+import org.apache.fluss.rpc.messages.GetTableStatsResponse;
 import org.apache.fluss.rpc.messages.InitWriterRequest;
 import org.apache.fluss.rpc.messages.InitWriterResponse;
 import org.apache.fluss.rpc.messages.LimitScanRequest;
@@ -106,9 +108,11 @@ import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getNotifySnaps
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getProduceLogData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getPutKvData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getStopReplicaData;
+import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getTableStatsRequestData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getTargetColumns;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getUpdateMetadataRequestData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeFetchLogResponse;
+import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeGetTableStatsResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeInitWriterResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeLimitScanResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeListOffsetsResponse;
@@ -303,6 +307,17 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
                         request.getBucketId()),
                 request.getLimit(),
                 value -> response.complete(makeLimitScanResponse(value)));
+        return response;
+    }
+
+    @Override
+    public CompletableFuture<GetTableStatsResponse> getTableStats(GetTableStatsRequest request) {
+        authorizeTable(READ, request.getTableId());
+
+        CompletableFuture<GetTableStatsResponse> response = new CompletableFuture<>();
+        replicaManager.getTableStats(
+                getTableStatsRequestData(request),
+                result -> response.complete(makeGetTableStatsResponse(result)));
         return response;
     }
 
