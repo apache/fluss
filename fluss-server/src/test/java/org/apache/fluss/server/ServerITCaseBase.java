@@ -77,15 +77,13 @@ public abstract class ServerITCaseBase {
         TestProcessBuilder.TestProcess serverProcess = null;
 
         try {
-            Path tmpDir = tempFolder.resolve("tmp");
-            Files.createDirectories(tmpDir);
             serverProcess =
                     new TestProcessBuilder(getServerClass().getName())
                             .addConfigAsMainClassArgs(configuration)
-                            .addJvmArg("-Djava.io.tmpdir=" + tmpDir.toAbsolutePath())
+                            .addJvmArg("-Djava.io.tmpdir=" + tempFolder.toAbsolutePath())
                             .addJvmArg(
                                     "-Dorg.apache.fluss.shaded.netty4.io.netty.native.workdir="
-                                            + tmpDir.toAbsolutePath())
+                                            + tempFolder.toAbsolutePath())
                             .addMainClassArg(
                                     String.format(
                                             "-D%s=%s",
