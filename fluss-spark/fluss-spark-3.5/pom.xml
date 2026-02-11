@@ -115,7 +115,7 @@
                         <configuration>
                             <artifactSet>
                                 <includes combine.children="append">
-                                    <include>org.apache.fluss:fluss-spark-common</include>
+                                    <include>org.apache.fluss:fluss-spark-common_${scala.binary.version}</include>
                                     <include>org.apache.fluss:fluss-client</include>
                                 </includes>
                             </artifactSet>
