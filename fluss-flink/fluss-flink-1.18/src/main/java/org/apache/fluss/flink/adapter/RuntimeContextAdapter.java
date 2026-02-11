@@ -17,13 +17,15 @@
 
 package org.apache.fluss.flink.adapter;
 
+import org.apache.flink.api.common.JobID;
 import org.apache.flink.api.common.functions.RuntimeContext;
 import org.apache.flink.streaming.api.operators.StreamingRuntimeContext;
 
 /**
- * An adapter for Flink {@link RuntimeContext} class. The {@link RuntimeContext} class added the
- * `getJobInfo` and `getTaskInfo` methods in version 1.19 and deprecated many methods, such as
- * `getAttemptNumber`.
+ * An adapter for Flink {@link RuntimeContext} class for Flink 1.18.
+ *
+ * <p>In Flink 1.18, methods like getJobId(), getIndexOfThisSubtask() are available directly on
+ * RuntimeContext. In Flink 1.19+, these were moved to getJobInfo() and getTaskInfo().
  *
  * <p>TODO: remove this class when no longer support flink 1.18.
  */
@@ -35,5 +37,21 @@ public class RuntimeContextAdapter {
 
     public static int getIndexOfThisSubtask(StreamingRuntimeContext runtimeContext) {
         return runtimeContext.getIndexOfThisSubtask();
+    }
+
+    public static int getNumberOfParallelSubtasks(StreamingRuntimeContext runtimeContext) {
+        return runtimeContext.getNumberOfParallelSubtasks();
+    }
+
+    /**
+     * Gets the JobID from the RuntimeContext.
+     *
+     * <p>In Flink 1.18, RuntimeContext has getJobId() method directly.
+     *
+     * @param runtimeContext the runtime context
+     * @return the JobID
+     */
+    public static JobID getJobId(RuntimeContext runtimeContext) {
+        return runtimeContext.getJobId();
     }
 }

@@ -27,6 +27,7 @@ import org.apache.fluss.flink.sink.serializer.FlussSerializationSchema;
 import org.apache.fluss.flink.sink.shuffle.DistributionMode;
 import org.apache.fluss.flink.sink.writer.FlinkSinkWriter;
 import org.apache.fluss.metadata.DataLakeFormat;
+import org.apache.fluss.metadata.MergeEngineType;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 
@@ -40,6 +41,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutionException;
 
+import static org.apache.fluss.flink.utils.FlinkConnectorOptionsUtils.validateDistributionModeForMergeEngine;
 import static org.apache.fluss.flink.utils.FlinkConversions.toFlinkRowType;
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
@@ -78,6 +80,8 @@ public class FlussSinkBuilder<InputT> {
     // Optional list of columns for partial update. When set, upsert will only update these columns.
     // The primary key columns must be fully specified in this list.
     private List<String> partialUpdateColumns;
+    // Optional producer ID for undo recovery. If not set, defaults to the Flink job ID.
+    private String producerId;
 
     /** Set the bootstrap server for the sink. */
     public FlussSinkBuilder<InputT> setBootstrapServers(String bootstrapServers) {
@@ -137,6 +141,21 @@ public class FlussSinkBuilder<InputT> {
         return this;
     }
 
+    /**
+     * Set the producer ID for undo recovery. If not set, defaults to the Flink job ID.
+     *
+     * <p>This option is useful for testing or when you need to maintain the same producer ID across
+     * different job submissions. The producer ID is used to track producer offsets for undo
+     * recovery during checkpoint restoration.
+     *
+     * @param producerId the producer ID to use
+     * @return this builder
+     */
+    public FlussSinkBuilder<InputT> setProducerId(String producerId) {
+        this.producerId = producerId;
+        return this;
+    }
+
     /** Set a configuration option. */
     public FlussSinkBuilder<InputT> setOption(String key, String value) {
         configOptions.put(key, value);
@@ -190,7 +209,15 @@ public class FlussSinkBuilder<InputT> {
 
         boolean isUpsert = tableInfo.hasPrimaryKey();
 
+        // Detect if this is an aggregation table that needs undo recovery
+        MergeEngineType mergeEngineType =
+                tableInfo.getTableConfig().getMergeEngineType().orElse(null);
+        boolean enableUndoRecovery = mergeEngineType == MergeEngineType.AGGREGATION;
+
         if (isUpsert) {
+            // Validate distribution mode for primary key tables with merge engine
+            validateDistributionModeForMergeEngine(mergeEngineType, distributionMode);
+
             LOG.info("Initializing Fluss upsert sink writer ...");
             int[] targetColumnIndexes =
                     computeTargetColumnIndexes(
@@ -208,7 +235,9 @@ public class FlussSinkBuilder<InputT> {
                             partitionKeys,
                             lakeFormat,
                             distributionMode,
-                            serializationSchema);
+                            serializationSchema,
+                            enableUndoRecovery,
+                            producerId);
         } else {
             LOG.info("Initializing Fluss append sink writer ...");
             writerBuilder =

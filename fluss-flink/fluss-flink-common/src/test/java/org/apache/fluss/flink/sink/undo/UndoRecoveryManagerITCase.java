@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.flink.sink.writer.undo;
+package org.apache.fluss.flink.sink.undo;
 
 import org.apache.fluss.client.Connection;
 import org.apache.fluss.client.ConnectionFactory;
@@ -30,7 +30,7 @@ import org.apache.fluss.client.table.writer.UpsertResult;
 import org.apache.fluss.client.table.writer.UpsertWriter;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
-import org.apache.fluss.flink.sink.writer.undo.UndoRecoveryManager.UndoOffsets;
+import org.apache.fluss.flink.sink.undo.UndoRecoveryManager.UndoOffsets;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.MergeEngineType;
 import org.apache.fluss.metadata.PartitionInfo;
@@ -1009,7 +1009,11 @@ public class UndoRecoveryManagerITCase {
                 if (latestOffset == null) {
                     latestOffset = 0L;
                 }
-                result.put(tb, new UndoOffsets(checkpointOffsets.get(tb), latestOffset));
+                long checkpointOffset = checkpointOffsets.get(tb);
+                // Skip buckets that don't need recovery (checkpointOffset == latestOffset)
+                if (checkpointOffset < latestOffset) {
+                    result.put(tb, new UndoOffsets(checkpointOffset, latestOffset));
+                }
             }
         }
 
@@ -1040,7 +1044,11 @@ public class UndoRecoveryManagerITCase {
                     if (latestOffset == null) {
                         latestOffset = 0L;
                     }
-                    result.put(tb, new UndoOffsets(checkpointOffsets.get(tb), latestOffset));
+                    long checkpointOffset = checkpointOffsets.get(tb);
+                    // Skip buckets that don't need recovery (checkpointOffset == latestOffset)
+                    if (checkpointOffset < latestOffset) {
+                        result.put(tb, new UndoOffsets(checkpointOffset, latestOffset));
+                    }
                 }
             }
         }

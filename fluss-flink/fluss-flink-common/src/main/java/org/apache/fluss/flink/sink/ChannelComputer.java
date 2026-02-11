@@ -30,6 +30,30 @@ public interface ChannelComputer<T> extends Serializable {
 
     int channel(T record);
 
+    /**
+     * Determines whether partition name should be combined with bucket for sharding calculation.
+     *
+     * <p>When bucket number is not evenly divisible by channel count, using only bucket ID for
+     * sharding can cause data skew. For example, with 3 buckets and 2 channels:
+     *
+     * <ul>
+     *   <li>Channel 0: bucket 0, bucket 2 (from all partitions)
+     *   <li>Channel 1: bucket 1 (from all partitions)
+     * </ul>
+     *
+     * <p>By including partition name in the hash, buckets from different partitions are distributed
+     * more evenly across channels.
+     *
+     * @param isPartitioned whether the table is partitioned
+     * @param numBuckets number of buckets in the table
+     * @param numChannels number of downstream channels (parallelism)
+     * @return true if partition name should be included in sharding calculation
+     */
+    static boolean shouldCombinePartitionInSharding(
+            boolean isPartitioned, int numBuckets, int numChannels) {
+        return isPartitioned && numBuckets % numChannels != 0;
+    }
+
     static int select(String partitionName, int bucket, int numChannels) {
         int startChannel = Math.abs(partitionName.hashCode()) % numChannels;
         return (startChannel + bucket) % numChannels;

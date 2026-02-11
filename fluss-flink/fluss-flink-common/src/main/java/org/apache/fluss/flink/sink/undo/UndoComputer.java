@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.flink.sink.writer.undo;
+package org.apache.fluss.flink.sink.undo;
 
 import org.apache.fluss.client.table.scanner.ScanRecord;
 import org.apache.fluss.client.table.writer.UpsertWriter;

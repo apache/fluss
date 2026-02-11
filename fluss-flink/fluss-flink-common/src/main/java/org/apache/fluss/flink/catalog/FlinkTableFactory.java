@@ -29,6 +29,7 @@ import org.apache.fluss.flink.source.ChangelogFlinkTableSource;
 import org.apache.fluss.flink.source.FlinkTableSource;
 import org.apache.fluss.flink.source.reader.LeaseContext;
 import org.apache.fluss.flink.utils.FlinkConnectorOptionsUtils;
+import org.apache.fluss.metadata.MergeEngineType;
 import org.apache.fluss.metadata.TablePath;
 
 import org.apache.flink.api.common.RuntimeExecutionMode;
@@ -64,6 +65,7 @@ import static org.apache.fluss.config.FlussConfigUtils.CLIENT_PREFIX;
 import static org.apache.fluss.flink.catalog.FlinkCatalog.LAKE_TABLE_SPLITTER;
 import static org.apache.fluss.flink.utils.FlinkConnectorOptionsUtils.getBucketKeyIndexes;
 import static org.apache.fluss.flink.utils.FlinkConnectorOptionsUtils.getBucketKeys;
+import static org.apache.fluss.flink.utils.FlinkConnectorOptionsUtils.validateDistributionModeForMergeEngine;
 import static org.apache.fluss.flink.utils.FlinkConversions.toFlinkOption;
 
 /** Factory to create table source and table sink for Fluss. */
@@ -177,14 +179,25 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
         List<String> partitionKeys = resolvedCatalogTable.getPartitionKeys();
 
         RowType rowType = (RowType) context.getPhysicalRowDataType().getLogicalType();
+
+        MergeEngineType mergeEngineType =
+                tableOptions.get(toFlinkOption(ConfigOptions.TABLE_MERGE_ENGINE));
+
+        // For primary key tables with any merge engine, keyed shuffle must be enabled
+        // to ensure correct data routing.
+        int[] primaryKeyIndexes = context.getPrimaryKeyIndexes();
         DistributionMode distributionMode =
                 tableOptions.get(FlinkConnectorOptions.SINK_DISTRIBUTION_MODE);
+        if (primaryKeyIndexes.length > 0) {
+            validateDistributionModeForMergeEngine(mergeEngineType, distributionMode);
+        }
+
         return new FlinkTableSink(
                 toFlussTablePath(context.getObjectIdentifier()),
                 toFlussClientConfig(
                         context.getCatalogTable().getOptions(), context.getConfiguration()),
                 rowType,
-                context.getPrimaryKeyIndexes(),
+                primaryKeyIndexes,
                 partitionKeys,
                 isStreamingMode,
                 tableOptions.get(toFlinkOption(ConfigOptions.TABLE_MERGE_ENGINE)),
@@ -193,7 +206,8 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
                 tableOptions.get(toFlinkOption(TABLE_DELETE_BEHAVIOR)),
                 tableOptions.get(FlinkConnectorOptions.BUCKET_NUMBER),
                 getBucketKeys(tableOptions),
-                distributionMode);
+                distributionMode,
+                tableOptions.getOptional(FlinkConnectorOptions.SINK_PRODUCER_ID).orElse(null));
     }
 
     @Override
@@ -224,6 +238,7 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
                                 FlinkConnectorOptions.SINK_IGNORE_DELETE,
                                 FlinkConnectorOptions.SINK_BUCKET_SHUFFLE,
                                 FlinkConnectorOptions.SINK_DISTRIBUTION_MODE,
+                                FlinkConnectorOptions.SINK_PRODUCER_ID,
                                 LookupOptions.MAX_RETRIES,
                                 LookupOptions.CACHE_TYPE,
                                 LookupOptions.PARTIAL_CACHE_EXPIRE_AFTER_ACCESS,

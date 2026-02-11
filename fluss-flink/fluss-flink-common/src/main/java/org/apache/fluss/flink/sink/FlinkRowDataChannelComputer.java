@@ -81,16 +81,10 @@ public class FlinkRowDataChannelComputer<InputT> implements ChannelComputer<Inpu
             this.partitionGetter = new PartitionGetter(flussRowType, partitionKeys);
         }
 
-        // Only when partition keys exist and the Flink job parallelism and the bucket number are
-        // not divisible, then we need to include the partition name as part of the shuffle key.
-        // This approach can help avoid the possible data skew. For example, if bucket number is 3
-        // and task parallelism is 2, it is highly possible that data shuffle becomes uneven. For
-        // instance, in task1, it might have 'partition0-bucket0', 'partition1-bucket0',
-        // 'partition0-bucket2', and 'partition1-bucket2', whereas in task2, it would only have
-        // 'partition0-bucket1' and 'partition1-bucket1'. As partition number increases, this
-        // situation becomes even more severe.
+        // Use shared logic from ChannelComputer to determine sharding strategy
         this.combineShuffleWithPartitionName =
-                partitionGetter != null && numBucket % numChannels != 0;
+                ChannelComputer.shouldCombinePartitionInSharding(
+                        partitionGetter != null, numBucket, numChannels);
 
         try {
             // no need to read real database, thus assume to deserialize the fluss row as same as

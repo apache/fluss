@@ -156,6 +156,15 @@ public class FlinkConnectorOptions {
                     .defaultValue(false)
                     .withDescription("Whether to ignore retract（-U/-D) record.");
 
+    public static final ConfigOption<String> SINK_PRODUCER_ID =
+            ConfigOptions.key("sink.producer-id")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The producer ID for undo recovery. If not set, defaults to the Flink job ID. "
+                                    + "This option is useful for testing or when you need to maintain the same producer ID "
+                                    + "across different job submissions.");
+
     @Deprecated
     public static final ConfigOption<Boolean> SINK_BUCKET_SHUFFLE =
             ConfigOptions.key("sink.bucket-shuffle")

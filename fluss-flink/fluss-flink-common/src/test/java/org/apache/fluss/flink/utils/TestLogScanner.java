@@ -61,16 +61,6 @@ public class TestLogScanner implements LogScanner {
     }
 
     /**
-     * Sets the number of empty polls to return before returning actual records.
-     *
-     * @param count number of empty polls
-     */
-    public void setEmptyPollsBeforeData(int count) {
-        this.emptyPollsBeforeData = count;
-        this.currentEmptyPollCount = 0;
-    }
-
-    /**
      * Sets whether to always return empty records (for testing fatal exception).
      *
      * @param alwaysEmpty if true, poll() always returns empty

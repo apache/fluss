@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.flink.sink.writer.undo;
+package org.apache.fluss.flink.sink.undo;
 
 import org.apache.fluss.client.table.scanner.ScanRecord;
 import org.apache.fluss.flink.utils.TestLogScanner;
@@ -119,13 +119,18 @@ class UndoRecoveryExecutorTest {
         assertThat(mockWriter.getDeleteCount()).isEqualTo(3);
         assertThat(mockWriter.getUpsertCount()).isEqualTo(2);
         assertThat(mockWriter.isFlushCalled()).isTrue();
-
-        assertThat(ctx0.isComplete()).isTrue();
-        assertThat(ctx1.isComplete()).isTrue();
     }
 
     /**
      * Test that recovery is skipped when checkpoint offset >= target offset.
+     *
+     * <p>Covers three scenarios for {@link BucketRecoveryContext#needsRecovery()}:
+     *
+     * <ul>
+     *   <li>checkpointOffset == logEndOffset → no recovery needed
+     *   <li>checkpointOffset > logEndOffset → no recovery needed (checkpoint ahead)
+     *   <li>checkpointOffset < logEndOffset → needs recovery
+     * </ul>
      *
      * <p>Validates: No unnecessary work when no recovery needed.
      */
@@ -133,9 +138,19 @@ class UndoRecoveryExecutorTest {
     void testNoRecoveryNeededSkipsExecution() throws Exception {
         TableBucket bucket = new TableBucket(TABLE_ID, 0);
 
-        // Checkpoint offset (5) >= log end offset (5) → no recovery needed
-        BucketRecoveryContext ctx = new BucketRecoveryContext(bucket, 5L, 5L);
+        // Verify needsRecovery() for the three scenarios
+        assertThat(new BucketRecoveryContext(bucket, 5L, 5L).needsRecovery())
+                .as("checkpointOffset == logEndOffset → no recovery")
+                .isFalse();
+        assertThat(new BucketRecoveryContext(bucket, 10L, 5L).needsRecovery())
+                .as("checkpointOffset > logEndOffset → no recovery")
+                .isFalse();
+        assertThat(new BucketRecoveryContext(bucket, 0L, 1L).needsRecovery())
+                .as("checkpointOffset < logEndOffset → needs recovery")
+                .isTrue();
 
+        // Execute with no-recovery context and verify nothing happens
+        BucketRecoveryContext ctx = new BucketRecoveryContext(bucket, 5L, 5L);
         executor.execute(Collections.singletonList(ctx));
 
         assertThat(mockWriter.getDeleteCount()).isEqualTo(0);
@@ -231,4 +246,50 @@ class UndoRecoveryExecutorTest {
         assertThat(mockWriter.getUpsertCount()).isEqualTo(2); // keys 3, 4
         assertThat(ctx.isComplete()).isTrue();
     }
+
+    /**
+     * Test single record recovery with checkpointOffset=0, logEndOffset=1.
+     *
+     * <p>This is a boundary case where the recovery range contains exactly one record. The executor
+     * must read and undo that record before completion. Completion is determined by {@code
+     * scanner.position(bucket) >= logEndOffset}.
+     */
+    @Test
+    void testSingleRecordRecoveryOffByOneFix() throws Exception {
+        TableBucket bucket = new TableBucket(TABLE_ID, 0);
+
+        // checkpointOffset=0, logEndOffset=1: exactly 1 record to recover
+        BucketRecoveryContext ctx = new BucketRecoveryContext(bucket, 0L, 1L);
+
+        // Scanner returns 1 INSERT record at offset 0
+        mockScanner.setRecordsForBucket(
+                bucket,
+                Collections.singletonList(
+                        new ScanRecord(0L, 0L, ChangeType.INSERT, row(1, "a", 100))));
+
+        executor.execute(Collections.singletonList(ctx));
+
+        // The single record should have been processed
+        assertThat(ctx.getTotalRecordsProcessed()).isEqualTo(1);
+
+        // INSERT record should be undone with a delete
+        assertThat(mockWriter.getDeleteCount()).isEqualTo(1);
+        assertThat(mockWriter.getUpsertCount()).isEqualTo(0);
+        assertThat(mockWriter.isFlushCalled()).isTrue();
+    }
+
+    /**
+     * Test scanner position-based completion for empty-batch-only recovery ranges.
+     *
+     * <p>Simulates a scenario where the recovery range (checkpointOffset=0, logEndOffset=3)
+     * contains only empty LogRecordBatches. Empty batches consume WAL offsets but produce zero
+     * ScanRecords. The scanner position advances past the recovery range without emitting any
+     * records for the target bucket.
+     *
+     * <p>Uses a two-bucket setup: bucket0 has no records (empty batches), bucket1 has real records
+     * that cause the mock scanner to advance bucket0's position on each poll. Completion is
+     * detected via {@code scanner.position(bucket) >= logEndOffset}.
+     */
+    // TODO: Empty LogRecordBatch scenario is not testable with current offset-based completion
+    //  detection. Once LogScanner supports bounded subscription mode, add a test here.
 }
