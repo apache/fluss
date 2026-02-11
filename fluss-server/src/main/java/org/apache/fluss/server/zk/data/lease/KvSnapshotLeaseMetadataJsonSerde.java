@@ -56,7 +56,7 @@ public class KvSnapshotLeaseMetadataJsonSerde
                 kvSnapshotLeaseMetadata.getTableIdToRemoteMetadataFilePath().entrySet()) {
             generator.writeStartObject();
             generator.writeNumberField(TABLE_ID, entry.getKey());
-            generator.writeStringField(KV_SNAPSHOT_PATH, entry.getValue().getPath());
+            generator.writeStringField(KV_SNAPSHOT_PATH, entry.getValue().toString());
             generator.writeEndObject();
         }
         // end tables
