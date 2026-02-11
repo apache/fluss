@@ -286,6 +286,11 @@ public class LogRecordReadContext implements LogRecordBatch.ReadContext, AutoClo
     public void close() {
         vectorSchemaRootMap.values().forEach(VectorSchemaRoot::close);
         if (bufferAllocator != null) {
+            // Force-release any remaining allocated memory in case some buffers were not tracked by
+            // vectorSchemaRootMap,
+            // for example temporary buffers left behind when an OOM occurs during decompression
+            // (see https://github.com/apache/fluss/issues/2646).
+            bufferAllocator.releaseBytes(bufferAllocator.getAllocatedMemory());
             bufferAllocator.close();
         }
     }
