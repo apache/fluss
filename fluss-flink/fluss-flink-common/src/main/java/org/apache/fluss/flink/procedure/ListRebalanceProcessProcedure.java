@@ -71,7 +71,7 @@ public class ListRebalanceProcessProcedure extends ProcedureBase {
         return new Row[] {
             Row.of(
                     progress.rebalanceId(),
-                    progress.status(),
+                    progress.status().toString(),
                     progress.formatAsPercentage(),
                     new String(
                             JsonSerdeUtils.writeValueAsBytes(

@@ -776,7 +776,7 @@ public abstract class FlinkProcedureITCase {
                         Row row = listProgressResult.get(0);
                         assertThat(row.getArity()).isEqualTo(4);
                         assertThat(row.getField(0)).isEqualTo(progress.rebalanceId());
-                        assertThat(row.getField(1)).isEqualTo(RebalanceStatus.COMPLETED);
+                        assertThat(row.getField(1)).isEqualTo(RebalanceStatus.COMPLETED.toString());
                         assertThat((String) row.getField(2)).endsWith("%");
                         assertThat((String) row.getField(3)).startsWith("{\"rebalance_id\":");
                     }
