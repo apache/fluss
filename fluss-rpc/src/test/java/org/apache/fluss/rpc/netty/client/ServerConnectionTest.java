@@ -22,6 +22,7 @@ import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.DisconnectException;
+import org.apache.fluss.exception.InvalidServerTypeException;
 import org.apache.fluss.metrics.Gauge;
 import org.apache.fluss.metrics.Metric;
 import org.apache.fluss.metrics.MetricType;
@@ -31,7 +32,9 @@ import org.apache.fluss.metrics.registry.NOPMetricRegistry;
 import org.apache.fluss.metrics.util.NOPMetricsGroup;
 import org.apache.fluss.rpc.TestingGatewayService;
 import org.apache.fluss.rpc.TestingTabletGatewayService;
+import org.apache.fluss.rpc.messages.ApiMessage;
 import org.apache.fluss.rpc.messages.GetTableSchemaRequest;
+import org.apache.fluss.rpc.messages.ListDatabasesRequest;
 import org.apache.fluss.rpc.messages.LookupRequest;
 import org.apache.fluss.rpc.messages.PbLookupReqForBucket;
 import org.apache.fluss.rpc.messages.PbTablePath;
@@ -44,6 +47,7 @@ import org.apache.fluss.rpc.protocol.ApiKeys;
 import org.apache.fluss.security.auth.AuthenticationFactory;
 import org.apache.fluss.security.auth.ClientAuthenticator;
 import org.apache.fluss.shaded.netty4.io.netty.bootstrap.Bootstrap;
+import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelFuture;
 import org.apache.fluss.shaded.netty4.io.netty.channel.EventLoopGroup;
 import org.apache.fluss.utils.NetUtils;
 
@@ -55,7 +59,9 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
 
 import static org.apache.fluss.metrics.MetricNames.CLIENT_BYTES_IN_RATE_AVG;
 import static org.apache.fluss.metrics.MetricNames.CLIENT_BYTES_IN_RATE_TOTAL;
@@ -194,6 +200,55 @@ public class ServerConnectionTest {
         assertThat(metric.getMetricType()).isEqualTo(MetricType.GAUGE);
         assertThat(((Gauge<?>) metric).getValue()).isEqualTo(2L);
         connection.close().get();
+    }
+
+    @Test
+    void testWrongServerType() {
+        ServerNode wrongServerTypeNode =
+                new ServerNode(
+                        serverNode.id(),
+                        serverNode.host(),
+                        serverNode.port(),
+                        ServerType.COORDINATOR);
+        CountDownLatch countDownLatch = new CountDownLatch(1);
+        Bootstrap mockBootstrap =
+                new Bootstrap() {
+                    @Override
+                    public ChannelFuture connect(String host, int port) {
+                        return bootstrap
+                                .connect(host, port)
+                                .addListener(f -> countDownLatch.await(1, TimeUnit.MINUTES));
+                    }
+                };
+        ServerConnection connection =
+                new ServerConnection(
+                        mockBootstrap,
+                        wrongServerTypeNode,
+                        TestingClientMetricGroup.newInstance(),
+                        clientAuthenticator,
+                        (con, ignore) -> {},
+                        false);
+
+        // Pending request will be rejected with InvalidServerTypeException which is
+        // InvalidRequestException.
+        CompletableFuture<ApiMessage> future =
+                connection.send(ApiKeys.LIST_DATABASES, new ListDatabasesRequest());
+        assertThat(future).isNotDone();
+        countDownLatch.countDown();
+        assertThatThrownBy(future::get)
+                .rootCause()
+                .isInstanceOf(InvalidServerTypeException.class)
+                .hasMessageContaining("Server type mismatch");
+
+        // Later request will be rejected with DisconnectException which is also
+        // InvalidRequestException.
+        assertThatThrownBy(
+                        () ->
+                                connection
+                                        .send(ApiKeys.LIST_DATABASES, new ListDatabasesRequest())
+                                        .get())
+                .rootCause()
+                .isInstanceOf(DisconnectException.class);
     }
 
     private void buildNettyServer() throws Exception {

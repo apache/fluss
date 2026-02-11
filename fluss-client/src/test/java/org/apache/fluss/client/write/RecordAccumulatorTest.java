@@ -634,7 +634,8 @@ class RecordAccumulatorTest {
                                 () -> cluster.getRandomTabletServer(),
                                 RpcClient.create(
                                         conf, TestingClientMetricGroup.newInstance(), false),
-                                TabletServerGateway.class)),
+                                TabletServerGateway.class),
+                        null),
                 TestingWriterMetricGroup.newInstance(),
                 clock);
     }

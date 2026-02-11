@@ -307,10 +307,7 @@ public class MetadataUpdater {
             try {
                 serverNode =
                         new ServerNode(
-                                -1,
-                                address.getHostString(),
-                                address.getPort(),
-                                ServerType.COORDINATOR);
+                                -1, address.getHostString(), address.getPort(), ServerType.UNKNOWN);
                 ServerNode finalServerNode = serverNode;
                 AdminReadOnlyGateway adminReadOnlyGateway =
                         GatewayClientProxy.createGatewayProxy(

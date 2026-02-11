@@ -15,33 +15,16 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.cluster;
+package org.apache.fluss.exception;
 
-/** The type of server in Fluss cluster. */
-public enum ServerType {
-    COORDINATOR(1),
-    TABLET_SERVER(2),
-    UNKNOWN(-1);
+import org.apache.fluss.annotation.PublicEvolving;
 
-    private final int typeId;
+/** Exception thrown when a request is sent to a server of an invalid type. since: 0.9 */
+@PublicEvolving
+public class InvalidServerTypeException extends InvalidMetadataException {
+    private static final long serialVersionUID = 1L;
 
-    ServerType(int typeId) {
-        this.typeId = typeId;
-    }
-
-    /** Get the ServerType from its typeId. */
-    public static ServerType fromTypeId(int typeId) {
-        if (typeId == COORDINATOR.typeId) {
-            return COORDINATOR;
-        } else if (typeId == TABLET_SERVER.typeId) {
-            return TABLET_SERVER;
-        } else {
-            return UNKNOWN;
-        }
-    }
-
-    /** Get the typeId of this ServerType. */
-    public int toTypeId() {
-        return typeId;
+    public InvalidServerTypeException(String message) {
+        super(message);
     }
 }

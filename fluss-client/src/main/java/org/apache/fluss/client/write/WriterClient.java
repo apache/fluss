@@ -259,8 +259,10 @@ public class WriterClient {
 
         TabletServerGateway tabletServerGateway = metadataUpdater.newRandomTabletServerClient();
         return idempotenceEnabled
-                ? new IdempotenceManager(true, maxInflightRequestPerBucket, tabletServerGateway)
-                : new IdempotenceManager(false, maxInflightRequestPerBucket, tabletServerGateway);
+                ? new IdempotenceManager(
+                        true, maxInflightRequestPerBucket, tabletServerGateway, metadataUpdater)
+                : new IdempotenceManager(
+                        false, maxInflightRequestPerBucket, tabletServerGateway, metadataUpdater);
     }
 
     private short configureAcks(boolean idempotenceEnabled) {

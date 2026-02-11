@@ -83,9 +83,10 @@ import java.util.concurrent.CompletableFuture;
 /** A testing implementation of the {@link TabletServerGateway} interface. */
 public class TestingTabletGatewayService extends TestingGatewayService
         implements TabletServerGateway {
+
     @Override
     public ServerType providerType() {
-        return null;
+        return ServerType.TABLET_SERVER;
     }
 
     @Override

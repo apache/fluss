@@ -198,6 +198,7 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
         }
         ApiVersionsResponse response = new ApiVersionsResponse();
         response.addAllApiVersions(apiVersions);
+        response.setServerType(provider.toTypeId());
         return CompletableFuture.completedFuture(response);
     }
 

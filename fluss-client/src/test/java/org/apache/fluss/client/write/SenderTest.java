@@ -124,7 +124,8 @@ final class SenderTest {
                         new IdempotenceManager(
                                 false,
                                 MAX_INFLIGHT_REQUEST_PER_BUCKET,
-                                metadataUpdater.newRandomTabletServerClient()),
+                                metadataUpdater.newRandomTabletServerClient(),
+                                metadataUpdater),
                         maxRetries,
                         0);
         // do a successful retry.
@@ -855,7 +856,8 @@ final class SenderTest {
         return new IdempotenceManager(
                 idempotenceEnabled,
                 MAX_INFLIGHT_REQUEST_PER_BUCKET,
-                metadataUpdater.newRandomTabletServerClient());
+                metadataUpdater.newRandomTabletServerClient(),
+                metadataUpdater);
     }
 
     private static boolean hasIdempotentRecords(TableBucket tb, ProduceLogRequest request) {
