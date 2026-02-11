@@ -464,9 +464,11 @@ CREATE TABLE test_last_value  (
 
 
 INSERT INTO test_last_value VALUES
-    (1, 'online', TIMESTAMP '2024-01-01 10:00:00'),
-    (1, 'offline', TIMESTAMP '2024-01-01 11:00:00'),
-    (1, null, TIMESTAMP '2024-01-01 12:00:00');  -- Null overwrites previous 'offline' value
+    (1, 'online', TIMESTAMP '2024-01-01 10:00:00');
+INSERT INTO test_last_value VALUES
+    (1, 'offline', TIMESTAMP '2024-01-01 11:00:00');
+INSERT INTO test_last_value VALUES
+    (1, CAST(NULL AS STRING), TIMESTAMP '2024-01-01 12:00:00');  -- Null overwrites previous 'offline' value
 
 SELECT * FROM test_last_value WHERE id = 1;
 +------------+---------+---------------------+
@@ -536,9 +538,11 @@ CREATE TABLE test_last_value_ignore_nulls  (
 
 
 INSERT INTO test_last_value_ignore_nulls VALUES
-    (1, 'user@example.com', '123-456'),
-    (1, null, '789-012'),  -- Null is ignored, email retains previous value
-    (1, 'new@example.com', null);
+    (1, 'user@example.com', '123-456');
+INSERT INTO test_last_value_ignore_nulls VALUES
+    (1, CAST(NULL AS STRING), '789-012');  -- Null is ignored, email retains previous value
+INSERT INTO test_last_value_ignore_nulls VALUES
+    (1, 'new@example.com', CAST(NULL AS STRING));
 
 SELECT * FROM test_last_value_ignore_nulls WHERE id = 1;
 +------------+-------------------+---------+
@@ -669,9 +673,11 @@ CREATE TABLE test_first_value_ignore_nulls  (
 );
 
 INSERT INTO test_first_value_ignore_nulls VALUES
-    (1, null, null),
-    (1, 'user@example.com', '2024-01-01 10:00:00'),
-    (1, 'other@example.com', '2024-01-02 10:00:00'); -- Only the first non-null value is retained
+    (1, CAST(NULL AS STRING), CAST(NULL AS TIMESTAMP(3)));
+INSERT INTO test_first_value_ignore_nulls VALUES
+    (1, 'user@example.com', TIMESTAMP '2024-01-01 10:00:00');
+INSERT INTO test_first_value_ignore_nulls VALUES
+    (1, 'other@example.com', TIMESTAMP '2024-01-02 10:00:00'); -- Only the first non-null value is retained
 
 SELECT * FROM test_first_value_ignore_nulls WHERE id = 1;
 +------------+-------------------+---------------------+
