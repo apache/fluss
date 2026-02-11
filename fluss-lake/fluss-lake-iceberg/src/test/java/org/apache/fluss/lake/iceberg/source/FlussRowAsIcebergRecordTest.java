@@ -336,13 +336,24 @@ class FlussRowAsIcebergRecordTest {
                                                 "ids",
                                                 Types.ListType.ofRequired(
                                                         10, Types.IntegerType.get())))),
+                        // array of row (ARRAY<ROW<type STRING, value STRING>>)
+                        Types.NestedField.required(
+                                11,
+                                "contacts",
+                                Types.ListType.ofRequired(
+                                        12,
+                                        Types.StructType.of(
+                                                Types.NestedField.required(
+                                                        13, "type", Types.StringType.get()),
+                                                Types.NestedField.required(
+                                                        14, "value", Types.StringType.get())))),
                         // nullable row
                         Types.NestedField.optional(
-                                11,
+                                15,
                                 "nullable_row",
                                 Types.StructType.of(
                                         Types.NestedField.required(
-                                                12, "id", Types.IntegerType.get()))));
+                                                16, "id", Types.IntegerType.get()))));
 
         RowType flussRowType =
                 RowType.of(
@@ -360,10 +371,15 @@ class FlussRowAsIcebergRecordTest {
                                                 DataTypes.FIELD("flag", DataTypes.BOOLEAN())))),
                         // row_with array
                         DataTypes.ROW(DataTypes.FIELD("ids", DataTypes.ARRAY(DataTypes.INT()))),
+                        // array of row
+                        DataTypes.ARRAY(
+                                DataTypes.ROW(
+                                        DataTypes.FIELD("type", DataTypes.STRING()),
+                                        DataTypes.FIELD("value", DataTypes.STRING()))),
                         // nullable row
                         DataTypes.ROW(DataTypes.FIELD("id", DataTypes.INT())));
 
-        GenericRow genericRow = new GenericRow(4);
+        GenericRow genericRow = new GenericRow(5);
 
         // Simple Row
         GenericRow simpleRow = new GenericRow(2);
@@ -385,8 +401,17 @@ class FlussRowAsIcebergRecordTest {
         rowWithArray.setField(0, new GenericArray(new int[] {1, 2, 3}));
         genericRow.setField(2, rowWithArray);
 
+        // Array of Row
+        GenericRow contact1 = new GenericRow(2);
+        contact1.setField(0, BinaryString.fromString("email"));
+        contact1.setField(1, BinaryString.fromString("user@example.com"));
+        GenericRow contact2 = new GenericRow(2);
+        contact2.setField(0, BinaryString.fromString("phone"));
+        contact2.setField(1, BinaryString.fromString("123-456-7890"));
+        genericRow.setField(3, new GenericArray(new Object[] {contact1, contact2}));
+
         // Nullable Row
-        genericRow.setField(3, null);
+        genericRow.setField(4, null);
 
         FlussRowAsIcebergRecord record = new FlussRowAsIcebergRecord(structType, flussRowType);
         record.internalRow = genericRow;
@@ -411,8 +436,19 @@ class FlussRowAsIcebergRecordTest {
         assertThat(ids.get(1)).isEqualTo(2);
         assertThat(ids.get(2)).isEqualTo(3);
 
+        // Verify Array of Row (ARRAY<ROW<type STRING, value STRING>>)
+        List<?> contacts = (List<?>) record.get(3);
+        assertThat(contacts).isNotNull();
+        assertThat(contacts).hasSize(2);
+        Record icebergContact1 = (Record) contacts.get(0);
+        assertThat(icebergContact1.get(0)).isEqualTo("email");
+        assertThat(icebergContact1.get(1)).isEqualTo("user@example.com");
+        Record icebergContact2 = (Record) contacts.get(1);
+        assertThat(icebergContact2.get(0)).isEqualTo("phone");
+        assertThat(icebergContact2.get(1)).isEqualTo("123-456-7890");
+
         // Verify Nullable Row
-        assertThat(record.get(3)).isNull();
+        assertThat(record.get(4)).isNull();
     }
 
     @SuppressWarnings("unchecked")
