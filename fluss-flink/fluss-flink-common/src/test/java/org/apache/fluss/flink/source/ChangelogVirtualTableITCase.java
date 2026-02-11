@@ -94,19 +94,7 @@ abstract class ChangelogVirtualTableITCase extends AbstractTestBase {
     @BeforeEach
     void before() {
         // Initialize Flink environment
-        execEnv = StreamExecutionEnvironment.getExecutionEnvironment();
-        tEnv = StreamTableEnvironment.create(execEnv, EnvironmentSettings.inStreamingMode());
-
-        // Initialize catalog and database
-        String bootstrapServers = String.join(",", clientConf.get(ConfigOptions.BOOTSTRAP_SERVERS));
-        tEnv.executeSql(
-                String.format(
-                        "create catalog %s with ('type' = 'fluss', '%s' = '%s')",
-                        CATALOG_NAME, BOOTSTRAP_SERVERS.key(), bootstrapServers));
-        tEnv.executeSql("use catalog " + CATALOG_NAME);
-        tEnv.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 1);
-        tEnv.executeSql("create database " + DEFAULT_DB);
-        tEnv.useDatabase(DEFAULT_DB);
+        tEnv = initTableEnvironment(null);
         // reset clock before each test
         CLOCK.advanceTime(-CLOCK.milliseconds(), TimeUnit.MILLISECONDS);
     }
@@ -136,7 +124,7 @@ abstract class ChangelogVirtualTableITCase extends AbstractTestBase {
                         "create catalog %s with ('type' = 'fluss', '%s' = '%s')",
                         CATALOG_NAME, BOOTSTRAP_SERVERS.key(), bootstrapServers));
         tEnv.executeSql("use catalog " + CATALOG_NAME);
-        tEnv.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 2);
+        tEnv.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 1);
         tEnv.executeSql("create database " + DEFAULT_DB);
         tEnv.useDatabase(DEFAULT_DB);
 
@@ -411,22 +399,42 @@ abstract class ChangelogVirtualTableITCase extends AbstractTestBase {
                 .containsExactly(
                         "+I[insert, 3, 1970-01-01T00:00:00.200Z, 4, v4]",
                         "+I[insert, 4, 1970-01-01T00:00:00.200Z, 5, v5]");
-        // 3. Test scan.startup.mode='latest' - should only read new records after subscription
-        // Create a new source table with 1 bucket for consistent log_offset numbers
+    }
+
+    @Test
+    public void testChangelogWithLatestScanStartupMode() throws Exception {
+        // Create source and result tables
         tEnv.executeSql(
-                "CREATE TABLE startup_mode_test_mode_latest ("
+                "CREATE TABLE source_table ("
                         + "  id INT NOT NULL,"
                         + "  name STRING,"
                         + "  PRIMARY KEY (id) NOT ENFORCED"
                         + ") WITH ('bucket.num' = '1')");
-        tablePath = TablePath.of(DEFAULT_DB, "startup_mode_test_mode_latest");
-        // Pre-populate the new source table with some existing records.
+
+        tEnv.executeSql(
+                "CREATE TABLE result_table ("
+                        + "  id INT NOT NULL,"
+                        + "  name STRING,"
+                        + "  PRIMARY KEY (id) NOT ENFORCED"
+                        + ")");
+
+        TablePath sourcePath = TablePath.of(DEFAULT_DB, "source_table");
+
+        // Write first batch of data.
+        CLOCK.advanceTime(Duration.ofMillis(100));
+        writeRows(conn, sourcePath, Arrays.asList(row(1, "v1"), row(2, "v2"), row(3, "v3")), false);
+
+        // Pre-populate the result table with some existing records.
+        String optionsLatest = "/*+ OPTIONS('scan.startup.mode' = 'latest') */";
         TableResult insertResult =
                 tEnv.executeSql(
-                        "INSERT INTO "
-                                + tablePath.getTableName()
-                                + " SELECT * FROM startup_mode_test");
-        // Stop the job with save point
+                        "INSERT INTO result_table SELECT id, name FROM source_table$changelog "
+                                + optionsLatest);
+
+        CloseableIterator<Row> rowIterLatest =
+                tEnv.executeSql("SELECT * FROM result_table").collect();
+
+        // now, stop the job with save point
         String savepointPath =
                 insertResult
                         .getJobClient()
@@ -436,41 +444,25 @@ abstract class ChangelogVirtualTableITCase extends AbstractTestBase {
                                 savepointDir.getAbsolutePath(),
                                 SavepointFormatType.CANONICAL)
                         .get();
+
         // Init env with savepoint Path
         tEnv = initTableEnvironment(savepointPath);
-        // Recreate a table
-        tEnv.executeSql(
-                "CREATE TABLE startup_mode_test_mode_latest ("
-                        + " id INT NOT NULL,"
-                        + " name STRING,"
-                        + " PRIMARY KEY (id) NOT ENFORCED"
-                        + ") WITH ('bucket.num' = '1')");
-        // Write a new record into the source table
-        tablePath = TablePath.of(DEFAULT_DB, "startup_mode_test_mode_latest");
+        insertResult =
+                tEnv.executeSql(
+                        "INSERT INTO result_table SELECT id, name FROM source_table$changelog "
+                                + optionsLatest);
+
+        // Write the third batch of data, ensure to get the lastest value
         CLOCK.advanceTime(Duration.ofMillis(100));
-        writeRows(conn, tablePath, Arrays.asList(row(6, "v6")), false);
+        writeRows(conn, sourcePath, Arrays.asList(row(4, "v4"), row(5, "v5")), false);
 
-        // Recreate a table
-        tEnv.executeSql(
-                "CREATE TABLE "
-                        + tablePath.getTableName()
-                        + " ("
-                        + " id INT NOT NULL,"
-                        + " name STRING,"
-                        + " PRIMARY KEY (id) NOT ENFORCED"
-                        + ") WITH ('bucket.num' = '1')");
+        // Should contain records from the third batch only
+        List<String> latestResults = collectRowsWithTimeout(rowIterLatest, 2, true);
+        assertThat(latestResults).hasSize(2);
+        assertThat(latestResults).containsExactly("+I[4, v4]", "+I[5, v5]");
 
-        String optionsLatest = " /*+ OPTIONS('scan.startup.mode' = 'latest') */";
-        String queryLatest =
-                "SELECT _change_type, id, name FROM "
-                        + tablePath.getTableName()
-                        + "$changelog"
-                        + optionsLatest;
-        CloseableIterator<Row> rowIterLatest = tEnv.executeSql(queryLatest).collect();
-
-        List<String> latestResults = collectRowsWithTimeout(rowIterLatest, 1, true);
-        assertThat(latestResults).hasSize(1);
-        assertThat(latestResults.get(0)).isEqualTo("+I[insert, 6, v6]");
+        // Cleanup job
+        insertResult.getJobClient().get().cancel().get();
     }
 
     @Test
