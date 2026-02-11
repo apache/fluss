@@ -38,26 +38,28 @@ cd fluss-quickstart-paimon
 mkdir -p lib opt
 
 # Flink connectors
-wget -O lib/flink-faker-0.5.3.jar https://github.com/knaufk/flink-faker/releases/download/v0.5.3/flink-faker-0.5.3.jar
-wget -O "lib/fluss-flink-1.20-$FLUSS_DOCKER_VERSION$.jar" "https://repo1.maven.org/maven2/org/apache/fluss/fluss-flink-1.20/$FLUSS_DOCKER_VERSION$/fluss-flink-1.20-$FLUSS_DOCKER_VERSION$.jar"
-wget -O "lib/paimon-flink-1.20-$PAIMON_VERSION$.jar" "https://repo1.maven.org/maven2/org/apache/paimon/paimon-flink-1.20/$PAIMON_VERSION$/paimon-flink-1.20-$PAIMON_VERSION$.jar"
+curl -fL -o lib/flink-faker-0.5.3.jar https://github.com/knaufk/flink-faker/releases/download/v0.5.3/flink-faker-0.5.3.jar
+curl -fL -o "lib/fluss-flink-1.20-$FLUSS_DOCKER_VERSION$.jar" "https://repo1.maven.org/maven2/org/apache/fluss/fluss-flink-1.20/$FLUSS_DOCKER_VERSION$/fluss-flink-1.20-$FLUSS_DOCKER_VERSION$.jar"
+curl -fL -o "lib/paimon-flink-1.20-$PAIMON_VERSION$.jar" "https://repo1.maven.org/maven2/org/apache/paimon/paimon-flink-1.20/$PAIMON_VERSION$/paimon-flink-1.20-$PAIMON_VERSION$.jar"
 
 # Fluss lake plugin
-wget -O "lib/fluss-lake-paimon-$FLUSS_DOCKER_VERSION$.jar" "https://repo1.maven.org/maven2/org/apache/fluss/fluss-lake-paimon/$FLUSS_DOCKER_VERSION$/fluss-lake-paimon-$FLUSS_DOCKER_VERSION$.jar"
+curl -fL -o "lib/fluss-lake-paimon-$FLUSS_DOCKER_VERSION$.jar" "https://repo1.maven.org/maven2/org/apache/fluss/fluss-lake-paimon/$FLUSS_DOCKER_VERSION$/fluss-lake-paimon-$FLUSS_DOCKER_VERSION$.jar"
 
 # Paimon bundle jar
-wget -O "lib/paimon-bundle-$PAIMON_VERSION$.jar" "https://repo.maven.apache.org/maven2/org/apache/paimon/paimon-bundle/$PAIMON_VERSION$/paimon-bundle-$PAIMON_VERSION$.jar"
+curl -fL -o "lib/paimon-bundle-$PAIMON_VERSION$.jar" "https://repo.maven.apache.org/maven2/org/apache/paimon/paimon-bundle/$PAIMON_VERSION$/paimon-bundle-$PAIMON_VERSION$.jar"
 
 # Hadoop bundle jar
-wget -O lib/flink-shaded-hadoop-2-uber-2.8.3-10.0.jar https://repo.maven.apache.org/maven2/org/apache/flink/flink-shaded-hadoop-2-uber/2.8.3-10.0/flink-shaded-hadoop-2-uber-2.8.3-10.0.jar
+curl -fL -o lib/flink-shaded-hadoop-2-uber-2.8.3-10.0.jar https://repo.maven.apache.org/maven2/org/apache/flink/flink-shaded-hadoop-2-uber/2.8.3-10.0/flink-shaded-hadoop-2-uber-2.8.3-10.0.jar
+
+# AWS S3 support
+curl -fL -o "lib/paimon-s3-$PAIMON_VERSION$.jar" "https://repo.maven.apache.org/maven2/org/apache/paimon/paimon-s3/$PAIMON_VERSION$/paimon-s3-$PAIMON_VERSION$.jar"
 
 # Tiering service
-wget -O "opt/fluss-flink-tiering-$FLUSS_DOCKER_VERSION$.jar" "https://repo1.maven.org/maven2/org/apache/fluss/fluss-flink-tiering/$FLUSS_DOCKER_VERSION$/fluss-flink-tiering-$FLUSS_DOCKER_VERSION$.jar"
+curl -fL -o "opt/fluss-flink-tiering-$FLUSS_DOCKER_VERSION$.jar" "https://repo1.maven.org/maven2/org/apache/fluss/fluss-flink-tiering/$FLUSS_DOCKER_VERSION$/fluss-flink-tiering-$FLUSS_DOCKER_VERSION$.jar"
 ```
 
 :::info
 You can add more jars to this `lib` directory based on your requirements:
-- **Cloud storage support**: For AWS S3 integration with Paimon, add the corresponding [paimon-s3](https://repo.maven.apache.org/maven2/org/apache/paimon/paimon-s3/$PAIMON_VERSION$/paimon-s3-$PAIMON_VERSION$.jar)
 - **Other catalog backends**: Add jars needed for alternative Paimon catalog implementations (e.g., Hive, JDBC)
   :::
 
@@ -65,23 +67,59 @@ You can add more jars to this `lib` directory based on your requirements:
 
 ```yaml
 services:
+  #begin RustFS (S3-compatible storage)
+  rustfs:
+    image: rustfs/rustfs:latest
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      - RUSTFS_ACCESS_KEY=rustfsadmin
+      - RUSTFS_SECRET_KEY=rustfsadmin
+      - RUSTFS_CONSOLE_ENABLE=true
+    volumes:
+      - rustfs-data:/data
+    command: /data
+  rustfs-init:
+    image: minio/mc
+    depends_on:
+      - rustfs
+    entrypoint: >
+      /bin/sh -c "
+      until mc alias set rustfs http://rustfs:9000 rustfsadmin rustfsadmin; do
+        echo 'Waiting for RustFS...';
+        sleep 1;
+      done;
+      mc mb --ignore-existing rustfs/fluss;
+      "
+  #end
   coordinator-server:
     image: apache/fluss:$FLUSS_DOCKER_VERSION$
     command: coordinatorServer
     depends_on:
-      - zookeeper
+      zookeeper:
+        condition: service_started
+      rustfs-init:
+        condition: service_completed_successfully
     environment:
       - |
         FLUSS_PROPERTIES=
         zookeeper.address: zookeeper:2181
         bind.listeners: FLUSS://coordinator-server:9123
-        remote.data.dir: /tmp/fluss/remote-data
+        remote.data.dir: s3://fluss/remote-data
+        s3.endpoint: http://rustfs:9000
+        s3.access-key: rustfsadmin
+        s3.secret-key: rustfsadmin
+        s3.path.style.access: true
         datalake.format: paimon
         datalake.paimon.metastore: filesystem
-        datalake.paimon.warehouse: /tmp/paimon
+        datalake.paimon.warehouse: s3://fluss/paimon
+        datalake.paimon.s3.endpoint: http://rustfs:9000
+        datalake.paimon.s3.access-key: rustfsadmin
+        datalake.paimon.s3.secret-key: rustfsadmin
+        datalake.paimon.s3.path.style.access: true
     volumes:
-      - shared-tmpfs:/tmp/paimon
-      - shared-tmpfs:/tmp/fluss
+      - ./lib/paimon-s3-$PAIMON_VERSION$.jar:/opt/fluss/plugins/paimon/paimon-s3-$PAIMON_VERSION$.jar
   tablet-server:
     image: apache/fluss:$FLUSS_DOCKER_VERSION$
     command: tabletServer
@@ -93,14 +131,21 @@ services:
         zookeeper.address: zookeeper:2181
         bind.listeners: FLUSS://tablet-server:9123
         data.dir: /tmp/fluss/data
-        remote.data.dir: /tmp/fluss/remote-data
+        remote.data.dir: s3://fluss/remote-data
+        s3.endpoint: http://rustfs:9000
+        s3.access-key: rustfsadmin
+        s3.secret-key: rustfsadmin
+        s3.path.style.access: true
         kv.snapshot.interval: 0s
         datalake.format: paimon
         datalake.paimon.metastore: filesystem
-        datalake.paimon.warehouse: /tmp/paimon
+        datalake.paimon.warehouse: s3://fluss/paimon
+        datalake.paimon.s3.endpoint: http://rustfs:9000
+        datalake.paimon.s3.access-key: rustfsadmin
+        datalake.paimon.s3.secret-key: rustfsadmin
+        datalake.paimon.s3.path.style.access: true
     volumes:
-      - shared-tmpfs:/tmp/paimon
-      - shared-tmpfs:/tmp/fluss
+      - ./lib/paimon-s3-$PAIMON_VERSION$.jar:/opt/fluss/plugins/paimon/paimon-s3-$PAIMON_VERSION$.jar
   zookeeper:
     restart: always
     image: zookeeper:3.9.2
@@ -110,8 +155,7 @@ services:
       - "8083:8081"
     entrypoint: ["/bin/bash", "-c"]
     command: >
-      "sed -i 's/exec $(drop_privs_cmd)//g' /docker-entrypoint.sh &&
-       cp /tmp/jars/*.jar /opt/flink/lib/ 2>/dev/null || true;
+      "cp /tmp/jars/*.jar /opt/flink/lib/ 2>/dev/null || true;
        cp /tmp/opt/*.jar /opt/flink/opt/ 2>/dev/null || true;
        /docker-entrypoint.sh jobmanager"
     environment:
@@ -119,8 +163,6 @@ services:
         FLINK_PROPERTIES=
         jobmanager.rpc.address: jobmanager
     volumes:
-      - shared-tmpfs:/tmp/paimon
-      - shared-tmpfs:/tmp/fluss
       - ./lib:/tmp/jars
       - ./opt:/tmp/opt
   taskmanager:
@@ -129,8 +171,7 @@ services:
       - jobmanager
     entrypoint: ["/bin/bash", "-c"]
     command: >
-      "sed -i 's/exec $(drop_privs_cmd)//g' /docker-entrypoint.sh &&
-       cp /tmp/jars/*.jar /opt/flink/lib/ 2>/dev/null || true;
+      "cp /tmp/jars/*.jar /opt/flink/lib/ 2>/dev/null || true;
        cp /tmp/opt/*.jar /opt/flink/opt/ 2>/dev/null || true;
        /docker-entrypoint.sh taskmanager"
     environment:
@@ -139,23 +180,24 @@ services:
         jobmanager.rpc.address: jobmanager
         taskmanager.numberOfTaskSlots: 10
         taskmanager.memory.process.size: 2048m
+        taskmanager.memory.task.off-heap.size: 128m
     volumes:
-      - shared-tmpfs:/tmp/paimon
-      - shared-tmpfs:/tmp/fluss
       - ./lib:/tmp/jars
       - ./opt:/tmp/opt
 
 volumes:
-  shared-tmpfs:
-    driver: local
-    driver_opts:
-      type: "tmpfs"
-      device: "tmpfs"
+  rustfs-data:
 ```
 
 The Docker Compose environment consists of the following containers:
 - **Fluss Cluster:** a Fluss `CoordinatorServer`, a Fluss `TabletServer` and a `ZooKeeper` server.
 - **Flink Cluster**: a Flink `JobManager` and a Flink `TaskManager` container to execute queries.
+- **RustFS**: an S3-compatible storage system used both as Fluss remote storage and Paimon's filesystem warehouse.
+
+
+:::tip
+[RustFS](https://github.com/rustfs/rustfs) is used as replacement for S3 in this quickstart example, for your production setup you may want to configure this to use cloud file system. See [here](/maintenance/filesystems/overview.md) for information on how to setup cloud file systems
+:::
 
 4. To start all containers, run:
 ```shell
@@ -198,25 +240,30 @@ cd fluss-quickstart-iceberg
 mkdir -p lib opt
 
 # Flink connectors
-wget -O lib/flink-faker-0.5.3.jar https://github.com/knaufk/flink-faker/releases/download/v0.5.3/flink-faker-0.5.3.jar
-wget -O "lib/fluss-flink-1.20-$FLUSS_DOCKER_VERSION$.jar" "https://repo1.maven.org/maven2/org/apache/fluss/fluss-flink-1.20/$FLUSS_DOCKER_VERSION$/fluss-flink-1.20-$FLUSS_DOCKER_VERSION$.jar"
-wget -O lib/iceberg-flink-runtime-1.20-1.10.1.jar "https://repo1.maven.org/maven2/org/apache/iceberg/iceberg-flink-runtime-1.20/1.10.1/iceberg-flink-runtime-1.20-1.10.1.jar"
+curl -fL -o lib/flink-faker-0.5.3.jar https://github.com/knaufk/flink-faker/releases/download/v0.5.3/flink-faker-0.5.3.jar
+curl -fL -o "lib/fluss-flink-1.20-$FLUSS_DOCKER_VERSION$.jar" "https://repo1.maven.org/maven2/org/apache/fluss/fluss-flink-1.20/$FLUSS_DOCKER_VERSION$/fluss-flink-1.20-$FLUSS_DOCKER_VERSION$.jar"
+curl -fL -o lib/iceberg-flink-runtime-1.20-1.10.1.jar https://repo1.maven.org/maven2/org/apache/iceberg/iceberg-flink-runtime-1.20/1.10.1/iceberg-flink-runtime-1.20-1.10.1.jar
 
 # Fluss lake plugin
-wget -O "lib/fluss-lake-iceberg-$FLUSS_DOCKER_VERSION$.jar" "https://repo1.maven.org/maven2/org/apache/fluss/fluss-lake-iceberg/$FLUSS_DOCKER_VERSION$/fluss-lake-iceberg-$FLUSS_DOCKER_VERSION$.jar"
+curl -fL -o "lib/fluss-lake-iceberg-$FLUSS_DOCKER_VERSION$.jar" "https://repo1.maven.org/maven2/org/apache/fluss/fluss-lake-iceberg/$FLUSS_DOCKER_VERSION$/fluss-lake-iceberg-$FLUSS_DOCKER_VERSION$.jar"
 
-# Hadoop filesystem support
-wget -O lib/hadoop-apache-3.3.5-2.jar https://repo1.maven.org/maven2/io/trino/hadoop/hadoop-apache/3.3.5-2/hadoop-apache-3.3.5-2.jar
-wget -O lib/failsafe-3.3.2.jar https://repo1.maven.org/maven2/dev/failsafe/failsafe/3.3.2/failsafe-3.3.2.jar
+# Iceberg AWS support (S3FileIO + AWS SDK)
+curl -fL -o lib/iceberg-aws-1.10.1.jar https://repo1.maven.org/maven2/org/apache/iceberg/iceberg-aws/1.10.1/iceberg-aws-1.10.1.jar
+curl -fL -o lib/iceberg-aws-bundle-1.10.1.jar https://repo1.maven.org/maven2/org/apache/iceberg/iceberg-aws-bundle/1.10.1/iceberg-aws-bundle-1.10.1.jar
+
+# JDBC catalog driver
+curl -fL -o lib/postgresql-42.7.4.jar https://repo1.maven.org/maven2/org/postgresql/postgresql/42.7.4/postgresql-42.7.4.jar
+
+# Hadoop client (required by Iceberg's Flink integration)
+curl -fL -o lib/hadoop-client-api-3.3.5.jar https://repo1.maven.org/maven2/org/apache/hadoop/hadoop-client-api/3.3.5/hadoop-client-api-3.3.5.jar
+curl -fL -o lib/hadoop-client-runtime-3.3.5.jar https://repo1.maven.org/maven2/org/apache/hadoop/hadoop-client-runtime/3.3.5/hadoop-client-runtime-3.3.5.jar
 
 # Tiering service
-wget -O "opt/fluss-flink-tiering-$FLUSS_DOCKER_VERSION$.jar" "https://repo1.maven.org/maven2/org/apache/fluss/fluss-flink-tiering/$FLUSS_DOCKER_VERSION$/fluss-flink-tiering-$FLUSS_DOCKER_VERSION$.jar"
+curl -fL -o "opt/fluss-flink-tiering-$FLUSS_DOCKER_VERSION$.jar" "https://repo1.maven.org/maven2/org/apache/fluss/fluss-flink-tiering/$FLUSS_DOCKER_VERSION$/fluss-flink-tiering-$FLUSS_DOCKER_VERSION$.jar"
 ```
 
 :::info
 You can add more jars to this `lib` directory based on your requirements:
-- **Cloud storage support**: For AWS S3 integration with Iceberg, add the corresponding Iceberg bundle jars (e.g., `iceberg-aws-bundle`)
-- **Custom Hadoop configurations**: Add jars for specific HDFS distributions or custom authentication mechanisms
 - **Other catalog backends**: Add jars needed for alternative Iceberg catalog implementations (e.g., Rest, Hive, Glue)
 :::
 
@@ -224,25 +271,81 @@ You can add more jars to this `lib` directory based on your requirements:
 
 ```yaml
 services:
+  #begin RustFS (S3-compatible storage)
+  rustfs:
+    image: rustfs/rustfs:latest
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      - RUSTFS_ACCESS_KEY=rustfsadmin
+      - RUSTFS_SECRET_KEY=rustfsadmin
+      - RUSTFS_CONSOLE_ENABLE=true
+    volumes:
+      - rustfs-data:/data
+    command: /data
+  rustfs-init:
+    image: minio/mc
+    depends_on:
+      - rustfs
+    entrypoint: >
+      /bin/sh -c "
+      until mc alias set rustfs http://rustfs:9000 rustfsadmin rustfsadmin; do
+        echo 'Waiting for RustFS...';
+        sleep 1;
+      done;
+      mc mb --ignore-existing rustfs/fluss;
+      "
+  #end
+  postgres:
+    image: postgres:17
+    environment:
+      - POSTGRES_USER=iceberg
+      - POSTGRES_PASSWORD=iceberg
+      - POSTGRES_DB=iceberg
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U iceberg"]
+      interval: 3s
+      timeout: 3s
+      retries: 5
   coordinator-server:
     image: apache/fluss:$FLUSS_DOCKER_VERSION$
     command: coordinatorServer
     depends_on:
-      - zookeeper
+      postgres:
+        condition: service_healthy
+      zookeeper:
+        condition: service_started
+      rustfs-init:
+        condition: service_completed_successfully
     environment:
       - |
         FLUSS_PROPERTIES=
         zookeeper.address: zookeeper:2181
         bind.listeners: FLUSS://coordinator-server:9123
-        remote.data.dir: /tmp/fluss/remote-data
+        remote.data.dir: s3://fluss/remote-data
+        s3.endpoint: http://rustfs:9000
+        s3.access-key: rustfsadmin
+        s3.secret-key: rustfsadmin
+        s3.path.style.access: true
         datalake.format: iceberg
-        datalake.iceberg.type: hadoop
-        datalake.iceberg.warehouse: /tmp/iceberg
+        datalake.iceberg.catalog-impl: org.apache.iceberg.jdbc.JdbcCatalog
+        datalake.iceberg.name: fluss_catalog
+        datalake.iceberg.uri: jdbc:postgresql://postgres:5432/iceberg
+        datalake.iceberg.jdbc.user: iceberg
+        datalake.iceberg.jdbc.password: iceberg
+        datalake.iceberg.warehouse: s3://fluss/iceberg
+        datalake.iceberg.io-impl: org.apache.iceberg.aws.s3.S3FileIO
+        datalake.iceberg.s3.endpoint: http://rustfs:9000
+        datalake.iceberg.s3.access-key-id: rustfsadmin
+        datalake.iceberg.s3.secret-access-key: rustfsadmin
+        datalake.iceberg.s3.path-style-access: true
+        datalake.iceberg.client.region: us-east-1
     volumes:
-      - shared-tmpfs:/tmp/iceberg
-      - shared-tmpfs:/tmp/fluss
       - ./lib/fluss-lake-iceberg-$FLUSS_DOCKER_VERSION$.jar:/opt/fluss/plugins/iceberg/fluss-lake-iceberg-$FLUSS_DOCKER_VERSION$.jar
-      - ./lib/hadoop-apache-3.3.5-2.jar:/opt/fluss/plugins/iceberg/hadoop-apache-3.3.5-2.jar
+      - ./lib/iceberg-aws-1.10.1.jar:/opt/fluss/plugins/iceberg/iceberg-aws-1.10.1.jar
+      - ./lib/iceberg-aws-bundle-1.10.1.jar:/opt/fluss/plugins/iceberg/iceberg-aws-bundle-1.10.1.jar
+      - ./lib/postgresql-42.7.4.jar:/opt/fluss/plugins/iceberg/postgresql-42.7.4.jar
   tablet-server:
     image: apache/fluss:$FLUSS_DOCKER_VERSION$
     command: tabletServer
@@ -254,14 +357,25 @@ services:
         zookeeper.address: zookeeper:2181
         bind.listeners: FLUSS://tablet-server:9123
         data.dir: /tmp/fluss/data
-        remote.data.dir: /tmp/fluss/remote-data
         kv.snapshot.interval: 0s
+        remote.data.dir: s3://fluss/remote-data
+        s3.endpoint: http://rustfs:9000
+        s3.access-key: rustfsadmin
+        s3.secret-key: rustfsadmin
+        s3.path.style.access: true
         datalake.format: iceberg
-        datalake.iceberg.type: hadoop
-        datalake.iceberg.warehouse: /tmp/iceberg
-    volumes:
-      - shared-tmpfs:/tmp/iceberg
-      - shared-tmpfs:/tmp/fluss
+        datalake.iceberg.catalog-impl: org.apache.iceberg.jdbc.JdbcCatalog
+        datalake.iceberg.name: fluss_catalog
+        datalake.iceberg.uri: jdbc:postgresql://postgres:5432/iceberg
+        datalake.iceberg.jdbc.user: iceberg
+        datalake.iceberg.jdbc.password: iceberg
+        datalake.iceberg.warehouse: s3://fluss/iceberg
+        datalake.iceberg.io-impl: org.apache.iceberg.aws.s3.S3FileIO
+        datalake.iceberg.s3.endpoint: http://rustfs:9000
+        datalake.iceberg.s3.access-key-id: rustfsadmin
+        datalake.iceberg.s3.secret-access-key: rustfsadmin
+        datalake.iceberg.s3.path-style-access: true
+        datalake.iceberg.client.region: us-east-1
   zookeeper:
     restart: always
     image: zookeeper:3.9.2
@@ -271,8 +385,7 @@ services:
       - "8083:8081"
     entrypoint: ["/bin/bash", "-c"]
     command: >
-      "sed -i 's/exec $(drop_privs_cmd)//g' /docker-entrypoint.sh &&
-       cp /tmp/jars/*.jar /opt/flink/lib/ 2>/dev/null || true;
+      "cp /tmp/jars/*.jar /opt/flink/lib/ 2>/dev/null || true;
        cp /tmp/opt/*.jar /opt/flink/opt/ 2>/dev/null || true;
        /docker-entrypoint.sh jobmanager"
     environment:
@@ -280,8 +393,6 @@ services:
         FLINK_PROPERTIES=
         jobmanager.rpc.address: jobmanager
     volumes:
-      - shared-tmpfs:/tmp/iceberg
-      - shared-tmpfs:/tmp/fluss
       - ./lib:/tmp/jars
       - ./opt:/tmp/opt
   taskmanager:
@@ -290,8 +401,7 @@ services:
       - jobmanager
     entrypoint: ["/bin/bash", "-c"]
     command: >
-      "sed -i 's/exec $(drop_privs_cmd)//g' /docker-entrypoint.sh &&
-       cp /tmp/jars/*.jar /opt/flink/lib/ 2>/dev/null || true;
+      "cp /tmp/jars/*.jar /opt/flink/lib/ 2>/dev/null || true;
        cp /tmp/opt/*.jar /opt/flink/opt/ 2>/dev/null || true;
        /docker-entrypoint.sh taskmanager"
     environment:
@@ -300,23 +410,24 @@ services:
         jobmanager.rpc.address: jobmanager
         taskmanager.numberOfTaskSlots: 10
         taskmanager.memory.process.size: 2048m
+        taskmanager.memory.task.off-heap.size: 128m
     volumes:
-      - shared-tmpfs:/tmp/iceberg
-      - shared-tmpfs:/tmp/fluss
       - ./lib:/tmp/jars
       - ./opt:/tmp/opt
 
 volumes:
-  shared-tmpfs:
-    driver: local
-    driver_opts:
-      type: "tmpfs"
-      device: "tmpfs"
+  rustfs-data:
 ```
 
 The Docker Compose environment consists of the following containers:
 - **Fluss Cluster:** a Fluss `CoordinatorServer`, a Fluss `TabletServer` and a `ZooKeeper` server.
 - **Flink Cluster**: a Flink `JobManager` and a Flink `TaskManager` container to execute queries.
+- **PostgreSQL**: stores Iceberg catalog metadata (used by `JdbcCatalog`).
+- **RustFS**: an S3-compatible storage system used both as Fluss remote storage and Iceberg's filesystem warehouse.
+
+:::tip
+[RustFS](https://github.com/rustfs/rustfs) is used as replacement for S3 in this quickstart example, for your production setup you may want to configure this to use cloud file system. See [here](/maintenance/filesystems/overview.md) for information on how to setup cloud file systems
+:::
 
 4. To start all containers, run:
 ```shell
@@ -492,12 +603,33 @@ SET 'table.exec.sink.not-null-enforcer'='DROP';
 ## Create Fluss Tables
 ### Create Fluss Catalog
 Use the following SQL to create a Fluss catalog:
+
+<Tabs groupId="lake-tabs">
+  <TabItem value="paimon" label="Paimon" default>
+
 ```sql title="Flink SQL"
 CREATE CATALOG fluss_catalog WITH (
     'type' = 'fluss',
-    'bootstrap.servers' = 'coordinator-server:9123'
+    'bootstrap.servers' = 'coordinator-server:9123',
+    'paimon.s3.access-key' = 'rustfsadmin',
+    'paimon.s3.secret-key' = 'rustfsadmin'
 );
 ```
+  </TabItem>
+
+  <TabItem value="iceberg" label="Iceberg">
+
+```sql title="Flink SQL"
+CREATE CATALOG fluss_catalog WITH (
+    'type' = 'fluss',
+    'bootstrap.servers' = 'coordinator-server:9123',
+    'iceberg.jdbc.password' = 'iceberg',
+    'iceberg.s3.access-key-id' = 'rustfsadmin',
+    'iceberg.s3.secret-access-key' = 'rustfsadmin'
+);
+```
+  </TabItem>
+</Tabs>
 
 ```sql title="Flink SQL"
 USE CATALOG fluss_catalog;
@@ -614,7 +746,11 @@ docker compose exec jobmanager \
     --fluss.bootstrap.servers coordinator-server:9123 \
     --datalake.format paimon \
     --datalake.paimon.metastore filesystem \
-    --datalake.paimon.warehouse /tmp/paimon
+    --datalake.paimon.warehouse s3://fluss/paimon \
+    --datalake.paimon.s3.endpoint http://rustfs:9000 \
+    --datalake.paimon.s3.access.key rustfsadmin \
+    --datalake.paimon.s3.secret.key rustfsadmin \
+    --datalake.paimon.s3.path.style.access true
 ```
 You should see a Flink Job to tier data from Fluss to Paimon running in the [Flink Web UI](http://localhost:8083/).
 
@@ -627,11 +763,21 @@ Open a new terminal, navigate to the `fluss-quickstart-iceberg` directory, and e
 ```shell
 docker compose exec jobmanager \
     /opt/flink/bin/flink run \
-    /opt/flink/opt/fluss-flink-tiering.jar \
+    /opt/flink/opt/fluss-flink-tiering-$FLUSS_VERSION$.jar \
     --fluss.bootstrap.servers coordinator-server:9123 \
     --datalake.format iceberg \
-    --datalake.iceberg.type hadoop \
-    --datalake.iceberg.warehouse /tmp/iceberg
+    --datalake.iceberg.catalog-impl org.apache.iceberg.jdbc.JdbcCatalog \
+    --datalake.iceberg.name fluss_catalog \
+    --datalake.iceberg.uri "jdbc:postgresql://postgres:5432/iceberg" \
+    --datalake.iceberg.jdbc.user iceberg \
+    --datalake.iceberg.jdbc.password iceberg \
+    --datalake.iceberg.warehouse "s3://fluss/iceberg" \
+    --datalake.iceberg.io-impl org.apache.iceberg.aws.s3.S3FileIO \
+    --datalake.iceberg.s3.endpoint "http://rustfs:9000" \
+    --datalake.iceberg.s3.access-key-id rustfsadmin \
+    --datalake.iceberg.s3.secret-access-key rustfsadmin \
+    --datalake.iceberg.s3.path-style-access true \
+    --datalake.iceberg.client.region us-east-1
 ```
 You should see a Flink Job to tier data from Fluss to Iceberg running in the [Flink Web UI](http://localhost:8083/).
 
@@ -888,9 +1034,19 @@ The files adhere to Iceberg's standard format, enabling seamless querying with o
   </TabItem>
 </Tabs>
 
+### Quitting Sql Client
+
+The following command allows you to quit Flink SQL Client.
+```sql title="Flink SQL"
+quit;
+```
+
+### Tiered Storage
+
+You can visit http://localhost:9001/ and sign in with `rustfsadmin` / `rustfsadmin` to view the files stored on tiered storage.
+
 ## Clean up
-After finishing the tutorial, run `exit` to exit Flink SQL CLI Container and then run 
+Run the following to stop all containers.
 ```shell
 docker compose down -v
 ```
-to stop all containers.
