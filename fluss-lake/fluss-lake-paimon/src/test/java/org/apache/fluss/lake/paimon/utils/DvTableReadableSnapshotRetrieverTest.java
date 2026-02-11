@@ -413,6 +413,22 @@ class DvTableReadableSnapshotRetrieverTest {
         // snapshot6 safely since we won't need to search for any earlier snapshots to get readable
         // offsets
         assertThat(readableSnapshotAndOffsets.getEarliestSnapshotIdToKeep()).isEqualTo(6);
+        commitSnapshot(
+                tableId,
+                tablePath,
+                snapshot14,
+                tieredLakeSnapshotEndOffset,
+                retriveReadableSnapshotAndOffsets(tablePath, fileStoreTable, snapshot14));
+
+        // when the compacted snapshot is already registered in ZK,
+        // getReadableSnapshotAndOffsets skips recomputation and returns null.
+        long snapshot15 = writeAndCommitData(fileStoreTable, Collections.emptyMap());
+        DvTableReadableSnapshotRetriever.ReadableSnapshotResult result15 =
+                retriveReadableSnapshotAndOffsets(tablePath, fileStoreTable, snapshot15);
+        assertThat(result15)
+                .as(
+                        "Compacted snapshot 13 is already in ZK, should skip recomputation and return null")
+                .isNull();
     }
 
     @Test
@@ -615,24 +631,11 @@ class DvTableReadableSnapshotRetrieverTest {
                         bucket0, generateRowsForPartition(partition1, bucket0, 3, 6));
         long snapshot9 = writeAndCommitData(fileStoreTable, appendRowsP1More);
         tieredLakeSnapshotEndOffset.put(tbP1B0, 6L);
+        // Snapshot 7 is already registered in Fluss cluster, so the retrieve result is null
+        // (no update needed).
         readableSnapshotAndOffsets =
                 retriveReadableSnapshotAndOffsets(tablePath, fileStoreTable, snapshot9);
-        // readable_snapshot = snapshot7 (unchanged, partition1/bucket0 still has L0 from snapshot9)
-        // readable_offsets: partition0/bucket0 uses snapshot6's offset (6L),
-        //                   partition0/bucket1 uses snapshot1's offset (3L),
-        //                   partition1/bucket0 uses snapshot3's offset (3L) - from snapshot5
-        // compaction
-        assertThat(readableSnapshotAndOffsets.getReadableSnapshotId()).isEqualTo(snapshot7);
-        expectedReadableOffsets = new HashMap<>();
-        expectedReadableOffsets.put(tbP0B0, 6L);
-        expectedReadableOffsets.put(tbP0B1, 3L);
-        expectedReadableOffsets.put(tbP1B0, 3L);
-        assertThat(readableSnapshotAndOffsets.getReadableOffsets())
-                .isEqualTo(expectedReadableOffsets);
-        // all buckets L0 level has been flushed in snapshot3, we can delete all snapshots prior to
-        // snapshot3 safely since we won't need to search for any earlier snapshots to get readable
-        // offsets
-        assertThat(readableSnapshotAndOffsets.getEarliestSnapshotIdToKeep()).isEqualTo(3);
+        assertThat(readableSnapshotAndOffsets).isNull();
         commitSnapshot(
                 tableId,
                 tablePath,
@@ -669,6 +672,69 @@ class DvTableReadableSnapshotRetrieverTest {
         expectedReadableOffsets.put(tbP1B0, 6L);
         assertThat(readableSnapshotAndOffsets.getReadableOffsets())
                 .isEqualTo(expectedReadableOffsets);
+        commitSnapshot(
+                tableId,
+                tablePath,
+                snapshot11,
+                tieredLakeSnapshotEndOffset,
+                readableSnapshotAndOffsets);
+
+        // Step 9: APPEND snapshot 12 - write more data to partition0, bucket1
+        // Snapshot 12 state:
+        //   ┌─────────────┬─────────┬─────────────────────────────┐
+        //   │ Partition   │ Bucket  │ Files                       │
+        //   ├─────────────┼─────────┼─────────────────────────────┤
+        //   │ partition0  │ bucket0 │ L1: [from s7 (rows 0-5)]    │ ← unchanged
+        //   │ partition0  │ bucket1 │ L1: [from s7 (rows 0-2)]    │
+        //   │             │         │ L0: [rows 3-6] ← new        │ ← added in snapshot12
+        //   │ partition1  │ bucket0 │ L1: [from s10 (rows 0-5)]   │ ← unchanged
+        //   └─────────────┴─────────┴─────────────────────────────┘
+        Map<Integer, List<GenericRow>> appendRowsP0B1 =
+                Collections.singletonMap(
+                        bucket1, generateRowsForPartition(partition0, bucket1, 3, 7));
+        long snapshot12 = writeAndCommitData(fileStoreTable, appendRowsP0B1);
+        tieredLakeSnapshotEndOffset.put(tbP0B1, 6L);
+        commitSnapshot(
+                tableId,
+                tablePath,
+                snapshot12,
+                tieredLakeSnapshotEndOffset,
+                retriveReadableSnapshotAndOffsets(tablePath, fileStoreTable, snapshot12));
+
+        // Step 10: COMPACT snapshot 13 - compact partition0, bucket1 again (flushes snapshot12's
+        // L0)
+        // Snapshot 13 state (after compacting partition0, bucket1):
+        //   ┌─────────────┬─────────┬─────────────────────────────┐
+        //   │ Partition   │ Bucket  │ Files                       │
+        //   ├─────────────┼─────────┼─────────────────────────────┤
+        //   │ partition0  │ bucket0 │ L1: [from s7 (rows 0-5)]    │ ← unchanged
+        //   │ partition0  │ bucket1 │ L1: [merged s7 L1 + s12 L0] │ ← s12's L0 flushed to L1
+        //   │             │         │     [rows 0-6 total]        │
+        //   │ partition1  │ bucket0 │ L1: [from s10 (rows 0-5)]   │ ← unchanged
+        //   └─────────────┴─────────┴─────────────────────────────┘
+        compactHelper.compactBucket(partition0BinaryRow, bucket1).commit();
+        long snapshot13 = latestSnapshot(fileStoreTable);
+
+        // Create an empty tiered snapshot (snapshot14) to simulate tiered snapshot commit
+        long snapshot14 = writeAndCommitData(fileStoreTable, Collections.emptyMap());
+
+        readableSnapshotAndOffsets =
+                retriveReadableSnapshotAndOffsets(tablePath, fileStoreTable, snapshot14);
+        // readable_snapshot = snapshot13
+        // readable_offsets: partition0/bucket0 uses snapshot6's offset (6L),
+        //                   partition0/bucket1 uses snapshot12's offset (6L) - flushed in s13,
+        //                   partition1/bucket0 uses snapshot9's offset (6L)
+        assertThat(readableSnapshotAndOffsets.getReadableSnapshotId()).isEqualTo(snapshot13);
+        expectedReadableOffsets = new HashMap<>();
+        expectedReadableOffsets.put(tbP0B0, 6L);
+        expectedReadableOffsets.put(tbP0B1, 6L);
+        expectedReadableOffsets.put(tbP1B0, 6L);
+        assertThat(readableSnapshotAndOffsets.getReadableOffsets())
+                .isEqualTo(expectedReadableOffsets);
+
+        // After compact 13, all buckets have no L0 in the compacted snapshot, we only need
+        // to keep the previous append snapshot 12
+        assertThat(readableSnapshotAndOffsets.getEarliestSnapshotIdToKeep()).isEqualTo(snapshot12);
     }
 
     private long latestSnapshot(FileStoreTable fileStoreTable) {
