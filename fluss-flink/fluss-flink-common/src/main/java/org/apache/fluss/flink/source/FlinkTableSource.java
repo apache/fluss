@@ -284,7 +284,7 @@ public class FlinkTableSource
                 results =
                         Collections.singleton(
                                 GenericRowData.of(
-                                        PushdownUtils.countLogTable(tablePath, flussConfig)));
+                                        PushdownUtils.countTable(tablePath, flussConfig)));
             }
 
             TypeInformation<RowData> resultTypeInfo =
@@ -593,7 +593,6 @@ public class FlinkTableSource
         // Only supports 'select count(*)/count(1) from source' for log table now.
         if (streaming
                 || aggregateExpressions.size() != 1
-                || hasPrimaryKey()
                 || groupingSets.size() > 1
                 || (groupingSets.size() == 1 && groupingSets.get(0).length > 0)
                 // The count pushdown feature is not supported when the data lake is enabled.

@@ -22,6 +22,7 @@ import org.apache.fluss.client.ConnectionFactory;
 import org.apache.fluss.client.metadata.KvSnapshotMetadata;
 import org.apache.fluss.client.metadata.KvSnapshots;
 import org.apache.fluss.client.table.Table;
+import org.apache.fluss.client.table.writer.AppendWriter;
 import org.apache.fluss.client.table.writer.UpsertWriter;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.rebalance.ServerTag;
@@ -1842,5 +1843,177 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                         .build();
         admin.createTable(tablePath6, tableDescriptor6, false).get();
         assertThat(admin.tableExists(tablePath6).get()).isTrue();
+    }
+
+    // ==================== Table Statistics Tests ====================
+
+    @Test
+    void testGetTableStatsForPrimaryKeyTableWithFailover() throws Exception {
+        // Create a primary key table
+        TablePath tablePath = TablePath.of("test_db", "test_pk_table_stats");
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder().schema(DEFAULT_SCHEMA).distributedBy(3, "id").build();
+        long tableId = createTable(tablePath, tableDescriptor, true);
+        FLUSS_CLUSTER_EXTENSION.waitUntilTableReady(tableId);
+
+        // Initially, row count should be 0
+        assertThat(admin.getTableStats(tablePath).get().getRowCount()).isEqualTo(0);
+
+        // Insert some data
+        try (Table table = conn.getTable(tablePath)) {
+            UpsertWriter upsertWriter = table.newUpsert().createWriter();
+            for (int i = 0; i < 100; i++) {
+                upsertWriter.upsert(row(i, "name" + i, i % 50));
+            }
+            upsertWriter.flush();
+        }
+        assertThat(admin.getTableStats(tablePath).get().getRowCount()).isEqualTo(100);
+
+        // Delete some rows, update some rows, insert some rows
+        try (Table table = conn.getTable(tablePath)) {
+            UpsertWriter upsertWriter = table.newUpsert().createWriter();
+            for (int i = 0; i < 30; i++) {
+                upsertWriter.delete(row(i, null, null));
+            }
+            upsertWriter.flush();
+        }
+        assertThat(admin.getTableStats(tablePath).get().getRowCount()).isEqualTo(70);
+
+        // snapshot the row count
+        FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshot(tablePath);
+        // restart all the servers
+        for (int i = 0; i < FLUSS_CLUSTER_EXTENSION.getTabletServerNodes().size(); i++) {
+            FLUSS_CLUSTER_EXTENSION.stopTabletServer(i);
+            FLUSS_CLUSTER_EXTENSION.startTabletServer(i);
+        }
+
+        FLUSS_CLUSTER_EXTENSION.waitUntilTableReady(tableId);
+
+        // reconnect with the restarted cluster
+        Connection newConn = ConnectionFactory.createConnection(clientConf);
+        try (Table table = newConn.getTable(tablePath)) {
+            UpsertWriter upsertWriter = table.newUpsert().createWriter();
+            // update existed rows shouldn't increase row count
+            for (int i = 50; i < 90; i++) {
+                upsertWriter.upsert(row(i, "updated_name" + i, i % 50));
+            }
+            for (int i = 200; i < 300; i++) {
+                upsertWriter.upsert(row(i, "name" + i, i % 50));
+            }
+            upsertWriter.flush();
+        }
+        // Final row count should be 170
+        assertThat(newConn.getAdmin().getTableStats(tablePath).get().getRowCount()).isEqualTo(170);
+        newConn.close();
+    }
+
+    @Test
+    void testGetTableStatsForLogTable() throws Exception {
+        // Create a log table (no primary key)
+        Schema logTableSchema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("name", DataTypes.STRING())
+                        .column("age", DataTypes.INT())
+                        .build();
+        TablePath tablePath = TablePath.of("test_db", "test_log_table_stats");
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder().schema(logTableSchema).distributedBy(3).build();
+        long tableId = createTable(tablePath, tableDescriptor, true);
+        FLUSS_CLUSTER_EXTENSION.waitUntilTableReady(tableId);
+
+        // Initially, row count should be 0
+        assertThat(admin.getTableStats(tablePath).get().getRowCount()).isEqualTo(0);
+
+        // Append some data
+        try (Table table = conn.getTable(tablePath)) {
+            AppendWriter appendWriter = table.newAppend().createWriter();
+            for (int i = 0; i < 50; i++) {
+                appendWriter.append(row(i, "name" + i, i % 30));
+            }
+            appendWriter.flush();
+        }
+
+        assertThat(admin.getTableStats(tablePath).get().getRowCount()).isEqualTo(50);
+    }
+
+    @Test
+    void testGetTableStatsForPartitionedTable() throws Exception {
+        // Create a partitioned primary key table
+        Schema partitionedSchema =
+                Schema.newBuilder()
+                        .primaryKey("id", "dt")
+                        .column("id", DataTypes.INT())
+                        .column("name", DataTypes.STRING())
+                        .column("dt", DataTypes.STRING())
+                        .build();
+        TablePath tablePath = TablePath.of("test_db", "test_partitioned_table_stats");
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(partitionedSchema)
+                        .distributedBy(2, "id")
+                        .partitionedBy("dt")
+                        .build();
+        long tableId = createTable(tablePath, tableDescriptor, true);
+
+        // Create partitions
+        admin.createPartition(tablePath, newPartitionSpec("dt", "2024-01-01"), false).get();
+        admin.createPartition(tablePath, newPartitionSpec("dt", "2024-01-02"), false).get();
+        admin.listPartitionInfos(tablePath)
+                .join()
+                .forEach(
+                        partition -> {
+                            FLUSS_CLUSTER_EXTENSION.waitUntilTablePartitionReady(
+                                    tableId, partition.getPartitionId());
+                        });
+
+        // Initially, row count should be 0
+        assertThat(admin.getTableStats(tablePath).get().getRowCount()).isEqualTo(0);
+
+        // Insert data into different partitions
+        try (Table table = conn.getTable(tablePath)) {
+            UpsertWriter upsertWriter = table.newUpsert().createWriter();
+            // 30 rows in partition 2024-01-01
+            for (int i = 0; i < 30; i++) {
+                upsertWriter.upsert(row(i, "name" + i, "2024-01-01"));
+            }
+            // 20 rows in partition 2024-01-02
+            for (int i = 0; i < 20; i++) {
+                upsertWriter.upsert(row(i, "name" + i, "2024-01-02"));
+            }
+            upsertWriter.flush();
+        }
+        // Total row count should be 50
+        assertThat(admin.getTableStats(tablePath).get().getRowCount()).isEqualTo(50);
+    }
+
+    @Test
+    void testGetTableStatsForWalChangelogModeTable() throws Exception {
+        // Create a primary key table with WAL changelog mode (row count disabled)
+        TablePath tablePath = TablePath.of("test_db", "test_wal_changelog_table_stats");
+        Map<String, String> properties = new HashMap<>();
+        properties.put(ConfigOptions.TABLE_CHANGELOG_IMAGE.key(), "WAL");
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(DEFAULT_SCHEMA)
+                        .distributedBy(3, "id")
+                        .properties(properties)
+                        .build();
+        createTable(tablePath, tableDescriptor, true);
+
+        // Insert some data
+        try (Table table = conn.getTable(tablePath)) {
+            UpsertWriter upsertWriter = table.newUpsert().createWriter();
+            for (int i = 0; i < 10; i++) {
+                upsertWriter.upsert(row(i, "name" + i, i % 5));
+            }
+            upsertWriter.flush();
+        }
+
+        // Getting table stats should throw exception for WAL changelog mode tables
+        assertThatThrownBy(() -> admin.getTableStats(tablePath).get())
+                .cause()
+                .isInstanceOf(InvalidTableException.class)
+                .hasMessageContaining("Row count is disabled for this table");
     }
 }

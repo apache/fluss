@@ -1379,6 +1379,21 @@ public final class Replica {
         }
     }
 
+    public long getRowCount() {
+        return inReadLock(
+                leaderIsrUpdateLock,
+                () -> {
+                    KvTablet kv = this.kvTablet;
+                    if (kv != null) {
+                        // return materialized row count for primary key table
+                        return kv.getRowCount();
+                    } else {
+                        // return log row count for non-primary key table
+                        return logTablet.getRowCount();
+                    }
+                });
+    }
+
     public long getOffset(RemoteLogManager remoteLogManager, ListOffsetsParam listOffsetsParam)
             throws IOException {
         return inReadLock(

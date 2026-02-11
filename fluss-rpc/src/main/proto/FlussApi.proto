@@ -288,6 +288,21 @@ message LimitScanResponse{
 }
 
 
+// Get table statistics request and response.
+// Sent to TabletServer to get per-bucket statistics.
+message GetTableStatsRequest {
+  required int64 table_id = 1;
+  repeated PbTableStatsReqForBucket buckets_req = 2;
+  // Column indexes for column-level stats (e.g., ndv, sum).
+  // If empty, column stats are not collected.
+  // Reserved for future use.
+  repeated int32 target_columns = 3 [packed = true];
+}
+
+message GetTableStatsResponse {
+  repeated PbTableStatsRespForBucket buckets_resp = 1;
+}
+
 // notify bucket leader and isr request
 message NotifyLeaderAndIsrRequest {
   required int32 coordinator_epoch = 1;
@@ -1184,4 +1199,35 @@ message PbKvSnapshotLeaseForBucket {
   optional int64 partition_id = 1;
   required int32 bucket_id = 2;
   required int64 snapshot_id = 3;
+}
+
+message PbTableStatsReqForBucket {
+  optional int64 partition_id = 1;
+  required int32 bucket_id = 2;
+}
+
+message PbTableStatsRespForBucket {
+  optional int32 error_code = 1;
+  optional string error_message = 2;
+  optional int64 partition_id = 3;
+  required int32 bucket_id = 4;
+
+  // --- Table-level stats ---
+  // The number of rows in this bucket.
+  // For KV tables: the number of unique keys (live rows).
+  // For Log tables: total number of log records (highWatermark - logStartOffset).
+  // Absent if row count is not available (e.g., WAL changelog mode or legacy tables).
+  optional int64 row_count = 5;
+
+  // --- data size stats (future) ---
+  // The data size in bytes of this bucket.
+  // For KV tables: the size of the KV store.
+  // For Log tables: the size of the log segments.
+  // Reserved for future use.
+  // optional int64 data_size_bytes = 6;
+
+  // --- Column-level stats (future) ---
+  // Per-column statistics, keyed by column index.
+  // Only populated when target_columns is specified in the request.
+  // repeated PbColumnStats column_stats = 10;
 }

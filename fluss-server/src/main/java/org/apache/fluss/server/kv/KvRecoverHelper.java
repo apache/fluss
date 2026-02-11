@@ -150,9 +150,9 @@ public class KvRecoverHelper {
         if (recoverPointRowCount != null) {
             kvTablet.setRowCount(rowCountUpdater.getRowCount());
             LOG.info(
-                    "Updated row count to {} for table '{}' after recovering from log",
+                    "Updated row count to {} for tablet '{}' after recovering from log",
                     rowCountUpdater.getRowCount(),
-                    kvTablet.getTablePath());
+                    kvTablet.getTableBucket());
         } else {
             LOG.info(
                     "Skipping row count update after recovering from log, because this table '{}' doesn't support row count.",
@@ -163,7 +163,10 @@ public class KvRecoverHelper {
         ThrowingConsumer<KeyValueAndLogOffset, Exception> resumeRecordApplier =
                 (resumeRecord) ->
                         kvTablet.putToPreWriteBuffer(
-                                resumeRecord.key, resumeRecord.value, resumeRecord.logOffset);
+                                resumeRecord.changeType,
+                                resumeRecord.key,
+                                resumeRecord.value,
+                                resumeRecord.logOffset);
         readLogRecordsAndApply(
                 nextLogOffset,
                 // records in pre-write-buffer shouldn't affect the row count, the high-watermark
@@ -178,10 +181,10 @@ public class KvRecoverHelper {
             AutoIncIDRange newRange = autoIncIdRangeUpdater.getNewRange();
             kvTablet.updateAutoIncrementIDRange(newRange);
             LOG.info(
-                    "Updated auto inc id range to [{}, {}] for table '{}' after recovering from log",
+                    "Updated auto inc id range to [{}, {}] for tablet '{}' after recovering from log",
                     newRange.getStart(),
                     newRange.getEnd(),
-                    kvTablet.getTablePath());
+                    kvTablet.getTableBucket());
         }
     }
 
@@ -230,7 +233,7 @@ public class KvRecoverHelper {
                                 }
                                 resumeRecordConsumer.accept(
                                         new KeyValueAndLogOffset(
-                                                key, value, logRecord.logOffset()));
+                                                changeType, key, value, logRecord.logOffset()));
 
                                 // reuse the logRow instance which is usually a CompactedRow which
                                 // has been deserialized during toKvRow(..)
@@ -301,11 +304,14 @@ public class KvRecoverHelper {
     }
 
     private static final class KeyValueAndLogOffset {
+        private final ChangeType changeType;
         private final byte[] key;
         private final @Nullable byte[] value;
         private final long logOffset;
 
-        public KeyValueAndLogOffset(byte[] key, byte[] value, long logOffset) {
+        public KeyValueAndLogOffset(
+                ChangeType changeType, byte[] key, byte[] value, long logOffset) {
+            this.changeType = changeType;
             this.key = key;
             this.value = value;
             this.logOffset = logOffset;

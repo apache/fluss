@@ -30,6 +30,7 @@ import org.apache.fluss.cluster.rebalance.RebalanceProgress;
 import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.config.cluster.AlterConfig;
 import org.apache.fluss.config.cluster.ConfigEntry;
+import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.LeaderNotAvailableException;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.DatabaseInfo;
@@ -44,6 +45,7 @@ import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.metadata.TableStats;
 import org.apache.fluss.rpc.GatewayClientProxy;
 import org.apache.fluss.rpc.RpcClient;
 import org.apache.fluss.rpc.gateway.AdminGateway;
@@ -70,6 +72,8 @@ import org.apache.fluss.rpc.messages.GetLatestKvSnapshotsRequest;
 import org.apache.fluss.rpc.messages.GetProducerOffsetsRequest;
 import org.apache.fluss.rpc.messages.GetTableInfoRequest;
 import org.apache.fluss.rpc.messages.GetTableSchemaRequest;
+import org.apache.fluss.rpc.messages.GetTableStatsRequest;
+import org.apache.fluss.rpc.messages.GetTableStatsResponse;
 import org.apache.fluss.rpc.messages.ListAclsRequest;
 import org.apache.fluss.rpc.messages.ListDatabasesRequest;
 import org.apache.fluss.rpc.messages.ListDatabasesResponse;
@@ -82,6 +86,7 @@ import org.apache.fluss.rpc.messages.PbAlterConfig;
 import org.apache.fluss.rpc.messages.PbListOffsetsRespForBucket;
 import org.apache.fluss.rpc.messages.PbPartitionSpec;
 import org.apache.fluss.rpc.messages.PbTablePath;
+import org.apache.fluss.rpc.messages.PbTableStatsRespForBucket;
 import org.apache.fluss.rpc.messages.RebalanceRequest;
 import org.apache.fluss.rpc.messages.RebalanceResponse;
 import org.apache.fluss.rpc.messages.RemoveServerTagRequest;
@@ -91,6 +96,7 @@ import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.security.acl.AclBinding;
 import org.apache.fluss.security.acl.AclBindingFilter;
 import org.apache.fluss.utils.MapUtils;
+import org.apache.fluss.utils.concurrent.FutureUtils;
 
 import javax.annotation.Nullable;
 
@@ -106,6 +112,7 @@ import java.util.concurrent.CompletableFuture;
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeAlterTableRequest;
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeCreatePartitionRequest;
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeDropPartitionRequest;
+import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeGetTableStatsRequest;
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeListOffsetsRequest;
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makePbPartitionSpec;
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeRegisterProducerOffsetsRequest;
@@ -457,6 +464,47 @@ public class FlussAdmin implements Admin {
         return listOffsets(PhysicalTablePath.of(tablePath, partitionName), buckets, offsetSpec);
     }
 
+    @Override
+    public CompletableFuture<TableStats> getTableStats(TablePath tablePath) {
+        metadataUpdater.updateTableOrPartitionMetadata(tablePath, null);
+        TableInfo tableInfo = getTableInfo(tablePath).join();
+        try {
+            int bucketCount = tableInfo.getNumBuckets();
+            List<PartitionInfo> partitionInfos;
+            if (tableInfo.isPartitioned()) {
+                partitionInfos = listPartitionInfos(tablePath).get();
+            } else {
+                partitionInfos = Collections.singletonList(null);
+            }
+            // create all TableBuckets for each partition and bucket combination
+            Map<TableBucket, CompletableFuture<Long>> bucketToRowCountMap = new HashMap<>();
+            for (PartitionInfo partitionInfo : partitionInfos) {
+                for (int bucket = 0; bucket < bucketCount; bucket++) {
+                    TableBucket tb =
+                            new TableBucket(
+                                    tableInfo.getTableId(),
+                                    partitionInfo == null ? null : partitionInfo.getPartitionId(),
+                                    bucket);
+                    bucketToRowCountMap.put(tb, new CompletableFuture<>());
+                }
+            }
+            Map<Integer, GetTableStatsRequest> requestMap =
+                    prepareTableStatsRequests(
+                            metadataUpdater, bucketToRowCountMap.keySet(), tablePath);
+            sendTableStatsRequest(
+                    metadataUpdater, tableInfo.getTableId(), requestMap, bucketToRowCountMap);
+            return FutureUtils.combineAll(bucketToRowCountMap.values())
+                    .thenApply(
+                            counts -> {
+                                long totalRowCount = counts.stream().reduce(0L, Long::sum);
+                                return new TableStats(totalRowCount);
+                            });
+        } catch (Exception e) {
+            throw new FlussRuntimeException(
+                    String.format("Failed to get row count for the table '%s'.", tablePath), e);
+        }
+    }
+
     private ListOffsetsResult listOffsets(
             PhysicalTablePath physicalTablePath,
             Collection<Integer> buckets,
@@ -676,6 +724,68 @@ public class FlussAdmin implements Admin {
     @Override
     public void close() {
         // nothing to do yet
+    }
+
+    private static Map<Integer, GetTableStatsRequest> prepareTableStatsRequests(
+            MetadataUpdater metadataUpdater, Collection<TableBucket> buckets, TablePath tablePath) {
+        Map<Integer, List<TableBucket>> nodeForBucketList = new HashMap<>();
+        for (TableBucket tb : buckets) {
+            int leader = metadataUpdater.leaderFor(tablePath, tb);
+            nodeForBucketList.computeIfAbsent(leader, k -> new ArrayList<>()).add(tb);
+        }
+
+        Map<Integer, GetTableStatsRequest> requests = new HashMap<>();
+        nodeForBucketList.forEach(
+                (leader, tbs) -> requests.put(leader, makeGetTableStatsRequest(tbs)));
+        return requests;
+    }
+
+    private static void sendTableStatsRequest(
+            MetadataUpdater metadataUpdater,
+            long tableId,
+            Map<Integer, GetTableStatsRequest> leaderToRequestMap,
+            Map<TableBucket, CompletableFuture<Long>> bucketToRowCountMap) {
+        leaderToRequestMap.forEach(
+                (leader, request) -> {
+                    TabletServerGateway gateway =
+                            metadataUpdater.newTabletServerClientForNode(leader);
+                    if (gateway == null) {
+                        throw new LeaderNotAvailableException(
+                                "Server " + leader + " is not found in metadata cache.");
+                    } else {
+                        gateway.getTableStats(request)
+                                .whenComplete(
+                                        (response, t) ->
+                                                handleTableStatsResponse(
+                                                        response, t, tableId, bucketToRowCountMap));
+                    }
+                });
+    }
+
+    private static void handleTableStatsResponse(
+            GetTableStatsResponse response,
+            Throwable t,
+            long tableId,
+            Map<TableBucket, CompletableFuture<Long>> bucketToRowCountMap) {
+        if (t != null) {
+            // fail all futures to fail fast
+            bucketToRowCountMap.values().forEach(f -> f.completeExceptionally(t));
+            return;
+        }
+        for (PbTableStatsRespForBucket resp : response.getBucketsRespsList()) {
+            TableBucket tb =
+                    new TableBucket(
+                            tableId,
+                            resp.hasPartitionId() ? resp.getPartitionId() : null,
+                            resp.getBucketId());
+            if (resp.hasErrorCode()) {
+                bucketToRowCountMap
+                        .get(tb)
+                        .completeExceptionally(ApiError.fromErrorMessage(resp).exception());
+            } else {
+                bucketToRowCountMap.get(tb).complete(resp.getRowCount());
+            }
+        }
     }
 
     private static Map<Integer, ListOffsetsRequest> prepareListOffsetsRequests(

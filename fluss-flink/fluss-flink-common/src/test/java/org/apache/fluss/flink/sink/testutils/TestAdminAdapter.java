@@ -45,6 +45,7 @@ import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.metadata.TableStats;
 import org.apache.fluss.security.acl.AclBinding;
 import org.apache.fluss.security.acl.AclBindingFilter;
 
@@ -219,6 +220,11 @@ public class TestAdminAdapter implements Admin {
             String partitionName,
             Collection<Integer> buckets,
             OffsetSpec offsetSpec) {
+        throw new UnsupportedOperationException("Not implemented in TestAdminAdapter");
+    }
+
+    @Override
+    public CompletableFuture<TableStats> getTableStats(TablePath tablePath) {
         throw new UnsupportedOperationException("Not implemented in TestAdminAdapter");
     }
 

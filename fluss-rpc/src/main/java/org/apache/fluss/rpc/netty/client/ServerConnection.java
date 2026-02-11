@@ -315,6 +315,7 @@ final class ServerConnection {
                     version = serverApiVersions.highestAvailableVersion(apiKey);
                 } catch (Exception e) {
                     responseFuture.completeExceptionally(e);
+                    return responseFuture;
                 }
             }
 

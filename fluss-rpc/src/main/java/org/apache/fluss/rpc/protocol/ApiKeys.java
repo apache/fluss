@@ -100,7 +100,8 @@ public enum ApiKeys {
     DELETE_PRODUCER_OFFSETS(1055, 0, 0, PUBLIC),
     ACQUIRE_KV_SNAPSHOT_LEASE(1056, 0, 0, PUBLIC),
     RELEASE_KV_SNAPSHOT_LEASE(1057, 0, 0, PUBLIC),
-    DROP_KV_SNAPSHOT_LEASE(1058, 0, 0, PUBLIC);
+    DROP_KV_SNAPSHOT_LEASE(1058, 0, 0, PUBLIC),
+    GET_TABLE_STATS(1059, 0, 0, PUBLIC);
 
     private static final Map<Integer, ApiKeys> ID_TO_TYPE =
             Arrays.stream(ApiKeys.values())

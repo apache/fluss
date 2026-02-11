@@ -233,6 +233,10 @@ public final class LogTablet {
         return localLog.getTableBucket();
     }
 
+    public long getRowCount() {
+        return getHighWatermark() - logStartOffset();
+    }
+
     public long getHighWatermark() {
         return highWatermarkMetadata.getMessageOffset();
     }
