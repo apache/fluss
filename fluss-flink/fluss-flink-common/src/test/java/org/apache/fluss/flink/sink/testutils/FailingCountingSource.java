@@ -234,11 +234,18 @@ public class FailingCountingSource
         private final int splitId;
         private final int emittedRecords;
         private final boolean hasFailed;
+        private final int keyIndex;
 
         public FailingCountingSplit(int splitId, int emittedRecords, boolean hasFailed) {
+            this(splitId, emittedRecords, hasFailed, 0);
+        }
+
+        public FailingCountingSplit(
+                int splitId, int emittedRecords, boolean hasFailed, int keyIndex) {
             this.splitId = splitId;
             this.emittedRecords = emittedRecords;
             this.hasFailed = hasFailed;
+            this.keyIndex = keyIndex;
         }
 
         @Override
@@ -258,6 +265,10 @@ public class FailingCountingSource
             return hasFailed;
         }
 
+        public int getKeyIndex() {
+            return keyIndex;
+        }
+
         @Override
         public String toString() {
             return "FailingCountingSplit{"
@@ -267,6 +278,8 @@ public class FailingCountingSource
                     + emittedRecords
                     + ", hasFailed="
                     + hasFailed
+                    + ", keyIndex="
+                    + keyIndex
                     + '}';
         }
     }
@@ -498,8 +511,9 @@ public class FailingCountingSource
 
         @Override
         public List<FailingCountingSplit> snapshotState(long checkpointId) {
-            // Checkpoint the current state including hasFailed flag
-            return Collections.singletonList(new FailingCountingSplit(0, totalEmitted, hasFailed));
+            // Checkpoint the current state including hasFailed flag and keyIndex
+            return Collections.singletonList(
+                    new FailingCountingSplit(0, totalEmitted, hasFailed, keyIndex));
         }
 
         @Override
@@ -513,6 +527,7 @@ public class FailingCountingSource
             for (FailingCountingSplit split : newSplits) {
                 this.totalEmitted = split.getEmittedRecords();
                 this.hasFailed = split.hasFailed();
+                this.keyIndex = split.getKeyIndex();
                 splits.add(split);
             }
             availableFuture.complete(null);
@@ -533,11 +548,12 @@ public class FailingCountingSource
     /**
      * Serializer for FailingCountingSplit.
      *
-     * <p>Serialization format: splitId (4 bytes) + emittedRecords (4 bytes) + hasFailed (1 byte)
+     * <p>Serialization format: splitId (4 bytes) + emittedRecords (4 bytes) + hasFailed (1 byte) +
+     * keyIndex (4 bytes)
      */
     private static class FailingCountingSplitSerializer
             implements SimpleVersionedSerializer<FailingCountingSplit> {
-        private static final int VERSION = 1;
+        private static final int VERSION = 2;
 
         @Override
         public int getVersion() {
@@ -546,10 +562,11 @@ public class FailingCountingSource
 
         @Override
         public byte[] serialize(FailingCountingSplit split) {
-            ByteBuffer buffer = ByteBuffer.allocate(9);
+            ByteBuffer buffer = ByteBuffer.allocate(13);
             buffer.putInt(split.getSplitIdInt());
             buffer.putInt(split.getEmittedRecords());
             buffer.put((byte) (split.hasFailed() ? 1 : 0));
+            buffer.putInt(split.getKeyIndex());
             return buffer.array();
         }
 
@@ -559,7 +576,8 @@ public class FailingCountingSource
             int splitId = buffer.getInt();
             int emittedRecords = buffer.getInt();
             boolean hasFailed = buffer.get() == 1;
-            return new FailingCountingSplit(splitId, emittedRecords, hasFailed);
+            int keyIndex = version >= 2 ? buffer.getInt() : 0;
+            return new FailingCountingSplit(splitId, emittedRecords, hasFailed, keyIndex);
         }
     }
 
