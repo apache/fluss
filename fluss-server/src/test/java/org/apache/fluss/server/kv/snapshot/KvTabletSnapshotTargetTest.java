@@ -501,7 +501,7 @@ class KvTabletSnapshotTargetTest {
                 executor,
                 cancelStreamRegistry,
                 testingSnapshotIdCounter,
-                logOffsetGenerator::get,
+                this::getCurrentTabletState,
                 updateMinRetainOffsetConsumer::set,
                 bucketLeaderEpochSupplier,
                 coordinatorEpochSupplier,
@@ -539,12 +539,16 @@ class KvTabletSnapshotTargetTest {
                 executor,
                 cancelStreamRegistry,
                 testingSnapshotIdCounter,
-                logOffsetGenerator::get,
+                this::getCurrentTabletState,
                 updateMinRetainOffsetConsumer::set,
                 bucketLeaderEpochSupplier,
                 coordinatorEpochSupplier,
                 0,
                 0L);
+    }
+
+    private TabletState getCurrentTabletState() {
+        return new TabletState(logOffsetGenerator.get(), null, null);
     }
 
     private RocksIncrementalSnapshot createIncrementalSnapshot(SnapshotFailType snapshotFailType)
@@ -626,10 +630,11 @@ class KvTabletSnapshotTargetTest {
             this.snapshotFailType = snapshotFailType;
         }
 
+        @Override
         public SnapshotResultSupplier asyncSnapshot(
                 NativeRocksDBSnapshotResources snapshotResources,
                 long snapshotId,
-                long logOffset,
+                TabletState tabletState,
                 @Nonnull SnapshotLocation snapshotLocation) {
             if (snapshotFailType == SnapshotFailType.SYNC_PHASE) {
                 throw new FlussRuntimeException("Fail in snapshot sync phase.");
@@ -639,7 +644,7 @@ class KvTabletSnapshotTargetTest {
                 };
             } else {
                 return super.asyncSnapshot(
-                        snapshotResources, snapshotId, logOffset, snapshotLocation);
+                        snapshotResources, snapshotId, tabletState, snapshotLocation);
             }
         }
 

@@ -31,6 +31,7 @@ import org.apache.fluss.exception.NonPrimaryKeyTableException;
 import org.apache.fluss.exception.NotEnoughReplicasException;
 import org.apache.fluss.exception.NotLeaderOrFollowerException;
 import org.apache.fluss.fs.FsPath;
+import org.apache.fluss.metadata.ChangelogImage;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.SchemaGetter;
@@ -52,6 +53,7 @@ import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
 import org.apache.fluss.server.kv.KvManager;
 import org.apache.fluss.server.kv.KvRecoverHelper;
 import org.apache.fluss.server.kv.KvTablet;
+import org.apache.fluss.server.kv.autoinc.AutoIncIDRange;
 import org.apache.fluss.server.kv.rocksdb.RocksDBKvBuilder;
 import org.apache.fluss.server.kv.snapshot.CompletedKvSnapshotCommitter;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
@@ -697,6 +699,8 @@ public final class Replica {
         long restoreStartOffset = 0;
         Optional<CompletedSnapshot> optCompletedSnapshot = getLatestSnapshot(tableBucket);
         try {
+            Long rowCount;
+            AutoIncIDRange autoIncIDRange;
             if (optCompletedSnapshot.isPresent()) {
                 LOG.info(
                         "Use snapshot {} to restore kv tablet for {} of table {}.",
@@ -714,6 +718,9 @@ public final class Replica {
 
                 checkNotNull(kvTablet, "kv tablet should not be null.");
                 restoreStartOffset = completedSnapshot.getLogOffset();
+                rowCount = completedSnapshot.getRowCount();
+                // currently, we only support one auto-increment column.
+                autoIncIDRange = completedSnapshot.getFirstAutoIncIDRange();
             } else {
                 LOG.info(
                         "No snapshot found for {} of {}, restore from log.",
@@ -731,10 +738,19 @@ public final class Replica {
                                 schemaGetter,
                                 tableConfig,
                                 arrowCompressionInfo);
+
+                // we don't support rowCount
+                rowCount = tableConfig.getChangelogImage() == ChangelogImage.WAL ? null : 0L;
+                // TODO: it is possible that this is a recovered kv tablet without kv snapshot but
+                //  with changelogs, in this case, the kv tablet should also have the
+                //  autoIncIDRange, we may need to get it from the changelog in the future.
+                //  but currently, we set it to null for simplification, as the auto-inc id
+                //  will be fetched from zk if not exist in local.
+                autoIncIDRange = null;
             }
 
             logTablet.updateMinRetainOffset(restoreStartOffset);
-            recoverKvTablet(restoreStartOffset);
+            recoverKvTablet(restoreStartOffset, rowCount, autoIncIDRange);
         } catch (Exception e) {
             throw new KvStorageException(
                     String.format(
@@ -800,14 +816,16 @@ public final class Replica {
         return Optional.empty();
     }
 
-    private void recoverKvTablet(long startRecoverLogOffset) {
+    private void recoverKvTablet(
+            long startRecoverLogOffset,
+            @Nullable Long rowCount,
+            @Nullable AutoIncIDRange autoIncIDRange) {
         long start = clock.milliseconds();
         checkNotNull(kvTablet, "kv tablet should not be null.");
         try {
             KvRecoverHelper.KvRecoverContext recoverContext =
                     new KvRecoverHelper.KvRecoverContext(
                             getTablePath(),
-                            tableBucket,
                             snapshotContext.getZooKeeperClient(),
                             snapshotContext.maxFetchLogSizeInRecoverKv());
             KvRecoverHelper kvRecoverHelper =
@@ -815,6 +833,8 @@ public final class Replica {
                             kvTablet,
                             logTablet,
                             startRecoverLogOffset,
+                            rowCount,
+                            autoIncIDRange,
                             recoverContext,
                             tableConfig.getKvFormat(),
                             tableConfig.getLogFormat(),
@@ -900,7 +920,7 @@ public final class Replica {
                             snapshotContext.getAsyncOperationsThreadPool(),
                             closeableRegistryForKv,
                             snapshotIDCounter,
-                            kvTablet::getFlushedLogOffset,
+                            kvTablet::getTabletState,
                             logTablet::updateMinRetainOffset,
                             bucketLeaderEpochSupplier,
                             coordinatorEpochSupplier,

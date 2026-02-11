@@ -498,7 +498,13 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                         .primaryKey("col1")
                         .build();
         TableDescriptor tableDescriptor =
-                TableDescriptor.builder().schema(schema).distributedBy(1, "col1").build();
+                TableDescriptor.builder()
+                        .schema(schema)
+                        .distributedBy(1, "col1")
+                        // set a small cache size to test the auto-increment buffer rollover and
+                        // recovery logic in case of server failure and schema change.
+                        .property(ConfigOptions.TABLE_AUTO_INCREMENT_CACHE_SIZE, 5L)
+                        .build();
         // create the table
         TablePath tablePath =
                 TablePath.of(DATA1_TABLE_PATH_PK.getDatabaseName(), "test_pk_table_auto_inc");
@@ -547,11 +553,15 @@ class FlussTableITCase extends ClientToServerITCaseBase {
         };
         verifyRecords(expectedRecordsWithOldSchema, autoIncTable, schema);
 
+        // trigger snapshot to make sure the auto-inc buffer is snapshotted
+        FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshot(tablePath);
+
         // schema change case2: update new data with new schema.
 
         Object[][] recordsWithNewSchema = {
             {"a", null, "batch3", 10},
-            {"b", null, "batch3", 11}
+            {"b", null, "batch3", 11},
+            {"f", null, "batch3", 12}
         };
         partialUpdateRecords(
                 new String[] {"col1", "col3", "col4"}, recordsWithNewSchema, newSchemaTable);
@@ -567,7 +577,8 @@ class FlussTableITCase extends ClientToServerITCaseBase {
             {"b", 2L, "batch3", 11},
             {"c", 3L, "batch1", null},
             {"d", 4L, "batch2", null},
-            {"e", 5L, "batch2", null}
+            {"e", 5L, "batch2", null},
+            {"f", 6L, "batch3", 12}
         };
         verifyRecords(expectedRecordsWithNewSchema, newSchemaTable, newSchema);
 
@@ -582,14 +593,42 @@ class FlussTableITCase extends ClientToServerITCaseBase {
         newSchemaTable = conn.getTable(tablePath);
         verifyRecords(expectedRecordsWithNewSchema, newSchemaTable, newSchema);
 
-        Object[][] restartWriteRecords = {{"f", null, "batch4", 12}};
+        Object[][] restartWriteRecords = {{"g", null, "batch4", 13}};
         partialUpdateRecords(
                 new String[] {"col1", "col3", "col4"}, restartWriteRecords, newSchemaTable);
 
         // The auto-increment column should start from a new segment for now, and local cached
         // IDs have been discarded.
-        Object[][] expectedRestartWriteRecords = {{"f", 100001L, "batch4", 12}};
+        Object[][] expectedRestartWriteRecords = {{"g", 7L, "batch4", 13}};
         verifyRecords(expectedRestartWriteRecords, newSchemaTable, newSchema);
+
+        // trigger snapshot to make sure the auto-inc buffer is snapshotted again
+        FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshot(tablePath);
+
+        Object[][] writeRecordsAgain = {
+            {"h", null, "batch5", 14},
+            {"i", null, "batch5", 15},
+            {"j", null, "batch5", 16}
+        };
+        partialUpdateRecords(
+                new String[] {"col1", "col3", "col4"}, writeRecordsAgain, newSchemaTable);
+
+        // kill and restart all tablet server, the recovered id range will hit 10 cache limit
+        for (int i = 0; i < 3; i++) {
+            FLUSS_CLUSTER_EXTENSION.stopTabletServer(i);
+            FLUSS_CLUSTER_EXTENSION.startTabletServer(i);
+        }
+
+        Object[][] finalWriteRecords = {{"k", null, "batch6", 17}};
+        partialUpdateRecords(
+                new String[] {"col1", "col3", "col4"}, finalWriteRecords, newSchemaTable);
+        Object[][] expectedFinalRecords = {
+            {"h", 8L, "batch5", 14},
+            {"i", 9L, "batch5", 15},
+            {"j", 10L, "batch5", 16},
+            {"k", 11L, "batch6", 17}
+        };
+        verifyRecords(expectedFinalRecords, newSchemaTable, newSchema);
     }
 
     @Test

@@ -21,12 +21,15 @@ import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.server.kv.autoinc.AutoIncIDRange;
 import org.apache.fluss.utils.concurrent.FutureUtils;
 
+import javax.annotation.Nullable;
 import javax.annotation.concurrent.NotThreadSafe;
 
 import java.io.IOException;
 import java.util.Arrays;
+import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
@@ -68,6 +71,18 @@ public class CompletedSnapshot {
     /** The next log offset when the snapshot is triggered. */
     private final long logOffset;
 
+    /**
+     * The row count of the snapshot, null for legacy tables that doesn't support row count
+     * statistics.
+     */
+    @Nullable private final Long rowCount;
+
+    /**
+     * The auto-increment ID ranges of the snapshot, null for legacy tables that doesn't support or
+     * doesn't have auto-increment columns.
+     */
+    @Nullable private final List<AutoIncIDRange> autoIncIDRanges;
+
     /** The location where the snapshot is stored. */
     private final FsPath snapshotLocation;
 
@@ -78,12 +93,16 @@ public class CompletedSnapshot {
             long snapshotID,
             FsPath snapshotLocation,
             KvSnapshotHandle kvSnapshotHandle,
-            long logOffset) {
+            long logOffset,
+            @Nullable Long rowCount,
+            @Nullable List<AutoIncIDRange> autoIncIDRanges) {
         this.tableBucket = tableBucket;
         this.snapshotID = snapshotID;
         this.snapshotLocation = snapshotLocation;
         this.kvSnapshotHandle = kvSnapshotHandle;
         this.logOffset = logOffset;
+        this.rowCount = rowCount;
+        this.autoIncIDRanges = autoIncIDRanges;
     }
 
     @VisibleForTesting
@@ -92,7 +111,7 @@ public class CompletedSnapshot {
             long snapshotID,
             FsPath snapshotLocation,
             KvSnapshotHandle kvSnapshotHandle) {
-        this(tableBucket, snapshotID, snapshotLocation, kvSnapshotHandle, 0);
+        this(tableBucket, snapshotID, snapshotLocation, kvSnapshotHandle, 0, null, null);
     }
 
     public long getSnapshotID() {
@@ -109,6 +128,24 @@ public class CompletedSnapshot {
 
     public long getLogOffset() {
         return logOffset;
+    }
+
+    @Nullable
+    public Long getRowCount() {
+        return rowCount;
+    }
+
+    @Nullable
+    public List<AutoIncIDRange> getAutoIncIDRanges() {
+        return autoIncIDRanges;
+    }
+
+    @Nullable
+    public AutoIncIDRange getFirstAutoIncIDRange() {
+        if (autoIncIDRanges == null || autoIncIDRanges.isEmpty()) {
+            return null;
+        }
+        return autoIncIDRanges.get(0);
     }
 
     public long getSnapshotSize() {
@@ -188,11 +225,20 @@ public class CompletedSnapshot {
                 && logOffset == that.logOffset
                 && Objects.equals(tableBucket, that.tableBucket)
                 && Objects.equals(kvSnapshotHandle, that.kvSnapshotHandle)
+                && Objects.equals(rowCount, that.rowCount)
+                && Objects.equals(autoIncIDRanges, that.autoIncIDRanges)
                 && Objects.equals(snapshotLocation, that.snapshotLocation);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(tableBucket, snapshotID, kvSnapshotHandle, logOffset, snapshotLocation);
+        return Objects.hash(
+                tableBucket,
+                snapshotID,
+                kvSnapshotHandle,
+                logOffset,
+                rowCount,
+                autoIncIDRanges,
+                snapshotLocation);
     }
 }

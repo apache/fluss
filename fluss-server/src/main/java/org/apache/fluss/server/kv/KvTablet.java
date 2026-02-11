@@ -46,6 +46,7 @@ import org.apache.fluss.row.arrow.ArrowWriterPool;
 import org.apache.fluss.row.arrow.ArrowWriterProvider;
 import org.apache.fluss.row.encode.ValueDecoder;
 import org.apache.fluss.rpc.protocol.MergeMode;
+import org.apache.fluss.server.kv.autoinc.AutoIncIDRange;
 import org.apache.fluss.server.kv.autoinc.AutoIncrementManager;
 import org.apache.fluss.server.kv.autoinc.AutoIncrementUpdater;
 import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer;
@@ -59,6 +60,7 @@ import org.apache.fluss.server.kv.rowmerger.RowMerger;
 import org.apache.fluss.server.kv.snapshot.KvFileHandleAndLocalPath;
 import org.apache.fluss.server.kv.snapshot.KvSnapshotDataUploader;
 import org.apache.fluss.server.kv.snapshot.RocksIncrementalSnapshot;
+import org.apache.fluss.server.kv.snapshot.TabletState;
 import org.apache.fluss.server.kv.wal.ArrowWalBuilder;
 import org.apache.fluss.server.kv.wal.CompactedWalBuilder;
 import org.apache.fluss.server.kv.wal.IndexWalBuilder;
@@ -96,6 +98,7 @@ import static org.apache.fluss.utils.concurrent.LockUtils.inWriteLock;
 @ThreadSafe
 public final class KvTablet {
     private static final Logger LOG = LoggerFactory.getLogger(KvTablet.class);
+    private static final long ROW_COUNT_DISABLED = -1;
 
     private final PhysicalTablePath physicalPath;
     private final TableBucket tableBucket;
@@ -135,6 +138,8 @@ public final class KvTablet {
      * flushed into kv.
      */
     private volatile long flushedLogOffset = 0;
+
+    private volatile long rowCount;
 
     @GuardedBy("kvLock")
     private volatile boolean isClosed = false;
@@ -178,6 +183,8 @@ public final class KvTablet {
         this.changelogImage = changelogImage;
         this.rocksDBStatistics = rocksDBStatistics;
         this.autoIncrementManager = autoIncrementManager;
+        // disable row count for WAL image mode.
+        this.rowCount = changelogImage == ChangelogImage.WAL ? ROW_COUNT_DISABLED : 0L;
     }
 
     public static KvTablet create(
@@ -253,6 +260,14 @@ public final class KvTablet {
         return physicalPath.getTablePath();
     }
 
+    public long getAutoIncrementCacheSize() {
+        return autoIncrementManager.getAutoIncrementCacheSize();
+    }
+
+    public void updateAutoIncrementIDRange(AutoIncIDRange newRange) {
+        autoIncrementManager.updateIDRange(newRange);
+    }
+
     @Nullable
     public String getPartitionName() {
         return physicalPath.getPartitionName();
@@ -276,8 +291,24 @@ public final class KvTablet {
         this.flushedLogOffset = flushedLogOffset;
     }
 
-    public long getFlushedLogOffset() {
-        return flushedLogOffset;
+    void setRowCount(long rowCount) {
+        this.rowCount = rowCount;
+    }
+
+    /**
+     * Get the current state of the tablet, including the log offset, row count and auto-increment
+     * ID range. This is used for snapshot and recovery to capture the state of the tablet at a
+     * specific log offset.
+     *
+     * <p>Note: this method must be called under the kvLock to ensure the consistency between the
+     * returned state and the log offset.
+     */
+    @GuardedBy("kvLock")
+    public TabletState getTabletState() {
+        return new TabletState(
+                flushedLogOffset,
+                rowCount == ROW_COUNT_DISABLED ? null : rowCount,
+                autoIncrementManager.getCurrentIDRanges());
     }
 
     /**
@@ -632,8 +663,13 @@ public final class KvTablet {
                                 tableBucket);
                     } else {
                         try {
-                            kvPreWriteBuffer.flush(exclusiveUpToLogOffset);
+                            int rowCountDiff = kvPreWriteBuffer.flush(exclusiveUpToLogOffset);
                             flushedLogOffset = exclusiveUpToLogOffset;
+                            if (rowCount != ROW_COUNT_DISABLED) {
+                                // row count is enabled, we update the row count after flush.
+                                long currentRowCount = rowCount;
+                                rowCount = currentRowCount + rowCountDiff;
+                            }
                         } catch (Throwable t) {
                             fatalErrorHandler.onFatalError(
                                     new KvStorageException("Failed to flush kv pre-write buffer."));
