@@ -7,7 +7,7 @@ sidebar_position: 2
 :::warning
 **This setup deploys Fluss to a single machine only.**
 
-By default, the Fluss endpoint is **accessible only locally** (e.g., via `localhost`). To allow external access to your local cluster, configure an externally reachable hostname or IP address in the `bind.listeners` field of `server.yaml`. When this is set, all services—including TabletServers—will bind to that address, making their ports accessible from remote clients.
+By default, the local cluster endpoint is **accessible only locally** (e.g., via `localhost`). To allow external access to your local cluster, configure an externally reachable hostname or IP address of this machine in the `bind.listeners` field of `server.yaml`. When this is set, all services—including TabletServers—will bind to that address, making their ports accessible from remote clients.
 
 If you require full control over network exposure or plan to deploy Fluss across multiple machines, refer to the [Deploying Distributed Cluster](install-deploy/deploying-distributed-cluster.md) guide. That guide explains how to deploy each `CoordinatorServer` and `TabletServer` with explicitly configured, externally accessible hostnames and ports.
 :::
