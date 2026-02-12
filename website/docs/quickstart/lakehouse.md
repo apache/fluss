@@ -342,7 +342,6 @@ services:
         datalake.iceberg.s3.path-style-access: true
         datalake.iceberg.client.region: us-east-1
     volumes:
-      - ./lib/fluss-lake-iceberg-$FLUSS_DOCKER_VERSION$.jar:/opt/fluss/plugins/iceberg/fluss-lake-iceberg-$FLUSS_DOCKER_VERSION$.jar
       - ./lib/iceberg-aws-1.10.1.jar:/opt/fluss/plugins/iceberg/iceberg-aws-1.10.1.jar
       - ./lib/iceberg-aws-bundle-1.10.1.jar:/opt/fluss/plugins/iceberg/iceberg-aws-bundle-1.10.1.jar
       - ./lib/postgresql-42.7.4.jar:/opt/fluss/plugins/iceberg/postgresql-42.7.4.jar
