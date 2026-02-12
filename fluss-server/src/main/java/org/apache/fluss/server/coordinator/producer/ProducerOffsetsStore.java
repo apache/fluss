@@ -199,13 +199,16 @@ public class ProducerOffsetsStore {
             return;
         }
 
-        // Delete remote files
+        // Delete ZK metadata first so that concurrent reads won't find metadata
+        // pointing to already-deleted files. Orphan files (if any) will be cleaned
+        // up by the periodic cleanup task.
+        zkClient.deleteProducerOffsets(producerId);
+
+        // Then delete remote files
         for (ProducerOffsets.TableOffsetMetadata metadata : optSnapshot.get().getTableOffsets()) {
             deleteRemoteFile(metadata.getOffsetsPath());
         }
 
-        // Delete ZK metadata
-        zkClient.deleteProducerOffsets(producerId);
         LOG.info("Deleted snapshot for producer {}", producerId);
     }
 
