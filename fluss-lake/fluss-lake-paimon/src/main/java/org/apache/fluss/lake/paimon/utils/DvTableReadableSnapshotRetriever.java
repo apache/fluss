@@ -23,11 +23,13 @@ import org.apache.fluss.client.ConnectionFactory;
 import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.client.metadata.LakeSnapshot;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.LakeTableSnapshotNotExistException;
 import org.apache.fluss.lake.committer.LakeCommitResult;
 import org.apache.fluss.metadata.PartitionInfo;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.utils.ExceptionUtils;
 import org.apache.fluss.utils.types.Tuple2;
 
 import org.apache.paimon.CoreOptions;
@@ -107,7 +109,11 @@ public class DvTableReadableSnapshotRetriever implements AutoCloseable {
      *
      * <ol>
      *   <li>Find the latest compacted snapshot before the given tiered snapshot
-     *   <li>Check which buckets have no L0 files and which have L0 files in the compacted snapshot
+     *   <li>Look up Fluss (ZK lake node) to see if this compacted snapshot is already registered.
+     *       If it exists, skip recomputing tiered and readable offsets and return null (no update
+     *       needed). This avoids redundant work when many APPEND snapshots follow a single COMPACT.
+     *   <li>Otherwise, check which buckets have no L0 files and which have L0 files in the
+     *       compacted snapshot
      *   <li>For buckets without L0 files: use offsets from the latest tiered snapshot (all data is
      *       in base files, safe to advance)
      *   <li>For buckets with L0 files:
@@ -136,6 +142,7 @@ public class DvTableReadableSnapshotRetriever implements AutoCloseable {
      * @return a tuple containing the readable snapshot ID (the latest compacted snapshot) and a map
      *     of TableBucket to readable offset for all buckets, or null if:
      *     <ul>
+     *       <li>The latest compacted snapshot is already registered in Fluss (ZK); no update needed
      *       <li>No compacted snapshot exists before the tiered snapshot
      *       <li>Cannot find the latest snapshot holding flushed L0 files for some buckets
      *       <li>Cannot find the previous APPEND snapshot for some buckets
@@ -159,8 +166,44 @@ public class DvTableReadableSnapshotRetriever implements AutoCloseable {
             return null;
         }
 
-        // todo: optimize in #2626, if the compacted snapshot exists in zk, we can
-        // skip the follow check
+        LakeSnapshot lastCompactedLakeSnapshot = null;
+
+        try {
+            // Attempt to retrieve the snapshot from Fluss.
+            // This is a blocking call to unwrap the future.
+            lastCompactedLakeSnapshot =
+                    flussAdmin.getLakeSnapshot(tablePath, latestCompactedSnapshot.id()).get();
+        } catch (Exception e) {
+            Throwable cause = ExceptionUtils.stripExecutionException(e);
+
+            // If the error is anything other than the snapshot simply not existing,
+            // we log a warning but do not interrupt the flow.
+            if (!(cause instanceof LakeTableSnapshotNotExistException)) {
+                LOG.warn(
+                        "Failed to retrieve lake snapshot {} from Fluss. "
+                                + "Will attempt to advance readable snapshot as a fallback.",
+                        latestCompactedSnapshot.id(),
+                        cause);
+            }
+            // If LakeTableSnapshotNotExistException occurs, we silently fall through
+            // as it is an expected case when the snapshot hasn't been recorded yet.
+        }
+
+        // If we successfully retrieved a snapshot, we must validate its integrity.
+        if (lastCompactedLakeSnapshot != null) {
+            // Consistency Check: The ID in Fluss must strictly match the expected compacted ID.
+            // Should never happen
+            // If they differ, it indicates a critical state mismatch in the metadata.
+            checkState(
+                    lastCompactedLakeSnapshot.getSnapshotId() == latestCompactedSnapshot.id(),
+                    "Snapshot ID mismatch detected! Expected: %s, Actual in Fluss: %s",
+                    latestCompactedSnapshot.id(),
+                    lastCompactedLakeSnapshot.getSnapshotId());
+
+            // If the snapshot already exists and is valid, no further action (advancing) is
+            // required.
+            return null;
+        }
 
         Map<TableBucket, Long> readableOffsets = new HashMap<>();
 
@@ -200,6 +243,31 @@ public class DvTableReadableSnapshotRetriever implements AutoCloseable {
                 readableOffsets.put(
                         tableBucket, latestTieredSnapshot.getTableBucketsOffset().get(tableBucket));
             }
+        }
+
+        Snapshot compactedSnapshotPreviousAppendSnapshot =
+                findPreviousSnapshot(latestCompactedSnapshot.id(), Snapshot.CommitKind.APPEND);
+        if (compactedSnapshotPreviousAppendSnapshot == null) {
+            LOG.warn(
+                    "Failed to find a previous APPEND snapshot before compacted snapshot {} for table {}. "
+                            + "This prevents retrieving baseline offsets from Fluss.",
+                    latestCompactedSnapshot.id(),
+                    tablePath);
+            return null;
+        }
+
+        // We keep snapshots because for a compacted snapshot, if a bucket has L0, we find the
+        // snapshot that exactly holds those L0, then use that snapshot's previous APPEND's tiered
+        // offset as the readable offset (that offset is safe to read). When the current compacted
+        // snapshot has no L0 in any bucket, we do not traverse; for any later compact we would
+        // traverse to (going backwards in time), if some bucket has L0, the snapshot that exactly
+        // holds that L0 must be after the current compacted snapshot on the timeline. So that
+        // snapshot's previous APPEND cannot be earlier than the current compacted snapshot's
+        // previous APPEND. Therefore the minimum snapshot we need to keep is the current compact's
+        // previous APPEND; set earliestSnapshotIdToKeep to it so it is not deleted. Earlier
+        // snapshots may be safely deleted.
+        if (bucketsWithL0.isEmpty()) {
+            earliestSnapshotIdToKeep = compactedSnapshotPreviousAppendSnapshot.id();
         }
 
         // for all buckets with l0, we need to find the latest compacted snapshot which flushed
@@ -336,21 +404,11 @@ public class DvTableReadableSnapshotRetriever implements AutoCloseable {
             return null;
         }
 
-        // to get the the tiered offset for the readable snapshot,
-        Snapshot previousSnapshot =
-                findPreviousSnapshot(latestCompactedSnapshot.id(), Snapshot.CommitKind.APPEND);
-        if (previousSnapshot == null) {
-            LOG.warn(
-                    "Failed to find a previous APPEND snapshot before compacted snapshot {} for table {}. "
-                            + "This prevents retrieving baseline offsets from Fluss.",
-                    latestCompactedSnapshot.id(),
-                    tablePath);
-            return null;
-        }
-
-        long previousSnapshotId = previousSnapshot.id();
+        // we use the previous append snapshot tiered offset of the compacted snapshot as the
+        // compacted snapshot tiered offsets
         LakeSnapshot tieredLakeSnapshot =
-                getOrFetchLakeSnapshot(previousSnapshotId, lakeSnapshotBySnapshotId);
+                getOrFetchLakeSnapshot(
+                        compactedSnapshotPreviousAppendSnapshot.id(), lakeSnapshotBySnapshotId);
         if (tieredLakeSnapshot == null) {
             return null;
         }
