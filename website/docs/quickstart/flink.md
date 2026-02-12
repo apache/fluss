@@ -161,7 +161,6 @@ volumes:
 The Docker Compose environment consists of the following containers:
 - **RustFS:** an S3-compatible object storage for tiered storage. You can access the RustFS console at http://localhost:9001 with credentials `rustfsadmin/rustfsadmin`. An init container (`rustfs-init`) automatically creates the `fluss` bucket on startup.
 - **Fluss Cluster:** a Fluss `CoordinatorServer`, a Fluss `TabletServer` and a `ZooKeeper` server.
-   - Snapshot interval `kv.snapshot.interval` is configured as 60 seconds. You may want to configure this differently for production systems
    - Credentials are configured directly with `s3.access-key` and `s3.secret-key`. Production systems should use CredentialsProvider chain specific to cloud environments.
 - **Flink Cluster**: a Flink `JobManager`, a Flink `TaskManager`, and a Flink SQL client container to execute queries.
 
