@@ -74,7 +74,9 @@ public class StatisticsOrRecordTypeInformation<InputT>
         return false;
     }
 
-    @Override
+    /**
+     * Do not annotate with <code>@Override</code> here to maintain compatibility with Flink 1.18-.
+     */
     public TypeSerializer<StatisticsOrRecord<InputT>> createSerializer(SerializerConfig config) {
         TypeSerializer<InputT> recordSerializer = rowTypeInformation.createSerializer(config);
         return new StatisticsOrRecordSerializer<>(globalStatisticsSerializer, recordSerializer);

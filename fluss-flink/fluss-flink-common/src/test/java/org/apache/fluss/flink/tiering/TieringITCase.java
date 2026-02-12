@@ -48,7 +48,7 @@ import static org.apache.fluss.testutils.common.CommonTestUtils.waitValue;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** The IT case for tiering. */
-class TieringITCase extends FlinkTieringTestBase {
+abstract class TieringITCase extends FlinkTieringTestBase {
 
     @BeforeAll
     protected static void beforeAll() {

@@ -20,6 +20,7 @@ package org.apache.fluss.flink.tiering.source;
 import org.apache.fluss.lake.serializer.SimpleVersionedSerializer;
 
 import org.apache.flink.api.common.ExecutionConfig;
+import org.apache.flink.api.common.serialization.SerializerConfig;
 import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.api.common.typeutils.TypeSerializer;
 import org.apache.flink.core.io.SimpleVersionedSerializerTypeSerializerProxy;
@@ -75,9 +76,11 @@ public class TableBucketWriteResultTypeInfo<WriteResult>
         return false;
     }
 
-    @Override
+    /**
+     * Do not annotate with <code>@Override</code> here to maintain compatibility with Flink 1.18-.
+     */
     public TypeSerializer<TableBucketWriteResult<WriteResult>> createSerializer(
-            ExecutionConfig executionConfig) {
+            SerializerConfig config) {
         // no copy, so that data from lake writer is directly going into lake committer while
         // chaining
         return new SimpleVersionedSerializerTypeSerializerProxy<
@@ -96,6 +99,12 @@ public class TableBucketWriteResultTypeInfo<WriteResult>
                 return from;
             }
         };
+    }
+
+    @Override
+    public TypeSerializer<TableBucketWriteResult<WriteResult>> createSerializer(
+            ExecutionConfig executionConfig) {
+        return createSerializer((SerializerConfig) null);
     }
 
     @Override

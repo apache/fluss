@@ -21,6 +21,7 @@ import org.apache.fluss.flink.tiering.source.TableBucketWriteResult;
 import org.apache.fluss.lake.serializer.SimpleVersionedSerializer;
 
 import org.apache.flink.api.common.ExecutionConfig;
+import org.apache.flink.api.common.serialization.SerializerConfig;
 import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.api.common.typeutils.TypeSerializer;
 import org.apache.flink.core.io.SimpleVersionedSerializerTypeSerializerProxy;
@@ -78,9 +79,11 @@ public class CommittableMessageTypeInfo<Committable>
         return false;
     }
 
-    @Override
+    /**
+     * Do not annotate with <code>@Override</code> here to maintain compatibility with Flink 1.18-.
+     */
     public TypeSerializer<CommittableMessage<Committable>> createSerializer(
-            ExecutionConfig executionConfig) {
+            SerializerConfig serializerConfig) {
         return new SimpleVersionedSerializerTypeSerializerProxy<CommittableMessage<Committable>>(
                 () ->
                         new org.apache.flink.core.io.SimpleVersionedSerializer<
@@ -120,6 +123,12 @@ public class CommittableMessageTypeInfo<Committable>
                 return from;
             }
         };
+    }
+
+    @Override
+    public TypeSerializer<CommittableMessage<Committable>> createSerializer(
+            ExecutionConfig executionConfig) {
+        return createSerializer((SerializerConfig) null);
     }
 
     @Override
