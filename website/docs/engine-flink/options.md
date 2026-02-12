@@ -3,7 +3,7 @@ title: Connector Options
 sidebar_position: 9
 ---
 
-# Connector Options
+# Flink Connector Options
 
 The following table lists the options that can be used to configure the Fluss table in Flink, including the storage format, the read/write behaviors.
 
