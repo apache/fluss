@@ -138,6 +138,79 @@ Generate the following output in the Flink SQL CLI:
 4 rows in set
 ```
 
+## Auto-Increment Column
+
+In Fluss, the auto increment column is a feature that automatically generates a unique numeric value, commonly used to create unique identifiers for each row of data.
+Each time a new record is inserted, the auto increment column automatically assigns an incrementing value, eliminating the need for manually specifying the number.
+
+One application scenario of the auto-increment column is to accelerate the counting of distinct values in a high-cardinality column:
+an auto-increment column can be used to represent the unique value column in a dictionary.
+Compared to directly counting distinct STRING values, counting distinct integer values of the auto-increment column can sometimes improve the query speed by several times or even tens of times.
+
+Furthermore, Fluss provides native support for RoaringBitmap-based aggregations through the built-in `rbm32` and `rbm64` aggregation functions, available in the [Aggregation Merge Engine](/docs/table-design/merge-engines/aggregation.md).
+These functions are optimized to work seamlessly with auto-incremented integer columns. A typical usage pattern involves creating a dictionary table that maps raw identifiers (e.g., strings or sparse IDs) to compact, dense integer IDs via an auto-increment column.
+These dense IDs are then aggregated into a RoaringBitmap using `rbm32` (for 32-bit IDs) or `rbm64` (for 64-bit IDs), enabling highly efficient count-distinct computations both in storage and during query execution.
+
+### Basic features
+
+#### Uniqueness
+
+Fluss guarantees table-wide uniqueness for values it generates in the auto-increment column.
+
+#### Monotonicity
+In order to improve the performance of allocating auto-incremented IDs, each table bucket on TabletServers caches some auto-incremented IDs locally.
+In this situation, Fluss cannot guarantee that the values for the auto-increment column are strictly monotonic globally.
+It can only be ensured that the values roughly increase in chronological order.
+
+:::note
+The number of auto-incremented IDs cached by the TabletServers is controlled by the table property `table.auto-increment.cache-size`,
+which defaults to 100,000. A larger cache size can enhance the performance of auto-incremented ID allocation but may result in
+less monotonic values in the auto-increment column. You can configure different cache sizes for different tables based on your specific requirements.
+However, this property cannot be modified after the table has been created.
+:::
+
+For example, create a table named `uid_mapping` with 2 buckets and insert five rows of data as follows:
+
+```sql
+CREATE TABLE uid_mapping (
+  user_id STRING,
+  uid BIGINT,
+  PRIMARY KEY (user_id) NOT ENFORCED
+) WITH (
+  'table.auto-increment.fields' = 'uid_int64',
+  'bucket.num' = '2'
+);
+
+INSERT INTO uid_mapping VALUES ('user1');
+INSERT INTO uid_mapping VALUES ('user2');
+INSERT INTO uid_mapping VALUES ('user3');
+INSERT INTO uid_mapping VALUES ('user4');
+INSERT INTO uid_mapping VALUES ('user5');
+```
+
+The auto-incremented IDs in the table `uid_mapping` do not monotonically increase, because the two table buckets cache auto-incremented IDs, [1, 100000] and [100001, 200000], respectively.
+
+```sql
+SELECT * FROM uid_mapping;
++---------+---------+
+| user_id |   uid   |
++---------+---------+
+| user1   |    	 1  |
+| user2   | 100001  |
+| user3   |  	 2  |
+| user4   |  	 3  |
+| user5   | 100002  |
++---------+---------+
+```
+
+### Limits
+- Auto-increment columns can only be used in primary key tables.
+- Explicitly specifying values for the auto-increment column is not allowed. The value for an auto-increment column can only be implicitly assigned.
+- A table can have only one auto-increment column.
+- The auto-increment column must be of type `INT` or `BIGINT`.
+- Fluss does not support specifying the starting value and step size for the auto-increment column.
+
+
 ## Data Queries
 
 For primary key tables, Fluss supports various kinds of querying abilities.
