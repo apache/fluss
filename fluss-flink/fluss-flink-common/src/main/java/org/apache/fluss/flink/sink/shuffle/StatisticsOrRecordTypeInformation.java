@@ -18,9 +18,8 @@
 package org.apache.fluss.flink.sink.shuffle;
 
 import org.apache.fluss.annotation.Internal;
+import org.apache.fluss.flink.adapter.TypeInformationAdapter;
 
-import org.apache.flink.api.common.ExecutionConfig;
-import org.apache.flink.api.common.serialization.SerializerConfig;
 import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.api.common.typeutils.TypeSerializer;
 
@@ -33,7 +32,7 @@ import java.util.Objects;
  */
 @Internal
 public class StatisticsOrRecordTypeInformation<InputT>
-        extends TypeInformation<StatisticsOrRecord<InputT>> {
+        extends TypeInformationAdapter<StatisticsOrRecord<InputT>> {
 
     private final TypeInformation<InputT> rowTypeInformation;
     private final DataStatisticsSerializer globalStatisticsSerializer;
@@ -74,18 +73,12 @@ public class StatisticsOrRecordTypeInformation<InputT>
         return false;
     }
 
-    /**
-     * Do not annotate with <code>@Override</code> here to maintain compatibility with Flink 1.18-.
-     */
-    public TypeSerializer<StatisticsOrRecord<InputT>> createSerializer(SerializerConfig config) {
-        TypeSerializer<InputT> recordSerializer = rowTypeInformation.createSerializer(config);
-        return new StatisticsOrRecordSerializer<>(globalStatisticsSerializer, recordSerializer);
-    }
-
     @Override
-    @Deprecated
-    public TypeSerializer<StatisticsOrRecord<InputT>> createSerializer(ExecutionConfig config) {
-        TypeSerializer<InputT> recordSerializer = rowTypeInformation.createSerializer(config);
+    @SuppressWarnings("unchecked")
+    protected TypeSerializer<StatisticsOrRecord<InputT>> createSerializer(
+            TypeInformationAdapter.TypeSerializerCreator typeSerializerCreator) {
+        TypeSerializer<InputT> recordSerializer =
+                (TypeSerializer<InputT>) typeSerializerCreator.createSerializer(rowTypeInformation);
         return new StatisticsOrRecordSerializer<>(globalStatisticsSerializer, recordSerializer);
     }
 
@@ -95,6 +88,7 @@ public class StatisticsOrRecordTypeInformation<InputT>
     }
 
     @Override
+    @SuppressWarnings("unchecked")
     public boolean equals(Object o) {
         if (this == o) {
             return true;
