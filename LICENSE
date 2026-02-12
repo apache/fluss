@@ -396,11 +396,29 @@ Apache Spark
 ./fluss-rpc/src/main/java/org/apache/fluss/rpc/netty/NettyLogger.java
 
 LightProto
-./fluss-common/src/main/java/org/apache/fluss/utils/ProtoCodecUtils.java
-./fluss-protogen/fluss-protogen-generator/src/main/java/org/apache/fluss/protogen/generator/generator/ProtoGen.java
-./fluss-protogen/fluss-protogen-generator/src/main/java/org/apache/fluss/protogen/generator/generator/ProtobufMessage.java
-./fluss-protogen/fluss-protogen-generator/src/main/java/org/apache/fluss/protogen/generator/generator/ProtobufNumberField.java
-./fluss-protogen/fluss-protogen-maven-plugin/src/main/java/org/apache/fluss/protogen/maven/plugin/ProtoGenMojo.java
+ ./fluss-common/src/main/java/org/apache/fluss/utils/ProtoCodecUtils.java
+ ./fluss-protogen/fluss-protogen-maven-plugin/src/main/java/org/apache/fluss/protogen/maven/plugin/ProtoGenMojo.java
+ ./fluss-protogen/fluss-protogen-generator/src/main/java/org/apache/fluss/protogen/generator/generator/ProtoGenUtil.java
+ ./fluss-protogen/fluss-protogen-generator/src/main/java/org/apache/fluss/protogen/generator/generator/NameUtilities.java
+ ./fluss-protogen/fluss-protogen-generator/src/main/java/org/apache/fluss/protogen/generator/generator/ProtoCodeGenerator.java
+ ./fluss-protogen/fluss-protogen-generator/src/main/java/org/apache/fluss/protogen/generator/generator/ProtobufAbstractRepeated.java
+ ./fluss-protogen/fluss-protogen-generator/src/main/java/org/apache/fluss/protogen/generator/generator/ProtobufBooleanField.java
+ ./fluss-protogen/fluss-protogen-generator/src/main/java/org/apache/fluss/protogen/generator/generator/ProtobufBytesField.java
+ ./fluss-protogen/fluss-protogen-generator/src/main/java/org/apache/fluss/protogen/generator/generator/ProtobufEnumField.java
+ ./fluss-protogen/fluss-protogen-generator/src/main/java/org/apache/fluss/protogen/generator/generator/ProtobufField.java
+ ./fluss-protogen/fluss-protogen-generator/src/main/java/org/apache/fluss/protogen/generator/generator/ProtobufEnum.java
+ ./fluss-protogen/fluss-protogen-generator/src/main/java/org/apache/fluss/protogen/generator/generator/ProtobufMessageField.java
+ ./fluss-protogen/fluss-protogen-generator/src/main/java/org/apache/fluss/protogen/generator/generator/ProtobufRepeatedBytesField.java
+ ./fluss-protogen/fluss-protogen-generator/src/main/java/org/apache/fluss/protogen/generator/generator/ProtobufRecordsField.java
+ ./fluss-protogen/fluss-protogen-generator/src/main/java/org/apache/fluss/protogen/generator/generator/ProtobufRepeatedEnumField.java
+ ./fluss-protogen/fluss-protogen-generator/src/main/java/org/apache/fluss/protogen/generator/generator/ProtobufRepeatedMessageField.java
+ ./fluss-protogen/fluss-protogen-generator/src/main/java/org/apache/fluss/protogen/generator/generator/ProtobufRepeatedNumberField.java
+ ./fluss-protogen/fluss-protogen-generator/src/main/java/org/apache/fluss/protogen/generator/generator/RecordsFieldFinder.java
+ ./fluss-protogen/fluss-protogen-generator/src/main/java/org/apache/fluss/protogen/generator/generator/ProtobufRepeatedStringField.java
+ ./fluss-protogen/fluss-protogen-generator/src/main/java/org/apache/fluss/protogen/generator/generator/ProtobufStringField.java
+ ./fluss-protogen/fluss-protogen-generator/src/main/java/org/apache/fluss/protogen/generator/generator/ProtobufNumberField.java
+ ./fluss-protogen/fluss-protogen-generator/src/main/java/org/apache/fluss/protogen/generator/generator/ProtobufMessage.java
+ ./fluss-protogen/fluss-protogen-generator/src/main/java/org/apache/fluss/protogen/generator/generator/ProtoGen.java
 
 Apache Maven Wrapper
 ./mvnw
