@@ -7,7 +7,7 @@ sidebar_position: 4
 
 This tutorial demonstrates how to build a production-grade, real-time user profiling system. You will learn how to map high-cardinality string identifiers (like emails) to compact integers and aggregate user behavior directly in the storage layer with exactly-once guarantees.
 
-<img width="1024" height="535" alt="Image" src="https://github.com/user-attachments/assets/91b30bbf-b1f0-42a7-89b1-03013a4d2ca2" />
+![arch](/img/user_profile.png)
 
 ## How the System Works
 
