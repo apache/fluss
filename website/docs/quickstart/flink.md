@@ -109,7 +109,7 @@ services:
         s3.access-key: rustfsadmin
         s3.secret-key: rustfsadmin
         s3.path-style-access: true
-        kv.snapshot.interval: 60s
+        kv.snapshot.interval: 0s
   zookeeper:
     restart: always
     image: zookeeper:3.9.2
@@ -450,27 +450,6 @@ SELECT * FROM fluss_customer WHERE `cust_key` = 1;
 The following command allows you to quit Flink SQL Client.
 ```sql title="Flink SQL"
 quit;
-```
-
-### Remote Storage
-
-Finally, you can use the following command to view the Primary Key Table snapshot files stored on RustFS:
-
-```shell
-docker run --rm --net=host \
--e MC_HOST_rustfs=http://rustfsadmin:rustfsadmin@localhost:9000 \
-minio/mc ls --recursive rustfs/fluss/                
-```
-
-Sample output: 
-```shell
-[2026-02-03 20:28:59 UTC]  26KiB STANDARD remote-data/kv/fluss/enriched_orders-3/0/shared/4f675202-e560-4b8e-9af4-08e9769b4797
-[2026-02-03 20:27:59 UTC]  11KiB STANDARD remote-data/kv/fluss/enriched_orders-3/0/shared/87447c34-81d0-4be5-b4c8-abcea5ce68e9
-[2026-02-03 20:28:59 UTC]     0B STANDARD remote-data/kv/fluss/enriched_orders-3/0/snap-0/
-[2026-02-03 20:28:59 UTC] 1.1KiB STANDARD remote-data/kv/fluss/enriched_orders-3/0/snap-1/_METADATA
-[2026-02-03 20:28:59 UTC]   211B STANDARD remote-data/kv/fluss/enriched_orders-3/0/snap-1/aaffa8fc-ddb3-4754-938a-45e28df6d975
-[2026-02-03 20:28:59 UTC]    16B STANDARD remote-data/kv/fluss/enriched_orders-3/0/snap-1/d3c18e43-11ee-4e39-912d-087ca01de0e8
-[2026-02-03 20:28:59 UTC] 6.2KiB STANDARD remote-data/kv/fluss/enriched_orders-3/0/snap-1/ea2f2097-aa9a-4c2a-9e72-530218cd551c
 ```
 
 ## Clean up
