@@ -17,10 +17,10 @@
 
 package org.apache.fluss.flink.tiering.committer;
 
+import org.apache.fluss.flink.adapter.TypeInformationAdapter;
 import org.apache.fluss.flink.tiering.source.TableBucketWriteResult;
 import org.apache.fluss.lake.serializer.SimpleVersionedSerializer;
 
-import org.apache.flink.api.common.ExecutionConfig;
 import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.api.common.typeutils.TypeSerializer;
 import org.apache.flink.core.io.SimpleVersionedSerializerTypeSerializerProxy;
@@ -30,7 +30,7 @@ import java.io.IOException;
 
 /** A {@link TypeInformation} for {@link CommittableMessage}. */
 public class CommittableMessageTypeInfo<Committable>
-        extends TypeInformation<CommittableMessage<Committable>> {
+        extends TypeInformationAdapter<CommittableMessage<Committable>> {
 
     private final SerializableSupplier<SimpleVersionedSerializer<Committable>>
             committableSerializerFactory;
@@ -79,8 +79,8 @@ public class CommittableMessageTypeInfo<Committable>
     }
 
     @Override
-    public TypeSerializer<CommittableMessage<Committable>> createSerializer(
-            ExecutionConfig executionConfig) {
+    protected TypeSerializer<CommittableMessage<Committable>> createSerializer(
+            TypeSerializerCreator typeSerializerCreator) {
         return new SimpleVersionedSerializerTypeSerializerProxy<CommittableMessage<Committable>>(
                 () ->
                         new org.apache.flink.core.io.SimpleVersionedSerializer<
