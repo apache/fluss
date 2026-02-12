@@ -9,7 +9,7 @@ sidebar_position: 5
 Fluss supports batch read with [Apache Spark](https://spark.apache.org/)'s SQL API for both Log Tables and Primary Key Tables.
 
 :::tip
-For streaming read, see the [Structured Streaming Read](streaming.md#streaming-read) section.
+For streaming read, see the [Structured Streaming Read](structured-streaming.md#streaming-read) section.
 :::
 
 ## Limitations

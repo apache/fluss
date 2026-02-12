@@ -112,4 +112,4 @@ INSERT INTO all_types_table VALUES (
 
 ## See Also
 
-- [Structured Streaming Write](streaming.md#streaming-write) for continuous streaming writes to Fluss tables.
+- [Structured Streaming Write](structured-streaming.md#streaming-write) for continuous streaming writes to Fluss tables.

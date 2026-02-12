@@ -1,5 +1,5 @@
 ---
-sidebar_label: Options
+sidebar_label: Connector Options
 title: Spark Connector Options
 sidebar_position: 7
 ---

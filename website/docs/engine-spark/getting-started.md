@@ -30,8 +30,8 @@ Fluss supports Apache Spark's SQL API and Spark Structured Streaming.
 | [SQL Drop Partition](ddl.md#drop-partition)          | ✔️    |                                             |
 | [SQL Select (Batch)](reads.md)                       | ✔️    | Log table and primary-key table             |
 | [SQL Insert Into](writes.md)                         | ✔️    | Log table and primary-key table             |
-| [Structured Streaming Read](streaming.md#streaming-read) | ✔️ | Log table and primary-key table             |
-| [Structured Streaming Write](streaming.md#streaming-write) | ✔️ | Log table and primary-key table           |
+| [Structured Streaming Read](structured-streaming.md#streaming-read) | ✔️ | Log table and primary-key table             |
+| [Structured Streaming Write](structured-streaming.md#streaming-write) | ✔️ | Log table and primary-key table           |
 
 
 ## Preparation when using Spark SQL
@@ -49,7 +49,7 @@ tar -xzf spark-3.5.7-bin-hadoop3.tgz
 Download [Fluss Spark Bundled jar](/downloads) and copy to the `jars` directory of your Spark home.
 
 ```shell
-cp fluss-spark-$FLUSS_VERSION$.jar <SPARK_HOME>/jars/
+cp fluss-spark-3.5_2.12-$FLUSS_VERSION$.jar <SPARK_HOME>/jars/
 ```
 
 - **Start Spark SQL**
@@ -95,11 +95,11 @@ val spark = SparkSession.builder()
 ```
 
 :::note
-1. The `bootstrap.servers` means the Fluss server address. Before you config the `bootstrap.servers`,
+1. The `spark.sql.catalog.fluss_catalog.bootstrap.servers` means the Fluss server address. Before you config the `bootstrap.servers`,
    you should start the Fluss server first. See [Deploying Fluss](install-deploy/overview.md#how-to-deploy-fluss)
    for how to build a Fluss cluster.
    Here, it is assumed that there is a Fluss cluster running on your local machine and the CoordinatorServer port is 9123.
-2. The `bootstrap.servers` configuration is used to discover all nodes within the Fluss cluster. It can be set with one or more (up to three) Fluss server addresses (either CoordinatorServer or TabletServer) separated by commas.
+2. The `spark.sql.catalog.fluss_catalog.bootstrap.servers` configuration is used to discover all nodes within the Fluss cluster. It can be set with one or more (up to three) Fluss server addresses (either CoordinatorServer or TabletServer) separated by commas.
 :::
 
 ## Creating a Database
@@ -109,7 +109,7 @@ USE fluss_catalog;
 ```
 
 ```sql title="Spark SQL"
-CREATE DATABSE fluss_db;
+CREATE DATABASE fluss_db;
 USE fluss_db;
 ```
 

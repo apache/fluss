@@ -1,5 +1,5 @@
 ---
-sidebar_label: Streaming
+sidebar_label: Structured Streaming
 title: Spark Structured Streaming
 sidebar_position: 6
 ---

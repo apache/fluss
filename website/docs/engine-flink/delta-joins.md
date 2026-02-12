@@ -4,7 +4,7 @@ title: Flink Delta Joins
 sidebar_position: 7
 ---
 
-# The Delta Join
+# Flink Delta Join
 Beginning with **Apache Flink 2.1**, a new operator called [Delta Join](https://cwiki.apache.org/confluence/display/FLINK/FLIP-486%3A+Introduce+A+New+DeltaJoin) was introduced.
 Compared to traditional streaming joins, the delta join operator significantly reduces the amount of state that needs to be maintained during execution. This improvement helps mitigate several common issues associated with large state sizes, including:
 
