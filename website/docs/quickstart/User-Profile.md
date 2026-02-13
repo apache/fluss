@@ -38,7 +38,7 @@ Before proceeding, ensure that [Docker](https://docs.docker.com/engine/install/)
 
 2. Set the Fluss version environment variable.
    ```shell
-   # Set to 0.1.0 or 0.10-SNAPSHOT for latest features
+   # Set to 0.9.0 or 0.10-SNAPSHOT for latest features
    export FLUSS_DOCKER_VERSION=0.10-SNAPSHOT
    export FLINK_VERSION="1.20"
    ```
@@ -55,6 +55,9 @@ Before proceeding, ensure that [Docker](https://docs.docker.com/engine/install/)
    curl -fL -o "lib/fluss-flink-${FLINK_VERSION}-${FLUSS_DOCKER_VERSION}.jar" \
    "https://repo1.maven.org/maven2/org/apache/fluss/fluss-flink-${FLINK_VERSION}/${FLUSS_DOCKER_VERSION}/fluss-flink-${FLINK_VERSION}-${FLUSS_DOCKER_VERSION}.jar"
    ```
+   :::note
+   For now : cp ../fluss-flink/fluss-flink-1.20/target/fluss-flink-1.20-0.10-SNAPSHOT.jar lib/
+   :::
 
 4. Create a `docker-compose.yml` file.
    ```yaml
@@ -243,8 +246,10 @@ You can query the `user_profiles` table to see the aggregated metrics updating i
 ```sql
 -- Set result mode to tableau for better visualization
 SET 'sql-client.execution.result-mode' = 'tableau';
+```
 
--- Query the profiles
+```sql
+--user profile
 SELECT 
     profile_id, 
     total_clicks, 
