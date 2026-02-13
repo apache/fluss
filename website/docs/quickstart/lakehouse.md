@@ -40,7 +40,7 @@ mkdir -p lib opt
 # Flink connectors
 curl -fL -o lib/flink-faker-0.5.3.jar https://github.com/knaufk/flink-faker/releases/download/v0.5.3/flink-faker-0.5.3.jar
 curl -fL -o "lib/fluss-flink-1.20-$FLUSS_VERSION$.jar" "$FLUSS_MAVEN_REPO_URL$/org/apache/fluss/fluss-flink-1.20/$FLUSS_VERSION$/fluss-flink-1.20-$FLUSS_VERSION$.jar"
-curl -fL -o "lib/paimon-flink-1.20-$PAIMON_VERSION$.jar" "$FLUSS_MAVEN_REPO_URL$/org/apache/paimon/paimon-flink-1.20/$PAIMON_VERSION$/paimon-flink-1.20-$PAIMON_VERSION$.jar"
+curl -fL -o "lib/paimon-flink-1.20-$PAIMON_VERSION$.jar" "https://repo1.maven.org/maven2/org/apache/paimon/paimon-flink-1.20/$PAIMON_VERSION$/paimon-flink-1.20-$PAIMON_VERSION$.jar"
 
 # Fluss lake plugin
 curl -fL -o "lib/fluss-lake-paimon-$FLUSS_VERSION$.jar" "$FLUSS_MAVEN_REPO_URL$/org/apache/fluss/fluss-lake-paimon/$FLUSS_VERSION$/fluss-lake-paimon-$FLUSS_VERSION$.jar"

@@ -115,7 +115,8 @@ CREATE TABLE product_stats (
 -- Insert data - these will be aggregated
 INSERT INTO product_stats VALUES
     (1, 23.0, 15, TIMESTAMP '2024-01-01 10:00:00'),
-    (1, 30.2, 20, TIMESTAMP '2024-01-01 11:00:00');  -- Same primary key - triggers aggregation
+    -- Same primary key - triggers aggregation
+    (1, 30.2, 20, TIMESTAMP '2024-01-01 11:00:00');
 ```
 
 ### Querying Results

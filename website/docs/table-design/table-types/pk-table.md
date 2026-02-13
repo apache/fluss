@@ -171,36 +171,40 @@ However, this property cannot be modified after the table has been created.
 
 For example, create a table named `uid_mapping` with 2 buckets and insert five rows of data as follows:
 
-```sql
+```sql title="Flink SQL"
 CREATE TABLE uid_mapping (
   user_id STRING,
   uid BIGINT,
   PRIMARY KEY (user_id) NOT ENFORCED
 ) WITH (
-  'table.auto-increment.fields' = 'uid_int64',
+  'auto-increment.fields' = 'uid',
   'bucket.num' = '2'
 );
+```
 
-INSERT INTO uid_mapping VALUES ('user1');
-INSERT INTO uid_mapping VALUES ('user2');
-INSERT INTO uid_mapping VALUES ('user3');
-INSERT INTO uid_mapping VALUES ('user4');
-INSERT INTO uid_mapping VALUES ('user5');
+```sql title="Flink SQL"
+INSERT INTO uid_mapping (user_id) VALUES
+  ('user1'), ('user2'), ('user3'), ('user4'), ('user5');
 ```
 
 The auto-incremented IDs in the table `uid_mapping` do not monotonically increase, because the two table buckets cache auto-incremented IDs, [1, 100000] and [100001, 200000], respectively.
 
-```sql
-SELECT * FROM uid_mapping;
-+---------+---------+
-| user_id |   uid   |
-+---------+---------+
-| user1   |    	 1  |
-| user2   | 100001  |
-| user3   |  	 2  |
-| user4   |  	 3  |
-| user5   | 100002  |
-+---------+---------+
+```sql title="Flink SQL"
+SELECT * FROM uid_mapping LIMIT 10;
+```
+
+The result may look like this:
+
+```
++---------+--------+
+| user_id |    uid |
++---------+--------+
+|   user1 | 100001 |
+|   user2 | 100002 |
+|   user4 | 100003 |
+|   user3 |      1 |
+|   user5 |      2 |
++---------+--------+
 ```
 
 ### Limits
