@@ -139,7 +139,7 @@ The Fluss Helm chart deploys the following Kubernetes resources:
 - **CoordinatorServer**: 1x StatefulSet with Headless Service for cluster coordination
 - **TabletServer**: 3x StatefulSet with Headless Service for data storage and processing
 - **ConfigMap**: Configuration management for `server.yaml` settings
-- **Services**: Headless services providing stable pod DNS names
+- **Services**: Headless services providing stable pod DNS names, plus optional dedicated headless services when metrics are enabled
 
 ### Step 3: Verify Installation
 
@@ -201,6 +201,17 @@ If the internal SASL username or password is left empty, the chart automatically
 - Password is set to the SHA-256 hash of `"fluss-internal-password-<release-name>"`
 
 It is recommended to set these explicitly in production.
+
+### Metrics Parameters
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `metrics.reporters` | Comma-separated reporter selector; use `""` to disable metrics | `""` |
+| `metrics.jmx.port` | JMX reporter port range | `9250` |
+| `metrics.prometheus.port` | Prometheus reporter port | `9249` |
+| `metrics.prometheus.service.portName` | Named port exposed on metrics services | `metrics` |
+| `metrics.prometheus.service.labels` | Additional labels added to metrics services | `{}` |
+| `metrics.prometheus.service.annotations` | Optional annotations added to metrics services | `{}` |
 
 ### Fluss Configuration Overrides
 
@@ -312,6 +323,62 @@ security:
       plain:
         username: internal-user
         password: internal-password
+```
+
+### Metrics and Monitoring
+
+When `metrics.reporters` is set, the chart adds the following `server.yaml` configuration entries:
+
+- `metrics.reporters`: comma-separated reporter names from `metrics.reporters`
+- `metrics.reporter.<name>.port`: port value from `metrics.<name>.port`
+
+These values are managed by the chart and cannot be set via `configurationOverrides`. All other metrics reporter options (refer to the [Fluss configuration](https://fluss.apache.org/docs/maintenance/configuration/#metrics)) should be specified via `configurationOverrides`.
+
+#### Prometheus Annotation Based Scraping
+
+The example values below show how to add annotations to the metrics services so that a Prometheus server can discover and scrape them automatically based on the annotations:
+
+```yaml
+metrics:
+  reporters: prometheus
+  prometheus:
+    port: 9249
+    service:
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/path: "/metrics"
+        prometheus.io/port: "9249"
+```
+
+#### Prometheus ServiceMonitor Based Scraping
+
+Similarly, if using the [Prometheus Operator](https://prometheus-operator.dev/), use the values below to add labels to the metrics services:
+
+```yaml
+metrics:
+  reporters: prometheus
+  prometheus:
+    port: 9249
+    service:
+      portName: metrics
+      labels:
+        monitoring: enabled
+```
+
+Then create a [`ServiceMonitor`](https://prometheus-operator.dev/docs/api-reference/api/#monitoring.coreos.com/v1.ServiceMonitor) that selects them matching the labels:
+
+```yaml
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: fluss-metrics
+spec:
+  selector:
+    matchLabels:
+      monitoring: enabled
+  endpoints:
+    # Matches `metrics.prometheus.service.portName`
+    - port: metrics
 ```
 
 ### Storage Configuration

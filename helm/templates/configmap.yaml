@@ -41,4 +41,15 @@ data:
     client.security.protocol: SASL
     client.security.sasl.mechanism: {{ upper $internalMechanism }}
     {{- end }}
+
+    {{- end }}
+
+    {{- if include "fluss.metrics.enabled" . }}
+    ### Metrics
+
+    metrics.reporters: {{ .Values.metrics.reporters }}
+    {{- range $name := (include "fluss.metrics.reporterNames" . | fromYamlArray) }}
+    {{ printf "metrics.reporter.%s.port" $name }}: {{ (index $.Values.metrics $name).port }}
+    {{- end }}
+
     {{- end }}
