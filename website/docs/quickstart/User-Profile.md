@@ -69,7 +69,9 @@ Before proceeding, ensure that [Docker](https://docs.docker.com/engine/install/)
            FLUSS_PROPERTIES=
            zookeeper.address: zookeeper:2181
            bind.listeners: FLUSS://coordinator-server:9123
-           remote.data.dir: /tmp/fluss/remote-data
+           remote.data.dir: /remote-data
+       volumes:
+         - fluss-remote-data:/remote-data
      tablet-server:
        image: apache/fluss:${FLUSS_DOCKER_VERSION}
        command: tabletServer
@@ -81,7 +83,9 @@ Before proceeding, ensure that [Docker](https://docs.docker.com/engine/install/)
            zookeeper.address: zookeeper:2181
            bind.listeners: FLUSS://tablet-server:9123
            data.dir: /tmp/fluss/data
-           remote.data.dir: /tmp/fluss/remote-data
+           remote.data.dir: /remote-data
+       volumes:
+         - fluss-remote-data:/remote-data
      zookeeper:
        restart: always
        image: zookeeper:3.9.2
@@ -96,6 +100,7 @@ Before proceeding, ensure that [Docker](https://docs.docker.com/engine/install/)
        entrypoint: ["sh", "-c", "cp -v /tmp/lib/*.jar /opt/flink/lib && exec /docker-entrypoint.sh jobmanager"]
        volumes:
          - ./lib:/tmp/lib
+         - fluss-remote-data:/remote-data
      taskmanager:
        image: flink:${FLINK_VERSION}
        depends_on:
@@ -108,6 +113,7 @@ Before proceeding, ensure that [Docker](https://docs.docker.com/engine/install/)
        entrypoint: ["sh", "-c", "cp -v /tmp/lib/*.jar /opt/flink/lib && exec /docker-entrypoint.sh taskmanager"]
        volumes:
          - ./lib:/tmp/lib
+         - fluss-remote-data:/remote-data
      sql-client:
        image: flink:${FLINK_VERSION}
        depends_on:
@@ -120,6 +126,10 @@ Before proceeding, ensure that [Docker](https://docs.docker.com/engine/install/)
        entrypoint: ["sh", "-c", "cp -v /tmp/lib/*.jar /opt/flink/lib && exec /docker-entrypoint.sh bin/sql-client.sh"]
        volumes:
          - ./lib:/tmp/lib
+         - fluss-remote-data:/remote-data
+
+   volumes:
+     fluss-remote-data:
    ```
 
 5. Start the environment.
@@ -218,7 +228,7 @@ SELECT
     d.uid,
     -- Convert INT to BYTES for rbm64. 
     -- Note: In a real production job, you might use a UDF to ensure correct bitmap initialization.
-    CAST(d.uid AS BYTES),
+    CAST(CAST(d.uid AS STRING) AS BYTES),
     CAST(e.click_count AS BIGINT)
 FROM raw_events AS e
 JOIN user_dict /*+ OPTIONS('lookup.insert-if-not-exists' = 'true') */
@@ -228,21 +238,21 @@ ON e.email = d.email;
 
 ## Step 5: Verify Results
 
-You can query the `user_profiles` table to see the aggregated metrics updating in real-time. To make the output readable, we use the `rbm64_cardinality` function to turn the bytes back into a human-readable count.
+You can query the `user_profiles` table to see the aggregated metrics updating in real-time.
 
 ```sql
 -- Set result mode to tableau for better visualization
 SET 'sql-client.execution.result-mode' = 'tableau';
 
--- Query the profiles with human-readable UV counts
+-- Query the profiles
 SELECT 
     profile_id, 
     total_clicks, 
-    rbm64_cardinality(unique_visitors) as unique_visitor_count 
+    unique_visitors 
 FROM user_profiles;
 ```
 
-You should see rows with `profile_id`, `total_clicks`, and `unique_visitor_count`. The `total_clicks` will increase as more events arrive for the same user.
+You should see rows with `profile_id`, `total_clicks`, and `unique_visitors` (as raw bytes representing the bitmap). The `total_clicks` will increase as more events arrive for the same user.
 
 To verify the dictionary mapping:
 ```sql
