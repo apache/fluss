@@ -117,10 +117,21 @@ $ git checkout -b release-${SHORT_RELEASE_VERSION}
 $ git push origin release-${SHORT_RELEASE_VERSION}
 ```
 
+Check that the version in the Helm Chart matches `RELEASE_VERSION` in:
+- `helm/Chart.yaml`
+- `helm/values.yaml`
+- `helm/README.md`
+
+If not, update the version in those files, then commit and push:
+
+```bash
+$ git commit -m "[helm] Bump helm version to x.y.z" helm/Chart.yaml helm/values.yaml helm/README.md
+$ git push origin release-${SHORT_RELEASE_VERSION}
+```
   </TabItem>
 
   <TabItem value="bugfix" label="Bugfix release">
-If you're creating a new bugfix release (e.g., 0.9.1 instead of 0.9.0), you do not need to create a release branch. You can skip this step can check out the the already existing branch for that version:
+If you're creating a new bugfix release (e.g., 0.9.1 instead of 0.9.0), you do not need to create a release branch. You can skip this step and check out the already existing branch for that version:
 
 ```bash
 $ git checkout release-$SHORT_RELEASE_VERSION
@@ -131,8 +142,7 @@ Update the version in the Helm Chart in:
 - `helm/values.yaml`
 - `helm/README.md`
 
-For example, if you are releasing a bugfix version `0.8.1-incubating`, you should replace all the previous version `0.8.0-incubating` to the new version `0.8.1-incubating`.
-
+For a bugfix release you need to update the version in these files. For example, if you are releasing `0.8.1-incubating`, replace the previous version `0.8.0-incubating` with `0.8.1-incubating` in those files.
 
 And commit/push the version bump:
 
@@ -180,7 +190,8 @@ Additionally, for the upgrade notes page of the version currently being released
 Commit the documentation changes, and push to the official repository.
 
 ```bash
-$ git commit -m "[docs] Create upgrade notes for $SHORT_NEXT_VERSION" .
+$ git add .
+$ git commit -m "[docs] Create upgrade notes for $SHORT_NEXT_VERSION"
 $ git push origin main
 ```
 
@@ -217,7 +228,7 @@ Additionally, update the `fullVersion`, `shortVersion`, and `dockerVersion` fiel
 Commit the documentation changes, and push to the official repository.
 
 ```bash
-$ git commit -m "[docs] Add version item for $SHORT_NEXT_VERSION" fluss-versions.json
+$ git commit -m "[docs] Add version item for $SHORT_NEXT_VERSION in fluss-versions.json" .
 $ git push origin main
 ```
 
