@@ -69,7 +69,7 @@ You can add more jars to this `lib` directory based on your requirements:
 services:
   #begin RustFS (S3-compatible storage)
   rustfs:
-    image: rustfs/rustfs:latest
+    image: rustfs/rustfs:1.0.0-alpha.83
     ports:
       - "9000:9000"
       - "9001:9001"
@@ -273,7 +273,7 @@ You can add more jars to this `lib` directory based on your requirements:
 services:
   #begin RustFS (S3-compatible storage)
   rustfs:
-    image: rustfs/rustfs:latest
+    image: rustfs/rustfs:1.0.0-alpha.83
     ports:
       - "9000:9000"
       - "9001:9001"
