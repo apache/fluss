@@ -27,3 +27,6 @@ data:
     {{- range $key, $val := .Values.configurationOverrides }}
     {{ $key }}: {{ tpl (printf "%v" $val) $ }}
     {{- end }}
+    {{- if .Values.metrics.enabled }}
+    {{- include "fluss.metrics.config" . | nindent 4 }}
+    {{- end }}
