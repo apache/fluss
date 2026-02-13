@@ -31,6 +31,7 @@ import org.apache.fluss.flink.source.reader.LeaseContext;
 import org.apache.fluss.flink.utils.FlinkConnectorOptionsUtils;
 import org.apache.fluss.metadata.MergeEngineType;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.utils.PropertiesUtils;
 
 import org.apache.flink.api.common.RuntimeExecutionMode;
 import org.apache.flink.configuration.ConfigOption;
@@ -49,6 +50,8 @@ import org.apache.flink.table.factories.DynamicTableSinkFactory;
 import org.apache.flink.table.factories.DynamicTableSourceFactory;
 import org.apache.flink.table.factories.FactoryUtil;
 import org.apache.flink.table.types.logical.RowType;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.time.ZoneId;
 import java.util.ArrayList;
@@ -70,6 +73,9 @@ import static org.apache.fluss.flink.utils.FlinkConversions.toFlinkOption;
 
 /** Factory to create table source and table sink for Fluss. */
 public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTableSinkFactory {
+
+    private static final Logger LOG = LoggerFactory.getLogger(FlinkTableFactory.class);
+    private static final String FLUSS_PREFIX = "fluss.";
 
     protected final LakeFlinkCatalog lakeFlinkCatalog;
     private volatile LakeTableFactory lakeTableFactory;
@@ -265,6 +271,17 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
                         flussConfig.setString(key, value);
                     }
                 });
+
+        // pass through all fluss options from flink config
+        try {
+            PropertiesUtils.extractAndRemovePrefix(flinkConfig.toMap(), FLUSS_PREFIX)
+                    .forEach(flussConfig::setString);
+        } catch (NoSuchMethodError e) {
+            // Flink 1.18 does not have the toMap() method yet, see
+            // https://nightlies.apache.org/flink/flink-docs-release-1.18/api/java//org/apache/flink/configuration/ReadableConfig.html
+            LOG.warn(
+                    "Passing config options with prefix 'fluss' via Flink config is only supported with Fluss Flink Connector 1.19 and higher. All config options with prefix 'fluss' will be ignored.");
+        }
 
         // Todo support LookupOptions.MAX_RETRIES. Currently, Fluss doesn't support connector level
         // retry. The option 'client.lookup.max-retries' is only for dealing with the
