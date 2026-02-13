@@ -7,7 +7,7 @@ sidebar_position: 4
 
 This tutorial demonstrates how to build a production-grade, real-time user profiling system using Apache Fluss. You will learn how to map high-cardinality string identifiers (like emails) to compact integers and aggregate user behavior directly in the storage layer with exactly-once guarantees.
 
-<img width="1024" height="535" alt="Image" src="https://github.com/user-attachments/assets/91b30bbf-b1f0-42a7-89b1-03013a4d2ca2" />
+![arch](/img/user-profile.png)
 
 ## How the System Works
 
@@ -38,10 +38,13 @@ Before proceeding, ensure that [Docker](https://docs.docker.com/engine/install/)
 
 2. Set the Fluss version environment variable.
    ```shell
-   # Set to the version you want to use, e.g., 0.6.0 or 0.10-SNAPSHOT
-   export FLUSS_DOCKER_VERSION=0.6.0 
+   # Set to 0.1.0 or 0.10-SNAPSHOT for latest features
+   export FLUSS_DOCKER_VERSION=0.10-SNAPSHOT
    export FLINK_VERSION="1.20"
    ```
+   :::note
+   If you open a new terminal window, remember to re-run these export commands.
+   :::
 
 3. Create a `lib` directory and download the required JARs.
    ```shell
@@ -49,7 +52,8 @@ Before proceeding, ensure that [Docker](https://docs.docker.com/engine/install/)
    # Download Flink Faker for data generation
    curl -fL -o lib/flink-faker-0.5.3.jar https://github.com/knaufk/flink-faker/releases/download/v0.5.3/flink-faker-0.5.3.jar
    # Download Fluss Connector
-   curl -fL -o "lib/fluss-flink-${FLINK_VERSION}-${FLUSS_DOCKER_VERSION}.jar" "https://repo1.maven.org/maven2/org/apache/fluss/fluss-flink-${FLINK_VERSION}/${FLUSS_DOCKER_VERSION}/fluss-flink-${FLINK_VERSION}-${FLUSS_DOCKER_VERSION}.jar"
+   curl -fL -o "lib/fluss-flink-${FLINK_VERSION}-${FLUSS_DOCKER_VERSION}.jar" \
+   "https://repo1.maven.org/maven2/org/apache/fluss/fluss-flink-${FLINK_VERSION}/${FLUSS_DOCKER_VERSION}/fluss-flink-${FLINK_VERSION}-${FLUSS_DOCKER_VERSION}.jar"
    ```
 
 4. Create a `docker-compose.yml` file.
@@ -125,25 +129,32 @@ Before proceeding, ensure that [Docker](https://docs.docker.com/engine/install/)
 
 6. Launch the Flink SQL Client.
    ```shell
-   docker compose run sql-client
+   # Explicitly include the Fluss JAR in the classpath for the session
+   docker compose run sql-client bin/sql-client.sh -j /tmp/lib/fluss-flink-${FLINK_VERSION}-${FLUSS_DOCKER_VERSION}.jar
    ```
 
 ## Step 1: Create the Fluss Catalog
 
 In the SQL Client, create and use the Fluss catalog.
 
+:::tip
+Run SQL statements one by one to avoid errors.
+:::
+
 ```sql
 CREATE CATALOG fluss_catalog WITH (
     'type' = 'fluss',
     'bootstrap.servers' = 'coordinator-server:9123'
 );
+```
 
+```sql
 USE CATALOG fluss_catalog;
 ```
 
 ## Step 2: Create the User Dictionary Table
 
-Create the `user_dict` table to map emails to UIDs. We use `table.auto-increment.fields` to automatically generate unique IDs.
+Create the `user_dict` table to map emails to UIDs. We use `auto-increment.fields` to automatically generate unique IDs.
 
 ```sql
 CREATE TABLE user_dict (
@@ -151,8 +162,9 @@ CREATE TABLE user_dict (
     uid INT,
     PRIMARY KEY (email) NOT ENFORCED
 ) WITH (
-    'table.type' = 'pk',
-    'table.auto-increment.fields' = 'uid'
+    'connector' = 'fluss',
+    'auto-increment.fields' = 'uid',
+    'bucket.num' = '1'
 );
 ```
 
@@ -171,10 +183,11 @@ CREATE TABLE user_profiles (
     total_clicks BIGINT,
     PRIMARY KEY (profile_id) NOT ENFORCED
 ) WITH (
-    'table.type' = 'pk',
+    'connector' = 'fluss',
     'table.merge-engine' = 'aggregation',
     'fields.unique_visitors.agg' = 'rbm64',
-    'fields.total_clicks.agg' = 'sum'
+    'fields.total_clicks.agg' = 'sum',
+    'bucket.num' = '1'
 );
 ```
 
@@ -203,7 +216,9 @@ Now, run the pipeline. The `lookup.insert-if-not-exists` hint ensures that if an
 INSERT INTO user_profiles
 SELECT
     d.uid,
-    TO_BINARY(d.uid), -- Convert INT to BYTES for rbm64
+    -- Convert INT to BYTES for rbm64. 
+    -- Note: In a real production job, you might use a UDF to ensure correct bitmap initialization.
+    CAST(d.uid AS BYTES),
     CAST(e.click_count AS BIGINT)
 FROM raw_events AS e
 JOIN user_dict /*+ OPTIONS('lookup.insert-if-not-exists' = 'true') */
