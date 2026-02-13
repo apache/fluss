@@ -264,6 +264,34 @@ listeners:
 
 To enable SASL based authentication, set any of the protocols to `SASL`.
 
+### Metrics and Monitoring
+
+When `metrics.enabled` is `true`, the Helm chart renders metrics reporter entries into `server.yaml`:
+
+- `metrics.reporters`: comma-separated reporter names from `metrics.reporters`
+- `metrics.reporter.<name>.<option>`: one entry per reporter option in `metrics.reporters`
+
+If `metrics.annotations` is configured, these annotations are also added to Fluss Services and can be used by reporters such as Prometheus to scrape metrics endpoints.
+
+```yaml
+metrics:
+  enabled: true
+  reporters:
+    grph:
+      port: 9020
+      host: example-localhost
+      protocol: TCP
+      interval: "60 SECONDS"
+    prometheus:
+      port: 9249
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/path: "/metrics"
+    prometheus.io/port: "9249"
+```
+
+If a metrics key is already provided in `configurationOverrides` (for example, `metrics.reporters` or `metrics.reporter.prometheus.port`), the chart keeps the value from `configurationOverrides`.
+
 ### Enabling Secure Connection
 
 With the helm deployment, you can specify authentication protocols when connecting to the Fluss cluster.

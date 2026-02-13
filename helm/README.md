@@ -93,6 +93,49 @@ Important Fluss options surfaced by the chart:
 - internal.listener.name: Which listener is used for internal communication (defaults to INTERNAL).
 - tablet-server.id: Required to be unique per TabletServer. The chart auto‑derives this from the StatefulSet pod ordinal at runtime.
 
+### Metrics and Prometheus scraping
+
+The chart can enable Fluss metrics reporters and add scrape annotations to Services.
+
+Example:
+
+```bash
+helm install fluss ./fluss-helm \
+  --set metrics.enabled=true
+```
+
+When enabled, the chart will:
+- configure `metrics.reporters` from reporter names in values
+- configure `metrics.reporter.<name>.<option>` entries from values
+- optionally add metrics scrape annotations to Fluss Services from values
+
+Values:
+
+| Key | Description |
+| --- | --- |
+| `metrics.enabled` | Enables metrics reporting and endpoint exposure. |
+| `metrics.reporters` | Map of Fluss metric reporters and their options. |
+| `metrics.annotations` | Optional map of annotations rendered on Fluss Services when metrics are enabled. |
+
+Example `values.yaml` snippet:
+
+```yaml
+metrics:
+  enabled: true
+  reporters:
+    grph:
+      port: 9020
+      host: example-localhost
+      protocol: TCP
+      interval: "60 SECONDS"
+    prometheus:
+      port: 9249
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/path: "/metrics"
+    prometheus.io/port: "9249"
+```
+
 
 ### Zookeeper and storage
 - zookeeper.address must point to a reachable ensemble.
