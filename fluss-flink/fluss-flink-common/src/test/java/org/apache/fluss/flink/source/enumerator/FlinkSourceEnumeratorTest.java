@@ -799,7 +799,9 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
                             DEFAULT_SCAN_PARTITION_DISCOVERY_INTERVAL_MS,
                             streaming,
                             null,
-                            null);
+                            null,
+                            LeaseContext.DEFAULT,
+                            false);
             enumerator.start();
             assertThat(context.getIsProcessingBacklog()).isTrue();
 
