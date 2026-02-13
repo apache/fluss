@@ -102,7 +102,7 @@ RELEASE_VERSION="0.8.0-incubating"
 SHORT_RELEASE_VERSION="0.8"
 CURRENT_SNAPSHOT_VERSION="$SHORT_RELEASE_VERSION-SNAPSHOT"
 NEXT_SNAPSHOT_VERSION="0.9-SNAPSHOT"
-SHORT_NEXT_SNAPSHOT_VERSION="0.9"
+SHORT_NEXT_VERSION="0.9"
 ```
 
 ### 7. Create a release branch
@@ -117,25 +117,21 @@ $ git checkout -b release-${SHORT_RELEASE_VERSION}
 $ git push origin release-${SHORT_RELEASE_VERSION}
 ```
 
-Update the version in the Helm Chart in:
+Check that the version in the Helm Chart matches `RELEASE_VERSION` in:
 - `helm/Chart.yaml`
 - `helm/values.yaml`
 - `helm/README.md`
 
-For example, if you are releasing a major version `0.8.0-incubating`, you should replace all the previous version `0.7.0-incubating` to the release version `0.8.0-incubating`.
-
-
-And commit/push the version bump:
+If not, update the version in those files, then commit and push:
 
 ```bash
 $ git commit -m "[helm] Bump helm version to x.y.z" helm/Chart.yaml helm/values.yaml helm/README.md
 $ git push origin release-${SHORT_RELEASE_VERSION}
 ```
-
   </TabItem>
 
   <TabItem value="bugfix" label="Bugfix release">
-If you're creating a new bugfix release (e.g., 0.9.1 instead of 0.9.0), you do not need to create a release branch. You can skip this step can check out the the already existing branch for that version:
+If you're creating a new bugfix release (e.g., 0.9.1 instead of 0.9.0), you do not need to create a release branch. You can skip this step and check out the already existing branch for that version:
 
 ```bash
 $ git checkout release-$SHORT_RELEASE_VERSION
@@ -146,8 +142,7 @@ Update the version in the Helm Chart in:
 - `helm/values.yaml`
 - `helm/README.md`
 
-For example, if you are releasing a bugfix version `0.8.1-incubating`, you should replace all the previous version `0.8.0-incubating` to the new version `0.8.1-incubating`.
-
+For a bugfix release you need to update the version in these files. For example, if you are releasing `0.8.1-incubating`, replace the previous version `0.8.0-incubating` with `0.8.1-incubating` in those files.
 
 And commit/push the version bump:
 
@@ -184,7 +179,7 @@ Besides, in the `main` branch, create a new "Upgrade Notes" markdown file for th
 ```
 ---
 title: Upgrade Notes
-sidebar_position: 3
+sidebar_position: 4
 ---
 
 # Upgrade Notes from v0.x to v0.y
@@ -195,30 +190,45 @@ Additionally, for the upgrade notes page of the version currently being released
 Commit the documentation changes, and push to the official repository.
 
 ```bash
-$ git commit -m "[docs] Create upgrade notes for $NEXT_SHORT_VERSION" .
+$ git add .
+$ git commit -m "[docs] Create upgrade notes for $SHORT_NEXT_VERSION"
 $ git push origin main
 ```
 
 **(3) Add version item in fluss-versions.json**
 
-Next, add a new version item for the current release version in the `website/fluss-versions.json` file on the `main` branch. The new version item should have the following fields and values (releasing `0.8.0` as an example):
+Next, add a new version item for the next release version in the `website/fluss-versions.json` file on the `main` branch. The new version item should have the following fields and values (current releasing `0.9.0`, next release `0.10.0` as an example):
 
 ```json
 {
-  "versionName": "version-0.8",
-  "fullVersion": "0.8.0-incubating",
-  "shortVersion": "0.8",
-  "dockerVersion": "0.8.0-incubating-rc1",
+  "versionName": "next",
+  "fullVersion": "0.10-SNAPSHOT",
+  "shortVersion": "0.10",
+  "dockerVersion": "0.10-SNAPSHOT",
+  "paimonVersion": "1.3.1",
+  "paimonVersionShort": "1.3",
   "released": false
 }
 ```
 
-Additionally, update the `fullVersion`, `shortVersion`, and `dockerVersion` fields for the `next` version entry to reflect the next release version.
+Additionally, update the `fullVersion`, `shortVersion`, and `dockerVersion` fields for the `current` version entry to reflect the current release version.
+
+```json
+{
+    "versionName": "version-0.9",
+    "fullVersion": "0.9.0-incubating",
+    "shortVersion": "0.9",
+    "dockerVersion": "0.9.0-incubating",
+    "paimonVersion": "1.3.1",
+    "paimonVersionShort": "1.3",
+    "released": false
+ }
+```
 
 Commit the documentation changes, and push to the official repository.
 
 ```bash
-$ git commit -m "[docs] Add version item for $RELEASE_VERSION in fluss-versions.json
+$ git commit -m "[docs] Add version item for $SHORT_NEXT_VERSION in fluss-versions.json" .
 $ git push origin main
 ```
 
@@ -265,9 +275,9 @@ export FLUSS_CURRENT_RELEASE_BRANCH={currentReleaseBranch}
 # export FLUSS_CURRENT_RELEASE_BRANCH=release-0.8
 
 # get contributor list
-git log $FLUSS_PREVIOUS_RELEASE_BRANCH..$FLUSS_CURRENT_RELEASE_BRANCH --pretty=format:"%an" | sort -u | paste -sd "," - | sed 's/,/, /g'
+git log origin/$FLUSS_PREVIOUS_RELEASE_BRANCH..origin/$FLUSS_CURRENT_RELEASE_BRANCH --pretty=format:"%an" | sort -u | paste -sd "," - | sed 's/,/, /g'
 # get total number of commits
-git log $FLUSS_PREVIOUS_RELEASE_BRANCH...$FLUSS_CURRENT_RELEASE_BRANCH --pretty=oneline | wc -l
+git log origin/$FLUSS_PREVIOUS_RELEASE_BRANCH..origin/$FLUSS_CURRENT_RELEASE_BRANCH --pretty=oneline | wc -l
 ```
 
 Besides, Create a pull request to add download links for the release on the Download page `website/src/pages/downloads.md`.
@@ -471,17 +481,8 @@ $ cd docker/fluss
 docker/fluss $ docker buildx build --push --platform linux/arm64/v8,linux/amd64 --tag apache/fluss:${RELEASE_VERSION}-rc${RC_NUM} .
 ```
 
-Then, run the following commands to build and push the flink — a customized Apache Flink image that includes all necessary libraries and JARs for the Fluss Quickstart guide:
-
-```bash
-docker/fluss $ cd ../quickstart-flink
-docker/quickstart-flink $ ./prepare_build.sh
-docker/quickstart-flink $ docker buildx build --push --platform linux/arm64/v8,linux/amd64 --tag apache/fluss-quickstart-flink:1.20-${RELEASE_VERSION}-rc${RC_NUM} .
-```
-
 Verify the RC images are present:
 - https://hub.docker.com/r/apache/fluss/tags
-- https://hub.docker.com/r/apache/fluss-quickstart-flink/tags
 
 Then, update the `dockerVersion` field for the current release RC version in the `website/fluss-versions.json` file on the `main` branch to the value of `${RELEASE_VERSION}_RC${RC_NUM}` (which includes the RC suffix, e.g., `0.8.0-incubating-rc1`). This update should be committed and pushed to the `main` branch.
 

@@ -15,7 +15,7 @@ Note: The following setup is a one-time configuration required for release prepa
 
 This release process is suggested to operate on MacOS or Linux systems, and the following tools are required:
 
-- Java 8
+- Java 11
 - Apache Maven 3.8.6
 - GnuPG 2.x
 - Git
@@ -121,7 +121,7 @@ sub   rsa4096 2025-08-07 [E]
 Determine your Apache GPG Key and Key ID, as follows:
 
 ```bash
-gpg --list-keys
+gpg --list-keys --keyid-format short
 ```
 
 This will list your GPG keys. One of these should reflect your Apache account, for example:
@@ -135,7 +135,7 @@ sub   2048R/BA4D50BE 2016-02-23
 
 Here, the key ID is the 8-digit hex string in the pub line: 845E6689.
 
-Now, add your Apache GPG key to the Flink’s KEYS file in the [release](https://dist.apache.org/repos/dist/release/incubator/fluss/KEYS) repository at [dist.apache.org](https://dist.apache.org). Follow the instructions listed at the top of these files. (Note: Only PPMC members have write access to the release repository. If you end up getting 403 errors ask on the mailing list for assistance.) PPMC member can refer following scripts to add your Apache GPG key to the KEYS in the release repository.
+Now, add your Apache GPG key to the Fluss’s KEYS file in the [release](https://dist.apache.org/repos/dist/release/incubator/fluss/KEYS) repository at [dist.apache.org](https://dist.apache.org). Follow the instructions listed at the top of these files. (Note: Only PPMC members have write access to the release repository. If you end up getting 403 errors ask on the mailing list for assistance.) PPMC member can refer following scripts to add your Apache GPG key to the KEYS in the release repository.
 
 ```
 svn co https://dist.apache.org/repos/dist/release/incubator/fluss fluss-dist
