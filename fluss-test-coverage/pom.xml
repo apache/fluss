@@ -419,8 +419,6 @@
                                         <exclude>org.apache.fluss.fs.oss.*</exclude>
                                         <exclude>org.apache.fluss.fs.s3.*</exclude>
                                         <exclude>org.apache.fluss.fs.obs.*</exclude>
-                                        <exclude>com.amazonaws.services.s3.model.transform.XmlResponsesSaxParser*
-                                        </exclude>
                                         <exclude>org.apache.fluss.rocksdb.RocksIteratorWrapper
                                         </exclude>
                                         <exclude>org.apache.fluss.plugin.PluginUtils</exclude>

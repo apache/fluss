@@ -33,7 +33,7 @@
     <packaging>jar</packaging>
 
     <properties>
-        <fs.s3.aws.version>1.12.319</fs.s3.aws.version>
+        <fs.s3.aws.sdk2.version>2.24.6</fs.s3.aws.sdk2.version>
     </properties>
 
     <dependencies>
@@ -73,6 +73,10 @@
                 <exclusion>
                     <groupId>com.sun.jersey</groupId>
                     <artifactId>jersey-server</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>com.github.pjfanning</groupId>
+                    <artifactId>jersey-json</artifactId>
                 </exclusion>
                 <exclusion>
                     <groupId>org.apache.avro</groupId>
@@ -174,6 +178,10 @@
                     <groupId>org.slf4j</groupId>
                     <artifactId>slf4j-reload4j</artifactId>
                 </exclusion>
+                <exclusion>
+                    <groupId>org.bouncycastle</groupId>
+                    <artifactId>bcprov-jdk18on</artifactId>
+                </exclusion>
             </exclusions>
         </dependency>
 
@@ -183,32 +191,31 @@
             <artifactId>fluss-fs-hadoop</artifactId>
             <version>${project.version}</version>
         </dependency>
-
-        <!-- AWS dependencies (bundled) -->
+        
         <dependency>
-            <groupId>com.amazonaws</groupId>
-            <artifactId>aws-java-sdk-core</artifactId>
-            <version>${fs.s3.aws.version}</version>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>aws-core</artifactId>
+            <version>${fs.s3.aws.sdk2.version}</version>
         </dependency>
         <dependency>
-            <groupId>com.amazonaws</groupId>
-            <artifactId>aws-java-sdk-s3</artifactId>
-            <version>${fs.s3.aws.version}</version>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>s3</artifactId>
+            <version>${fs.s3.aws.sdk2.version}</version>
         </dependency>
         <dependency>
-            <groupId>com.amazonaws</groupId>
-            <artifactId>aws-java-sdk-kms</artifactId>
-            <version>${fs.s3.aws.version}</version>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>kms</artifactId>
+            <version>${fs.s3.aws.sdk2.version}</version>
         </dependency>
         <dependency>
-            <groupId>com.amazonaws</groupId>
-            <artifactId>aws-java-sdk-dynamodb</artifactId>
-            <version>${fs.s3.aws.version}</version>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>dynamodb</artifactId>
+            <version>${fs.s3.aws.sdk2.version}</version>
         </dependency>
         <dependency>
-            <groupId>com.amazonaws</groupId>
-            <artifactId>aws-java-sdk-sts</artifactId>
-            <version>${fs.s3.aws.version}</version>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>sts</artifactId>
+            <version>${fs.s3.aws.sdk2.version}</version>
         </dependency>
 
         <!-- Hadoop's s3 support classes (bundled) -->
@@ -218,8 +225,8 @@
             <version>${fs.hadoopshaded.version}</version>
             <exclusions>
                 <exclusion>
-                    <groupId>com.amazonaws</groupId>
-                    <artifactId>aws-java-sdk-bundle</artifactId>
+                    <groupId>software.amazon.awssdk</groupId>
+                    <artifactId>bundle</artifactId>
                 </exclusion>
                 <exclusion>
                     <groupId>ch.qos.reload4j</groupId>
@@ -362,15 +369,6 @@
                                         <exclude>PropertyList-1.0.dtd</exclude>
                                         <exclude>META-INF/services/javax.xml.stream.*</exclude>
                                         <exclude>META-INF/LICENSE.txt</exclude>
-                                    </excludes>
-                                </filter>
-                                <filter>
-                                    <artifact>com.amazonaws:aws-java-sdk-s3</artifact>
-                                    <!-- Make sure we are using the overridden XmlResponsesSaxParser of flink-s3-fs-base.
-                                        Filter must be removed as soon as XmlResponsesSaxParser of this module is
-                                        dropped, for example when discontinuing support for Java 8. -->
-                                    <excludes>
-                                        <exclude>com/amazonaws/services/s3/model/transform/XmlResponsesSaxParser**</exclude>
                                     </excludes>
                                 </filter>
                                 <filter>

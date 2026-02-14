@@ -40,7 +40,7 @@ This project bundles the following dependencies under the Apache Software Licens
 - io.opentracing:opentracing-noop:0.33.0
 - io.opentracing:opentracing-util:0.33.0
 - jakarta.activation:jakarta.activation-api:1.2.1
-- org.apache.hadoop:hadoop-aliyun:3.3.4
+- org.apache.hadoop:hadoop-aliyun:3.4.1
 - org.apache.hadoop.thirdparty:hadoop-shaded-guava:1.2.0
 - org.apache.hadoop.thirdparty:hadoop-shaded-protobuf_3_21:1.2.0
 - org.apache.httpcomponents:httpclient:4.5.13
