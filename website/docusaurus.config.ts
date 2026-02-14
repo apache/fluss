@@ -193,6 +193,7 @@ const config: Config = {
             label: 'ASF', position: 'right', items: [
                 {to: 'https://www.apache.org/', label: 'Foundation'},
                 {to: 'https://www.apache.org/licenses/', label: 'License'},
+                {to: 'https://events.apache.org', label: 'Events'},
                 {to: 'https://www.apache.org/foundation/sponsorship.html', label: 'Donate'},
                 {to: 'https://www.apache.org/foundation/thanks.html', label: 'Sponsors'},
                 {to: 'https://www.apache.org/security/', label: 'Security'},
