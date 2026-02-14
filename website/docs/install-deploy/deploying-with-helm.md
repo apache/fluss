@@ -36,7 +36,7 @@ the installation documentation provides instructions for deploying one using Bit
 
 ### Running Fluss locally with Minikube
 
-For local testing and development, you can deploy Fluss on Minikube. This is ideal for development, testing, and learning purposes.
+For local testing and development, you can deploy Fluss on Minikube. This is ideal for development, testing and learning purposes.
 
 #### Prerequisites
 
@@ -157,7 +157,7 @@ kubectl logs -l app.kubernetes.io/component=tablet
 
 ## Configuration Parameters
 
-The following table lists the configurable parameters of the Fluss chart and their default values.
+The following table lists the configurable parameters of the Fluss chart, and their default values.
 
 ### Global Parameters
 
@@ -225,6 +225,11 @@ The following table lists the configurable parameters of the Fluss chart and the
 | `resources.tabletServer.limits.cpu` | CPU limits for tablet servers | Not set |
 | `resources.tabletServer.limits.memory` | Memory limits for tablet servers | Not set |
 
+### SASL Parameters
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `security.sasl_plain.users` | User list for SASL/PLAIN authentication | `[{username: admin, password: password}]` |
 
 ## Advanced Configuration
 
@@ -245,15 +250,46 @@ The chart automatically configures listeners for internal cluster communication 
 - **Internal Port (9123)**: Used for internal communication within the cluster
 - **Client Port (9124)**: Used for client connections
 
-Custom listener configuration:
+Default listeners configuration:
 
 ```yaml
 listeners:
   internal:
+    protocol: PLAINTEXT
     port: 9123
   client:
+    protocol: PLAINTEXT
     port: 9124
 ```
+
+To enable SASL based authentication, set any of the protocols to `SASL`.
+
+### Enabling Secure Connection
+
+With the helm deployment, you can specify authentication protocols when connecting to the Fluss cluster.
+
+The following table shows the supported protocols and security they provide:
+
+| Method      | Authentication | TLS Encryption     |
+|-------------|:--------------:|:------------------:|
+| `PLAINTEXT` | No             | No                 |
+| `SASL`      | Yes            | No                 |
+
+By default, the `PLAINTEXT` protocol is used.
+
+The SASL authentication will be enabled if any of the listener protocols is using `SASL`.
+
+Set these values for additional configurations:
+
+```yaml
+security:
+  sasl_plain:
+    users:
+      - username: admin
+        password: password
+```
+
+The `security.sasl_plain.users` field defines the list of usernames and passwords for SASL/PLAIN authentication. When the internal listener protocol uses SASL, the first user in the list is used for internal client authentication. The authentication mechanism is fixed to `PLAIN`.
 
 ### Storage Configuration
 

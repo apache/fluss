@@ -54,8 +54,10 @@ coordinator:
 # Fluss listener configurations
 listeners:
   internal:
+    protocol: PLAINTEXT
     port: 9123
   client:
+    protocol: PLAINTEXT
     port: 9124
 
 resources: {}
@@ -85,3 +87,12 @@ serviceAccount:
   # Additional annotations to apply to the ServiceAccount.
   # These can be useful, for example, to support integrations like workload identity.
   annotations: {}
+
+## Fluss security configurations for authentication.
+## These are required if SASL listeners are configured.
+security:
+  sasl_plain:
+    # List of client users for authentication
+    users:
+      - username: admin
+        password: password
