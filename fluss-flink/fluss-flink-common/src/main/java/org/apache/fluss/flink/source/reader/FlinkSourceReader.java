@@ -78,6 +78,7 @@ public class FlinkSourceReader<OUT>
                         elementsQueue,
                         () ->
                                 new FlinkSourceSplitReader(
+                                        context,
                                         flussConfig,
                                         tablePath,
                                         sourceOutputType,
