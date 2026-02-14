@@ -52,7 +52,7 @@ curl -fL -o "lib/fluss-fs-s3-$FLUSS_VERSION$.jar" "$FLUSS_MAVEN_REPO_URL$/org/ap
 services:
   #begin RustFS (S3-compatible storage)
   rustfs:
-    image: rustfs/rustfs:latest
+    image: rustfs/rustfs:1.0.0-alpha.83
     ports:
       - "9000:9000"
       - "9001:9001"
@@ -450,6 +450,10 @@ The following command allows you to quit Flink SQL Client.
 ```sql title="Flink SQL"
 quit;
 ```
+
+### Remote Storage
+
+You can visit http://localhost:9001/ and sign in with `rustfsadmin` / `rustfsadmin` to view the files stored on remote storage.
 
 ## Clean up
 After finishing the tutorial, run `exit` to exit Flink SQL CLI Container and then run 
