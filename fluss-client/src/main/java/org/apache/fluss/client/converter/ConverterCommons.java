@@ -46,12 +46,39 @@ final class ConverterCommons {
     private static Map<DataTypeRoot, Set<Class<?>>> createSupportedTypes() {
         Map<DataTypeRoot, Set<Class<?>>> map = new EnumMap<>(DataTypeRoot.class);
         map.put(DataTypeRoot.BOOLEAN, setOf(Boolean.class));
+
+        // Numeric types with widening support
         map.put(DataTypeRoot.TINYINT, setOf(Byte.class));
-        map.put(DataTypeRoot.SMALLINT, setOf(Short.class));
-        map.put(DataTypeRoot.INTEGER, setOf(Integer.class));
-        map.put(DataTypeRoot.BIGINT, setOf(Long.class));
-        map.put(DataTypeRoot.FLOAT, setOf(Float.class));
-        map.put(DataTypeRoot.DOUBLE, setOf(Double.class));
+        map.put(DataTypeRoot.SMALLINT, setOf(Short.class, Byte.class)); // byte can widen to short
+        map.put(
+                DataTypeRoot.INTEGER,
+                setOf(Integer.class, Short.class, Byte.class)); // byte, short can widen to int
+        map.put(
+                DataTypeRoot.BIGINT,
+                setOf(
+                        Long.class,
+                        Integer.class,
+                        Short.class,
+                        Byte.class)); // smaller ints can widen to long
+        map.put(
+                DataTypeRoot.FLOAT,
+                setOf(
+                        Float.class,
+                        Long.class,
+                        Integer.class,
+                        Short.class,
+                        Byte.class)); // all ints can widen to float
+        map.put(
+                DataTypeRoot.DOUBLE,
+                setOf(
+                        Double.class,
+                        Float.class,
+                        Long.class,
+                        Integer.class,
+                        Short.class,
+                        Byte.class)); // all numerics can widen to double
+
+        // Numeric types remain unchanged
         map.put(DataTypeRoot.CHAR, setOf(String.class, Character.class));
         map.put(DataTypeRoot.STRING, setOf(String.class, Character.class));
         map.put(DataTypeRoot.BINARY, setOf(byte[].class));
