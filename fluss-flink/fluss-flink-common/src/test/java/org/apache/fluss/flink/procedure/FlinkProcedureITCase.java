@@ -733,7 +733,13 @@ public abstract class FlinkProcedureITCase {
                             tableName));
             long tableId =
                     admin.getTableInfo(TablePath.of(DEFAULT_DB, tableName)).get().getTableId();
-            FLUSS_CLUSTER_EXTENSION.waitUntilTableReady(tableId);
+            // Use 90 second timeout to handle high load with PERMANENT_OFFLINE server
+            FLUSS_CLUSTER_EXTENSION.waitUntilTableReady(tableId, Duration.ofSeconds(90));
+
+            // Add delay between table creations to reduce coordinator lock contention
+            if (i < 9) { // Don't delay after last table
+                Thread.sleep(100);
+            }
         }
 
         // remove tag after crated table.
