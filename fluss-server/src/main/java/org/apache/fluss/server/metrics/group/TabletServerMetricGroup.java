@@ -34,6 +34,7 @@ import org.apache.fluss.server.kv.rocksdb.RocksDBStatistics;
 import org.apache.fluss.utils.MapUtils;
 
 import java.util.Map;
+import java.util.function.LongSupplier;
 
 /** The metric group for tablet server. */
 public class TabletServerMetricGroup extends AbstractMetricGroup {
@@ -75,6 +76,9 @@ public class TabletServerMetricGroup extends AbstractMetricGroup {
     private final Counter isrShrinks;
     private final Counter isrExpands;
     private final Counter failedIsrUpdates;
+
+    /** Supplier for shared block cache usage, set by KvManager when shared cache is enabled. */
+    private volatile LongSupplier sharedBlockCacheUsageSupplier = () -> 0L;
 
     public TabletServerMetricGroup(
             MetricRegistry registry, String clusterId, String rack, String hostname, int serverId) {
@@ -145,13 +149,24 @@ public class TabletServerMetricGroup extends AbstractMetricGroup {
      */
     private void registerServerRocksDBMetrics() {
         // Total memory usage across all RocksDB instances in this server.
+        // When shared block cache is enabled, per-tablet stats exclude block cache,
+        // so we add the shared block cache usage once separately.
         gauge(
                 MetricNames.ROCKSDB_MEMORY_USAGE_TOTAL,
                 () ->
                         metricGroupByTable.values().stream()
-                                .flatMap(TableMetricGroup::allRocksDBStatistics)
-                                .mapToLong(RocksDBStatistics::getTotalMemoryUsage)
-                                .sum());
+                                        .flatMap(TableMetricGroup::allRocksDBStatistics)
+                                        .mapToLong(RocksDBStatistics::getTotalMemoryUsage)
+                                        .sum()
+                                + sharedBlockCacheUsageSupplier.getAsLong());
+    }
+
+    /**
+     * Sets the supplier for shared block cache usage. Called by KvManager when shared block cache
+     * is enabled.
+     */
+    public void setSharedBlockCacheUsageSupplier(LongSupplier supplier) {
+        this.sharedBlockCacheUsageSupplier = supplier;
     }
 
     @Override
