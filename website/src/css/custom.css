@@ -21,9 +21,6 @@
  * work well for content-centric websites.
  */
 
-/* Import Inter font from Google Fonts */
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
-
 /* You can override the default Infima variables here. */
 :root {
   --ifm-color-primary: #0071e3;
@@ -34,7 +31,7 @@
   --ifm-color-primary-lighter: #0682ff;
   --ifm-color-primary-lightest: #2893ff;
   --ifm-code-font-size: 90%;
-  --ifm-font-family-base: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  --ifm-font-family-base: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
   --docusaurus-highlighted-code-line-bg: #E2E9F3;
 
   --ifm-menu-color-background-active: #edeefa99;
@@ -53,7 +50,7 @@
 }
 
 .hero__title {
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   font-weight: 700;
   letter-spacing: -0.03em;
 }
