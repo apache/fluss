@@ -80,6 +80,7 @@
         <test.skip.coverage>true</test.skip.coverage>
         <fluss.forkCount>2</fluss.forkCount>
         <fluss.reuseForks>true</fluss.reuseForks>
+        <fluss.convergence.phase>validate</fluss.convergence.phase>
         <skip.on.java8>false</skip.on.java8>
 
         <!-- library versions in fluss-shaded -->
@@ -524,6 +525,28 @@
                                 <goals>
                                     <goal>jar</goal>
                                 </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+        <profile>
+            <id>check-convergence</id>
+            <activation>
+                <property>
+                    <name>check-convergence</name>
+                </property>
+            </activation>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-enforcer-plugin</artifactId>
+                        <executions>
+                            <execution>
+                                <id>dependency-convergence</id>
+                                <phase>${fluss.convergence.phase}</phase>
                             </execution>
                         </executions>
                     </plugin>
