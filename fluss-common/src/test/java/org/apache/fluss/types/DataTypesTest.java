@@ -514,6 +514,59 @@ public class DataTypesTest {
     }
 
     @Test
+    void testTimestampNanoType() {
+        TimestampNanoType timestampNanoType = new TimestampNanoType();
+        dataTypeBaseAssert(timestampNanoType, true, "TIMESTAMP_NS", new TimestampNanoType(false));
+
+        timestampNanoType = new TimestampNanoType(false);
+        dataTypeBaseAssert(
+                timestampNanoType, false, "TIMESTAMP_NS NOT NULL", new TimestampNanoType(true));
+
+        timestampNanoType = DataTypes.TIMESTAMP_NS();
+        dataTypeBaseAssert(timestampNanoType, true, "TIMESTAMP_NS", new TimestampNanoType(false));
+
+        assertThat(timestampNanoType.getChildren().size()).isEqualTo(0);
+        assertThat(timestampNanoType.getTypeRoot().getFamilies())
+                .containsExactlyInAnyOrder(
+                        DataTypeFamily.PREDEFINED,
+                        DataTypeFamily.DATETIME,
+                        DataTypeFamily.TIMESTAMP,
+                        DataTypeFamily.EXTENSION);
+    }
+
+    @Test
+    void testLocalZonedTimestampNanoType() {
+        LocalZonedTimestampNanoType localZonedTimestampNanoType = new LocalZonedTimestampNanoType();
+        dataTypeBaseAssert(
+                localZonedTimestampNanoType,
+                true,
+                "TIMESTAMP_NS_LTZ",
+                new LocalZonedTimestampNanoType(false));
+
+        localZonedTimestampNanoType = new LocalZonedTimestampNanoType(false);
+        dataTypeBaseAssert(
+                localZonedTimestampNanoType,
+                false,
+                "TIMESTAMP_NS_LTZ NOT NULL",
+                new LocalZonedTimestampNanoType(true));
+
+        localZonedTimestampNanoType = DataTypes.TIMESTAMP_NS_LTZ();
+        dataTypeBaseAssert(
+                localZonedTimestampNanoType,
+                true,
+                "TIMESTAMP_NS_LTZ",
+                new LocalZonedTimestampNanoType(false));
+
+        assertThat(localZonedTimestampNanoType.getChildren().size()).isEqualTo(0);
+        assertThat(localZonedTimestampNanoType.getTypeRoot().getFamilies())
+                .containsExactlyInAnyOrder(
+                        DataTypeFamily.PREDEFINED,
+                        DataTypeFamily.DATETIME,
+                        DataTypeFamily.TIMESTAMP,
+                        DataTypeFamily.EXTENSION);
+    }
+
+    @Test
     void testArrayType() {
         ArrayType arrayType = new ArrayType(new CharType(5));
         dataTypeBaseAssert(arrayType.getElementType(), true, "CHAR(5)", new CharType(1));
