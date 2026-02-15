@@ -40,4 +40,15 @@ public class FailedTieringEvent implements SourceEvent {
     public String failReason() {
         return failReason;
     }
+
+    @Override
+    public String toString() {
+        return "FailedTieringEvent{"
+                + "tableId="
+                + tableId
+                + ", failReason='"
+                + failReason
+                + '\''
+                + '}';
+    }
 }

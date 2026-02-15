@@ -578,9 +578,23 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
 
             assertThat(actualAssignment).containsExactlyInAnyOrderElementsOf(expectedAssignment);
 
-            // mock tiering fail by send tiering fail event
+            // mock tiering fail by send tiering fail event from reader 1
             context.getSplitsAssignmentSequence().clear();
-            enumerator.handleSourceEvent(1, new FailedTieringEvent(tableId, "test_reason"));
+            int senderSubtaskId = 1;
+            enumerator.handleSourceEvent(
+                    senderSubtaskId, new FailedTieringEvent(tableId, "test_reason"));
+
+            // verify failure event is broadcast to all readers including the sender
+            Map<Integer, List<SourceEvent>> sentSourceEvents = context.getSentSourceEvent();
+            assertThat(sentSourceEvents).hasSize(numSubtasks);
+            for (int subtaskId = 0; subtaskId < numSubtasks; subtaskId++) {
+                List<SourceEvent> sourceEvents = sentSourceEvents.get(subtaskId);
+                assertThat(sourceEvents).hasSize(1);
+                SourceEvent sourceEvent = sourceEvents.get(0);
+                FailedTieringEvent failedEvent = (FailedTieringEvent) sourceEvent;
+                assertThat(failedEvent.getTableId()).isEqualTo(tableId);
+                assertThat(failedEvent.failReason()).isEqualTo("test_reason");
+            }
 
             // request tiering table splits, should get splits
             for (int subtaskId = 0; subtaskId < numSubtasks; subtaskId++) {
