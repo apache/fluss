@@ -554,14 +554,43 @@ public class FlinkCatalog extends AbstractCatalog {
             ObjectPath objectPath, CatalogPartitionSpec catalogPartitionSpec)
             throws TableNotExistException, TableNotPartitionedException,
                     PartitionSpecInvalidException, CatalogException {
-
-        // TODO lake table should support.
-        if (objectPath.getObjectName().contains(LAKE_TABLE_SPLITTER)) {
-            return Collections.emptyList();
-        }
-
+        String tableName = objectPath.getObjectName();
+        TablePath tablePath = toTablePath(objectPath);
         try {
-            TablePath tablePath = toTablePath(objectPath);
+            if (tableName.contains(LAKE_TABLE_SPLITTER)) {
+                String[] tableComponents = tableName.split("\\" + LAKE_TABLE_SPLITTER);
+
+                // Validate table name format - only support "table_name$lake" pattern
+                if (tableComponents.length != 1) {
+                    throw new IllegalArgumentException(
+                            "listPartitions only supports table_name$lake pattern");
+                }
+
+                TableInfo tableInfo =
+                        admin.getTableInfo(
+                                        TablePath.of(
+                                                objectPath.getDatabaseName(), tableComponents[0]))
+                                .get();
+                if (!tableInfo.getTableConfig().isDataLakeEnabled()) {
+                    throw new UnsupportedOperationException(
+                            String.format(
+                                    "The table %s is not a data lake table, please check the table config.",
+                                    objectPath));
+                }
+                ObjectPath lakeObjectPath =
+                        ObjectPath.fromString(
+                                objectPath.getDatabaseName() + "." + tableComponents[0]);
+                if (catalogPartitionSpec == null) {
+                    // TODO: For now iceberg-flink connector only support list partitions without
+                    // partition spec.
+                    return lakeCatalog
+                            .getLakeCatalog(tableInfo.getProperties())
+                            .listPartitions(lakeObjectPath);
+                }
+                return lakeCatalog
+                        .getLakeCatalog(tableInfo.getProperties())
+                        .listPartitions(lakeObjectPath, catalogPartitionSpec);
+            }
             List<PartitionInfo> partitionInfos;
             if (catalogPartitionSpec != null) {
                 Map<String, String> partitionSpec = catalogPartitionSpec.getPartitionSpec();
