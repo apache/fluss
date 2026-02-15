@@ -483,6 +483,8 @@
                                         <!-- end exclude for flink tiering service -->
                                         <!-- exclude flink compatibility class for catalogs -->
                                         <exclude>org.apache.flink.table.catalog.*</exclude>
+                                        <!-- exclude codegen exception class -->
+                                        <exclude>org.apache.fluss.codegen.CodeGenException</exclude>
                                     </excludes>
                                 </rule>
                             </rules>
