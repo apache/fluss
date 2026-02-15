@@ -81,6 +81,9 @@ import java.util.concurrent.CompletableFuture;
  * The administrative client for Fluss, which supports managing and inspecting tables, servers,
  * configurations and ACLs.
  *
+ * <p>Note: Any API changes should be accompanied by corresponding compatibility tests added in the
+ * fluss-compatibility-test module.
+ *
  * @since 0.1
  */
 @PublicEvolving
