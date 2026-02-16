@@ -397,7 +397,26 @@ SELECT * FROM enriched_orders LIMIT 2;
 |  10715776 |        2 |      924.43 | 2024-11-04 |         medium | Clerk3 | Rita Booke | (925) 775-0717 |       172.39 |       FURNITURE |      UNITED |
 +-----------+----------+-------------+------------+----------------+--------+------------+----------------+--------------+-----------------+-------------+
 ```
-If you are interested in a specific customer, you can retrieve their details by performing a lookup on the `cust_key`. 
+
+To quickly get the total number of rows in a table, you can use `COUNT(*)`:
+```sql  title="Flink SQL"
+-- count total rows in the table
+SELECT COUNT(*) FROM enriched_orders;
+```
+
+**Sample Output**
+```
++--------+
+| EXPR$0 |
++--------+
+|   200  |
++--------+
+```
+
+You can execute this `COUNT(*)` query multiple times. Because Fluss ingests data continuously in real time, the result will reflect the latest row count and may increase with each execution, but the max count value should be `10000` as the total number of the `source_order` source is `10000` rows.
+The query should return very quickly, as Fluss maintains table-level statistics that enable efficient aggregation without scanning the entire dataset.
+
+If you are interested in a specific customer, you can retrieve their details by performing a lookup on the `cust_key`.
 
 ```sql title="Flink SQL"
 -- lookup by primary key
