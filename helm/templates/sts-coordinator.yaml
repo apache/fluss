@@ -38,9 +38,10 @@ spec:
       {{- if .Values.serviceAccount.create }}
       serviceAccountName: {{ .Values.serviceAccount.name | default (include "fluss.fullname" .) }}
       {{- end }}
+      {{- include "fluss.imagePullSecrets" . | nindent 6 }}
       containers:
         - name: {{ .Chart.Name }}-coordinator
-          image: "{{.Values.image.repository}}:{{ .Values.image.tag }}"
+          image: {{ include "fluss.image" . }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           env:
             - name: POD_NAME
