@@ -203,6 +203,9 @@ Fluss's integration for Flink automatically converts between Flink and Fluss typ
 | TIMESTAMP     | TIMESTAMP     |
 | TIMESTAMP_LTZ | TIMESTAMP_LTZ |
 | BYTES         | BYTES         |
+| ARRAY         | ARRAY         |
+| MAP           | MAP           |
+| ROW           | ROW           |
 
 ### Apache Flink -> Fluss
 
@@ -222,11 +225,11 @@ Fluss's integration for Flink automatically converts between Flink and Fluss typ
 | TIMESTAMP     | TIMESTAMP                                     |
 | TIMESTAMP_LTZ | TIMESTAMP_LTZ                                 |
 | BYTES         | BYTES                                         |
+| ARRAY         | ARRAY                                         |
+| MAP           | MAP                                           |
+| ROW           | ROW                                           |
 | VARCHAR       | Not supported, suggest to use STRING instead. |
 | VARBINARY     | Not supported, suggest to use BYTES instead.  |
 | INTERVAL      | Not supported                                 |
-| ARRAY         | Not supported                                 |
-| MAP           | Not supported                                 |
 | MULTISET      | Not supported                                 |
-| ROW           | Not supported                                 |
 | RAW           | Not supported                                 |
