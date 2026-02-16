@@ -392,6 +392,10 @@ public class PushdownUtils {
      */
     private static long countLogTable(Admin flussAdmin, TablePath tablePath) throws Exception {
         TableInfo tableInfo = flussAdmin.getTableInfo(tablePath).get();
+        if (tableInfo.hasPrimaryKey()) {
+            throw new IllegalArgumentException(
+                    "The Fluss cluster doesn't support count(*) on primary key table yet. Please upgrade to newer version (≥ 0.9).");
+        }
         int bucketCount = tableInfo.getNumBuckets();
         Collection<Integer> buckets =
                 IntStream.range(0, bucketCount).boxed().collect(Collectors.toList());
