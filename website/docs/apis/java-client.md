@@ -144,6 +144,20 @@ TableInfo tableInfo = admin.getTableInfo(tablePath).get(); // blocking call
 System.out.println(tableInfo);
 ```
 
+## Table Statistics
+
+The Admin API provides the `getTableStats` method to retrieve statistics about a table, such as the current row count.
+
+```java
+TablePath tablePath = TablePath.of("my_db", "user_table");
+TableStats stats = admin.getTableStats(tablePath).get();
+System.out.println("Row count: " + stats.getRowCount());
+```
+
+:::note
+`getTableStats` for Primary Key Tables requires the table to use the default changelog mode (`'table.changelog.image' = 'FULL'`). Tables configured with `'table.changelog.image' = 'WAL'` do not support this feature.
+:::
+
 ## Table API
 ### Writers
 In order to write data to Fluss tables, first you need to create a Table instance.
