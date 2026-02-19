@@ -196,7 +196,7 @@ The Docker Compose environment consists of the following containers:
 
 
 :::tip
-[RustFS](https://github.com/rustfs/rustfs) is used as replacement for S3 in this quickstart example, for your production setup you may want to configure this to use cloud file system. See [here](/maintenance/filesystems/overview.md) for information on how to setup cloud file systems
+[RustFS](https://github.com/rustfs/rustfs) is used as replacement for S3 in this quickstart example, for your production setup you may want to configure this to use cloud file system. See [here](/maintenance/tiered-storage/filesystems/overview.md) for information on how to setup cloud file systems
 :::
 
 4. To start all containers, run:
@@ -425,7 +425,7 @@ The Docker Compose environment consists of the following containers:
 - **RustFS**: an S3-compatible storage system used both as Fluss remote storage and Iceberg's filesystem warehouse.
 
 :::tip
-[RustFS](https://github.com/rustfs/rustfs) is used as replacement for S3 in this quickstart example, for your production setup you may want to configure this to use cloud file system. See [here](/maintenance/filesystems/overview.md) for information on how to setup cloud file systems
+[RustFS](https://github.com/rustfs/rustfs) is used as replacement for S3 in this quickstart example, for your production setup you may want to configure this to use cloud file system. See [here](/maintenance/tiered-storage/filesystems/overview.md) for information on how to setup cloud file systems
 :::
 
 4. To start all containers, run:

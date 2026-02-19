@@ -25,7 +25,7 @@ Overall, these data lake formats typically achieve data freshness at best within
 ## Streaming Lakehouse: Unified Stream & Lakehouse
 
 Fluss is a streaming storage supporting streaming reads and writes with sub-second low latency.
-With [Lakehouse Storage](maintenance/tiered-storage/lakehouse-storage.md), Fluss unifies data streaming and data Lakehouse by serving real-time streaming data on top of Lakehouse.
+With [Lakehouse Storage](../maintenance/tiered-storage/lakehouse-storage.md), Fluss unifies data streaming and data Lakehouse by serving real-time streaming data on top of Lakehouse.
 This not only brings low latency to data Lakehouse, but also adds powerful analytics to data streams.
 
 To build a Streaming Lakehouse, Fluss maintains a tiering service that compacts real-time data from the Fluss cluster into the data lake format stored in the Lakehouse Storage.
@@ -43,4 +43,13 @@ Some powerful features it provides are:
 - **Analytical Streams**: The union reads help data streams to have the powerful analytics capabilities. This reduces complexity when developing streaming applications, simplifies debugging, and allows for immediate access to live data insights.
 - **Connect to Lakehouse Ecosystem**: Fluss keeps the table metadata in sync with data lake catalogs while compacting data into Lakehouse. As a result, external engines like Spark, StarRocks, Flink, and Trino can read the data directly. They simply connect to the data lake catalog.
 
-Currently, Fluss supports [Paimon](streaming-lakehouse/integrate-data-lakes/paimon.md), [Iceberg](streaming-lakehouse/integrate-data-lakes/iceberg.md), and [Lance](streaming-lakehouse/integrate-data-lakes/lance.md) as Lakehouse Storage, more kinds of data lake formats are on the roadmap.
+Currently, Fluss supports [Paimon](datalake-formats/paimon.md), [Iceberg](datalake-formats/iceberg.md), and [Lance](datalake-formats/lance.md) as Lakehouse Storage, more kinds of data lake formats are on the roadmap.
+
+## Getting Started
+
+Ready to build your Streaming Lakehouse? Here's a recommended path:
+
+1. **Hands-on Tutorial**: Follow the [Lakehouse Quickstart](../quickstart/lakehouse.md) to build a working Streaming Lakehouse in minutes using Docker
+2. **Understand the Architecture**: Learn how [Tiering Service](tiering-service.md) continuously syncs data to your data lake
+3. **Query Your Data**: Explore [Union Read](union-read.md) to query real-time and historical data together
+4. **Production Deployment**: See [Deploying Streaming Lakehouse](../install-deploy/deploying-streaming-lakehouse.md) for cluster setup

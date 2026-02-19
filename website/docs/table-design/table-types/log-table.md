@@ -115,4 +115,4 @@ In the above example, we set the compression codec to `LZ4_FRAME` and the compre
 :::
 
 ## Log Tiering
-Log Table supports tiering data to different storage tiers. See more details about [Remote Log](maintenance/tiered-storage/remote-storage.md).
+Log Table supports tiering data to different storage tiers. See more details about [Remote Log](../../maintenance/tiered-storage/remote-storage.md).

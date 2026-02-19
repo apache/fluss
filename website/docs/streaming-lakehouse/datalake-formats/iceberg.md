@@ -8,7 +8,7 @@ sidebar_position: 2
 ## Introduction
 
 [Apache Iceberg](https://iceberg.apache.org/) is an open table format for huge analytic datasets. It provides ACID transactions, schema evolution, and efficient data organization for data lakes.
-To integrate Fluss with Iceberg, you must enable lakehouse storage and configure Iceberg as the lakehouse storage. For more details, see [Enable Lakehouse Storage](maintenance/tiered-storage/lakehouse-storage.md#enable-lakehouse-storage).
+To integrate Fluss with Iceberg, you must enable lakehouse storage and configure Iceberg as the lakehouse storage. For more details, see [Deploying Streaming Lakehouse](../../install-deploy/deploying-streaming-lakehouse.md).
 
 > **NOTE**: Iceberg requires JDK11 or later. Please ensure that both your Fluss deployment and the Flink cluster used for tiering services are running on JDK11+.
 
@@ -103,7 +103,7 @@ The Iceberg version that Fluss bundles is based on `1.10.1`. Please ensure the J
 
 ### Start Tiering Service to Iceberg
 
-To tier Fluss's data to Iceberg, you must start the datalake tiering service. For guidance, you can refer to [Start The Datalake Tiering Service](maintenance/tiered-storage/lakehouse-storage.md#start-the-datalake-tiering-service). Although the example uses Paimon, the process is also applicable to Iceberg.
+To tier Fluss's data to Iceberg, you must start the datalake tiering service. For guidance, you can refer to [Deploying Streaming Lakehouse](../../install-deploy/deploying-streaming-lakehouse.md). Although the example uses Paimon, the process is also applicable to Iceberg.
 
 #### Prerequisites: Hadoop Dependencies
 
@@ -146,7 +146,7 @@ export HADOOP_CLASSPATH=`$HADOOP_HOME/bin/hadoop classpath`
 
 #### Prepare Required JARs
 
-Follow the dependency management guidelines below for the [Prepare required jars](maintenance/tiered-storage/lakehouse-storage.md#prepare-required-jars) step:
+Follow the dependency management guidelines below for required JARs:
 
 ##### 1. Core Fluss Components
 - **Fluss Flink Connector**: Put [fluss-flink connector jar](/downloads) into `${FLINK_HOME}/lib`
@@ -178,7 +178,7 @@ failsafe-3.3.2.jar
 
 #### Start Datalake Tiering Service
 
-When following the [Start Datalake Tiering Service](maintenance/tiered-storage/lakehouse-storage.md#start-datalake-tiering-service) guide, use Iceberg-specific configurations as parameters when starting the Flink tiering job:
+Use Iceberg-specific configurations as parameters when starting the Flink tiering job:
 
 ```bash
 <FLINK_HOME>/bin/flink run /path/to/fluss-flink-tiering-$FLUSS_VERSION$.jar \

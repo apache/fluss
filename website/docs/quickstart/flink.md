@@ -165,7 +165,7 @@ The Docker Compose environment consists of the following containers:
 - **Flink Cluster**: a Flink `JobManager`, a Flink `TaskManager`, and a Flink SQL client container to execute queries.
 
 :::tip
-[RustFS](https://github.com/rustfs/rustfs) is used as replacement for S3 in this quickstart example, for your production setup you may want to configure this to use cloud file system. See [here](/maintenance/filesystems/overview.md) for information on how to setup cloud file systems
+[RustFS](https://github.com/rustfs/rustfs) is used as replacement for S3 in this quickstart example, for your production setup you may want to configure this to use cloud file system. See [here](/maintenance/tiered-storage/filesystems/overview.md) for information on how to setup cloud file systems
 :::
 
 4. To start all containers, run:

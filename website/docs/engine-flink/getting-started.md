@@ -61,7 +61,7 @@ Download [Fluss Flink Bundled jar](/downloads) and copy to the `lib` directory o
 cp fluss-flink-1.20-$FLUSS_VERSION$.jar <FLINK_HOME>/lib/
 ```
 :::note
-If you use [Amazon S3](http://aws.amazon.com/s3/), [Aliyun OSS](https://www.aliyun.com/product/oss) or [HDFS(Hadoop Distributed File System)](https://hadoop.apache.org/docs/stable/) as Fluss's [remote storage](maintenance/tiered-storage/remote-storage.md),
+If you use [Amazon S3](http://aws.amazon.com/s3/), [Aliyun OSS](https://www.aliyun.com/product/oss) or [HDFS(Hadoop Distributed File System)](https://hadoop.apache.org/docs/stable/) as Fluss's [remote storage](../maintenance/tiered-storage/remote-storage.md),
 you should download the corresponding [Fluss filesystem jar](/downloads#filesystem-jars) and also copy it to the lib directory of your Flink home.
 :::
 
