@@ -20,6 +20,8 @@ package org.apache.fluss.security.auth.sasl.jaas;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import javax.security.auth.login.AppConfigurationEntry;
 import javax.security.auth.login.Configuration;
@@ -38,7 +40,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link JaasContext}. */
-public class JaasContextTest {
+class JaasContextTest {
 
     private File jaasConfigFile;
 
@@ -75,6 +77,72 @@ public class JaasContextTest {
                 "org.apache.fluss.security.auth.sasl.jaas.DigestLoginModule",
                 AppConfigurationEntry.LoginModuleControlFlag.OPTIONAL,
                 Collections.singletonMap("option2", "value2"));
+    }
+
+    @Test
+    void testLoadServerContextWithEscapedSpecialCharactersFromDynamicJaasConfig() {
+        String username = "ad \"#+,;<=>\\min";
+        String password = "pa \"#+,;<=>\\ssword";
+        String dynamicJaasConfig =
+                String.format(
+                        "org.apache.fluss.security.auth.sasl.plain.PlainLoginModule required \"%s\"=\"%s\";",
+                        JaasUtils.escapeJaasValue("user_" + username),
+                        JaasUtils.escapeJaasValue(password));
+
+        JaasContext context = JaasContext.loadServerContext("CLIENT", dynamicJaasConfig);
+        checkEntry(
+                context.configurationEntries().get(0),
+                "org.apache.fluss.security.auth.sasl.plain.PlainLoginModule",
+                AppConfigurationEntry.LoginModuleControlFlag.REQUIRED,
+                Collections.singletonMap("user_" + username, password));
+    }
+
+    @Test
+    void testLoadServerContextWithUnescapedSpecialCharactersFromDynamicJaasConfig() {
+        String username = "ad \"min";
+        String password = "pa \"ssword";
+        String dynamicJaasConfig =
+                String.format(
+                        "org.apache.fluss.security.auth.sasl.plain.PlainLoginModule required \"user_%s\"=\"%s\";",
+                        username, password);
+
+        assertThatThrownBy(() -> JaasContext.loadServerContext("CLIENT", dynamicJaasConfig))
+                .isExactlyInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void testLoadServerContextWithEscapedSpecialCharactersFromJaasFile() throws IOException {
+        String username = "ad \"#+,;<=>\\min";
+        String password = "pa \"#+,;<=>\\ssword";
+        String jaasConfigProp =
+                String.format(
+                        "org.apache.fluss.security.auth.sasl.plain.PlainLoginModule required \"%s\"=\"%s\";",
+                        JaasUtils.escapeJaasValue("user_" + username),
+                        JaasUtils.escapeJaasValue(password));
+
+        writeConfiguration("FlussServer", jaasConfigProp);
+
+        JaasContext context = JaasContext.loadServerContext("CLIENT", null);
+        checkEntry(
+                context.configurationEntries().get(0),
+                "org.apache.fluss.security.auth.sasl.plain.PlainLoginModule",
+                AppConfigurationEntry.LoginModuleControlFlag.REQUIRED,
+                Collections.singletonMap("user_" + username, password));
+    }
+
+    @Test
+    void testLoadServerContextWithUnescapedSpecialCharactersFromJaasFile() throws IOException {
+        String username = "ad \"min";
+        String password = "pa \"ssword";
+        String jaasConfigProp =
+                String.format(
+                        "org.apache.fluss.security.auth.sasl.plain.PlainLoginModule required \"user_%s\"=\"%s\";",
+                        username, password);
+
+        writeConfiguration("FlussServer", jaasConfigProp);
+
+        assertThatThrownBy(() -> JaasContext.loadServerContext("CLIENT", null))
+                .isExactlyInstanceOf(SecurityException.class);
     }
 
     // -------- test server context ----------
@@ -132,6 +200,25 @@ public class JaasContextTest {
                 options);
     }
 
+    @ParameterizedTest
+    @ValueSource(strings = {" ", "\"", "#", "+", ",", ";", "<", "=", ">", "\\"})
+    void testEscapedValueInStaticAndDynamicConfig(String specialCharacter) throws Exception {
+        String username = "ad" + specialCharacter + "min";
+        String password = "pa" + specialCharacter + "ssword";
+        String jaasConfigProp =
+                String.format(
+                        "test.testEscapedValue required username=\"%s\" password=\"%s\";",
+                        JaasUtils.escapeJaasValue(username), JaasUtils.escapeJaasValue(password));
+
+        AppConfigurationEntry dynamicEntry =
+                configurationEntry(JaasContext.Type.CLIENT, jaasConfigProp);
+        assertThat(dynamicEntry.getOptions().get("password")).isEqualTo(password);
+
+        writeConfiguration(JaasContext.Type.SERVER.name(), jaasConfigProp);
+        AppConfigurationEntry staticEntry = configurationEntry(JaasContext.Type.SERVER, null);
+        assertThat(staticEntry.getOptions().get("password")).isEqualTo(password);
+    }
+
     @Test
     void testQuotedOptionName() throws Exception {
         Map<String, Object> options = new HashMap<>();
@@ -168,7 +255,7 @@ public class JaasContextTest {
         Configuration configuration = new JaasConfig(clientContextName, jaasConfigProp);
         AppConfigurationEntry[] dynamicEntries =
                 configuration.getAppConfigurationEntry(clientContextName);
-        assertThat(dynamicEntries.length).isEqualTo(moduleCount);
+        assertThat(dynamicEntries).hasSize(moduleCount);
 
         for (int i = 0; i < moduleCount; i++) {
             AppConfigurationEntry entry = dynamicEntries[i];

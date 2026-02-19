@@ -67,7 +67,7 @@ tests:
           pattern: 'internal\.FlussServer\s*\{'
       - matchRegex:
           path: stringData["jaas.conf"]
-          pattern: 'user_internal-[a-z0-9]{12}="[A-Za-z0-9]{32}"'
+          pattern: '"user_internal-[a-z0-9]{12}"="[A-Za-z0-9]{32}"'
       - matchRegex:
           path: stringData["internal-generated-username"]
           pattern: '^internal-[a-z0-9]{12}$'
@@ -117,10 +117,10 @@ tests:
           pattern: 'client\.FlussServer\s*\{'
       - matchRegex:
           path: stringData["jaas.conf"]
-          pattern: 'user_app="app-password"'
+          pattern: '"user_app"="app-password"'
       - matchRegex:
           path: stringData["jaas.conf"]
-          pattern: 'user_reader="reader-password"'
+          pattern: '"user_reader"="reader-password"'
       - notMatchRegex:
           path: stringData["jaas.conf"]
           pattern: 'FlussClient\s*\{'
@@ -146,6 +146,31 @@ tests:
           pattern: '^internal-[a-z0-9]{12}$'
 ---
 
+suite: internal-sasl-special-characters
+templates:
+  - templates/secret-jaas-config.yaml
+tests:
+  - it: escapes special characters in internal username and password
+    set:
+      listeners.internal.protocol: SASL
+      listeners.client.protocol: PLAINTEXT
+      listeners.internal.security.users:
+        - username: 'ad\min"'
+          password: 'pa\ss"'
+    asserts:
+      - hasDocuments:
+          count: 1
+      - matchRegex:
+          path: stringData["jaas.conf"]
+          pattern: '"user_ad\\\\min\\""="pa\\\\ss\\""'
+      - matchRegex:
+          path: stringData["jaas.conf"]
+          pattern: 'username="ad\\\\min\\""'
+      - matchRegex:
+          path: stringData["jaas.conf"]
+          pattern: 'password="pa\\\\ss\\"";'
+---
+
 suite: both-listeners-sasl
 templates:
   - templates/secret-jaas-config.yaml
@@ -169,13 +194,13 @@ tests:
           pattern: 'internal\.FlussServer\s*\{'
       - matchRegex:
           path: stringData["jaas.conf"]
-          pattern: 'user_internal-user="internal-password"'
+          pattern: '"user_internal-user"="internal-password"'
       - matchRegex:
           path: stringData["jaas.conf"]
           pattern: 'client\.FlussServer\s*\{'
       - matchRegex:
           path: stringData["jaas.conf"]
-          pattern: 'user_external-user="external-password"'
+          pattern: '"user_external-user"="external-password"'
       - matchRegex:
           path: stringData["jaas.conf"]
           pattern: 'FlussClient\s*\{'
@@ -313,6 +338,30 @@ tests:
           value: |
             zookeeper.sasl.client=true
             zookeeper.sasl.clientconfig=ZookeeperClient
+---
+
+suite: zookeeper-sasl-special-characters
+templates:
+  - templates/secret-jaas-config.yaml
+tests:
+  - it: escapes special characters in zookeeper username and password
+    set:
+      listeners.internal.protocol: PLAINTEXT
+      listeners.client.protocol: PLAINTEXT
+      security.zookeeperSasl.username: 'zk\user"'
+      security.zookeeperSasl.password: 'zk\pass"'
+    asserts:
+      - hasDocuments:
+          count: 1
+      - matchRegex:
+          path: stringData["jaas.conf"]
+          pattern: 'username="zk\\\\user\\""\s*password="zk\\\\pass\\"";'
+      - matchRegex:
+          path: stringData["jaas.conf"]
+          pattern: 'username="zk\\\\user\\""'
+      - matchRegex:
+          path: stringData["jaas.conf"]
+          pattern: 'password="zk\\\\pass\\"";'
 ---
 
 suite: zookeeper-sasl-enabled-statefulset

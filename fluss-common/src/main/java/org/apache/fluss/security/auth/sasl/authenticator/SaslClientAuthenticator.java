@@ -21,6 +21,7 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.AuthenticationException;
 import org.apache.fluss.security.auth.ClientAuthenticator;
 import org.apache.fluss.security.auth.sasl.jaas.JaasContext;
+import org.apache.fluss.security.auth.sasl.jaas.JaasUtils;
 import org.apache.fluss.security.auth.sasl.jaas.LoginManager;
 import org.apache.fluss.security.auth.sasl.plain.PlainSaslServer;
 
@@ -61,7 +62,11 @@ public class SaslClientAuthenticator implements ClientAuthenticator {
                                     CLIENT_SASL_JAAS_USERNAME.key(),
                                     CLIENT_SASL_JAAS_PASSWORD.key()));
                 }
-                jaasConfigStr = String.format(JAAS_CONF_FORMAT, username, password);
+                jaasConfigStr =
+                        String.format(
+                                JAAS_CONF_FORMAT,
+                                JaasUtils.escapeJaasValue(username),
+                                JaasUtils.escapeJaasValue(password));
             }
         }
         this.jaasConfig = jaasConfigStr;

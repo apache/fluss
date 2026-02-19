@@ -32,6 +32,13 @@ Return true if SASL is configured in any of the listener protocols
 {{- end -}}
 
 {{/*
+Escape JAAS value for quoted string contexts.
+*/}}
+{{- define "fluss.sasl.escapeJaasValue" -}}
+{{- . | toString | replace "\\" "\\\\" | replace "\"" "\\\"" -}}
+{{- end -}}
+
+{{/*
 Return true if ZooKeeper SASL is enabled
 */}}
 {{- define "fluss.zookeeper.sasl.enabled" -}}
@@ -127,9 +134,9 @@ Usage: include "fluss.sasl.jaasServerBlock" (dict "name" "internal" "users" $use
 {{- define "fluss.sasl.jaasServerBlock" }}
     {{ .name }}.FlussServer {
        org.apache.fluss.security.auth.sasl.plain.PlainLoginModule required
-       {{- range .users }}
-       user_{{ .username }}="{{ .password }}"
-       {{- end }};
+        {{- range .users }}
+       "user_{{ include "fluss.sasl.escapeJaasValue" .username }}"="{{ include "fluss.sasl.escapeJaasValue" .password }}"
+        {{- end }};
     };
 {{- end -}}
 
@@ -140,8 +147,8 @@ Usage: include "fluss.sasl.jaasClientBlock" (dict "user" $user)
 {{- define "fluss.sasl.jaasClientBlock" }}
     FlussClient {
        org.apache.fluss.security.auth.sasl.plain.PlainLoginModule required
-       username="{{ .user.username }}"
-       password="{{ .user.password }}";
+       username="{{ include "fluss.sasl.escapeJaasValue" .user.username }}"
+       password="{{ include "fluss.sasl.escapeJaasValue" .user.password }}";
     };
 {{- end -}}
 
