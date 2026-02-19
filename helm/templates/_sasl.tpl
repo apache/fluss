@@ -32,6 +32,26 @@ Return true if SASL is configured in any of the listener protocols
 {{- end -}}
 
 {{/*
+Return true if ZooKeeper SASL is enabled
+*/}}
+{{- define "fluss.zookeeper.sasl.enabled" -}}
+{{- $zkSaslUsername := default "" .Values.security.zookeeperSasl.username | trim -}}
+{{- $zkSaslPassword := default "" .Values.security.zookeeperSasl.password | trim -}}
+{{- if or (ne $zkSaslUsername "") (ne $zkSaslPassword "") -}}
+{{- true -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Return true if any JAAS configuration is required
+*/}}
+{{- define "fluss.jaas.required" -}}
+{{- if or (include "fluss.sasl.enabled" .) (include "fluss.zookeeper.sasl.enabled" .) -}}
+{{- true -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
 Return true if listener protocol is SASL
 Usage: include "fluss.listener.sasl.enabled" (dict "root" . "listener" "internal")
 */}}
