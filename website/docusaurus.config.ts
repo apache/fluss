@@ -127,18 +127,6 @@ const config: Config = {
     [
       '@docusaurus/plugin-client-redirects',
       {
-          // Redirects for moved documentation pages
-          redirects: [
-            { from: '/docs/maintenance/filesystems/hdfs', to: '/docs/maintenance/tiered-storage/filesystems/hdfs' },
-            { from: '/docs/maintenance/filesystems/s3', to: '/docs/maintenance/tiered-storage/filesystems/s3' },
-            { from: '/docs/maintenance/filesystems/oss', to: '/docs/maintenance/tiered-storage/filesystems/oss' },
-            { from: '/docs/maintenance/filesystems/obs', to: '/docs/maintenance/tiered-storage/filesystems/obs' },
-            { from: '/docs/maintenance/filesystems/azure', to: '/docs/maintenance/tiered-storage/filesystems/azure' },
-            { from: '/docs/maintenance/filesystems/overview', to: '/docs/maintenance/tiered-storage/filesystems/overview' },
-            { from: '/docs/streaming-lakehouse/integrate-data-lakes/paimon', to: '/docs/streaming-lakehouse/datalake-formats/paimon' },
-            { from: '/docs/streaming-lakehouse/integrate-data-lakes/iceberg', to: '/docs/streaming-lakehouse/datalake-formats/iceberg' },
-            { from: '/docs/streaming-lakehouse/integrate-data-lakes/lance', to: '/docs/streaming-lakehouse/datalake-formats/lance' },
-          ],
           // Create redirects from the available routes that have already been created
           createRedirects(existingPath) {
             // Only evaluate paths related to documentation

@@ -122,6 +122,14 @@ for branch in $branches; do
     # Copy the website/docs directory to the target directory
     $CP_CMD "$version_dir/" || { echo "Failed to copy for branch: $clean_branch_name"; continue; }
     echo "Copied documentation for branch '$clean_branch_name' to '$version_dir'"
+
+    # Fix absolute links in versioned docs (convert /docs/maintenance/filesystems/hdfs.md to relative path)
+    lakehouse_file="$version_dir/maintenance/tiered-storage/lakehouse-storage.md"
+    if [ -f "$lakehouse_file" ]; then
+      sed -i.bak 's|/docs/maintenance/filesystems/hdfs\.md|../../filesystems/hdfs|g' "$lakehouse_file"
+      rm -f "$lakehouse_file.bak"
+      echo "Fixed absolute links in '$lakehouse_file'"
+    fi
   else
     echo "The website/docs directory does not exist in branch '$clean_branch_name', skipping..."
   fi
