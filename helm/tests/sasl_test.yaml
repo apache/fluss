@@ -299,6 +299,9 @@ tests:
       - matchRegex:
           path: stringData["jaas.conf"]
           pattern: 'ZookeeperClient\s*\{'
+      - matchRegex:
+          path: stringData["jaas.conf"]
+          pattern: 'org\.apache\.fluss\.shaded\.zookeeper3\.org\.apache\.zookeeper\.server\.auth\.DigestLoginModule required'
       - notMatchRegex:
           path: stringData["jaas.conf"]
           pattern: 'internal\.FlussServer\s*\{'
@@ -352,3 +355,36 @@ tests:
     asserts:
       - failedTemplate:
           errorMessage: security.zookeeperSasl.username and security.zookeeperSasl.password must be set together
+---
+
+suite: zookeeper-sasl-custom-login-module
+templates:
+  - templates/secret-jaas-config.yaml
+tests:
+  - it: renders custom zookeeper sasl login module when provided
+    set:
+      listeners.internal.protocol: PLAINTEXT
+      listeners.client.protocol: PLAINTEXT
+      security.zookeeperSasl.username: zk-username
+      security.zookeeperSasl.password: zk-password
+      security.zookeeperSasl.loginModuleClass: org.apache.zookeeper.server.auth.DigestLoginModule
+    asserts:
+      - matchRegex:
+          path: stringData["jaas.conf"]
+          pattern: 'org\.apache\.zookeeper\.server\.auth\.DigestLoginModule required'
+---
+
+suite: zookeeper-sasl-empty-login-module-fails
+templates:
+  - templates/secret-jaas-config.yaml
+tests:
+  - it: fails when zookeeper sasl login module class is empty
+    set:
+      listeners.internal.protocol: PLAINTEXT
+      listeners.client.protocol: PLAINTEXT
+      security.zookeeperSasl.username: zk-username
+      security.zookeeperSasl.password: zk-password
+      security.zookeeperSasl.loginModuleClass: ""
+    asserts:
+      - failedTemplate:
+          errorMessage: security.zookeeperSasl.loginModuleClass must be set when ZooKeeper SASL is configured

@@ -235,6 +235,7 @@ The following table lists the configurable parameters of the Fluss chart, and th
 | `listeners.client.security.users` | User list for client SASL authentication (required when client protocol is SASL) | `[]` |
 | `security.zookeeperSasl.username` | ZooKeeper SASL username for Digest authentication | `""` |
 | `security.zookeeperSasl.password` | ZooKeeper SASL password for Digest authentication | `""` |
+| `security.zookeeperSasl.loginModuleClass` | JAAS login module class for ZooKeeper client SASL | `org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.server.auth.DigestLoginModule` |
 
 ## Advanced Configuration
 
@@ -327,9 +328,12 @@ security:
   zookeeperSasl:
     username: zk-username
     password: zk-password
+    loginModuleClass: org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.server.auth.DigestLoginModule
 ```
 
-When both `username` and `password` are set, the chart generates ZooKeeper client JAAS config and sets `zookeeper.client.config-path` automatically. These fields must be set together.
+When both `username` and `password` are set, the chart generates ZooKeeper client JAAS config and sets `zookeeper.client.config-path` automatically. Both username and password fields must be set together.
+
+If your runtime expects a different Zookeeper login module class name (for example shaded ZooKeeper), override `security.zookeeperSasl.loginModuleClass` field.
 
 ### Storage Configuration
 

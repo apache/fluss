@@ -70,6 +70,7 @@ security:
   zookeeperSasl:
     username: ""
     password: ""
+    loginModuleClass: "org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.server.auth.DigestLoginModule"
 
 resources: {}
   # We usually recommend not to specify default resources and to leave this as a conscious
