@@ -24,7 +24,7 @@
     <parent>
         <groupId>org.apache.fluss</groupId>
         <artifactId>fluss-filesystems</artifactId>
-        <version>0.9-SNAPSHOT</version>
+        <version>0.9.0-incubating</version>
     </parent>
 
     <artifactId>fluss-fs-gs</artifactId>
