@@ -34,9 +34,10 @@ public class LogSplit extends SourceSplitBase {
 
     private final long startingOffset;
     private final long stoppingOffset;
+    private final long backlogMarkedOffset;
 
     public LogSplit(TableBucket tableBucket, @Nullable String partitionName, long startingOffset) {
-        this(tableBucket, partitionName, startingOffset, NO_STOPPING_OFFSET);
+        this(tableBucket, partitionName, startingOffset, NO_STOPPING_OFFSET, NO_STOPPING_OFFSET);
     }
 
     public LogSplit(
@@ -44,9 +45,19 @@ public class LogSplit extends SourceSplitBase {
             @Nullable String partitionName,
             long startingOffset,
             long stoppingOffset) {
+        this(tableBucket, partitionName, startingOffset, stoppingOffset, NO_STOPPING_OFFSET);
+    }
+
+    public LogSplit(
+            TableBucket tableBucket,
+            @Nullable String partitionName,
+            long startingOffset,
+            long stoppingOffset,
+            long backlogMarkedOffset) {
         super(tableBucket, partitionName);
         this.startingOffset = startingOffset;
         this.stoppingOffset = stoppingOffset;
+        this.backlogMarkedOffset = backlogMarkedOffset;
     }
 
     public long getStartingOffset() {
@@ -55,6 +66,10 @@ public class LogSplit extends SourceSplitBase {
 
     public Optional<Long> getStoppingOffset() {
         return stoppingOffset >= 0 ? Optional.of(stoppingOffset) : Optional.empty();
+    }
+
+    public Optional<Long> getBacklogMarkedOffset() {
+        return backlogMarkedOffset >= 0 ? Optional.of(backlogMarkedOffset) : Optional.empty();
     }
 
     @Override
@@ -78,14 +93,15 @@ public class LogSplit extends SourceSplitBase {
         if (!super.equals(object)) {
             return false;
         }
-        LogSplit logSplit = (LogSplit) object;
-        return startingOffset == logSplit.startingOffset
-                && stoppingOffset == logSplit.stoppingOffset;
+        LogSplit that = (LogSplit) object;
+        return startingOffset == that.startingOffset
+                && stoppingOffset == that.stoppingOffset
+                && backlogMarkedOffset == that.backlogMarkedOffset;
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(super.hashCode(), startingOffset, stoppingOffset);
+        return Objects.hash(super.hashCode(), startingOffset, stoppingOffset, backlogMarkedOffset);
     }
 
     @Override
@@ -100,6 +116,8 @@ public class LogSplit extends SourceSplitBase {
                 + startingOffset
                 + ", stoppingOffset="
                 + stoppingOffset
+                + ", backlogMarkedOffset="
+                + backlogMarkedOffset
                 + '}';
     }
 }
