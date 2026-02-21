@@ -150,13 +150,16 @@ class NoticeFileCheckerTest {
                                 bundleDependencies,
                                 moduleName,
                                 new NoticeContents(
-                                        moduleName, Collections.singletonList(bundledDependency))))
+                                        moduleName, Collections.singletonList(bundledDependency)),
+                                Collections.emptySet()))
                 .isEmpty();
     }
 
     @Test
     void testCheckNoticeFileRejectsEmptyFile() {
-        assertThat(NoticeFileChecker.checkNoticeFile(Collections.emptyMap(), "test", null))
+        assertThat(
+                        NoticeFileChecker.checkNoticeFile(
+                                Collections.emptyMap(), "test", null, Collections.emptySet()))
                 .containsOnlyKeys(NoticeFileChecker.Severity.CRITICAL);
     }
 
@@ -168,7 +171,8 @@ class NoticeFileCheckerTest {
                         NoticeFileChecker.checkNoticeFile(
                                 Collections.emptyMap(),
                                 moduleName,
-                                new NoticeContents(moduleName + "2", Collections.emptyList())))
+                                new NoticeContents(moduleName + "2", Collections.emptyList()),
+                                Collections.emptySet()))
                 .containsOnlyKeys(NoticeFileChecker.Severity.TOLERATED);
     }
 
@@ -187,7 +191,8 @@ class NoticeFileCheckerTest {
                                         moduleName,
                                         Arrays.asList(
                                                 Dependency.create("a", "b", "c", null),
-                                                Dependency.create("a", "b", "c", null)))))
+                                                Dependency.create("a", "b", "c", null))),
+                                Collections.emptySet()))
                 .containsOnlyKeys(NoticeFileChecker.Severity.CRITICAL);
     }
 
@@ -202,7 +207,28 @@ class NoticeFileCheckerTest {
                         NoticeFileChecker.checkNoticeFile(
                                 bundleDependencies,
                                 moduleName,
-                                new NoticeContents(moduleName, Collections.emptyList())))
+                                new NoticeContents(moduleName, Collections.emptyList()),
+                                Collections.emptySet()))
                 .containsOnlyKeys(NoticeFileChecker.Severity.CRITICAL);
+    }
+
+    @Test
+    void testCheckNoticeFileAcceptsDependencyListedInLicenseOnly() throws IOException {
+        final String moduleName = "test";
+        final Dependency bundledDependency = Dependency.create("a", "b", "c", null);
+        final Map<String, Set<Dependency>> bundleDependencies = new HashMap<>();
+        bundleDependencies.put(moduleName, Collections.singleton(bundledDependency));
+        // NOTICE is empty (e.g. only Apache deps in NOTICE); dependency listed in LICENSE only
+        final Optional<NoticeContents> noticeContents =
+                Optional.of(new NoticeContents(moduleName, Collections.emptyList()));
+        final Set<Dependency> licenseDeps = Collections.singleton(bundledDependency);
+
+        assertThat(
+                        NoticeFileChecker.run(
+                                bundleDependencies,
+                                Collections.singleton(moduleName),
+                                Collections.singletonMap(moduleName, noticeContents),
+                                Collections.singletonMap(moduleName, licenseDeps)))
+                .isEqualTo(0);
     }
 }

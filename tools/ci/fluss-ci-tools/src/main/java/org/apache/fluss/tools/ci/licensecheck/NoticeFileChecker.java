@@ -19,6 +19,7 @@ package org.apache.fluss.tools.ci.licensecheck;
 
 import org.apache.fluss.tools.ci.utils.dependency.DependencyParser;
 import org.apache.fluss.tools.ci.utils.deploy.DeployParser;
+import org.apache.fluss.tools.ci.utils.notice.LicenseParser;
 import org.apache.fluss.tools.ci.utils.notice.NoticeContents;
 import org.apache.fluss.tools.ci.utils.notice.NoticeParser;
 import org.apache.fluss.tools.ci.utils.shade.ShadeParser;
@@ -103,14 +104,51 @@ public class NoticeFileChecker {
                                             }
                                         }));
 
-        return run(modulesWithBundledDependencies, deployedModules, moduleToNotice);
+        // Parse LICENSE file for each module (same META-INF as NOTICE); dependencies listed there
+        // count as declared alongside NOTICE.
+        final Map<String, Set<Dependency>> moduleToLicenseDependencies = new HashMap<>();
+        for (Path noticeFile : noticeFiles) {
+            String moduleName = getModuleFromNoticeFile(noticeFile);
+            Path licensePath = noticeFile.getParent().resolve("LICENSE");
+            try {
+                Set<Dependency> licenseDeps = LicenseParser.parseLicenseFile(licensePath);
+                if (!licenseDeps.isEmpty()) {
+                    moduleToLicenseDependencies.put(moduleName, licenseDeps);
+                }
+            } catch (IOException e) {
+                throw new RuntimeException("Failed to parse LICENSE for " + moduleName, e);
+            }
+        }
+
+        return run(
+                modulesWithBundledDependencies,
+                deployedModules,
+                moduleToNotice,
+                moduleToLicenseDependencies);
     }
 
+    /** Used by tests that do not pass LICENSE-derived dependencies. */
     static int run(
             Map<String, Set<Dependency>> modulesWithBundledDependencies,
             Set<String> deployedModules,
             Map<String, Optional<NoticeContents>> noticeFiles)
             throws IOException {
+        return run(
+                modulesWithBundledDependencies,
+                deployedModules,
+                noticeFiles,
+                Collections.emptyMap());
+    }
+
+    static int run(
+            Map<String, Set<Dependency>> modulesWithBundledDependencies,
+            Set<String> deployedModules,
+            Map<String, Optional<NoticeContents>> noticeFiles,
+            Map<String, Set<Dependency>> moduleToLicenseDependencies)
+            throws IOException {
+        if (moduleToLicenseDependencies == null) {
+            moduleToLicenseDependencies = Collections.emptyMap();
+        }
         int severeIssueCount = 0;
 
         final Set<String> modulesSkippingDeployment =
@@ -155,13 +193,17 @@ public class NoticeFileChecker {
         severeIssueCount +=
                 ensureRequiredNoticeFiles(modulesWithBundledDependencies, noticeFiles.keySet());
 
-        // check each NOTICE file
+        // check each NOTICE file (declared deps = NOTICE + LICENSE for that module)
         for (Map.Entry<String, Optional<NoticeContents>> noticeFile : noticeFiles.entrySet()) {
+            String moduleName = noticeFile.getKey();
+            Set<Dependency> licenseDeps =
+                    moduleToLicenseDependencies.getOrDefault(moduleName, Collections.emptySet());
             severeIssueCount +=
                     checkNoticeFileAndLogProblems(
                             modulesWithBundledDependencies,
-                            noticeFile.getKey(),
-                            noticeFile.getValue().orElse(null));
+                            moduleName,
+                            noticeFile.getValue().orElse(null),
+                            licenseDeps);
         }
 
         return severeIssueCount;
@@ -240,11 +282,16 @@ public class NoticeFileChecker {
     private static int checkNoticeFileAndLogProblems(
             Map<String, Set<Dependency>> modulesWithShadedDependencies,
             String moduleName,
-            @Nullable NoticeContents noticeContents)
+            @Nullable NoticeContents noticeContents,
+            Set<Dependency> licenseDeclaredDependencies)
             throws IOException {
 
         final Map<Severity, List<String>> problemsBySeverity =
-                checkNoticeFile(modulesWithShadedDependencies, moduleName, noticeContents);
+                checkNoticeFile(
+                        modulesWithShadedDependencies,
+                        moduleName,
+                        noticeContents,
+                        licenseDeclaredDependencies);
 
         final List<String> severeProblems =
                 problemsBySeverity.getOrDefault(Severity.CRITICAL, Collections.emptyList());
@@ -274,9 +321,15 @@ public class NoticeFileChecker {
     static Map<Severity, List<String>> checkNoticeFile(
             Map<String, Set<Dependency>> modulesWithShadedDependencies,
             String moduleName,
-            @Nullable NoticeContents noticeContents) {
+            @Nullable NoticeContents noticeContents,
+            Set<Dependency> licenseDeclaredDependencies) {
 
         final Map<Severity, List<String>> problemsBySeverity = new HashMap<>();
+        Set<Dependency> declaredDependencies = new HashSet<>();
+
+        if (licenseDeclaredDependencies != null) {
+            declaredDependencies.addAll(licenseDeclaredDependencies);
+        }
 
         if (noticeContents == null) {
             addProblem(problemsBySeverity, Severity.CRITICAL, "The NOTICE file was empty.");
@@ -291,8 +344,7 @@ public class NoticeFileChecker {
                                 noticeContents.getNoticeModuleName()));
             }
 
-            // collect all declared dependencies from NOTICE file
-            Set<Dependency> declaredDependencies = new HashSet<>();
+            // collect all declared dependencies from NOTICE file (LICENSE deps already in set)
             for (Dependency declaredDependency : noticeContents.getDeclaredDependencies()) {
                 if (!declaredDependencies.add(declaredDependency)) {
                     addProblem(
@@ -314,10 +366,34 @@ public class NoticeFileChecker {
 
             for (Dependency expectedDependency : expectedDependencies) {
                 if (!declaredDependencies.contains(expectedDependency)) {
-                    addProblem(
-                            problemsBySeverity,
-                            Severity.CRITICAL,
-                            String.format("Dependency %s is not listed.", expectedDependency));
+                    // LICENSE may list the same dependency with a different version (resolved at
+                    // build time); treat as listed with version mismatch (TOLERATED).
+                    boolean listedInLicenseWithDifferentVersion =
+                            licenseDeclaredDependencies != null
+                                    && licenseDeclaredDependencies.stream()
+                                            .anyMatch(
+                                                    d ->
+                                                            d.getGroupId()
+                                                                            .equals(
+                                                                                    expectedDependency
+                                                                                            .getGroupId())
+                                                                    && d.getArtifactId()
+                                                                            .equals(
+                                                                                    expectedDependency
+                                                                                            .getArtifactId()));
+                    if (listedInLicenseWithDifferentVersion) {
+                        addProblem(
+                                problemsBySeverity,
+                                Severity.TOLERATED,
+                                String.format(
+                                        "Dependency %s is listed in LICENSE with a different version.",
+                                        expectedDependency));
+                    } else {
+                        addProblem(
+                                problemsBySeverity,
+                                Severity.CRITICAL,
+                                String.format("Dependency %s is not listed.", expectedDependency));
+                    }
                 }
             }
 
