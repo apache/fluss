@@ -47,16 +47,6 @@ This project bundles the following dependencies under the Apache Software Licens
 - commons-collections:commons-collections:3.2.2
 - commons-io:commons-io:2.16.1
 - commons-logging:commons-logging:1.2
-- io.dropwizard.metrics:metrics-core:3.2.4
-- io.netty:netty-buffer:4.1.100.Final
-- io.netty:netty-codec:4.1.100.Final
-- io.netty:netty-common:4.1.100.Final
-- io.netty:netty-handler:4.1.100.Final
-- io.netty:netty-resolver:4.1.100.Final
-- io.netty:netty-transport:4.1.100.Final
-- io.netty:netty-transport-classes-epoll:4.1.100.Final
-- io.netty:netty-transport-native-epoll:4.1.100.Final
-- io.netty:netty-transport-native-unix-common:4.1.100.Final
 - io.grpc:grpc-alts:1.59.1
 - io.grpc:grpc-api:1.59.1
 - io.grpc:grpc-auth:1.59.1
@@ -103,7 +93,6 @@ This project bundles the following dependencies under the Apache Software Licens
 - org.apache.kerby:kerby-config:2.0.3
 - org.apache.kerby:kerby-pkix:2.0.3
 - org.apache.kerby:kerby-util:2.0.3
-- org.codehaus.jettison:jettison:1.5.4
 - org.conscrypt:conscrypt-openjdk-uber:2.5.2
 - org.xerial.snappy:snappy-java:1.1.10.4
 
@@ -137,7 +126,6 @@ See bundled license files for details.
 This project bundles the following dependencies under the MIT License.
 See bundled license files for details.
 
-- org.bouncycastle:bcprov-jdk18on:1.78.1
 - org.checkerframework:checker-qual:2.5.2
 - org.codehaus.mojo:animal-sniffer-annotations:1.23
 
