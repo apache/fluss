@@ -36,7 +36,7 @@ the installation documentation provides instructions for deploying one using Bit
 
 ### Running Fluss locally with Minikube
 
-For local testing and development, you can deploy Fluss on Minikube. This is ideal for development, testing, and learning purposes.
+For local testing and development, you can deploy Fluss on Minikube. This is ideal for development, testing and learning purposes.
 
 #### Prerequisites
 
@@ -157,7 +157,7 @@ kubectl logs -l app.kubernetes.io/component=tablet
 
 ## Configuration Parameters
 
-The following table lists the configurable parameters of the Fluss chart and their default values.
+The following table lists the configurable parameters of the Fluss chart, and their default values.
 
 ### Global Parameters
 
@@ -225,6 +225,17 @@ The following table lists the configurable parameters of the Fluss chart and the
 | `resources.tabletServer.limits.cpu` | CPU limits for tablet servers | Not set |
 | `resources.tabletServer.limits.memory` | Memory limits for tablet servers | Not set |
 
+### SASL Parameters
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `listeners.internal.security.mechanism` | SASL mechanism for internal listener | `PLAIN` |
+| `listeners.internal.security.users` | User list for internal SASL authentication (auto-generated if empty and internal protocol is SASL) | `[]` |
+| `listeners.client.security.mechanism` | SASL mechanism for client listener | `PLAIN` |
+| `listeners.client.security.users` | User list for client SASL authentication (required when client protocol is SASL) | `[]` |
+| `security.zookeeperSasl.username` | ZooKeeper SASL username for Digest authentication | `""` |
+| `security.zookeeperSasl.password` | ZooKeeper SASL password for Digest authentication | `""` |
+| `security.zookeeperSasl.loginModuleClass` | JAAS login module class for ZooKeeper client SASL | `org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.server.auth.DigestLoginModule` |
 
 ## Advanced Configuration
 
@@ -245,15 +256,84 @@ The chart automatically configures listeners for internal cluster communication 
 - **Internal Port (9123)**: Used for internal communication within the cluster
 - **Client Port (9124)**: Used for client connections
 
-Custom listener configuration:
+Default listeners configuration:
 
 ```yaml
 listeners:
   internal:
+    protocol: PLAINTEXT
     port: 9123
+    security:
+      mechanism: PLAIN
+      users: []
   client:
+    protocol: PLAINTEXT
     port: 9124
+    security:
+      mechanism: PLAIN
+      users: []
 ```
+
+To enable SASL based authentication, set any of the protocols to `SASL`.
+
+### Enabling Secure Connection
+
+With the helm deployment, you can specify authentication protocols when connecting to the Fluss cluster.
+
+The following table shows the supported protocols and security they provide:
+
+| Method      | Authentication | TLS Encryption     |
+|-------------|:--------------:|:------------------:|
+| `PLAINTEXT` | No             | No                 |
+| `SASL`      | Yes            | No                 |
+
+By default, the `PLAINTEXT` protocol is used.
+
+The SASL authentication will be enabled if any of the listener protocols is using `SASL`.
+
+Set these values for additional configurations:
+
+```yaml
+listeners:
+  internal:
+    protocol: SASL
+    port: 9123
+    security:
+      mechanism: PLAIN
+      users:
+        - username: internal-admin
+          password: internal-password
+  client:
+    protocol: SASL
+    port: 9124
+    security:
+      mechanism: PLAIN
+      users:
+        - username: client-admin
+          password: client-password
+```
+
+The `listeners.internal.security.users` and `listeners.client.security.users` fields define distinct user lists for internal and client SASL/PLAIN authentication.
+
+- When `listeners.internal.protocol` is `SASL` and no internal users are provided, the chart auto-generates one internal user and stores it in the Secret for reuse on upgrades.
+- When `listeners.client.protocol` is `SASL`, `listeners.client.security.users` must include at least one `{username, password}` entry or rendering fails.
+- The default authentication mechanism is `PLAIN` for both listeners, and non-`PLAIN` values fail template rendering.
+
+### Enabling ZooKeeper SASL Authentication
+
+If your ZooKeeper requires SASL authentication, configure the Fluss chart values as following:
+
+```yaml
+security:
+  zookeeperSasl:
+    username: zk-username
+    password: zk-password
+    loginModuleClass: org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.server.auth.DigestLoginModule
+```
+
+When both `username` and `password` are set, the chart generates ZooKeeper client JAAS config and sets `zookeeper.client.config-path` automatically. Both username and password fields must be set together.
+
+If your runtime expects a different Zookeeper login module class name (for example shaded ZooKeeper), override `security.zookeeperSasl.loginModuleClass` field.
 
 ### Storage Configuration
 
