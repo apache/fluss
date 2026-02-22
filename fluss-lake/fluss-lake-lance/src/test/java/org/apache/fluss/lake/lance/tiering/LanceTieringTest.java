@@ -65,7 +65,6 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.stream.Stream;
 
 import static org.apache.fluss.lake.committer.LakeCommitter.FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY;
@@ -132,7 +131,7 @@ class LanceTieringTest {
         Map<Tuple2<String, Integer>, List<LogRecord>> recordsByBucket = new HashMap<>();
         Map<Long, String> partitionIdAndName =
                 isPartitioned
-                        ? new HashMap<>() {
+                        ? new HashMap<Long, String>() {
                             {
                                 put(1L, "p1");
                                 put(2L, "p2");
@@ -322,11 +321,13 @@ class LanceTieringTest {
             genericRow = new GenericRow(4); // c1, c2, c3(partition), embedding
             genericRow.setField(0, i);
             genericRow.setField(1, BinaryString.fromString("bucket" + bucket + "_" + i));
-            genericRow.setField(
-                    2,
-                    BinaryString.fromString(
-                            Objects.requireNonNullElseGet(
-                                    partition, () -> "bucket" + bucket))); // partition field
+
+            if (partition == null) {
+                genericRow.setField(2, BinaryString.fromString("bucket" + bucket));
+            } else {
+                genericRow.setField(2, BinaryString.fromString(partition));
+            }
+
             genericRow.setField(
                     3, new GenericArray(new float[] {0.1f * i, 0.2f * i, 0.3f * i, 0.4f * i}));
 
