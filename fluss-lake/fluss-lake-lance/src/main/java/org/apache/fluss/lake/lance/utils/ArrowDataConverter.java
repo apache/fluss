@@ -21,6 +21,7 @@ import org.apache.arrow.memory.ArrowBuf;
 import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.vector.FieldVector;
 import org.apache.arrow.vector.VectorSchemaRoot;
+import org.apache.arrow.vector.complex.FixedSizeListVector;
 import org.apache.arrow.vector.complex.ListVector;
 import org.apache.arrow.vector.types.pojo.Schema;
 
@@ -71,14 +72,21 @@ public class ArrowDataConverter {
             FieldVector nonShadedVector) {
 
         if (shadedVector
-                        instanceof
-                        org.apache.fluss.shaded.arrow.org.apache.arrow.vector.complex.ListVector
-                && nonShadedVector instanceof ListVector) {
-            copyListVectorData(
-                    (org.apache.fluss.shaded.arrow.org.apache.arrow.vector.complex.ListVector)
-                            shadedVector,
-                    (ListVector) nonShadedVector);
-            return;
+                instanceof
+                org.apache.fluss.shaded.arrow.org.apache.arrow.vector.complex.ListVector) {
+            if (nonShadedVector instanceof FixedSizeListVector) {
+                copyListToFixedSizeListVectorData(
+                        (org.apache.fluss.shaded.arrow.org.apache.arrow.vector.complex.ListVector)
+                                shadedVector,
+                        (FixedSizeListVector) nonShadedVector);
+                return;
+            } else if (nonShadedVector instanceof ListVector) {
+                copyListVectorData(
+                        (org.apache.fluss.shaded.arrow.org.apache.arrow.vector.complex.ListVector)
+                                shadedVector,
+                        (ListVector) nonShadedVector);
+                return;
+            }
         }
 
         List<org.apache.fluss.shaded.arrow.org.apache.arrow.memory.ArrowBuf> shadedBuffers =
@@ -142,5 +150,44 @@ public class ArrowDataConverter {
         int valueCount = shadedListVector.getValueCount();
         // For ListVector, we need to manually set lastSet to avoid offset buffer recalculation
         nonShadedListVector.setLastSet(valueCount - 1);
+    }
+
+    private static void copyListToFixedSizeListVectorData(
+            org.apache.fluss.shaded.arrow.org.apache.arrow.vector.complex.ListVector
+                    shadedListVector,
+            FixedSizeListVector nonShadedFixedSizeListVector) {
+
+        // Copy the child data vector recursively (e.g., the float values)
+        org.apache.fluss.shaded.arrow.org.apache.arrow.vector.FieldVector shadedDataVector =
+                shadedListVector.getDataVector();
+        FieldVector nonShadedDataVector = nonShadedFixedSizeListVector.getDataVector();
+
+        if (shadedDataVector != null && nonShadedDataVector != null) {
+            copyVectorData(shadedDataVector, nonShadedDataVector);
+        }
+
+        // FixedSizeListVector only has a validity buffer (no offset buffer).
+        // Copy the validity buffer from the shaded ListVector.
+        List<org.apache.fluss.shaded.arrow.org.apache.arrow.memory.ArrowBuf> shadedBuffers =
+                shadedListVector.getFieldBuffers();
+        List<ArrowBuf> nonShadedBuffers = nonShadedFixedSizeListVector.getFieldBuffers();
+
+        // Both ListVector and FixedSizeListVector have validity as their first buffer
+        if (!shadedBuffers.isEmpty() && !nonShadedBuffers.isEmpty()) {
+            org.apache.fluss.shaded.arrow.org.apache.arrow.memory.ArrowBuf shadedValidityBuf =
+                    shadedBuffers.get(0);
+            ArrowBuf nonShadedValidityBuf = nonShadedBuffers.get(0);
+
+            long size = Math.min(shadedValidityBuf.capacity(), nonShadedValidityBuf.capacity());
+            if (size > 0) {
+                ByteBuffer srcBuffer = shadedValidityBuf.nioBuffer(0, (int) size);
+                srcBuffer.position(0);
+                srcBuffer.limit((int) Math.min(size, Integer.MAX_VALUE));
+                nonShadedValidityBuf.setBytes(0, srcBuffer);
+            }
+        }
+
+        int valueCount = shadedListVector.getValueCount();
+        nonShadedFixedSizeListVector.setValueCount(valueCount);
     }
 }

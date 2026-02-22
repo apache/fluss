@@ -47,6 +47,7 @@ import org.apache.arrow.vector.types.pojo.Schema;
 
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
 
 /**
@@ -55,23 +56,52 @@ import java.util.stream.Collectors;
  */
 public class LanceArrowUtils {
 
+    /** Property suffix for configuring a fixed-size list Arrow type on array columns. */
+    public static final String FIXED_SIZE_LIST_SIZE_SUFFIX = ".arrow.fixed-size-list.size";
+
     /** Returns the non-shaded Arrow schema of the specified Fluss RowType. */
     public static Schema toArrowSchema(RowType rowType) {
+        return toArrowSchema(rowType, Collections.emptyMap());
+    }
+
+    /**
+     * Returns the non-shaded Arrow schema of the specified Fluss RowType, using table properties to
+     * determine whether array columns should use FixedSizeList instead of List.
+     *
+     * <p>When a table property {@code <column>.arrow.fixed-size-list.size} is set, the
+     * corresponding ARRAY column will be emitted as {@code FixedSizeList<element>(size)} instead of
+     * {@code List<element>}.
+     */
+    public static Schema toArrowSchema(RowType rowType, Map<String, String> tableProperties) {
         List<Field> fields =
                 rowType.getFields().stream()
-                        .map(f -> toArrowField(f.getName(), f.getType()))
+                        .map(f -> toArrowField(f.getName(), f.getType(), tableProperties))
                         .collect(Collectors.toList());
         return new Schema(fields);
     }
 
-    private static Field toArrowField(String fieldName, DataType logicalType) {
-        FieldType fieldType =
-                new FieldType(logicalType.isNullable(), toArrowType(logicalType), null);
+    private static Field toArrowField(
+            String fieldName, DataType logicalType, Map<String, String> tableProperties) {
+        ArrowType arrowType;
+        if (logicalType instanceof ArrayType && tableProperties != null) {
+            String sizeStr = tableProperties.get(fieldName + FIXED_SIZE_LIST_SIZE_SUFFIX);
+            if (sizeStr != null) {
+                arrowType = new ArrowType.FixedSizeList(Integer.parseInt(sizeStr));
+            } else {
+                arrowType = toArrowType(logicalType);
+            }
+        } else {
+            arrowType = toArrowType(logicalType);
+        }
+        FieldType fieldType = new FieldType(logicalType.isNullable(), arrowType, null);
         List<Field> children = null;
         if (logicalType instanceof ArrayType) {
             children =
                     Collections.singletonList(
-                            toArrowField("element", ((ArrayType) logicalType).getElementType()));
+                            toArrowField(
+                                    "element",
+                                    ((ArrayType) logicalType).getElementType(),
+                                    tableProperties));
         }
         return new Field(fieldName, fieldType, children);
     }
