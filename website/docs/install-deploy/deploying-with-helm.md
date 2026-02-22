@@ -36,7 +36,7 @@ the installation documentation provides instructions for deploying one using Bit
 
 ### Running Fluss locally with Minikube
 
-For local testing and development, you can deploy Fluss on Minikube. This is ideal for development, testing, and learning purposes.
+For local testing and development, you can deploy Fluss on Minikube. This is ideal for development, testing and learning purposes.
 
 #### Prerequisites
 
@@ -157,7 +157,7 @@ kubectl logs -l app.kubernetes.io/component=tablet
 
 ## Configuration Parameters
 
-The following table lists the configurable parameters of the Fluss chart and their default values.
+The following table lists the configurable parameters of the Fluss chart, and their default values.
 
 ### Global Parameters
 
@@ -225,6 +225,11 @@ The following table lists the configurable parameters of the Fluss chart and the
 | `resources.tabletServer.limits.cpu` | CPU limits for tablet servers | Not set |
 | `resources.tabletServer.limits.memory` | Memory limits for tablet servers | Not set |
 
+### SASL Parameters
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `security.sasl_plain.users` | User list for SASL/PLAIN authentication | `[{username: admin, password: password}]` |
 
 ## Advanced Configuration
 
@@ -245,15 +250,74 @@ The chart automatically configures listeners for internal cluster communication 
 - **Internal Port (9123)**: Used for internal communication within the cluster
 - **Client Port (9124)**: Used for client connections
 
-Custom listener configuration:
+Default listeners configuration:
 
 ```yaml
 listeners:
   internal:
+    protocol: PLAINTEXT
     port: 9123
   client:
+    protocol: PLAINTEXT
     port: 9124
 ```
+
+To enable SASL based authentication, set any of the protocols to `SASL`.
+
+### Metrics and Monitoring
+
+When `metrics.enabled` is `true`, the Helm chart renders metrics reporter entries into `server.yaml`:
+
+- `metrics.reporters`: comma-separated reporter names from `metrics.reporters`
+- `metrics.reporter.<name>.<option>`: one entry per reporter option in `metrics.reporters`
+
+If `metrics.annotations` is configured, these annotations are also added to Fluss Services and can be used by reporters such as Prometheus to scrape metrics endpoints.
+
+```yaml
+metrics:
+  enabled: true
+  reporters:
+    grph:
+      port: 9020
+      host: example-localhost
+      protocol: TCP
+      interval: "60 SECONDS"
+    prometheus:
+      port: 9249
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/path: "/metrics"
+    prometheus.io/port: "9249"
+```
+
+If a metrics key is already provided in `configurationOverrides` (for example, `metrics.reporters` or `metrics.reporter.prometheus.port`), the chart keeps the value from `configurationOverrides`.
+
+### Enabling Secure Connection
+
+With the helm deployment, you can specify authentication protocols when connecting to the Fluss cluster.
+
+The following table shows the supported protocols and security they provide:
+
+| Method      | Authentication | TLS Encryption     |
+|-------------|:--------------:|:------------------:|
+| `PLAINTEXT` | No             | No                 |
+| `SASL`      | Yes            | No                 |
+
+By default, the `PLAINTEXT` protocol is used.
+
+The SASL authentication will be enabled if any of the listener protocols is using `SASL`.
+
+Set these values for additional configurations:
+
+```yaml
+security:
+  sasl_plain:
+    users:
+      - username: admin
+        password: password
+```
+
+The `security.sasl_plain.users` field defines the list of usernames and passwords for SASL/PLAIN authentication. When the internal listener protocol uses SASL, the first user in the list is used for internal client authentication. The authentication mechanism is fixed to `PLAIN`.
 
 ### Storage Configuration
 

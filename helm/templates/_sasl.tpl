@@ -16,29 +16,17 @@
 # limitations under the License.
 #
 
-apiVersion: v1
-kind: Service
-metadata:
-  name: coordinator-server-hs
-  labels:
-    {{- include "fluss.labels" . | nindent 4 }}
-    app.kubernetes.io/component: coordinator
-  {{- if and .Values.metrics.enabled .Values.metrics.annotations }}
-  annotations:
-    {{- toYaml .Values.metrics.annotations | nindent 4 }}
-  {{- end }}
-spec:
-  clusterIP: None
-  type: ClusterIP
-  ports:
-    - name: internal
-      protocol: TCP
-      port: {{ .Values.listeners.internal.port }}
-      targetPort: internal
-    - name: client
-      protocol: TCP
-      port: {{ .Values.listeners.client.port }}
-      targetPort: client
-  selector:
-    {{- include "fluss.selectorLabels" . | nindent 4 }}
-    app.kubernetes.io/component: coordinator
+{{/*
+Return true if SASL is configured in any of the listener protocols
+*/}}
+{{- define "fluss.sasl.enabled" -}}
+{{- $enabled := false -}}
+{{- range $id, $l := .Values.listeners -}}
+  {{- if and (not $enabled) (regexFind "SASL" (upper $l.protocol)) -}}
+    {{- $enabled = true -}}
+  {{- end -}}
+{{- end -}}
+{{- if $enabled -}}
+{{- true -}}
+{{- end -}}
+{{- end -}}
