@@ -33,21 +33,27 @@ import org.apache.fluss.rpc.netty.client.NettyClient;
 import org.apache.fluss.rpc.netty.server.NettyServer;
 import org.apache.fluss.rpc.netty.server.RequestsMetrics;
 import org.apache.fluss.rpc.protocol.ApiKeys;
+import org.apache.fluss.security.auth.sasl.jaas.JaasUtils;
 import org.apache.fluss.security.auth.sasl.jaas.TestJaasConfig;
 import org.apache.fluss.utils.NetUtils;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.util.Collections;
 import java.util.concurrent.CompletableFuture;
+import java.util.stream.Stream;
 
 import static org.apache.fluss.utils.NetUtils.getAvailablePort;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for sasl authentication. */
-public class SaslAuthenticationITCase {
+class SaslAuthenticationITCase {
     private static final String CLIENT_JAAS_INFO =
             "org.apache.fluss.security.auth.sasl.plain.PlainLoginModule required username=\"admin\" password=\"admin-secret\";";
     private static final String SERVER_JAAS_INFO =
@@ -69,60 +75,38 @@ public class SaslAuthenticationITCase {
         testAuthentication(clientConfig);
     }
 
-    @Test
-    void testClientWrongPassword() {
-        String jaasClientInfo =
-                "org.apache.fluss.security.auth.sasl.plain.PlainLoginModule required username=\"admin\" password=\"wrong-secret\";";
-        Configuration clientConfig = new Configuration();
-        clientConfig.setString("client.security.protocol", "sasl");
-        clientConfig.setString("client.security.sasl.mechanism", "PLAIN");
-        clientConfig.setString("client.security.sasl.jaas.config", jaasClientInfo);
-        assertThatThrownBy(() -> testAuthentication(clientConfig))
-                .cause()
-                .isExactlyInstanceOf(AuthenticationException.class)
-                .hasMessage("Authentication failed: Invalid username or password");
+    private static Stream<Arguments> invalidClientAuthenticationCases() {
+        return Stream.of(
+                Arguments.of(
+                        "org.apache.fluss.security.auth.sasl.plain.PlainLoginModule required username=\"admin\" password=\"wrong-secret\";",
+                        "PLAIN",
+                        "Authentication failed: Invalid username or password"),
+                Arguments.of(
+                        "org.apache.fluss.security.auth.sasl.plain.PlainLoginModule required username=\"admin\" password=\"wrong-secret\";",
+                        "FAKE",
+                        "Unable to find a matching SASL mechanism for FAKE"),
+                Arguments.of(
+                        "org.apache.fluss.security.auth.sasl.jaas.FakeLoginModule required username=\"admin\" password=\"wrong-secret\";",
+                        "FAKE",
+                        "Failed to load login manager"),
+                Arguments.of(
+                        " org.apache.fluss.security.auth.sasl.jaas.DigestLoginModule required username=\"admin\" password=\"wrong-secret\";",
+                        "DIGEST-MD5",
+                        "SASL server enables [PLAIN] while protocol of client is 'DIGEST-MD5'"));
     }
 
-    @Test
-    void testClientLackMechanism() {
-        String jaasClientInfo =
-                "org.apache.fluss.security.auth.sasl.plain.PlainLoginModule required username=\"admin\" password=\"wrong-secret\";";
+    @ParameterizedTest
+    @MethodSource("invalidClientAuthenticationCases")
+    void testClientAuthenticationFailures(
+            String jaasClientInfo, String mechanism, String expectedErrorMessage) {
         Configuration clientConfig = new Configuration();
         clientConfig.setString("client.security.protocol", "sasl");
-        clientConfig.setString("client.security.sasl.mechanism", "FAKE");
+        clientConfig.setString("client.security.sasl.mechanism", mechanism);
         clientConfig.setString("client.security.sasl.jaas.config", jaasClientInfo);
         assertThatThrownBy(() -> testAuthentication(clientConfig))
                 .cause()
                 .isExactlyInstanceOf(AuthenticationException.class)
-                .hasMessage("Unable to find a matching SASL mechanism for FAKE");
-    }
-
-    @Test
-    void testClientLackLoginModule() {
-        String jaasClientInfo =
-                "org.apache.fluss.security.auth.sasl.jaas.FakeLoginModule required username=\"admin\" password=\"wrong-secret\";";
-        Configuration clientConfig = new Configuration();
-        clientConfig.setString("client.security.protocol", "sasl");
-        clientConfig.setString("client.security.sasl.mechanism", "FAKE");
-        clientConfig.setString("client.security.sasl.jaas.config", jaasClientInfo);
-        assertThatThrownBy(() -> testAuthentication(clientConfig))
-                .cause()
-                .isExactlyInstanceOf(AuthenticationException.class)
-                .hasMessage("Failed to load login manager");
-    }
-
-    @Test
-    void testClientMechanismNotMatchServer() {
-        String jaasClientInfo =
-                " org.apache.fluss.security.auth.sasl.jaas.DigestLoginModule required username=\"admin\" password=\"wrong-secret\";";
-        Configuration clientConfig = new Configuration();
-        clientConfig.setString("client.security.protocol", "sasl");
-        clientConfig.setString("client.security.sasl.mechanism", "DIGEST-MD5");
-        clientConfig.setString("client.security.sasl.jaas.config", jaasClientInfo);
-        assertThatThrownBy(() -> testAuthentication(clientConfig))
-                .cause()
-                .isExactlyInstanceOf(AuthenticationException.class)
-                .hasMessage("SASL server enables [PLAIN] while protocol of client is 'DIGEST-MD5'");
+                .hasMessage(expectedErrorMessage);
     }
 
     @Test
@@ -178,6 +162,47 @@ public class SaslAuthenticationITCase {
                 .hasMessage("Authentication failed: Invalid username or password");
         clientConfig.setString("client.security.sasl.password", "alice-secret");
         testAuthentication(clientConfig);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {" ", "\"", "#", "+", ",", ";", "<", "=", ">", "\\"})
+    void testUsernameAndPasswordWithSpecialCharacters(String specialCharacter) throws Exception {
+        String username = "ad" + specialCharacter + "min";
+        String password = "pa" + specialCharacter + "ssword";
+
+        // Server configuration
+        Configuration serverConfig = getDefaultServerConfig();
+        serverConfig.setString(
+                "security.sasl.plain.jaas.config",
+                String.format(
+                        "org.apache.fluss.security.auth.sasl.plain.PlainLoginModule required \"%s\"=\"%s\";",
+                        JaasUtils.escapeJaasValue("user_" + username),
+                        JaasUtils.escapeJaasValue(password)));
+
+        // Client settings from configuration
+        Configuration clientConfig = new Configuration();
+        clientConfig.setString("client.security.protocol", "sasl");
+        clientConfig.setString("client.security.sasl.username", username);
+        clientConfig.setString("client.security.sasl.password", password);
+
+        testAuthentication(clientConfig, serverConfig);
+
+        // Server fallback to JVM config
+        serverConfig.removeKey("security.sasl.plain.jaas.config");
+        TestJaasConfig.createConfiguration(
+                "PLAIN", Collections.singletonList("PLAIN"), username, password);
+        testAuthentication(clientConfig, serverConfig);
+
+        // Client settings with JAAS string
+        clientConfig.removeKey("client.security.sasl.username");
+        clientConfig.removeKey("client.security.sasl.password");
+        clientConfig.setString("client.security.sasl.mechanism", "PLAIN");
+        clientConfig.setString(
+                "client.security.sasl.jaas.config",
+                String.format(
+                        "org.apache.fluss.security.auth.sasl.plain.PlainLoginModule required username=\"%s\" password=\"%s\";",
+                        JaasUtils.escapeJaasValue(username), JaasUtils.escapeJaasValue(password)));
+        testAuthentication(clientConfig, serverConfig);
     }
 
     private void testAuthentication(Configuration clientConfig) throws Exception {
