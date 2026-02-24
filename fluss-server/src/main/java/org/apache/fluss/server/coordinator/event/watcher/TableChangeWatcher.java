@@ -114,6 +114,24 @@ public class TableChangeWatcher {
                             if (tablePathIntegerTuple2 != null) {
                                 processSchemaChange(
                                         tablePathIntegerTuple2.f0, tablePathIntegerTuple2.f1);
+                                break;
+                            }
+
+                            // Handle the case where CuratorCache fires NODE_CREATED with
+                            // full table data. This happens in two scenarios:
+                            // 1. CuratorCache async getData race: the table node is created
+                            //    empty (via creatingParentsIfNeeded) and setData follows
+                            //    immediately. CuratorCache's async getData() may read the
+                            //    post-setData state, causing NODE_CREATED to carry full data
+                            //    while NODE_CHANGED is suppressed.
+                            // 2. CuratorCache initial sync: when the watcher starts, existing
+                            //    table nodes are reported as NODE_CREATED with full data.
+                            // See CuratorCacheRaceConditionTest for details on the race.
+                            TablePath tablePath = TableZNode.parsePath(newData.getPath());
+                            if (tablePath != null
+                                    && newData.getData() != null
+                                    && newData.getData().length > 0) {
+                                processCreateTable(tablePath, newData);
                             }
                         }
                         break;

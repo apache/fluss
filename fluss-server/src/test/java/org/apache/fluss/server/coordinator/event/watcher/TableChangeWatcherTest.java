@@ -38,6 +38,7 @@ import org.apache.fluss.server.coordinator.event.SchemaChangeEvent;
 import org.apache.fluss.server.coordinator.event.TableRegistrationChangeEvent;
 import org.apache.fluss.server.coordinator.event.TestingEventManager;
 import org.apache.fluss.server.entity.TablePropertyChanges;
+import org.apache.fluss.server.zk.CuratorCacheRaceConditionTest;
 import org.apache.fluss.server.zk.NOPErrorHandler;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperExtension;
@@ -390,5 +391,73 @@ class TableChangeWatcherTest {
                 () ->
                         assertThat(eventManager.getEvents())
                                 .containsExactlyInAnyOrderElementsOf(expectedEvents));
+    }
+
+    /**
+     * Tests that table creation is correctly detected via NODE_CREATED events with full data. This
+     * exercises the fix for the CuratorCache async getData race condition.
+     *
+     * <p>When CuratorCache starts (or during the race), it fires NODE_CREATED for table nodes that
+     * already contain full data. Without the fix, only NODE_CHANGED triggers {@code
+     * processCreateTable}, so these events would be missed. The fix adds table path handling in the
+     * NODE_CREATED branch to cover this case.
+     *
+     * @see CuratorCacheRaceConditionTest
+     */
+    @Test
+    void testTableCreationDetectedViaNodeCreatedEvent() {
+        // Stop the watcher started in @BeforeEach to prevent it from processing events
+        tableChangeWatcher.stop();
+
+        // Create tables BEFORE starting a new watcher. This ensures that when
+        // CuratorCache starts and does its initial sync, the table nodes already
+        // have full data. CuratorCache fires NODE_CREATED (not NODE_CHANGED) for
+        // existing nodes, exercising the same code path that handles the race
+        // condition where NODE_CHANGED is lost due to async getData.
+        List<CoordinatorEvent> expectedEvents = new ArrayList<>();
+        for (int i = 0; i < 3; i++) {
+            TablePath tablePath = TablePath.of(DEFAULT_DB, "table_nc_" + i);
+            TableAssignment tableAssignment =
+                    generateAssignment(
+                            3,
+                            3,
+                            new TabletServerInfo[] {
+                                new TabletServerInfo(0, "rack0"),
+                                new TabletServerInfo(1, "rack1"),
+                                new TabletServerInfo(2, "rack2")
+                            });
+            long tableId =
+                    metadataManager.createTable(tablePath, TEST_TABLE, tableAssignment, false);
+            SchemaInfo schemaInfo = metadataManager.getLatestSchema(tablePath);
+            long currentMillis = System.currentTimeMillis();
+            expectedEvents.add(
+                    new CreateTableEvent(
+                            TableInfo.of(
+                                    tablePath,
+                                    tableId,
+                                    schemaInfo.getSchemaId(),
+                                    TEST_TABLE,
+                                    currentMillis,
+                                    currentMillis),
+                            tableAssignment));
+            expectedEvents.add(new SchemaChangeEvent(tablePath, schemaInfo));
+        }
+
+        // Verify that the watcher has not processed any events
+        assertThat(eventManager.getEvents()).isEmpty();
+
+        // Start a new watcher. CuratorCache initial sync fires NODE_CREATED for
+        // existing nodes with full data - the same code path as when the async
+        // getData race causes NODE_CHANGED to be lost.
+        TestingEventManager newEventManager = new TestingEventManager();
+        TableChangeWatcher newWatcher = new TableChangeWatcher(zookeeperClient, newEventManager);
+        newWatcher.start();
+
+        retry(
+                Duration.ofMinutes(1),
+                () ->
+                        assertThat(newEventManager.getEvents())
+                                .containsExactlyInAnyOrderElementsOf(expectedEvents));
+        newWatcher.stop();
     }
 }
