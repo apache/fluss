@@ -22,7 +22,7 @@ This chart deploys an Apache Fluss cluster on Kubernetes, following Helm best pr
 It requires a Zookeeper ensemble to be running in the same Kubernetes cluster. In future releases, we may add support for an embedded Zookeeper cluster.
 
 
-## Development environment 
+## Development environment
 
 | component                                                                      | version |
 | ------------------------------------------------------------------------------ | ------- |
@@ -33,7 +33,7 @@ It requires a Zookeeper ensemble to be running in the same Kubernetes cluster. I
 | [Apache Fluss](https://fluss.apache.org/docs/)                                 | v0.10.0-incubating  |
 
 
-## Image requirements 
+## Image requirements
 
 A container image for Fluss is available on DockerHub as `fluss/fluss`. You can use it directly or build your own from this repo. To use your own image you need to build the project with [Maven](https://fluss.apache.org/community/dev/building/) and build it with Docker.
 
@@ -80,7 +80,7 @@ This assumes, that Zookeeper is reachable at `zk-zookeeper.<your-namespace>.svc.
 
 ```bash
 helm install fluss ./fluss-helm \
-  --set zookeeper.address=<your-zk-address>
+  --set configurationOverrides.zookeeper.address=<your-zk-address>
 ```
 
 ## Configuration reference
@@ -95,8 +95,37 @@ Important Fluss options surfaced by the chart:
 
 
 ### Zookeeper and storage
+
 - zookeeper.address must point to a reachable ensemble.
 - data.dir defaults to /tmp/fluss/data; use a PVC if persistence.enabled=true.
+
+### Metrics
+
+The chart supports annotation based scraping for Fluss metrics.
+
+Example values:
+
+```yaml
+metrics:
+  enabled: false
+  reporters:
+    prometheus:
+      port: 9249
+  annotations: {}
+```
+
+Once the metrics enabled, it:
+
+- applies `metrics.annotations` to services for scraper discovery,
+- adds reporter configuration from `metrics.reporters` into `server.yaml`:
+  - `metrics.reporters: <sorted reporter names joined by comma>`
+  - `metrics.reporter.<reporter>.<option>: <value>` for each configured reporter option.
+
+Precedence rules when metrics are set in `configurationOverrides`:
+
+- If `configurationOverrides.metrics.reporters` is set, the chart does not include `metrics.reporters`.
+- If `configurationOverrides.metrics.reporter.prometheus.port` is set, the chart does not include `metrics.reporter.prometheus.port`.
+- In other words, `configurationOverrides` always takes precedence over chart generated metrics configurations.
 
 ## Resource management
 

@@ -65,12 +65,24 @@ public class TestJaasConfig extends Configuration {
     // mock jaas operation from JVM option).
 
     public static void createConfiguration(String clientMechanism, List<String> serverMechanisms) {
+        createConfiguration(clientMechanism, serverMechanisms, USERNAME, PASSWORD);
+    }
+
+    public static void createConfiguration(
+            String clientMechanism,
+            List<String> serverMechanisms,
+            String username,
+            String password) {
         TestJaasConfig config = new TestJaasConfig();
         config.createOrUpdateEntry(
-                LOGIN_CONTEXT_CLIENT, loginModule(clientMechanism), defaultClientOptions());
+                LOGIN_CONTEXT_CLIENT,
+                loginModule(clientMechanism),
+                defaultClientOptions(username, password));
         for (String mechanism : serverMechanisms) {
             config.addEntry(
-                    LOGIN_CONTEXT_SERVER, loginModule(mechanism), defaultServerOptions(mechanism));
+                    LOGIN_CONTEXT_SERVER,
+                    loginModule(mechanism),
+                    defaultServerOptions(mechanism, username, password));
         }
         Configuration.setConfiguration(config);
     }
@@ -115,18 +127,27 @@ public class TestJaasConfig extends Configuration {
     }
 
     public static Map<String, Object> defaultClientOptions() {
+        return defaultClientOptions(USERNAME, PASSWORD);
+    }
+
+    public static Map<String, Object> defaultClientOptions(String username, String password) {
         Map<String, Object> options = new HashMap<>();
-        options.put("username", USERNAME);
-        options.put("password", PASSWORD);
+        options.put("username", username);
+        options.put("password", password);
         return options;
     }
 
     public static Map<String, String> defaultServerOptions(String mechanism) {
+        return defaultServerOptions(mechanism, USERNAME, PASSWORD);
+    }
+
+    public static Map<String, String> defaultServerOptions(
+            String mechanism, String username, String password) {
         Map<String, String> options = new HashMap<>();
         switch (mechanism) {
             case "PLAIN":
             case "DIGEST-MD5":
-                options.put("user_" + USERNAME, PASSWORD);
+                options.put("user_" + username, password);
                 break;
             default:
                 throw new IllegalArgumentException("Unsupported mechanism " + mechanism);

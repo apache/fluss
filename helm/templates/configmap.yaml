@@ -24,6 +24,10 @@ metadata:
   {{- include "fluss.labels" . | nindent 4 }}
 data:
   server.yaml: |
-    {{- range $key, $val := .Values.configurationOverrides }}
+    {{- $overrides := .Values.configurationOverrides | default dict }}
+    {{- if .Values.metrics.enabled }}
+    {{ include "fluss.metrics.config" . | nindent 4 }}
+    {{- end }}
+    {{- range $key, $val := $overrides }}
     {{ $key }}: {{ tpl (printf "%v" $val) $ }}
     {{- end }}
