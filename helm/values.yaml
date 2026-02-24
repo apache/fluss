@@ -66,6 +66,13 @@ listeners:
       mechanism: PLAIN
       users: []
 
+metrics:
+  enabled: false
+  reporters:
+    prometheus:
+      port: 9249
+  annotations: {}
+
 security:
   zookeeperSasl:
     username: ""

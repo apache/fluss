@@ -1,0 +1,233 @@
+#
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+
+suite: metrics-disabled-default
+templates:
+  - templates/configmap.yaml
+  - templates/sts-coordinator.yaml
+  - templates/sts-tablet.yaml
+  - templates/svc-coordinator.yaml
+  - templates/svc-tablet.yaml
+tests:
+  - it: does not inject reporter config and does not expose metrics ports
+    template: templates/configmap.yaml
+    asserts:
+      - notMatchRegex:
+          path: data["server.yaml"]
+          pattern: 'metrics\.reporters:'
+      - notMatchRegex:
+          path: data["server.yaml"]
+          pattern: 'metrics\.reporter\.prometheus\.port:'
+  - it: does not expose metrics port on coordinator pod
+    template: templates/sts-coordinator.yaml
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].ports
+          content:
+            name: metrics
+            containerPort: 9249
+  - it: does not expose metrics port on tablet pod
+    template: templates/sts-tablet.yaml
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].ports
+          content:
+            name: metrics
+            containerPort: 9249
+  - it: does not expose metrics service port on coordinator service
+    template: templates/svc-coordinator.yaml
+    asserts:
+      - notContains:
+          path: spec.ports
+          content:
+            name: metrics
+            port: 9249
+            targetPort: metrics
+      - notExists:
+          path: metadata.annotations
+  - it: does not expose metrics service port on tablet service
+    template: templates/svc-tablet.yaml
+    asserts:
+      - notContains:
+          path: spec.ports
+          content:
+            name: metrics
+            port: 9249
+            targetPort: metrics
+      - notExists:
+          path: metadata.annotations
+---
+
+suite: metrics-enabled-default
+templates:
+  - templates/configmap.yaml
+  - templates/sts-coordinator.yaml
+  - templates/sts-tablet.yaml
+  - templates/svc-coordinator.yaml
+  - templates/svc-tablet.yaml
+tests:
+  - it: injects prometheus reporter config into server yaml
+    template: templates/configmap.yaml
+    set:
+      metrics.enabled: true
+    asserts:
+      - matchRegex:
+          path: data["server.yaml"]
+          pattern: 'metrics\.reporters: prometheus'
+      - matchRegex:
+          path: data["server.yaml"]
+          pattern: 'metrics\.reporter\.prometheus\.port: 9249'
+  - it: does not expose metrics port on coordinator pod
+    template: templates/sts-coordinator.yaml
+    set:
+      metrics.enabled: true
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].ports
+          content:
+            name: metrics
+            containerPort: 9249
+  - it: does not expose metrics port on tablet pod
+    template: templates/sts-tablet.yaml
+    set:
+      metrics.enabled: true
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].ports
+          content:
+            name: metrics
+            containerPort: 9249
+  - it: does not expose metrics service port on coordinator service
+    template: templates/svc-coordinator.yaml
+    set:
+      metrics.enabled: true
+    asserts:
+      - notContains:
+          path: spec.ports
+          content:
+            name: metrics
+            port: 9249
+            protocol: TCP
+            targetPort: metrics
+  - it: does not expose metrics service port on tablet service
+    template: templates/svc-tablet.yaml
+    set:
+      metrics.enabled: true
+    asserts:
+      - notContains:
+          path: spec.ports
+          content:
+            name: metrics
+            port: 9249
+            protocol: TCP
+            targetPort: metrics
+---
+
+suite: metrics-annotations
+templates:
+  - templates/svc-coordinator.yaml
+  - templates/svc-tablet.yaml
+tests:
+  - it: renders metrics annotations when metrics are enabled
+    set:
+      metrics:
+        enabled: true
+        annotations:
+          test/scrape: "true"
+          test/port: "9249"
+          test/path: /metrics
+    template: templates/svc-coordinator.yaml
+    asserts:
+      - equal:
+          path: metadata.annotations["test/scrape"]
+          value: "true"
+      - equal:
+          path: metadata.annotations["test/port"]
+          value: "9249"
+      - equal:
+          path: metadata.annotations["test/path"]
+          value: "/metrics"
+  - it: does not render metrics annotations when metrics are disabled
+    set:
+      metrics:
+        enabled: false
+        annotations:
+          test/scrape: "true"
+    template: templates/svc-tablet.yaml
+    asserts:
+      - notExists:
+          path: metadata.annotations
+---
+
+suite: metrics-overrides-precedence
+templates:
+  - templates/configmap.yaml
+tests:
+  - it: keeps user reporter overrides and skips auto-injected defaults
+    set:
+      metrics:
+        enabled: true
+      configurationOverrides:
+        "metrics.reporters": jmx
+        "metrics.reporter.prometheus.port": 19191
+    asserts:
+      - matchRegex:
+          path: data["server.yaml"]
+          pattern: 'metrics\.reporters: jmx'
+      - matchRegex:
+          path: data["server.yaml"]
+          pattern: 'metrics\.reporter\.prometheus\.port: 19191'
+      - notMatchRegex:
+          path: data["server.yaml"]
+          pattern: 'metrics\.reporters: prometheus'
+      - notMatchRegex:
+          path: data["server.yaml"]
+          pattern: 'metrics\.reporter\.prometheus\.port: 9249'
+  - it: keeps user prometheus port override and still injects reporter when missing
+    set:
+      metrics:
+        enabled: true
+        reporters:
+          prometheus:
+            port: 19444
+      configurationOverrides:
+        "metrics.reporter.prometheus.port": 19090
+    asserts:
+      - matchRegex:
+          path: data["server.yaml"]
+          pattern: 'metrics\.reporters: prometheus'
+      - matchRegex:
+          path: data["server.yaml"]
+          pattern: 'metrics\.reporter\.prometheus\.port: 19090'
+      - notMatchRegex:
+          path: data["server.yaml"]
+          pattern: 'metrics\.reporter\.prometheus\.port: 19444'
+---
+
+suite: metrics-config-validation
+templates:
+  - templates/configmap.yaml
+tests:
+  - it: fails when metrics are enabled and no reporters are configured
+    set:
+      metrics:
+        enabled: true
+        reporters: null
+    asserts:
+      - failedTemplate:
+          errorMessage: metrics.reporters must contain at least one reporter when metrics.enabled is true

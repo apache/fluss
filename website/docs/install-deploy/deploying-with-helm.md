@@ -225,6 +225,17 @@ The following table lists the configurable parameters of the Fluss chart, and th
 | `resources.tabletServer.limits.cpu` | CPU limits for tablet servers | Not set |
 | `resources.tabletServer.limits.memory` | Memory limits for tablet servers | Not set |
 
+### Metrics Parameters
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `metrics.enabled` | Enable metrics related chart wiring (annotations and auto config injection) | `false` |
+| `metrics.reporters.<reporter>` | Default metrics reporter added to `server.yaml` when enabled | `prometheus` |
+| `metrics.reporters.<reporter>.port` | Default metrics reporter port added to `server.yaml` when enabled | `9249` |
+| `metrics.annotations` | Service annotations used by annotation based scrapers | `{}` |
+
+For now, only the Prometheus and JMX metrics reporters are supported.
+
 ### SASL Parameters
 
 | Parameter | Description | Default |
@@ -408,6 +419,34 @@ image:
 ```
 
 ## Monitoring and Observability
+
+### Metrics
+
+The Helm chart supports annotation based metrics scraping.
+
+Once the metrics enabled, it:
+
+- Applies `metrics.annotations` to services for scraper discovery,
+- Adds reporter configuration into `server.yaml` from `metrics.reporters`.
+
+Example values:
+
+```yaml
+metrics:
+  enabled: true
+  reporters:
+    prometheus:
+      port: 9249
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "9249"
+    prometheus.io/path: /metrics
+```
+
+Reporter configuration precedence:
+
+- If a reporter key already exists in `configurationOverrides`, Helm will not auto-inject that key.
+- `configurationOverrides` always takes precedence over auto-generated metrics config.
 
 ### Health Checks
 

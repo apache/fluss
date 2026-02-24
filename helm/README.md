@@ -95,8 +95,37 @@ Important Fluss options surfaced by the chart:
 
 
 ### Zookeeper and storage
+
 - zookeeper.address must point to a reachable ensemble.
 - data.dir defaults to /tmp/fluss/data; use a PVC if persistence.enabled=true.
+
+### Metrics
+
+The chart supports annotation based scraping for Fluss metrics.
+
+Example values:
+
+```yaml
+metrics:
+  enabled: false
+  reporters:
+    prometheus:
+      port: 9249
+  annotations: {}
+```
+
+Once the metrics enabled, it:
+
+- applies `metrics.annotations` to services for scraper discovery,
+- adds reporter configuration from `metrics.reporters` into `server.yaml`:
+  - `metrics.reporters: <sorted reporter names joined by comma>`
+  - `metrics.reporter.<reporter>.<option>: <value>` for each configured reporter option.
+
+Precedence rules when metrics are set in `configurationOverrides`:
+
+- If `configurationOverrides.metrics.reporters` is set, the chart does not include `metrics.reporters`.
+- If `configurationOverrides.metrics.reporter.prometheus.port` is set, the chart does not include `metrics.reporter.prometheus.port`.
+- In other words, `configurationOverrides` always takes precedence over chart generated metrics configurations.
 
 ## Resource management
 
