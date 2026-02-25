@@ -28,6 +28,7 @@ import org.apache.fluss.client.initializer.SnapshotOffsetsInitializer;
 import org.apache.fluss.client.metadata.KvSnapshots;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.UnsupportedVersionException;
 import org.apache.fluss.flink.lake.LakeSplitGenerator;
 import org.apache.fluss.flink.lake.split.LakeSnapshotAndFlussLogSplit;
 import org.apache.fluss.flink.lake.split.LakeSnapshotSplit;
@@ -607,17 +608,33 @@ public class FlinkSourceEnumerator
                         kvSnapshotLeaseId,
                         PhysicalTablePath.of(tablePath, partitionName));
                 long kvSnapshotLeaseDurationMs = leaseContext.getKvSnapshotLeaseDurationMs();
-                Set<TableBucket> unavailableTableBucketSet =
-                        flussAdmin
-                                .createKvSnapshotLease(kvSnapshotLeaseId, kvSnapshotLeaseDurationMs)
-                                .acquireSnapshots(bucketsToLease)
-                                .get()
-                                .getUnavailableTableBucketSet();
-                if (!unavailableTableBucketSet.isEmpty()) {
-                    LOG.error(
-                            "Failed to acquire kv snapshot lease for table {}: {}.",
-                            tablePath,
-                            unavailableTableBucketSet);
+                try {
+                    Set<TableBucket> unavailableTableBucketSet =
+                            flussAdmin
+                                    .createKvSnapshotLease(
+                                            kvSnapshotLeaseId, kvSnapshotLeaseDurationMs)
+                                    .acquireSnapshots(bucketsToLease)
+                                    .get()
+                                    .getUnavailableTableBucketSet();
+                    if (!unavailableTableBucketSet.isEmpty()) {
+                        LOG.error(
+                                "Failed to acquire kv snapshot lease for table {}: {}.",
+                                tablePath,
+                                unavailableTableBucketSet);
+                    }
+                } catch (Exception e) {
+                    if (ExceptionUtils.findThrowable(e, UnsupportedVersionException.class)
+                            .isPresent()) {
+                        LOG.warn(
+                                "Failed to acquire kv snapshot lease for table {} because the "
+                                        + "server does not support kv snapshot lease API. "
+                                        + "Snapshots may be cleaned up earlier than expected. "
+                                        + "Please upgrade the Fluss server to version 0.9 or later.",
+                                tablePath,
+                                e);
+                    } else {
+                        throw e;
+                    }
                 }
             }
         } catch (Exception e) {
@@ -1054,10 +1071,21 @@ public class FlinkSourceEnumerator
                     .releaseSnapshots(consumedKvSnapshots)
                     .get();
         } catch (Exception e) {
-            LOG.error("Failed to release kv snapshot lease. These snapshot need to re-enqueue", e);
-            // use the current checkpoint id to re-enqueue the buckets
-            consumedKvSnapshots.forEach(
-                    tableBucket -> addConsumedBucket(checkpointId, tableBucket));
+            if (ExceptionUtils.findThrowable(e, UnsupportedVersionException.class).isPresent()) {
+                LOG.warn(
+                        "Failed to release kv snapshot lease because the server does not support "
+                                + "kv snapshot lease API. Snapshots may remain in storage longer "
+                                + "than necessary. Please upgrade the Fluss server to version 0.9 "
+                                + "or later.",
+                        e);
+            } else {
+                LOG.error(
+                        "Failed to release kv snapshot lease. These snapshots need to re-enqueue",
+                        e);
+                // use the current checkpoint id to re-enqueue the buckets
+                consumedKvSnapshots.forEach(
+                        tableBucket -> addConsumedBucket(checkpointId, tableBucket));
+            }
         }
     }
 
@@ -1114,12 +1142,25 @@ public class FlinkSourceEnumerator
                     "Dropping kv snapshot lease {} when source enumerator close. isStreaming {}",
                     leaseContext.getKvSnapshotLeaseId(),
                     streaming);
-            flussAdmin
-                    .createKvSnapshotLease(
-                            leaseContext.getKvSnapshotLeaseId(),
-                            leaseContext.getKvSnapshotLeaseDurationMs())
-                    .dropLease()
-                    .get();
+            try {
+                flussAdmin
+                        .createKvSnapshotLease(
+                                leaseContext.getKvSnapshotLeaseId(),
+                                leaseContext.getKvSnapshotLeaseDurationMs())
+                        .dropLease()
+                        .get();
+            } catch (Exception e) {
+                if (ExceptionUtils.findThrowable(e, UnsupportedVersionException.class)
+                        .isPresent()) {
+                    LOG.warn(
+                            "Failed to drop kv snapshot lease because the server does not support "
+                                    + "kv snapshot lease API. Please upgrade the Fluss server to "
+                                    + "version 0.9 or later.",
+                            e);
+                } else {
+                    throw e;
+                }
+            }
         }
     }
 
