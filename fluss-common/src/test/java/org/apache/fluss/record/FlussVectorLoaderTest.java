@@ -15,15 +15,16 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.compression;
+package org.apache.fluss.record;
 
+import org.apache.fluss.compression.ArrowCompressionFactory;
+import org.apache.fluss.compression.ZstdArrowCompressionCodec;
 import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.ArrowBuf;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.RootAllocator;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.IntVector;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.VarCharVector;
-import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.VectorLoader;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.VectorSchemaRoot;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.VectorUnloader;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.compression.CompressionCodec;
@@ -53,12 +54,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * Tests for the patched {@link VectorLoader} that ensures decompressed buffers are released when an
- * error occurs during loading.
+ * Tests for the patched {@link FlussVectorLoader} that ensures decompressed buffers are released
+ * when an error occurs during loading.
  *
  * @see <a href="https://github.com/apache/fluss/issues/2646">FLUSS-2646</a>
  */
-class VectorLoaderTest {
+class FlussVectorLoaderTest {
 
     private static final Schema SCHEMA =
             new Schema(
@@ -83,8 +84,8 @@ class VectorLoaderTest {
     void testNormalLoadWithCompression() throws Exception {
         testLoadWithCompression(
                 (schemaRoot, arrowRecordBatch) -> {
-                    VectorLoader loader =
-                            new VectorLoader(schemaRoot, ArrowCompressionFactory.INSTANCE);
+                    FlussVectorLoader loader =
+                            new FlussVectorLoader(schemaRoot, ArrowCompressionFactory.INSTANCE);
                     loader.load(arrowRecordBatch);
                     assertThat(schemaRoot.getRowCount()).isEqualTo(10);
                     IntVector readInts = (IntVector) schemaRoot.getVector(0);
@@ -116,7 +117,7 @@ class VectorLoaderTest {
         testLoadWithCompression(
                 (schemaRoot, arrowRecordBatch) -> {
                     CompressionCodec.Factory failingFactory = new TrackingFailCodecFactory(2);
-                    VectorLoader loader = new VectorLoader(schemaRoot, failingFactory);
+                    FlussVectorLoader loader = new FlussVectorLoader(schemaRoot, failingFactory);
                     assertThatThrownBy(() -> loader.load(arrowRecordBatch))
                             .isInstanceOf(IllegalArgumentException.class)
                             .hasMessageContaining("Could not load buffers")
@@ -138,7 +139,7 @@ class VectorLoaderTest {
         testLoadWithCompression(
                 (schemaRoot, arrowRecordBatch) -> {
                     CompressionCodec.Factory failingFactory = new TrackingFailCodecFactory(4);
-                    VectorLoader loader = new VectorLoader(schemaRoot, failingFactory);
+                    FlussVectorLoader loader = new FlussVectorLoader(schemaRoot, failingFactory);
                     assertThatThrownBy(() -> loader.load(arrowRecordBatch))
                             .isInstanceOf(IllegalArgumentException.class)
                             .hasMessageContaining("Could not load buffers")

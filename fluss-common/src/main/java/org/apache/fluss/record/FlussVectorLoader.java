@@ -17,16 +17,18 @@
  * under the License.
  */
 
-package org.apache.fluss.shaded.arrow.org.apache.arrow.vector;
+package org.apache.fluss.record;
 
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.ArrowBuf;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.util.Collections2;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.util.Preconditions;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.FieldVector;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.TypeLayout;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.VectorSchemaRoot;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.compression.CompressionCodec;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.compression.CompressionUtil;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.compression.CompressionUtil.CodecType;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.compression.NoCompressionCodec;
-import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.compression.NoCompressionCodec.Factory;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.ipc.message.ArrowFieldNode;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.ipc.message.ArrowRecordBatch;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.types.pojo.Field;
@@ -55,18 +57,21 @@ import java.util.List;
  *       count to 0, immediately freeing the Direct Memory.
  * </ul>
  *
- * @see <a href="https://github.com/apache/fluss/issues/2646">FLUSS-2646</a>
+ * <p>TODO: This class should be removed once Apache Arrow fixes the buffer leak in their {@code
+ * VectorLoader.loadBuffers()} method. See:
+ *
+ * <ul>
+ *   <li>Apache Arrow issue: <a
+ *       href="https://github.com/apache/arrow-java/issues/1037">arrow-java#1037</a>
+ *   <li>Fluss issue: <a href="https://github.com/apache/fluss/issues/2646">FLUSS-2646</a>
+ * </ul>
  */
-public class VectorLoader {
+public class FlussVectorLoader {
     private final VectorSchemaRoot root;
     private final CompressionCodec.Factory factory;
     private boolean decompressionNeeded;
 
-    public VectorLoader(VectorSchemaRoot root) {
-        this(root, Factory.INSTANCE);
-    }
-
-    public VectorLoader(VectorSchemaRoot root, CompressionCodec.Factory factory) {
+    public FlussVectorLoader(VectorSchemaRoot root, CompressionCodec.Factory factory) {
         this.root = root;
         this.factory = factory;
     }
@@ -137,7 +142,7 @@ public class VectorLoader {
         }
 
         List<Field> children = field.getChildren();
-        if (children.size() > 0) {
+        if (!children.isEmpty()) {
             List<FieldVector> childrenFromFields = vector.getChildrenFromFields();
             Preconditions.checkArgument(
                     children.size() == childrenFromFields.size(),
@@ -146,8 +151,8 @@ public class VectorLoader {
                     children.size());
 
             for (int i = 0; i < childrenFromFields.size(); ++i) {
-                Field child = (Field) children.get(i);
-                FieldVector fieldVector = (FieldVector) childrenFromFields.get(i);
+                Field child = children.get(i);
+                FieldVector fieldVector = childrenFromFields.get(i);
                 this.loadBuffers(fieldVector, child, buffers, nodes, codec);
             }
         }
