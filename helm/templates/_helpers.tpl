@@ -64,3 +64,38 @@ Selector labels
 app.kubernetes.io/name: {{ include "fluss.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
+
+{{/*
+Image name
+*/}}
+{{- define "fluss.image" -}}
+
+{{- $registry := .Values.image.registry | default "" -}}
+{{- $repo := required "image.repository is required" .Values.image.repository -}}
+{{- $tag := .Values.image.tag | default "" | toString -}}
+
+{{- $image := $repo -}}
+
+{{- if $registry -}}
+  {{- $image = printf "%s/%s" $registry $image -}}
+{{- end -}}
+
+{{- if $tag -}}
+  {{- $image = printf "%s:%s" $image $tag -}}
+{{- end -}}
+
+{{- $image -}}
+{{- end -}}
+
+{{/*
+Render pull secrets
+*/}}
+{{- define "fluss.imagePullSecrets" -}}
+{{- $secrets := .Values.image.pullSecrets -}}
+{{- if $secrets -}}
+imagePullSecrets:
+{{- range $secrets }}
+  - name: {{ . }}
+{{- end }}
+{{- end }}
+{{- end }}

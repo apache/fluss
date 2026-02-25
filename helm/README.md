@@ -98,6 +98,20 @@ Important Fluss options surfaced by the chart:
 - zookeeper.address must point to a reachable ensemble.
 - data.dir defaults to /tmp/fluss/data; use a PVC if persistence.enabled=true.
 
+### Private Docker Registry
+
+If you are pulling the Fluss image from a private Docker registry, you can configure the chart using `image.registry` and `image.pullSecrets`.
+
+#### Image values reference
+
+| Parameter            | Description                              | Default             |
+| -------------------- |------------------------------------------|---------------------|
+| `image.registry`     | Docker image registry                    | `""`                |
+| `image.repository`   | Docker image repository                  | `apache/fluss`      |
+| `image.pullPolicy`   | Image pull policy                        | `IfNotPresent`      |
+| `image.pullSecrets`  | Docker registry secret names as an array | `[]`                |
+
+
 ## Resource management
 
 Set resources with requests/limits as appropriate for production. There are no defaults to make it also run on environments with little resources such as Minikube.
