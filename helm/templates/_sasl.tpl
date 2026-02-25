@@ -22,7 +22,7 @@ Return true if SASL is configured in any of the listener protocols
 {{- define "fluss.sasl.enabled" -}}
 {{- $enabled := false -}}
 {{- range $id, $l := .Values.listeners -}}
-  {{- if and (not $enabled) (regexFind "SASL" (upper $l.protocol)) -}}
+  {{- if and (not $enabled) (contains "SASL" (upper $l.protocol)) -}}
     {{- $enabled = true -}}
   {{- end -}}
 {{- end -}}
@@ -37,7 +37,7 @@ Usage: include "fluss.listener.sasl.enabled" (dict "root" . "listener" "internal
 */}}
 {{- define "fluss.listener.sasl.enabled" -}}
 {{- $listener := index .root.Values.listeners .listener -}}
-{{- if and $listener $listener.protocol (regexFind "SASL" (upper $listener.protocol)) -}}
+{{- if and $listener $listener.protocol (contains "SASL" (upper $listener.protocol)) -}}
 {{- true -}}
 {{- end -}}
 {{- end -}}
