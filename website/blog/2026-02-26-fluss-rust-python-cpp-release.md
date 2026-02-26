@@ -23,7 +23,7 @@ fluss-rust supports Fluss's core table types:
 
 ### Apache Arrow Native
 
-Records are represented as Apache Arrow RecordBatch objects throughout the stack, enabling zero-copy data sharing between Rust, Python, and C++, columnar access patterns for analytical workloads, and direct integration with the broader Arrow ecosystem. The client supports 18+ data types including decimals, timestamps, and nested structures. See [supported Arrow data types](TODO: Add the link once website is setup).
+Records are represented as Apache Arrow RecordBatch objects throughout the stack, enabling zero-copy data sharing between Rust, Python, and C++, columnar access patterns for analytical workloads, and direct integration with the broader Arrow ecosystem. The client supports 16+ arrow data types. See [supported Arrow data types](TODO: Add the link once website is setup).
 
 ### Remote Storage Support
 
