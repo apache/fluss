@@ -205,7 +205,7 @@ class FlinkCatalogTest {
                     DEFAULT_DB, new CatalogDatabaseImpl(Collections.emptyMap(), null), true);
         } catch (CatalogException e) {
             // the auto partitioned manager may create the db zk node
-            // in an another thread, so if exception is NodeExistsException, just ignore
+            // in another thread, so if exception is NodeExistsException, just ignore
             if (!ExceptionUtils.findThrowableWithMessage(e, "KeeperException$NodeExistsException")
                     .isPresent()) {
                 throw e;
@@ -275,7 +275,7 @@ class FlinkCatalogTest {
                                 this.tableInDefaultDb, CATALOG_NAME));
         // should be ok since we set ignoreIfNotExists = true
         catalog.dropTable(this.tableInDefaultDb, true);
-        // create table from an non-exist db
+        // create table from a non-exist db
         ObjectPath nonExistDbPath = ObjectPath.fromString("non.exist");
 
         // remove bucket-key
@@ -300,7 +300,7 @@ class FlinkCatalogTest {
                         resolvedSchema);
         catalog.createTable(this.tableInDefaultDb, table2, false);
         tableCreated = catalog.getTable(this.tableInDefaultDb);
-        // need to over write the option
+        // need to overwrite the option
         addedOptions.put(BUCKET_KEY.key(), "third");
 
         expectedTable = addOptions(table2, addedOptions);
@@ -492,7 +492,7 @@ class FlinkCatalogTest {
         // should be ok since we set ignoreIfNotExists = true
         catalog.dropTable(mt1, true);
 
-        // create table from an non-exist db
+        // create table from a non-exist db
         ObjectPath nonExistDbPath = ObjectPath.fromString("non.exist");
 
         // remove bucket-key
@@ -658,10 +658,10 @@ class FlinkCatalogTest {
     @Test
     void testOperatePartitions() throws Exception {
         catalog.createDatabase("db1", new CatalogDatabaseImpl(Collections.emptyMap(), null), false);
-        assertThatThrownBy(() -> catalog.listPartitions(new ObjectPath("db1", "unkown_table")))
+        assertThatThrownBy(() -> catalog.listPartitions(new ObjectPath("db1", "unknown_table")))
                 .isInstanceOf(TableNotExistException.class)
                 .hasMessage(
-                        "Table (or view) db1.unkown_table does not exist in Catalog test-catalog.");
+                        "Table (or view) db1.unknown_table does not exist in Catalog test-catalog.");
 
         // create a none partitioned table.
         CatalogTable table = this.newCatalogTable(Collections.emptyMap());
@@ -843,7 +843,7 @@ class FlinkCatalogTest {
                         Collections::emptyMap);
 
         // Test open() throws proper exception
-        assertThatThrownBy(() -> badCatalog.open())
+        assertThatThrownBy(badCatalog::open)
                 .isInstanceOf(IllegalConfigurationException.class)
                 .hasMessageContaining("No resolvable bootstrap urls");
     }

@@ -287,7 +287,7 @@ public class BinaryArrayTest {
         writer.writeInt(2, 30);
         writer.complete();
 
-        assertThatThrownBy(() -> array.toIntArray())
+        assertThatThrownBy(array::toIntArray)
                 .isInstanceOf(RuntimeException.class)
                 .hasMessageContaining("Primitive array must not contain a null value");
     }

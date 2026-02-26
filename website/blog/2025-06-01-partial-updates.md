@@ -45,7 +45,7 @@ Next, let's try and better understand how this works in practice with a concrete
 ### Example: Building a Unified Wide Table
 > You can find the full source code on github [here](https://github.com/ververica/ververica-fluss-examples/tree/main/partial_updates).
 
-Start by cloning the repository, run `docker compose up` to spin up the development enviroment and finally grab a terminal 
+Start by cloning the repository, run `docker compose up` to spin up the development environment and finally grab a terminal 
 into the `jobmanager` and start the Flink SQL cli, by running the following command:
 ```shell
 ./bin/sql-client.sh
@@ -149,7 +149,7 @@ and then run:
 ```sql
 SELECT * FROM user_rec_wide;
 ```
-to observe the output of the table, as we insert `partially` records into the it from the different sources.
+to observe the output of the table, as we insert `partially` records into it from the different sources.
 
 **Step 5:** Let's insert the records from the `recommendations` table into the `user_rec_wide` table.
 ```sql

@@ -12,7 +12,7 @@ sidebar_position: 3
 
 ## Configurations setup
 
-To enabled OSS as remote storage, there are some required configurations that must be add to Fluss' `server.yaml`:
+To enabled OSS as remote storage, there are some required configurations that must be added to Fluss' `server.yaml`:
 
 ```yaml
 # The dir that used to be as the remote storage of Fluss

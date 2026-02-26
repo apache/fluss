@@ -25,7 +25,7 @@ import javax.annotation.Nullable;
 
 import java.io.Serializable;
 
-/** The write result of Iceberg lake writer to pass to commiter to commit. */
+/** The write result of Iceberg lake writer to pass to committer to commit. */
 public class IcebergWriteResult implements Serializable {
 
     private static final long serialVersionUID = 1L;

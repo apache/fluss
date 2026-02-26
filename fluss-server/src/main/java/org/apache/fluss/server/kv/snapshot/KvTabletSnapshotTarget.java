@@ -300,8 +300,8 @@ public class KvTabletSnapshotTarget implements PeriodicSnapshotManager.SnapshotT
         // Fix for issue: https://github.com/apache/fluss/issues/1304
         // Tablet server try to commit kv snapshot to coordinator server,
         // coordinator server commit the kv snapshot to zk, then failover.
-        // Tablet server will got exception from coordinator server, but mistake it as a fail
-        // commit although coordinator server has committed to zk, then discard the commited kv
+        // Tablet server will get exception from coordinator server, but mistake it as a fail
+        // commit although coordinator server has committed to zk, then discard the committed kv
         // snapshot.
         //
         // Idempotent check: Double check ZK to verify if the snapshot actually exists before

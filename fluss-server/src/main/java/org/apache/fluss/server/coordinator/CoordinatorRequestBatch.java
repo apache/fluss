@@ -276,11 +276,11 @@ public class CoordinatorRequestBatch {
      *       none-partitioned table
      *   <li>case3: Table create and bucketAssignment don't generated, case will happen for new
      *       created partitioned table
-     *   <li>case4: Table is queued for deletion, in this case we will set a empty tableBucket set
+     *   <li>case4: Table is queued for deletion, in this case we will set an empty tableBucket set
      *       and tableId set to {@link TableMetadata#DELETED_TABLE_ID} to avoid send unless info to
      *       tabletServer
      *   <li>case5: Partition create and bucketAssignment of this partition generated.
-     *   <li>case6: Partition is queued for deletion, in this case we will set a empty tableBucket
+     *   <li>case6: Partition is queued for deletion, in this case we will set an empty tableBucket
      *       set and partitionId set to {@link PartitionMetadata#DELETED_PARTITION_ID } to avoid
      *       send unless info to tabletServer
      *   <li>case7: Leader and isr is changed for these input tableBuckets

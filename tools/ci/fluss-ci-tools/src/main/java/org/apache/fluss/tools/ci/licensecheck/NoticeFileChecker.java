@@ -80,7 +80,7 @@ public class NoticeFileChecker {
                 "Extracted "
                         + deployedModules.size()
                         + " modules that were deployed and "
-                        + modulesWithBundledDependencies.keySet().size()
+                        + modulesWithBundledDependencies.size()
                         + " modules which bundle dependencies with a total of "
                         + modulesWithBundledDependencies.values().stream().mapToInt(Set::size).sum()
                         + " dependencies");

@@ -219,7 +219,7 @@ final class NettyClientTest {
                     .get();
             assertThat(nettyClient.connections().size()).isEqualTo(1);
             try (NettyClient client =
-                    new NettyClient(conf, TestingClientMetricGroup.newInstance(), false); ) {
+                    new NettyClient(conf, TestingClientMetricGroup.newInstance(), false)) {
                 client.sendRequest(
                                 new ServerNode(
                                         2,

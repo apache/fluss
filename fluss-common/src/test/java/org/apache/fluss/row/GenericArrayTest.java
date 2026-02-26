@@ -185,7 +185,7 @@ public class GenericArrayTest {
         assertThat(array.isNullAt(1)).isTrue();
         assertThat(array.isNullAt(2)).isFalse();
 
-        assertThatThrownBy(() -> array.toIntArray())
+        assertThatThrownBy(array::toIntArray)
                 .isInstanceOf(RuntimeException.class)
                 .hasMessageContaining("Primitive array must not contain a null value");
     }

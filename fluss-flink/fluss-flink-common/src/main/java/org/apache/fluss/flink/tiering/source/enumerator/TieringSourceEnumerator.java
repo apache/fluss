@@ -492,7 +492,7 @@ public class TieringSourceEnumerator
 
     @Override
     public TieringSourceEnumeratorState snapshotState(long checkpointId) throws Exception {
-        // do nothing, the downstream lake commiter will snapshot the state to Fluss Cluster
+        // do nothing, the downstream lake committer will snapshot the state to Fluss Cluster
         return new TieringSourceEnumeratorState();
     }
 

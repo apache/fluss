@@ -739,7 +739,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
         try (FlussMockSplitEnumeratorContext<TieringSplit> context =
                         new FlussMockSplitEnumeratorContext<>(numSubtasks);
                 TieringSourceEnumerator enumerator =
-                        createTieringSourceEnumerator(flussConf, context); ) {
+                        createTieringSourceEnumerator(flussConf, context)) {
             enumerator.start();
 
             // Register all readers

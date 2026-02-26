@@ -1005,7 +1005,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
             // it may happen during coordinator server initiation, the watcher watch a new tablet
             // server register event and put it to event manager, but after that, the coordinator
             // server read
-            // all tablet server nodes registered which contain the tablet server a; in this case,
+            // all tablet server nodes registered which contain the tablet server; in this case,
             // we can ignore it.
             return;
         }
@@ -1398,7 +1398,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
      *
      * <ul>
      *   <li>B1. Move all replicas in AR to OnlineReplica state.
-     *   <li>B2. Send a LeaderAndIsr request with RS = ORS +TRS. The will make the origin leader
+     *   <li>B2. Send a LeaderAndIsr request with RS = ORS +TRS. This will make the origin leader
      *       change to the new leader. this request will be sent to every tabletServer in ORS +TRS.
      *   <li>B3. Set RS = TRS, AR = [], RR = [] in memory.
      *   <li>Re-send LeaderAndIsr request with new leader and a new RS (using TRS) and same isr to
@@ -1408,8 +1408,8 @@ public class CoordinatorEventProcessor implements EventProcessor {
      *       Leader to notify it of the shrunk isr. After that, we send a StopReplica (delete =
      *       false and deleteRemote = false) to the replicas in RR.
      *   <li>B6. Move all replicas in RR to ReplicaMigrationStarted state. This will send a
-     *       StopReplica (delete = true and deleteRemote = false) to he replicas in RR to physically
-     *       delete the replicas on disk but don't delete the data in remote storage.
+     *       StopReplica (delete = true and deleteRemote = false) to the replicas in RR to
+     *       physically delete the replicas on disk but don't delete the data in remote storage.
      *   <li>B7. Update ZK with RS=TRS, AR=[], RR=[].
      *   <li>B8. After electing leader, the replicas and isr information changes. So resend the
      *       update metadata request to every tabletServer.
