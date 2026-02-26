@@ -25,6 +25,7 @@ import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.InternalRow.FieldGetter;
 import org.apache.fluss.row.ProjectedRow;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.AllocationListener;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.RootAllocator;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.VectorSchemaRoot;
@@ -115,7 +116,11 @@ public class LogRecordReadContext implements LogRecordBatch.ReadContext, AutoClo
             boolean projectionPushDowned,
             SchemaGetter schemaGetter) {
         // TODO: use a more reasonable memory limit
-        BufferAllocator allocator = new RootAllocator(Long.MAX_VALUE);
+        BufferAllocator allocator =
+                new RootAllocator(
+                        AllocationListener.NOOP,
+                        Long.MAX_VALUE,
+                        FlussRoundingPolicy.DEFAULT_ROUNDING_POLICY);
         FieldGetter[] fieldGetters = buildProjectedFieldGetters(dataRowType, selectedFields);
         return new LogRecordReadContext(
                 LogFormat.ARROW,
