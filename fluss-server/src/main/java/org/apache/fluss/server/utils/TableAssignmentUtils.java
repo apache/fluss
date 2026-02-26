@@ -111,8 +111,8 @@ public class TableAssignmentUtils {
      * <tr><td>bucket7      </td><td>bucket8      </td><td>bucket9      </td><td>bucket5      </td><td>bucket6      </td><td>(3rd replica)</td></tr>
      * </table>
      *
-     * <p>To create rack aware assignment, this API will first create a rack alternated tabletServers
-     * list. For example, from this tabletServerId -> rack mapping:
+     * <p>To create rack aware assignment, this API will first create a rack alternated
+     * tabletServers list. For example, from this tabletServerId -> rack mapping:
      *
      * <pre>
      *     0 -> "rack1"
