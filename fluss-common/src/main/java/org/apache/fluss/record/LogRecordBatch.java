@@ -187,9 +187,13 @@ public interface LogRecordBatch {
          * <p>The schema root is used to read the Arrow records in the batch, if this is a {@link
          * LogFormat#ARROW} record batch.
          *
-         * <p>Note: DO NOT close the vector schema root because it is shared across multiple
-         * batches. Use {@link VectorSchemaRoot#slice(int)} to cache the root and close it after
-         * use.
+         * <p><b>Lifecycle:</b> DO NOT close the returned {@link VectorSchemaRoot} because it is
+         * shared across multiple batches. Each new batch load replaces the old buffers inside the
+         * same root. To avoid temporary buffer duplication (old and new buffers coexisting during
+         * the load), callers should call {@link VectorSchemaRoot#clear()} after finishing each
+         * batch to release old buffers immediately before the next batch is loaded. If you need to
+         * retain the data beyond the current batch, use {@link VectorSchemaRoot#slice(int)} to
+         * create an independent copy and close it after use.
          *
          * @param schemaId The schema id of the record batch.
          * @return The (maybe projected) schema root of the record batch.
