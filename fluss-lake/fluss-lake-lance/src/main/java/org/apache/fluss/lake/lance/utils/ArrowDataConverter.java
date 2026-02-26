@@ -55,16 +55,21 @@ public class ArrowDataConverter {
                 VectorSchemaRoot.create(nonShadedSchema, nonShadedAllocator);
         nonShadedRoot.allocateNew();
 
-        List<org.apache.fluss.shaded.arrow.org.apache.arrow.vector.FieldVector> shadedVectors =
-                shadedRoot.getFieldVectors();
-        List<FieldVector> nonShadedVectors = nonShadedRoot.getFieldVectors();
+        try {
+            List<org.apache.fluss.shaded.arrow.org.apache.arrow.vector.FieldVector> shadedVectors =
+                    shadedRoot.getFieldVectors();
+            List<FieldVector> nonShadedVectors = nonShadedRoot.getFieldVectors();
 
-        for (int i = 0; i < shadedVectors.size(); i++) {
-            copyVectorData(shadedVectors.get(i), nonShadedVectors.get(i));
+            for (int i = 0; i < shadedVectors.size(); i++) {
+                copyVectorData(shadedVectors.get(i), nonShadedVectors.get(i));
+            }
+
+            nonShadedRoot.setRowCount(shadedRoot.getRowCount());
+            return nonShadedRoot;
+        } catch (Exception e) {
+            nonShadedRoot.close();
+            throw e;
         }
-
-        nonShadedRoot.setRowCount(shadedRoot.getRowCount());
-        return nonShadedRoot;
     }
 
     private static void copyVectorData(
