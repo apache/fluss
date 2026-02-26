@@ -4,7 +4,7 @@ The Apache Fluss (Incubating) community is pleased to announce the release of fl
 
 ## What is fluss-rust?
 
-[fluss-rust](https://github.com/apache/fluss-rust) is the official [Apache Fluss (Incubating)](https://fluss.apache.org/) client library, written in Rust with bindings for [Python](https://fluss.apache.org/fluss-rust/user-guide/python/installation) and [C++](https://fluss.apache.org/fluss-rust/user-guide/cpp/installation). All three clients share
+[fluss-rust](https://github.com/apache/fluss-rust) is the official [Apache Fluss (Incubating)](https://fluss.apache.org/) client library, written in Rust with bindings for [Python](TODO: Add the link once website is setup) and [C++](TODO: Add the link once website is setup). All three clients share
 the same Rust core, gaining native Rust performance while retaining language ergonomics. Built on [Apache Arrow](https://arrow.apache.org/), fluss-rust enables table management, log streaming, and key-value operations with zero-copy efficiency and async-first design.
 
 Fluss is a streaming storage built for real-time analytics, serving as the real-time data layer for Lakehouse architectures. It bridges the gap between streaming data and the data Lakehouse by enabling low-latency, high-throughput data ingestion and processing while seamlessly integrating with popular compute engines.
