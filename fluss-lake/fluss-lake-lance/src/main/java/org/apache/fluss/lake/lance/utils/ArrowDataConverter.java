@@ -157,6 +157,21 @@ public class ArrowDataConverter {
                     shadedListVector,
             FixedSizeListVector nonShadedFixedSizeListVector) {
 
+        int valueCount = shadedListVector.getValueCount();
+        int expectedListSize = nonShadedFixedSizeListVector.getListSize();
+        int expectedTotalValueCount = valueCount * expectedListSize;
+
+        // Validate that backing data vector element count matches expected fixed-size layout.
+        // If every list has exactly expectedListSize elements, the total must be
+        // valueCount * expectedListSize.
+        int totalValueCount = shadedListVector.getDataVector().getValueCount();
+        if (totalValueCount != expectedTotalValueCount) {
+            throw new IllegalArgumentException(
+                    String.format(
+                            "Total child elements (%d) does not match expected %d for FixedSizeList conversion.",
+                            totalValueCount, expectedTotalValueCount));
+        }
+
         // Copy the child data vector recursively (e.g., the float values)
         org.apache.fluss.shaded.arrow.org.apache.arrow.vector.FieldVector shadedDataVector =
                 shadedListVector.getDataVector();
@@ -187,7 +202,6 @@ public class ArrowDataConverter {
             }
         }
 
-        int valueCount = shadedListVector.getValueCount();
         nonShadedFixedSizeListVector.setValueCount(valueCount);
     }
 }

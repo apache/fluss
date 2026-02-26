@@ -50,6 +50,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 
+import static org.apache.fluss.utils.Preconditions.checkArgument;
+
 /**
  * Utilities for converting Fluss RowType to non-shaded Arrow Schema. This is needed because Lance
  * requires non-shaded Arrow API.
@@ -86,7 +88,20 @@ public class LanceArrowUtils {
         if (logicalType instanceof ArrayType && tableProperties != null) {
             String sizeStr = tableProperties.get(fieldName + FIXED_SIZE_LIST_SIZE_SUFFIX);
             if (sizeStr != null) {
-                arrowType = new ArrowType.FixedSizeList(Integer.parseInt(sizeStr));
+                int listSize = -1;
+                try {
+                    listSize = Integer.parseInt(sizeStr);
+                } catch (NumberFormatException ignored) {
+                    // Not really ignored, IllegalArgumentEx still thrown below.
+                    // This removes duplicate boilerplates for throwing IAE
+                }
+
+                checkArgument(
+                        listSize > 0,
+                        "Invalid value '%s' for property '%s'. Expected a positive integer.",
+                        sizeStr,
+                        fieldName + FIXED_SIZE_LIST_SIZE_SUFFIX);
+                arrowType = new ArrowType.FixedSizeList(listSize);
             } else {
                 arrowType = toArrowType(logicalType);
             }
