@@ -1054,37 +1054,42 @@ public class FlinkSourceEnumerator
     public void notifyCheckpointComplete(long checkpointId) throws Exception {
         checkpointTriggeredBefore = true;
 
-        // lower than this checkpoint id.
-        Set<TableBucket> consumedKvSnapshots = getAndRemoveConsumedBucketsUpTo(checkpointId);
+        if (hasPrimaryKey) {
+            // lower than this checkpoint id.
+            Set<TableBucket> consumedKvSnapshots = getAndRemoveConsumedBucketsUpTo(checkpointId);
 
-        LOG.info(
-                "kv snapshot has already consumed and try to release kv snapshot lease for: {}, checkpoint id: {}",
-                consumedKvSnapshots,
-                checkpointId);
+            if (!consumedKvSnapshots.isEmpty()) {
+                LOG.info(
+                        "kv snapshot has already consumed and try to release kv snapshot lease for: {}, checkpoint id: {}",
+                        consumedKvSnapshots,
+                        checkpointId);
 
-        // send request to fluss to unregister the kv snapshot lease.
-        try {
-            flussAdmin
-                    .createKvSnapshotLease(
-                            leaseContext.getKvSnapshotLeaseId(),
-                            leaseContext.getKvSnapshotLeaseDurationMs())
-                    .releaseSnapshots(consumedKvSnapshots)
-                    .get();
-        } catch (Exception e) {
-            if (ExceptionUtils.findThrowable(e, UnsupportedVersionException.class).isPresent()) {
-                LOG.warn(
-                        "Failed to release kv snapshot lease because the server does not support "
-                                + "kv snapshot lease API. Snapshots may remain in storage longer "
-                                + "than necessary. Please upgrade the Fluss server to version 0.9 "
-                                + "or later.",
-                        e);
-            } else {
-                LOG.error(
-                        "Failed to release kv snapshot lease. These snapshots need to re-enqueue",
-                        e);
-                // use the current checkpoint id to re-enqueue the buckets
-                consumedKvSnapshots.forEach(
-                        tableBucket -> addConsumedBucket(checkpointId, tableBucket));
+                // send request to fluss to unregister the kv snapshot lease.
+                try {
+                    flussAdmin
+                            .createKvSnapshotLease(
+                                    leaseContext.getKvSnapshotLeaseId(),
+                                    leaseContext.getKvSnapshotLeaseDurationMs())
+                            .releaseSnapshots(consumedKvSnapshots)
+                            .get();
+                } catch (Exception e) {
+                    if (ExceptionUtils.findThrowable(e, UnsupportedVersionException.class)
+                            .isPresent()) {
+                        LOG.warn(
+                                "Failed to release kv snapshot lease because the server does not support "
+                                        + "kv snapshot lease API. Snapshots may remain in storage longer "
+                                        + "than necessary. Please upgrade the Fluss server to version 0.9 "
+                                        + "or later.",
+                                e);
+                    } else {
+                        LOG.error(
+                                "Failed to release kv snapshot lease. These snapshots need to re-enqueue",
+                                e);
+                        // use the current checkpoint id to re-enqueue the buckets
+                        consumedKvSnapshots.forEach(
+                                tableBucket -> addConsumedBucket(checkpointId, tableBucket));
+                    }
+                }
             }
         }
     }
