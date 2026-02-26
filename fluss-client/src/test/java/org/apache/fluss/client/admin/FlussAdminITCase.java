@@ -41,6 +41,7 @@ import org.apache.fluss.exception.InvalidDatabaseException;
 import org.apache.fluss.exception.InvalidPartitionException;
 import org.apache.fluss.exception.InvalidReplicationFactorException;
 import org.apache.fluss.exception.InvalidTableException;
+import org.apache.fluss.exception.NonPrimaryKeyTableException;
 import org.apache.fluss.exception.PartitionAlreadyExistsException;
 import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.exception.SchemaNotExistException;
@@ -2015,5 +2016,41 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                 .cause()
                 .isInstanceOf(InvalidTableException.class)
                 .hasMessageContaining("Row count is disabled for this table");
+    }
+
+    @Test
+    void testKvSnapshotLeaseForLogTable() throws Exception {
+        // Create a log table (without primary key)
+        TablePath logTablePath = TablePath.of("test_db", "test_log_table_kv_lease");
+        Schema logSchema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("name", DataTypes.STRING())
+                        .column("age", DataTypes.INT())
+                        .build();
+        TableDescriptor logTableDescriptor =
+                TableDescriptor.builder().schema(logSchema).distributedBy(3).build();
+        long tableId = createTable(logTablePath, logTableDescriptor, true);
+
+        // Create a KvSnapshotLease
+        KvSnapshotLease lease = admin.createKvSnapshotLease("test-lease-log", 60000);
+
+        // Test acquireSnapshots should fail for log table
+        Map<TableBucket, Long> snapshotIds = new HashMap<>();
+        snapshotIds.put(new TableBucket(tableId, 0), 0L);
+        assertThatThrownBy(() -> lease.acquireSnapshots(snapshotIds).get())
+                .cause()
+                .isInstanceOf(NonPrimaryKeyTableException.class)
+                .hasMessageContaining("is not a primary key table");
+
+        // Test releaseSnapshots should fail for log table
+        assertThatThrownBy(
+                        () ->
+                                lease.releaseSnapshots(
+                                                Collections.singleton(new TableBucket(tableId, 0)))
+                                        .get())
+                .cause()
+                .isInstanceOf(NonPrimaryKeyTableException.class)
+                .hasMessageContaining("is not a primary key table");
     }
 }
