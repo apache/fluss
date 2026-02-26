@@ -44,7 +44,7 @@ The release also includes SASL/PLAIN authentication across all three clients, a 
 
 - Rust: fluss-rs [installation guide](TODO: Add the link once website is setup).
 - Python: pyfluss [installation guide](TODO: Add the link once website is setup).
-- C++:  https://fluss.apache.org/fluss-rust/user-guide/cpp/installation
+- C++: fluss-cpp [installation guide](TODO: Add the link once website is setup).
 
 ### What's Next
 
