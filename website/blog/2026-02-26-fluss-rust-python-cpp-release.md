@@ -58,4 +58,4 @@ The Apache Fluss community welcomes contributions!
 - Documentation: TODO: Add the link once website is setup
 - Website: https://fluss.apache.org/
 - Mailing List: dev@fluss.apache.org
-- Slack:https://apache-fluss.slack.com
+- Slack: https://apache-fluss.slack.com
