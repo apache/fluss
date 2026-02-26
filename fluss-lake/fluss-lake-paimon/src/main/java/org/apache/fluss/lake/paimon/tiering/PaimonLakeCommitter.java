@@ -116,7 +116,7 @@ public class PaimonLakeCommitter implements LakeCommitter<PaimonWriteResult, Pai
             if (!fileStoreTable.coreOptions().deletionVectorsEnabled()) {
                 return LakeCommitResult.committedIsReadable(committedSnapshotId);
             } else {
-                // retrive the readable snapshot during commit
+                // retrieve the readable snapshot during commit
                 try (DvTableReadableSnapshotRetriever retriever =
                         new DvTableReadableSnapshotRetriever(
                                 tablePath, tableId, fileStoreTable, flussClientConfig)) {

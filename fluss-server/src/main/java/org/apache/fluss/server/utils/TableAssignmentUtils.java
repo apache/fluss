@@ -63,7 +63,7 @@ public class TableAssignmentUtils {
         }
 
         if (Arrays.stream(servers).noneMatch(tsInfo -> tsInfo.getRack() != null)) {
-            return generateRackUnawareAssigment(
+            return generateRackUnawareAssignment(
                     nBuckets,
                     replicationFactor,
                     Arrays.stream(servers).mapToInt(TabletServerInfo::getId).toArray(),
@@ -74,7 +74,7 @@ public class TableAssignmentUtils {
                 throw new InvalidServerRackInfoException(
                         "Not all tabletServers have rack information for replica rack aware assignment.");
             } else {
-                return generateRackAwareAssigment(
+                return generateRackAwareAssignment(
                         nBuckets, replicationFactor, servers, startIndex, nextReplicaShift);
             }
         }
@@ -107,11 +107,11 @@ public class TableAssignmentUtils {
      * <tr><td>bucket5      </td><td>bucket6      </td><td>bucket7      </td><td>bucket8      </td><td>bucket9      </td><td>(1st replica)</td></tr>
      * <tr><td>bucket4      </td><td>bucket0      </td><td>bucket1      </td><td>bucket2      </td><td>bucket3      </td><td>(2nd replica)</td></tr>
      * <tr><td>bucket8      </td><td>bucket9      </td><td>bucket5      </td><td>bucket6      </td><td>bucket7      </td><td>(2nd replica)</td></tr>
-     * <tr><td>bucket3      </td><td>bucket4      </td><td>bucket0      </td><td>bucket1      </td><td>bucket2      </td><td>(3nd replica)</td></tr>
-     * <tr><td>bucket7      </td><td>bucket8      </td><td>bucket9      </td><td>bucket5      </td><td>bucket6      </td><td>(3nd replica)</td></tr>
+     * <tr><td>bucket3      </td><td>bucket4      </td><td>bucket0      </td><td>bucket1      </td><td>bucket2      </td><td>(3rd replica)</td></tr>
+     * <tr><td>bucket7      </td><td>bucket8      </td><td>bucket9      </td><td>bucket5      </td><td>bucket6      </td><td>(3rd replica)</td></tr>
      * </table>
      *
-     * <p>To create rack aware assigment, this API will first create a rack alternated tabletServers
+     * <p>To create rack aware assignment, this API will first create a rack alternated tabletServers
      * list. For example, from this tabletServerId -> rack mapping:
      *
      * <pre>
@@ -172,7 +172,7 @@ public class TableAssignmentUtils {
                 randomInt(servers.length));
     }
 
-    private static TableAssignment generateRackUnawareAssigment(
+    private static TableAssignment generateRackUnawareAssignment(
             int nBuckets,
             int replicationFactor,
             int[] serverIds,
@@ -198,7 +198,7 @@ public class TableAssignmentUtils {
         return new TableAssignment(assignments);
     }
 
-    private static TableAssignment generateRackAwareAssigment(
+    private static TableAssignment generateRackAwareAssignment(
             int nBuckets,
             int replicationFactor,
             TabletServerInfo[] servers,

@@ -1370,8 +1370,8 @@ class CoordinatorEventProcessorTest {
                 });
     }
 
-    private <T> T fromCtx(Function<CoordinatorContext, T> retriveFunction) throws Exception {
-        AccessContextEvent<T> event = new AccessContextEvent<>(retriveFunction);
+    private <T> T fromCtx(Function<CoordinatorContext, T> retrieveFunction) throws Exception {
+        AccessContextEvent<T> event = new AccessContextEvent<>(retrieveFunction);
         eventProcessor.getCoordinatorEventManager().put(event);
         return event.getResultFuture().get(30, TimeUnit.SECONDS);
     }

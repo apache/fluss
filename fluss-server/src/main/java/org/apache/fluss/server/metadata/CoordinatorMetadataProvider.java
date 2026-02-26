@@ -122,16 +122,16 @@ public class CoordinatorMetadataProvider extends ZkBasedMetadataProvider {
      * @param ctx the coordinator context containing leader and epoch information
      * @param tableId the table identifier
      * @param partitionId the partition identifier, null for non-partitioned tables
-     * @param tableAssigment the assignment map from bucket ID to list of replica server IDs
+     * @param tableAssignment the assignment map from bucket ID to list of replica server IDs
      * @return a list of bucket metadata objects containing complete bucket information
      */
     private static List<BucketMetadata> getBucketMetadataFromContext(
             CoordinatorContext ctx,
             long tableId,
             @Nullable Long partitionId,
-            Map<Integer, List<Integer>> tableAssigment) {
+            Map<Integer, List<Integer>> tableAssignment) {
         List<BucketMetadata> bucketMetadataList = new ArrayList<>();
-        tableAssigment.forEach(
+        tableAssignment.forEach(
                 (bucketId, serverIds) -> {
                     TableBucket tableBucket = new TableBucket(tableId, partitionId, bucketId);
                     Optional<LeaderAndIsr> optLeaderAndIsr = ctx.getBucketLeaderAndIsr(tableBucket);
