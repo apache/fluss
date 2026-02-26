@@ -636,9 +636,83 @@ class FlinkCatalogTest {
                 .isInstanceOf(DatabaseNotExistException.class)
                 .hasMessage("Database %s does not exist in Catalog %s.", "unknown", CATALOG_NAME);
         assertThatThrownBy(() -> catalog.alterDatabase("db2", null, false))
-                .isInstanceOf(UnsupportedOperationException.class);
+                .isInstanceOf(DatabaseNotExistException.class);
         assertThat(catalog.getDefaultDatabase()).isEqualTo(DEFAULT_DB);
+    }
 
+    @Test
+    void testAlterDatabase() throws Exception {
+        // Create database with initial properties
+        String dbName = "test_alter_db";
+        Map<String, String> initialProps = new HashMap<>();
+        initialProps.put("key1", "value1");
+        initialProps.put("key2", "value2");
+
+        catalog.createDatabase(dbName, new CatalogDatabaseImpl(initialProps, null), false);
+
+        // Verify initial state
+        CatalogDatabase currentDb = catalog.getDatabase(dbName);
+        assertThat(currentDb.getProperties()).containsEntry("key1", "value1");
+        assertThat(currentDb.getProperties()).containsEntry("key2", "value2");
+        assertThat(currentDb.getComment()).isNull();
+
+        // Alter database: add new property and update existing property
+        Map<String, String> newProps1 = new HashMap<>(currentDb.getProperties());
+        newProps1.put("key3", "value3");
+        newProps1.put("key1", "updated_value1");
+
+        CatalogDatabase newDb1 = new CatalogDatabaseImpl(newProps1, null);
+        catalog.alterDatabase(dbName, newDb1, false);
+
+        // Verify first alteration
+        CatalogDatabase alteredDb1 = catalog.getDatabase(dbName);
+        assertThat(alteredDb1.getProperties()).containsEntry("key1", "updated_value1");
+        assertThat(alteredDb1.getProperties()).containsEntry("key2", "value2");
+        assertThat(alteredDb1.getProperties()).containsEntry("key3", "value3");
+        assertThat(alteredDb1.getComment()).isNull();
+
+        // Alter database: add comment
+        Map<String, String> newProps2 = new HashMap<>(alteredDb1.getProperties());
+        CatalogDatabase newDb2 = new CatalogDatabaseImpl(newProps2, "test comment");
+        catalog.alterDatabase(dbName, newDb2, false);
+
+        // Verify comment change
+        CatalogDatabase alteredDb2 = catalog.getDatabase(dbName);
+        assertThat(alteredDb2.getProperties()).containsEntry("key1", "updated_value1");
+        assertThat(alteredDb2.getProperties()).containsEntry("key2", "value2");
+        assertThat(alteredDb2.getProperties()).containsEntry("key3", "value3");
+        assertThat(alteredDb2.getComment()).isEqualTo("test comment");
+
+        // Alter database: reset a property (remove key2)
+        Map<String, String> newProps3 = new HashMap<>();
+        newProps3.put("key1", "updated_value1");
+        newProps3.put("key3", "value3");
+
+        CatalogDatabase newDb3 = new CatalogDatabaseImpl(newProps3, "test comment");
+        catalog.alterDatabase(dbName, newDb3, false);
+
+        // Verify reset
+        CatalogDatabase alteredDb3 = catalog.getDatabase(dbName);
+        assertThat(alteredDb3.getProperties()).containsEntry("key1", "updated_value1");
+        assertThat(alteredDb3.getProperties()).containsEntry("key3", "value3");
+        assertThat(alteredDb3.getProperties()).doesNotContainKey("key2");
+        assertThat(alteredDb3.getComment()).isEqualTo("test comment");
+
+        // Test database not exist
+        assertThatThrownBy(() -> catalog.alterDatabase("non_exist_db", newDb3, false))
+                .isInstanceOf(DatabaseNotExistException.class)
+                .hasMessage(
+                        "Database %s does not exist in Catalog %s.", "non_exist_db", CATALOG_NAME);
+
+        // Test with ignoreIfNotExists = true
+        catalog.alterDatabase("non_exist_db", newDb3, true);
+
+        // Clean up
+        catalog.dropDatabase(dbName, false, true);
+    }
+
+    @Test
+    void testCatalogWithNullDefaultDatabase() throws Exception {
         // Test catalog with null default database
         Configuration flussConf = FLUSS_CLUSTER_EXTENSION.getClientConfig();
         assertThatThrownBy(

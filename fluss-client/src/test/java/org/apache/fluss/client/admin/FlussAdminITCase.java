@@ -55,6 +55,7 @@ import org.apache.fluss.exception.TooManyPartitionsException;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.fs.FsPathAndFileName;
 import org.apache.fluss.metadata.AggFunctions;
+import org.apache.fluss.metadata.DatabaseChange;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.DatabaseInfo;
 import org.apache.fluss.metadata.DatabaseSummary;
@@ -176,6 +177,76 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         assertThat(databaseInfo.getDatabaseDescriptor().getCustomProperties()).hasSize(1);
         assertThat(databaseInfo.getCreatedTime())
                 .isBetween(timestampBeforeCreate, timestampAfterCreate);
+    }
+
+    @Test
+    void testAlterDatabase() throws Exception {
+        // create database
+        String dbName = "test_alter_db";
+        admin.createDatabase(
+                        dbName,
+                        DatabaseDescriptor.builder()
+                                .comment("original comment")
+                                .customProperty("key1", "value1")
+                                .customProperty("key2", "value2")
+                                .build(),
+                        false)
+                .get();
+
+        DatabaseInfo databaseInfo = admin.getDatabaseInfo(dbName).get();
+        DatabaseDescriptor existingDescriptor = databaseInfo.getDatabaseDescriptor();
+
+        // Verify initial state
+        assertThat(existingDescriptor.getComment().get()).isEqualTo("original comment");
+        assertThat(existingDescriptor.getCustomProperties()).containsEntry("key1", "value1");
+        assertThat(existingDescriptor.getCustomProperties()).containsEntry("key2", "value2");
+
+        // Alter database: add and modify custom properties
+        List<DatabaseChange> databaseChanges = new ArrayList<>();
+        databaseChanges.add(DatabaseChange.set("key3", "value3"));
+        databaseChanges.add(DatabaseChange.set("key1", "updated_value1"));
+        databaseChanges.add(DatabaseChange.updateComment("updated comment"));
+        admin.alterDatabase(dbName, databaseChanges, false).get();
+
+        // Verify alterations
+        DatabaseInfo alteredDatabaseInfo = admin.getDatabaseInfo(dbName).get();
+        DatabaseDescriptor alteredDescriptor = alteredDatabaseInfo.getDatabaseDescriptor();
+        assertThat(alteredDescriptor.getComment().get()).isEqualTo("updated comment");
+        assertThat(alteredDescriptor.getCustomProperties()).containsEntry("key1", "updated_value1");
+        assertThat(alteredDescriptor.getCustomProperties()).containsEntry("key2", "value2");
+        assertThat(alteredDescriptor.getCustomProperties()).containsEntry("key3", "value3");
+        assertThat(alteredDescriptor.getCustomProperties()).hasSize(3);
+
+        // Alter database: reset a property
+        databaseChanges = new ArrayList<>();
+        databaseChanges.add(DatabaseChange.reset("key2"));
+        databaseChanges.add(DatabaseChange.updateComment(null));
+        admin.alterDatabase(dbName, databaseChanges, false).get();
+
+        // Verify reset
+        DatabaseInfo resetDatabaseInfo = admin.getDatabaseInfo(dbName).get();
+        DatabaseDescriptor resetDescriptor = resetDatabaseInfo.getDatabaseDescriptor();
+        assertThat(resetDescriptor.getComment()).isEmpty();
+        assertThat(resetDescriptor.getCustomProperties()).containsEntry("key1", "updated_value1");
+        assertThat(resetDescriptor.getCustomProperties()).containsEntry("key3", "value3");
+        assertThat(resetDescriptor.getCustomProperties()).doesNotContainKey("key2");
+        assertThat(resetDescriptor.getCustomProperties()).hasSize(2);
+
+        // throw exception if database not exist
+        List<DatabaseChange> finalDatabaseChanges = databaseChanges;
+        assertThatThrownBy(
+                        () ->
+                                admin.alterDatabase(
+                                                "test_alter_db_not_exist",
+                                                finalDatabaseChanges,
+                                                false)
+                                        .get())
+                .cause()
+                .isInstanceOf(DatabaseNotExistException.class)
+                .hasMessage(String.format("Database %s not exists.", "test_alter_db_not_exist"));
+
+        // should success if ignore not exist
+        admin.alterDatabase("test_alter_db_not_exist", databaseChanges, true).get();
     }
 
     @Test

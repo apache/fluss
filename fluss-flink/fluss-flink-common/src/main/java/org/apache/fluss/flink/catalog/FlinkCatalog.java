@@ -29,6 +29,7 @@ import org.apache.fluss.flink.lake.LakeFlinkCatalog;
 import org.apache.fluss.flink.procedure.ProcedureManager;
 import org.apache.fluss.flink.utils.CatalogExceptionUtils;
 import org.apache.fluss.flink.utils.FlinkConversions;
+import org.apache.fluss.metadata.DatabaseChange;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.PartitionInfo;
 import org.apache.fluss.metadata.PartitionSpec;
@@ -278,9 +279,34 @@ public class FlinkCatalog extends AbstractCatalog {
     }
 
     @Override
-    public void alterDatabase(String databaseName, CatalogDatabase catalogDatabase, boolean b)
+    public void alterDatabase(
+            String databaseName, CatalogDatabase catalogDatabase, boolean ignoreIfNotExists)
             throws DatabaseNotExistException, CatalogException {
-        throw new UnsupportedOperationException();
+        try {
+            // Get current database info
+            DatabaseDescriptor currentDescriptor =
+                    admin.getDatabaseInfo(databaseName).get().getDatabaseDescriptor();
+
+            // Get new database descriptor
+            DatabaseDescriptor newDescriptor = FlinkConversions.toFlussDatabase(catalogDatabase);
+
+            // Compare and generate DatabaseChanges
+            List<DatabaseChange> databaseChanges =
+                    generateDatabaseChanges(currentDescriptor, newDescriptor);
+
+            admin.alterDatabase(databaseName, databaseChanges, ignoreIfNotExists).get();
+        } catch (Exception e) {
+            Throwable t = ExceptionUtils.stripExecutionException(e);
+            if (CatalogExceptionUtils.isDatabaseNotExist(t)) {
+                if (!ignoreIfNotExists) {
+                    throw new DatabaseNotExistException(getName(), databaseName);
+                }
+            } else {
+                throw new CatalogException(
+                        String.format("Failed to alter database %s in %s", databaseName, getName()),
+                        t);
+            }
+        }
     }
 
     @Override
@@ -1063,5 +1089,45 @@ public class FlinkCatalog extends AbstractCatalog {
         // Note: We don't copy primary keys or watermarks for virtual tables
 
         return builder.build();
+    }
+
+    /**
+     * Generate database changes by comparing old and new database descriptors.
+     *
+     * @param oldDescriptor Old database descriptor
+     * @param newDescriptor New database descriptor
+     * @return List of database changes
+     */
+    private List<DatabaseChange> generateDatabaseChanges(
+            DatabaseDescriptor oldDescriptor, DatabaseDescriptor newDescriptor) {
+        List<DatabaseChange> changes = new ArrayList<>();
+
+        // Check comment changes
+        String oldComment = oldDescriptor.getComment().orElse(null);
+        String newComment = newDescriptor.getComment().orElse(null);
+        if (!Objects.equals(oldComment, newComment)) {
+            changes.add(DatabaseChange.updateComment(newComment));
+        }
+
+        // Check custom properties changes
+        Map<String, String> oldProps = oldDescriptor.getCustomProperties();
+        Map<String, String> newProps = newDescriptor.getCustomProperties();
+
+        newProps.forEach(
+                (k, v) -> {
+                    if (!oldProps.containsKey(k) || !oldProps.get(k).equals(v)) {
+                        changes.add(DatabaseChange.set(k, v));
+                    }
+                });
+
+        oldProps.keySet()
+                .forEach(
+                        (k) -> {
+                            if (!newProps.containsKey(k)) {
+                                changes.add(DatabaseChange.reset(k));
+                            }
+                        });
+
+        return changes;
     }
 }
