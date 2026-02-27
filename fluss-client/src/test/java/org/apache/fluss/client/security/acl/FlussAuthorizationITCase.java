@@ -648,7 +648,7 @@ public class FlussAuthorizationITCase {
                                     Collections.singletonList(noWriteAclTable)));
         }
 
-        // 2. Try to write data to writeAclTable. It will success and writeId will be set.
+        // 2. Try to write data to writeAclTable. It will succeed and writeId will be set.
         try (Table table = guestConn.getTable(writeAclTable)) {
             AppendWriter appendWriter = table.newAppend().createWriter();
             appendWriter.append(row(1, "a")).get();
