@@ -33,6 +33,7 @@ import org.apache.fluss.exception.InvalidCoordinatorException;
 import org.apache.fluss.exception.InvalidDatabaseException;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.LakeTableAlreadyExistException;
+import org.apache.fluss.exception.NonPrimaryKeyTableException;
 import org.apache.fluss.exception.SecurityDisabledException;
 import org.apache.fluss.exception.TableAlreadyExistException;
 import org.apache.fluss.exception.TableNotPartitionedException;
@@ -50,6 +51,7 @@ import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
+import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.gateway.CoordinatorGateway;
 import org.apache.fluss.rpc.messages.AcquireKvSnapshotLeaseRequest;
@@ -300,6 +302,11 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
      */
     private void authorizeTableWithSession(
             Session session, OperationType operationType, long tableId) {
+        TablePath tablePath = getTablePathById(tableId);
+        authorizer.authorize(session, operationType, Resource.table(tablePath));
+    }
+
+    private TablePath getTablePathById(long tableId) {
         TablePath tablePath;
         try {
             // TODO: this will block on the coordinator event thread, consider refactor
@@ -320,8 +327,16 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                                     + "metadata cache in the server is not updated yet.",
                             name(), tableId));
         }
+        return tablePath;
+    }
 
-        authorizer.authorize(session, operationType, Resource.table(tablePath));
+    private void validateKvTable(long tableId) {
+        TablePath tablePath = getTablePathById(tableId);
+        TableInfo tableInfo = metadataManager.getTable(tablePath);
+        if (!tableInfo.hasPrimaryKey()) {
+            throw new NonPrimaryKeyTableException(
+                    "Table '" + tablePath + "' is not a primary key table");
+        }
     }
 
     @Override
@@ -881,13 +896,15 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     @Override
     public CompletableFuture<AcquireKvSnapshotLeaseResponse> acquireKvSnapshotLease(
             AcquireKvSnapshotLeaseRequest request) {
-        // Authorization: require WRITE permission on all tables in the request
-        if (authorizer != null) {
-            for (PbKvSnapshotLeaseForTable kvSnapshotLeaseForTable :
-                    request.getSnapshotsToLeasesList()) {
-                long tableId = kvSnapshotLeaseForTable.getTableId();
+        for (PbKvSnapshotLeaseForTable kvSnapshotLeaseForTable :
+                request.getSnapshotsToLeasesList()) {
+            long tableId = kvSnapshotLeaseForTable.getTableId();
+            if (authorizer != null) {
+                // Authorization: require WRITE permission on all tables in the request
                 authorizeTable(OperationType.READ, tableId);
             }
+
+            validateKvTable(tableId);
         }
 
         String leaseId = request.getLeaseId();
@@ -913,12 +930,14 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     @Override
     public CompletableFuture<ReleaseKvSnapshotLeaseResponse> releaseKvSnapshotLease(
             ReleaseKvSnapshotLeaseRequest request) {
-        // Authorization: require WRITE permission on all tables in the request
-        if (authorizer != null) {
-            for (PbTableBucket tableBucket : request.getBucketsToReleasesList()) {
-                long tableId = tableBucket.getTableId();
+        for (PbTableBucket tableBucket : request.getBucketsToReleasesList()) {
+            long tableId = tableBucket.getTableId();
+            if (authorizer != null) {
+                // Authorization: require WRITE permission on all tables in the request.
                 authorizeTable(OperationType.READ, tableId);
             }
+
+            validateKvTable(tableId);
         }
 
         String leaseId = request.getLeaseId();
