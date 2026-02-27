@@ -423,7 +423,7 @@ If you are interested in a specific customer, you can retrieve their details by 
 SELECT * FROM fluss_customer WHERE `cust_key` = 1;
 ```
 **Sample Output**
-```shell
+```
 +----------+---------------+--------------+------------+---------+------------+
 | cust_key |          name |        phone | nation_key | acctbal | mktsegment |
 +----------+---------------+--------------+------------+---------+------------+

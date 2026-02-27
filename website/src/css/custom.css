@@ -144,13 +144,12 @@
         color: #4c576c;
     }
 
-/*    pre {
+    pre {
         code {
             padding: 0.725rem 1.25rem;
-            background-color: #262a37;
-            line-height: 1.875;
+            background-color: #f5f5f5;
         }
-    }*/
+    }
 
     table thead tr {
         background-color: #f7f9fe;

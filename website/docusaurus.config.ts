@@ -18,6 +18,7 @@
 import {themes as prismThemes} from 'prism-react-renderer';
 import type {Config} from '@docusaurus/types';
 import type * as Preset from '@docusaurus/preset-classic';
+import lightTheme from './src/utils/prismLight';
 import versionReplace from './src/plugins/remark-version-replace/index';
 import { loadVersionData } from './src/utils/versionData';
 const { versionsMap, latestVersion } = loadVersionData();
@@ -226,7 +227,7 @@ const config: Config = {
                   <p>Apache, the names of Apache projects, and the feather logo are either registered trademarks or trademarks of the Apache Software Foundation in the United States and/or other countries. All other marks mentioned may be trademarks or registered trademarks of their respective owners.</p>`,
     },
     prism: {
-      theme: prismThemes.vsDark,
+      theme: lightTheme,
       darkTheme: prismThemes.dracula,
       additionalLanguages: ['java', 'bash', 'scala']
     },
