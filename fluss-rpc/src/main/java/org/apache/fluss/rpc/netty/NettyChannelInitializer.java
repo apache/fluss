@@ -22,6 +22,7 @@ import org.apache.fluss.shaded.netty4.io.netty.channel.socket.SocketChannel;
 import org.apache.fluss.shaded.netty4.io.netty.handler.codec.LengthFieldBasedFrameDecoder;
 import org.apache.fluss.shaded.netty4.io.netty.handler.timeout.IdleStateHandler;
 
+import static org.apache.fluss.shaded.netty4.io.netty.handler.codec.ByteToMessageDecoder.COMPOSITE_CUMULATOR;
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 
 /**
@@ -47,11 +48,10 @@ public class NettyChannelInitializer extends ChannelInitializer<SocketChannel> {
     }
 
     public void addFrameDecoder(SocketChannel ch, int maxFrameLength, int initialBytesToStrip) {
-        ch.pipeline()
-                .addLast(
-                        "frameDecoder",
-                        new LengthFieldBasedFrameDecoder(
-                                maxFrameLength, 0, 4, 0, initialBytesToStrip));
+        LengthFieldBasedFrameDecoder lengthFieldBasedFrameDecoder =
+                new LengthFieldBasedFrameDecoder(maxFrameLength, 0, 4, 0, initialBytesToStrip);
+        lengthFieldBasedFrameDecoder.setCumulator(COMPOSITE_CUMULATOR);
+        ch.pipeline().addLast("frameDecoder", lengthFieldBasedFrameDecoder);
     }
 
     public void addIdleStateHandler(SocketChannel ch) {
