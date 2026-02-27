@@ -175,7 +175,7 @@ public interface DatabaseChange {
 
         @Override
         public String toString() {
-            return "SetComment{" + "comment='" + comment + '\'' + '}';
+            return "UpdateComment{" + "comment='" + comment + '\'' + '}';
         }
     }
 }

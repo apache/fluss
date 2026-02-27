@@ -29,15 +29,24 @@ public class DatabasePropertyChanges {
 
     public final Map<String, String> customPropertiesToSet;
     public final Set<String> customPropertiesToReset;
+
     public final String commentToSet;
+
+    private final boolean commentChanged;
 
     protected DatabasePropertyChanges(
             Map<String, String> customPropertiesToSet,
             Set<String> customPropertiesToReset,
-            @Nullable String commentToSet) {
+            @Nullable String commentToSet,
+            boolean commentChanged) {
         this.customPropertiesToSet = customPropertiesToSet;
         this.customPropertiesToReset = customPropertiesToReset;
         this.commentToSet = commentToSet;
+        this.commentChanged = commentChanged;
+    }
+
+    public boolean isCommentChanged() {
+        return commentChanged;
     }
 
     public static DatabasePropertyChanges.Builder builder() {
@@ -50,6 +59,7 @@ public class DatabasePropertyChanges {
         private final Set<String> customPropertiesToReset = new HashSet<>();
 
         private String commentToSet = null;
+        private boolean commentChanged = false;
 
         public void setCustomProperty(String key, String value) {
             customPropertiesToSet.put(key, value);
@@ -59,13 +69,14 @@ public class DatabasePropertyChanges {
             customPropertiesToReset.add(key);
         }
 
-        public void setComment(String comment) {
+        public void setComment(@Nullable String comment) {
             this.commentToSet = comment;
+            this.commentChanged = true;
         }
 
         public DatabasePropertyChanges build() {
             return new DatabasePropertyChanges(
-                    customPropertiesToSet, customPropertiesToReset, commentToSet);
+                    customPropertiesToSet, customPropertiesToReset, commentToSet, commentChanged);
         }
     }
 }

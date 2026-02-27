@@ -150,8 +150,8 @@ public class MetadataManager {
                 throw new DatabaseNotExistException("Database " + databaseName + " not exists.");
             }
 
-            DatabaseInfo databaseInfo = getDatabase(databaseName);
-            DatabaseDescriptor currentDescriptor = databaseInfo.getDatabaseDescriptor();
+            DatabaseRegistration databaseRegistration = getDatabaseRegistration(databaseName);
+            DatabaseDescriptor currentDescriptor = databaseRegistration.toDatabaseDescriptor();
 
             // Create updated descriptor
             DatabaseDescriptor newDescriptor =
@@ -159,7 +159,8 @@ public class MetadataManager {
 
             if (newDescriptor != null) {
                 // Update the database in ZooKeeper
-                DatabaseRegistration updatedRegistration = DatabaseRegistration.of(newDescriptor);
+                DatabaseRegistration updatedRegistration =
+                        databaseRegistration.newProperties(newDescriptor);
                 zookeeperClient.updateDatabase(databaseName, updatedRegistration);
                 LOG.info("Successfully altered database properties for database: {}", databaseName);
             } else {
@@ -189,16 +190,13 @@ public class MetadataManager {
         // reset properties
         newCustomProperties.keySet().removeAll(changes.customPropertiesToReset);
 
-        boolean hasCommentChange =
-                !currentDescriptor.getComment().equals(Optional.ofNullable(changes.commentToSet));
-
         if (newCustomProperties.equals(currentDescriptor.getCustomProperties())
-                && !hasCommentChange) {
+                && !changes.isCommentChanged()) {
             return null;
         }
 
         String newComment =
-                hasCommentChange
+                changes.isCommentChanged()
                         ? changes.commentToSet
                         : currentDescriptor.getComment().orElse(null);
 
@@ -209,7 +207,15 @@ public class MetadataManager {
     }
 
     public DatabaseInfo getDatabase(String databaseName) throws DatabaseNotExistException {
+        DatabaseRegistration databaseReg = getDatabaseRegistration(databaseName);
+        return new DatabaseInfo(
+                databaseName,
+                databaseReg.toDatabaseDescriptor(),
+                databaseReg.createdTime,
+                databaseReg.modifiedTime);
+    }
 
+    public DatabaseRegistration getDatabaseRegistration(String databaseName) {
         Optional<DatabaseRegistration> optionalDB;
         try {
             optionalDB = zookeeperClient.getDatabase(databaseName);
@@ -221,13 +227,7 @@ public class MetadataManager {
         if (!optionalDB.isPresent()) {
             throw new DatabaseNotExistException("Database '" + databaseName + "' does not exist.");
         }
-
-        DatabaseRegistration databaseReg = optionalDB.get();
-        return new DatabaseInfo(
-                databaseName,
-                databaseReg.toDatabaseDescriptor(),
-                databaseReg.createdTime,
-                databaseReg.modifiedTime);
+        return optionalDB.get();
     }
 
     public boolean databaseExists(String databaseName) {
