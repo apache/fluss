@@ -139,4 +139,59 @@ class ArrowDataConverterTest {
             assertThat(nonShadedAllocator.getAllocatedMemory()).isZero();
         }
     }
+
+    @Test
+    void testConvertListToFixedSizeListWithNulls() {
+        int listSize = 3;
+        RowType rowType =
+                DataTypes.ROW(DataTypes.FIELD("embedding", DataTypes.ARRAY(DataTypes.FLOAT())));
+
+        Map<String, String> properties = new HashMap<>();
+        properties.put("embedding.arrow.fixed-size-list.size", String.valueOf(listSize));
+        Schema nonShadedSchema = LanceArrowUtils.toArrowSchema(rowType, properties);
+
+        // 3 rows: non-null, null, non-null
+        try (ShadedArrowBatchWriter writer = new ShadedArrowBatchWriter(shadedAllocator, rowType)) {
+            GenericRow row1 = new GenericRow(1);
+            row1.setField(0, new GenericArray(new float[] {1.0f, 2.0f, 3.0f}));
+            writer.writeRow(row1);
+
+            GenericRow row2 = new GenericRow(1);
+            row2.setField(0, null); // null embedding
+            writer.writeRow(row2);
+
+            GenericRow row3 = new GenericRow(1);
+            row3.setField(0, new GenericArray(new float[] {7.0f, 8.0f, 9.0f}));
+            writer.writeRow(row3);
+            writer.finish();
+
+            try (VectorSchemaRoot nonShadedRoot =
+                    ArrowDataConverter.convertToNonShaded(
+                            writer.getShadedRoot(), nonShadedAllocator, nonShadedSchema)) {
+                assertThat(nonShadedRoot.getRowCount()).isEqualTo(3);
+
+                FixedSizeListVector fixedSizeListVector =
+                        (FixedSizeListVector) nonShadedRoot.getVector("embedding");
+
+                // Row 0: non-null
+                assertThat(fixedSizeListVector.isNull(0)).isFalse();
+                List<?> values0 = fixedSizeListVector.getObject(0);
+                assertThat(values0).hasSize(3);
+                assertThat((Float) values0.get(0)).isEqualTo(1.0f);
+                assertThat((Float) values0.get(1)).isEqualTo(2.0f);
+                assertThat((Float) values0.get(2)).isEqualTo(3.0f);
+
+                // Row 1: null
+                assertThat(fixedSizeListVector.isNull(1)).isTrue();
+
+                // Row 2: non-null
+                assertThat(fixedSizeListVector.isNull(2)).isFalse();
+                List<?> values2 = fixedSizeListVector.getObject(2);
+                assertThat(values2).hasSize(3);
+                assertThat((Float) values2.get(0)).isEqualTo(7.0f);
+                assertThat((Float) values2.get(1)).isEqualTo(8.0f);
+                assertThat((Float) values2.get(2)).isEqualTo(9.0f);
+            }
+        }
+    }
 }

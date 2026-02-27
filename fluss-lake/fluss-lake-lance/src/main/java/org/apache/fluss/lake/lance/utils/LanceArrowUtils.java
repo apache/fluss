@@ -84,16 +84,24 @@ public class LanceArrowUtils {
 
     private static Field toArrowField(
             String fieldName, DataType logicalType, Map<String, String> tableProperties) {
+        checkArgument(
+                !fieldName.contains("."),
+                "Column name '%s' must not contain periods. "
+                        + "Lance does not support field names with periods.",
+                fieldName);
         ArrowType arrowType;
         if (logicalType instanceof ArrayType && tableProperties != null) {
             String sizeStr = tableProperties.get(fieldName + FIXED_SIZE_LIST_SIZE_SUFFIX);
             if (sizeStr != null) {
-                int listSize = -1;
+                int listSize;
                 try {
                     listSize = Integer.parseInt(sizeStr);
-                } catch (NumberFormatException ignored) {
-                    // Not really ignored, IllegalArgumentEx still thrown below.
-                    // This removes duplicate boilerplates for throwing IAE
+                } catch (NumberFormatException e) {
+                    throw new IllegalArgumentException(
+                            String.format(
+                                    "Invalid value '%s' for property '%s', expected a positive integer.",
+                                    sizeStr, fieldName + FIXED_SIZE_LIST_SIZE_SUFFIX),
+                            e);
                 }
 
                 checkArgument(

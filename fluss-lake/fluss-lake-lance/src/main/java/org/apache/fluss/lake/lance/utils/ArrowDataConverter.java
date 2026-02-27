@@ -164,26 +164,40 @@ public class ArrowDataConverter {
 
         int valueCount = shadedListVector.getValueCount();
         int expectedListSize = nonShadedFixedSizeListVector.getListSize();
-        int expectedTotalValueCount = valueCount * expectedListSize;
+        int nonNullCount = valueCount - shadedListVector.getNullCount();
+        int expectedTotalChildCount = nonNullCount * expectedListSize;
 
         // Validate that backing data vector element count matches expected fixed-size layout.
-        // If every list has exactly expectedListSize elements, the total must be
-        // valueCount * expectedListSize.
-        int totalValueCount = shadedListVector.getDataVector().getValueCount();
-        if (totalValueCount != expectedTotalValueCount) {
+        int totalChildCount = shadedListVector.getDataVector().getValueCount();
+        if (totalChildCount != expectedTotalChildCount) {
             throw new IllegalArgumentException(
                     String.format(
                             "Total child elements (%d) does not match expected %d for FixedSizeList conversion.",
-                            totalValueCount, expectedTotalValueCount));
+                            totalChildCount, expectedTotalChildCount));
         }
 
-        // Copy the child data vector recursively (e.g., the float values)
+        // Copy child data from the source ListVector to the target FixedSizeListVector.
+        //
+        // In a ListVector, child elements for non-null rows are packed contiguously
+        // (null rows contribute 0 children). In a FixedSizeListVector, child data is
+        // stride-based: row i's data starts at index i * listSize, so null rows still
+        // occupy child slots. When null rows exist, a simple bulk buffer copy won't
+        // work because the layouts differ — we must remap per-row using the source
+        // offset buffer.
         org.apache.fluss.shaded.arrow.org.apache.arrow.vector.FieldVector shadedDataVector =
                 shadedListVector.getDataVector();
         FieldVector nonShadedDataVector = nonShadedFixedSizeListVector.getDataVector();
 
         if (shadedDataVector != null && nonShadedDataVector != null) {
-            copyVectorData(shadedDataVector, nonShadedDataVector);
+            if (nonNullCount == valueCount) {
+                // No null rows — child layouts are identical, use fast bulk copy.
+                copyVectorData(shadedDataVector, nonShadedDataVector);
+            } else if (totalChildCount > 0) {
+                // Null rows present — copy child data row-by-row with offset remapping.
+                copyChildDataWithOffsetRemapping(
+                        shadedListVector, nonShadedDataVector, valueCount, expectedListSize);
+                nonShadedDataVector.setValueCount(valueCount * expectedListSize);
+            }
         }
 
         // FixedSizeListVector only has a validity buffer (no offset buffer).
@@ -208,5 +222,63 @@ public class ArrowDataConverter {
         }
 
         nonShadedFixedSizeListVector.setValueCount(valueCount);
+    }
+
+    /**
+     * Copies child element data from a shaded ListVector to a non-shaded child vector, remapping
+     * offsets so that row i's data lands at index {@code i * listSize} in the target (the layout
+     * required by FixedSizeListVector). Null rows in the source are skipped.
+     */
+    private static void copyChildDataWithOffsetRemapping(
+            org.apache.fluss.shaded.arrow.org.apache.arrow.vector.complex.ListVector
+                    shadedListVector,
+            FieldVector nonShadedChildVector,
+            int valueCount,
+            int listSize) {
+
+        // Source child data buffer (index 1 for fixed-width vectors: [validity, data])
+        org.apache.fluss.shaded.arrow.org.apache.arrow.memory.ArrowBuf srcDataBuf =
+                shadedListVector.getDataVector().getFieldBuffers().get(1);
+        // Source offset buffer: offset[i] is the start element index for row i
+        org.apache.fluss.shaded.arrow.org.apache.arrow.memory.ArrowBuf srcOffsetBuf =
+                shadedListVector.getOffsetBuffer();
+
+        // Target child buffers: [0] = validity, [1] = data
+        ArrowBuf tgtValidityBuf = nonShadedChildVector.getFieldBuffers().get(0);
+        ArrowBuf tgtDataBuf = nonShadedChildVector.getFieldBuffers().get(1);
+
+        // Get element byte width from the non-shaded child vector type.
+        // Buffer capacity cannot be used because Arrow pads/aligns buffers.
+        if (!(nonShadedChildVector instanceof org.apache.arrow.vector.BaseFixedWidthVector)) {
+            throw new UnsupportedOperationException(
+                    "FixedSizeList conversion with null rows only supports fixed-width child vectors, got "
+                            + nonShadedChildVector.getClass().getSimpleName());
+        }
+        int elementByteWidth =
+                ((org.apache.arrow.vector.BaseFixedWidthVector) nonShadedChildVector)
+                        .getTypeWidth();
+        int rowByteWidth = listSize * elementByteWidth;
+
+        for (int i = 0; i < valueCount; i++) {
+            if (!shadedListVector.isNull(i)) {
+                int srcElementStart = srcOffsetBuf.getInt((long) i * Integer.BYTES);
+                int srcByteOffset = srcElementStart * elementByteWidth;
+                int tgtElementStart = i * listSize;
+                int tgtByteOffset = tgtElementStart * elementByteWidth;
+
+                // Copy the data bytes for this row's child elements
+                ByteBuffer srcSlice = srcDataBuf.nioBuffer(srcByteOffset, rowByteWidth);
+                tgtDataBuf.setBytes(tgtByteOffset, srcSlice);
+
+                // Set validity bits for each child element in this row
+                for (int j = 0; j < listSize; j++) {
+                    int bitIndex = tgtElementStart + j;
+                    int byteIndex = bitIndex / 8;
+                    int bitOffset = bitIndex % 8;
+                    byte currentByte = tgtValidityBuf.getByte(byteIndex);
+                    tgtValidityBuf.setByte(byteIndex, currentByte | (1 << bitOffset));
+                }
+            }
+        }
     }
 }

@@ -113,6 +113,15 @@ class LanceArrowUtilsTest {
     }
 
     @Test
+    void testColumnNameWithPeriodThrows() {
+        RowType rowType = DataTypes.ROW(DataTypes.FIELD("my.embedding", DataTypes.FLOAT()));
+
+        assertThatThrownBy(() -> LanceArrowUtils.toArrowSchema(rowType, Collections.emptyMap()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("must not contain periods");
+    }
+
+    @Test
     void testToArrowSchemaWithNullProperties() {
         RowType rowType =
                 DataTypes.ROW(DataTypes.FIELD("embedding", DataTypes.ARRAY(DataTypes.FLOAT())));
