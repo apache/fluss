@@ -100,7 +100,7 @@ spec:
             tcpSocket:
               port: {{ .Values.listeners.client.port }}
           resources:
-            {{- toYaml .Values.resources.tabletServer | nindent 12 }}
+            {{- toYaml .Values.resources.coordinatorServer | nindent 12 }}
           volumeMounts:
             - name: fluss-conf
               mountPath: /opt/conf
