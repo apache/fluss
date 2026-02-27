@@ -5,110 +5,60 @@ sidebar_position: 3
 
 # Lakehouse Storage
 
-Lakehouse represents a new, open architecture that combines the best elements of data lakes and data warehouses.
-Lakehouse combines data lake scalability and cost-effectiveness with data warehouse reliability and performance.
+Fluss leverages well-known Lakehouse storage solutions like Apache Paimon, Apache Iceberg, and Lance as the tiered storage layer. The Tiering Service continuously tiers Fluss data to Lakehouse storage, where it can be read by Fluss clients in a streaming manner and accessed directly by external systems such as Flink, Spark, StarRocks, and others.
 
-Fluss leverages the well-known Lakehouse storage solutions like Apache Paimon, Apache Iceberg, Apache Hudi, Delta Lake as
-the tiered storage layer. Currently, only Apache Paimon, Apache Iceberg, Lance are supported, with more kinds of Lakehouse storage support are on the way.
+For deployment instructions, see [Deploying Streaming Lakehouse](../../install-deploy/deploying-streaming-lakehouse.md).
 
-Fluss's datalake tiering service will tier Fluss's data to the Lakehouse storage continuously. The data in Lakehouse storage can be read both by Fluss's client in a streaming manner and accessed directly
-by external systems such as Flink, Spark, StarRocks and others. With data tiered in Lakehouse storage, Fluss
-can gain much storage cost reduction and analytics performance improvement.
+For architecture details, see [Tiering Service](../../streaming-lakehouse/tiering-service.md).
 
+## Cluster Configuration
 
-## Enable Lakehouse Storage
+Lakehouse storage is configured in `server.yaml` using the `datalake.` prefix:
 
-Lakehouse Storage is disabled by default, you must enable it manually. 
-
-The following example uses Paimon for demonstration—other data lake formats follow similar steps, but require different configuration settings and JAR files.
-You can refer to the documentation of the corresponding data lake format integration for required configurations and JAR files. 
-
-### Lakehouse Storage Cluster Configurations
-#### Modify `server.yaml`
-First, you must configure the lakehouse storage in `server.yaml`. Take Paimon as an example, you must configure the following configurations:
-```yaml
-# Paimon configuration
+```yaml title="server.yaml"
 datalake.format: paimon
-
-# the catalog config about Paimon, assuming using Filesystem catalog
 datalake.paimon.metastore: filesystem
 datalake.paimon.warehouse: /tmp/paimon
 ```
 
-Fluss processes Paimon configurations by removing the `datalake.paimon.` prefix and then use the remaining configuration (without the prefix `datalake.paimon.`) to create the Paimon catalog. Checkout the [Paimon documentation](https://paimon.apache.org/docs/$PAIMON_VERSION_SHORT$/maintenance/configurations/) for more details on the available configurations.
+Fluss processes configurations by removing the `datalake.<format>.` prefix and uses the remaining configuration to create the data lake catalog.
 
-For example, if you want to configure to use Hive catalog, you can configure like following:
-```yaml
-datalake.format: paimon
-datalake.paimon.metastore: hive
-datalake.paimon.uri: thrift://<hive-metastore-host-name>:<port>
-datalake.paimon.warehouse: hdfs:///path/to/warehouse
+For format-specific configuration, see:
+- [Paimon](../../streaming-lakehouse/datalake-formats/paimon.md)
+- [Iceberg](../../streaming-lakehouse/datalake-formats/iceberg.md)
+- [Lance](../../streaming-lakehouse/datalake-formats/lance.md)
+
+## Table-Level Options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `table.datalake.enabled` | Boolean | false | Enable lakehouse storage for this table |
+| `table.datalake.freshness` | Duration | 3min | Maximum lag between Fluss and data lake table |
+| `table.datalake.format` | String | - | Data lake format (paimon, iceberg, lance). Inherits from cluster config |
+| `table.datalake.auto-compaction` | Boolean | false | Auto-trigger compaction in the data lake |
+| `table.datalake.auto-expire-snapshot` | Boolean | false | Auto-expire snapshots in the data lake |
+
+Example:
+```sql title="Flink SQL"
+CREATE TABLE my_table (
+    id BIGINT PRIMARY KEY NOT ENFORCED,
+    name STRING
+) WITH (
+    'table.datalake.enabled' = 'true',
+    'table.datalake.freshness' = '1min'
+);
 ```
 
-#### Add other jars required by datalake
-While Fluss includes the core Paimon library, additional jars may still need to be manually added to `${FLUSS_HOME}/plugins/paimon/` according to your needs.
-For example:
-- If you are using Paimon filesystem catalog with OSS filesystem, you need to put `paimon-oss-<paimon_version>.jar` into directory `${FLUSS_HOME}/plugins/paimon/`.
-- If you are using Paimon Hive catalog, you need to put [the flink sql hive connector jar](https://nightlies.apache.org/flink/flink-docs-stable/docs/connectors/table/hive/overview/#using-bundled-hive-jar) into directory `${FLUSS_HOME}/plugins/paimon/`.
+## Tiering Service Options
 
-Additionally, when using Paimon with HDFS, you must also configure the Fluss server with the Hadoop environment. See the [HDFS setup guide](/docs/maintenance/filesystems/hdfs.md) for detailed instructions.
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `lake.tiering.auto-expire-snapshot` | Boolean | false | Auto-trigger snapshot expiration on commit, even if `table.datalake.auto-expire-snapshot` is false |
 
-### Start The Datalake Tiering Service
-Then, you must start the datalake tiering service to tier Fluss's data to the lakehouse storage.
-#### Prerequisites
-- A running Flink cluster (currently only Flink is supported as the tiering backend)
-- Download [fluss-flink-tiering-$FLUSS_VERSION$.jar](https://repo1.maven.org/maven2/org/apache/fluss/fluss-flink-tiering/$FLUSS_VERSION$/fluss-flink-tiering-$FLUSS_VERSION$.jar) 
+## Data Retention
 
-#### Prepare required jars
-- Put [fluss-flink connector jar](/downloads) into `${FLINK_HOME}/lib`, you should choose a connector version matching your Flink version. If you're using Flink 1.20, please use [fluss-flink-1.20-$FLUSS_VERSION$.jar](https://repo1.maven.org/maven2/org/apache/fluss/fluss-flink-1.20/$FLUSS_VERSION$/fluss-flink-1.20-$FLUSS_VERSION$.jar)
-- If you are using [Amazon S3](http://aws.amazon.com/s3/), [Aliyun OSS](https://www.aliyun.com/product/oss) or [HDFS(Hadoop Distributed File System)](https://hadoop.apache.org/docs/stable/) as Fluss's [remote storage](maintenance/tiered-storage/remote-storage.md),
-  you should download the corresponding [Fluss filesystem jar](/downloads#filesystem-jars) and also put it into `${FLINK_HOME}/lib`
-- Put [fluss-lake-paimon jar](https://repo1.maven.org/maven2/org/apache/fluss/fluss-lake-paimon/$FLUSS_VERSION$/fluss-lake-paimon-$FLUSS_VERSION$.jar) into `${FLINK_HOME}/lib`
-- Put [paimon-bundle jar](https://repo.maven.apache.org/maven2/org/apache/paimon/paimon-bundle/$PAIMON_VERSION$/paimon-bundle-$PAIMON_VERSION$.jar) into `${FLINK_HOME}/lib`
-- [Download](https://flink.apache.org/downloads/) pre-bundled Hadoop jar `flink-shaded-hadoop-2-uber-*.jar` and put into `${FLINK_HOME}/lib`
-- Put Paimon's [filesystem jar](https://paimon.apache.org/docs/$PAIMON_VERSION_SHORT$/project/download/) into `${FLINK_HOME}/lib`, if you use s3 to store paimon data, please put `paimon-s3` jar into `${FLINK_HOME}/lib`
-- The other jars that Paimon may require, for example, if you use HiveCatalog, you will need to put hive related jars
+When using lakehouse storage with Union Read:
+- **Expired Fluss log data** (controlled by `table.log.ttl`) remains accessible via the lake if previously tiered
+- **Cleaned-up partitions** (controlled by `table.auto-partition.num-retention`) remain accessible via the lake if previously tiered
 
-
-#### Start Datalake Tiering Service
-After the Flink Cluster has been started, you can execute the `fluss-flink-tiering-$FLUSS_VERSION$.jar` by using the following command to start datalake tiering service:
-```shell
-<FLINK_HOME>/bin/flink run /path/to/fluss-flink-tiering-$FLUSS_VERSION$.jar \
-    --fluss.bootstrap.servers localhost:9123 \
-    --datalake.format paimon \
-    --datalake.paimon.metastore filesystem \
-    --datalake.paimon.warehouse /tmp/paimon
-```
-
-**Note:**
-- The `fluss.bootstrap.servers` should be the bootstrap server address of your Fluss cluster. You must configure all options with the `datalake.` prefix in the [server.yaml](#modify-serveryaml) file to run the tiering service. In this case, these parameters are `--datalake.format`, `--datalake.paimon.metastore`, and `--datalake.paimon.warehouse`.
-- The Flink tiering service is stateless, and you can run multiple tiering services simultaneously to tier tables in Fluss.
-These tiering services are coordinated by the Fluss cluster to ensure exactly-once semantics when tiering data to the lake storage. This means you can freely scale the service up or down according to your workload.
-- This follows the standard practice for [submitting jobs to Flink](https://nightlies.apache.org/flink/flink-docs-release-1.20/docs/deployment/cli/), where you can use the `-D` parameter to specify Flink-related configurations.
-For example, if you want to set the tiering service job name to `My Fluss Tiering Service1` and use `3` as the job parallelism, you can use the following command:
-```shell
-<FLINK_HOME>/bin/flink run \
-    -Dpipeline.name="My Fluss Tiering Service1" \
-    -Dparallelism.default=3 \
-    /path/to/fluss-flink-tiering-$FLUSS_VERSION$.jar \
-    --fluss.bootstrap.servers localhost:9123 \
-    --datalake.format paimon \
-    --datalake.paimon.metastore filesystem \
-    --datalake.paimon.warehouse /tmp/paimon
-```
-
-### Enable Lakehouse Storage Per Table
-To enable lakehouse storage for a table, the table must be created with the option `'table.datalake.enabled' = 'true'`.
-
-Another option `table.datalake.freshness`, allows per-table configuration of data freshness in the datalake.
-It defines the maximum amount of time that the datalake table's content should lag behind updates to the Fluss table. 
-Based on this target freshness, the Fluss tiering service automatically moves data from the Fluss table and updates to the datalake table, so that the data in the datalake table is kept up to date within this target.
-The default is `3min`, if the data does not need to be as fresh, you can specify a longer target freshness time to reduce costs.
-
-# Datalake Tiering Service Options
-
-The following table lists the options that can be used to configure the datalake tiering service.
-
-| Option                                  | Type     | Default | Description                                                                                                                                                        |
-|-----------------------------------------|----------|---------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| lake.tiering.auto-expire-snapshot       | Boolean  | false   | If true, snapshot expiration will be triggered automatically when tiering service commits to the datalake, even if `table.datalake.auto-expire-snapshot` is false. |
+This enables Fluss to store only recent data while the lake serves as a complete historical archive.

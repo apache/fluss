@@ -8,7 +8,7 @@ sidebar_position: 1
 ## Introduction
 
 [Apache Paimon](https://paimon.apache.org/) innovatively combines a lake format with an LSM (Log-Structured Merge-tree) structure, bringing efficient updates into the lake architecture. 
-To integrate Fluss with Paimon, you must enable lakehouse storage and configure Paimon as the lakehouse storage. For more details, see [Enable Lakehouse Storage](maintenance/tiered-storage/lakehouse-storage.md#enable-lakehouse-storage).
+To integrate Fluss with Paimon, you must enable lakehouse storage and configure Paimon as the lakehouse storage. For more details, see [Deploying Streaming Lakehouse](../../install-deploy/deploying-streaming-lakehouse.md).
 
 ## Version Compatibility
 
@@ -19,7 +19,7 @@ To integrate Fluss with Paimon, you must enable lakehouse storage and configure 
 
 ## Configure Paimon as LakeHouse Storage
 
-For general guidance on configuring Paimon as the lakehouse storage, you can refer to [Lakehouse Storage](maintenance/tiered-storage/lakehouse-storage.md) documentation. When starting the tiering service, make sure to use Paimon-specific configurations as parameters.
+For general guidance on configuring Paimon as the lakehouse storage, you can refer to [Deploying Streaming Lakehouse](../../install-deploy/deploying-streaming-lakehouse.md) documentation. When starting the tiering service, make sure to use Paimon-specific configurations as parameters.
 
 When a table is created or altered with the option `'table.datalake.enabled' = 'true'`, Fluss will automatically create a corresponding Paimon table with the same table path.
 The schema of the Paimon table matches that of the Fluss table, except for the addition of three system columns at the end: `__bucket`, `__offset`, and `__timestamp`.  
