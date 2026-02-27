@@ -20,6 +20,7 @@ package org.apache.fluss.flink.source;
 import org.apache.fluss.client.initializer.OffsetsInitializer;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.source.deserializer.BinlogDeserializationSchema;
+import org.apache.fluss.flink.source.reader.LeaseContext;
 import org.apache.fluss.flink.utils.FlinkConnectorOptionsUtils;
 import org.apache.fluss.flink.utils.FlinkConversions;
 import org.apache.fluss.metadata.TablePath;
@@ -130,7 +131,7 @@ public class BinlogFlinkTableSource implements ScanTableSource {
                         new BinlogDeserializationSchema(),
                         streaming,
                         partitionFilters,
-                        null);
+                        LeaseContext.DEFAULT);
 
         return SourceProvider.of(source);
     }
