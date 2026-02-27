@@ -22,7 +22,7 @@ This chart deploys an Apache Fluss cluster on Kubernetes, following Helm best pr
 It requires a Zookeeper ensemble to be running in the same Kubernetes cluster. In future releases, we may add support for an embedded Zookeeper cluster.
 
 
-## Development environment 
+## Development environment
 
 | component                                                                      | version |
 | ------------------------------------------------------------------------------ | ------- |
@@ -33,7 +33,7 @@ It requires a Zookeeper ensemble to be running in the same Kubernetes cluster. I
 | [Apache Fluss](https://fluss.apache.org/docs/)                                 | v0.10.0-incubating  |
 
 
-## Image requirements 
+## Image requirements
 
 A container image for Fluss is available on DockerHub as `fluss/fluss`. You can use it directly or build your own from this repo. To use your own image you need to build the project with [Maven](https://fluss.apache.org/community/dev/building/) and build it with Docker.
 
@@ -97,6 +97,46 @@ Important Fluss options surfaced by the chart:
 ### Zookeeper and storage
 - zookeeper.address must point to a reachable ensemble.
 - data.dir defaults to /tmp/fluss/data; use a PVC if persistence.enabled=true.
+
+### Security configuration
+
+The authentication methods are configured through `security` values block.
+
+```yaml
+listeners:
+  internal:
+    port: 9123
+  client:
+    port: 9124
+
+security:
+  tls:
+    existingSecret: ""
+    certFileKey: tls.crt
+    keyFileKey: tls.key
+    caFileKey: ca.crt
+
+  client:
+    tls:
+      enabled: false
+      clientAuth: none
+    sasl:
+      mechanism: plain
+      plain:
+        users:
+          - username: client-user
+            password: client-password
+
+  internal:
+    tls:
+      enabled: false
+      clientAuth: required
+    sasl:
+      mechanism: plain
+      plain:
+        username: internal-user
+        password: internal-password
+```
 
 ### Private Docker Registry
 
