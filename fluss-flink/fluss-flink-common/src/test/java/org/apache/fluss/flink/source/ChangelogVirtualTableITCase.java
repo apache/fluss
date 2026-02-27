@@ -40,13 +40,10 @@ import org.apache.flink.table.api.EnvironmentSettings;
 import org.apache.flink.table.api.TableResult;
 import org.apache.flink.table.api.bridge.java.StreamTableEnvironment;
 import org.apache.flink.table.api.config.ExecutionConfigOptions;
-import org.apache.flink.test.util.AbstractTestBase;
 import org.apache.flink.test.util.MiniClusterWithClientResource;
 import org.apache.flink.types.Row;
 import org.apache.flink.util.CloseableIterator;
-import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
@@ -61,16 +58,16 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
-import static org.apache.flink.runtime.testutils.CommonTestUtils.waitUntilCondition;
 import static org.apache.fluss.flink.FlinkConnectorOptions.BOOTSTRAP_SERVERS;
 import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.collectRowsWithTimeout;
 import static org.apache.fluss.flink.utils.FlinkTestBase.writeRows;
 import static org.apache.fluss.server.testutils.FlussClusterExtension.BUILTIN_DATABASE;
 import static org.apache.fluss.testutils.DataTestUtils.row;
+import static org.apache.fluss.testutils.common.CommonTestUtils.waitUntil;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Integration test for $changelog virtual table functionality. */
-abstract class ChangelogVirtualTableITCase extends AbstractTestBase {
+abstract class ChangelogVirtualTableITCase {
 
     protected static final ManualClock CLOCK = new ManualClock();
     @TempDir public static File checkpointDir;
@@ -88,14 +85,17 @@ abstract class ChangelogVirtualTableITCase extends AbstractTestBase {
     static final String DEFAULT_DB = "test_changelog_db";
     protected StreamExecutionEnvironment execEnv;
     protected StreamTableEnvironment tEnv;
-    protected static Connection conn;
-    protected static Admin admin;
-    static MiniClusterWithClientResource cluster;
+    protected Connection conn;
+    protected Admin admin;
+    protected Configuration clientConf;
+    protected MiniClusterWithClientResource cluster;
 
-    protected static Configuration clientConf;
+    @BeforeEach
+    protected void beforeEach() throws Exception {
+        clientConf = FLUSS_CLUSTER_EXTENSION.getClientConfig();
+        conn = ConnectionFactory.createConnection(clientConf);
+        admin = conn.getAdmin();
 
-    @BeforeAll
-    protected static void beforeAll() throws Exception {
         cluster =
                 new MiniClusterWithClientResource(
                         new MiniClusterResourceConfiguration.Builder()
@@ -104,13 +104,7 @@ abstract class ChangelogVirtualTableITCase extends AbstractTestBase {
                                 .setNumberSlotsPerTaskManager(2)
                                 .build());
         cluster.before();
-        clientConf = FLUSS_CLUSTER_EXTENSION.getClientConfig();
-        conn = ConnectionFactory.createConnection(clientConf);
-        admin = conn.getAdmin();
-    }
 
-    @BeforeEach
-    void before() {
         // Initialize Flink environment
         tEnv = initTableEnvironment(null);
         // reset clock before each test
@@ -121,13 +115,6 @@ abstract class ChangelogVirtualTableITCase extends AbstractTestBase {
     void after() throws Exception {
         tEnv.useDatabase(BUILTIN_DATABASE);
         tEnv.executeSql(String.format("drop database %s cascade", DEFAULT_DB));
-    }
-
-    @AfterAll
-    protected static void afterAll() throws Exception {
-        admin.close();
-        cluster.after();
-        conn.close();
     }
 
     // init table environment from savepointPath
@@ -151,7 +138,7 @@ abstract class ChangelogVirtualTableITCase extends AbstractTestBase {
                         CATALOG_NAME, BOOTSTRAP_SERVERS.key(), bootstrapServers));
         tEnv.executeSql("use catalog " + CATALOG_NAME);
         tEnv.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 1);
-        tEnv.executeSql("create database " + DEFAULT_DB);
+        tEnv.executeSql("create database if not exists " + DEFAULT_DB);
         tEnv.useDatabase(DEFAULT_DB);
 
         return tEnv;
@@ -472,7 +459,7 @@ abstract class ChangelogVirtualTableITCase extends AbstractTestBase {
                                 false,
                                 savepointDir.getAbsolutePath(),
                                 SavepointFormatType.CANONICAL)
-                        .get();
+                        .get(60, TimeUnit.SECONDS);
 
         // Init env with savepoint Path
         tEnv = initTableEnvironment(savepointPath);
@@ -554,9 +541,9 @@ abstract class ChangelogVirtualTableITCase extends AbstractTestBase {
         return config;
     }
 
-    private static void waitForCheckpoint(JobID jobId) throws Exception {
+    protected static void waitForCheckpoint(JobID jobId) {
         String jobIdStr = jobId.toHexString();
-        waitUntilCondition(
+        waitUntil(
                 () -> {
                     File jobCheckpointDir = new File(checkpointDir, jobIdStr);
                     if (!jobCheckpointDir.exists()) {
@@ -566,6 +553,8 @@ abstract class ChangelogVirtualTableITCase extends AbstractTestBase {
                             jobCheckpointDir.listFiles(
                                     f -> f.isDirectory() && f.getName().startsWith("chk-"));
                     return checkpoints != null && checkpoints.length > 0;
-                });
+                },
+                Duration.ofSeconds(60),
+                "Timeout waiting for checkpoint for job " + jobIdStr);
     }
 }
