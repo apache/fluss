@@ -1,0 +1,268 @@
+#
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+
+suite: plain-sasl-config
+templates:
+  - templates/secret-jaas-config.yaml
+  - templates/sts-coordinator.yaml
+tests:
+  - it: renders JAAS secret and protocol map for plain mechanisms
+    template: templates/secret-jaas-config.yaml
+    set:
+      security.client.sasl.mechanism: plain
+      security.client.sasl.plain.users:
+        - username: client-user
+          password: client-pass
+      security.internal.sasl.mechanism: plain
+      security.internal.sasl.plain.username: internal-user
+      security.internal.sasl.plain.password: internal-pass
+    asserts:
+      - hasDocuments:
+          count: 1
+      - matchRegex:
+          path: stringData["jaas.conf"]
+          pattern: 'internal\.FlussServer\s*\{'
+      - matchRegex:
+          path: stringData["jaas.conf"]
+          pattern: 'client\.FlussServer\s*\{'
+  - it: writes SASL protocol map and enabled mechanisms
+    template: templates/sts-coordinator.yaml
+    set:
+      security.client.sasl.mechanism: plain
+      security.client.sasl.plain.users:
+        - username: client-user
+          password: client-pass
+      security.internal.sasl.mechanism: plain
+      security.internal.sasl.plain.username: internal-user
+      security.internal.sasl.plain.password: internal-pass
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'security\.protocol\.map: INTERNAL:SASL,CLIENT:SASL'
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'security\.sasl\.enabled\.mechanisms: PLAIN'
+
+---
+
+suite: pass-through-mechanisms
+templates:
+  - templates/sts-tablet.yaml
+tests:
+  - it: accepts scram and oauthbearer mechanisms
+    set:
+      security.client.sasl.mechanism: oauthbearer
+      security.internal.sasl.mechanism: scram
+      security.internal.sasl.scram.sha: 512
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'security\.sasl\.enabled\.mechanisms: SCRAM-SHA-512,OAUTHBEARER'
+
+---
+
+suite: plain-validation
+templates:
+  - templates/secret-jaas-config.yaml
+tests:
+  - it: fails when client plain users are empty
+    set:
+      security.client.sasl.mechanism: plain
+      security.client.sasl.plain.users: []
+    asserts:
+      - failedTemplate:
+          errorMessage: security.client.sasl.plain.users must contain at least one user when security.client.sasl.mechanism is plain
+
+---
+
+suite: security-disabled-defaults
+templates:
+  - templates/secret-jaas-config.yaml
+  - templates/sts-coordinator.yaml
+tests:
+  - it: does not render JAAS secret by default
+    template: templates/secret-jaas-config.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+  - it: does not render SASL settings or volumes by default
+    template: templates/sts-coordinator.yaml
+    asserts:
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'security\.sasl\.enabled\.mechanisms:'
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'client\.security\.protocol: SASL'
+      - notContains:
+          path: spec.template.spec.volumes
+          content:
+            name: sasl-config
+
+---
+
+suite: plain-internal-only
+templates:
+  - templates/secret-jaas-config.yaml
+  - templates/sts-coordinator.yaml
+tests:
+  - it: renders internal server and client JAAS blocks only
+    template: templates/secret-jaas-config.yaml
+    set:
+      security.client.sasl.mechanism: none
+      security.internal.sasl.mechanism: plain
+      security.internal.sasl.plain.username: internal-user
+      security.internal.sasl.plain.password: internal-pass
+    asserts:
+      - hasDocuments:
+          count: 1
+      - matchRegex:
+          path: stringData["jaas.conf"]
+          pattern: 'internal\.FlussServer\s*\{'
+      - matchRegex:
+          path: stringData["jaas.conf"]
+          pattern: 'FlussClient\s*\{'
+      - notMatchRegex:
+          path: stringData["jaas.conf"]
+          pattern: 'client\.FlussServer\s*\{'
+  - it: renders internal SASL client properties and mounts secret
+    template: templates/sts-coordinator.yaml
+    set:
+      security.client.sasl.mechanism: none
+      security.internal.sasl.mechanism: plain
+      security.internal.sasl.plain.username: internal-user
+      security.internal.sasl.plain.password: internal-pass
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'security\.protocol\.map: INTERNAL:SASL,CLIENT:PLAINTEXT'
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'security\.sasl\.enabled\.mechanisms: PLAIN'
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'client\.security\.protocol: SASL'
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'client\.security\.sasl\.mechanism: PLAIN'
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'FLUSS_ENV_JAVA_OPTS="-Djava\.security\.auth\.login\.config=/etc/fluss/conf/jaas\.conf \$\{FLUSS_ENV_JAVA_OPTS\}"'
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: sasl-config
+            secret:
+              secretName: RELEASE-NAME-fluss-sasl-jaas-config
+
+---
+
+suite: plain-client-only
+templates:
+  - templates/secret-jaas-config.yaml
+  - templates/sts-coordinator.yaml
+tests:
+  - it: renders client JAAS block only
+    template: templates/secret-jaas-config.yaml
+    set:
+      security.client.sasl.mechanism: plain
+      security.client.sasl.plain.users:
+        - username: app
+          password: app-pass
+      security.internal.sasl.mechanism: none
+    asserts:
+      - hasDocuments:
+          count: 1
+      - matchRegex:
+          path: stringData["jaas.conf"]
+          pattern: 'client\.FlussServer\s*\{'
+      - notMatchRegex:
+          path: stringData["jaas.conf"]
+          pattern: 'internal\.FlussServer\s*\{'
+      - notMatchRegex:
+          path: stringData["jaas.conf"]
+          pattern: 'FlussClient\s*\{'
+  - it: does not render internal client sasl properties
+    template: templates/sts-coordinator.yaml
+    set:
+      security.client.sasl.mechanism: plain
+      security.client.sasl.plain.users:
+        - username: app
+          password: app-pass
+      security.internal.sasl.mechanism: none
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'security\.protocol\.map: INTERNAL:PLAINTEXT,CLIENT:SASL'
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'security\.sasl\.enabled\.mechanisms: PLAIN'
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'client\.security\.protocol: SASL'
+
+---
+
+suite: mechanism-and-scram-validation
+templates:
+  - templates/sts-tablet.yaml
+tests:
+  - it: fails for invalid client mechanism value
+    set:
+      security.client.sasl.mechanism: bogus
+    asserts:
+      - failedTemplate:
+          errorMessage: 'security.client.sasl.mechanism must be one of: none, plain, scram, oauthbearer'
+  - it: fails for invalid internal scram sha
+    set:
+      security.internal.sasl.mechanism: scram
+      security.internal.sasl.scram.sha: 1024
+    asserts:
+      - failedTemplate:
+          errorMessage: security.internal.sasl.scram.sha must be 256 or 512
+
+---
+
+suite: mechanism-dedup-and-path
+templates:
+  - templates/sts-tablet.yaml
+tests:
+  - it: deduplicates enabled mechanisms when both listeners use plain
+    set:
+      security.client.sasl.mechanism: plain
+      security.client.sasl.plain.users:
+        - username: app
+          password: app-pass
+      security.internal.sasl.mechanism: plain
+      security.internal.sasl.plain.username: internal-user
+      security.internal.sasl.plain.password: internal-pass
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'security\.sasl\.enabled\.mechanisms: PLAIN'
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'security\.sasl\.enabled\.mechanisms: PLAIN,PLAIN'
+  - it: writes server yaml using expected destination path
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'cp /opt/conf/server\.yaml \$FLUSS_HOME/conf'
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: '>> \$FLUSS_HOME/conf/server\.yaml'

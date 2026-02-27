@@ -58,6 +58,52 @@ listeners:
   client:
     port: 9124
 
+# Fluss security configurations
+security:
+  tls:
+    existingSecret: ""
+    certFileKey: tls.crt
+    keyFileKey: tls.key
+    caFileKey: ca.crt
+
+  client:
+    tls:
+      enabled: false
+      # none | required
+      clientAuth: none
+    sasl:
+      # none | plain | scram | oauthbearer
+      mechanism: none
+      plain:
+        users: []
+      scram:
+        # 256 | 512
+        sha: 256
+        users: []
+      oauth:
+        tokenEndpointUrl: ""
+        subClaimName: sub
+
+  internal:
+    tls:
+      enabled: false
+      # none | required
+      clientAuth: required
+    sasl:
+      # none | plain | scram | oauthbearer
+      mechanism: none
+      plain:
+        username: ""
+        password: ""
+      scram:
+        # 256 | 512
+        sha: 256
+        username: ""
+        password: ""
+      oauth:
+        tokenEndpointUrl: ""
+        subClaimName: sub
+
 resources: {}
   # We usually recommend not to specify default resources and to leave this as a conscious
   # choice for the user. This also increases chances charts run on environments with little
