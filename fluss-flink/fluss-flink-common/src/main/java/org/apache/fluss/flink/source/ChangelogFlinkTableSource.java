@@ -20,6 +20,7 @@ package org.apache.fluss.flink.source;
 import org.apache.fluss.client.initializer.OffsetsInitializer;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.source.deserializer.ChangelogDeserializationSchema;
+import org.apache.fluss.flink.source.reader.LeaseContext;
 import org.apache.fluss.flink.utils.FlinkConnectorOptionsUtils;
 import org.apache.fluss.flink.utils.FlinkConversions;
 import org.apache.fluss.metadata.TableDescriptor;
@@ -167,7 +168,7 @@ public class ChangelogFlinkTableSource implements ScanTableSource {
                         new ChangelogDeserializationSchema(),
                         streaming,
                         partitionFilters,
-                        null); // Lake source not supported
+                        LeaseContext.DEFAULT); // Lake source not supported
 
         return SourceProvider.of(source);
     }
