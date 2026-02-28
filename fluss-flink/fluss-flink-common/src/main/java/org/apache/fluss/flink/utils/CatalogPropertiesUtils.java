@@ -17,6 +17,8 @@
 
 package org.apache.fluss.flink.utils;
 
+import org.apache.fluss.shaded.guava32.com.google.common.collect.ImmutableSet;
+
 import org.apache.flink.table.api.Schema;
 import org.apache.flink.table.api.TableException;
 import org.apache.flink.table.catalog.Catalog;
@@ -28,9 +30,11 @@ import org.apache.flink.table.types.logical.LogicalType;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.function.Function;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -79,6 +83,84 @@ public class CatalogPropertiesUtils {
 
     private static final String COMMENT = "comment";
     private static final Pattern SCHEMA_COLUMN_NAME_SUFFIX = Pattern.compile("\\d+\\.name");
+    private static final Pattern SCHEMA_COLUMN_EXPR_SUFFIX = Pattern.compile("\\d+\\." + EXPR);
+    private static final Pattern SCHEMA_COLUMN_DATATYPE_SUFFIX =
+            Pattern.compile("\\d+\\." + DATA_TYPE);
+    private static final Set<Pattern> NON_PHYSICAL_KEY_PATTERNS =
+            ImmutableSet.of(
+                    SCHEMA_COLUMN_NAME_SUFFIX,
+                    SCHEMA_COLUMN_EXPR_SUFFIX,
+                    SCHEMA_COLUMN_DATATYPE_SUFFIX);
+
+    public static String getWatermarkRowtimeKey(int index) {
+        return compoundKey(SCHEMA, WATERMARK, index, WATERMARK_ROWTIME);
+    }
+
+    public static String getWatermarkExprKey(int index) {
+        return compoundKey(SCHEMA, WATERMARK, index, WATERMARK_STRATEGY_EXPR);
+    }
+
+    public static String getWatermarkDataTypeKey(int index) {
+        return compoundKey(SCHEMA, WATERMARK, index, WATERMARK_STRATEGY_DATA_TYPE);
+    }
+
+    /**
+     * Check if the given key is a non-physical column key (computed column or watermark).
+     *
+     * @param key The key to check
+     * @return true if the key represents a non-physical column property
+     */
+    public static boolean isNonPhysicalKey(String key) {
+        if (!key.startsWith(SCHEMA)) {
+            return false;
+        }
+        String suffix = key.substring(SCHEMA.length() + 1);
+        for (Pattern pattern : NON_PHYSICAL_KEY_PATTERNS) {
+            if (pattern.matcher(suffix).matches()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public static Map<String, Integer> nonPhysicalColumns(
+            Map<String, String> tableOptions, List<String> physicalColumns) {
+        Map<String, Integer> nonPhysicalColumnIndex = new HashMap<>();
+        for (Map.Entry<String, String> entry : tableOptions.entrySet()) {
+            if (isColumnNameKey(entry.getKey()) && !physicalColumns.contains(entry.getValue())) {
+                String key = entry.getKey();
+                int index =
+                        Integer.parseInt(
+                                key.substring(
+                                        SCHEMA.length() + 1,
+                                        key.indexOf(".", SCHEMA.length() + 1)));
+                nonPhysicalColumnIndex.put(entry.getValue(), index);
+            }
+        }
+        return nonPhysicalColumnIndex;
+    }
+
+    /**
+     * Serialize all non-physical columns (computed columns and watermarks) from the resolved
+     * schema.
+     *
+     * @param schema The resolved schema
+     * @param watermarkSpecs The watermark specifications
+     * @return A map of serialized non-physical column properties
+     */
+    public static Map<String, String> serializeNonPhysicalColumns(
+            org.apache.flink.table.catalog.ResolvedSchema schema,
+            List<WatermarkSpec> watermarkSpecs) {
+        Map<String, String> serialized = new HashMap<>();
+
+        // Serialize computed columns
+        serializeComputedColumns(serialized, schema.getColumns());
+
+        // Serialize watermarks
+        serializeWatermarkSpecs(serialized, watermarkSpecs);
+
+        return serialized;
+    }
 
     public static Map<String, String> deserializeOptions(Map<String, String> map) {
         return excludeByPrefix(map, SCHEMA + SEPARATOR);

@@ -28,6 +28,7 @@ import org.apache.fluss.flink.adapter.CatalogTableAdapter;
 import org.apache.fluss.flink.lake.LakeFlinkCatalog;
 import org.apache.fluss.flink.procedure.ProcedureManager;
 import org.apache.fluss.flink.utils.CatalogExceptionUtils;
+import org.apache.fluss.flink.utils.CatalogPropertiesUtils;
 import org.apache.fluss.flink.utils.FlinkConversions;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.PartitionInfo;
@@ -491,11 +492,63 @@ public class FlinkCatalog extends AbstractCatalog {
             throws TableNotExistException, CatalogException {
         TablePath tablePath = toTablePath(objectPath);
 
-        List<TableChange> flussTableChanges =
-                tableChanges.stream()
-                        .filter(Objects::nonNull)
-                        .flatMap(change -> FlinkConversions.toFlussTableChanges(change).stream())
-                        .collect(Collectors.toList());
+        TableInfo tableInfo;
+        try {
+            tableInfo = admin.getTableInfo(tablePath).get();
+        } catch (Exception e) {
+            Throwable t = ExceptionUtils.stripExecutionException(e);
+            if (isTableNotExist(t)) {
+                throw new TableNotExistException(getName(), objectPath);
+            }
+            throw new CatalogException(
+                    String.format("Failed to get table %s in %s", objectPath, getName()), t);
+        }
+
+        Map<String, Integer> oldTableNonPhysicalColumnIndex =
+                CatalogPropertiesUtils.nonPhysicalColumns(
+                        tableInfo.getCustomProperties().toMap(),
+                        tableInfo.getSchema().getColumnNames());
+
+        // Serialize non-physical columns from new table definition
+        ResolvedCatalogBaseTable<?> resolvedNewTable = (ResolvedCatalogBaseTable<?>) newTable;
+        Map<String, String> newSchemaOptions =
+                CatalogPropertiesUtils.serializeNonPhysicalColumns(
+                        resolvedNewTable.getResolvedSchema(),
+                        resolvedNewTable.getResolvedSchema().getWatermarkSpecs());
+
+        List<TableChange> flussTableChanges = new ArrayList<>();
+
+        Map<String, String> oldCustomProps = tableInfo.getCustomProperties().toMap();
+        // Remove non-physical columns that are deleted
+        oldCustomProps.forEach(
+                (key, value) -> {
+                    if (CatalogPropertiesUtils.isNonPhysicalKey(key)
+                            && !newSchemaOptions.containsKey(key)) {
+                        flussTableChanges.add(TableChange.reset(key));
+                    }
+                });
+
+        // Add or modify non-physical columns
+        newSchemaOptions.forEach(
+                (key, value) -> {
+                    if (!oldCustomProps.containsKey(key)
+                            || !oldCustomProps.get(key).equals(value)) {
+                        flussTableChanges.add(TableChange.set(key, value));
+                    }
+                });
+
+        if (tableChanges != null) {
+            List<TableChange> changes =
+                    tableChanges.stream()
+                            .filter(Objects::nonNull)
+                            .flatMap(
+                                    change ->
+                                            FlinkConversions.toFlussTableChanges(
+                                                    change, oldTableNonPhysicalColumnIndex)
+                                                    .stream())
+                            .collect(Collectors.toList());
+            flussTableChanges.addAll(changes);
+        }
 
         // some connector options are table storage related, not allowed to alter
         for (TableChange change : flussTableChanges) {
