@@ -139,7 +139,8 @@ public class RemoteLogSegment {
                 && maxTimestamp == that.maxTimestamp
                 && Objects.equals(remoteLogSegmentId, that.remoteLogSegmentId)
                 && Objects.equals(physicalTablePath, that.physicalTablePath)
-                && Objects.equals(tableBucket, that.tableBucket);
+                && Objects.equals(tableBucket, that.tableBucket)
+                && Objects.equals(remoteLogDir, that.remoteLogDir);
     }
 
     @Override
@@ -151,7 +152,8 @@ public class RemoteLogSegment {
                 remoteLogStartOffset,
                 remoteLogEndOffset,
                 maxTimestamp,
-                segmentSizeInBytes);
+                segmentSizeInBytes,
+                remoteLogDir);
     }
 
     @Override
@@ -171,6 +173,8 @@ public class RemoteLogSegment {
                 + maxTimestamp
                 + ", segmentSizeInBytes="
                 + segmentSizeInBytes
+                + ", remoteLogDir="
+                + remoteLogDir
                 + '}';
     }
 
