@@ -147,6 +147,7 @@ public final class Replica {
 
     private final PhysicalTablePath physicalPath;
     private final TableBucket tableBucket;
+    private final FsPath remoteDataDir;
 
     private final LogManager logManager;
     private final LogTablet logTablet;
@@ -223,6 +224,7 @@ public final class Replica {
             FatalErrorHandler fatalErrorHandler,
             BucketMetricGroup bucketMetricGroup,
             TableInfo tableInfo,
+            FsPath remoteDataDir,
             Clock clock)
             throws Exception {
         this.physicalPath = physicalPath;
@@ -254,6 +256,7 @@ public final class Replica {
 
         this.logTablet = createLog(lazyHighWatermarkCheckpoint);
         this.logTablet.updateIsDataLakeEnabled(tableConfig.isDataLakeEnabled());
+        this.remoteDataDir = remoteDataDir;
         this.clock = clock;
         registerMetrics();
     }
@@ -386,6 +389,10 @@ public final class Replica {
 
     public LogFormat getLogFormat() {
         return logFormat;
+    }
+
+    public FsPath getRemoteDataDir() {
+        return remoteDataDir;
     }
 
     public void makeLeader(NotifyLeaderAndIsrData data) throws IOException {
@@ -905,9 +912,10 @@ public final class Replica {
             // instead of a separate class
             Supplier<Integer> bucketLeaderEpochSupplier = () -> leaderEpoch;
             Supplier<Integer> coordinatorEpochSupplier = () -> coordinatorEpoch;
+
+            FsPath remoteKvDir = FlussPaths.remoteKvDir(remoteDataDir);
             FsPath remoteKvTabletDir =
-                    FlussPaths.remoteKvTabletDir(
-                            snapshotContext.getRemoteKvDir(), physicalPath, tableBucket);
+                    FlussPaths.remoteKvTabletDir(remoteKvDir, physicalPath, tableBucket);
 
             kvTabletSnapshotTarget =
                     new KvTabletSnapshotTarget(

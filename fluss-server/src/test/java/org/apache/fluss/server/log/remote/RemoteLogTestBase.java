@@ -29,6 +29,7 @@ import org.apache.fluss.server.log.LogTablet;
 import org.apache.fluss.server.replica.Replica;
 import org.apache.fluss.server.replica.ReplicaTestBase;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
+import org.apache.fluss.utils.FlussPaths;
 
 import org.junit.jupiter.api.BeforeEach;
 
@@ -92,7 +93,7 @@ public class RemoteLogTestBase extends ReplicaTestBase {
     }
 
     protected static RemoteLogSegment copyLogSegmentToRemote(
-            LogTablet logTablet, RemoteLogStorage remoteLogStorage, int segmentIndex)
+            LogTablet logTablet, DefaultRemoteLogStorage remoteLogStorage, int segmentIndex)
             throws Exception {
         PhysicalTablePath tp = logTablet.getPhysicalTablePath();
         TableBucket tb = logTablet.getTableBucket();
@@ -119,6 +120,7 @@ public class RemoteLogTestBase extends ReplicaTestBase {
                         .segmentSizeInBytes(segment.getFileLogRecords().sizeInBytes())
                         .tableBucket(tb)
                         .physicalTablePath(tp)
+                        .remoteLogDir(remoteLogStorage.getDefaultRemoteLogDir())
                         .build();
 
         remoteLogStorage.copyLogSegmentFiles(remoteLogSegment, logSegmentFiles);
@@ -129,10 +131,11 @@ public class RemoteLogTestBase extends ReplicaTestBase {
         return new RemoteLogTablet(
                 logTablet.getPhysicalTablePath(),
                 logTablet.getTableBucket(),
-                conf.get(ConfigOptions.TABLE_LOG_TTL).toMillis());
+                conf.get(ConfigOptions.TABLE_LOG_TTL).toMillis(),
+                FlussPaths.remoteLogDir(conf));
     }
 
-    protected static List<RemoteLogSegment> createRemoteLogSegmentList(LogTablet logTablet) {
+    protected List<RemoteLogSegment> createRemoteLogSegmentList(LogTablet logTablet) {
         return logTablet.getSegments().stream()
                 .map(
                         segment -> {
@@ -146,6 +149,7 @@ public class RemoteLogTestBase extends ReplicaTestBase {
                                                 segment.getFileLogRecords().sizeInBytes())
                                         .tableBucket(logTablet.getTableBucket())
                                         .physicalTablePath(logTablet.getPhysicalTablePath())
+                                        .remoteLogDir(FlussPaths.remoteLogDir(conf))
                                         .build();
                             } catch (IOException e) {
                                 throw new RuntimeException(e);

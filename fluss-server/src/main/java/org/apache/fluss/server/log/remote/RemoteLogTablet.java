@@ -18,6 +18,7 @@
 package org.apache.fluss.server.log.remote;
 
 import org.apache.fluss.annotation.VisibleForTesting;
+import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metrics.MetricNames;
@@ -55,6 +56,8 @@ public class RemoteLogTablet {
     private final TableBucket tableBucket;
 
     private final PhysicalTablePath physicalTablePath;
+
+    private final FsPath remoteLogDir;
 
     /**
      * It contains all the segment-id to {@link RemoteLogSegment} mappings which did not delete in
@@ -102,12 +105,17 @@ public class RemoteLogTablet {
     private volatile boolean closed = false;
 
     public RemoteLogTablet(
-            PhysicalTablePath physicalTablePath, TableBucket tableBucket, long ttlMs) {
+            PhysicalTablePath physicalTablePath,
+            TableBucket tableBucket,
+            long ttlMs,
+            FsPath remoteLogDir) {
         this.tableBucket = tableBucket;
         this.physicalTablePath = physicalTablePath;
+        this.remoteLogDir = remoteLogDir;
         this.ttlMs = ttlMs;
         this.currentManifest =
-                new RemoteLogManifest(physicalTablePath, tableBucket, new ArrayList<>());
+                new RemoteLogManifest(
+                        physicalTablePath, tableBucket, new ArrayList<>(), remoteLogDir);
         reset();
     }
 
@@ -258,6 +266,10 @@ public class RemoteLogTablet {
                 : OptionalLong.of(remoteLogEndOffset);
     }
 
+    public FsPath getRemoteLogDir() {
+        return remoteLogDir;
+    }
+
     /**
      * Gets the snapshot of current remote log segment manifest. The snapshot including the exists
      * remoteLogSegment already committed.
@@ -349,7 +361,8 @@ public class RemoteLogTablet {
                             new RemoteLogManifest(
                                     physicalTablePath,
                                     tableBucket,
-                                    new ArrayList<>(idToRemoteLogSegment.values()));
+                                    new ArrayList<>(idToRemoteLogSegment.values()),
+                                    remoteLogDir);
                 });
     }
 

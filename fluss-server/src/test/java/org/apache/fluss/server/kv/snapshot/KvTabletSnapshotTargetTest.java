@@ -404,7 +404,9 @@ class KvTabletSnapshotTargetTest {
         FsPath remoteKvTabletDir = FsPath.fromLocalFile(kvTabletDir.toFile());
 
         // Create a failing ZK client that throws exception to simulate ZK query failure
-        ZooKeeperClient failingZkClient = createFailingZooKeeperClient();
+        Configuration conf = new Configuration();
+        conf.set(ConfigOptions.REMOTE_DATA_DIR, remoteKvTabletDir.toString());
+        ZooKeeperClient failingZkClient = createFailingZooKeeperClient(conf);
 
         CompletedKvSnapshotCommitter failingCommitter =
                 (snapshot, coordinatorEpoch, bucketLeaderEpoch) -> {
@@ -575,16 +577,16 @@ class KvTabletSnapshotTargetTest {
                 snapshotFailType);
     }
 
-    private ZooKeeperClient createFailingZooKeeperClient() {
+    private ZooKeeperClient createFailingZooKeeperClient(Configuration conf) {
         // Create a ZooKeeperClient that throws exception on getTableBucketSnapshot
-        return new FailingZooKeeperClient();
+        return new FailingZooKeeperClient(conf);
     }
 
     private static class FailingZooKeeperClient extends ZooKeeperClient {
 
-        public FailingZooKeeperClient() {
+        public FailingZooKeeperClient(Configuration conf) {
             // Create a new ZooKeeperClient using ZooKeeperUtils.startZookeeperClient
-            super(createCuratorFrameworkWrapper(), new Configuration());
+            super(createCuratorFrameworkWrapper(), conf);
         }
 
         private static CuratorFrameworkWithUnhandledErrorListener createCuratorFrameworkWrapper() {
