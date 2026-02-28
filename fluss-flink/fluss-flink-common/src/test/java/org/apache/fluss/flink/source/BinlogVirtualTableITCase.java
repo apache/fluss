@@ -113,6 +113,22 @@ abstract class BinlogVirtualTableITCase {
         CLOCK.advanceTime(-CLOCK.milliseconds(), TimeUnit.MILLISECONDS);
     }
 
+    @AfterEach
+    protected void afterEach() throws Exception {
+        if (cluster != null) {
+            cluster.after();
+            cluster = null;
+        }
+        if (admin != null) {
+            admin.close();
+            admin = null;
+        }
+        if (conn != null) {
+            conn.close();
+            conn = null;
+        }
+    }
+
     // init table environment from savepointPath
     private StreamTableEnvironment initTableEnvironment(@Nullable String savepointPath) {
         org.apache.flink.configuration.Configuration conf =

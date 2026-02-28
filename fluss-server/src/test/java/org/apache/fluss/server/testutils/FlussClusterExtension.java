@@ -67,7 +67,6 @@ import org.apache.fluss.server.zk.data.PartitionAssignment;
 import org.apache.fluss.server.zk.data.RemoteLogManifestHandle;
 import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.server.zk.data.TableRegistration;
-import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.clock.Clock;
 import org.apache.fluss.utils.clock.SystemClock;
 
@@ -83,7 +82,6 @@ import javax.annotation.Nullable;
 
 import java.io.File;
 import java.nio.file.Files;
-import java.nio.file.Paths;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -94,8 +92,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
 
+import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newDropDatabaseRequest;
+import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newDropTableRequest;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeNotifyBucketLeaderAndIsr;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeStopBucketReplica;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toServerNode;
@@ -179,33 +180,25 @@ public final class FlussClusterExtension
 
     @Override
     public void afterEach(ExtensionContext extensionContext) throws Exception {
-        String defaultDb = BUILTIN_DATABASE;
-        // TODO: we need to cleanup all zk nodes, including the assignments,
-        //  but currently, we don't have a good way to do it
-        if (metadataManager != null) {
-            // drop all database and tables.
-            List<String> databases = metadataManager.listDatabases();
-            for (String database : databases) {
-                if (!database.equals(defaultDb)) {
-                    metadataManager.dropDatabase(database, true, true);
-                    // delete the data dirs
-                    for (int serverId : tabletServers.keySet()) {
-                        String dataDir = getDataDir(serverId);
-                        FileUtils.deleteDirectoryQuietly(Paths.get(dataDir, database).toFile());
-                    }
+        List<String> dbs = metadataManager.listDatabases();
+        CoordinatorGateway coordinatorGateway = newCoordinatorClient();
+        List<CompletableFuture<?>> dropFutures = new ArrayList<>();
+        for (String db : dbs) {
+            if (BUILTIN_DATABASE.equals(db)) {
+                // if it's built-in database, we just drop all tables in it but not drop the
+                // database itself.
+                List<String> tables = metadataManager.listTables(BUILTIN_DATABASE);
+                for (String table : tables) {
+                    dropFutures.add(
+                            coordinatorGateway.dropTable(
+                                    newDropTableRequest(BUILTIN_DATABASE, table, true)));
                 }
-            }
-            List<String> tables = metadataManager.listTables(defaultDb);
-            for (String table : tables) {
-                metadataManager.dropTable(TablePath.of(defaultDb, table), true);
+            } else {
+                dropFutures.add(
+                        coordinatorGateway.dropDatabase(newDropDatabaseRequest(db, true, true)));
             }
         }
-
-        // TODO we need to drop these table by dropTable Event instead of manual clear table
-        // metadata.
-        for (TabletServer tabletServer : tabletServers.values()) {
-            tabletServer.getMetadataCache().clearTableMetadata();
-        }
+        CompletableFuture.allOf(dropFutures.toArray(new CompletableFuture[0])).join();
     }
 
     public void start() throws Exception {
