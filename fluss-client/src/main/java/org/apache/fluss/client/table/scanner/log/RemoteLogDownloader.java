@@ -141,13 +141,15 @@ public class RemoteLogDownloader implements Closeable {
      * to fetch.
      */
     void fetchOnce() throws Exception {
-        // blocks until there is capacity (the fetched file is consumed)
-        prefetchSemaphore.acquire();
-
-        // wait until there is a remote fetch request
+        // get a request without holding capacity
         RemoteLogDownloadRequest request = segmentsToFetch.poll(pollTimeout, TimeUnit.MILLISECONDS);
         if (request == null) {
-            prefetchSemaphore.release();
+            return;
+        }
+
+        // only start work if capacity exists; otherwise put it back
+        if (!prefetchSemaphore.tryAcquire()) {
+            segmentsToFetch.add(request);
             return;
         }
 
@@ -166,16 +168,16 @@ public class RemoteLogDownloader implements Closeable {
                     .whenComplete(
                             (bytes, throwable) -> {
                                 if (throwable != null) {
-                                    LOG.error(
-                                            "Failed to download remote log segment file {}.",
-                                            fsPathAndFileName.getFileName(),
-                                            ExceptionUtils.stripExecutionException(throwable));
                                     // release the semaphore for the failed request
                                     prefetchSemaphore.release();
                                     // add back the request to the queue,
                                     // so we do not complete the request.future here
                                     segmentsToFetch.add(request);
                                     scannerMetricGroup.remoteFetchErrorCount().inc();
+                                    LOG.error(
+                                            "Failed to download remote log segment file {}.",
+                                            fsPathAndFileName.getFileName(),
+                                            ExceptionUtils.stripExecutionException(throwable));
                                 } else {
                                     LOG.info(
                                             "Successfully downloaded remote log segment file {} to local cost {} ms.",
