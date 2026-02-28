@@ -88,11 +88,27 @@ The following merge engines are supported:
 4. [Aggregation Merge Engine](/table-design/merge-engines/aggregation.md)
 
 
-## Changelog Generation
+## Change Data Feed
 
-Fluss will capture the changes when inserting, updating, deleting records on the Primary Key Table, which is known as
-the changelog. Downstream consumers can directly consume the changelog to obtain the changes in the table. For example,
-consider the following primary key table in Fluss:
+Fluss automatically captures row-level changes (inserts, updates, and deletes) on Primary Key Tables, making this **change data** available for downstream consumption. This capability, commonly known as **Change Data Feed**, enables powerful use cases such as:
+
+- **Real-time data synchronization** to downstream systems
+- **Incremental ETL pipelines** that process only changed data
+- **Audit logging** and compliance tracking
+- **Event-driven architectures** with change notifications
+
+### Accessing Change Data via Virtual Tables
+
+Fluss provides two virtual tables to consume change data in different formats:
+
+| Virtual Table | Description |
+|---------------|-------------|
+| [`$changelog`](/table-design/virtual-tables.md#changelog-table) | Raw changelog stream with `insert`, `update_before`, `update_after`, and `delete` change types |
+| [`$binlog`](/table-design/virtual-tables.md#binlog-table) | Binlog format with `before` and `after` row images in a single record |
+
+### Example: Observing Change Data
+
+Consider the following primary key table in Fluss:
 
 ```sql title="Flink SQL"
 CREATE TABLE T
@@ -118,25 +134,50 @@ INSERT INTO T (k, v1, v2) VALUES (1, 4.0, 'banana');
 
 -- delete the record with primary key k=1
 DELETE FROM T WHERE k = 1;
+```
 
--- set to streaming mode to observe the changelogs
+#### Using `$changelog`
+
+Query the changelog virtual table to see all row-level changes with metadata:
+
+```sql title="Flink SQL"
 SET execution.runtime-mode = streaming;
-SELECT * FROM T;
+SELECT * FROM T$changelog;
 ```
 
-Generate the following output in the Flink SQL CLI:
-
 ```
-+------+------+------+--------+
-| op   | k    | v1   | v2     |
-| ---- | ---- | ---- | ------ |
-| +I   | 1    | 2.0  | apple  |
-| -U   | 1    | 2.0  | apple  |
-| +U   | 1    | 4.0  | banana |
-| -D   | 1    | 4.0  | banana |
-+------+------+------+--------+
++---------------+-------------+---------------------+---+-----+--------+
+| _change_type  | _log_offset | _commit_timestamp   | k | v1  | v2     |
++---------------+-------------+---------------------+---+-----+--------+
+| insert        |           0 | 2024-01-15 10:30:00 | 1 | 2.0 | apple  |
+| update_before |           1 | 2024-01-15 10:35:00 | 1 | 2.0 | apple  |
+| update_after  |           2 | 2024-01-15 10:35:00 | 1 | 4.0 | banana |
+| delete        |           3 | 2024-01-15 10:40:00 | 1 | 4.0 | banana |
++---------------+-------------+---------------------+---+-----+--------+
 4 rows in set
 ```
+
+#### Using `$binlog`
+
+Query the binlog virtual table to see changes with before and after row images:
+
+```sql title="Flink SQL"
+SET execution.runtime-mode = streaming;
+SELECT * FROM T$binlog;
+```
+
+```
++--------------+-------------+---------------------+---------------------+---------------------+
+| _change_type | _log_offset | _commit_timestamp   | before              | after               |
++--------------+-------------+---------------------+---------------------+---------------------+
+| insert       |           0 | 2024-01-15 10:30:00 | NULL                | (1, 2.0, apple)     |
+| update       |           2 | 2024-01-15 10:35:00 | (1, 2.0, apple)     | (1, 4.0, banana)    |
+| delete       |           3 | 2024-01-15 10:40:00 | (1, 4.0, banana)    | NULL                |
++--------------+-------------+---------------------+---------------------+---------------------+
+3 rows in set
+```
+
+For detailed schema information, change types, and startup mode options, see the [Virtual Tables](/table-design/virtual-tables.md) documentation.
 
 ## Auto-Increment Column
 
