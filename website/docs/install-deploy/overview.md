@@ -116,9 +116,9 @@ We have listed them in the table below the figure.
                by query engines such as Flink, Spark, StarRocks, Trino.
             </td>
             <td>
-                <li>[Paimon](streaming-lakehouse/integrate-data-lakes/paimon.md)</li>
-                <li>[Iceberg](streaming-lakehouse/integrate-data-lakes/iceberg.md)</li>
-                <li>[Lance](streaming-lakehouse/integrate-data-lakes/lance.md)</li>
+                <li>[Paimon](streaming-lakehouse/integrate-data-lakes/formats/paimon.md)</li>
+                <li>[Iceberg](streaming-lakehouse/integrate-data-lakes/formats/iceberg.md)</li>
+                <li>[Lance](streaming-lakehouse/integrate-data-lakes/formats/lance.md)</li>
             </td>
         </tr>
         <tr>
