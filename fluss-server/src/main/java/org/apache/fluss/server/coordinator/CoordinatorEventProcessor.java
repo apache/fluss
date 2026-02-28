@@ -40,7 +40,9 @@ import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.exception.TabletServerNotAvailableException;
 import org.apache.fluss.exception.UnknownServerException;
 import org.apache.fluss.exception.UnknownTableOrBucketException;
+import org.apache.fluss.metadata.PartitionInfo;
 import org.apache.fluss.metadata.PhysicalTablePath;
+import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableBucketReplica;
@@ -90,6 +92,7 @@ import org.apache.fluss.server.coordinator.event.watcher.TableChangeWatcher;
 import org.apache.fluss.server.coordinator.event.watcher.TabletServerChangeWatcher;
 import org.apache.fluss.server.coordinator.lease.KvSnapshotLeaseManager;
 import org.apache.fluss.server.coordinator.rebalance.RebalanceManager;
+import org.apache.fluss.server.coordinator.remote.RemoteStorageCleaner;
 import org.apache.fluss.server.coordinator.statemachine.ReplicaLeaderElection.ControlledShutdownLeaderElection;
 import org.apache.fluss.server.coordinator.statemachine.ReplicaLeaderElection.ReassignmentLeaderElection;
 import org.apache.fluss.server.coordinator.statemachine.ReplicaStateMachine;
@@ -109,6 +112,7 @@ import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.BucketAssignment;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
+import org.apache.fluss.server.zk.data.PartitionRegistration;
 import org.apache.fluss.server.zk.data.RebalanceTask;
 import org.apache.fluss.server.zk.data.RemoteLogManifestHandle;
 import org.apache.fluss.server.zk.data.ServerTags;
@@ -244,8 +248,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
         this.internalListenerName = conf.getString(ConfigOptions.INTERNAL_LISTENER_NAME);
         this.rebalanceManager = new RebalanceManager(this, zooKeeperClient);
         this.ioExecutor = ioExecutor;
-        this.lakeTableHelper =
-                new LakeTableHelper(zooKeeperClient, conf.getString(ConfigOptions.REMOTE_DATA_DIR));
+        this.lakeTableHelper = new LakeTableHelper(zooKeeperClient);
     }
 
     public CoordinatorEventManager getCoordinatorEventManager() {
@@ -397,8 +400,8 @@ public class CoordinatorEventProcessor implements EventProcessor {
                         .filter(entry -> entry.getValue().isPartitioned())
                         .map(Map.Entry::getKey)
                         .collect(Collectors.toList());
-        Map<TablePath, Map<String, Long>> tablePathMap =
-                zooKeeperClient.getPartitionNameAndIdsForTables(partitionedTablePathList);
+        Map<TablePath, Map<String, PartitionRegistration>> tablePathMap =
+                zooKeeperClient.getPartitionNameAndRegistrationsForTables(partitionedTablePathList);
         for (TablePath tablePath : tablePathSet) {
             TableInfo tableInfo = tablePath2TableInfoMap.get(tablePath);
             coordinatorContext.putTablePath(tableInfo.getTableId(), tablePath);
@@ -409,13 +412,22 @@ public class CoordinatorEventProcessor implements EventProcessor {
                 lakeTables.add(Tuple2.of(tableInfo, System.currentTimeMillis()));
             }
             if (tableInfo.isPartitioned()) {
-                Map<String, Long> partitions = tablePathMap.get(tablePath);
+                Map<String, PartitionRegistration> partitions = tablePathMap.get(tablePath);
                 if (partitions != null) {
-                    for (Map.Entry<String, Long> partition : partitions.entrySet()) {
+                    for (Map.Entry<String, PartitionRegistration> partition :
+                            partitions.entrySet()) {
+                        long partitionId = partition.getValue().getPartitionId();
                         // put partition info to coordinator context
+                        PartitionInfo partitionInfo =
+                                new PartitionInfo(
+                                        partitionId,
+                                        ResolvedPartitionSpec.fromPartitionName(
+                                                tableInfo.getPartitionKeys(), partition.getKey()),
+                                        partition.getValue().getRemoteDataDir());
                         coordinatorContext.putPartition(
-                                partition.getValue(),
-                                PhysicalTablePath.of(tableInfo.getTablePath(), partition.getKey()));
+                                partitionId,
+                                PhysicalTablePath.of(tableInfo.getTablePath(), partition.getKey()),
+                                partitionInfo);
                     }
                 }
                 // if the table is auto partition, put the partitions info
@@ -716,6 +728,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
                         oldTableInfo.getNumBuckets(),
                         oldTableInfo.getProperties(),
                         oldTableInfo.getCustomProperties(),
+                        oldTableInfo.getRemoteDataDir(),
                         oldTableInfo.getComment().orElse(null),
                         oldTableInfo.getCreatedTime(),
                         System.currentTimeMillis()));
@@ -796,12 +809,14 @@ public class CoordinatorEventProcessor implements EventProcessor {
         TablePath tablePath = createPartitionEvent.getTablePath();
         String partitionName = createPartitionEvent.getPartitionName();
         PartitionAssignment partitionAssignment = createPartitionEvent.getPartitionAssignment();
-        tableManager.onCreateNewPartition(
-                tablePath,
-                tableId,
-                createPartitionEvent.getPartitionId(),
-                partitionName,
-                partitionAssignment);
+        TableInfo tableInfo = coordinatorContext.getTableInfoById(tableId);
+        PartitionInfo partitionInfo =
+                new PartitionInfo(
+                        partitionId,
+                        ResolvedPartitionSpec.fromPartitionName(
+                                tableInfo.getPartitionKeys(), partitionName),
+                        createPartitionEvent.getRemoteDataDir());
+        tableManager.onCreateNewPartition(tablePath, tableId, partitionInfo, partitionAssignment);
         autoPartitionManager.addPartition(tableId, partitionName);
 
         Set<TableBucket> tableBuckets = new HashSet<>();
@@ -843,6 +858,12 @@ public class CoordinatorEventProcessor implements EventProcessor {
         }
         if (dropTableEvent.isDataLakeEnabled()) {
             lakeTableTieringManager.removeLakeTable(tableId);
+        }
+
+        // for partitioned table, if all the partitions of this table have been deleted,
+        // there's no event to trigger resumeTableDeletions, so we need to trigger here
+        if (dropTableInfo.isPartitioned()) {
+            tableManager.resumeTableDeletions();
         }
 
         // send update metadata request.
