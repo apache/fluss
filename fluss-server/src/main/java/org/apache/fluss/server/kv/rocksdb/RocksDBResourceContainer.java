@@ -82,6 +82,9 @@ public class RocksDBResourceContainer implements AutoCloseable {
     /** The shared rate limiter for all RocksDB instances. */
     private final RateLimiter sharedRateLimiter;
 
+    /** The shared block cache from KvManager, null if not using shared cache. */
+    @Nullable private final Cache sharedBlockCache;
+
     /** The statistics object for RocksDB, null if statistics is disabled. */
     @Nullable private Statistics statistics;
 
@@ -93,18 +96,23 @@ public class RocksDBResourceContainer implements AutoCloseable {
 
     @VisibleForTesting
     RocksDBResourceContainer() {
-        this(new Configuration(), null, false, KvManager.getDefaultRateLimiter());
+        this(new Configuration(), null, false, KvManager.getDefaultRateLimiter(), null);
     }
 
     public RocksDBResourceContainer(ReadableConfig configuration, @Nullable File instanceBasePath) {
-        this(configuration, instanceBasePath, false, KvManager.getDefaultRateLimiter());
+        this(configuration, instanceBasePath, false, KvManager.getDefaultRateLimiter(), null);
     }
 
     public RocksDBResourceContainer(
             ReadableConfig configuration,
             @Nullable File instanceBasePath,
             boolean enableStatistics) {
-        this(configuration, instanceBasePath, enableStatistics, KvManager.getDefaultRateLimiter());
+        this(
+                configuration,
+                instanceBasePath,
+                enableStatistics,
+                KvManager.getDefaultRateLimiter(),
+                null);
     }
 
     public RocksDBResourceContainer(
@@ -112,6 +120,15 @@ public class RocksDBResourceContainer implements AutoCloseable {
             @Nullable File instanceBasePath,
             boolean enableStatistics,
             RateLimiter sharedRateLimiter) {
+        this(configuration, instanceBasePath, enableStatistics, sharedRateLimiter, null);
+    }
+
+    public RocksDBResourceContainer(
+            ReadableConfig configuration,
+            @Nullable File instanceBasePath,
+            boolean enableStatistics,
+            RateLimiter sharedRateLimiter,
+            @Nullable Cache sharedBlockCache) {
         this.configuration = configuration;
 
         this.instanceRocksDBPath =
@@ -121,6 +138,7 @@ public class RocksDBResourceContainer implements AutoCloseable {
         this.enableStatistics = enableStatistics;
         this.sharedRateLimiter =
                 checkNotNull(sharedRateLimiter, "sharedRateLimiter must not be null");
+        this.sharedBlockCache = sharedBlockCache;
 
         this.handlesToClose = new ArrayList<>();
     }
@@ -303,10 +321,16 @@ public class RocksDBResourceContainer implements AutoCloseable {
                 internalGetOption(ConfigOptions.KV_METADATA_BLOCK_SIZE).getBytes());
 
         // Create explicit LRUCache for accurate memory tracking
-        long blockCacheSize = internalGetOption(ConfigOptions.KV_BLOCK_CACHE_SIZE).getBytes();
-        blockCache = new LRUCache(blockCacheSize);
-        handlesToClose.add(blockCache);
-        blockBasedTableConfig.setBlockCache(blockCache);
+        if (sharedBlockCache != null) {
+            // Use shared block cache, do NOT add to handlesToClose (managed by KvManager)
+            blockCache = sharedBlockCache;
+            blockBasedTableConfig.setBlockCache(sharedBlockCache);
+        } else {
+            long blockCacheSize = internalGetOption(ConfigOptions.KV_BLOCK_CACHE_SIZE).getBytes();
+            blockCache = new LRUCache(blockCacheSize);
+            handlesToClose.add(blockCache);
+            blockBasedTableConfig.setBlockCache(blockCache);
+        }
 
         // Configure index and filter blocks caching
         blockBasedTableConfig.setCacheIndexAndFilterBlocks(

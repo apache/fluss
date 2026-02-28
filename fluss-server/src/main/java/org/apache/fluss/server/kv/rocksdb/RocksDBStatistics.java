@@ -60,6 +60,7 @@ public class RocksDBStatistics implements AutoCloseable {
     private final ResourceGuard resourceGuard;
     private final ColumnFamilyHandle defaultColumnFamilyHandle;
     @Nullable private final Cache blockCache;
+    private final boolean isSharedBlockCache;
 
     public RocksDBStatistics(
             RocksDB db,
@@ -67,11 +68,22 @@ public class RocksDBStatistics implements AutoCloseable {
             ResourceGuard resourceGuard,
             ColumnFamilyHandle defaultColumnFamilyHandle,
             @Nullable Cache blockCache) {
+        this(db, statistics, resourceGuard, defaultColumnFamilyHandle, blockCache, false);
+    }
+
+    public RocksDBStatistics(
+            RocksDB db,
+            @Nullable Statistics statistics,
+            ResourceGuard resourceGuard,
+            ColumnFamilyHandle defaultColumnFamilyHandle,
+            @Nullable Cache blockCache,
+            boolean isSharedBlockCache) {
         this.db = db;
         this.statistics = statistics;
         this.resourceGuard = resourceGuard;
         this.defaultColumnFamilyHandle = defaultColumnFamilyHandle;
         this.blockCache = blockCache;
+        this.isSharedBlockCache = isSharedBlockCache;
     }
 
     // ==================== Ticker-based Metrics ====================
@@ -226,8 +238,10 @@ public class RocksDBStatistics implements AutoCloseable {
                 return 0L;
             }
 
+            // When using shared block cache, exclude it from per-tablet stats
+            // to avoid double-counting during aggregation
             Set<Cache> caches = null;
-            if (blockCache != null) {
+            if (blockCache != null && !isSharedBlockCache) {
                 caches = new HashSet<>();
                 caches.add(blockCache);
             }
@@ -274,18 +288,29 @@ public class RocksDBStatistics implements AutoCloseable {
     /**
      * Get memory usage for block cache via MemoryUtil API.
      *
-     * @return block cache memory usage in bytes, or 0 if not available
+     * <p>When using shared block cache, returns 0 to avoid double-counting during aggregation. The
+     * shared block cache usage should be reported separately at the server level.
+     *
+     * @return block cache memory usage in bytes, or 0 if not available or using shared cache
      */
     public long getBlockCacheMemoryUsage() {
+        if (isSharedBlockCache) {
+            return 0L;
+        }
         return getMemoryUsageByType(MemoryUsageType.kCacheTotal);
     }
 
     /**
      * Get pinned memory usage in block cache.
      *
-     * @return pinned memory usage in bytes, or 0 if not available
+     * <p>When using shared block cache, returns 0 to avoid double-counting during aggregation.
+     *
+     * @return pinned memory usage in bytes, or 0 if not available or using shared cache
      */
     public long getBlockCachePinnedUsage() {
+        if (isSharedBlockCache) {
+            return 0L;
+        }
         try (ResourceGuard.Lease lease = resourceGuard.acquireResource()) {
             if (blockCache != null) {
                 return blockCache.getPinnedUsage();
@@ -302,8 +327,9 @@ public class RocksDBStatistics implements AutoCloseable {
                 return 0L;
             }
 
+            // When using shared block cache, exclude it from per-tablet stats
             Set<Cache> caches = null;
-            if (blockCache != null) {
+            if (blockCache != null && !isSharedBlockCache) {
                 caches = new HashSet<>();
                 caches.add(blockCache);
             }

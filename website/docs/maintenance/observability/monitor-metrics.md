@@ -958,7 +958,7 @@ These metrics use Sum aggregation to show the total value across all tables in a
       <th rowspan="1"><strong>tabletserver</strong></th>
       <td style={{textAlign: 'center', verticalAlign: 'middle' }} rowspan="1">-</td>
       <td>rocksdbMemoryUsageTotal</td>
-      <td>Total memory usage across all RocksDB instances in this server (in bytes).</td>
+      <td>Total memory usage across all RocksDB instances in this server (in bytes). This includes memtables, table readers, and block cache. When shared block cache is enabled (<code>kv.rocksdb.shared-block-cache.enabled=true</code>), the shared block cache usage is counted once to avoid double-counting across tablets.</td>
       <td>Gauge</td>
     </tr>
   </tbody>
@@ -996,12 +996,12 @@ These metrics use Sum aggregation to show the total value across all tables in a
     </tr>
     <tr>
       <td>rocksdbBlockCacheMemoryUsageTotal</td>
-      <td>Total block cache memory usage across all buckets of this table (in bytes).</td>
+      <td>Total block cache memory usage across all buckets of this table (in bytes). When shared block cache is enabled, this metric reports 0 because the cache is shared across all tables and reported at the server level via <code>rocksdbMemoryUsageTotal</code>.</td>
       <td>Gauge</td>
     </tr>
     <tr>
       <td>rocksdbBlockCachePinnedUsageTotal</td>
-      <td>Total pinned memory in block cache across all buckets of this table (in bytes).</td>
+      <td>Total pinned memory in block cache across all buckets of this table (in bytes). When shared block cache is enabled, this metric reports 0 because the cache is shared across all tables and reported at the server level.</td>
       <td>Gauge</td>
     </tr>
   </tbody>

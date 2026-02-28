@@ -1644,6 +1644,28 @@ public class ConfigOptions {
                                     + "The RateLimiter is always enabled. The default value is Long.MAX_VALUE (effectively unlimited). "
                                     + "Set to a lower value (e.g., 100MB) to limit the rate.");
 
+    public static final ConfigOption<Boolean> KV_SHARED_BLOCK_CACHE_ENABLED =
+            key("kv.rocksdb.shared-block-cache.enabled")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription(
+                            "Whether to enable a shared block cache for all RocksDB instances "
+                                    + "in the TabletServer. When enabled, all KV tablets share a single "
+                                    + "block cache to improve memory utilization. When disabled, each "
+                                    + "tablet creates its own independent block cache.");
+
+    public static final ConfigOption<MemorySize> KV_SHARED_BLOCK_CACHE_SIZE =
+            key("kv.rocksdb.shared-block-cache.size")
+                    .memoryType()
+                    .defaultValue(MemorySize.parse("256mb"))
+                    .withDescription(
+                            "The total size of the shared block cache for all RocksDB instances "
+                                    + "in the TabletServer. All KV tablets share a single block cache "
+                                    + "to improve memory utilization. Hot tablets can use more cache "
+                                    + "while cold tablets use less. The default value is 256MB. "
+                                    + "Only takes effect when kv.rocksdb.shared-block-cache.enabled "
+                                    + "is set to true.");
+
     // --------------------------------------------------------------------------
     // Provided configurable ColumnFamilyOptions within Fluss
     // --------------------------------------------------------------------------
@@ -1767,7 +1789,9 @@ public class ConfigOptions {
                     .defaultValue(MemorySize.parse("8mb"))
                     .withDescription(
                             "The amount of the cache for data blocks in RocksDB. "
-                                    + "The default block-cache size is `8MB`.");
+                                    + "The default block-cache size is `8MB`. "
+                                    + "This setting is ignored when shared block cache is enabled "
+                                    + "(kv.rocksdb.shared-block-cache.enabled=true).");
 
     public static final ConfigOption<Boolean> KV_USE_BLOOM_FILTER =
             key("kv.rocksdb.use-bloom-filter")

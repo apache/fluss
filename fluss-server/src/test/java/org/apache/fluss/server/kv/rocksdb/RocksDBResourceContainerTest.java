@@ -19,16 +19,19 @@ package org.apache.fluss.server.kv.rocksdb;
 
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.server.kv.KvManager;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.rocksdb.BlockBasedTableConfig;
 import org.rocksdb.BloomFilter;
+import org.rocksdb.Cache;
 import org.rocksdb.ColumnFamilyOptions;
 import org.rocksdb.CompactionStyle;
 import org.rocksdb.CompressionType;
 import org.rocksdb.DBOptions;
 import org.rocksdb.InfoLogLevel;
+import org.rocksdb.LRUCache;
 import org.rocksdb.ReadOptions;
 import org.rocksdb.WriteOptions;
 import org.rocksdb.util.SizeUnit;
@@ -232,5 +235,117 @@ class RocksDBResourceContainerTest {
             assertThat(tableConfig.pinL0FilterAndIndexBlocksInCache()).isTrue();
             assertThat(tableConfig.pinTopLevelIndexAndFilter()).isTrue();
         }
+    }
+
+    @Test
+    void testSharedBlockCacheIdentity() throws Exception {
+        // Property 1: when shared cache is provided, getBlockCache() returns the same instance
+        Cache sharedCache = new LRUCache(64 * SizeUnit.MB);
+        try (RocksDBResourceContainer container =
+                new RocksDBResourceContainer(
+                        new Configuration(),
+                        null,
+                        false,
+                        KvManager.getDefaultRateLimiter(),
+                        sharedCache)) {
+            container.getColumnOptions();
+            assertThat(container.getBlockCache()).isSameAs(sharedCache);
+        } finally {
+            sharedCache.close();
+        }
+    }
+
+    @Test
+    void testSharedBlockCacheNotClosedOnContainerClose() throws Exception {
+        // Property 2: closing container does not close the shared cache
+        Cache sharedCache = new LRUCache(64 * SizeUnit.MB);
+        try {
+            RocksDBResourceContainer container1 =
+                    new RocksDBResourceContainer(
+                            new Configuration(),
+                            null,
+                            false,
+                            KvManager.getDefaultRateLimiter(),
+                            sharedCache);
+            container1.getColumnOptions();
+            container1.close();
+
+            // shared cache should still be usable after container close
+            assertThat(sharedCache.isOwningHandle()).isTrue();
+
+            // another container using the same shared cache should work fine
+            try (RocksDBResourceContainer container2 =
+                    new RocksDBResourceContainer(
+                            new Configuration(),
+                            null,
+                            false,
+                            KvManager.getDefaultRateLimiter(),
+                            sharedCache)) {
+                container2.getColumnOptions();
+                assertThat(container2.getBlockCache()).isSameAs(sharedCache);
+            }
+            assertThat(sharedCache.isOwningHandle()).isTrue();
+        } finally {
+            sharedCache.close();
+        }
+    }
+
+    @Test
+    void testFallbackToIndependentCacheWhenNoSharedCache() throws Exception {
+        // Property 4: without shared cache, container creates its own independent LRUCache
+        try (RocksDBResourceContainer container = new RocksDBResourceContainer()) {
+            container.getColumnOptions();
+            Cache blockCache = container.getBlockCache();
+            assertThat(blockCache).isNotNull();
+            assertThat(blockCache.isOwningHandle()).isTrue();
+        }
+    }
+
+    @Test
+    void testIndependentCacheClosedOnContainerClose() throws Exception {
+        // When no shared cache, the independent cache should be closed with the container
+        RocksDBResourceContainer container = new RocksDBResourceContainer();
+        container.getColumnOptions();
+        Cache blockCache = container.getBlockCache();
+        assertThat(blockCache).isNotNull();
+        assertThat(blockCache.isOwningHandle()).isTrue();
+        container.close();
+        assertThat(blockCache.isOwningHandle()).isFalse();
+    }
+
+    @Test
+    void testDefaultConstructorCompatibility() throws Exception {
+        // Existing constructors (without shared cache) still work correctly
+        try (RocksDBResourceContainer container =
+                new RocksDBResourceContainer(new Configuration(), null)) {
+            container.getColumnOptions();
+            assertThat(container.getBlockCache()).isNotNull();
+        }
+
+        try (RocksDBResourceContainer container =
+                new RocksDBResourceContainer(new Configuration(), null, true)) {
+            container.getColumnOptions();
+            assertThat(container.getBlockCache()).isNotNull();
+        }
+
+        try (RocksDBResourceContainer container =
+                new RocksDBResourceContainer(
+                        new Configuration(), null, false, KvManager.getDefaultRateLimiter())) {
+            container.getColumnOptions();
+            assertThat(container.getBlockCache()).isNotNull();
+        }
+    }
+
+    @Test
+    void testSharedBlockCacheSizeConfig() {
+        // Property 3: KV_SHARED_BLOCK_CACHE_SIZE default is 256MB and custom values take effect
+        Configuration defaultConf = new Configuration();
+        assertThat(defaultConf.get(ConfigOptions.KV_SHARED_BLOCK_CACHE_SIZE).getBytes())
+                .isEqualTo(256 * SizeUnit.MB);
+
+        Configuration customConf = new Configuration();
+        customConf.setString(ConfigOptions.KV_SHARED_BLOCK_CACHE_SIZE.key(), "512mb");
+        assertThat(customConf.get(ConfigOptions.KV_SHARED_BLOCK_CACHE_SIZE).getBytes())
+                .isEqualTo(512 * SizeUnit.MB);
     }
 }
