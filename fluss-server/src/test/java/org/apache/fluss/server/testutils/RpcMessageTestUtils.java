@@ -408,6 +408,22 @@ public class RpcMessageTestUtils {
         return response.getTableId();
     }
 
+    public static void dropTable(FlussClusterExtension extension, TablePath tablePath)
+            throws Exception {
+        CoordinatorGateway coordinatorGateway = extension.newCoordinatorClient();
+        coordinatorGateway
+                .dropTable(
+                        newDropTableRequest(
+                                tablePath.getDatabaseName(), tablePath.getTableName(), true))
+                .get();
+    }
+
+    public static void dropDatabase(FlussClusterExtension extension, String databaseName)
+            throws Exception {
+        CoordinatorGateway coordinatorGateway = extension.newCoordinatorClient();
+        coordinatorGateway.dropDatabase(newDropDatabaseRequest(databaseName, true, true)).get();
+    }
+
     public static void assertProduceLogResponse(
             ProduceLogResponse produceLogResponse, int bucketId, Long baseOffset) {
         assertThat(produceLogResponse.getBucketsRespsCount()).isEqualTo(1);
