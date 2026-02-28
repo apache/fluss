@@ -67,6 +67,7 @@ import static org.apache.fluss.record.TestData.DATA2_ROW_TYPE;
 import static org.apache.fluss.record.TestData.DATA2_TABLE_ID;
 import static org.apache.fluss.record.TestData.DATA2_TABLE_INFO;
 import static org.apache.fluss.record.TestData.DATA2_TABLE_PATH;
+import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
 import static org.apache.fluss.record.TestData.DEFAULT_SCHEMA_ID;
 import static org.apache.fluss.row.BinaryString.fromString;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toByteBuffer;
@@ -169,6 +170,7 @@ public class DefaultCompletedFetchTest {
                                 .distributedBy(3)
                                 .logFormat(logFormat)
                                 .build(),
+                        DEFAULT_REMOTE_DATA_DIR,
                         System.currentTimeMillis(),
                         System.currentTimeMillis());
         long fetchOffset = 0L;
@@ -313,6 +315,7 @@ public class DefaultCompletedFetchTest {
                                 .distributedBy(3)
                                 .logFormat(LogFormat.ARROW)
                                 .build(),
+                        DEFAULT_REMOTE_DATA_DIR,
                         System.currentTimeMillis(),
                         System.currentTimeMillis());
         long fetchOffset = 0L;

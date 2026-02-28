@@ -19,6 +19,7 @@ package org.apache.fluss.server.coordinator;
 
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.cluster.rebalance.ServerTag;
+import org.apache.fluss.metadata.PartitionInfo;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableBucketReplica;
@@ -84,6 +85,7 @@ public class CoordinatorContext {
     // a map from partition_id -> physicalTablePath
     private final Map<Long, PhysicalTablePath> pathByPartitionId = new HashMap<>();
     private final Map<PhysicalTablePath, Long> partitionIdByPath = new HashMap<>();
+    private final Map<Long, PartitionInfo> partitionInfoById = new HashMap<>();
 
     // a map from table_id to the table path
     private final Map<Long, TablePath> tablePathById = new HashMap<>();
@@ -267,9 +269,11 @@ public class CoordinatorContext {
         this.tableInfoById.put(tableInfo.getTableId(), tableInfo);
     }
 
-    public void putPartition(long partitionId, PhysicalTablePath physicalTablePath) {
+    public void putPartition(
+            long partitionId, PhysicalTablePath physicalTablePath, PartitionInfo partitionInfo) {
         this.pathByPartitionId.put(partitionId, physicalTablePath);
         this.partitionIdByPath.put(physicalTablePath, partitionId);
+        this.partitionInfoById.put(partitionId, partitionInfo);
     }
 
     public TableInfo getTableInfoById(long tableId) {
@@ -307,6 +311,10 @@ public class CoordinatorContext {
 
     public Optional<Long> getPartitionId(PhysicalTablePath physicalTablePath) {
         return Optional.ofNullable(partitionIdByPath.get(physicalTablePath));
+    }
+
+    public PartitionInfo getPartitionInfoById(long partitionId) {
+        return partitionInfoById.get(partitionId);
     }
 
     public Map<Integer, List<Integer>> getTableAssignment(long tableId) {
@@ -440,6 +448,11 @@ public class CoordinatorContext {
                             }
                         });
         return allReplicas;
+    }
+
+    public boolean hasPartitionsToDelete(long tableId) {
+        return partitionsToBeDeleted.stream()
+                .anyMatch(partition -> partition.getTableId() == tableId);
     }
 
     /**

@@ -32,6 +32,7 @@ import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.exception.SchemaNotExistException;
 import org.apache.fluss.exception.TableAlreadyExistException;
 import org.apache.fluss.exception.TableNotExistException;
+import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
@@ -711,6 +712,7 @@ class TableManagerITCase {
                         pbTableMetadata.getTableId(),
                         pbTableMetadata.getSchemaId(),
                         TableDescriptor.fromJsonBytes(pbTableMetadata.getTableJson()),
+                        new FsPath(FLUSS_CLUSTER_EXTENSION.getRemoteDataDir()),
                         pbTableMetadata.getCreatedTime(),
                         pbTableMetadata.getModifiedTime());
         List<Schema.Column> columns = tableInfo.getSchema().getColumns();

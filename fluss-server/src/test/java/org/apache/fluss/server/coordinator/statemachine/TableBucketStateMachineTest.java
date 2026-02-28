@@ -19,6 +19,7 @@ package org.apache.fluss.server.coordinator.statemachine;
 
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
@@ -36,6 +37,7 @@ import org.apache.fluss.server.coordinator.MetadataManager;
 import org.apache.fluss.server.coordinator.TestCoordinatorChannelManager;
 import org.apache.fluss.server.coordinator.event.CoordinatorEventManager;
 import org.apache.fluss.server.coordinator.lease.KvSnapshotLeaseManager;
+import org.apache.fluss.server.coordinator.remote.RemoteDirDynamicLoader;
 import org.apache.fluss.server.coordinator.statemachine.ReplicaLeaderElection.ControlledShutdownLeaderElection;
 import org.apache.fluss.server.coordinator.statemachine.TableBucketStateMachine.ElectionResult;
 import org.apache.fluss.server.metadata.CoordinatorMetadataCache;
@@ -53,8 +55,9 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
+import org.junit.jupiter.api.io.TempDir;
 
-import java.io.IOException;
+import java.io.File;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.Collections;
@@ -89,6 +92,10 @@ class TableBucketStateMachineTest {
     private LakeTableTieringManager lakeTableTieringManager;
     private CoordinatorMetadataCache serverMetadataCache;
     private KvSnapshotLeaseManager kvSnapshotLeaseManager;
+    private Configuration conf;
+
+    private static @TempDir File tempDir;
+    private static FsPath remoteDataDir;
 
     @BeforeAll
     static void baseBeforeAll() {
@@ -96,14 +103,14 @@ class TableBucketStateMachineTest {
                 ZOO_KEEPER_EXTENSION_WRAPPER
                         .getCustomExtension()
                         .getZooKeeperClient(NOPErrorHandler.INSTANCE);
+        remoteDataDir = FsPath.fromLocalFile(tempDir);
     }
 
     @BeforeEach
-    void beforeEach() throws IOException {
-        Configuration conf = new Configuration();
+    void beforeEach() {
+        conf = new Configuration();
         conf.setString(ConfigOptions.COORDINATOR_HOST, "localhost");
-        String remoteDir = "/tmp/fluss/remote-data";
-        conf.setString(ConfigOptions.REMOTE_DATA_DIR, remoteDir);
+        conf.setString(ConfigOptions.REMOTE_DATA_DIR, remoteDataDir.toString());
         coordinatorContext = new CoordinatorContext();
         testCoordinatorChannelManager = new TestCoordinatorChannelManager();
         coordinatorRequestBatch =
@@ -121,6 +128,7 @@ class TableBucketStateMachineTest {
                                 zookeeperClient,
                                 new Configuration(),
                                 new LakeCatalogDynamicLoader(new Configuration(), null, true)),
+                        new RemoteDirDynamicLoader(conf),
                         new Configuration());
         lakeTableTieringManager = new LakeTableTieringManager();
 
@@ -128,7 +136,7 @@ class TableBucketStateMachineTest {
                 new KvSnapshotLeaseManager(
                         Duration.ofMinutes(10).toMillis(),
                         zookeeperClient,
-                        remoteDir,
+                        remoteDataDir.toString(),
                         SystemClock.getInstance(),
                         TestingMetricGroups.COORDINATOR_METRICS);
         kvSnapshotLeaseManager.start();
@@ -215,6 +223,7 @@ class TableBucketStateMachineTest {
                         tableId,
                         0,
                         DATA1_TABLE_DESCRIPTOR,
+                        remoteDataDir,
                         System.currentTimeMillis(),
                         System.currentTimeMillis()));
         coordinatorContext.putTablePath(tableId, fakeTablePath);
@@ -275,7 +284,7 @@ class TableBucketStateMachineTest {
                         autoPartitionManager,
                         lakeTableTieringManager,
                         TestingMetricGroups.COORDINATOR_METRICS,
-                        new Configuration(),
+                        conf,
                         Executors.newFixedThreadPool(
                                 1, new ExecutorThreadFactory("test-coordinator-io")),
                         new MetadataManager(
@@ -360,6 +369,7 @@ class TableBucketStateMachineTest {
                         tableId,
                         0,
                         DATA1_TABLE_DESCRIPTOR,
+                        remoteDataDir,
                         System.currentTimeMillis(),
                         System.currentTimeMillis()));
         coordinatorContext.putTablePath(tableId, fakeTablePath);

@@ -19,6 +19,7 @@ package org.apache.fluss.lake.lance.tiering;
 
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.lake.committer.CommittedLakeSnapshot;
 import org.apache.fluss.lake.committer.CommitterInitContext;
 import org.apache.fluss.lake.committer.LakeCommitter;
@@ -77,12 +78,14 @@ class LanceTieringTest {
     private @TempDir File tempWarehouseDir;
     private LanceLakeTieringFactory lanceLakeTieringFactory;
     private Configuration configuration;
+    private FsPath remoteDataDir;
 
     @BeforeEach
     void beforeEach() {
         configuration = new Configuration();
         configuration.setString("warehouse", tempWarehouseDir.toString());
         lanceLakeTieringFactory = new LanceLakeTieringFactory(configuration);
+        remoteDataDir = new FsPath("/tmp/remote_data");
     }
 
     private static Stream<Arguments> tieringWriteArgs() {
@@ -114,7 +117,7 @@ class LanceTieringTest {
                         .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
                         .customProperties(customProperties)
                         .build();
-        TableInfo tableInfo = TableInfo.of(tablePath, 0, 1, descriptor, 1L, 1L);
+        TableInfo tableInfo = TableInfo.of(tablePath, 0, 1, descriptor, remoteDataDir, 1L, 1L);
 
         List<LanceWriteResult> lanceWriteResults = new ArrayList<>();
         SimpleVersionedSerializer<LanceWriteResult> writeResultSerializer =

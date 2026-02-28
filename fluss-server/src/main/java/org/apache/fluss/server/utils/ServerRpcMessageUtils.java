@@ -530,6 +530,7 @@ public class ServerRpcMessageUtils {
                         .setTableId(tableInfo.getTableId())
                         .setSchemaId(tableInfo.getSchemaId())
                         .setTableJson(tableInfo.toTableDescriptor().toJsonBytes())
+                        .setRemoteDataDir(tableInfo.getRemoteDataDir().toString())
                         .setCreatedTime(tableInfo.getCreatedTime())
                         .setModifiedTime(tableInfo.getModifiedTime());
         TablePath tablePath = tableInfo.getTablePath();
@@ -588,6 +589,14 @@ public class ServerRpcMessageUtils {
                         tableId,
                         pbTableMetadata.getSchemaId(),
                         TableDescriptor.fromJsonBytes(pbTableMetadata.getTableJson()),
+                        // For backword capability. When an older Coordinator sends an
+                        // UpdateMetadataRequest to a newer TabletServer, the remoteDataDir will be
+                        // missing. In this case, setting it to null is acceptable because the
+                        // TabletServerMetadataCache does not maintain any remoteDataDir
+                        // information.
+                        pbTableMetadata.hasRemoteDataDir()
+                                ? new FsPath(pbTableMetadata.getRemoteDataDir())
+                                : null,
                         pbTableMetadata.getCreatedTime(),
                         pbTableMetadata.getModifiedTime());
 

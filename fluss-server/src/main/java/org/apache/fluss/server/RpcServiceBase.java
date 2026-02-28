@@ -36,7 +36,6 @@ import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
-import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.RpcGatewayService;
 import org.apache.fluss.rpc.gateway.AdminReadOnlyGateway;
@@ -93,6 +92,7 @@ import org.apache.fluss.server.tablet.TabletService;
 import org.apache.fluss.server.utils.ServerRpcMessageUtils;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.BucketSnapshot;
+import org.apache.fluss.server.zk.data.PartitionRegistration;
 import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
 
 import org.slf4j.Logger;
@@ -362,7 +362,7 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
     }
 
     private long getPartitionId(TablePath tablePath, String partitionName) {
-        Optional<TablePartition> optTablePartition;
+        Optional<PartitionRegistration> optTablePartition;
         try {
             optTablePartition = zkClient.getPartition(tablePath, partitionName);
         } catch (Exception e) {

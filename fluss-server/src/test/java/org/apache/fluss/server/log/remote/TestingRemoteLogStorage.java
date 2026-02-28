@@ -21,7 +21,6 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.RemoteStorageException;
 import org.apache.fluss.fs.FsPath;
 
-import java.io.IOException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -33,8 +32,7 @@ public class TestingRemoteLogStorage extends DefaultRemoteLogStorage {
 
     public final AtomicBoolean writeManifestFail = new AtomicBoolean(false);
 
-    public TestingRemoteLogStorage(Configuration conf, ExecutorService ioExecutor)
-            throws IOException {
+    public TestingRemoteLogStorage(Configuration conf, ExecutorService ioExecutor) {
         super(conf, ioExecutor);
     }
 
