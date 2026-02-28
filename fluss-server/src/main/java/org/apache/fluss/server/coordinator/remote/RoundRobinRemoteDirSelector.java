@@ -21,6 +21,7 @@ import org.apache.fluss.fs.FsPath;
 
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Round-robin remote data dir selector.
@@ -36,15 +37,11 @@ public class RoundRobinRemoteDirSelector implements RemoteDirSelector {
     private final List<FsPath> remoteDataDirs;
 
     // Current position in the round-robin cycle.
-    private int position;
-
-    // Lock object for thread safety
-    private final Object lock = new Object();
+    private final AtomicInteger position = new AtomicInteger(0);
 
     public RoundRobinRemoteDirSelector(FsPath defaultRemoteDataDir, List<FsPath> remoteDataDirs) {
         this.defaultRemoteDataDir = defaultRemoteDataDir;
         this.remoteDataDirs = Collections.unmodifiableList(remoteDataDirs);
-        this.position = 0;
     }
 
     @Override
@@ -53,12 +50,7 @@ public class RoundRobinRemoteDirSelector implements RemoteDirSelector {
             return defaultRemoteDataDir;
         }
 
-        synchronized (lock) {
-            int selectedIndex = position++;
-            if (position == remoteDataDirs.size()) {
-                position = 0;
-            }
-            return remoteDataDirs.get(selectedIndex);
-        }
+        int index = position.getAndUpdate(i -> (i + 1) % remoteDataDirs.size());
+        return remoteDataDirs.get(index);
     }
 }
