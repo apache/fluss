@@ -1,0 +1,109 @@
+#
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+
+# The purpose of this test file is to ensure that encoding (and consequently, hashing) is consistent across Java and rust client
+
+# BOOLEAN: true
+01
+
+# TINYINT: 2
+02 
+
+# SMALLINT: 10
+0A
+
+# INT: 100
+00 64 
+
+# BIGINT: -6101065172474983726
+D2 95 FC D8 CE B1 AA AA AB 01
+
+# FLOAT: 13.2
+33 33 53 41
+
+# DOUBLE: 15.21
+EC 51 B8 1E 85 6B 2E 40
+
+# DATE: TypeUtils.castFromString("2023-10-25", DataTypes.DATE())
+C7 99 01
+
+# TIME(0): TypeUtils.castFromString("09:30:00.0", DataTypes.TIME())
+C0 B3 A7 10
+
+# BINARY(20): "1234567890".getBytes()
+0A 31 32 33 34 35 36 37 38 39 30
+
+# BYTES: byte[]: "20".getBytes()
+02 32 30
+
+# CHAR(2): String: "1" 
+01 31
+
+# STRING: String: "hello"
+05 68 65 6C 6C 6F
+
+# DECIMAL(52) Decimal.fromUnscaledLong(9, 5, 2)
+09
+
+# DECIMAL(200): Decimal.fromBigDecimal(new BigDecimal(10), 20, 0)
+01 0A
+
+# TIMESTAMP(1): TimestampNtz.fromMillis(1698235273182L)
+DE 9F D7 B5 B6 31
+
+# TIMESTAMP(5): TimestampNtz.fromMillis(1698235273182L))
+DE 9F D7 B5 B6 31 00
+
+# TIMESTAMP_LTZ(1): TimestampLtz.fromEpochMillis(1698235273182L)
+DE 9F D7 B5 B6 31
+
+# TIMESTAMP_LTZ(5): TimestampLtz.fromEpochMillis(1698235273182L)
+DE 9F D7 B5 B6 31 00
+
+# ARRAY(INT): GenericArray.of(1, 2, 3, 4, 5, -11, null, 444, 102234)
+30 09 00 00 00 40 00 00 00 01 
+00 00 00 02 00 00 00 03 00 00
+00 04 00 00 00 05 00 00 00 F5
+FF FF FF 00 00 00 00 BC 01 00
+00 5A 8F 01 00 00 00 00 00
+
+# ARRAY<FLOAT NOT NULL>: GenericArray.of(0.1f, 1.1f, -0.5f, 6.6f, Float.MAX_VALUE, Float.MIN_VALUE)
+20 06 00 00 00 00 00 00 00 CD 
+CC CC 3D CD CC 8C 3F 00 00 00
+BF 33 33 D3 40 FF FF 7F 7F 01
+00 00 00
+
+# ARRAY<ARRAY<STRING>>: GenericArray.of(GenericArray.of(fromString("a"), null, fromString("c")), null, GenericArray.of(fromString("hello"), fromString("world")))
+58 03 00 00 00 02 00 00 00 20 
+00 00 00 20 00 00 00 00 00 00
+00 00 00 00 00 18 00 00 00 40
+00 00 00 03 00 00 00 02 00 00
+00 61 00 00 00 00 00 00 81 00
+00 00 00 00 00 00 00 63 00 00
+00 00 00 00 81 02 00 00 00 00
+00 00 00 68 65 6C 6C 6F 00 00
+85 77 6F 72 6C 64 00 00 85
+
+# MAP<INT NOT NULL STRING>: GenericMap.of(0, null, 1, fromString("1"), 2, fromString("2"))
+3C 18 00 00 00 03 00 00 00 00 
+00 00 00 00 00 00 00 01 00 00
+00 02 00 00 00 00 00 00 00 03
+00 00 00 01 00 00 00 00 00 00
+00 00 00 00 00 31 00 00 00 00
+00 00 81 32 00 00 00 00 00 00
+81
