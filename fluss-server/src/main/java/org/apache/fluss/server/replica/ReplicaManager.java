@@ -25,8 +25,10 @@ import org.apache.fluss.exception.FencedLeaderEpochException;
 import org.apache.fluss.exception.InvalidColumnProjectionException;
 import org.apache.fluss.exception.InvalidCoordinatorException;
 import org.apache.fluss.exception.InvalidRequiredAcksException;
+import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.LogOffsetOutOfRangeException;
 import org.apache.fluss.exception.LogStorageException;
+import org.apache.fluss.exception.NonPrimaryKeyTableException;
 import org.apache.fluss.exception.NotLeaderOrFollowerException;
 import org.apache.fluss.exception.StorageException;
 import org.apache.fluss.exception.UnknownTableOrBucketException;
@@ -1177,6 +1179,12 @@ public class ReplicaManager {
             TableMetricGroup tableMetrics = null;
             try {
                 Replica replica = getReplicaOrException(tb);
+                if (replica.getTableInfo().hasPrimaryKey()) {
+                    throw new InvalidTableException(
+                            String.format(
+                                    "PRODUCE_LOG is only supported on log table, but %s is a primary key table.",
+                                    replica.getTablePath()));
+                }
                 tableMetrics = replica.tableMetrics();
                 tableMetrics.totalProduceLogRequests().inc();
                 // record user metrics before appending to log,
@@ -1228,6 +1236,12 @@ public class ReplicaManager {
             try {
                 LOG.trace("Put records to local kv tablet for table bucket {}", tb);
                 Replica replica = getReplicaOrException(tb);
+                if (!replica.getTableInfo().hasPrimaryKey()) {
+                    throw new NonPrimaryKeyTableException(
+                            String.format(
+                                    "PUT_KV is only supported on primary key table, but %s is a log table.",
+                                    replica.getTablePath()));
+                }
                 validateClientVersionForPkTable(apiVersion, replica.getTableInfo());
                 tableMetrics = replica.tableMetrics();
                 tableMetrics.totalPutKvRequests().inc();
