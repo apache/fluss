@@ -33,7 +33,7 @@ public class TableBucketWriteResultSerializer<WriteResult>
     private static final ThreadLocal<DataOutputSerializer> SERIALIZER_CACHE =
             ThreadLocal.withInitial(() -> new DataOutputSerializer(64));
 
-    private static final int CURRENT_VERSION = 1;
+    private static final int CURRENT_VERSION = 2;
 
     private final org.apache.fluss.lake.serializer.SimpleVersionedSerializer<WriteResult>
             writeResultSerializer;
@@ -53,43 +53,57 @@ public class TableBucketWriteResultSerializer<WriteResult>
     public byte[] serialize(TableBucketWriteResult<WriteResult> tableBucketWriteResult)
             throws IOException {
         final DataOutputSerializer out = SERIALIZER_CACHE.get();
-        // serialize table path
-        TablePath tablePath = tableBucketWriteResult.tablePath();
-        out.writeUTF(tablePath.getDatabaseName());
-        out.writeUTF(tablePath.getTableName());
 
-        // serialize bucket
-        TableBucket tableBucket = tableBucketWriteResult.tableBucket();
-        out.writeLong(tableBucket.getTableId());
-        // write partition
-        if (tableBucket.getPartitionId() != null) {
-            out.writeBoolean(true);
-            out.writeLong(tableBucket.getPartitionId());
-            out.writeUTF(tableBucketWriteResult.partitionName());
+        // serialize failed marker flag first
+        out.writeBoolean(tableBucketWriteResult.isFailedMarker());
+
+        if (tableBucketWriteResult.isFailedMarker()) {
+            // for failed marker, only serialize tableId and failReason
+            out.writeLong(tableBucketWriteResult.tableBucket().getTableId());
+            String failReason = tableBucketWriteResult.failReason();
+            out.writeBoolean(failReason != null);
+            if (failReason != null) {
+                out.writeUTF(failReason);
+            }
         } else {
-            out.writeBoolean(false);
+            // serialize table path
+            TablePath tablePath = tableBucketWriteResult.tablePath();
+            out.writeUTF(tablePath.getDatabaseName());
+            out.writeUTF(tablePath.getTableName());
+
+            // serialize bucket
+            TableBucket tableBucket = tableBucketWriteResult.tableBucket();
+            out.writeLong(tableBucket.getTableId());
+            // write partition
+            if (tableBucket.getPartitionId() != null) {
+                out.writeBoolean(true);
+                out.writeLong(tableBucket.getPartitionId());
+                out.writeUTF(tableBucketWriteResult.partitionName());
+            } else {
+                out.writeBoolean(false);
+            }
+            out.writeInt(tableBucket.getBucket());
+
+            // serialize write result
+            WriteResult writeResult = tableBucketWriteResult.writeResult();
+            if (writeResult == null) {
+                // write -1 to mark write result as null
+                out.writeInt(-1);
+            } else {
+                byte[] serializeBytes = writeResultSerializer.serialize(writeResult);
+                out.writeInt(serializeBytes.length);
+                out.write(serializeBytes);
+            }
+
+            // serialize log end offset
+            out.writeLong(tableBucketWriteResult.logEndOffset());
+
+            // serialize max timestamp
+            out.writeLong(tableBucketWriteResult.maxTimestamp());
+
+            // serialize number of write results
+            out.writeInt(tableBucketWriteResult.numberOfWriteResults());
         }
-        out.writeInt(tableBucket.getBucket());
-
-        // serialize write result
-        WriteResult writeResult = tableBucketWriteResult.writeResult();
-        if (writeResult == null) {
-            // write -1 to mark write result as null
-            out.writeInt(-1);
-        } else {
-            byte[] serializeBytes = writeResultSerializer.serialize(writeResult);
-            out.writeInt(serializeBytes.length);
-            out.write(serializeBytes);
-        }
-
-        // serialize log end offset
-        out.writeLong(tableBucketWriteResult.logEndOffset());
-
-        // serialize max timestamp
-        out.writeLong(tableBucketWriteResult.maxTimestamp());
-
-        // serialize number of write results
-        out.writeInt(tableBucketWriteResult.numberOfWriteResults());
 
         final byte[] result = out.getCopyOfBuffer();
         out.clear();
@@ -99,9 +113,17 @@ public class TableBucketWriteResultSerializer<WriteResult>
     @Override
     public TableBucketWriteResult<WriteResult> deserialize(int version, byte[] serialized)
             throws IOException {
-        if (version != CURRENT_VERSION) {
+        if (version == 1) {
+            return deserializeV1(serialized);
+        } else if (version == CURRENT_VERSION) {
+            return deserializeV2(serialized);
+        } else {
             throw new IOException("Unknown version " + version);
         }
+    }
+
+    private TableBucketWriteResult<WriteResult> deserializeV1(byte[] serialized)
+            throws IOException {
         final DataInputDeserializer in = new DataInputDeserializer(serialized);
         // deserialize table path
         String databaseName = in.readUTF();
@@ -125,7 +147,7 @@ public class TableBucketWriteResultSerializer<WriteResult>
         if (writeResultLength >= 0) {
             byte[] writeResultBytes = new byte[writeResultLength];
             in.readFully(writeResultBytes);
-            writeResult = writeResultSerializer.deserialize(version, writeResultBytes);
+            writeResult = writeResultSerializer.deserialize(1, writeResultBytes);
         } else {
             writeResult = null;
         }
@@ -144,5 +166,67 @@ public class TableBucketWriteResultSerializer<WriteResult>
                 logEndOffset,
                 maxTimestamp,
                 numberOfWriteResults);
+    }
+
+    private TableBucketWriteResult<WriteResult> deserializeV2(byte[] serialized)
+            throws IOException {
+        final DataInputDeserializer in = new DataInputDeserializer(serialized);
+
+        // read failed marker flag
+        boolean isFailedMarker = in.readBoolean();
+
+        if (isFailedMarker) {
+            // deserialize failed marker
+            long tableId = in.readLong();
+            String failReason = null;
+            if (in.readBoolean()) {
+                failReason = in.readUTF();
+            }
+            return TableBucketWriteResult.failedMarker(tableId, failReason);
+        } else {
+            // deserialize table path
+            String databaseName = in.readUTF();
+            String tableName = in.readUTF();
+            TablePath tablePath = new TablePath(databaseName, tableName);
+
+            // deserialize bucket
+            long tableId = in.readLong();
+            Long partitionId = null;
+            String partitionName = null;
+            if (in.readBoolean()) {
+                partitionId = in.readLong();
+                partitionName = in.readUTF();
+            }
+            int bucketId = in.readInt();
+            TableBucket tableBucket = new TableBucket(tableId, partitionId, bucketId);
+
+            // deserialize write result
+            int writeResultLength = in.readInt();
+            WriteResult writeResult;
+            if (writeResultLength >= 0) {
+                byte[] writeResultBytes = new byte[writeResultLength];
+                in.readFully(writeResultBytes);
+                writeResult =
+                        writeResultSerializer.deserialize(
+                                writeResultSerializer.getVersion(), writeResultBytes);
+            } else {
+                writeResult = null;
+            }
+
+            // deserialize log end offset
+            long logEndOffset = in.readLong();
+            // deserialize max timestamp
+            long maxTimestamp = in.readLong();
+            // deserialize number of write results
+            int numberOfWriteResults = in.readInt();
+            return new TableBucketWriteResult<>(
+                    tablePath,
+                    tableBucket,
+                    partitionName,
+                    writeResult,
+                    logEndOffset,
+                    maxTimestamp,
+                    numberOfWriteResults);
+        }
     }
 }

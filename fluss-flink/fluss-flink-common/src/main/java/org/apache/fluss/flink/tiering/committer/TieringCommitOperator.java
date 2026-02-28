@@ -125,6 +125,29 @@ public class TieringCommitOperator<WriteResult, Committable>
     public void processElement(StreamRecord<TableBucketWriteResult<WriteResult>> streamRecord)
             throws Exception {
         TableBucketWriteResult<WriteResult> tableBucketWriteResult = streamRecord.getValue();
+
+        // Check if this is a failure marker from upstream Reader
+        if (tableBucketWriteResult.isFailedMarker()) {
+            long failedTableId = tableBucketWriteResult.tableBucket().getTableId();
+            String failReason = tableBucketWriteResult.failReason();
+            LOG.info(
+                    "Received failure marker for table {}. Reason: {}. "
+                            + "Cleaning up collected write results for this table.",
+                    failedTableId,
+                    failReason);
+
+            // Clean up any partially collected write results for the failed table
+            List<TableBucketWriteResult<WriteResult>> removedResults =
+                    collectedTableBucketWriteResults.remove(failedTableId);
+            if (removedResults != null) {
+                LOG.info(
+                        "Cleaned up {} collected write results for failed table {}.",
+                        removedResults.size(),
+                        failedTableId);
+            }
+            return;
+        }
+
         TableBucket tableBucket = tableBucketWriteResult.tableBucket();
         long tableId = tableBucket.getTableId();
         registerTableBucketWriteResult(tableId, tableBucketWriteResult);
