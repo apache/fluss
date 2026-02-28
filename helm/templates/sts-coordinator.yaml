@@ -78,6 +78,16 @@ spec:
               echo "" >> $FLUSS_HOME/conf/server.yaml && \
               echo "bind.listeners: ${BIND_LISTENERS}" >> $FLUSS_HOME/conf/server.yaml && \
               echo "advertised.listeners: ${ADVERTISED_LISTENERS}" >> $FLUSS_HOME/conf/server.yaml && \
+              echo "security.protocol.map: INTERNAL:{{ upper .Values.listeners.internal.protocol }},CLIENT:{{ upper .Values.listeners.client.protocol }}" >> $FLUSS_HOME/conf/server.yaml && \
+
+              {{- if (include "fluss.sasl.enabled" .) }}
+              echo "security.sasl.enabled.mechanisms: PLAIN" >> $FLUSS_HOME/conf/server.yaml && \
+              {{ if eq (include "fluss.listener.sasl.enabled" (dict "root" . "listener" "internal")) "true" }}
+              echo "client.security.protocol: SASL" >> $FLUSS_HOME/conf/server.yaml && \
+              echo "client.security.sasl.mechanism: {{ include "fluss.listener.sasl.mechanism" (dict "root" . "listener" "internal") }}" >> $FLUSS_HOME/conf/server.yaml && \
+              {{ end }}
+              export FLUSS_ENV_JAVA_OPTS="-Djava.security.auth.login.config=/etc/fluss/conf/jaas.conf ${FLUSS_ENV_JAVA_OPTS}" && \
+              {{- end }}
 
               bin/coordinator-server.sh start-foreground
           livenessProbe:
@@ -95,12 +105,17 @@ spec:
             tcpSocket:
               port: {{ .Values.listeners.client.port }}
           resources:
-            {{- toYaml .Values.resources.tabletServer | nindent 12 }}
+            {{- toYaml .Values.resources.coordinatorServer | nindent 12 }}
           volumeMounts:
             - name: fluss-conf
               mountPath: /opt/conf
             - name: data
               mountPath: /tmp/fluss/data
+            {{- if (include "fluss.sasl.enabled" .) }}
+            - name: sasl-config
+              mountPath: /etc/fluss/conf
+              readOnly: true
+            {{- end }}
       volumes:
         - name: fluss-conf
           configMap:
@@ -108,6 +123,11 @@ spec:
         {{- if not .Values.coordinator.storage.enabled }}
         - name: data
           emptyDir: {}
+        {{- end }}
+        {{- if (include "fluss.sasl.enabled" .) }}
+        - name: sasl-config
+          secret:
+            secretName: {{ include "fluss.fullname" . }}-sasl-jaas-config
         {{- end }}
   {{- if .Values.coordinator.storage.enabled }}
   volumeClaimTemplates:

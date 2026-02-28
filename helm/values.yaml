@@ -54,9 +54,17 @@ coordinator:
 # Fluss listener configurations
 listeners:
   internal:
+    protocol: PLAINTEXT
     port: 9123
+    security:
+      mechanism: PLAIN
+      users: []
   client:
+    protocol: PLAINTEXT
     port: 9124
+    security:
+      mechanism: PLAIN
+      users: []
 
 resources: {}
   # We usually recommend not to specify default resources and to leave this as a conscious
