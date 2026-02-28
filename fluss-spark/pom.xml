@@ -34,9 +34,31 @@
     <modules>
         <module>fluss-spark-common</module>
         <module>fluss-spark-ut</module>
-        <module>fluss-spark-3.5</module>
-        <module>fluss-spark-3.4</module>
     </modules>
+
+    <profiles>
+        <profile>
+            <id>spark3</id>
+            <activation>
+                <activeByDefault>true</activeByDefault>
+            </activation>
+            <modules>
+                <module>fluss-spark-3.5</module>
+                <module>fluss-spark-3.4</module>
+            </modules>
+        </profile>
+        <profile>
+            <!-- Spark 4.x requires Scala 2.13; activate with -Pspark4 -->
+            <id>spark4</id>
+            <properties>
+                <scala.binary.version>2.13</scala.binary.version>
+                <scala.version>${scala213.version}</scala.version>
+            </properties>
+            <modules>
+                <module>fluss-spark-4.1</module>
+            </modules>
+        </profile>
+    </profiles>
 
     <dependencies>
         <dependency>

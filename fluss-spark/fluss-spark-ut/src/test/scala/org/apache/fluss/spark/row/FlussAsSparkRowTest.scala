@@ -230,7 +230,7 @@ class FlussAsSparkRowTest extends AnyFunSuite {
     val sparkRow = new FlussAsSparkRow(rowType).replace(flussRow)
 
     val sparkDecimal = sparkRow.getDecimal(0, 10, 2)
-    assertThat(sparkDecimal.toBigDecimal.doubleValue()).isEqualTo(123.45)
+    assertThat(sparkDecimal.toBigDecimal.doubleValue).isEqualTo(123.45)
   }
 
   test("getUTF8String: read string values") {
@@ -479,6 +479,6 @@ class FlussAsSparkRowTest extends AnyFunSuite {
     assertThat(sparkRow.getFloat(5)).isEqualTo(3.14f)
     assertThat(sparkRow.getDouble(6)).isEqualTo(2.718)
     assertThat(sparkRow.getUTF8String(7).toString).isEqualTo("test")
-    assertThat(sparkRow.getDecimal(8, 10, 2).toBigDecimal.doubleValue()).isEqualTo(99.99)
+    assertThat(sparkRow.getDecimal(8, 10, 2).toBigDecimal.doubleValue).isEqualTo(99.99)
   }
 }
