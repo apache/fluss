@@ -99,6 +99,44 @@ public class ConfigOptions {
                             "The directory used for storing the kv snapshot data files and remote log for log tiered storage "
                                     + " in a Fluss supported filesystem.");
 
+    public static final ConfigOption<List<String>> REMOTE_DATA_DIRS =
+            key("remote.data.dirs")
+                    .stringType()
+                    .asList()
+                    .defaultValues()
+                    .withDescription(
+                            "The directories used for storing the kv snapshot data files and remote log for log tiered storage "
+                                    + " in a Fluss supported filesystem. "
+                                    + "This is a list of remote data directory paths. "
+                                    + "Example: `remote.data.dirs: oss://bucket1/fluss-remote-data, oss://bucket2/fluss-remote-data`.");
+
+    public static final ConfigOption<RemoteDataDirStrategy> REMOTE_DATA_DIRS_STRATEGY =
+            key("remote.data.dirs.strategy")
+                    .enumType(RemoteDataDirStrategy.class)
+                    .defaultValue(RemoteDataDirStrategy.ROUND_ROBIN)
+                    .withDescription(
+                            "The strategy for selecting the remote data directory from `"
+                                    + REMOTE_DATA_DIRS.key()
+                                    + "`.");
+
+    public static final ConfigOption<List<Integer>> REMOTE_DATA_DIRS_WEIGHTS =
+            key("remote.data.dirs.weights")
+                    .intType()
+                    .asList()
+                    .defaultValues()
+                    .withDescription(
+                            "The weights of the remote data directories. "
+                                    + "This is a list of weights corresponding to the `"
+                                    + REMOTE_DATA_DIRS.key()
+                                    + "` in the same order. When `"
+                                    + REMOTE_DATA_DIRS_STRATEGY.key()
+                                    + "` is set to `"
+                                    + RemoteDataDirStrategy.WEIGHTED_ROUND_ROBIN
+                                    + "`, this must be configured, and its size must be equal to `"
+                                    + REMOTE_DATA_DIRS.key()
+                                    + "`; otherwise, it will be ignored."
+                                    + "Example: `remote.data.dir.weights: 1, 2`");
+
     public static final ConfigOption<MemorySize> REMOTE_FS_WRITE_BUFFER_SIZE =
             key("remote.fs.write-buffer-size")
                     .memoryType()
@@ -2065,5 +2103,11 @@ public class ConfigOptions {
     @Internal
     public static ConfigOption<?> getConfigOption(String key) {
         return ConfigOptionsHolder.CONFIG_OPTIONS_BY_KEY.get(key);
+    }
+
+    /** Remote data dir select strategy for Fluss. */
+    public enum RemoteDataDirStrategy {
+        ROUND_ROBIN,
+        WEIGHTED_ROUND_ROBIN
     }
 }
