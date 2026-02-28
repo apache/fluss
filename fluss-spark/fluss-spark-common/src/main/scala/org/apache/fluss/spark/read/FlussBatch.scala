@@ -53,12 +53,14 @@ abstract class FlussBatch(
 
   protected def projection: Array[Int] = {
     val columnNameToIndex = tableInfo.getSchema.getColumnNames.asScala.zipWithIndex.toMap
-    readSchema.fields.map {
+    val projectedColumns = readSchema.fields.map {
       field =>
         columnNameToIndex.getOrElse(
           field.name,
           throw new IllegalArgumentException(s"Invalid field name: ${field.name}"))
     }
+    // COUNT(*) may prune all columns; ensure at least one column to avoid Arrow metadata error.
+    if (projectedColumns.isEmpty) Array(0) else projectedColumns
   }
 
   override def close(): Unit = {
