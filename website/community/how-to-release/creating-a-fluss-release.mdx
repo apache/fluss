@@ -857,6 +857,22 @@ Regards,
 Release Manager
 ```
 
+### Fluss Blog
+
+Major or otherwise important releases should have an announcement blog post. Write one if needed for this particular release. Minor releases that don’t introduce new major functionality don’t necessarily need to be blogged.
+
+We usually include the names of all contributors in the announcement blog post. Use the following command to get the list of contributors:
+
+```bash
+export PREVIOUS_RELEASE_BRANCH=<previousReleaseBranch>
+export CURRENT_RELEASE_BRANCH=<currentReleaseBranch>
+# e.g.
+# export PREVIOUS_RELEASE_BRANCH=release-0.8
+# export CURRENT_RELEASE_BRANCH=release-0.9
+# please make sure the previous release branch and current release branch are both up-to-date with the official repository before running the command below
+git log $PREVIOUS_RELEASE_BRANCH..$CURRENT_RELEASE_BRANCH --format='%an' | sort -u | paste -sd ',' - | sed 's/,/, /g'
+```
+
 -------------------------
 
 ***Checklist to declare the process completed***
