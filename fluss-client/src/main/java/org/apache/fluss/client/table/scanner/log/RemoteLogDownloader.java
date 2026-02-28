@@ -167,8 +167,9 @@ public class RemoteLogDownloader implements Closeable {
                             (bytes, throwable) -> {
                                 if (throwable != null) {
                                     LOG.error(
-                                            "Failed to download remote log segment file {}.",
+                                            "Failed to download remote log segment file {} for bucket {}.",
                                             fsPathAndFileName.getFileName(),
+                                            request.segment.tableBucket(),
                                             ExceptionUtils.stripExecutionException(throwable));
                                     // release the semaphore for the failed request
                                     prefetchSemaphore.release();
@@ -178,8 +179,9 @@ public class RemoteLogDownloader implements Closeable {
                                     scannerMetricGroup.remoteFetchErrorCount().inc();
                                 } else {
                                     LOG.info(
-                                            "Successfully downloaded remote log segment file {} to local cost {} ms.",
+                                            "Successfully downloaded remote log segment file {} for bucket {} to local cost {} ms.",
                                             fsPathAndFileName.getFileName(),
+                                            request.segment.tableBucket(),
                                             System.currentTimeMillis() - startTime);
                                     File localFile =
                                             new File(

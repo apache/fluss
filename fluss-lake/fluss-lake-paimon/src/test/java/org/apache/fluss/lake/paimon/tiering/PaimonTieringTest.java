@@ -19,6 +19,7 @@ package org.apache.fluss.lake.paimon.tiering;
 
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.lake.committer.CommittedLakeSnapshot;
 import org.apache.fluss.lake.committer.CommitterInitContext;
 import org.apache.fluss.lake.committer.LakeCommitter;
@@ -88,6 +89,7 @@ class PaimonTieringTest {
     private @TempDir File tempWarehouseDir;
     private PaimonLakeTieringFactory paimonLakeTieringFactory;
     private Catalog paimonCatalog;
+    private FsPath remoteDataDir;
 
     @BeforeEach
     void beforeEach() {
@@ -97,6 +99,7 @@ class PaimonTieringTest {
         paimonCatalog =
                 CatalogFactory.createCatalog(
                         CatalogContext.create(Options.fromMap(configuration.toMap())));
+        remoteDataDir = new FsPath("/tmp/remote_data");
     }
 
     private static Stream<Arguments> tieringWriteArgs() {
@@ -147,7 +150,7 @@ class PaimonTieringTest {
                         .distributedBy(bucketNum)
                         .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
                         .build();
-        TableInfo tableInfo = TableInfo.of(tablePath, 0, 1, descriptor, 1L, 1L);
+        TableInfo tableInfo = TableInfo.of(tablePath, 0, 1, descriptor, remoteDataDir, 1L, 1L);
 
         try (LakeCommitter<PaimonWriteResult, PaimonCommittable> lakeCommitter =
                 createLakeCommitter(tablePath, tableInfo, new Configuration())) {
@@ -219,7 +222,7 @@ class PaimonTieringTest {
                         .distributedBy(1)
                         .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
                         .build();
-        TableInfo tableInfo = TableInfo.of(tablePath, 0, 1, descriptor, 1L, 1L);
+        TableInfo tableInfo = TableInfo.of(tablePath, 0, 1, descriptor, remoteDataDir, 1L, 1L);
 
         Map<String, List<LogRecord>> recordsByPartition = new HashMap<>();
         List<PaimonWriteResult> paimonWriteResults = new ArrayList<>();
@@ -293,7 +296,7 @@ class PaimonTieringTest {
                         .distributedBy(1)
                         .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
                         .build();
-        TableInfo tableInfo = TableInfo.of(tablePath, 0, 1, descriptor, 1L, 1L);
+        TableInfo tableInfo = TableInfo.of(tablePath, 0, 1, descriptor, remoteDataDir, 1L, 1L);
         Map<String, List<LogRecord>> recordsByPartition = new HashMap<>();
         List<PaimonWriteResult> paimonWriteResults = new ArrayList<>();
 
@@ -382,7 +385,7 @@ class PaimonTieringTest {
                                 ConfigOptions.TABLE_DATALAKE_AUTO_EXPIRE_SNAPSHOT,
                                 isTableAutoExpireSnapshot)
                         .build();
-        TableInfo tableInfo = TableInfo.of(tablePath, 0, 1, descriptor, 1L, 1L);
+        TableInfo tableInfo = TableInfo.of(tablePath, 0, 1, descriptor, remoteDataDir, 1L, 1L);
         // Get the FileStoreTable to verify snapshots
         FileStoreTable fileStoreTable =
                 (FileStoreTable) paimonCatalog.getTable(toPaimon(tablePath));

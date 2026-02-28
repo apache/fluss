@@ -33,7 +33,6 @@ import java.util.Collections;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 
-import static org.apache.fluss.record.TestData.DATA1_TABLE_ID;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test for remote log ttl in {@link RemoteLogManager}. */
@@ -47,12 +46,7 @@ final class RemoteLogTTLTest extends RemoteLogTestBase {
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
     void testRemoteLogTTL(boolean partitionTable) throws Exception {
-        TableBucket tb;
-        if (partitionTable) {
-            tb = new TableBucket(DATA1_TABLE_ID, 0L, 0);
-        } else {
-            tb = new TableBucket(DATA1_TABLE_ID, 0);
-        }
+        TableBucket tb = makeTableBucket(partitionTable);
         // Need to make leader by ReplicaManager.
         makeLogTableAsLeader(tb, partitionTable);
         LogTablet logTablet = replicaManager.getReplicaOrException(tb).getLogTablet();

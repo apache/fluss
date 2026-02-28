@@ -24,6 +24,7 @@ import org.apache.fluss.client.admin.RegisterResult;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.sink.state.WriterState;
 import org.apache.fluss.flink.sink.testutils.TestAdminAdapter;
+import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.PartitionInfo;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.Schema;
@@ -58,6 +59,7 @@ public class RecoveryOffsetManagerTest {
     private static final long TABLE_ID = 1L;
     private static final TablePath TABLE_PATH = TablePath.of("test_db", "test_table");
     private static final String PRODUCER_ID = "test-producer";
+    private static final FsPath REMOTE_DATA_DIR = new FsPath("/tmp/fluss-remote/test-dir");
 
     // ==================== Test Data Helpers ====================
 
@@ -82,6 +84,7 @@ public class RecoveryOffsetManagerTest {
                 numBuckets,
                 new Configuration(),
                 new Configuration(),
+                REMOTE_DATA_DIR,
                 null, // comment
                 System.currentTimeMillis(),
                 System.currentTimeMillis());

@@ -634,7 +634,7 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
                                 new TableBucket(tableId, hybridPartitionId, 0), lakeEndOffset,
                                 new TableBucket(tableId, hybridPartitionId, 1), lakeEndOffset,
                                 new TableBucket(tableId, hybridPartitionId, 2), lakeEndOffset));
-        LakeTableHelper lakeTableHelper = new LakeTableHelper(zooKeeperClient, tempDir.toString());
+        LakeTableHelper lakeTableHelper = new LakeTableHelper(zooKeeperClient);
         lakeTableHelper.registerLakeTableSnapshotV1(tableId, lakeTableSnapshot);
 
         // Create PartitionInfo for lake partitions

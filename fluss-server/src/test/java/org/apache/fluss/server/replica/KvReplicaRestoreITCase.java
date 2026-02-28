@@ -33,6 +33,8 @@ import org.apache.fluss.rpc.messages.PutKvRequest;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
 import org.apache.fluss.server.kv.snapshot.ZooKeeperCompletedSnapshotHandleStore;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
+import org.apache.fluss.server.zk.ZooKeeperClient;
+import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.utils.ExceptionUtils;
 import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.types.Tuple2;
@@ -43,7 +45,9 @@ import org.junit.jupiter.api.extension.RegisterExtension;
 
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
+import java.util.Optional;
 import java.util.Random;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -64,17 +68,22 @@ import static org.assertj.core.api.Assertions.assertThat;
 /** The IT case for the restoring of kv replica. */
 class KvReplicaRestoreITCase {
 
+    private static final List<String> REMOTE_DIR_NAMES = Arrays.asList("dir1", "dir2", "dir3");
+
     @RegisterExtension
     public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION =
             FlussClusterExtension.builder()
                     .setNumOfTabletServers(3)
                     .setClusterConf(initConfig())
+                    .setRemoteDirNames(REMOTE_DIR_NAMES)
                     .build();
 
+    private ZooKeeperClient zkClient;
     private ZooKeeperCompletedSnapshotHandleStore completedSnapshotHandleStore;
 
     @BeforeEach
     void beforeEach() {
+        zkClient = FLUSS_CLUSTER_EXTENSION.getZooKeeperClient();
         completedSnapshotHandleStore =
                 new ZooKeeperCompletedSnapshotHandleStore(
                         FLUSS_CLUSTER_EXTENSION.getZooKeeperClient());
@@ -98,6 +107,13 @@ class KvReplicaRestoreITCase {
             for (int bucket = 0; bucket < bucketNum; bucket++) {
                 tableBuckets.add(new TableBucket(tableId, bucket));
             }
+
+            Optional<TableRegistration> tableOpt = zkClient.getTable(tablePath);
+            assertThat(tableOpt).isPresent();
+            TableRegistration table = tableOpt.get();
+
+            assertThat(table.remoteDataDir).isNotNull();
+            assertThat(REMOTE_DIR_NAMES).contains(table.remoteDataDir.getName());
         }
 
         for (TableBucket tableBucket : tableBuckets) {

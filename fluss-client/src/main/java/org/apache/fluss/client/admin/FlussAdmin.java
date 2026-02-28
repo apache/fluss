@@ -32,6 +32,7 @@ import org.apache.fluss.config.cluster.AlterConfig;
 import org.apache.fluss.config.cluster.ConfigEntry;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.LeaderNotAvailableException;
+import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.DatabaseInfo;
 import org.apache.fluss.metadata.DatabaseSummary;
@@ -298,6 +299,11 @@ public class FlussAdmin implements Admin {
                                         r.getTableId(),
                                         r.getSchemaId(),
                                         TableDescriptor.fromJsonBytes(r.getTableJson()),
+                                        // For backward compatibility, results returned by old
+                                        // clusters do not include the remote data dir
+                                        r.hasRemoteDataDir()
+                                                ? new FsPath(r.getRemoteDataDir())
+                                                : null,
                                         r.getCreatedTime(),
                                         r.getModifiedTime()));
     }
