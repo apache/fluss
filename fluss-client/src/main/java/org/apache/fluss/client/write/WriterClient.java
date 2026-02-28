@@ -225,7 +225,7 @@ public class WriterClient {
     private void maybeAbortBatches(Throwable t) {
         if (accumulator.hasIncomplete()) {
             LOG.error("Aborting all pending write batches due to fatal error", t);
-            accumulator.abortBatches(toException(t));
+            accumulator.abortAllBatches(toException(t));
         }
     }
 

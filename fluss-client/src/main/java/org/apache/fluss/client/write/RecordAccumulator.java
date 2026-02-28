@@ -25,6 +25,7 @@ import org.apache.fluss.cluster.Cluster;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.FlussRuntimeException;
+import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.memory.LazyMemorySegmentPool;
 import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.memory.PreAllocatedPagedOutputView;
@@ -306,16 +307,20 @@ public final class RecordAccumulator {
     }
 
     /** Abort all incomplete batches (whether they have been sent or not). */
-    public void abortBatches(final Exception reason) {
+    public void abortAllBatches(final Exception reason) {
         for (WriteBatch batch : incomplete.copyAll()) {
-            Deque<WriteBatch> dq = getDeque(batch.physicalTablePath(), batch.bucketId());
-            synchronized (dq) {
-                batch.abortRecordAppends();
-                dq.remove(batch);
-            }
-            batch.abort(reason);
-            deallocate(batch);
+            abortBatch(reason, batch);
         }
+    }
+
+    private void abortBatch(final Exception reason, WriteBatch batch) {
+        Deque<WriteBatch> dq = getDeque(batch.physicalTablePath(), batch.bucketId());
+        synchronized (dq) {
+            batch.abortRecordAppends();
+            dq.remove(batch);
+        }
+        batch.abort(reason);
+        deallocate(batch);
     }
 
     /** Get the deque for the given table-bucket, creating it if necessary. */
@@ -610,6 +615,7 @@ public final class RecordAccumulator {
             case COMPACTED_KV:
             case INDEXED_KV:
                 return new KvWriteBatch(
+                        tableInfo.getTableId(),
                         bucketId,
                         physicalTablePath,
                         tableInfo.getSchemaId(),
@@ -629,6 +635,7 @@ public final class RecordAccumulator {
                                 tableInfo.getRowType(),
                                 tableInfo.getTableConfig().getArrowCompressionInfo());
                 return new ArrowLogWriteBatch(
+                        tableInfo.getTableId(),
                         bucketId,
                         physicalTablePath,
                         tableInfo.getSchemaId(),
@@ -638,6 +645,7 @@ public final class RecordAccumulator {
 
             case COMPACTED_LOG:
                 return new CompactedLogWriteBatch(
+                        tableInfo.getTableId(),
                         bucketId,
                         physicalTablePath,
                         schemaId,
@@ -647,6 +655,7 @@ public final class RecordAccumulator {
 
             case INDEXED_LOG:
                 return new IndexedLogWriteBatch(
+                        tableInfo.getTableId(),
                         bucketId,
                         physicalTablePath,
                         tableInfo.getSchemaId(),
@@ -709,6 +718,28 @@ public final class RecordAccumulator {
             synchronized (deque) {
                 WriteBatch first = deque.peekFirst();
                 if (first == null) {
+                    continue;
+                }
+
+                if (tableBucket.getTableId() != first.tableId()) {
+                    LOG.warn(
+                            "Table {} has been dropped and re-created with a new table ID. Old ID: {}, New ID: {}. "
+                                    + "Aborting pending batches for the old table instance.",
+                            physicalTablePath,
+                            first.tableId(),
+                            tableBucket.getTableId());
+                    TableNotExistException reason =
+                            new TableNotExistException(
+                                    String.format(
+                                            "Table '%s' has been dropped and re-created with a new table ID (old: %d, new: %d). "
+                                                    + "Further writes to the old table instance cannot proceed. "
+                                                    + "Please recreate the writer with the new table metadata.",
+                                            physicalTablePath,
+                                            first.tableId(),
+                                            tableBucket.getTableId()),
+                                    null,
+                                    true);
+                    abortBatch(reason, deque.pollFirst());
                     continue;
                 }
 
