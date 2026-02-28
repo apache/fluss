@@ -18,6 +18,8 @@
 
 package org.apache.fluss.lake.iceberg.source;
 
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.lake.iceberg.IcebergLakeStorage;
 import org.apache.fluss.lake.source.LakeSource;
 import org.apache.fluss.lake.source.RecordReader;
 import org.apache.fluss.metadata.TablePath;
@@ -156,5 +158,150 @@ class IcebergLakeSourceTest extends IcebergSourceTestBase {
         assertThat(filterPushDownResult.acceptedPredicates()).isEmpty();
         assertThat(filterPushDownResult.remainingPredicates().toString())
                 .isEqualTo(allFilters.toString());
+    }
+
+    @Test
+    void testCreateRecordReaderReusesCachedTable() throws Exception {
+        TablePath tablePath = TablePath.of("fluss", "test_cache_reuse");
+        createTable(tablePath, SCHEMA, PARTITION_SPEC);
+        Table table = getTable(tablePath);
+        List<Record> rows = new ArrayList<>();
+        for (int i = 1; i <= 3; i++) {
+            rows.add(
+                    createIcebergRecord(
+                            SCHEMA, i, "n" + i, 0, (long) i, OffsetDateTime.now(ZoneOffset.UTC)));
+        }
+        writeRecord(table, rows, null, 0);
+        table.refresh();
+
+        LakeSource<IcebergSplit> lakeSource = lakeStorage.createLakeSource(tablePath);
+        List<IcebergSplit> splits =
+                lakeSource.createPlanner(() -> table.currentSnapshot().snapshotId()).plan();
+        assertThat(splits).isNotEmpty();
+
+        org.apache.fluss.row.InternalRow.FieldGetter[] fieldGetters =
+                org.apache.fluss.row.InternalRow.createFieldGetters(
+                        RowType.of(new IntType(), new StringType()));
+        List<Row> actual = new ArrayList<>();
+        for (IcebergSplit split : splits) {
+            RecordReader recordReader = lakeSource.createRecordReader(() -> split);
+            try (CloseableIterator<LogRecord> it = recordReader.read()) {
+                actual.addAll(
+                        convertToFlinkRow(
+                                fieldGetters,
+                                TransformingCloseableIterator.transform(it, LogRecord::getRow)));
+            }
+        }
+        assertThat(actual).hasSize(3);
+        assertThat(actual.toString()).contains("n1", "n2", "n3");
+    }
+
+    @Test
+    void testGetSchemaUsesCacheAfterCreateRecordReader() throws Exception {
+        TablePath tablePath = TablePath.of("fluss", "test_get_schema_cache");
+        createTable(tablePath, SCHEMA, PARTITION_SPEC);
+        Table table = getTable(tablePath);
+        List<Record> rows = new ArrayList<>();
+        rows.add(createIcebergRecord(SCHEMA, 1, "a", 0, 1L, OffsetDateTime.now(ZoneOffset.UTC)));
+        writeRecord(table, rows, null, 0);
+        table.refresh();
+
+        LakeSource<IcebergSplit> lakeSource = lakeStorage.createLakeSource(tablePath);
+        List<IcebergSplit> splits =
+                lakeSource.createPlanner(() -> table.currentSnapshot().snapshotId()).plan();
+        RecordReader recordReader = lakeSource.createRecordReader(() -> splits.get(0));
+        try (CloseableIterator<LogRecord> it = recordReader.read()) {
+            assertThat(it.hasNext()).isTrue();
+            it.next();
+        }
+        Predicate filter = FLUSS_BUILDER.greaterOrEqual(0, 0);
+        LakeSource.FilterPushDownResult result =
+                lakeSource.withFilters(Collections.singletonList(filter));
+        assertThat(result.acceptedPredicates()).hasSize(1);
+    }
+
+    @Test
+    void testTableCacheTtlZeroDisablesExpiry() throws Exception {
+        TablePath tablePath = TablePath.of("fluss", "test_ttl_zero");
+        createTable(tablePath, SCHEMA, PARTITION_SPEC);
+        Table table = getTable(tablePath);
+        List<Record> rows = new ArrayList<>();
+        rows.add(createIcebergRecord(SCHEMA, 1, "v1", 0, 1L, OffsetDateTime.now(ZoneOffset.UTC)));
+        writeRecord(table, rows, null, 0);
+        table.refresh();
+
+        Configuration config = new Configuration();
+        config.setString("warehouse", warehousePath);
+        config.setString("type", "hadoop");
+        config.setString("name", "fluss_test_catalog_ttl_zero");
+        config.setString(IcebergLakeSource.TABLE_CACHE_TTL_MS_KEY, "0");
+        IcebergLakeStorage storageWithTtl = new IcebergLakeStorage(config);
+        LakeSource<IcebergSplit> lakeSource = storageWithTtl.createLakeSource(tablePath);
+
+        List<IcebergSplit> splits =
+                lakeSource.createPlanner(() -> table.currentSnapshot().snapshotId()).plan();
+        org.apache.fluss.row.InternalRow.FieldGetter[] fieldGetters =
+                org.apache.fluss.row.InternalRow.createFieldGetters(
+                        RowType.of(new IntType(), new StringType()));
+        List<Row> actual = new ArrayList<>();
+        for (IcebergSplit split : splits) {
+            RecordReader recordReader = lakeSource.createRecordReader(() -> split);
+            try (CloseableIterator<LogRecord> it = recordReader.read()) {
+                actual.addAll(
+                        convertToFlinkRow(
+                                fieldGetters,
+                                TransformingCloseableIterator.transform(it, LogRecord::getRow)));
+            }
+        }
+        assertThat(actual).hasSize(1);
+        assertThat(actual.get(0).getField(1)).isEqualTo(BinaryString.fromString("v1"));
+    }
+
+    @Test
+    void testTableCacheTtlRefresh() throws Exception {
+        TablePath tablePath = TablePath.of("fluss", "test_ttl_refresh");
+        createTable(tablePath, SCHEMA, PARTITION_SPEC);
+        Table table = getTable(tablePath);
+        List<Record> rows = new ArrayList<>();
+        rows.add(createIcebergRecord(SCHEMA, 1, "v1", 0, 1L, OffsetDateTime.now(ZoneOffset.UTC)));
+        writeRecord(table, rows, null, 0);
+        table.refresh();
+
+        Configuration config = new Configuration();
+        config.setString("warehouse", warehousePath);
+        config.setString("type", "hadoop");
+        config.setString("name", "fluss_test_catalog_ttl_refresh");
+        config.setString(IcebergLakeSource.TABLE_CACHE_TTL_MS_KEY, "50");
+        IcebergLakeStorage storageWithTtl = new IcebergLakeStorage(config);
+        LakeSource<IcebergSplit> lakeSource = storageWithTtl.createLakeSource(tablePath);
+
+        List<IcebergSplit> splits =
+                lakeSource.createPlanner(() -> table.currentSnapshot().snapshotId()).plan();
+        org.apache.fluss.row.InternalRow.FieldGetter[] fieldGetters =
+                org.apache.fluss.row.InternalRow.createFieldGetters(
+                        RowType.of(new IntType(), new StringType()));
+
+        RecordReader recordReader1 = lakeSource.createRecordReader(() -> splits.get(0));
+        List<Row> first = new ArrayList<>();
+        try (CloseableIterator<LogRecord> it = recordReader1.read()) {
+            first.addAll(
+                    convertToFlinkRow(
+                            fieldGetters,
+                            TransformingCloseableIterator.transform(it, LogRecord::getRow)));
+        }
+        assertThat(first).hasSize(1);
+
+        Thread.sleep(60);
+
+        RecordReader recordReader2 = lakeSource.createRecordReader(() -> splits.get(0));
+        List<Row> second = new ArrayList<>();
+        try (CloseableIterator<LogRecord> it = recordReader2.read()) {
+            second.addAll(
+                    convertToFlinkRow(
+                            fieldGetters,
+                            TransformingCloseableIterator.transform(it, LogRecord::getRow)));
+        }
+        assertThat(second).hasSize(1);
+        assertThat(second.get(0).getField(1)).isEqualTo(BinaryString.fromString("v1"));
     }
 }
