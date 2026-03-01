@@ -1,0 +1,42 @@
+public final class ProjectionEqualiser$16 implements org.apache.fluss.codegen.types.RecordEqualiser {
+  public ProjectionEqualiser$16(java.lang.Object[] references) throws Exception {
+  }
+
+  @Override
+  public boolean equals(org.apache.fluss.row.InternalRow left, org.apache.fluss.row.InternalRow right) {
+    boolean result = true;
+    result = result && equalsField1(left, right);
+    result = result && equalsField2(left, right);
+    return result;
+  }
+
+  private boolean equalsField1(org.apache.fluss.row.InternalRow left, org.apache.fluss.row.InternalRow right) {
+    boolean leftNull = left.isNullAt(1);
+    boolean rightNull = right.isNullAt(1);
+    if (leftNull && rightNull) {
+      return true;
+    }
+    if (leftNull || rightNull) {
+      return false;
+    }
+    org.apache.fluss.row.BinaryString leftVal = ((org.apache.fluss.row.BinaryString) left.getString(1));
+    org.apache.fluss.row.BinaryString rightVal = ((org.apache.fluss.row.BinaryString) right.getString(1));
+    return leftVal.equals(rightVal);
+  }
+
+
+  private boolean equalsField2(org.apache.fluss.row.InternalRow left, org.apache.fluss.row.InternalRow right) {
+    boolean leftNull = left.isNullAt(2);
+    boolean rightNull = right.isNullAt(2);
+    if (leftNull && rightNull) {
+      return true;
+    }
+    if (leftNull || rightNull) {
+      return false;
+    }
+    long leftVal = left.getLong(2);
+    long rightVal = right.getLong(2);
+    return leftVal == rightVal;
+  }
+
+}

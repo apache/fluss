@@ -57,6 +57,50 @@ public final class DataTypeChecks {
         return dataType.accept(FIELD_TYPES_EXTRACTOR);
     }
 
+    /**
+     * Checks whether the given {@link DataType} is a composite type, i.e., a Row, Array, or Map
+     * type.
+     *
+     * @param dataType the data type to check
+     * @return true if the type is a composite type
+     */
+    public static boolean isCompositeType(DataType dataType) {
+        DataTypeRoot typeRoot = dataType.getTypeRoot();
+        return typeRoot == DataTypeRoot.ROW
+                || typeRoot == DataTypeRoot.ARRAY
+                || typeRoot == DataTypeRoot.MAP;
+    }
+
+    /**
+     * Returns the element type of an array type.
+     *
+     * @param dataType the array type
+     * @return the element type
+     */
+    public static DataType getArrayElementType(DataType dataType) {
+        return ((ArrayType) dataType).getElementType();
+    }
+
+    /**
+     * Returns the key type of a map type.
+     *
+     * @param dataType the map type
+     * @return the key type
+     */
+    public static DataType getMapKeyType(DataType dataType) {
+        return ((MapType) dataType).getKeyType();
+    }
+
+    /**
+     * Returns the value type of a map type.
+     *
+     * @param dataType the map type
+     * @return the value type
+     */
+    public static DataType getMapValueType(DataType dataType) {
+        return ((MapType) dataType).getValueType();
+    }
+
     /** Checks whether two data types are equal including field ids for row types. */
     public static boolean equalsWithFieldId(DataType original, DataType that) {
         return that.accept(new DataTypeEqualsWithFieldId(original));

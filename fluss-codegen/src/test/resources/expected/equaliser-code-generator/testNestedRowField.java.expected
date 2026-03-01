@@ -1,0 +1,34 @@
+public final class NestedRowFieldEqualiser$4 implements org.apache.fluss.codegen.types.RecordEqualiser {
+  private transient org.apache.fluss.codegen.GeneratedClass nestedEqualiser$6;
+  private org.apache.fluss.codegen.types.RecordEqualiser rowEq$7;
+
+  public NestedRowFieldEqualiser$4(java.lang.Object[] references) throws Exception {
+    nestedEqualiser$6 = ((org.apache.fluss.codegen.GeneratedClass) references[0]);
+    rowEq$7 = (org.apache.fluss.codegen.types.RecordEqualiser) nestedEqualiser$6.newInstance(this.getClass().getClassLoader());
+  }
+
+  @Override
+  public boolean equals(org.apache.fluss.row.InternalRow left, org.apache.fluss.row.InternalRow right) {
+    if (left instanceof org.apache.fluss.row.BinaryRow && right instanceof org.apache.fluss.row.BinaryRow) {
+      return left.equals(right);
+    }
+    boolean result = true;
+    result = result && equalsField0(left, right);
+    return result;
+  }
+
+  private boolean equalsField0(org.apache.fluss.row.InternalRow left, org.apache.fluss.row.InternalRow right) {
+    boolean leftNull = left.isNullAt(0);
+    boolean rightNull = right.isNullAt(0);
+    if (leftNull && rightNull) {
+      return true;
+    }
+    if (leftNull || rightNull) {
+      return false;
+    }
+    org.apache.fluss.row.InternalRow leftVal = left.getRow(0, 2);
+    org.apache.fluss.row.InternalRow rightVal = right.getRow(0, 2);
+    return rowEq$7.equals(leftVal, rightVal);
+  }
+
+}

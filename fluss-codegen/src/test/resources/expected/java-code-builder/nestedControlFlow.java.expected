@@ -1,0 +1,15 @@
+public class TestClass {
+  public void process(int[][] matrix) {
+    for (int i = 0; i < matrix.length; i++) {
+      for (int j = 0; j < matrix[i].length; j++) {
+        if (matrix[i][j] < 0) {
+          continue;
+        } else if (matrix[i][j] == 0) {
+          break;
+        } else {
+          System.out.println(matrix[i][j]);
+        }
+      }
+    }
+  }
+}
