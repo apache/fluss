@@ -109,6 +109,9 @@ public final class ArrayUtils {
      *     array.
      */
     public static int[] removeSet(int[] a, int[] b) {
+        if (b.length == 0) {
+            return a;
+        }
         // Iterate over each element in the second array
         // and check if the element exists in the first array
         if (!isSubset(a, b)) {
@@ -116,6 +119,10 @@ public final class ArrayUtils {
         }
         // Remove the elements of the second array from the first array
         int[] resultArray = new int[a.length - b.length];
+        if (resultArray.length == 0) {
+            return resultArray;
+        }
+
         int index = 0;
         for (int elementA : a) {
             boolean found = false;
