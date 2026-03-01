@@ -23,6 +23,8 @@ import org.apache.fluss.client.table.scanner.ScanRecord;
 import org.apache.fluss.client.table.writer.AppendWriter;
 import org.apache.fluss.client.table.writer.UpsertWriter;
 import org.apache.fluss.exception.FetchException;
+import org.apache.fluss.exception.FlussRuntimeException;
+import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
@@ -465,6 +467,57 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
                                 String.format(
                                         "The fetching offset %s is out of range", Long.MIN_VALUE));
             }
+        }
+    }
+
+    @Test
+    void testDropTableWhileScanning() throws Exception {
+        TablePath tablePath = TablePath.of("test_db_1", "test_drop_table_while_scanning");
+        createTable(tablePath, DATA1_TABLE_DESCRIPTOR, false);
+
+        // append a batch of data.
+        int recordSize = 100;
+        try (Table table = conn.getTable(tablePath)) {
+            AppendWriter appendWriter = table.newAppend().createWriter();
+            for (int i = 0; i < recordSize; i++) {
+                GenericRow row = row(i, "a");
+                appendWriter.append(row);
+            }
+            appendWriter.flush();
+
+            LogScanner logScanner = createLogScanner(table);
+            subscribeFromBeginning(logScanner, table);
+
+            // Poll some data
+            ScanRecords scanRecords = logScanner.poll(Duration.ofSeconds(1));
+            assertThat(scanRecords.isEmpty()).isFalse();
+
+            // Drop the table
+            admin.dropTable(tablePath, false).get();
+
+            // Poll again, should eventually fail
+            assertThatThrownBy(
+                            () -> {
+                                while (true) {
+                                    logScanner.poll(Duration.ofSeconds(1));
+                                }
+                            })
+                    .satisfies(
+                            e -> {
+                                boolean isTableMissing =
+                                        e instanceof TableNotExistException
+                                                || (e instanceof FlussRuntimeException
+                                                        && e.getMessage()
+                                                                .contains(
+                                                                        "Failed to update metadata"))
+                                                || (e.getCause() != null
+                                                        && e.getCause()
+                                                                instanceof TableNotExistException);
+                                assertThat(isTableMissing)
+                                        .as(
+                                                "Expected TableNotExistException or FlussRuntimeException with metadata update failure")
+                                        .isTrue();
+                            });
         }
     }
 }
