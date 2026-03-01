@@ -17,12 +17,13 @@
 
 package org.apache.fluss.fs.s3;
 
+import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.fs.hdfs.HadoopFileSystem;
 import org.apache.fluss.fs.s3.token.S3DelegationTokenProvider;
 import org.apache.fluss.fs.token.ObtainedSecurityToken;
 
-import org.apache.hadoop.conf.Configuration;
+import java.util.function.Supplier;
 
 /**
  * Implementation of the Fluss {@link FileSystem} interface for S3. This class implements the common
@@ -31,10 +32,9 @@ import org.apache.hadoop.conf.Configuration;
  */
 public class S3FileSystem extends HadoopFileSystem {
 
-    private final String scheme;
-    private final Configuration conf;
+    private final Supplier<S3DelegationTokenProvider> delegationTokenProviderSupplier;
 
-    private volatile S3DelegationTokenProvider s3DelegationTokenProvider;
+    @VisibleForTesting volatile S3DelegationTokenProvider s3DelegationTokenProvider;
 
     /**
      * Creates a S3FileSystem based on the given Hadoop S3 file system. The given Hadoop file system
@@ -45,10 +45,10 @@ public class S3FileSystem extends HadoopFileSystem {
      * @param hadoopS3FileSystem The Hadoop FileSystem that will be used under the hood.
      */
     public S3FileSystem(
-            String scheme, org.apache.hadoop.fs.FileSystem hadoopS3FileSystem, Configuration conf) {
+            org.apache.hadoop.fs.FileSystem hadoopS3FileSystem,
+            Supplier<S3DelegationTokenProvider> delegationTokenProviderSupplier) {
         super(hadoopS3FileSystem);
-        this.scheme = scheme;
-        this.conf = conf;
+        this.delegationTokenProviderSupplier = delegationTokenProviderSupplier;
     }
 
     @Override
@@ -56,7 +56,7 @@ public class S3FileSystem extends HadoopFileSystem {
         if (s3DelegationTokenProvider == null) {
             synchronized (this) {
                 if (s3DelegationTokenProvider == null) {
-                    s3DelegationTokenProvider = new S3DelegationTokenProvider(scheme, conf);
+                    s3DelegationTokenProvider = delegationTokenProviderSupplier.get();
                 }
             }
         }
