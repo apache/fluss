@@ -50,4 +50,31 @@ object SparkFlussConf {
       .durationType()
       .defaultValue(Duration.ofMillis(10000L))
       .withDescription("The timeout for log scanner to poll records.")
+
+  val MAX_OFFSETS_PER_TRIGGER: ConfigOption[java.lang.Long] =
+    ConfigBuilder
+      .key("scan.max.offsets.per.trigger")
+      .longType()
+      .noDefaultValue()
+      .withDescription(
+        "Maximum number of offsets processed per trigger interval, " +
+          "proportionally split across table buckets.")
+
+  val MIN_OFFSETS_PER_TRIGGER: ConfigOption[java.lang.Long] =
+    ConfigBuilder
+      .key("scan.min.offsets.per.trigger")
+      .longType()
+      .noDefaultValue()
+      .withDescription(
+        "Minimum number of offsets per trigger to ensure progress during data spikes. " +
+          "Requires scan.max.offsets.per.trigger to be set.")
+
+  val MAX_TRIGGER_DELAY: ConfigOption[Duration] =
+    ConfigBuilder
+      .key("scan.max.trigger.delay")
+      .durationType()
+      .defaultValue(Duration.ofMinutes(5))
+      .withDescription(
+        "Maximum time a trigger can be delayed waiting for scan.min.offsets.per.trigger " +
+          "to be satisfied.")
 }
