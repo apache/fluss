@@ -214,6 +214,29 @@ class ReplicaManagerTest extends ReplicaTestBase {
     }
 
     @Test
+    void testProduceLogOnPrimaryKeyTable() throws Exception {
+        TableBucket tb = new TableBucket(DATA1_TABLE_ID_PK, 1);
+        makeKvTableAsLeader(DATA1_TABLE_ID_PK, DATA1_TABLE_PATH_PK, tb.getBucket());
+
+        CompletableFuture<List<ProduceLogResultForBucket>> future = new CompletableFuture<>();
+        replicaManager.appendRecordsToLog(
+                20000,
+                1,
+                Collections.singletonMap(tb, genMemoryLogRecordsByObject(DATA1)),
+                null,
+                future::complete);
+        assertThat(future.get())
+                .containsOnly(
+                        new ProduceLogResultForBucket(
+                                tb,
+                                new ApiError(
+                                        Errors.INVALID_TABLE_EXCEPTION,
+                                        String.format(
+                                                "PRODUCE_LOG is only supported on log table, but %s is a primary key table.",
+                                                DATA1_TABLE_PATH_PK))));
+    }
+
+    @Test
     void testFetchLog() throws Exception {
         SchemaGetter schemaGetter =
                 serverMetadataCache.subscribeWithInitialSchema(
