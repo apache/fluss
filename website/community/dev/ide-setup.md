@@ -205,12 +205,6 @@ If you do not want to expose your email address in Git commits, you can activate
 
 This section lists issues that developers have run into in the past when working with IntelliJ.
 
-#### Compilation fails with `invalid flag: --add-exports=java.base/sun.net.util=ALL-UNNAMED`
-
-This happens if the "java11" Maven profile is active, but an older JDK version is used. Go to
-"View" → "Tool Windows" → "Maven" and uncheck the "java11" profile. Afterwards, reimport the
-project.
-
 #### Compilation fails with `package sun.misc does not exist`
 
 This happens if you are using JDK 11 and compile to Java 8 with the `--release` option. This option is currently incompatible with our build setup.
