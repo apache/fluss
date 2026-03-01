@@ -38,14 +38,16 @@ import org.apache.fluss.metadata.TableInfo;
 @PublicEvolving
 public interface Table extends AutoCloseable {
 
+    // spotless:off
     /**
      * Get the {@link TableInfo} for this table.
      *
-     * <p>Note: the table info of this {@link Table} is set during the creation of this {@link
-     * Table} and will not be updated after that, even if the table info of the table has been
+     * <p>Note: the table info of this {@link Table} is set during the creation of this
+     * {@link Table} and will not be updated after that, even if the table info of the table has been
      * changed. Therefore, if there are any changes to the table info, it may be necessary to
      * reconstruct the {@link Table}.
      */
+    // spotless:on
     TableInfo getTableInfo();
 
     /**
