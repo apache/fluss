@@ -53,6 +53,7 @@ import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.exception.TableNotPartitionedException;
 import org.apache.fluss.exception.TooManyBucketsException;
 import org.apache.fluss.exception.TooManyPartitionsException;
+import org.apache.fluss.metadata.DatabaseChange;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.DatabaseInfo;
 import org.apache.fluss.metadata.DatabaseSummary;
@@ -136,6 +137,24 @@ public interface Admin extends AutoCloseable {
      */
     CompletableFuture<Void> createDatabase(
             String databaseName, DatabaseDescriptor databaseDescriptor, boolean ignoreIfExists);
+
+    /**
+     * Alter a database with the given {@code databaseChanges}.
+     *
+     * <p>The following exceptions can be anticipated when calling {@code get()} on returned future.
+     *
+     * <ul>
+     *   <li>{@link DatabaseNotExistException} when the database does not exist and {@code
+     *       ignoreIfNotExists} is false.
+     * </ul>
+     *
+     * @param databaseName The name of the database.
+     * @param databaseChanges The database changes.
+     * @param ignoreIfNotExists if it is true, do nothing if database does not exist. If false,
+     *     throw a {@link DatabaseNotExistException}.
+     */
+    CompletableFuture<Void> alterDatabase(
+            String databaseName, List<DatabaseChange> databaseChanges, boolean ignoreIfNotExists);
 
     /**
      * Get the database with the given database name asynchronously.
@@ -275,8 +294,8 @@ public interface Admin extends AutoCloseable {
      *
      * <ul>
      *   <li>{@link DatabaseNotExistException} when the database does not exist.
-     *   <li>{@link TableNotExistException} when the table does not exist, and ignoreIfNotExists is
-     *       false.
+     *   <li>{@link TableNotExistException} when the table does not exist and {@code
+     *       ignoreIfNotExists} is false.
      *   <li>{@link InvalidAlterTableException} if the alter operation is invalid, such as alter set
      *       a table option which is not supported to modify currently.
      * </ul>

@@ -472,6 +472,13 @@ public class ZooKeeperClient implements AutoCloseable {
         LOG.info("Registered database {}", database);
     }
 
+    public void updateDatabase(String database, DatabaseRegistration databaseRegistration)
+            throws Exception {
+        String path = DatabaseZNode.path(database);
+        zkClient.setData().forPath(path, DatabaseZNode.encode(databaseRegistration));
+        LOG.info("Updated database {}", database);
+    }
+
     /** Get the database in ZK. */
     public Optional<DatabaseRegistration> getDatabase(String database) throws Exception {
         String path = DatabaseZNode.path(database);

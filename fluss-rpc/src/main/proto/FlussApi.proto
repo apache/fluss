@@ -64,6 +64,16 @@ message CreateDatabaseRequest {
 message CreateDatabaseResponse {
 }
 
+// alter database request and response
+message AlterDatabaseRequest {
+  required string database_name = 1;
+  required bool ignore_if_not_exists = 2;
+  repeated PbAlterConfig config_changes = 3;
+}
+
+message AlterDatabaseResponse {
+}
+
 // get table request and response
 message GetDatabaseInfoRequest {
   required string database_name = 1;

@@ -54,6 +54,14 @@ public class DatabaseRegistration {
         return builder.build();
     }
 
+    public DatabaseRegistration newProperties(DatabaseDescriptor databaseDescriptor) {
+        return new DatabaseRegistration(
+                databaseDescriptor.getComment().orElse(null),
+                databaseDescriptor.getCustomProperties(),
+                createdTime,
+                System.currentTimeMillis());
+    }
+
     public static DatabaseRegistration of(DatabaseDescriptor databaseDescriptor) {
         final long currentMillis = System.currentTimeMillis();
         return new DatabaseRegistration(

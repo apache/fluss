@@ -47,6 +47,7 @@ import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.security.acl.FlussPrincipal;
+import org.apache.fluss.server.entity.DatabasePropertyChanges;
 import org.apache.fluss.server.entity.TablePropertyChanges;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.DatabaseRegistration;
@@ -136,8 +137,85 @@ public class MetadataManager {
         }
     }
 
-    public DatabaseInfo getDatabase(String databaseName) throws DatabaseNotExistException {
+    public void alterDatabaseProperties(
+            String databaseName,
+            DatabasePropertyChanges databasePropertyChanges,
+            boolean ignoreIfNotExists) {
+        try {
+            // Check if database exists
+            if (!databaseExists(databaseName)) {
+                if (ignoreIfNotExists) {
+                    return;
+                }
+                throw new DatabaseNotExistException("Database " + databaseName + " not exists.");
+            }
 
+            DatabaseRegistration databaseRegistration = getDatabaseRegistration(databaseName);
+            DatabaseDescriptor currentDescriptor = databaseRegistration.toDatabaseDescriptor();
+
+            // Create updated descriptor
+            DatabaseDescriptor newDescriptor =
+                    getUpdatedDatabaseDescriptor(currentDescriptor, databasePropertyChanges);
+
+            if (newDescriptor != null) {
+                // Update the database in ZooKeeper
+                DatabaseRegistration updatedRegistration =
+                        databaseRegistration.newProperties(newDescriptor);
+                zookeeperClient.updateDatabase(databaseName, updatedRegistration);
+                LOG.info("Successfully altered database properties for database: {}", databaseName);
+            } else {
+                LOG.info(
+                        "No properties changed when alter database {}, skip update.", databaseName);
+            }
+        } catch (Exception e) {
+            if (e instanceof DatabaseNotExistException) {
+                if (ignoreIfNotExists) {
+                    return;
+                }
+                throw (DatabaseNotExistException) e;
+            } else if (e instanceof RuntimeException) {
+                throw (RuntimeException) e;
+            } else {
+                throw new FlussRuntimeException("Failed to alter database: " + databaseName, e);
+            }
+        }
+    }
+
+    private DatabaseDescriptor getUpdatedDatabaseDescriptor(
+            DatabaseDescriptor currentDescriptor, DatabasePropertyChanges changes) {
+        Map<String, String> newCustomProperties =
+                new HashMap<>(currentDescriptor.getCustomProperties());
+        // set properties
+        newCustomProperties.putAll(changes.customPropertiesToSet);
+        // reset properties
+        newCustomProperties.keySet().removeAll(changes.customPropertiesToReset);
+
+        if (newCustomProperties.equals(currentDescriptor.getCustomProperties())
+                && !changes.isCommentChanged()) {
+            return null;
+        }
+
+        String newComment =
+                changes.isCommentChanged()
+                        ? changes.commentToSet
+                        : currentDescriptor.getComment().orElse(null);
+
+        return DatabaseDescriptor.builder()
+                .customProperties(newCustomProperties)
+                .comment(newComment)
+                .build();
+    }
+
+    public DatabaseInfo getDatabase(String databaseName) throws DatabaseNotExistException {
+        DatabaseRegistration databaseReg = getDatabaseRegistration(databaseName);
+        return new DatabaseInfo(
+                databaseName,
+                databaseReg.toDatabaseDescriptor(),
+                databaseReg.createdTime,
+                databaseReg.modifiedTime);
+    }
+
+    public DatabaseRegistration getDatabaseRegistration(String databaseName) {
         Optional<DatabaseRegistration> optionalDB;
         try {
             optionalDB = zookeeperClient.getDatabase(databaseName);
@@ -149,13 +227,7 @@ public class MetadataManager {
         if (!optionalDB.isPresent()) {
             throw new DatabaseNotExistException("Database '" + databaseName + "' does not exist.");
         }
-
-        DatabaseRegistration databaseReg = optionalDB.get();
-        return new DatabaseInfo(
-                databaseName,
-                databaseReg.toDatabaseDescriptor(),
-                databaseReg.createdTime,
-                databaseReg.modifiedTime);
+        return optionalDB.get();
     }
 
     public boolean databaseExists(String databaseName) {
