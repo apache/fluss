@@ -29,6 +29,7 @@ import org.junit.jupiter.api.Test;
 import java.time.Duration;
 
 import static org.apache.fluss.config.ConfigOptions.TABLE_DATALAKE_ENABLED;
+import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test for {@link CoordinatorContext}. */
@@ -82,6 +83,7 @@ class CoordinatorContextTest {
                 tableId,
                 1,
                 tableDescriptor,
+                DEFAULT_REMOTE_DATA_DIR,
                 System.currentTimeMillis(),
                 System.currentTimeMillis());
     }

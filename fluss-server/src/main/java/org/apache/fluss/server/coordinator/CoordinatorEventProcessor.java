@@ -716,6 +716,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
                         oldTableInfo.getNumBuckets(),
                         oldTableInfo.getProperties(),
                         oldTableInfo.getCustomProperties(),
+                        oldTableInfo.getRemoteDataDir(),
                         oldTableInfo.getComment().orElse(null),
                         oldTableInfo.getCreatedTime(),
                         System.currentTimeMillis()));

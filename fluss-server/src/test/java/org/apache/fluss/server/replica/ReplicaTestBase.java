@@ -110,6 +110,7 @@ import static org.apache.fluss.record.TestData.DATA3_SCHEMA_PK_AUTO_INC;
 import static org.apache.fluss.record.TestData.DATA3_TABLE_DESCRIPTOR_PK_AUTO_INC;
 import static org.apache.fluss.record.TestData.DATA3_TABLE_ID_PK_AUTO_INC;
 import static org.apache.fluss.record.TestData.DATA3_TABLE_PATH_PK_AUTO_INC;
+import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
 import static org.apache.fluss.server.coordinator.CoordinatorContext.INITIAL_COORDINATOR_EPOCH;
 import static org.apache.fluss.server.replica.ReplicaManager.HIGH_WATERMARK_CHECKPOINT_FILE_NAME;
 import static org.apache.fluss.server.zk.data.LeaderAndIsr.INITIAL_BUCKET_EPOCH;
@@ -259,22 +260,27 @@ public class ReplicaTestBase {
                 TableDescriptor.builder().schema(DATA1_SCHEMA).distributedBy(3).build();
         zkClient.registerTable(
                 DATA1_TABLE_PATH,
-                TableRegistration.newTable(DATA1_TABLE_ID, data1NonPkTableDescriptor));
+                TableRegistration.newTable(
+                        DATA1_TABLE_ID, DEFAULT_REMOTE_DATA_DIR, data1NonPkTableDescriptor));
         zkClient.registerFirstSchema(DATA1_TABLE_PATH, DATA1_SCHEMA);
         zkClient.registerTable(
                 DATA1_TABLE_PATH_PK,
-                TableRegistration.newTable(DATA1_TABLE_ID_PK, DATA1_TABLE_DESCRIPTOR_PK));
+                TableRegistration.newTable(
+                        DATA1_TABLE_ID_PK, DEFAULT_REMOTE_DATA_DIR, DATA1_TABLE_DESCRIPTOR_PK));
         zkClient.registerFirstSchema(DATA1_TABLE_PATH_PK, DATA1_SCHEMA_PK);
 
         zkClient.registerTable(
                 DATA2_TABLE_PATH,
-                TableRegistration.newTable(DATA2_TABLE_ID, DATA2_TABLE_DESCRIPTOR));
+                TableRegistration.newTable(
+                        DATA2_TABLE_ID, DEFAULT_REMOTE_DATA_DIR, DATA2_TABLE_DESCRIPTOR));
         zkClient.registerFirstSchema(DATA2_TABLE_PATH, DATA2_SCHEMA);
 
         zkClient.registerTable(
                 DATA3_TABLE_PATH_PK_AUTO_INC,
                 TableRegistration.newTable(
-                        DATA3_TABLE_ID_PK_AUTO_INC, DATA3_TABLE_DESCRIPTOR_PK_AUTO_INC));
+                        DATA3_TABLE_ID_PK_AUTO_INC,
+                        DEFAULT_REMOTE_DATA_DIR,
+                        DATA3_TABLE_DESCRIPTOR_PK_AUTO_INC));
         zkClient.registerFirstSchema(DATA3_TABLE_PATH_PK_AUTO_INC, DATA3_SCHEMA_PK_AUTO_INC);
     }
 
@@ -293,7 +299,9 @@ public class ReplicaTestBase {
         if (zkClient.tableExist(tablePath)) {
             zkClient.deleteTable(tablePath);
         }
-        zkClient.registerTable(tablePath, TableRegistration.newTable(tableId, tableDescriptor));
+        zkClient.registerTable(
+                tablePath,
+                TableRegistration.newTable(tableId, DEFAULT_REMOTE_DATA_DIR, tableDescriptor));
         zkClient.registerFirstSchema(tablePath, schema);
         return tableId;
     }

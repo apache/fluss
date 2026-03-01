@@ -58,6 +58,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
+import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
 import static org.apache.fluss.server.utils.TableAssignmentUtils.generateAssignment;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -144,6 +145,7 @@ class TableChangeWatcherTest {
                                     tableId,
                                     schemaInfo.getSchemaId(),
                                     TEST_TABLE,
+                                    DEFAULT_REMOTE_DATA_DIR,
                                     currentMillis,
                                     currentMillis),
                             tableAssignment));
@@ -206,6 +208,7 @@ class TableChangeWatcherTest {
                                 tableId,
                                 schemaInfo.getSchemaId(),
                                 partitionedTable,
+                                DEFAULT_REMOTE_DATA_DIR,
                                 currentMillis,
                                 currentMillis),
                         TableAssignment.builder().build()));
@@ -226,9 +229,9 @@ class TableChangeWatcherTest {
                                 .getBucketAssignments());
         // register assignment and metadata
         zookeeperClient.registerPartitionAssignmentAndMetadata(
-                1L, "2011", partitionAssignment, tablePath, tableId);
+                1L, "2011", partitionAssignment, DEFAULT_REMOTE_DATA_DIR, tablePath, tableId);
         zookeeperClient.registerPartitionAssignmentAndMetadata(
-                2L, "2022", partitionAssignment, tablePath, tableId);
+                2L, "2022", partitionAssignment, DEFAULT_REMOTE_DATA_DIR, tablePath, tableId);
 
         // create partitions events
         expectedEvents.add(
@@ -283,6 +286,7 @@ class TableChangeWatcherTest {
                                     tableId,
                                     schemaInfo.getSchemaId(),
                                     TEST_TABLE,
+                                    DEFAULT_REMOTE_DATA_DIR,
                                     currentMillis,
                                     currentMillis),
                             tableAssignment));
@@ -357,6 +361,7 @@ class TableChangeWatcherTest {
                                 tableId,
                                 schemaInfo.getSchemaId(),
                                 TEST_TABLE,
+                                DEFAULT_REMOTE_DATA_DIR,
                                 currentMillis,
                                 currentMillis),
                         tableAssignment));

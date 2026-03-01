@@ -711,6 +711,7 @@ class TableManagerITCase {
                         pbTableMetadata.getTableId(),
                         pbTableMetadata.getSchemaId(),
                         TableDescriptor.fromJsonBytes(pbTableMetadata.getTableJson()),
+                        pbTableMetadata.getRemoteDataDir(),
                         pbTableMetadata.getCreatedTime(),
                         pbTableMetadata.getModifiedTime());
         List<Schema.Column> columns = tableInfo.getSchema().getColumns();
