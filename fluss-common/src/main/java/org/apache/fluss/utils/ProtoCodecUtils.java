@@ -283,11 +283,21 @@ public final class ProtoCodecUtils {
     public static final class StringHolder {
         public String s;
         public int len;
+
+        @Override
+        public String toString() {
+            return s;
+        }
     }
 
     /** Holder for a byte array and byte length. */
     public static final class BytesHolder {
         public byte[] b;
         public int len;
+
+        @Override
+        public String toString() {
+            return "<byte[" + len + "]>";
+        }
     }
 }
