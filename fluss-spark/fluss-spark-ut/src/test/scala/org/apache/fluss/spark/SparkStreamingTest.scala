@@ -342,10 +342,8 @@ class SparkStreamingTest extends FlussSparkTestBase with StreamTest {
     withTable(tableName) {
       sql(s"CREATE TABLE $tableName (id int, data string) TBLPROPERTIES('bucket.num' = '1')")
 
-      // Pre-load data BEFORE starting the stream.
-      // We use "earliest" startup mode so the stream reads from the beginning.
-      // This avoids using AddFlussData mid-stream, which would cause the StreamTest
-      // framework to wait for all data to be consumed (incompatible with rate limiting).
+      // Pre-load data BEFORE starting the stream and use "earliest" startup mode so the stream reads from the beginning.
+      // This avoids using AddFlussData mid-stream.
       sql(
         s"INSERT INTO $tableName VALUES (1, 'data1'), (2, 'data2'), (3, 'data3'), (4, 'data4'), (5, 'data5')")
 
@@ -359,14 +357,17 @@ class SparkStreamingTest extends FlussSparkTestBase with StreamTest {
             ))
           .table(tableName))(
         StartStream(trigger = Trigger.ProcessingTime(500), clock),
+
         // First trigger should only get 2 records due to rate limit
         AdvanceManualClock(500),
         waitUntilBatchProcessed(clock),
         CheckNewAnswer(Row(1, "data1"), Row(2, "data2")),
+
         // Second trigger should get next 2 records
         AdvanceManualClock(500),
         waitUntilBatchProcessed(clock),
         CheckNewAnswer(Row(3, "data3"), Row(4, "data4")),
+
         // Third trigger should get the remaining 1 record
         AdvanceManualClock(500),
         waitUntilBatchProcessed(clock),
