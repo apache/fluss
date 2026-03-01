@@ -18,12 +18,11 @@
 package org.apache.fluss.fs.gs;
 
 import org.apache.fluss.fs.FileSystem;
+import org.apache.fluss.fs.gs.token.GSImpersonatedTokenProvider;
 import org.apache.fluss.fs.hdfs.HadoopFileSystem;
 import org.apache.fluss.fs.token.ObtainedSecurityToken;
 
 import org.apache.hadoop.conf.Configuration;
-
-import java.io.IOException;
 
 // TODO: implement obtainSecurityToken to enable clients access the Google File System
 //  through the FileSystem security token receiver API.
@@ -36,6 +35,8 @@ public class GSFileSystem extends HadoopFileSystem {
 
     private final String scheme;
     private final Configuration conf;
+
+    private volatile GSImpersonatedTokenProvider tokenProvider;
 
     /**
      * Creates a GSFileSystem based on the given Hadoop Google Cloud Storage file system. The given
@@ -53,7 +54,14 @@ public class GSFileSystem extends HadoopFileSystem {
     }
 
     @Override
-    public ObtainedSecurityToken obtainSecurityToken() throws IOException {
-        throw new UnsupportedOperationException("Not impl.");
+    public ObtainedSecurityToken obtainSecurityToken() {
+        if (tokenProvider == null) {
+            synchronized (this) {
+                if (tokenProvider == null) {
+                    tokenProvider = new GSImpersonatedTokenProvider(scheme, conf);
+                }
+            }
+        }
+        return tokenProvider.obtainSecurityToken();
     }
 }
