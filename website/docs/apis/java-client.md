@@ -206,7 +206,6 @@ rows.forEach(writer::upsert);
 // call flush() to blocking the thread until all data is written successfully
 writer.flush();
 ```
-
 For a Log table you can use the `AppendWriter` API to write data.
 ```java
 table.newAppend().createWriter().append(row);

@@ -119,15 +119,23 @@ public final class PojoToRowConverter<T> {
     private static FieldToRow createFieldConverter(PojoType.Property prop, DataType fieldType) {
         switch (fieldType.getTypeRoot()) {
             case BOOLEAN:
-            case TINYINT:
-            case SMALLINT:
-            case INTEGER:
-            case BIGINT:
-            case FLOAT:
-            case DOUBLE:
             case BINARY:
             case BYTES:
-                return prop::read;
+                return prop::read; // No casting needed
+
+            case TINYINT:
+                return (obj) -> convertToTinyInt(prop, prop.read(obj));
+            case SMALLINT:
+                return (obj) -> convertToSmallInt(prop, prop.read(obj));
+            case INTEGER:
+                return (obj) -> convertToInteger(prop, prop.read(obj));
+            case BIGINT:
+                return (obj) -> convertToBigInt(prop, prop.read(obj));
+            case FLOAT:
+                return (obj) -> convertToFloat(prop, prop.read(obj));
+            case DOUBLE:
+                return (obj) -> convertToDouble(prop, prop.read(obj));
+
             case CHAR:
             case STRING:
                 return (obj) -> convertTextValue(fieldType, prop, prop.read(obj));
@@ -322,6 +330,120 @@ public final class PojoToRowConverter<T> {
     private static int truncateNanos(int nanos, int precision) {
         int divisor = (int) Math.pow(10, 9 - precision);
         return (nanos / divisor) * divisor;
+    }
+
+    /** Converts a numeric POJO property to TINYINT (Byte). */
+    private static @Nullable Byte convertToTinyInt(PojoType.Property prop, @Nullable Object v) {
+        if (v == null) {
+            return null;
+        }
+        if (v instanceof Byte) {
+            return (Byte) v;
+        }
+        throw new IllegalArgumentException(
+                String.format(
+                        "Field %s cannot be converted to TINYINT. Type: %s",
+                        prop.name, v.getClass().getName()));
+    }
+
+    /** Converts a numeric POJO property to SMALLINT (Short) with widening support. */
+    private static @Nullable Short convertToSmallInt(PojoType.Property prop, @Nullable Object v) {
+        if (v == null) {
+            return null;
+        }
+        if (v instanceof Short) {
+            return (Short) v;
+        }
+        if (v instanceof Byte) {
+            return ((Byte) v).shortValue(); // byte -> short widening
+        }
+        throw new IllegalArgumentException(
+                String.format(
+                        "Field %s cannot be converted to SMALLINT. Type: %s",
+                        prop.name, v.getClass().getName()));
+    }
+
+    /** Converts a numeric POJO property to INTEGER (Integer) with widening support. */
+    private static @Nullable Integer convertToInteger(PojoType.Property prop, @Nullable Object v) {
+        if (v == null) {
+            return null;
+        }
+        if (v instanceof Integer) {
+            return (Integer) v;
+        }
+        if (v instanceof Short) {
+            return ((Short) v).intValue(); // short -> int widening
+        }
+        if (v instanceof Byte) {
+            return ((Byte) v).intValue(); // byte -> int widening
+        }
+        throw new IllegalArgumentException(
+                String.format(
+                        "Field %s cannot be converted to INTEGER. Type: %s",
+                        prop.name, v.getClass().getName()));
+    }
+
+    /** Converts a numeric POJO property to BIGINT (Long) with widening support. */
+    private static @Nullable Long convertToBigInt(PojoType.Property prop, @Nullable Object v) {
+        if (v == null) {
+            return null;
+        }
+        if (v instanceof Long) {
+            return (Long) v;
+        }
+        if (v instanceof Integer) {
+            return ((Integer) v).longValue(); // int -> long widening
+        }
+        if (v instanceof Short) {
+            return ((Short) v).longValue(); // short -> long widening
+        }
+        if (v instanceof Byte) {
+            return ((Byte) v).longValue(); // byte -> long widening
+        }
+        throw new IllegalArgumentException(
+                String.format(
+                        "Field %s cannot be converted to BIGINT. Type: %s",
+                        prop.name, v.getClass().getName()));
+    }
+
+    /** Converts a numeric POJO property to FLOAT (Float) with widening support. */
+    private static @Nullable Float convertToFloat(PojoType.Property prop, @Nullable Object v) {
+        if (v == null) {
+            return null;
+        }
+        if (v instanceof Float) {
+            return (Float) v;
+        }
+        if (v instanceof Long) {
+            return ((Long) v).floatValue(); // long -> float widening
+        }
+        if (v instanceof Integer) {
+            return ((Integer) v).floatValue(); // int -> float widening
+        }
+        if (v instanceof Short) {
+            return ((Short) v).floatValue(); // short -> float widening
+        }
+        if (v instanceof Byte) {
+            return ((Byte) v).floatValue(); // byte -> float widening
+        }
+        throw new IllegalArgumentException(
+                String.format(
+                        "Field %s cannot be converted to FLOAT. Type: %s",
+                        prop.name, v.getClass().getName()));
+    }
+
+    /** Converts a numeric POJO property to DOUBLE (Double) with widening support. */
+    private static @Nullable Double convertToDouble(PojoType.Property prop, @Nullable Object v) {
+        if (v == null) {
+            return null;
+        }
+        if (v instanceof Number) {
+            return ((Number) v).doubleValue();
+        }
+        throw new IllegalArgumentException(
+                String.format(
+                        "Field %s cannot be converted to DOUBLE. Type: %s",
+                        prop.name, v.getClass().getName()));
     }
 
     private interface FieldToRow {
