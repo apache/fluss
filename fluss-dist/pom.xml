@@ -78,6 +78,13 @@
 
         <dependency>
             <groupId>org.apache.fluss</groupId>
+            <artifactId>fluss-metrics-opentelemetry</artifactId>
+            <version>0.8-SNAPSHOT</version>
+            <scope>provided</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>org.apache.fluss</groupId>
             <artifactId>fluss-lake-paimon</artifactId>
             <version>${project.version}</version>
             <scope>provided</scope>
@@ -96,7 +103,7 @@
             <version>${project.version}</version>
             <scope>provided</scope>
         </dependency>
-      
+
         <dependency>
             <groupId>org.apache.flink</groupId>
             <artifactId>flink-shaded-hadoop-2-uber</artifactId>

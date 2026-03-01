@@ -80,6 +80,15 @@
             <fileMode>0644</fileMode>
         </file>
 
+        <file>
+            <source>
+                ../fluss-metrics/fluss-metrics-opentelemetry/target/fluss-metrics-opentelemetry-${project.version}.jar
+            </source>
+            <outputDirectory>plugins/opentelemetry/</outputDirectory>
+            <destName>fluss-metrics-opentelemetry-${project.version}.jar</destName>
+            <fileMode>0644</fileMode>
+        </file>
+
         <!-- lake formats -->
         <file>
             <source>../fluss-lake/fluss-lake-paimon/target/fluss-lake-paimon-${project.version}.jar</source>
