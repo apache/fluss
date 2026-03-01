@@ -52,4 +52,15 @@ public class StringUtilsTest {
                                 new Object[] {new Integer[] {4, 5, 6}, null, DayOfWeek.MONDAY}))
                 .isEqualTo("[[4, 5, 6], null, MONDAY]");
     }
+
+    @Test
+    void testMaskSecret() {
+        assertThat(StringUtils.maskSecret(null)).isEqualTo("");
+        assertThat(StringUtils.maskSecret("")).isEqualTo("");
+        assertThat(StringUtils.maskSecret("A")).isEqualTo("A******");
+        assertThat(StringUtils.maskSecret("AB")).isEqualTo("AB******");
+        assertThat(StringUtils.maskSecret("ABC")).isEqualTo("ABC******");
+        assertThat(StringUtils.maskSecret("ABCD")).isEqualTo("ABC******");
+        assertThat(StringUtils.maskSecret("ABCDE")).isEqualTo("ABC******");
+    }
 }
