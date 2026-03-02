@@ -60,22 +60,6 @@ tests:
 
 ---
 
-suite: pass-through-mechanisms
-templates:
-  - templates/sts-tablet.yaml
-tests:
-  - it: accepts scram and oauthbearer mechanisms
-    set:
-      security.client.sasl.mechanism: oauthbearer
-      security.internal.sasl.mechanism: scram
-      security.internal.sasl.scram.sha: 512
-    asserts:
-      - matchRegex:
-          path: spec.template.spec.containers[0].command[2]
-          pattern: 'security\.sasl\.enabled\.mechanisms: SCRAM-SHA-512,OAUTHBEARER'
-
----
-
 suite: plain-validation
 templates:
   - templates/secret-jaas-config.yaml
@@ -240,7 +224,7 @@ tests:
 
 ---
 
-suite: mechanism-and-scram-validation
+suite: mechanism-validation
 templates:
   - templates/sts-tablet.yaml
 tests:
@@ -249,14 +233,7 @@ tests:
       security.client.sasl.mechanism: bogus
     asserts:
       - failedTemplate:
-          errorMessage: 'security.client.sasl.mechanism must be one of: none, plain, scram, oauthbearer'
-  - it: fails for invalid internal scram sha
-    set:
-      security.internal.sasl.mechanism: scram
-      security.internal.sasl.scram.sha: 1024
-    asserts:
-      - failedTemplate:
-          errorMessage: security.internal.sasl.scram.sha must be 256 or 512
+          errorMessage: 'security.client.sasl.mechanism must be one of: none, plain'
 
 ---
 
