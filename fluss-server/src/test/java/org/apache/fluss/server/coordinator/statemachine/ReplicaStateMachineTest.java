@@ -54,6 +54,7 @@ import java.util.Map;
 
 import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
+import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
 import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.NewReplica;
 import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.OfflineReplica;
 import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.OnlineReplica;
@@ -202,6 +203,7 @@ class ReplicaStateMachineTest {
                         tableId,
                         0,
                         DATA1_TABLE_DESCRIPTOR,
+                        DEFAULT_REMOTE_DATA_DIR,
                         System.currentTimeMillis(),
                         System.currentTimeMillis()));
         coordinatorContext.putTablePath(tableId, DATA1_TABLE_PATH);
@@ -240,6 +242,7 @@ class ReplicaStateMachineTest {
                         tableId,
                         0,
                         DATA1_TABLE_DESCRIPTOR,
+                        DEFAULT_REMOTE_DATA_DIR,
                         System.currentTimeMillis(),
                         System.currentTimeMillis()));
         coordinatorContext.putTablePath(tableId, DATA1_TABLE_PATH);

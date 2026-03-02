@@ -76,6 +76,7 @@ import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_ID;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_INFO;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
+import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
 import static org.apache.fluss.testutils.DataTestUtils.indexedRow;
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -96,6 +97,7 @@ class RecordAccumulatorTest {
                             .distributedBy(3)
                             .property(ConfigOptions.TABLE_LOG_ARROW_COMPRESSION_TYPE.key(), "zstd")
                             .build(),
+                    DEFAULT_REMOTE_DATA_DIR,
                     System.currentTimeMillis(),
                     System.currentTimeMillis());
 

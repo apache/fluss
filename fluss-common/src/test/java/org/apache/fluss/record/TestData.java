@@ -39,6 +39,7 @@ public final class TestData {
     public static final short DEFAULT_SCHEMA_ID = 1;
     public static final long BASE_OFFSET = 0L;
     public static final byte DEFAULT_MAGIC = CURRENT_LOG_MAGIC_VALUE;
+    public static final String DEFAULT_REMOTE_DATA_DIR = "/tmp/fluss/remote-data";
     // ---------------------------- data1 and related table info begin ---------------------------
     public static final List<Object[]> DATA1 =
             Arrays.asList(
@@ -93,6 +94,7 @@ public final class TestData {
                     DATA1_TABLE_ID,
                     1,
                     DATA1_TABLE_DESCRIPTOR,
+                    DEFAULT_REMOTE_DATA_DIR,
                     currentMillis,
                     currentMillis);
 
@@ -118,6 +120,7 @@ public final class TestData {
                     PARTITION_TABLE_ID,
                     1,
                     DATA1_PARTITIONED_TABLE_DESCRIPTOR,
+                    DEFAULT_REMOTE_DATA_DIR,
                     System.currentTimeMillis(),
                     System.currentTimeMillis());
 
@@ -148,6 +151,7 @@ public final class TestData {
                     DATA1_TABLE_ID_PK,
                     1,
                     DATA1_TABLE_DESCRIPTOR_PK,
+                    DEFAULT_REMOTE_DATA_DIR,
                     currentMillis,
                     currentMillis);
 
@@ -217,6 +221,7 @@ public final class TestData {
                     DATA2_TABLE_ID,
                     1,
                     DATA2_TABLE_DESCRIPTOR,
+                    DEFAULT_REMOTE_DATA_DIR,
                     System.currentTimeMillis(),
                     System.currentTimeMillis());
     // -------------------------------- data2 info end ------------------------------------

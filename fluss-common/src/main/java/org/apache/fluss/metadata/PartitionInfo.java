@@ -22,8 +22,8 @@ import org.apache.fluss.annotation.PublicEvolving;
 import java.util.Objects;
 
 /**
- * Information of a partition metadata, includes the partition's name and the partition id that
- * represents the unique identifier of the partition.
+ * Information of a partition metadata, includes partition id (unique identifier of the partition),
+ * partition name, remote data dir for partitioned data storage, etc.
  *
  * @since 0.2
  */
@@ -31,10 +31,13 @@ import java.util.Objects;
 public class PartitionInfo {
     private final long partitionId;
     private final ResolvedPartitionSpec partitionSpec;
+    private final String remoteDataDir;
 
-    public PartitionInfo(long partitionId, ResolvedPartitionSpec partitionSpec) {
+    public PartitionInfo(
+            long partitionId, ResolvedPartitionSpec partitionSpec, String remoteDataDir) {
         this.partitionId = partitionId;
         this.partitionSpec = partitionSpec;
+        this.remoteDataDir = remoteDataDir;
     }
 
     /** Get the partition id. The id is globally unique in the Fluss cluster. */
@@ -58,6 +61,10 @@ public class PartitionInfo {
         return partitionSpec.toPartitionSpec();
     }
 
+    public String getRemoteDataDir() {
+        return remoteDataDir;
+    }
+
     @Override
     public boolean equals(Object o) {
         if (this == o) {
@@ -67,16 +74,25 @@ public class PartitionInfo {
             return false;
         }
         PartitionInfo that = (PartitionInfo) o;
-        return partitionId == that.partitionId && Objects.equals(partitionSpec, that.partitionSpec);
+        return partitionId == that.partitionId
+                && Objects.equals(partitionSpec, that.partitionSpec)
+                && Objects.equals(remoteDataDir, that.remoteDataDir);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(partitionId, partitionSpec);
+        return Objects.hash(partitionId, partitionSpec, remoteDataDir);
     }
 
     @Override
     public String toString() {
-        return "Partition{name='" + getPartitionName() + '\'' + ", id=" + partitionId + '}';
+        return "Partition{name='"
+                + getPartitionName()
+                + '\''
+                + ", id="
+                + partitionId
+                + ", remoteDataDir="
+                + remoteDataDir
+                + '}';
     }
 }

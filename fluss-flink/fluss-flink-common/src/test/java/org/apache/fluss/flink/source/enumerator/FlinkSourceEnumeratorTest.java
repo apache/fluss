@@ -76,6 +76,7 @@ import java.util.Set;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.client.table.scanner.log.LogScanner.EARLIEST_OFFSET;
+import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -646,13 +647,15 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
                     ResolvedPartitionSpec.fromPartitionName(
                             Collections.singletonList(isPrimaryKeyTable ? "date" : "name"),
                             partitionName);
-            lakePartitionInfos.add(new PartitionInfo(partitionId, partitionSpec));
+            lakePartitionInfos.add(
+                    new PartitionInfo(partitionId, partitionSpec, DEFAULT_REMOTE_DATA_DIR));
         }
         ResolvedPartitionSpec partitionSpec =
                 ResolvedPartitionSpec.fromPartitionName(
                         Collections.singletonList(isPrimaryKeyTable ? "date" : "name"),
                         hybridPartitionName);
-        lakePartitionInfos.add(new PartitionInfo(hybridPartitionId, partitionSpec));
+        lakePartitionInfos.add(
+                new PartitionInfo(hybridPartitionId, partitionSpec, DEFAULT_REMOTE_DATA_DIR));
 
         LakeSource<LakeSplit> lakeSource =
                 new TestingLakeSource(DEFAULT_BUCKET_NUM, lakePartitionInfos);

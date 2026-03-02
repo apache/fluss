@@ -45,6 +45,7 @@ import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_ID;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_INFO;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
+import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
 import static org.apache.fluss.server.metadata.PartitionMetadata.DELETED_PARTITION_ID;
 import static org.apache.fluss.server.metadata.TableMetadata.DELETED_TABLE_ID;
 import static org.apache.fluss.server.zk.data.LeaderAndIsr.NO_LEADER;
@@ -69,6 +70,7 @@ public class TabletServerMetadataCacheTest {
                     partitionTableId,
                     0,
                     DATA1_PARTITIONED_TABLE_DESCRIPTOR,
+                    DEFAULT_REMOTE_DATA_DIR,
                     100L,
                     100L);
     private List<TableMetadata> tableMetadataList;
@@ -217,6 +219,7 @@ public class TabletServerMetadataCacheTest {
                                                 // deletion.
                                                 1,
                                                 DATA1_TABLE_DESCRIPTOR,
+                                                DEFAULT_REMOTE_DATA_DIR,
                                                 System.currentTimeMillis(),
                                                 System.currentTimeMillis()),
                                         changedBucket1BucketMetadata)),

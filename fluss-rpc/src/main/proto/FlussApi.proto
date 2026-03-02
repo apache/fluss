@@ -139,6 +139,7 @@ message GetTableInfoResponse {
   required bytes table_json = 3;
   required int64 created_time = 4;
   required int64 modified_time = 5;
+  optional string remote_data_dir = 6;
 }
 
 // list tables request and response
@@ -762,6 +763,7 @@ message PbTableMetadata {
   repeated PbBucketMetadata bucket_metadata = 5;
   required int64 created_time = 6;
   required int64 modified_time = 7;
+  optional string remote_data_dir = 8;
 
   // TODO add a new filed 'deleted_table' to indicate this table is deleted in UpdateMetadataRequest.
   // trace by: https://github.com/apache/fluss/issues/981
@@ -1006,6 +1008,7 @@ message PbRemoteLogSegment {
 message PbPartitionInfo {
   required int64 partition_id = 1;
   required PbPartitionSpec partition_spec = 2;
+  optional string remote_data_dir = 3;
 }
 
 message PbPartitionSpec {

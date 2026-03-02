@@ -410,6 +410,23 @@ public class FlussPaths {
     }
 
     // ----------------------------------------------------------------------------------------
+    // Remote Data Paths
+    // ----------------------------------------------------------------------------------------
+
+    /**
+     * Returns the remote root directory path for storing data files.
+     *
+     * <p>The path contract:
+     *
+     * <pre>
+     * {$remote.data.dir}
+     * </pre>
+     */
+    public static FsPath remoteDataDir(Configuration conf) {
+        return new FsPath(conf.get(ConfigOptions.REMOTE_DATA_DIR));
+    }
+
+    // ----------------------------------------------------------------------------------------
     // Remote Log Paths
     // ----------------------------------------------------------------------------------------
 

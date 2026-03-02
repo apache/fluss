@@ -68,6 +68,7 @@ import java.util.Map;
 import java.util.stream.Stream;
 
 import static org.apache.fluss.lake.committer.LakeCommitter.FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY;
+import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** The UT for tiering to Lance via {@link LanceLakeTieringFactory}. */
@@ -114,7 +115,8 @@ class LanceTieringTest {
                         .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
                         .customProperties(customProperties)
                         .build();
-        TableInfo tableInfo = TableInfo.of(tablePath, 0, 1, descriptor, 1L, 1L);
+        TableInfo tableInfo =
+                TableInfo.of(tablePath, 0, 1, descriptor, DEFAULT_REMOTE_DATA_DIR, 1L, 1L);
 
         List<LanceWriteResult> lanceWriteResults = new ArrayList<>();
         SimpleVersionedSerializer<LanceWriteResult> writeResultSerializer =

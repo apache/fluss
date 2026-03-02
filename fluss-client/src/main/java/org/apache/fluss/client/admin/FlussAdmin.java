@@ -298,6 +298,9 @@ public class FlussAdmin implements Admin {
                                         r.getTableId(),
                                         r.getSchemaId(),
                                         TableDescriptor.fromJsonBytes(r.getTableJson()),
+                                        // For backward compatibility, results returned by old
+                                        // clusters do not include the remote data dir
+                                        r.hasRemoteDataDir() ? r.getRemoteDataDir() : null,
                                         r.getCreatedTime(),
                                         r.getModifiedTime()));
     }
