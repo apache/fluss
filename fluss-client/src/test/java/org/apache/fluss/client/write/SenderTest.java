@@ -24,6 +24,7 @@ import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.MemorySize;
+import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.exception.TimeoutException;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
@@ -61,12 +62,14 @@ import static org.apache.fluss.record.LogRecordBatchFormat.NO_WRITER_ID;
 import static org.apache.fluss.record.TestData.DATA1_PHYSICAL_TABLE_PATH;
 import static org.apache.fluss.record.TestData.DATA1_ROW_TYPE;
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA_PK;
+import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_ID;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_ID_PK;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_INFO;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_INFO_PK;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH_PK;
+import static org.apache.fluss.record.TestData.DATA2_TABLE_ID;
 import static org.apache.fluss.rpc.protocol.Errors.SCHEMA_NOT_EXIST;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getProduceLogData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeProduceLogResponse;
@@ -747,6 +750,39 @@ final class SenderTest {
         assertThat(future.get()).isNull();
     }
 
+    @Test
+    void testSendWhenTableIdChanges() throws Exception {
+        CompletableFuture<Exception> future1 = new CompletableFuture<>();
+        appendToAccumulator(tb1, row(1, "a"), (tb, leo, e) -> future1.complete(e));
+        TableInfo newTableInfo =
+                TableInfo.of(
+                        DATA1_TABLE_PATH,
+                        DATA2_TABLE_ID,
+                        1,
+                        DATA1_TABLE_DESCRIPTOR,
+                        System.currentTimeMillis(),
+                        System.currentTimeMillis());
+        TableBucket newTableBucket = new TableBucket(newTableInfo.getTableId(), tb1.getBucket());
+
+        metadataUpdater.updateTableInfos(Collections.singletonMap(DATA1_TABLE_PATH, newTableInfo));
+        sender.runOnce();
+        Exception exception = future1.get();
+        assertThat(exception).isNotNull();
+        assertThat(exception).isExactlyInstanceOf(TableNotExistException.class);
+        assertThat(exception.getMessage())
+                .contains(
+                        String.format(
+                                "Table '%s' has been dropped and re-created with a new table ID (old: %s, new: %s)",
+                                DATA1_TABLE_PATH, DATA1_TABLE_ID, newTableInfo.getTableId()));
+
+        CompletableFuture<Exception> future2 = new CompletableFuture<>();
+        appendToAccumulator(
+                newTableInfo, newTableBucket, row(1, "a"), (tb, leo, e) -> future2.complete(e));
+        sender.runOnce();
+        finishRequest(newTableBucket, 0, createProduceLogResponse(newTableBucket, 0, 1));
+        assertThat(future2.get()).isNull();
+    }
+
     private TestingMetadataUpdater initializeMetadataUpdater() {
         Map<TablePath, TableInfo> tableInfos = new HashMap<>();
         tableInfos.put(DATA1_TABLE_PATH, DATA1_TABLE_INFO);
@@ -756,8 +792,14 @@ final class SenderTest {
 
     private void appendToAccumulator(TableBucket tb, GenericRow row, WriteCallback writeCallback)
             throws Exception {
+        appendToAccumulator(DATA1_TABLE_INFO, tb, row, writeCallback);
+    }
+
+    private void appendToAccumulator(
+            TableInfo tableInfo, TableBucket tb, GenericRow row, WriteCallback writeCallback)
+            throws Exception {
         accumulator.append(
-                WriteRecord.forArrowAppend(DATA1_TABLE_INFO, DATA1_PHYSICAL_TABLE_PATH, row, null),
+                WriteRecord.forArrowAppend(tableInfo, DATA1_PHYSICAL_TABLE_PATH, row, null),
                 writeCallback,
                 metadataUpdater.getCluster(),
                 tb.getBucket(),

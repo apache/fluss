@@ -87,6 +87,11 @@ public class TestingMetadataUpdater extends MetadataUpdater {
         }
     }
 
+    public void updateTableInfos(Map<TablePath, TableInfo> tableInfos) {
+        initializeCluster(
+                cluster.getCoordinatorServer(), cluster.getAliveTabletServerList(), tableInfos);
+    }
+
     /**
      * Create a builder for constructing TestingMetadataUpdater with custom gateways.
      *
