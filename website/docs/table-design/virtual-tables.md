@@ -169,34 +169,40 @@ The `before` and `after` columns are nested ROW types containing all columns fro
 
 ### Examples
 
+Consider the same Primary Key Table tracking user orders:
+
 ```sql title="Flink SQL"
 -- Create a primary key table
-CREATE TABLE users (
-    user_id INT NOT NULL,
-    name STRING,
-    email STRING,
-    PRIMARY KEY (user_id) NOT ENFORCED
+CREATE TABLE orders (
+    order_id INT NOT NULL,
+    customer_name STRING,
+    amount DECIMAL(10, 2),
+    PRIMARY KEY (order_id) NOT ENFORCED
 ) WITH ('bucket.num' = '1');
 
--- Insert, update, then delete a record
-INSERT INTO users VALUES (1, 'Alice', 'alice@example.com');
-INSERT INTO users VALUES (1, 'Alice Smith', 'alice.smith@example.com');
-DELETE FROM users WHERE user_id = 1;
+-- Insert a record
+INSERT INTO orders VALUES (1, 'Rhea', 100.00);
+
+-- Update the record
+INSERT INTO orders VALUES (1, 'Rhea', 150.00);
+
+-- Delete the record
+DELETE FROM orders WHERE order_id = 1;
 
 -- Query the binlog
-SELECT * FROM users$binlog;
+SELECT * FROM orders$binlog;
 ```
 
 Output:
 
 ```
-+--------------+-------------+---------------------+----------------------------------+--------------------------------------+
-| _change_type | _log_offset | _commit_timestamp   | before                           | after                                |
-+--------------+-------------+---------------------+----------------------------------+--------------------------------------+
-| insert       |           0 | 2024-01-15 10:30:00 | NULL                             | (1, Alice, alice@example.com)        |
-| update       |           2 | 2024-01-15 10:35:00 | (1, Alice, alice@example.com)    | (1, Alice Smith, alice.smith@example.com) |
-| delete       |           3 | 2024-01-15 10:40:00 | (1, Alice Smith, alice.smith@example.com) | NULL                        |
-+--------------+-------------+---------------------+----------------------------------+--------------------------------------+
++--------------+-------------+---------------------+----------------------+----------------------+
+| _change_type | _log_offset | _commit_timestamp   | before               | after                |
++--------------+-------------+---------------------+----------------------+----------------------+
+| insert       |           0 | 2024-01-15 10:30:00 | NULL                 | (1, Rhea, 100.00)    |
+| update       |           2 | 2024-01-15 10:35:00 | (1, Rhea, 100.00)    | (1, Rhea, 150.00)    |
+| delete       |           3 | 2024-01-15 10:40:00 | (1, Rhea, 150.00)    | NULL                 |
++--------------+-------------+---------------------+----------------------+----------------------+
 ```
 
 #### Accessing Nested Fields
