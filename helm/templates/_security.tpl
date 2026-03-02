@@ -18,7 +18,7 @@
 
 {{/*
 Returns the authentication mechanism value of a given listener.
-Allowed mechanism values: 'none', 'plain', 'scram', 'oauthbearer'
+Allowed mechanism values: 'none', 'plain'
 Usage:
   include "fluss.security.listener.mechanism" (dict "Values" .Values "listener" "client")
 
@@ -45,14 +45,14 @@ The reason for this is that include can only pass one argument, so dict is a sta
 {{- $listener := index .Values.security .listener | default (dict) -}}
 {{- $sasl := $listener.sasl | default (dict) -}}
 {{- $mechanism := lower (default "" $sasl.mechanism) -}}
-{{- if not (has $mechanism (list "none" "plain" "scram" "oauthbearer")) -}}
-{{- fail (printf "security.%s.sasl.mechanism must be one of: none, plain, scram, oauthbearer" .listener) -}}
+{{- if not (has $mechanism (list "none" "plain")) -}}
+{{- fail (printf "security.%s.sasl.mechanism must be one of: none, plain" .listener) -}}
 {{- end -}}
 {{- $mechanism -}}
 {{- end -}}
 
 {{/*
-Returns true if any of the listeners uses SASL based authentication mechanism ('plain', 'scram', 'oauthbearer').
+Returns true if any of the listeners uses SASL based authentication mechanism ('plain' for now).
 Usage:
   include "fluss.security.sasl.enabled" .
 */}}
@@ -84,39 +84,6 @@ Usage:
 {{- end -}}
 
 {{/*
-Returns values file mechanisms as the Fluss expected configuration mechanisms.
-
-Why this helper exists:
-- Values file use: none | plain | scram | oauthbearer
-- Fluss configuration expects: PLAIN | SCRAM-SHA-256 | SCRAM-SHA-512 | OAUTHBEARER
-- SCRAM also needs sha variant mapping/validation (256 or 512)
-
-This is internal method, specific to this file used by other methods.
-
-Usage:
-  include "fluss.security.listener.normalizeMechanism" (dict "Values" .Values "listener" "client")
-*/}}
-{{- define "fluss.security.listener.normalizeMechanism" -}}
-{{- $mechanism := include "fluss.security.listener.mechanism" (dict "Values" .Values "listener" .listener) -}}
-{{- if eq $mechanism "plain" -}}
-PLAIN
-{{- else if eq $mechanism "oauthbearer" -}}
-OAUTHBEARER
-{{- else if eq $mechanism "scram" -}}
-  {{- $listenerBlock := index .Values.security .listener | default (dict) -}}
-  {{- $sasl := $listenerBlock.sasl | default (dict) -}}
-  {{- $scram := $sasl.scram | default (dict) -}}
-  {{- $sha := int (default 256 $scram.sha) -}}
-  {{- if and (ne $sha 256) (ne $sha 512) -}}
-  {{- fail (printf "security.%s.sasl.scram.sha must be 256 or 512" .listener) -}}
-  {{- end -}}
-SCRAM-SHA-{{ $sha }}
-{{- else -}}
-NONE
-{{- end -}}
-{{- end -}}
-
-{{/*
 Returns comma separated list of enabled mechanisms.
 Usage:
   include "fluss.security.sasl.enabledMechanisms" .
@@ -127,24 +94,12 @@ Example usage:
 {{- define "fluss.security.sasl.enabledMechanisms" -}}
 {{- $mechanisms := list -}}
 {{- range $listener := list "internal" "client" -}}
-  {{- $current := include "fluss.security.listener.normalizeMechanism" (dict "Values" $.Values "listener" $listener) | trim -}}
-  {{- if and (ne $current "") (ne $current "NONE") (not (has $current $mechanisms)) -}}
-    {{- $mechanisms = append $mechanisms $current -}}
+  {{- $current := include "fluss.security.listener.mechanism" (dict "Values" $.Values "listener" $listener) -}}
+  {{- if and (ne $current "none") (not (has (upper $current) $mechanisms)) -}}
+    {{- $mechanisms = append $mechanisms (upper $current) -}}
   {{- end -}}
 {{- end -}}
 {{- join "," $mechanisms -}}
-{{- end -}}
-
-{{/*
-Returns the normalized client listener mechanism.
-Usage:
-  include "fluss.security.internal.clientMechanism" .
-
-Example usage:
-  "client.security.sasl.mechanism: {{ include "fluss.security.internal.clientMechanism" . | trim }}"
-*/}}
-{{- define "fluss.security.internal.clientMechanism" -}}
-{{- include "fluss.security.listener.normalizeMechanism" (dict "Values" .Values "listener" "internal") | trim -}}
 {{- end -}}
 
 {{/*
@@ -155,7 +110,6 @@ Usage:
 */}}
 {{- define "fluss.security.sasl.validatePlainUsers" -}}
 {{- $clientMechanism := include "fluss.security.listener.mechanism" (dict "Values" .Values "listener" "client") -}}
-{{- $internalMechanism := include "fluss.security.listener.mechanism" (dict "Values" .Values "listener" "internal") -}}
 
 {{- if eq $clientMechanism "plain" -}}
   {{- $users := .Values.security.client.sasl.plain.users | default (list) -}}
@@ -178,7 +132,7 @@ Usage:
 {{- define "fluss.security.renderSecurityOptions" -}}
 {{- $internalProtocol := include "fluss.security.listener.protocol" (dict "Values" .Values "listener" "internal") | trim -}}
 {{- $enabledMechanisms := include "fluss.security.sasl.enabledMechanisms" . | trim }}
-{{- $internalClientMechanism := include "fluss.security.internal.clientMechanism" . | trim }}
+{{- $internalClientMechanism := include "fluss.security.listener.mechanism" (dict "Values" .Values "listener" "internal") | upper }}
 
 {{- if (include "fluss.security.sasl.enabled" .) }}
 echo "security.sasl.enabled.mechanisms: {{ $enabledMechanisms }}" >> $FLUSS_HOME/conf/server.yaml && \

@@ -110,16 +110,7 @@ listeners:
     port: 9124
 
 security:
-  tls:
-    existingSecret: ""
-    certFileKey: tls.crt
-    keyFileKey: tls.key
-    caFileKey: ca.crt
-
   client:
-    tls:
-      enabled: false
-      clientAuth: none
     sasl:
       mechanism: plain
       plain:
@@ -128,9 +119,6 @@ security:
             password: client-password
 
   internal:
-    tls:
-      enabled: false
-      clientAuth: required
     sasl:
       mechanism: plain
       plain:
