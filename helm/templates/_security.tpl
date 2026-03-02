@@ -103,12 +103,12 @@ Example usage:
 {{- end -}}
 
 {{/*
-Validates that the PLAIN mechanism block contains the required users.
+Validates that the client PLAIN mechanism block contains the required users.
 
 Usage:
-  include "fluss.security.sasl.validatePlainUsers" .
+  include "fluss.security.sasl.validateClientPlainUsers" .
 */}}
-{{- define "fluss.security.sasl.validatePlainUsers" -}}
+{{- define "fluss.security.sasl.validateClientPlainUsers" -}}
 {{- $clientMechanism := include "fluss.security.listener.mechanism" (dict "Values" .Values "listener" "client") -}}
 
 {{- if eq $clientMechanism "plain" -}}
