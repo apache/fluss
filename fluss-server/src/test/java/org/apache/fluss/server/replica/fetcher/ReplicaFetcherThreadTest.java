@@ -75,6 +75,7 @@ import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_ID;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
+import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
 import static org.apache.fluss.server.coordinator.CoordinatorContext.INITIAL_COORDINATOR_EPOCH;
 import static org.apache.fluss.server.metrics.group.TestingMetricGroups.USER_METRICS;
 import static org.apache.fluss.server.zk.data.LeaderAndIsr.INITIAL_BUCKET_EPOCH;
@@ -377,7 +378,8 @@ public class ReplicaFetcherThreadTest {
         ZOO_KEEPER_EXTENSION_WRAPPER.getCustomExtension().cleanupRoot();
         zkClient.registerTable(
                 DATA1_TABLE_PATH,
-                TableRegistration.newTable(DATA1_TABLE_ID, DATA1_TABLE_DESCRIPTOR));
+                TableRegistration.newTable(
+                        DATA1_TABLE_ID, DEFAULT_REMOTE_DATA_DIR, DATA1_TABLE_DESCRIPTOR));
         zkClient.registerFirstSchema(DATA1_TABLE_PATH, DATA1_SCHEMA);
     }
 

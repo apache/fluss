@@ -59,6 +59,7 @@ class LakeTableHelperTest {
             new AllCallbackWrapper<>(new ZooKeeperExtension());
 
     private static ZooKeeperClient zookeeperClient;
+    private static String remoteDataDir;
 
     @BeforeAll
     static void beforeAll() {
@@ -66,6 +67,7 @@ class LakeTableHelperTest {
                 ZOO_KEEPER_EXTENSION_WRAPPER
                         .getCustomExtension()
                         .getZooKeeperClient(NOPErrorHandler.INSTANCE);
+        remoteDataDir = zookeeperClient.getRemoteDataDir();
     }
 
     @AfterEach
@@ -267,6 +269,7 @@ class LakeTableHelperTest {
                 new TableDescriptor.TableDistribution(1, Collections.singletonList("a")),
                 Collections.emptyMap(),
                 Collections.emptyMap(),
+                remoteDataDir,
                 System.currentTimeMillis(),
                 System.currentTimeMillis());
     }

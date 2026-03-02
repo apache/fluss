@@ -64,6 +64,7 @@ import java.util.concurrent.Executors;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
+import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
 import static org.apache.fluss.server.coordinator.CoordinatorTestUtils.createServers;
 import static org.apache.fluss.server.coordinator.CoordinatorTestUtils.makeSendLeaderAndStopRequestAlwaysSuccess;
 import static org.apache.fluss.server.coordinator.statemachine.BucketState.NewBucket;
@@ -215,6 +216,7 @@ class TableBucketStateMachineTest {
                         tableId,
                         0,
                         DATA1_TABLE_DESCRIPTOR,
+                        DEFAULT_REMOTE_DATA_DIR,
                         System.currentTimeMillis(),
                         System.currentTimeMillis()));
         coordinatorContext.putTablePath(tableId, fakeTablePath);
@@ -360,6 +362,7 @@ class TableBucketStateMachineTest {
                         tableId,
                         0,
                         DATA1_TABLE_DESCRIPTOR,
+                        DEFAULT_REMOTE_DATA_DIR,
                         System.currentTimeMillis(),
                         System.currentTimeMillis()));
         coordinatorContext.putTablePath(tableId, fakeTablePath);
