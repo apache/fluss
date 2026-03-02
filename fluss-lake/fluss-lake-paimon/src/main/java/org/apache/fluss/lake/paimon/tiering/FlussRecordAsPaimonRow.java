@@ -27,6 +27,8 @@ import org.apache.paimon.types.RowType;
 
 import static org.apache.fluss.lake.paimon.PaimonLakeCatalog.SYSTEM_COLUMNS;
 import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toRowKind;
+import static org.apache.fluss.utils.Preconditions.checkNotNull;
+import static org.apache.fluss.utils.Preconditions.checkState;
 
 /** To wrap Fluss {@link LogRecord} as paimon {@link InternalRow}. */
 public class FlussRecordAsPaimonRow extends FlussRowAsPaimonRow {
@@ -49,6 +51,7 @@ public class FlussRecordAsPaimonRow extends FlussRowAsPaimonRow {
     }
 
     public void setFlussRecord(LogRecord logRecord) {
+        checkNotNull(logRecord, "logRecord must not be null");
         this.logRecord = logRecord;
         this.internalRow = logRecord.getRow();
         int flussFieldCount = internalRow.getFieldCount();
@@ -74,11 +77,13 @@ public class FlussRecordAsPaimonRow extends FlussRowAsPaimonRow {
 
     @Override
     public RowKind getRowKind() {
+        checkState(logRecord != null, "setFlussRecord() must be called before accessing the row.");
         return toRowKind(logRecord.getChangeType());
     }
 
     @Override
     public boolean isNullAt(int pos) {
+        checkState(logRecord != null, "setFlussRecord() must be called before accessing the row.");
         if (pos < originRowFieldCount) {
             return super.isNullAt(pos);
         }
@@ -96,6 +101,7 @@ public class FlussRecordAsPaimonRow extends FlussRowAsPaimonRow {
             // bucket system column
             return bucket;
         }
+        checkState(logRecord != null, "setFlussRecord() must be called before accessing the row.");
         if (pos >= originRowFieldCount) {
             throw new IllegalStateException(
                     String.format(
@@ -107,6 +113,7 @@ public class FlussRecordAsPaimonRow extends FlussRowAsPaimonRow {
 
     @Override
     public long getLong(int pos) {
+        checkState(logRecord != null, "setFlussRecord() must be called before accessing the row.");
         if (pos == offsetFieldIndex) {
             //  offset system column
             return logRecord.logOffset();
@@ -126,6 +133,7 @@ public class FlussRecordAsPaimonRow extends FlussRowAsPaimonRow {
 
     @Override
     public Timestamp getTimestamp(int pos, int precision) {
+        checkState(logRecord != null, "setFlussRecord() must be called before accessing the row.");
         // it's timestamp system column
         if (pos == timestampFieldIndex) {
             return Timestamp.fromEpochMillis(logRecord.timestamp());
