@@ -17,7 +17,7 @@
 #
 
 {{/*
-Render metrics reporter configuration entries.
+Renders metrics reporter configuration entries.
 Expects the root context as argument.
 
 From values:
@@ -33,6 +33,7 @@ Renders:
 Keys already present in configurationOverrides are not rendered.
 */}}
 {{- define "fluss.metrics.config" -}}
+{{- if .Values.metrics.enabled -}}
 {{- $config := .Values.configurationOverrides | default dict -}}
 {{- $reporters := .Values.metrics.reporters | default dict -}}
 {{- $reporterNames := keys $reporters | sortAlpha -}}
@@ -48,6 +49,19 @@ metrics.reporters: {{ join "," $reporterNames }}
 {{- if not (hasKey $config $fullKey) }}
 {{ $fullKey }}: {{ tpl (printf "%v" $value) $ }}
 {{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Renders metrics annotations entries as YAML format.
+Expects the root context as argument.
+*/}}
+{{- define "fluss.metrics.annotations" -}}
+{{- if .Values.metrics.enabled -}}
+{{- with .Values.metrics.annotations -}}
+{{- toYaml . -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}

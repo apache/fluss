@@ -268,11 +268,8 @@ If `metrics.annotations` is configured, these annotations are also added to Flus
 metrics:
   enabled: true
   reporters:
-    grph:
-      port: 9020
-      host: example-localhost
-      protocol: TCP
-      interval: "60 SECONDS"
+    jmx:
+      port: 9250-9260
     prometheus:
       port: 9249
   annotations:

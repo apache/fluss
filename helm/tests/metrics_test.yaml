@@ -137,6 +137,14 @@ suite: metrics-enabled-service
 templates:
   - templates/svc-coordinator.yaml
 tests:
+  - it: does not render metrics annotations when metrics are disabled
+    set:
+      metrics.annotations:
+        prometheus.io/scrape: "true"
+    asserts:
+      - equal:
+          path: metadata.annotations
+          value: null
   - it: renders value-driven annotations when provided
     set:
       metrics.enabled: true
@@ -191,5 +199,6 @@ tests:
     set:
       metrics.enabled: true
     asserts:
-      - isNull:
+      - equal:
           path: metadata.annotations
+          value: null

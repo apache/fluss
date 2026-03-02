@@ -23,10 +23,8 @@ metadata:
   labels:
     {{- include "fluss.labels" . | nindent 4 }}
     app.kubernetes.io/component: tablet
-  {{- if and .Values.metrics.enabled .Values.metrics.annotations }}
   annotations:
-    {{- toYaml .Values.metrics.annotations | nindent 4 }}
-  {{- end }}
+    {{- include "fluss.metrics.annotations" . | nindent 4 }}
 spec:
   clusterIP: None
   type: ClusterIP
