@@ -25,7 +25,6 @@ import org.apache.fluss.client.table.writer.UpsertWriter;
 import org.apache.fluss.client.write.HashBucketAssigner;
 import org.apache.fluss.flink.source.event.FinishedBacklogEvent;
 import org.apache.fluss.flink.source.event.MarkedBacklogOffsetEvent;
-import org.apache.fluss.testutils.common.CommonTestUtils;
 import org.apache.fluss.flink.source.metrics.FlinkSourceReaderMetrics;
 import org.apache.fluss.flink.source.split.HybridSnapshotLogSplit;
 import org.apache.fluss.flink.source.split.LogSplit;
@@ -38,6 +37,7 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.ChangeType;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.encode.CompactedKeyEncoder;
+import org.apache.fluss.testutils.common.CommonTestUtils;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
 
@@ -390,6 +390,9 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
             HybridSnapshotLogSplit split =
                     new HybridSnapshotLogSplit(tableBucket, null, 0L, 0L, true, 0L);
             splitReader.handleSplitsChanges(new SplitsAddition<>(Collections.singletonList(split)));
+
+            // Simulate receiving a MarkedBacklogOffsetEvent so the reader knows to report backlog
+            splitReader.addMarkedBacklogOffsets(Collections.singletonMap(tableBucket, 0L));
 
             splitReader.fetch();
 

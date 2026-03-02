@@ -195,7 +195,7 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
                 // empty log splits mean there is no log data to consume, so the backlog
                 // phase is already complete (including snapshot-only buckets that have a
                 // marked backlog offset).
-                sendBacklogFinishedEvent(new HashSet<>(subscribedBuckets.keySet()));
+                sendFinishedBacklogEvent(new HashSet<>(subscribedBuckets.keySet()));
                 return records;
             } else {
                 // if not subscribe any buckets, just return empty records
@@ -530,10 +530,10 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
             Set<TableBucket> bucketsWithoutBacklogMark = new HashSet<>(subscribedBuckets.keySet());
             bucketsWithoutBacklogMark.removeAll(markedBacklogOffsets.keySet());
             if (!bucketsWithoutBacklogMark.isEmpty()) {
-                sendBacklogFinishedEvent(bucketsWithoutBacklogMark);
+                sendFinishedBacklogEvent(bucketsWithoutBacklogMark);
             }
         } else {
-            sendBacklogFinishedEvent(backlogFinishedTbl);
+            sendFinishedBacklogEvent(backlogFinishedTbl);
         }
         return recordsWithSplitIds;
     }
@@ -569,7 +569,10 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
                 flinkSourceReaderMetrics);
     }
 
-    private void sendBacklogFinishedEvent(Set<TableBucket> backlogFinishedTbls) {
+    private void sendFinishedBacklogEvent(Set<TableBucket> backlogFinishedTbls) {
+        if (markedBacklogOffsets.isEmpty()) {
+            return;
+        }
         if (context == null) {
             LOG.warn("context is null then no operator event could be sent ");
             return;

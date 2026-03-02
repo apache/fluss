@@ -118,6 +118,7 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
                             null,
                             null,
                             LeaseContext.DEFAULT,
+                            false,
                             false);
 
             enumerator.start();
@@ -168,6 +169,7 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
                             null,
                             null,
                             LeaseContext.DEFAULT,
+                            false,
                             false);
             enumerator.start();
             // register all read
@@ -242,6 +244,7 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
                             null,
                             null,
                             LeaseContext.DEFAULT,
+                            false,
                             false);
 
             enumerator.start();
@@ -291,6 +294,7 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
                             null,
                             null,
                             LeaseContext.DEFAULT,
+                            false,
                             false);
 
             enumerator.start();
@@ -330,6 +334,7 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
                             null,
                             null,
                             LeaseContext.DEFAULT,
+                            false,
                             false);
 
             enumerator.start();
@@ -393,7 +398,8 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
                             null,
                             null,
                             LeaseContext.DEFAULT,
-                            true);
+                            true,
+                            false);
 
             enumerator.start();
             assertThat(context.getSplitsAssignmentSequence()).isEmpty();
@@ -444,6 +450,7 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
                                 null,
                                 workExecutor,
                                 LeaseContext.DEFAULT,
+                                false,
                                 false)) {
 
             Map<Long, String> partitionNameByIds =
@@ -563,6 +570,7 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
                                 null,
                                 null,
                                 LeaseContext.DEFAULT,
+                                false,
                                 false)) {
 
             // test splits for same non-partitioned bucket, should assign to same task
@@ -678,6 +686,7 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
                                 lakeSource,
                                 workExecutor,
                                 LeaseContext.DEFAULT,
+                                false,
                                 false)) {
             enumerator.start();
 
@@ -802,7 +811,8 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
                             null,
                             null,
                             LeaseContext.DEFAULT,
-                            false);
+                            false,
+                            true);
             enumerator.start();
             assertThat(context.getIsProcessingBacklog()).isTrue();
 
@@ -849,7 +859,8 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
                             null,
                             null,
                             LeaseContext.DEFAULT,
-                            false);
+                            false,
+                            true);
             enumerator.start();
             assertThat(context.getIsProcessingBacklog()).isTrue();
 
@@ -901,7 +912,8 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
                             null,
                             null,
                             LeaseContext.DEFAULT,
-                            false);
+                            false,
+                            true);
             enumerator.start();
             assertThat(context.getIsProcessingBacklog()).isTrue();
 

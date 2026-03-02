@@ -191,6 +191,8 @@ public class FlinkSourceEnumerator
 
     private final Map<TableBucket, Long> bucketsWithBacklogOffset;
 
+    private final boolean enableBacklogReporting;
+
     public FlinkSourceEnumerator(
             TablePath tablePath,
             Configuration flussConf,
@@ -203,7 +205,8 @@ public class FlinkSourceEnumerator
             @Nullable Predicate partitionFilters,
             @Nullable LakeSource<LakeSplit> lakeSource,
             LeaseContext leaseContext,
-            boolean checkpointTriggeredBefore) {
+            boolean checkpointTriggeredBefore,
+            boolean enableBacklogReporting) {
         this(
                 tablePath,
                 flussConf,
@@ -219,7 +222,8 @@ public class FlinkSourceEnumerator
                 partitionFilters,
                 lakeSource,
                 leaseContext,
-                checkpointTriggeredBefore);
+                checkpointTriggeredBefore,
+                enableBacklogReporting);
     }
 
     public FlinkSourceEnumerator(
@@ -237,7 +241,8 @@ public class FlinkSourceEnumerator
             @Nullable Predicate partitionFilters,
             @Nullable LakeSource<LakeSplit> lakeSource,
             LeaseContext leaseContext,
-            boolean checkpointTriggeredBefore) {
+            boolean checkpointTriggeredBefore,
+            boolean enableBacklogReporting) {
         this(
                 tablePath,
                 flussConf,
@@ -254,7 +259,8 @@ public class FlinkSourceEnumerator
                 lakeSource,
                 new WorkerExecutor(context),
                 leaseContext,
-                checkpointTriggeredBefore);
+                checkpointTriggeredBefore,
+                enableBacklogReporting);
     }
 
     FlinkSourceEnumerator(
@@ -273,7 +279,8 @@ public class FlinkSourceEnumerator
             @Nullable LakeSource<LakeSplit> lakeSource,
             WorkerExecutor workerExecutor,
             LeaseContext leaseContext,
-            boolean checkpointTriggeredBefore) {
+            boolean checkpointTriggeredBefore,
+            boolean enableBacklogReporting) {
         this.tablePath = checkNotNull(tablePath);
         this.flussConf = checkNotNull(flussConf);
         this.hasPrimaryKey = hasPrimaryKey;
@@ -297,6 +304,7 @@ public class FlinkSourceEnumerator
         this.bucketsWithBacklogOffset = new HashMap<>();
         this.leaseContext = leaseContext;
         this.checkpointTriggeredBefore = checkpointTriggeredBefore;
+        this.enableBacklogReporting = enableBacklogReporting;
     }
 
     @Override
@@ -313,7 +321,9 @@ public class FlinkSourceEnumerator
                     String.format("Failed to get table info for %s", tablePath),
                     ExceptionUtils.stripCompletionException(e));
         }
-        initializeBacklog();
+        if (enableBacklogReporting) {
+            initializeBacklog();
+        }
         if (isPartitioned) {
             if (streaming) {
                 if (lakeSource != null) {
@@ -931,7 +941,9 @@ public class FlinkSourceEnumerator
         if (!incrementalAssignment.isEmpty()) {
             LOG.info("Assigning splits to readers {}", incrementalAssignment);
             context.assignSplits(new SplitsAssignment<>(incrementalAssignment));
-            sendMarkedBacklogOffsetEvents(incrementalAssignment);
+            if (enableBacklogReporting) {
+                sendMarkedBacklogOffsetEvents(incrementalAssignment);
+            }
         }
 
         if (noMoreNewSplits) {
