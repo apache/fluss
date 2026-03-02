@@ -233,7 +233,12 @@ public class LogTieringTask implements Runnable {
      * Copy the given log segments to remote and add the successfully copied segment to the {@code
      * copiedSegments} parameter.
      *
-     * @return the end offset of the last segment copied to remote.
+     * <p>If a segment copy fails (e.g., due to rate limiting or transient errors), the method stops
+     * copying further segments but retains all previously successful copies so they can still be
+     * committed, avoiding wasted uploads.
+     *
+     * @return the end offset of the last segment successfully copied to remote, or -1 if no
+     *     segments were copied.
      */
     private long copyLogSegmentFilesToRemote(
             LogTablet log,
@@ -251,10 +256,10 @@ public class LogTieringTask implements Runnable {
                     logFileName,
                     physicalTablePath,
                     tableBucket.getBucket());
-            endOffset = enrichedSegment.nextSegmentOffset;
+            long segmentEndOffset = enrichedSegment.nextSegmentOffset;
 
             File writerIdSnapshotFile =
-                    log.writerStateManager().fetchSnapshot(endOffset).orElse(null);
+                    log.writerStateManager().fetchSnapshot(segmentEndOffset).orElse(null);
             LogSegmentFiles logSegmentFiles =
                     new LogSegmentFiles(
                             logFile.toPath(),
@@ -270,7 +275,7 @@ public class LogTieringTask implements Runnable {
                             .tableBucket(tableBucket)
                             .remoteLogSegmentId(remoteLogSegmentId)
                             .remoteLogStartOffset(segment.getBaseOffset())
-                            .remoteLogEndOffset(endOffset)
+                            .remoteLogEndOffset(segmentEndOffset)
                             .maxTimestamp(segment.maxTimestampSoFar())
                             .segmentSizeInBytes(sizeInBytes)
                             .build();
@@ -278,7 +283,16 @@ public class LogTieringTask implements Runnable {
                 remoteLogStorage.copyLogSegmentFiles(copyRemoteLogSegment, logSegmentFiles);
             } catch (RemoteStorageException e) {
                 metricGroup.remoteLogCopyErrors().inc();
-                throw e;
+                LOG.warn(
+                        "Failed to copy {} of table {} bucket {} to remote storage. "
+                                + "Stopping further segment copies. "
+                                + "{} segment(s) already copied successfully will be committed.",
+                        logFileName,
+                        physicalTablePath,
+                        tableBucket.getBucket(),
+                        copiedSegments.size(),
+                        e);
+                break;
             }
             LOG.info(
                     "Copied {} of table {} bucket {} to remote storage as remote log segment: {}.",
@@ -289,6 +303,7 @@ public class LogTieringTask implements Runnable {
             metricGroup.remoteLogCopyRequests().inc();
             metricGroup.remoteLogCopyBytes().inc(sizeInBytes);
             copiedSegments.add(copyRemoteLogSegment);
+            endOffset = segmentEndOffset;
         }
         return endOffset;
     }

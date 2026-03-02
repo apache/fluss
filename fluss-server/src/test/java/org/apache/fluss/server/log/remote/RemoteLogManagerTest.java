@@ -664,6 +664,33 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
         assertThat(logTablet.getSegments()).hasSize(3);
     }
 
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testCopySegmentPartialFailureCommitsSuccessfulOnes(boolean partitionTable)
+            throws Exception {
+        TableBucket tb = makeTableBucket(partitionTable);
+        // Need to make leader by ReplicaManager.
+        makeLogTableAsLeader(tb, partitionTable);
+        addMultiSegmentsToLogTablet(replicaManager.getReplicaOrException(tb).getLogTablet(), 5);
+        // 5 segments total, 4 candidates (1 active segment excluded).
+
+        // Inject failure: let the first 2 segment copies succeed, then fail on the 3rd.
+        remoteLogStorage.copySegmentFailAfterNCopies.set(2);
+
+        remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
+
+        // Only the 2 successfully copied segments should be committed.
+        List<RemoteLogSegment> remoteLogSegmentList =
+                remoteLogManager.relevantRemoteLogSegments(tb, 0L);
+        assertThat(remoteLogSegmentList).hasSize(2);
+        // Remote storage should contain exactly the 2 committed segment files.
+        assertThat(listRemoteLogFiles(tb))
+                .isEqualTo(
+                        remoteLogSegmentList.stream()
+                                .map(s -> s.remoteLogSegmentId().toString())
+                                .collect(Collectors.toSet()));
+    }
+
     private TableBucket makeTableBucket(boolean partitionTable) {
         return makeTableBucket(DATA1_TABLE_ID, partitionTable);
     }
