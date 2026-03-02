@@ -40,6 +40,7 @@ import java.util.Collections;
 import static org.apache.fluss.metadata.TablePath.detectInvalidName;
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
+import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
 import static org.apache.fluss.utils.PartitionUtils.convertValueOfType;
 import static org.apache.fluss.utils.PartitionUtils.generateAutoPartition;
 import static org.apache.fluss.utils.PartitionUtils.validatePartitionSpec;
@@ -84,7 +85,8 @@ class PartitionUtilsTest {
                                 ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT,
                                 AutoPartitionTimeUnit.YEAR)
                         .build();
-        TableInfo tableInfo = TableInfo.of(DATA1_TABLE_PATH, 1L, 1, descriptor, 1L, 1L);
+        TableInfo tableInfo =
+                TableInfo.of(DATA1_TABLE_PATH, 1L, 1, descriptor, DEFAULT_REMOTE_DATA_DIR, 1L, 1L);
         assertThatThrownBy(
                         () ->
                                 validatePartitionSpec(
