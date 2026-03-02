@@ -275,6 +275,7 @@ public class MetadataManager {
      * Returns -1 if the table already exists and ignoreIfExists is true.
      *
      * @param tablePath the table path
+     * @param remoteDataDir the remote data directory
      * @param tableToCreate the table descriptor describing the table to create
      * @param tableAssignment the table assignment, will be null when the table is partitioned table
      * @param ignoreIfExists whether to ignore if the table already exists
@@ -282,6 +283,7 @@ public class MetadataManager {
      */
     public long createTable(
             TablePath tablePath,
+            String remoteDataDir,
             TableDescriptor tableToCreate,
             @Nullable TableAssignment tableAssignment,
             boolean ignoreIfExists)
@@ -324,8 +326,7 @@ public class MetadataManager {
                     // register the table
                     zookeeperClient.registerTable(
                             tablePath,
-                            TableRegistration.newTable(
-                                    tableId, zookeeperClient.getRemoteDataDir(), tableToCreate),
+                            TableRegistration.newTable(tableId, remoteDataDir, tableToCreate),
                             false);
                     return tableId;
                 },
@@ -695,6 +696,7 @@ public class MetadataManager {
     public void createPartition(
             TablePath tablePath,
             long tableId,
+            String remoteDataDir,
             PartitionAssignment partitionAssignment,
             ResolvedPartitionSpec partition,
             boolean ignoreIfExists) {
@@ -757,7 +759,7 @@ public class MetadataManager {
                     partitionId,
                     partitionName,
                     partitionAssignment,
-                    zookeeperClient.getRemoteDataDir(),
+                    remoteDataDir,
                     tablePath,
                     tableId);
             LOG.info(
