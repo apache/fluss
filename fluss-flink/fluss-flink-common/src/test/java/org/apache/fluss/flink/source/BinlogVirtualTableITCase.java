@@ -17,6 +17,16 @@
 
 package org.apache.fluss.flink.source;
 
+import org.apache.flink.core.execution.SavepointFormatType;
+import org.apache.flink.runtime.testutils.MiniClusterResourceConfiguration;
+import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
+import org.apache.flink.table.api.EnvironmentSettings;
+import org.apache.flink.table.api.TableResult;
+import org.apache.flink.table.api.bridge.java.StreamTableEnvironment;
+import org.apache.flink.table.api.config.ExecutionConfigOptions;
+import org.apache.flink.test.util.MiniClusterWithClientResource;
+import org.apache.flink.types.Row;
+import org.apache.flink.util.CloseableIterator;
 import org.apache.fluss.client.Connection;
 import org.apache.fluss.client.ConnectionFactory;
 import org.apache.fluss.client.admin.Admin;
@@ -28,24 +38,12 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.utils.clock.ManualClock;
-
-import org.apache.flink.core.execution.SavepointFormatType;
-import org.apache.flink.runtime.testutils.MiniClusterResourceConfiguration;
-import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
-import org.apache.flink.table.api.EnvironmentSettings;
-import org.apache.flink.table.api.TableResult;
-import org.apache.flink.table.api.bridge.java.StreamTableEnvironment;
-import org.apache.flink.table.api.config.ExecutionConfigOptions;
-import org.apache.flink.test.util.MiniClusterWithClientResource;
-import org.apache.flink.types.Row;
-import org.apache.flink.util.CloseableIterator;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 
 import javax.annotation.Nullable;
-
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -56,7 +54,6 @@ import java.util.concurrent.TimeUnit;
 import static org.apache.fluss.flink.FlinkConnectorOptions.BOOTSTRAP_SERVERS;
 import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.collectRowsWithTimeout;
 import static org.apache.fluss.flink.utils.FlinkTestBase.writeRows;
-import static org.apache.fluss.server.testutils.FlussClusterExtension.BUILTIN_DATABASE;
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -145,12 +142,6 @@ abstract class BinlogVirtualTableITCase extends FlussVirtualTableITCaseBase {
         tEnv.useDatabase(DEFAULT_DB);
 
         return tEnv;
-    }
-
-    @AfterEach
-    void after() {
-        tEnv.useDatabase(BUILTIN_DATABASE);
-        tEnv.executeSql(String.format("drop database %s cascade", DEFAULT_DB));
     }
 
     /** Deletes rows from a primary key table using the proper delete API. */
