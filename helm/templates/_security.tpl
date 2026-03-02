@@ -168,12 +168,6 @@ Usage:
     {{- end -}}
   {{- end -}}
 {{- end -}}
-
-{{- if eq $internalMechanism "plain" -}}
-  {{- if or (empty .Values.security.internal.sasl.plain.username) (empty .Values.security.internal.sasl.plain.password) -}}
-  {{- fail "security.internal.sasl.plain.username and security.internal.sasl.plain.password are required when security.internal.sasl.mechanism is plain" -}}
-  {{- end -}}
-{{- end -}}
 {{- end -}}
 
 {{/*
