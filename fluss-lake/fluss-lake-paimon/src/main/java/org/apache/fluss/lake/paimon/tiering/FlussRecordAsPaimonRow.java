@@ -51,7 +51,7 @@ public class FlussRecordAsPaimonRow extends FlussRowAsPaimonRow {
     }
 
     public void setFlussRecord(LogRecord logRecord) {
-        checkNotNull(logRecord, "logRecord must not be null");
+        checkNotNull(logRecord, "logRecord must not be null.");
         this.logRecord = logRecord;
         this.internalRow = logRecord.getRow();
         int flussFieldCount = internalRow.getFieldCount();
