@@ -16,7 +16,7 @@
 # limitations under the License.
 #
 
-{{ include "fluss.security.sasl.validatePlainUsers" . }}
+{{ include "fluss.security.sasl.validateClientPlainUsers" . }}
 {{- $internalProtocol := include "fluss.security.listener.protocol" (dict "Values" .Values "listener" "internal") | trim }}
 {{- $clientProtocol := include "fluss.security.listener.protocol" (dict "Values" .Values "listener" "client") | trim }}
 apiVersion: apps/v1
