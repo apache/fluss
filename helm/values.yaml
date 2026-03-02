@@ -93,13 +93,13 @@ security:
       # none | plain | scram | oauthbearer
       mechanism: none
       plain:
-        username: ""
-        password: ""
+        username: "fluss-internal-user"
+        password: "fluss-internal-password"
       scram:
         # 256 | 512
         sha: 256
-        username: ""
-        password: ""
+        username: "fluss-internal-user"
+        password: "fluss-internal-password"
       oauth:
         tokenEndpointUrl: ""
         subClaimName: sub
