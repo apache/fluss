@@ -32,6 +32,7 @@ import org.apache.paimon.data.InternalMap;
 import org.apache.paimon.data.Timestamp;
 import org.apache.paimon.types.RowKind;
 import org.apache.paimon.types.RowType;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
@@ -48,6 +49,25 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link FlussRecordAsPaimonRow}. */
 class FlussRecordAsPaimonRowTest {
+
+    private static final String UNINITIALIZED_MSG =
+            "setFlussRecord() must be called before accessing the row.";
+
+    /** Minimal row type: one business INT column + three system columns. */
+    private static final RowType GUARD_ROW_TYPE =
+            RowType.of(
+                    new org.apache.paimon.types.IntType(),
+                    // system columns: __bucket, __offset, __timestamp
+                    new org.apache.paimon.types.IntType(),
+                    new org.apache.paimon.types.BigIntType(),
+                    new org.apache.paimon.types.LocalZonedTimestampType(3));
+
+    private FlussRecordAsPaimonRow guardRow;
+
+    @BeforeEach
+    void setUp() {
+        guardRow = new FlussRecordAsPaimonRow(0, GUARD_ROW_TYPE);
+    }
 
     @Test
     void testLogTableRecordAllTypes() {
@@ -1070,5 +1090,86 @@ class FlussRecordAsPaimonRowTest {
         InternalMap map = flussRecordAsPaimonRow.getMap(0);
         assertThat(map).isNotNull();
         assertThat(map.size()).isEqualTo(0);
+    }
+
+    // -------------------------------------------------------------------------
+    // Guard tests: setFlussRecord(null) and uninitialized access
+    // -------------------------------------------------------------------------
+
+    @Test
+    void testSetFlussRecordNullThrowsNPE() {
+        assertThatThrownBy(() -> guardRow.setFlussRecord(null))
+                .isInstanceOf(NullPointerException.class)
+                .hasMessageContaining("logRecord must not be null");
+    }
+
+    @Test
+    void testGetRowKindBeforeSetThrowsIllegalState() {
+        assertThatThrownBy(() -> guardRow.getRowKind())
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining(UNINITIALIZED_MSG);
+    }
+
+    @Test
+    void testIsNullAtBeforeSetThrowsIllegalState() {
+        assertThatThrownBy(() -> guardRow.isNullAt(0))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining(UNINITIALIZED_MSG);
+    }
+
+    @Test
+    void testGetLongBeforeSetThrowsIllegalState() {
+        // pos 0 is a business column — routes through the logRecord null-check
+        assertThatThrownBy(() -> guardRow.getLong(0))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining(UNINITIALIZED_MSG);
+    }
+
+    @Test
+    void testGetLongOffsetColumnBeforeSetThrowsIllegalState() {
+        // pos == offsetFieldIndex (businessFieldCount + 1 == 2) also accesses logRecord
+        assertThatThrownBy(() -> guardRow.getLong(2))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining(UNINITIALIZED_MSG);
+    }
+
+    @Test
+    void testGetLongTimestampColumnBeforeSetThrowsIllegalState() {
+        // pos == timestampFieldIndex (businessFieldCount + 2 == 3) also accesses logRecord
+        assertThatThrownBy(() -> guardRow.getLong(3))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining(UNINITIALIZED_MSG);
+    }
+
+    @Test
+    void testGetTimestampBeforeSetThrowsIllegalState() {
+        assertThatThrownBy(() -> guardRow.getTimestamp(0, 6))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining(UNINITIALIZED_MSG);
+    }
+
+    @Test
+    void testGetTimestampSystemColumnBeforeSetThrowsIllegalState() {
+        // pos == timestampFieldIndex (3) is the __timestamp system column
+        assertThatThrownBy(() -> guardRow.getTimestamp(3, 3))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining(UNINITIALIZED_MSG);
+    }
+
+    @Test
+    void testGetIntBusinessColumnBeforeSetThrowsIllegalState() {
+        // pos 0 is a business column (not bucketFieldIndex == 1), so the null-check fires
+        assertThatThrownBy(() -> guardRow.getInt(0))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining(UNINITIALIZED_MSG);
+    }
+
+    @Test
+    void testGetIntBucketColumnBeforeSetReturnsValue() {
+        // bucketFieldIndex (businessFieldCount == 1) does NOT depend on logRecord; it returns the
+        // bucket value passed to the constructor, so it must never throw even before setFlussRecord
+        assertThatThrownBy(() -> guardRow.getInt(0)).isInstanceOf(IllegalStateException.class);
+        // bucket column itself is safe
+        assertThat(guardRow.getInt(1)).isEqualTo(0);
     }
 }
