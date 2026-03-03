@@ -34,6 +34,7 @@ import org.apache.fluss.flink.source.split.HybridSnapshotLogSplit;
 import org.apache.fluss.flink.source.split.LogSplit;
 import org.apache.fluss.flink.source.split.SnapshotSplit;
 import org.apache.fluss.flink.source.split.SourceSplitBase;
+import org.apache.fluss.flink.source.state.SourceEnumeratorState;
 import org.apache.fluss.flink.utils.FlinkTestBase;
 import org.apache.fluss.lake.source.LakeSource;
 import org.apache.fluss.lake.source.LakeSplit;
@@ -154,8 +155,8 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
         Map<Integer, Integer> bucketIdToNumRecords = putRows(DEFAULT_TABLE_PATH, 10);
         FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshot(DEFAULT_TABLE_PATH);
 
-        try (MockBacklogSplitEnumeratorContext context =
-                new MockBacklogSplitEnumeratorContext(numSubtasks)) {
+        try (MockSplitEnumeratorContext<SourceSplitBase> context =
+                new MockSplitEnumeratorContext<>(numSubtasks)) {
             FlinkSourceEnumerator enumerator =
                     new FlinkSourceEnumerator(
                             DEFAULT_TABLE_PATH,
@@ -229,8 +230,8 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
         long tableId = admin.getTableInfo(path1).get().getTableId();
 
         // test get snapshot log split and the assignment
-        try (MockBacklogSplitEnumeratorContext context =
-                new MockBacklogSplitEnumeratorContext(numSubtasks)) {
+        try (MockSplitEnumeratorContext<SourceSplitBase> context =
+                new MockSplitEnumeratorContext<>(numSubtasks)) {
             FlinkSourceEnumerator enumerator =
                     new FlinkSourceEnumerator(
                             path1,
@@ -279,8 +280,8 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
         long tableId = createTable(DEFAULT_TABLE_PATH, DEFAULT_PK_TABLE_DESCRIPTOR);
         int numSubtasks = 3;
         // test get snapshot split & log split and the assignment
-        try (MockBacklogSplitEnumeratorContext context =
-                new MockBacklogSplitEnumeratorContext(numSubtasks)) {
+        try (MockSplitEnumeratorContext<SourceSplitBase> context =
+                new MockSplitEnumeratorContext<>(numSubtasks)) {
             FlinkSourceEnumerator enumerator =
                     new FlinkSourceEnumerator(
                             DEFAULT_TABLE_PATH,
@@ -319,8 +320,8 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
         long tableId = createTable(DEFAULT_TABLE_PATH, DEFAULT_PK_TABLE_DESCRIPTOR);
         int numSubtasks = 3;
         // test get snapshot split & log split and the assignment
-        try (MockBacklogSplitEnumeratorContext context =
-                new MockBacklogSplitEnumeratorContext(numSubtasks)) {
+        try (MockSplitEnumeratorContext<SourceSplitBase> context =
+                new MockSplitEnumeratorContext<>(numSubtasks)) {
             FlinkSourceEnumerator enumerator =
                     new FlinkSourceEnumerator(
                             DEFAULT_TABLE_PATH,
@@ -374,8 +375,8 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
         long tableId = createTable(DEFAULT_TABLE_PATH, DEFAULT_PK_TABLE_DESCRIPTOR);
         int numSubtasks = 3;
         // test get snapshot split & log split and the assignment
-        try (MockBacklogSplitEnumeratorContext context =
-                new MockBacklogSplitEnumeratorContext(numSubtasks)) {
+        try (MockSplitEnumeratorContext<SourceSplitBase> context =
+                new MockSplitEnumeratorContext<>(numSubtasks)) {
 
             // mock bucket1 has been assigned
             TableBucket bucket1 = new TableBucket(tableId, 1);
@@ -431,8 +432,8 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
                         : DEFAULT_AUTO_PARTITIONED_LOG_TABLE_DESCRIPTOR;
         long tableId = createTable(DEFAULT_TABLE_PATH, tableDescriptor);
         ZooKeeperClient zooKeeperClient = FLUSS_CLUSTER_EXTENSION.getZooKeeperClient();
-        try (MockBacklogSplitEnumeratorContext context =
-                        new MockBacklogSplitEnumeratorContext(numSubtasks);
+        try (MockSplitEnumeratorContext<SourceSplitBase> context =
+                        new MockSplitEnumeratorContext<>(numSubtasks);
                 MockWorkExecutor workExecutor = new MockWorkExecutor(context);
                 FlinkSourceEnumerator enumerator =
                         new FlinkSourceEnumerator(
@@ -557,8 +558,8 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
     void testGetSplitOwner() throws Exception {
         int numSubtasks = 3;
         long tableId = createTable(DEFAULT_TABLE_PATH, DEFAULT_PK_TABLE_DESCRIPTOR);
-        try (MockBacklogSplitEnumeratorContext context =
-                        new MockBacklogSplitEnumeratorContext(numSubtasks);
+        try (MockSplitEnumeratorContext<SourceSplitBase> context =
+                        new MockSplitEnumeratorContext<>(numSubtasks);
                 FlinkSourceEnumerator enumerator =
                         new FlinkSourceEnumerator(
                                 DEFAULT_TABLE_PATH,
@@ -668,8 +669,8 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
 
         LakeSource<LakeSplit> lakeSource =
                 new TestingLakeSource(DEFAULT_BUCKET_NUM, lakePartitionInfos);
-        try (MockBacklogSplitEnumeratorContext context =
-                        new MockBacklogSplitEnumeratorContext(numSubtasks);
+        try (MockSplitEnumeratorContext<SourceSplitBase> context =
+                        new MockSplitEnumeratorContext<>(numSubtasks);
                 MockWorkExecutor workExecutor = new MockWorkExecutor(context);
                 FlinkSourceEnumerator enumerator =
                         new FlinkSourceEnumerator(
@@ -895,7 +896,7 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
     }
 
     @Test
-    void testMarkedBacklogOffsetEventAndFinishedBacklogEventInteraction() throws Throwable {
+    void testBacklogTransitionWithEventInteraction() throws Throwable {
         long tableId = createTable(DEFAULT_TABLE_PATH, DEFAULT_PK_TABLE_DESCRIPTOR);
         int numSubtasks = 3;
 
@@ -954,9 +955,66 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
         }
     }
 
+    @Test
+    void testRestoreWithBacklog() throws Throwable {
+        long tableId = createTable(DEFAULT_TABLE_PATH, DEFAULT_PK_TABLE_DESCRIPTOR);
+        int numSubtasks = 3;
+        putRows(DEFAULT_TABLE_PATH, 30);
+
+        try (MockBacklogSplitEnumeratorContext context =
+                new MockBacklogSplitEnumeratorContext(numSubtasks)) {
+
+            TableBucket bucket0 = new TableBucket(tableId, 0);
+            TableBucket bucket1 = new TableBucket(tableId, 1);
+            Set<TableBucket> assignedBuckets = new HashSet<>(Arrays.asList(bucket0, bucket1));
+
+            FlinkSourceEnumerator enumerator =
+                    new FlinkSourceEnumerator(
+                            DEFAULT_TABLE_PATH,
+                            flussConf,
+                            true,
+                            false,
+                            context,
+                            assignedBuckets,
+                            Collections.emptyMap(),
+                            Collections.emptyList(),
+                            OffsetsInitializer.full(),
+                            DEFAULT_SCAN_PARTITION_DISCOVERY_INTERVAL_MS,
+                            streaming,
+                            null,
+                            null,
+                            LeaseContext.DEFAULT,
+                            true,
+                            true,
+                            true); // isBacklogProcessed=true restored from state
+
+            enumerator.start();
+
+            assertThat(context.getIsProcessingBacklog()).isFalse();
+
+            for (int i = 0; i < numSubtasks; i++) {
+                registerReader(context, enumerator, i);
+            }
+            context.runNextOneTimeCallable();
+
+            // no MarkedBacklogOffsetEvent is sent
+            Map<Integer, List<SourceEvent>> sentEvents = context.getSentSourceEvent();
+            long markedBacklogEventCount =
+                    sentEvents.values().stream()
+                            .flatMap(List::stream)
+                            .filter(e -> e instanceof MarkedBacklogOffsetEvent)
+                            .count();
+            assertThat(markedBacklogEventCount).isZero();
+
+            // state traces the state
+            SourceEnumeratorState state = enumerator.snapshotState(1L);
+            assertThat(state.isBacklogProcessed()).isTrue();
+        }
+    }
+
     // ---------------------
     private void registerReader(
-            MockBacklogSplitEnumeratorContext context,
+            MockSplitEnumeratorContext<SourceSplitBase> context,
             FlinkSourceEnumerator enumerator,
             int readerId) {
         context.registerReader(new ReaderInfo(readerId, "location " + readerId));
@@ -1087,7 +1145,7 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
     }
 
     private Map<Integer, List<SourceSplitBase>> getReadersAssignments(
-            MockBacklogSplitEnumeratorContext context) {
+            MockSplitEnumeratorContext<SourceSplitBase> context) {
         List<SplitsAssignment<SourceSplitBase>> splitsAssignments =
                 context.getSplitsAssignmentSequence();
         Map<Integer, List<SourceSplitBase>> assignment = new HashMap<>();
@@ -1098,7 +1156,7 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
     }
 
     private Map<Integer, List<SourceSplitBase>> getLastReadersAssignments(
-            MockBacklogSplitEnumeratorContext context) {
+            MockSplitEnumeratorContext<SourceSplitBase> context) {
         List<SplitsAssignment<SourceSplitBase>> splitsAssignments =
                 context.getSplitsAssignmentSequence();
         // get the last one

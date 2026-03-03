@@ -89,6 +89,7 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
         assertThatThrownBy(
                         () ->
                                 new FlinkSourceSplitReader(
+                                        new TestingReaderContext(),
                                         clientConf,
                                         tablePath1,
                                         DataTypes.ROW(
@@ -107,6 +108,7 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
         assertThatThrownBy(
                         () ->
                                 new FlinkSourceSplitReader(
+                                        new TestingReaderContext(),
                                         clientConf,
                                         tablePath1,
                                         DataTypes.ROW(
@@ -120,6 +122,7 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
 
         FlinkSourceSplitReader flinkSourceSplitReader =
                 new FlinkSourceSplitReader(
+                        new TestingReaderContext(),
                         clientConf,
                         tablePath1,
                         DataTypes.ROW(
@@ -607,7 +610,13 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
 
     private FlinkSourceSplitReader createSplitReader(TablePath tablePath, RowType rowType) {
         return new FlinkSourceSplitReader(
-                clientConf, tablePath, rowType, null, createMockSourceReaderMetrics(), null);
+                new TestingReaderContext(),
+                clientConf,
+                tablePath,
+                rowType,
+                null,
+                createMockSourceReaderMetrics(),
+                null);
     }
 
     private FlinkSourceReaderMetrics createMockSourceReaderMetrics() {

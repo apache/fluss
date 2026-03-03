@@ -189,6 +189,7 @@ public class FlinkSourceEnumerator
 
     @Nullable private final LakeSource<LakeSplit> lakeSource;
 
+    // Record the backlog offset of buckets which have backlog data
     private final Map<TableBucket, Long> bucketsWithBacklogOffset;
 
     private final boolean enableBacklogReporting;
@@ -948,9 +949,7 @@ public class FlinkSourceEnumerator
         if (!incrementalAssignment.isEmpty()) {
             LOG.info("Assigning splits to readers {}", incrementalAssignment);
             context.assignSplits(new SplitsAssignment<>(incrementalAssignment));
-            if (enableBacklogReporting) {
-                sendMarkedBacklogOffsetEvents(incrementalAssignment);
-            }
+            sendMarkedBacklogOffsetEvents(incrementalAssignment);
         }
 
         if (noMoreNewSplits) {
@@ -968,6 +967,7 @@ public class FlinkSourceEnumerator
     private void sendMarkedBacklogOffsetEvents(
             Map<Integer, List<SourceSplitBase>> incrementalAssignment) {
         if (bucketsWithBacklogOffset.isEmpty()) {
+            // no recorded buckets if do not report backlog
             return;
         }
         for (Map.Entry<Integer, List<SourceSplitBase>> entry : incrementalAssignment.entrySet()) {
