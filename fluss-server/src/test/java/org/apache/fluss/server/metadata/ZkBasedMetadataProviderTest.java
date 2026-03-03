@@ -101,7 +101,9 @@ class ZkBasedMetadataProviderTest {
                         .add(1, BucketAssignment.of(2, 3, 4))
                         .build();
         metadataManager.createDatabase("test_db", DatabaseDescriptor.EMPTY, true);
-        long tableId = metadataManager.createTable(tablePath, desc, tableAssignment, false);
+        long tableId =
+                metadataManager.createTable(
+                        tablePath, DEFAULT_REMOTE_DATA_DIR, desc, tableAssignment, false);
 
         // Create leader and isr for buckets
         TableBucket tableBucket0 = new TableBucket(tableId, 0);
