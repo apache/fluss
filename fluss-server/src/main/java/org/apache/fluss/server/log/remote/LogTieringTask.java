@@ -229,12 +229,6 @@ public class LogTieringTask implements Runnable {
                     highWatermark);
         }
 
-        // Limit the number of segments to upload per task execution to prevent
-        // overwhelming the remote storage when there is a large backlog.
-        if (candidateLogSegments.size() > maxUploadSegmentsPerTask) {
-            candidateLogSegments = candidateLogSegments.subList(0, maxUploadSegmentsPerTask);
-        }
-
         return candidateLogSegments;
     }
 
@@ -457,12 +451,16 @@ public class LogTieringTask implements Runnable {
     }
 
     /**
-     * Segments which match the following criteria are eligible for copying to remote storage:
+     * Returns up to {@code maxUploadSegmentsPerTask} segments eligible for copying to remote
+     * storage. A segment is eligible if it meets the following criteria:
      *
      * <p>1. Segment is not the active segment.
      *
      * <p>2. Segment end-offset is less than the highWatermark as remote storage should contain only
      * committed/acked records.
+     *
+     * <p>The number of returned segments is capped at {@code maxUploadSegmentsPerTask} to prevent
+     * overwhelming the remote storage when there is a large backlog.
      */
     private List<EnrichedLogSegment> candidateLogSegments(
             LogTablet log, long fromOffset, long highWatermark) {
@@ -475,6 +473,11 @@ public class LogTieringTask implements Runnable {
                 long curSegBaseOffset = currentSeg.getBaseOffset();
                 if (curSegBaseOffset <= highWatermark) {
                     candidateLogSegments.add(new EnrichedLogSegment(previousSeg, curSegBaseOffset));
+                    // Limit the number of segments to upload per task execution to prevent
+                    // overwhelming the remote storage when there is a large backlog.
+                    if (candidateLogSegments.size() >= maxUploadSegmentsPerTask) {
+                        break;
+                    }
                 }
             }
             // Discard the last active segment
