@@ -29,6 +29,7 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.remote.RemoteLogSegment;
 import org.apache.fluss.utils.ExceptionUtils;
 import org.apache.fluss.utils.FlussPaths;
+import org.apache.fluss.utils.MapUtils;
 import org.apache.fluss.utils.concurrent.ShutdownableThread;
 
 import org.slf4j.Logger;
@@ -45,6 +46,8 @@ import java.nio.file.Paths;
 import java.util.UUID;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Future;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.PriorityBlockingQueue;
 import java.util.concurrent.Semaphore;
@@ -74,6 +77,8 @@ public class RemoteLogDownloader implements Closeable {
 
     private final BlockingQueue<RemoteLogSegment> segmentsToRecycle;
 
+    private final ConcurrentHashMap<String, Future<?>> downloadingFiles;
+
     private final Semaphore prefetchSemaphore;
 
     private final DownloadRemoteLogThread downloadThread;
@@ -83,6 +88,8 @@ public class RemoteLogDownloader implements Closeable {
     private final ScannerMetricGroup scannerMetricGroup;
 
     private final long pollTimeout;
+
+    private volatile boolean closed = false;
 
     public RemoteLogDownloader(
             TablePath tablePath,
@@ -114,6 +121,7 @@ public class RemoteLogDownloader implements Closeable {
                         conf.get(ConfigOptions.CLIENT_SCANNER_IO_TMP_DIR),
                         "remote-logs-" + UUID.randomUUID());
         this.downloadThread = new DownloadRemoteLogThread(tablePath);
+        this.downloadingFiles = MapUtils.newConcurrentHashMap();
     }
 
     public void start() {
@@ -144,6 +152,11 @@ public class RemoteLogDownloader implements Closeable {
         // blocks until there is capacity (the fetched file is consumed)
         prefetchSemaphore.acquire();
 
+        if (closed) {
+            prefetchSemaphore.release();
+            return;
+        }
+
         // wait until there is a remote fetch request
         RemoteLogDownloadRequest request = segmentsToFetch.poll(pollTimeout, TimeUnit.MILLISECONDS);
         if (request == null) {
@@ -161,38 +174,43 @@ public class RemoteLogDownloader implements Closeable {
 
             long startTime = System.currentTimeMillis();
             // download the remote file to local
-            remoteFileDownloader
-                    .downloadFileAsync(fsPathAndFileName, localLogDir)
-                    .whenComplete(
-                            (bytes, throwable) -> {
-                                if (throwable != null) {
-                                    LOG.error(
-                                            "Failed to download remote log segment file {}.",
-                                            fsPathAndFileName.getFileName(),
-                                            ExceptionUtils.stripExecutionException(throwable));
-                                    // release the semaphore for the failed request
-                                    prefetchSemaphore.release();
-                                    // add back the request to the queue,
-                                    // so we do not complete the request.future here
-                                    segmentsToFetch.add(request);
-                                    scannerMetricGroup.remoteFetchErrorCount().inc();
-                                } else {
-                                    LOG.info(
-                                            "Successfully downloaded remote log segment file {} to local cost {} ms.",
-                                            fsPathAndFileName.getFileName(),
-                                            System.currentTimeMillis() - startTime);
-                                    File localFile =
-                                            new File(
-                                                    localLogDir.toFile(),
-                                                    fsPathAndFileName.getFileName());
-                                    scannerMetricGroup.remoteFetchBytes().inc(bytes);
-                                    request.future.complete(localFile);
-                                }
-                            });
+            CompletableFuture<Long> completableFuture = new CompletableFuture<>();
+            Future<?> downloadingFuture =
+                    remoteFileDownloader.downloadFileAsync(
+                            fsPathAndFileName, localLogDir, completableFuture);
+            downloadingFiles.put(fsPathAndFileName.getFileName(), downloadingFuture);
+            completableFuture.whenComplete(
+                    (bytes, throwable) -> {
+                        downloadingFiles.remove(fsPathAndFileName.getFileName());
+                        if (throwable != null) {
+                            LOG.error(
+                                    "Failed to download remote log segment file {}.",
+                                    fsPathAndFileName.getFileName(),
+                                    ExceptionUtils.stripExecutionException(throwable));
+                            // release the semaphore for the failed request
+                            prefetchSemaphore.release();
+                            // only re-queue the request if the downloader is still active
+                            if (!closed) {
+                                segmentsToFetch.add(request);
+                            }
+                            scannerMetricGroup.remoteFetchErrorCount().inc();
+                        } else {
+                            LOG.info(
+                                    "Successfully downloaded remote log segment file {} to local cost {} ms.",
+                                    fsPathAndFileName.getFileName(),
+                                    System.currentTimeMillis() - startTime);
+                            File localFile =
+                                    new File(localLogDir.toFile(), fsPathAndFileName.getFileName());
+                            scannerMetricGroup.remoteFetchBytes().inc(bytes);
+                            request.future.complete(localFile);
+                        }
+                    });
         } catch (Throwable t) {
             prefetchSemaphore.release();
-            // add back the request to the queue
-            segmentsToFetch.add(request);
+            // only re-queue the request if the downloader is still active
+            if (!closed) {
+                segmentsToFetch.add(request);
+            }
             scannerMetricGroup.remoteFetchErrorCount().inc();
             // log the error and continue instead of shutdown the download thread
             LOG.error("Failed to download remote log segment.", t);
@@ -221,13 +239,32 @@ public class RemoteLogDownloader implements Closeable {
 
     @Override
     public void close() throws IOException {
+        closed = true;
+        // cancel pending download so that downloadThread can stop as soon as possible.
+        segmentsToFetch.clear();
+        cancelPendingDownloads();
         try {
             downloadThread.shutdown();
         } catch (InterruptedException e) {
             // ignore
         }
-
+        // cancel pending downloads again in case new downloads were submitted during shutdown.
+        cancelPendingDownloads();
         deleteDirectoryQuietly(localLogDir.toFile());
+    }
+
+    private void cancelPendingDownloads() {
+        downloadingFiles
+                .values()
+                .forEach(
+                        f -> {
+                            try {
+                                f.cancel(true);
+                            } catch (Exception e) {
+                                LOG.warn(
+                                        "Failed to cancel downloading file in {}.", localLogDir, e);
+                            }
+                        });
     }
 
     @VisibleForTesting
