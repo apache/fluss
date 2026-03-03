@@ -1251,7 +1251,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
     void testListOffsets(boolean isPartitioned) throws Exception {
-        TableBucket tb = new TableBucket(DATA1_TABLE_ID, isPartitioned ? 10L : null, 1);
+        TableBucket tb = makeTableBucket(DATA1_TABLE_ID, isPartitioned ? 10L : null, false);
         makeLogTableAsLeader(tb, isPartitioned);
 
         // produce one batch to this bucket.
