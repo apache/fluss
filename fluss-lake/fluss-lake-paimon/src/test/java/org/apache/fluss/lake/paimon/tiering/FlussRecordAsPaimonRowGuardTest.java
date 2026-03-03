@@ -132,8 +132,7 @@ class FlussRecordAsPaimonRowGuardTest {
     void testGetIntBucketColumnBeforeSetReturnsValue() {
         // bucketFieldIndex (businessFieldCount == 1) does NOT depend on logRecord; it returns the
         // bucket value passed to the constructor, so it must never throw even before setFlussRecord
-        assertThatThrownBy(() -> row.getInt(0))
-                .isInstanceOf(IllegalStateException.class);
+        assertThatThrownBy(() -> row.getInt(0)).isInstanceOf(IllegalStateException.class);
         // bucket column itself is safe
         org.assertj.core.api.Assertions.assertThat(row.getInt(1)).isEqualTo(0);
     }
