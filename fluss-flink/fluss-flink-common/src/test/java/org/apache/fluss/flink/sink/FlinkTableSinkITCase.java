@@ -29,6 +29,7 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
+import org.apache.fluss.utils.types.Tuple2;
 
 import org.apache.flink.api.common.RuntimeExecutionMode;
 import org.apache.flink.api.common.typeinfo.Types;
@@ -1687,21 +1688,24 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
                                 + ") with ('auto-increment.fields'='auto_increment_id')",
                         tableName));
 
-        // Insert initial data specifying only id and amount
-        tEnv.executeSql(
-                        String.format(
-                                "INSERT INTO %s (id, amount) VALUES "
-                                        + "(1, 100), "
-                                        + "(2, 200), "
-                                        + "(3, 150), "
-                                        + "(4, 250)",
-                                tableName))
-                .await();
+        // Insert initial data one by one to ensure auto increment ID ordering.
+        // Auto increment IDs are assigned server-side in arrival order, so concurrent
+        // multi-value INSERTs may receive IDs out of SQL statement order.
+        List<Tuple2<Integer, Integer>> inserts =
+                Arrays.asList(
+                        Tuple2.of(1, 100), Tuple2.of(2, 200), Tuple2.of(3, 150), Tuple2.of(4, 250));
+        for (Tuple2<Integer, Integer> record : inserts) {
+            tEnv.executeSql(
+                            String.format(
+                                    "INSERT INTO %s (id, amount) VALUES (%d, %d)",
+                                    tableName, record.f0, record.f1))
+                    .await();
+        }
 
+        // Update and insert more records
         tEnv.executeSql(
                         String.format(
-                                "INSERT INTO %s (id, amount) VALUES " + "(3, 350), " + "(5, 500)",
-                                tableName))
+                                "INSERT INTO %s (id, amount) VALUES (3, 350), (5, 500)", tableName))
                 .await();
 
         List<String> expectedResults =
@@ -1780,25 +1784,26 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
                                 + ") with ('table.changelog.image' = 'wal', 'auto-increment.fields'='auto_increment_id')",
                         tableName));
 
-        // Insert initial data
-        tEnv.executeSql(
-                        String.format(
-                                "INSERT INTO %s (id, amount) VALUES "
-                                        + "(1, 100), "
-                                        + "(2, 200), "
-                                        + "(3, 150), "
-                                        + "(4, 250)",
-                                tableName))
-                .await();
+        // Insert initial data one by one to ensure auto increment ID ordering.
+        // Auto increment IDs are assigned server-side in arrival order, so concurrent
+        // multi-value INSERTs may receive IDs out of SQL statement order.
+        List<Tuple2<Integer, Integer>> inserts =
+                Arrays.asList(
+                        Tuple2.of(1, 100), Tuple2.of(2, 200), Tuple2.of(3, 150), Tuple2.of(4, 250));
+        for (Tuple2<Integer, Integer> record : inserts) {
+            tEnv.executeSql(
+                            String.format(
+                                    "INSERT INTO %s (id, amount) VALUES (%d, %d)",
+                                    tableName, record.f0, record.f1))
+                    .await();
+        }
 
-        // Use batch mode to update and delete records
-
-        // Upsert data, not support update/delete rows in table with auto-inc column for now.
+        // Upsert data - these don't need sequential execution since auto increment IDs
+        // are already assigned from initial inserts above. Updates reuse existing IDs.
         // TODO: Support Batch Update
         tEnv.executeSql(
                         String.format(
-                                "INSERT INTO %s (id, amount) VALUES " + "(1, 120), " + "(3, 180)",
-                                tableName))
+                                "INSERT INTO %s (id, amount) VALUES (1, 120), (3, 180)", tableName))
                 .await();
 
         List<String> expectedResults =
