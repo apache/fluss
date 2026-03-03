@@ -181,7 +181,8 @@ public class FlinkSource<OUT>
                         sourceEnumeratorState.getLeaseId(),
                         leaseContext.getKvSnapshotLeaseDurationMs()),
                 true,
-                enableBacklogReporting);
+                enableBacklogReporting,
+                sourceEnumeratorState.isBacklogProcessed());
     }
 
     @Override

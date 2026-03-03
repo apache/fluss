@@ -399,6 +399,7 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
                             null,
                             LeaseContext.DEFAULT,
                             true,
+                            false,
                             false);
 
             enumerator.start();
@@ -450,6 +451,7 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
                                 null,
                                 workExecutor,
                                 LeaseContext.DEFAULT,
+                                false,
                                 false,
                                 false)) {
 
@@ -686,6 +688,7 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
                                 lakeSource,
                                 workExecutor,
                                 LeaseContext.DEFAULT,
+                                false,
                                 false,
                                 false)) {
             enumerator.start();

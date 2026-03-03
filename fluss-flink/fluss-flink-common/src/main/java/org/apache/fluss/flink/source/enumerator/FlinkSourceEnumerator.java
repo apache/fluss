@@ -193,6 +193,8 @@ public class FlinkSourceEnumerator
 
     private final boolean enableBacklogReporting;
 
+    private volatile boolean isBacklogProcessed;
+
     public FlinkSourceEnumerator(
             TablePath tablePath,
             Configuration flussConf,
@@ -223,7 +225,8 @@ public class FlinkSourceEnumerator
                 lakeSource,
                 leaseContext,
                 checkpointTriggeredBefore,
-                enableBacklogReporting);
+                enableBacklogReporting,
+                false);
     }
 
     public FlinkSourceEnumerator(
@@ -242,7 +245,8 @@ public class FlinkSourceEnumerator
             @Nullable LakeSource<LakeSplit> lakeSource,
             LeaseContext leaseContext,
             boolean checkpointTriggeredBefore,
-            boolean enableBacklogReporting) {
+            boolean enableBacklogReporting,
+            boolean isBacklogProcessed) {
         this(
                 tablePath,
                 flussConf,
@@ -260,7 +264,8 @@ public class FlinkSourceEnumerator
                 new WorkerExecutor(context),
                 leaseContext,
                 checkpointTriggeredBefore,
-                enableBacklogReporting);
+                enableBacklogReporting,
+                isBacklogProcessed);
     }
 
     FlinkSourceEnumerator(
@@ -280,7 +285,8 @@ public class FlinkSourceEnumerator
             WorkerExecutor workerExecutor,
             LeaseContext leaseContext,
             boolean checkpointTriggeredBefore,
-            boolean enableBacklogReporting) {
+            boolean enableBacklogReporting,
+            boolean isBacklogProcessed) {
         this.tablePath = checkNotNull(tablePath);
         this.flussConf = checkNotNull(flussConf);
         this.hasPrimaryKey = hasPrimaryKey;
@@ -305,6 +311,7 @@ public class FlinkSourceEnumerator
         this.leaseContext = leaseContext;
         this.checkpointTriggeredBefore = checkpointTriggeredBefore;
         this.enableBacklogReporting = enableBacklogReporting;
+        this.isBacklogProcessed = isBacklogProcessed;
     }
 
     @Override
@@ -321,7 +328,7 @@ public class FlinkSourceEnumerator
                     String.format("Failed to get table info for %s", tablePath),
                     ExceptionUtils.stripCompletionException(e));
         }
-        if (enableBacklogReporting) {
+        if (enableBacklogReporting && !isBacklogProcessed) {
             initializeBacklog();
         }
         if (isPartitioned) {
@@ -1076,6 +1083,7 @@ public class FlinkSourceEnumerator
             final TableBucket bucket = event.getTableBucket();
             bucketsWithBacklogOffset.remove(bucket);
             if (bucketsWithBacklogOffset.isEmpty()) {
+                isBacklogProcessed = true;
                 SplitEnumeratorContextAdapter.setIsProcessingBacklog(context, false);
                 LOG.info(
                         "Table {} finished reading backlog data and isProcessingBacklog set to false.",
@@ -1118,7 +1126,8 @@ public class FlinkSourceEnumerator
                         assignedTableBuckets,
                         assignedPartitions,
                         pendingHybridLakeFlussSplits,
-                        leaseContext.getKvSnapshotLeaseId());
+                        leaseContext.getKvSnapshotLeaseId(),
+                        isBacklogProcessed);
         LOG.debug("Source Checkpoint is {}", enumeratorState);
         return enumeratorState;
     }
