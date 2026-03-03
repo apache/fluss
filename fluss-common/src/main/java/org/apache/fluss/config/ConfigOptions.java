@@ -798,6 +798,16 @@ public class ConfigOptions {
                                     + "copy segments, clean up remote log segments, delete local log segments etc. "
                                     + "If the value is set to 0, it means that the remote log storage is disabled.");
 
+    public static final ConfigOption<Integer> REMOTE_LOG_TASK_MAX_UPLOAD_SEGMENTS =
+            key("remote.log.task-max-upload-segments")
+                    .intType()
+                    .defaultValue(5)
+                    .withDescription(
+                            "The maximum number of log segments to upload to remote storage per "
+                                    + "tiering task execution. This limits the upload batch size to "
+                                    + "prevent overwhelming the remote storage when there is a large "
+                                    + "backlog of segments to upload.");
+
     public static final ConfigOption<MemorySize> REMOTE_LOG_INDEX_FILE_CACHE_SIZE =
             key("remote.log.index-file-cache-size")
                     .memoryType()

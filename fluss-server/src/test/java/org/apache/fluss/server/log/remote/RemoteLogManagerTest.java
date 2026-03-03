@@ -679,14 +679,15 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
 
         remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
 
-        // Only the 2 successfully copied segments should be committed.
-        List<RemoteLogSegment> remoteLogSegmentList =
-                remoteLogManager.relevantRemoteLogSegments(tb, 0L);
-        assertThat(remoteLogSegmentList).hasSize(2);
-        // Remote storage should contain exactly the 2 committed segment files.
+        // Verify: The manifest should contain exactly 2 segments (the successfully copied ones).
+        RemoteLogTablet remoteLog = remoteLogManager.remoteLogTablet(tb);
+        List<RemoteLogSegment> manifestSegments = remoteLog.allRemoteLogSegments();
+        assertThat(manifestSegments).hasSize(2);
+
+        // Verify: Remote storage should contain exactly the 2 committed segment files.
         assertThat(listRemoteLogFiles(tb))
                 .isEqualTo(
-                        remoteLogSegmentList.stream()
+                        manifestSegments.stream()
                                 .map(s -> s.remoteLogSegmentId().toString())
                                 .collect(Collectors.toSet()));
     }

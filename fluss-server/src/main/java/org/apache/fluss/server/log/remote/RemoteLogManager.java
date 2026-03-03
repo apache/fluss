@@ -70,6 +70,7 @@ public class RemoteLogManager implements Closeable {
     public static final String RLM_SCHEDULED_THREAD_PREFIX = "fluss-remote-log-manager-thread-pool";
 
     private final long taskInterval;
+    private final int maxUploadSegmentsPerTask;
     private final RemoteLogIndexCache remoteLogIndexCache;
     private final RemoteLogStorage remoteLogStorage;
     private final CoordinatorGateway coordinatorGateway;
@@ -118,6 +119,8 @@ public class RemoteLogManager implements Closeable {
                         remoteLogStorage,
                         dataDir);
         this.taskInterval = conf.get(ConfigOptions.REMOTE_LOG_TASK_INTERVAL_DURATION).toMillis();
+        this.maxUploadSegmentsPerTask =
+                conf.getInt(ConfigOptions.REMOTE_LOG_TASK_MAX_UPLOAD_SEGMENTS);
         this.rlManagerScheduledThreadPool = scheduledExecutor;
         this.clock = clock;
     }
@@ -290,7 +293,8 @@ public class RemoteLogManager implements Closeable {
                                     remoteLog,
                                     remoteLogStorage,
                                     coordinatorGateway,
-                                    clock);
+                                    clock,
+                                    maxUploadSegmentsPerTask);
                     LOG.info(
                             "Created a new remote log task for table-bucket{}: {} and getting scheduled",
                             tableBucket,

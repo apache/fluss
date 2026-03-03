@@ -58,6 +58,7 @@ public class LogTieringTask implements Runnable {
     private final RemoteLogStorage remoteLogStorage;
     private final CoordinatorGateway coordinatorGateway;
     private final Clock clock;
+    private final int maxUploadSegmentsPerTask;
 
     // The copied offset is empty initially for a new leader LogTieringTask, and needs to
     // be fetched inside the task's run() method.
@@ -70,7 +71,8 @@ public class LogTieringTask implements Runnable {
             RemoteLogTablet remoteLog,
             RemoteLogStorage remoteLogStorage,
             CoordinatorGateway coordinatorGateway,
-            Clock clock) {
+            Clock clock,
+            int maxUploadSegmentsPerTask) {
         this.replica = replica;
         this.remoteLog = remoteLog;
         this.physicalTablePath = replica.getPhysicalTablePath();
@@ -78,6 +80,7 @@ public class LogTieringTask implements Runnable {
         this.remoteLogStorage = remoteLogStorage;
         this.coordinatorGateway = coordinatorGateway;
         this.clock = clock;
+        this.maxUploadSegmentsPerTask = maxUploadSegmentsPerTask;
     }
 
     @Override
@@ -224,6 +227,12 @@ public class LogTieringTask implements Runnable {
                     tableBucket,
                     copiedOffset,
                     highWatermark);
+        }
+
+        // Limit the number of segments to upload per task execution to prevent
+        // overwhelming the remote storage when there is a large backlog.
+        if (candidateLogSegments.size() > maxUploadSegmentsPerTask) {
+            candidateLogSegments = candidateLogSegments.subList(0, maxUploadSegmentsPerTask);
         }
 
         return candidateLogSegments;
