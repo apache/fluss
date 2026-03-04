@@ -16,25 +16,28 @@
 # limitations under the License.
 #
 
+{{- if .Values.metrics.enabled }}
 apiVersion: v1
 kind: Service
 metadata:
-  name: tablet-server-hs
+  name: tablet-server-metrics-hs
   labels:
     {{- include "fluss.labels" . | nindent 4 }}
     app.kubernetes.io/component: tablet
+    {{- with .Values.metrics.service.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  annotations:
+    {{- include "fluss.metrics.annotations" . | nindent 4 }}
 spec:
   clusterIP: None
   type: ClusterIP
   ports:
-    - name: internal
+    - name: {{ default "metrics" .Values.metrics.service.portName }}
       protocol: TCP
-      port: {{ .Values.listeners.internal.port }}
-      targetPort: internal
-    - name: client
-      protocol: TCP
-      port: {{ .Values.listeners.client.port }}
-      targetPort: client
+      port: {{ default 9249 .Values.metrics.reporters.prometheus.port }}
+      targetPort: {{ default 9249 .Values.metrics.reporters.prometheus.port }}
   selector:
     {{- include "fluss.selectorLabels" . | nindent 4 }}
     app.kubernetes.io/component: tablet
+{{- end }}

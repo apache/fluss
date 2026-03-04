@@ -139,7 +139,7 @@ The Fluss Helm chart deploys the following Kubernetes resources:
 - **CoordinatorServer**: 1x StatefulSet with Headless Service for cluster coordination
 - **TabletServer**: 3x StatefulSet with Headless Service for data storage and processing
 - **ConfigMap**: Configuration management for `server.yaml` settings
-- **Services**: Headless services providing stable pod DNS names
+- **Services**: Headless services for pod communication, plus optional dedicated headless metrics services when metrics are enabled
 
 ### Step 3: Verify Installation
 
@@ -182,6 +182,16 @@ The following table lists the configurable parameters of the Fluss chart and the
 |-----------|-------------|---------|
 | `listeners.internal.port` | Internal communication port | `9123` |
 | `listeners.client.port` | Client port (intra-cluster) | `9124` |
+
+### Metrics Parameters
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `metrics.enabled` | Enables metrics reporter configuration and dedicated metrics services | `false` |
+| `metrics.reporters` | Map of Fluss metric reporters and reporter options | `{ prometheus: { port: 9249 } }` |
+| `metrics.service.portName` | Named port exposed on metrics services (used by ServiceMonitor endpoint `port`) | `metrics` |
+| `metrics.service.labels` | Additional labels added to metrics services for ServiceMonitor selectors | `{}` |
+| `metrics.annotations` | Optional annotations added to metrics services (for annotation-based scraping) | `{}` |
 
 ### Fluss Configuration Overrides
 
@@ -257,12 +267,17 @@ listeners:
 
 ### Metrics and Monitoring
 
-When `metrics.enabled` is `true`, the Helm chart renders metrics reporter entries into `server.yaml`:
+When `metrics.enabled` is `true`, the Helm chart does the following:
 
 - `metrics.reporters`: comma-separated reporter names from `metrics.reporters`
 - `metrics.reporter.<name>.<option>`: one entry per reporter option in `metrics.reporters`
+- Creates dedicated metrics services:
+  - `coordinator-server-metrics-hs`
+  - `tablet-server-metrics-hs`
+- Exposes the Prometheus reporter port as a named service port (`metrics.service.portName`)
+- Adds optional labels from `metrics.service.labels` for ServiceMonitor selection
 
-If `metrics.annotations` is configured, these annotations are also added to Fluss Services and can be used by reporters such as Prometheus to scrape metrics endpoints.
+If `metrics.annotations` is configured, these annotations are added to the dedicated metrics services and can be used for annotation based scraping.
 
 ```yaml
 metrics:
@@ -272,6 +287,10 @@ metrics:
       port: 9250-9260
     prometheus:
       port: 9249
+  service:
+    portName: metrics
+    labels:
+      monitoring: enabled
   annotations:
     prometheus.io/scrape: "true"
     prometheus.io/path: "/metrics"

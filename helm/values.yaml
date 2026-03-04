@@ -63,6 +63,9 @@ metrics:
   reporters:
     prometheus:
       port: 9249
+  service:
+    portName: metrics
+    labels: {}
   annotations: {}
 
 resources: {}
