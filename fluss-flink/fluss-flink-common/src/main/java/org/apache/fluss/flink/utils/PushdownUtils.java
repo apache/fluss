@@ -23,8 +23,6 @@ import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.client.admin.ListOffsetsResult;
 import org.apache.fluss.client.admin.OffsetSpec;
 import org.apache.fluss.client.table.Table;
-import org.apache.fluss.client.table.scanner.Scan;
-import org.apache.fluss.client.table.scanner.batch.BatchScanUtils;
 import org.apache.fluss.client.table.scanner.batch.BatchScanner;
 import org.apache.fluss.client.table.writer.UpsertWriter;
 import org.apache.fluss.config.Configuration;
@@ -33,7 +31,6 @@ import org.apache.fluss.exception.UnsupportedVersionException;
 import org.apache.fluss.flink.source.lookup.FlinkLookupFunction;
 import org.apache.fluss.flink.source.lookup.LookupNormalizer;
 import org.apache.fluss.metadata.PartitionInfo;
-import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.metadata.TableStats;
@@ -75,6 +72,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
+import static org.apache.fluss.client.table.scanner.batch.BatchScanUtils.collectRows;
 import static org.apache.fluss.flink.source.lookup.LookupNormalizer.createPrimaryKeyLookupNormalizer;
 import static org.apache.fluss.utils.ExceptionUtils.findThrowable;
 
@@ -308,42 +306,12 @@ public class PushdownUtils {
         int limit = (int) limitRowNum;
         try (Connection connection = ConnectionFactory.createConnection(flussConfig);
                 Table table = connection.getTable(tablePath);
-                Admin flussAdmin = connection.getAdmin()) {
-            TableInfo tableInfo = flussAdmin.getTableInfo(tablePath).get();
-            int bucketCount = tableInfo.getNumBuckets();
-            List<TableBucket> tableBuckets;
-            if (tableInfo.isPartitioned()) {
-                List<PartitionInfo> partitionInfos = flussAdmin.listPartitionInfos(tablePath).get();
-                tableBuckets =
-                        partitionInfos.stream()
-                                .flatMap(
-                                        partitionInfo ->
-                                                IntStream.range(0, bucketCount)
-                                                        .mapToObj(
-                                                                bucketId ->
-                                                                        new TableBucket(
-                                                                                tableInfo
-                                                                                        .getTableId(),
-                                                                                partitionInfo
-                                                                                        .getPartitionId(),
-                                                                                bucketId)))
-                                .collect(Collectors.toList());
-            } else {
-                tableBuckets =
-                        IntStream.range(0, bucketCount)
-                                .mapToObj(
-                                        bucketId ->
-                                                new TableBucket(tableInfo.getTableId(), bucketId))
-                                .collect(Collectors.toList());
-            }
-
-            Scan scan = table.newScan().limit(limit).project(projectedFields);
-            List<BatchScanner> scanners =
-                    tableBuckets.stream()
-                            .map(scan::createBatchScanner)
-                            .collect(Collectors.toList());
-            List<InternalRow> scannedRows = BatchScanUtils.collectLimitedRows(scanners, limit);
-
+                BatchScanner batchScanner =
+                        table.newScan()
+                                .project(projectedFields)
+                                .limit(limit)
+                                .createBatchScanner()) {
+            List<InternalRow> scannedRows = collectRows(batchScanner);
             // convert fluss row into flink row
             List<RowData> flinkRows = new ArrayList<>();
             FlussRowToFlinkRowConverter flussRowToFlinkRowConverter =

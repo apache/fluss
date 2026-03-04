@@ -53,12 +53,13 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
+import static org.apache.fluss.client.table.scanner.batch.BatchScanUtils.collectRows;
 import static org.apache.fluss.record.TestData.DATA1_ROW_TYPE;
 import static org.apache.fluss.testutils.DataTestUtils.compactedRow;
 import static org.assertj.core.api.Assertions.assertThat;
 
-/** IT Case for {@link KvSnapshotBatchScanner}. */
-class KvSnapshotBatchScannerITCase extends ClientToServerITCaseBase {
+/** IT Case for {@link BatchScanner}. */
+class BatchScannerITCase extends ClientToServerITCaseBase {
 
     private static final int DEFAULT_BUCKET_NUM = 3;
 
@@ -322,6 +323,24 @@ class KvSnapshotBatchScannerITCase extends ClientToServerITCaseBase {
             scanner.close();
         }
         table.close();
+    }
+
+    @Test
+    void testTableLevelScanRespectsLimit() throws Exception {
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "test-table-level-scan-limit");
+        long tableId = createTable(tablePath, DEFAULT_TABLE_DESCRIPTOR, true);
+
+        // insert 3 rows per bucket (9 total across 3 buckets)
+        putRows(tableId, tablePath, 9);
+
+        int limit = 5;
+        try (Table table = conn.getTable(tablePath);
+                BatchScanner scanner = table.newScan().limit(limit).createBatchScanner()) {
+            List<InternalRow> actual = collectRows(scanner);
+            // collectLimitedRows stops once >= limit rows are collected
+            assertThat(actual.size()).isGreaterThanOrEqualTo(limit);
+            assertThat(actual.size()).isLessThanOrEqualTo(9);
+        }
     }
 
     // -------- Utils method
