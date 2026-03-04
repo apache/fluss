@@ -29,6 +29,7 @@ import org.apache.fluss.flink.lake.LakeFlinkCatalog;
 import org.apache.fluss.flink.procedure.ProcedureManager;
 import org.apache.fluss.flink.utils.CatalogExceptionUtils;
 import org.apache.fluss.flink.utils.FlinkConversions;
+import org.apache.fluss.metadata.DatabaseChange;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.PartitionInfo;
 import org.apache.fluss.metadata.PartitionSpec;
@@ -120,6 +121,7 @@ public class FlinkCatalog extends AbstractCatalog {
     public static final String LAKE_TABLE_SPLITTER = "$lake";
     public static final String CHANGELOG_TABLE_SUFFIX = "$changelog";
     public static final String BINLOG_TABLE_SUFFIX = "$binlog";
+    public static final String COMMENT_PROP = "comment";
 
     protected final ClassLoader classLoader;
 
@@ -278,9 +280,59 @@ public class FlinkCatalog extends AbstractCatalog {
     }
 
     @Override
-    public void alterDatabase(String databaseName, CatalogDatabase catalogDatabase, boolean b)
+    public void alterDatabase(
+            String databaseName, CatalogDatabase catalogDatabase, boolean ignoreIfNotExists)
             throws DatabaseNotExistException, CatalogException {
-        throw new UnsupportedOperationException();
+        try {
+            // Get current database info
+            DatabaseDescriptor currentDescriptor =
+                    admin.getDatabaseInfo(databaseName).get().getDatabaseDescriptor();
+
+            List<DatabaseChange> databaseChanges = new ArrayList<>();
+
+            // Check comment changes
+            String oldComment = currentDescriptor.getComment().orElse(null);
+            String newComment = catalogDatabase.getComment();
+            if (!Objects.equals(oldComment, newComment)) {
+                databaseChanges.add(DatabaseChange.updateComment(newComment));
+            }
+
+            // Check custom properties changes
+            Map<String, String> oldProps = currentDescriptor.getCustomProperties();
+            Map<String, String> newProps = catalogDatabase.getProperties();
+
+            newProps.forEach(
+                    (k, v) -> {
+                        // When execute `ALTER DATABASE db SET ('comment' = 'new comment');`,
+                        // the comment will be set in the properties of CatalogDatabase.
+                        if (k.equals(COMMENT_PROP)) {
+                            databaseChanges.add(DatabaseChange.updateComment(v));
+                        } else if (!oldProps.containsKey(k) || !oldProps.get(k).equals(v)) {
+                            databaseChanges.add(DatabaseChange.set(k, v));
+                        }
+                    });
+
+            oldProps.keySet()
+                    .forEach(
+                            (k) -> {
+                                if (!newProps.containsKey(k)) {
+                                    databaseChanges.add(DatabaseChange.reset(k));
+                                }
+                            });
+
+            admin.alterDatabase(databaseName, databaseChanges, ignoreIfNotExists).get();
+        } catch (Exception e) {
+            Throwable t = ExceptionUtils.stripExecutionException(e);
+            if (CatalogExceptionUtils.isDatabaseNotExist(t)) {
+                if (!ignoreIfNotExists) {
+                    throw new DatabaseNotExistException(getName(), databaseName);
+                }
+            } else {
+                throw new CatalogException(
+                        String.format("Failed to alter database %s in %s", databaseName, getName()),
+                        t);
+            }
+        }
     }
 
     @Override

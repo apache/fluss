@@ -37,6 +37,7 @@ import org.apache.fluss.config.cluster.ConfigEntry;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.fs.FsPathAndFileName;
 import org.apache.fluss.fs.token.ObtainedSecurityToken;
+import org.apache.fluss.metadata.DatabaseChange;
 import org.apache.fluss.metadata.DatabaseSummary;
 import org.apache.fluss.metadata.PartitionInfo;
 import org.apache.fluss.metadata.PartitionSpec;
@@ -46,6 +47,7 @@ import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.messages.AcquireKvSnapshotLeaseRequest;
 import org.apache.fluss.rpc.messages.AcquireKvSnapshotLeaseResponse;
+import org.apache.fluss.rpc.messages.AlterDatabaseRequest;
 import org.apache.fluss.rpc.messages.AlterTableRequest;
 import org.apache.fluss.rpc.messages.CreatePartitionRequest;
 import org.apache.fluss.rpc.messages.DropPartitionRequest;
@@ -417,6 +419,47 @@ public class ClientRpcMessageUtils {
                 .addAllDropColumns(dropColumns)
                 .addAllRenameColumns(renameColumns)
                 .addAllModifyColumns(modifyColumns);
+        return request;
+    }
+
+    public static AlterDatabaseRequest makeAlterDatabaseRequest(
+            String databaseName, List<DatabaseChange> databaseChanges, boolean ignoreIfNotExists) {
+        AlterDatabaseRequest request = new AlterDatabaseRequest();
+
+        List<PbAlterConfig> pbDatabaseChanges = new ArrayList<>(databaseChanges.size());
+        String comment = null;
+        for (DatabaseChange databaseChange : databaseChanges) {
+            PbAlterConfig info = new PbAlterConfig();
+            if (databaseChange instanceof DatabaseChange.SetOption) {
+                DatabaseChange.SetOption setOption = (DatabaseChange.SetOption) databaseChange;
+                info.setConfigKey(setOption.getKey());
+                info.setConfigValue(setOption.getValue());
+                info.setOpType(AlterConfigOpType.SET.value());
+                pbDatabaseChanges.add(info);
+            } else if (databaseChange instanceof DatabaseChange.ResetOption) {
+                DatabaseChange.ResetOption resetOption =
+                        (DatabaseChange.ResetOption) databaseChange;
+                info.setConfigKey(resetOption.getKey());
+                info.setOpType(AlterConfigOpType.DELETE.value());
+                pbDatabaseChanges.add(info);
+            } else if (databaseChange instanceof DatabaseChange.UpdateComment) {
+                DatabaseChange.UpdateComment updateComment =
+                        (DatabaseChange.UpdateComment) databaseChange;
+                comment = updateComment.getComment();
+            } else {
+                throw new IllegalArgumentException(
+                        "Unsupported database change: " + databaseChange.getClass());
+            }
+        }
+
+        request.addAllConfigChanges(pbDatabaseChanges)
+                .setDatabaseName(databaseName)
+                .setIgnoreIfNotExists(ignoreIfNotExists);
+
+        if (comment != null) {
+            request.setComment(comment);
+        }
+
         return request;
     }
 

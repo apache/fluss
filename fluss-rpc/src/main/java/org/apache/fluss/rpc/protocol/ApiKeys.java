@@ -101,7 +101,8 @@ public enum ApiKeys {
     ACQUIRE_KV_SNAPSHOT_LEASE(1056, 0, 0, PUBLIC),
     RELEASE_KV_SNAPSHOT_LEASE(1057, 0, 0, PUBLIC),
     DROP_KV_SNAPSHOT_LEASE(1058, 0, 0, PUBLIC),
-    GET_TABLE_STATS(1059, 0, 0, PUBLIC);
+    GET_TABLE_STATS(1059, 0, 0, PUBLIC),
+    ALTER_DATABASE(1060, 0, 0, PUBLIC);
 
     private static final Map<Integer, ApiKeys> ID_TO_TYPE =
             Arrays.stream(ApiKeys.values())
