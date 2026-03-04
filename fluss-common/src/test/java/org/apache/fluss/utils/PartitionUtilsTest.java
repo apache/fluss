@@ -422,4 +422,148 @@ class PartitionUtilsTest {
         String detectInvalid = detectInvalidName(toStringResult);
         assertThat(detectInvalid).isEqualTo(null);
     }
+
+    // ----------------------- IEEE 754 Special Values Partition Name Tests -----------------------
+
+    /**
+     * Tests that Float.NaN converts to partition name "NaN". This validates FR-010: System MUST
+     * convert Float.NaN to valid partition name "NaN".
+     *
+     * <p>The partition name must be filesystem-safe and recognizable as representing NaN values.
+     */
+    @Test
+    void testFloatNaNPartitionName() {
+        String partitionName = PartitionNameConverters.reformatFloat(Float.NaN);
+
+        assertThat(partitionName)
+                .as("Float.NaN should convert to partition name 'NaN'")
+                .isEqualTo("NaN");
+
+        // Verify partition name is valid
+        assertThat(detectInvalidName(partitionName))
+                .as("'NaN' should be a valid partition name")
+                .isNull();
+    }
+
+    /**
+     * Tests that Double.NaN converts to partition name "NaN". This validates FR-011: System MUST
+     * convert Double.NaN to valid partition name "NaN".
+     */
+    @Test
+    void testDoubleNaNPartitionName() {
+        String partitionName = PartitionNameConverters.reformatDouble(Double.NaN);
+
+        assertThat(partitionName)
+                .as("Double.NaN should convert to partition name 'NaN'")
+                .isEqualTo("NaN");
+
+        // Verify partition name is valid
+        assertThat(detectInvalidName(partitionName))
+                .as("'NaN' should be a valid partition name")
+                .isNull();
+    }
+
+    /**
+     * Tests that Float.POSITIVE_INFINITY converts to partition name "Inf". This validates FR-012:
+     * System MUST convert Float.POSITIVE_INFINITY to valid partition name "Inf".
+     */
+    @Test
+    void testFloatPositiveInfinityPartitionName() {
+        String partitionName = PartitionNameConverters.reformatFloat(Float.POSITIVE_INFINITY);
+
+        assertThat(partitionName)
+                .as("Float.POSITIVE_INFINITY should convert to partition name 'Inf'")
+                .isEqualTo("Inf");
+
+        // Verify partition name is valid
+        assertThat(detectInvalidName(partitionName))
+                .as("'Inf' should be a valid partition name")
+                .isNull();
+    }
+
+    /**
+     * Tests that Float.NEGATIVE_INFINITY converts to partition name "-Inf". This validates FR-013:
+     * System MUST convert Float.NEGATIVE_INFINITY to valid partition name "-Inf".
+     */
+    @Test
+    void testFloatNegativeInfinityPartitionName() {
+        String partitionName = PartitionNameConverters.reformatFloat(Float.NEGATIVE_INFINITY);
+
+        assertThat(partitionName)
+                .as("Float.NEGATIVE_INFINITY should convert to partition name '-Inf'")
+                .isEqualTo("-Inf");
+
+        // Verify partition name is valid
+        assertThat(detectInvalidName(partitionName))
+                .as("'-Inf' should be a valid partition name")
+                .isNull();
+    }
+
+    /**
+     * Tests that Double.POSITIVE_INFINITY converts to partition name "Inf". This validates FR-014:
+     * System MUST convert Double.POSITIVE_INFINITY to valid partition name "Inf".
+     */
+    @Test
+    void testDoublePositiveInfinityPartitionName() {
+        String partitionName = PartitionNameConverters.reformatDouble(Double.POSITIVE_INFINITY);
+
+        assertThat(partitionName)
+                .as("Double.POSITIVE_INFINITY should convert to partition name 'Inf'")
+                .isEqualTo("Inf");
+
+        // Verify partition name is valid
+        assertThat(detectInvalidName(partitionName))
+                .as("'Inf' should be a valid partition name")
+                .isNull();
+    }
+
+    /**
+     * Tests that Double.NEGATIVE_INFINITY converts to partition name "-Inf". This validates FR-015:
+     * System MUST convert Double.NEGATIVE_INFINITY to valid partition name "-Inf".
+     */
+    @Test
+    void testDoubleNegativeInfinityPartitionName() {
+        String partitionName = PartitionNameConverters.reformatDouble(Double.NEGATIVE_INFINITY);
+
+        assertThat(partitionName)
+                .as("Double.NEGATIVE_INFINITY should convert to partition name '-Inf'")
+                .isEqualTo("-Inf");
+
+        // Verify partition name is valid
+        assertThat(detectInvalidName(partitionName))
+                .as("'-Inf' should be a valid partition name")
+                .isNull();
+    }
+
+    /**
+     * Tests that special value partition names are recognized as valid by the filesystem path
+     * validator. This verifies FR-016: Special value partition names must pass TablePath
+     * validation.
+     */
+    @Test
+    void testSpecialValuePartitionNamesAreValid() {
+        // Test all special value partition names
+        assertThat(detectInvalidName("NaN")).as("'NaN' partition name should be valid").isNull();
+
+        assertThat(detectInvalidName("Inf")).as("'Inf' partition name should be valid").isNull();
+
+        assertThat(detectInvalidName("-Inf")).as("'-Inf' partition name should be valid").isNull();
+    }
+
+    /**
+     * Tests that normal Float values still convert correctly to partition names. This ensures
+     * special value handling doesn't break normal value formatting.
+     */
+    @Test
+    void testFloatNormalValuePartitionName() {
+        String partitionName = PartitionNameConverters.reformatFloat(99.99f);
+
+        assertThat(partitionName)
+                .as("Normal Float values should convert with '.' replaced by '_'")
+                .isEqualTo("99_99");
+
+        assertThat(detectInvalidName(partitionName))
+                .as("Normal Float partition name should be valid")
+                .isNull();
+    }
 }
