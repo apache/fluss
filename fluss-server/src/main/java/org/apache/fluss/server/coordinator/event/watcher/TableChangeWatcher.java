@@ -248,9 +248,19 @@ public class TableChangeWatcher {
                         e);
                 return;
             }
+            // Use default remote data dir configured by ConfigOptions.REMOTE_DATA_DIR for
+            // PartitionRegistration created by old cluster.
+            String remoteDataDir =
+                    Optional.ofNullable(partition.getRemoteDataDir())
+                            .orElseGet(zooKeeperClient::getRemoteDataDir);
             eventManager.put(
                     new CreatePartitionEvent(
-                            tablePath, tableId, partitionId, partitionName, partitionAssignment));
+                            tablePath,
+                            tableId,
+                            partitionId,
+                            partitionName,
+                            partitionAssignment,
+                            remoteDataDir));
         }
 
         private void processTableRegistrationChange(TablePath tablePath, ChildData newData) {
