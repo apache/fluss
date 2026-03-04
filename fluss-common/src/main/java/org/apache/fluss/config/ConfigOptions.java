@@ -1930,6 +1930,42 @@ public class ConfigOptions {
                                     + "like 9990-9999.");
 
     // ------------------------------------------------------------------------
+    //  ConfigOptions for OpenTelemetry reporter
+    // ------------------------------------------------------------------------
+    public static final ConfigOption<String> METRICS_REPORTER_OPENTELEMETRY_ENDPOINT =
+            key("metrics.reporter.opentelemetry.endpoint")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "Target to which the OpenTelemetry metric reporter is going to send metrics to.");
+
+    public static final ConfigOption<Duration> METRICS_REPORTER_OPENTELEMETRY_EXPORT_INTERVAL =
+            key("metrics.reporter.opentelemetry.export-interval")
+                    .durationType()
+                    .defaultValue(Duration.ofSeconds(10))
+                    .withDescription(
+                            "Frequency of metric export by the OpenTelemetry metric reporter to the endpoint.");
+
+    public static final ConfigOption<Duration> METRICS_REPORTER_OPENTELEMETRY_EXPORT_TIMEOUT =
+            key("metrics.reporter.opentelemetry.export-timeout")
+                    .durationType()
+                    .defaultValue(Duration.ofSeconds(10))
+                    .withDescription(
+                            "Maximum time the OpenTelemetry metric reporter will wait for each metric export.");
+
+    public static final ConfigOption<String> METRICS_REPORTER_OPENTELEMETRY_SERVICE_NAME =
+            key("metrics.reporter.opentelemetry.service.name")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription("Service name that is set in the OpenTelemetry Resource.");
+
+    public static final ConfigOption<String> METRICS_REPORTER_OPENTELEMETRY_SERVICE_VERSION =
+            key("metrics.reporter.opentelemetry.service.version")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription("Service version that is set in the OpenTelemetry Resource.");
+
+    // ------------------------------------------------------------------------
     //  ConfigOptions for lakehouse storage
     // ------------------------------------------------------------------------
     public static final ConfigOption<DataLakeFormat> DATALAKE_FORMAT =
