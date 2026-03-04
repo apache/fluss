@@ -22,7 +22,7 @@ This chart deploys an Apache Fluss cluster on Kubernetes, following Helm best pr
 It requires a Zookeeper ensemble to be running in the same Kubernetes cluster. In future releases, we may add support for an embedded Zookeeper cluster.
 
 
-## Development environment 
+## Development environment
 
 | component                                                                      | version |
 | ------------------------------------------------------------------------------ | ------- |
@@ -33,7 +33,7 @@ It requires a Zookeeper ensemble to be running in the same Kubernetes cluster. I
 | [Apache Fluss](https://fluss.apache.org/docs/)                                 | v0.10.0-incubating  |
 
 
-## Image requirements 
+## Image requirements
 
 A container image for Fluss is available on DockerHub as `fluss/fluss`. You can use it directly or build your own from this repo. To use your own image you need to build the project with [Maven](https://fluss.apache.org/community/dev/building/) and build it with Docker.
 
@@ -93,9 +93,9 @@ Important Fluss options surfaced by the chart:
 - internal.listener.name: Which listener is used for internal communication (defaults to INTERNAL).
 - tablet-server.id: Required to be unique per TabletServer. The chart auto‑derives this from the StatefulSet pod ordinal at runtime.
 
-### Metrics and Prometheus scraping
+### Metrics and Prometheus Scraping
 
-The chart can enable Fluss metrics reporters and add scrape annotations to Services.
+The chart can enable Fluss metrics reporters and create dedicated metrics services for `coordinator` and `tablet` components.
 
 Example:
 
@@ -107,7 +107,9 @@ helm install fluss ./fluss-helm \
 When enabled, the chart will:
 - configure `metrics.reporters` from reporter names in values
 - configure `metrics.reporter.<name>.<option>` entries from values
-- optionally add metrics scrape annotations to Fluss Services from values
+- create separate metrics services exposing the Prometheus reporter port
+- optionally add metrics scrape annotations to metrics services from values
+- optionally add custom labels to metrics services for `ServiceMonitor` selectors
 
 Values:
 
@@ -115,7 +117,9 @@ Values:
 | --- | --- |
 | `metrics.enabled` | Enables metrics reporting and endpoint exposure. |
 | `metrics.reporters` | Map of Fluss metric reporters and their options. |
-| `metrics.annotations` | Optional map of annotations rendered on Fluss Services when metrics are enabled. |
+| `metrics.service.portName` | Named port exposed by metrics services (usually used by ServiceMonitor endpoint `port`). |
+| `metrics.service.labels` | Optional labels rendered on metrics services (usually used by ServiceMonitor selectors). |
+| `metrics.annotations` | Optional map of annotations rendered on metrics services when metrics are enabled. |
 
 Example `values.yaml` snippet:
 
@@ -123,13 +127,14 @@ Example `values.yaml` snippet:
 metrics:
   enabled: true
   reporters:
-    grph:
-      port: 9020
-      host: example-localhost
-      protocol: TCP
-      interval: "60 SECONDS"
+    jmx:
+      port: 9250-9260
     prometheus:
       port: 9249
+  service:
+    portName: metrics
+    labels:
+      monitoring: enabled
   annotations:
     prometheus.io/scrape: "true"
     prometheus.io/path: "/metrics"

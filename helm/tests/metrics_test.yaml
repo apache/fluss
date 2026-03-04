@@ -133,19 +133,50 @@ tests:
           pattern: 'metrics\.reporters:\s*grph,prometheus'
 ---
 
-suite: metrics-enabled-service
+suite: metrics-service-disabled
 templates:
-  - templates/svc-coordinator.yaml
+  - templates/svc-metrics-coordinator.yaml
 tests:
-  - it: does not render metrics annotations when metrics are disabled
+  - it: does not render coordinator metrics service when metrics are disabled
+    asserts:
+      - hasDocuments:
+          count: 0
+---
+
+suite: metrics-service-enabled
+templates:
+  - templates/svc-metrics-coordinator.yaml
+tests:
+  - it: renders coordinator metrics service with named metrics port
     set:
-      metrics.annotations:
-        prometheus.io/scrape: "true"
+      metrics.enabled: true
     asserts:
       - equal:
-          path: metadata.annotations
-          value: null
-  - it: renders value-driven annotations when provided
+          path: metadata.name
+          value: coordinator-server-metrics-hs
+      - equal:
+          path: spec.ports[0].name
+          value: metrics
+      - equal:
+          path: spec.ports[0].port
+          value: 9249
+      - equal:
+          path: spec.clusterIP
+          value: None
+  - it: renders custom port name and service labels for ServiceMonitor selectors
+    set:
+      metrics.enabled: true
+      metrics.service.portName: fluss-metrics
+      metrics.service.labels:
+        monitoring: enabled
+    asserts:
+      - equal:
+          path: spec.ports[0].name
+          value: fluss-metrics
+      - equal:
+          path: metadata.labels.monitoring
+          value: enabled
+  - it: renders value-driven annotations on metrics service when provided
     set:
       metrics.enabled: true
       metrics.annotations:
@@ -162,6 +193,38 @@ tests:
       - equal:
           path: metadata.annotations["prometheus.io/port"]
           value: "9249"
+  - it: renders no annotations when not configured
+    set:
+      metrics.enabled: true
+    asserts:
+      - equal:
+          path: metadata.annotations
+          value: null
+---
+
+suite: pod-service-separation
+templates:
+  - templates/svc-coordinator.yaml
+  - templates/svc-tablet.yaml
+tests:
+  - it: keeps coordinator pod service without metrics annotations
+    set:
+      metrics.enabled: true
+      metrics.annotations:
+        prometheus.io/scrape: "true"
+    template: templates/svc-coordinator.yaml
+    asserts:
+      - notExists:
+          path: metadata.annotations
+  - it: keeps tablet pod service without metrics annotations
+    set:
+      metrics.enabled: true
+      metrics.annotations:
+        prometheus.io/scrape: "true"
+    template: templates/svc-tablet.yaml
+    asserts:
+      - notExists:
+          path: metadata.annotations
 ---
 
 suite: metrics-enabled-statefulset
@@ -189,16 +252,3 @@ tests:
           content:
             name: metrics
             containerPort: 9249
----
-
-suite: metrics-enabled-without-annotations
-templates:
-  - templates/svc-tablet.yaml
-tests:
-  - it: renders no annotations when not configured
-    set:
-      metrics.enabled: true
-    asserts:
-      - equal:
-          path: metadata.annotations
-          value: null
