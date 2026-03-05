@@ -138,7 +138,7 @@ class FlussConfigUtilsTest {
                 ConfigOptions.RemoteDataDirStrategy.WEIGHTED_ROUND_ROBIN);
         matchedWeightsConf.set(
                 ConfigOptions.REMOTE_DATA_DIRS, Arrays.asList("s3://bucket1", "s3://bucket2"));
-        matchedWeightsConf.set(ConfigOptions.REMOTE_DATA_DIRS_WEIGHTS, Arrays.asList(1, 2));
+        matchedWeightsConf.set(ConfigOptions.REMOTE_DATA_DIRS_WEIGHTS, Arrays.asList(0, 2));
         validateCoordinatorConfigs(matchedWeightsConf);
 
         // Test negative weight

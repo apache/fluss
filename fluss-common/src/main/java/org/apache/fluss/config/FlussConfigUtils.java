@@ -21,7 +21,6 @@ import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.exception.IllegalConfigurationException;
 import org.apache.fluss.fs.FsPath;
-import org.apache.fluss.utils.FlussPaths;
 
 import java.lang.reflect.Field;
 import java.util.Arrays;
@@ -83,11 +82,49 @@ public class FlussConfigUtils {
     }
 
     public static void validateCoordinatorConfigs(Configuration conf) {
-        validServerConfigs(conf);
+        validateServerConfigs(conf);
+    }
+
+    public static void validateTabletConfigs(Configuration conf) {
+        validateServerConfigs(conf);
+
+        Optional<Integer> serverId = conf.getOptional(ConfigOptions.TABLET_SERVER_ID);
+        if (!serverId.isPresent()) {
+            throw new IllegalConfigurationException(
+                    String.format("Configuration %s must be set.", ConfigOptions.TABLET_SERVER_ID));
+        }
+        validMinValue(ConfigOptions.TABLET_SERVER_ID, serverId.get(), 0);
+    }
+
+    /** Validate common server configs. */
+    private static void validateServerConfigs(Configuration conf) {
+        if (conf.get(ConfigOptions.REMOTE_DATA_DIR) == null) {
+            throw new IllegalConfigurationException(
+                    String.format("Configuration %s must be set.", ConfigOptions.REMOTE_DATA_DIR));
+        } else {
+            // Must validate that remote.data.dir is a valid FsPath
+            try {
+                new FsPath(conf.get(ConfigOptions.REMOTE_DATA_DIR));
+            } catch (Exception e) {
+                throw new IllegalConfigurationException(
+                        String.format(
+                                "Invalid configuration for %s.",
+                                ConfigOptions.REMOTE_DATA_DIR.key()),
+                        e);
+            }
+        }
 
         validMinValue(conf, ConfigOptions.DEFAULT_REPLICATION_FACTOR, 1);
         validMinValue(conf, ConfigOptions.KV_MAX_RETAINED_SNAPSHOTS, 1);
         validMinValue(conf, ConfigOptions.SERVER_IO_POOL_SIZE, 1);
+        validMinValue(conf, ConfigOptions.BACKGROUND_THREADS, 1);
+
+        if (conf.get(ConfigOptions.LOG_SEGMENT_FILE_SIZE).getBytes() > Integer.MAX_VALUE) {
+            throw new IllegalConfigurationException(
+                    String.format(
+                            "Invalid configuration for %s, it must be less than or equal %d bytes.",
+                            ConfigOptions.LOG_SEGMENT_FILE_SIZE.key(), Integer.MAX_VALUE));
+        }
 
         // Validate remote.data.dirs
         List<String> remoteDataDirs = conf.get(ConfigOptions.REMOTE_DATA_DIRS);
@@ -109,7 +146,7 @@ public class FlussConfigUtils {
                 conf.get(ConfigOptions.REMOTE_DATA_DIRS_STRATEGY);
         if (remoteDataDirStrategy == ConfigOptions.RemoteDataDirStrategy.WEIGHTED_ROUND_ROBIN) {
             List<Integer> weights = conf.get(ConfigOptions.REMOTE_DATA_DIRS_WEIGHTS);
-            if (!remoteDataDirs.isEmpty() && !weights.isEmpty()) {
+            if (!remoteDataDirs.isEmpty()) {
                 if (remoteDataDirs.size() != weights.size()) {
                     throw new IllegalConfigurationException(
                             String.format(
@@ -119,7 +156,7 @@ public class FlussConfigUtils {
                                     ConfigOptions.REMOTE_DATA_DIRS_WEIGHTS.key(),
                                     weights.size()));
                 }
-                // Validate all weights are positive
+                // Validate all weights are no less than 0
                 for (int i = 0; i < weights.size(); i++) {
                     if (weights.get(i) < 0) {
                         throw new IllegalConfigurationException(
@@ -130,45 +167,6 @@ public class FlussConfigUtils {
                                         i));
                     }
                 }
-            }
-        }
-    }
-
-    public static void validateTabletConfigs(Configuration conf) {
-        validServerConfigs(conf);
-
-        Optional<Integer> serverId = conf.getOptional(ConfigOptions.TABLET_SERVER_ID);
-        if (!serverId.isPresent()) {
-            throw new IllegalConfigurationException(
-                    String.format("Configuration %s must be set.", ConfigOptions.TABLET_SERVER_ID));
-        }
-        validMinValue(ConfigOptions.TABLET_SERVER_ID, serverId.get(), 0);
-
-        validMinValue(conf, ConfigOptions.BACKGROUND_THREADS, 1);
-
-        if (conf.get(ConfigOptions.LOG_SEGMENT_FILE_SIZE).getBytes() > Integer.MAX_VALUE) {
-            throw new IllegalConfigurationException(
-                    String.format(
-                            "Invalid configuration for %s, it must be less than or equal %d bytes.",
-                            ConfigOptions.LOG_SEGMENT_FILE_SIZE.key(), Integer.MAX_VALUE));
-        }
-    }
-
-    /** Validate common server configs. */
-    private static void validServerConfigs(Configuration conf) {
-        if (conf.get(ConfigOptions.REMOTE_DATA_DIR) == null) {
-            throw new IllegalConfigurationException(
-                    String.format("Configuration %s must be set.", ConfigOptions.REMOTE_DATA_DIR));
-        } else {
-            // Must validate that remote.data.dir is a valid FsPath
-            try {
-                FlussPaths.remoteDataDir(conf);
-            } catch (Exception e) {
-                throw new IllegalConfigurationException(
-                        String.format(
-                                "Invalid configuration for %s.",
-                                ConfigOptions.REMOTE_DATA_DIR.key()),
-                        e);
             }
         }
     }
