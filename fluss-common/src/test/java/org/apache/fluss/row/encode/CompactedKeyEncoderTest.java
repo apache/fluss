@@ -231,7 +231,8 @@ class CompactedKeyEncoderTest {
             expectedHexString.append("00 00 00 00 00 31 00 00 00 00 ");
             expectedHexString.append("00 00 81 32 00 00 00 00 00 00 ");
             expectedHexString.append("81");
-            byte[] expected = BaseEncoding.base16().decode(expectedHexString.toString().replace(" ", ""));
+            byte[] expected =
+                    BaseEncoding.base16().decode(expectedHexString.toString().replace(" ", ""));
 
             assertThat(keyBytes).isEqualTo(expected);
 
