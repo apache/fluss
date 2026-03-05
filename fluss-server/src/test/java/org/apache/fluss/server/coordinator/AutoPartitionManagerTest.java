@@ -25,12 +25,14 @@ import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.server.coordinator.remote.RemoteDirDynamicLoader;
 import org.apache.fluss.server.testutils.TestingServerMetadataCache;
 import org.apache.fluss.server.zk.NOPErrorHandler;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperExtension;
 import org.apache.fluss.server.zk.data.BucketAssignment;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
+import org.apache.fluss.server.zk.data.PartitionRegistration;
 import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.testutils.common.AllCallbackWrapper;
 import org.apache.fluss.testutils.common.ManuallyTriggeredScheduledExecutorService;
@@ -49,7 +51,13 @@ import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
+import java.util.Arrays;
+import java.util.Collection;
+import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.function.Function;
 import java.util.stream.Stream;
@@ -67,6 +75,9 @@ class AutoPartitionManagerTest {
 
     protected static ZooKeeperClient zookeeperClient;
     private static MetadataManager metadataManager;
+    private static String remoteDataDir;
+    private static List<String> remoteDataDirs;
+    private static RemoteDirDynamicLoader remoteDirDynamicLoader;
 
     @BeforeAll
     static void beforeAll() {
@@ -79,6 +90,17 @@ class AutoPartitionManagerTest {
                         zookeeperClient,
                         new Configuration(),
                         new LakeCatalogDynamicLoader(new Configuration(), null, true));
+
+        remoteDataDir = "/dir";
+        remoteDataDirs = Arrays.asList("/dir1", "/dir2", "/dir3", "/dir4");
+        Configuration conf = new Configuration();
+        conf.set(ConfigOptions.REMOTE_DATA_DIR, remoteDataDir);
+        conf.set(ConfigOptions.REMOTE_DATA_DIRS, remoteDataDirs);
+        conf.set(ConfigOptions.REMOTE_DATA_DIRS_WEIGHTS, Arrays.asList(1, 1, 1, 1));
+        conf.set(
+                ConfigOptions.REMOTE_DATA_DIRS_STRATEGY,
+                ConfigOptions.RemoteDataDirStrategy.WEIGHTED_ROUND_ROBIN);
+        remoteDirDynamicLoader = new RemoteDirDynamicLoader(conf);
     }
 
     @AfterEach
@@ -297,6 +319,7 @@ class AutoPartitionManagerTest {
                                 zookeeperClient,
                                 new Configuration(),
                                 new LakeCatalogDynamicLoader(new Configuration(), null, true)),
+                        remoteDirDynamicLoader,
                         new Configuration(),
                         clock,
                         periodicExecutor);
@@ -312,6 +335,7 @@ class AutoPartitionManagerTest {
         Map<String, Long> partitions = zookeeperClient.getPartitionNameAndIds(tablePath);
         // pre-create 4 partitions including current partition
         assertThat(partitions.keySet()).containsExactlyInAnyOrder(params.expectedPartitions);
+        verifyPartitionsRemoteDataDir(tablePath, partitions.keySet());
 
         int replicaFactor = table.getTableConfig().getReplicationFactor();
         Map<Integer, BucketAssignment> bucketAssignments =
@@ -333,6 +357,7 @@ class AutoPartitionManagerTest {
             metadataManager.createPartition(
                     tablePath,
                     tableId,
+                    remoteDataDir,
                     partitionAssignment,
                     fromPartitionName(table.getPartitionKeys(), partitionName),
                     false);
@@ -353,11 +378,13 @@ class AutoPartitionManagerTest {
         partitions = zookeeperClient.getPartitionNameAndIds(tablePath);
         assertThat(partitions.keySet())
                 .containsExactlyInAnyOrder(params.expectedPartitionsAfterAdvance);
+        verifyPartitionsRemoteDataDir(tablePath, partitions.keySet());
 
         clock.advanceTime(params.advanceDuration2);
         periodicExecutor.triggerPeriodicScheduledTasks();
         partitions = zookeeperClient.getPartitionNameAndIds(tablePath);
         assertThat(partitions.keySet()).containsExactlyInAnyOrder(params.expectedPartitionsFinal);
+        verifyPartitionsRemoteDataDir(tablePath, partitions.keySet());
 
         // trigger again at the same time, should be nothing changes
         periodicExecutor.triggerPeriodicScheduledTasks();
@@ -387,6 +414,7 @@ class AutoPartitionManagerTest {
                 new AutoPartitionManager(
                         new TestingServerMetadataCache(3),
                         metadataManager,
+                        remoteDirDynamicLoader,
                         new Configuration(),
                         clock,
                         periodicExecutor);
@@ -424,6 +452,7 @@ class AutoPartitionManagerTest {
             metadataManager.createPartition(
                     tablePath,
                     tableId,
+                    remoteDataDir,
                     partitionAssignment,
                     fromPartitionName(table.getPartitionKeys(), i + ""),
                     false);
@@ -463,6 +492,7 @@ class AutoPartitionManagerTest {
                 new AutoPartitionManager(
                         new TestingServerMetadataCache(3),
                         metadataManager,
+                        remoteDirDynamicLoader,
                         new Configuration(),
                         clock,
                         periodicExecutor);
@@ -527,6 +557,7 @@ class AutoPartitionManagerTest {
                 new AutoPartitionManager(
                         new TestingServerMetadataCache(3),
                         metadataManager,
+                        remoteDirDynamicLoader,
                         config,
                         clock,
                         periodicExecutor);
@@ -698,6 +729,19 @@ class AutoPartitionManagerTest {
 
     // -------------------------------------------------------------------------------------------
 
+    private void verifyPartitionsRemoteDataDir(
+            TablePath tablePath, Collection<String> partitionNames) throws Exception {
+        Set<String> allRemoteDataDirs = new HashSet<>(remoteDataDirs);
+        allRemoteDataDirs.add(remoteDataDir);
+        for (String partitionName : partitionNames) {
+            Optional<PartitionRegistration> partition =
+                    zookeeperClient.getPartition(tablePath, partitionName);
+            String remoteDataDir = partition.get().getRemoteDataDir();
+            assertThat(remoteDataDir).isNotNull();
+            assertThat(allRemoteDataDirs).contains(remoteDataDir);
+        }
+    }
+
     private TableInfo createPartitionedTable(
             int partitionRetentionNum, int partitionPreCreateNum, AutoPartitionTimeUnit timeUnit)
             throws Exception {
@@ -752,8 +796,16 @@ class AutoPartitionManagerTest {
                         .build();
         long currentMillis = System.currentTimeMillis();
         TableInfo tableInfo =
-                TableInfo.of(tablePath, tableId, 1, descriptor, currentMillis, currentMillis);
-        TableRegistration registration = TableRegistration.newTable(tableId, descriptor);
+                TableInfo.of(
+                        tablePath,
+                        tableId,
+                        1,
+                        descriptor,
+                        remoteDataDir,
+                        currentMillis,
+                        currentMillis);
+        TableRegistration registration =
+                TableRegistration.newTable(tableId, remoteDataDir, descriptor);
         zookeeperClient.registerTable(tablePath, registration);
         return tableInfo;
     }
@@ -794,8 +846,16 @@ class AutoPartitionManagerTest {
                         .build();
         long currentMillis = System.currentTimeMillis();
         TableInfo tableInfo =
-                TableInfo.of(tablePath, tableId, 1, descriptor, currentMillis, currentMillis);
-        TableRegistration registration = TableRegistration.newTable(tableId, descriptor);
+                TableInfo.of(
+                        tablePath,
+                        tableId,
+                        1,
+                        descriptor,
+                        remoteDataDir,
+                        currentMillis,
+                        currentMillis);
+        TableRegistration registration =
+                TableRegistration.newTable(tableId, remoteDataDir, descriptor);
         zookeeperClient.registerTable(tablePath, registration);
         return tableInfo;
     }
