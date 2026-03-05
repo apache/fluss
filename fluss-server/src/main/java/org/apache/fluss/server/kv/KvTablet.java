@@ -75,6 +75,7 @@ import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.BytesUtils;
 import org.apache.fluss.utils.FileUtils;
 
+import org.rocksdb.Cache;
 import org.rocksdb.RateLimiter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -203,9 +204,10 @@ public final class KvTablet {
             SchemaGetter schemaGetter,
             ChangelogImage changelogImage,
             RateLimiter sharedRateLimiter,
+            @Nullable Cache sharedBlockCache,
             AutoIncrementManager autoIncrementManager)
             throws IOException {
-        RocksDBKv kv = buildRocksDBKv(serverConf, kvTabletDir, sharedRateLimiter);
+        RocksDBKv kv = buildRocksDBKv(serverConf, kvTabletDir, sharedRateLimiter, sharedBlockCache);
 
         // Create RocksDB statistics accessor (will be registered to TableMetricGroup by Replica)
         // Pass ResourceGuard to ensure thread-safe access during concurrent close operations
@@ -217,7 +219,8 @@ public final class KvTablet {
                         kv.getStatistics(),
                         kv.getResourceGuard(),
                         kv.getDefaultColumnFamilyHandle(),
-                        kv.getBlockCache());
+                        kv.getBlockCache(),
+                        sharedBlockCache != null);
 
         return new KvTablet(
                 tablePath,
@@ -240,11 +243,15 @@ public final class KvTablet {
     }
 
     private static RocksDBKv buildRocksDBKv(
-            Configuration configuration, File kvDir, RateLimiter sharedRateLimiter)
+            Configuration configuration,
+            File kvDir,
+            RateLimiter sharedRateLimiter,
+            @Nullable Cache sharedBlockCache)
             throws IOException {
         // Enable statistics to support RocksDB statistics collection
         RocksDBResourceContainer rocksDBResourceContainer =
-                new RocksDBResourceContainer(configuration, kvDir, true, sharedRateLimiter);
+                new RocksDBResourceContainer(
+                        configuration, kvDir, true, sharedRateLimiter, sharedBlockCache);
         RocksDBKvBuilder rocksDBKvBuilder =
                 new RocksDBKvBuilder(
                         kvDir,
