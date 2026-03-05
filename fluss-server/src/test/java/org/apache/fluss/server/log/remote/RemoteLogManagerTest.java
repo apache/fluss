@@ -50,7 +50,6 @@ import java.util.stream.Stream;
 import static org.apache.fluss.record.TestData.DATA1_PHYSICAL_TABLE_PATH;
 import static org.apache.fluss.record.TestData.DATA1_PHYSICAL_TABLE_PATH_PA_2024;
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
-import static org.apache.fluss.record.TestData.DATA1_TABLE_ID;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH_PK;
 import static org.apache.fluss.server.zk.data.LeaderAndIsr.INITIAL_LEADER_EPOCH;
@@ -363,7 +362,7 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
     void testCleanupLocalSegments(boolean partitionTable) throws Exception {
-        TableBucket tb = makeTableBucket(partitionTable);
+        TableBucket tb = makeTableBucket(partitionTable, true);
         // Need to make leader by ReplicaManager.
         makeKvTableAsLeader(tb, DATA1_TABLE_PATH_PK, INITIAL_LEADER_EPOCH, partitionTable);
         LogTablet logTablet = replicaManager.getReplicaOrException(tb).getLogTablet();
@@ -662,18 +661,6 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
 
         // Should retain 3 local segments
         assertThat(logTablet.getSegments()).hasSize(3);
-    }
-
-    private TableBucket makeTableBucket(boolean partitionTable) {
-        return makeTableBucket(DATA1_TABLE_ID, partitionTable);
-    }
-
-    private TableBucket makeTableBucket(long tableId, boolean partitionTable) {
-        if (partitionTable) {
-            return new TableBucket(tableId, 0L, 0);
-        } else {
-            return new TableBucket(tableId, 0);
-        }
     }
 
     private static Stream<Arguments> stopArgs() {
