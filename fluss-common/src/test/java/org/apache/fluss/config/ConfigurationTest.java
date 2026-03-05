@@ -108,6 +108,8 @@ public class ConfigurationTest {
         assertThat(conf.get(DURATION_OPTION).toMillis()).isEqualTo(3);
         conf.setString(DURATION_OPTION.key(), "3 s");
         assertThat(conf.get(DURATION_OPTION).toMillis()).isEqualTo(3000);
+        conf.setString(DURATION_OPTION.key(), "-1");
+        assertThat(conf.get(DURATION_OPTION)).isEqualTo(Duration.ofMillis(-1));
 
         conf.setBytes("test-bytes-key", new byte[] {1, 2, 3, 4, 5});
         assertThat(conf.getBytes("test-bytes-key", new byte[0]).length).isEqualTo(5);
@@ -426,6 +428,20 @@ public class ConfigurationTest {
         assertThat(conf.toMap().get(LIST_STRING_OPTION.key())).isEqualTo(listValues);
         assertThat(conf.toMap().get(MAP_OPTION.key())).isEqualTo(mapValues);
         assertThat(conf.toMap().get(DURATION_OPTION.key())).isEqualTo("3 s");
+    }
+
+    @Test
+    void testTableLogTtlMinusOneParseAndRoundTrip() {
+        // Parse "-1" as Duration (e.g. table.log.ttl = -1 means never delete logs)
+        final Configuration conf = new Configuration();
+        conf.setString(ConfigOptions.TABLE_LOG_TTL.key(), "-1");
+        assertThat(conf.get(ConfigOptions.TABLE_LOG_TTL)).isEqualTo(Duration.ofMillis(-1));
+        assertThat(conf.get(ConfigOptions.TABLE_LOG_TTL).toMillis()).isEqualTo(-1L);
+
+        // Round-trip: Duration.ofMillis(-1) serializes back to "-1"
+        final Configuration conf2 = new Configuration();
+        conf2.set(ConfigOptions.TABLE_LOG_TTL, Duration.ofMillis(-1));
+        assertThat(conf2.toMap().get(ConfigOptions.TABLE_LOG_TTL.key())).isEqualTo("-1");
     }
 
     @Test
