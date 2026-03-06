@@ -27,6 +27,7 @@ import org.apache.fluss.flink.metrics.FlinkMetricRegistry;
 import org.apache.fluss.flink.tiering.event.FailedTieringEvent;
 import org.apache.fluss.flink.tiering.event.FinishedTieringEvent;
 import org.apache.fluss.flink.tiering.event.TieringReachMaxDurationEvent;
+import org.apache.fluss.flink.tiering.event.TieringStats;
 import org.apache.fluss.flink.tiering.source.split.TieringSplit;
 import org.apache.fluss.flink.tiering.source.split.TieringSplitGenerator;
 import org.apache.fluss.flink.tiering.source.state.TieringSourceEnumeratorState;
@@ -38,6 +39,7 @@ import org.apache.fluss.rpc.gateway.CoordinatorGateway;
 import org.apache.fluss.rpc.messages.LakeTieringHeartbeatRequest;
 import org.apache.fluss.rpc.messages.LakeTieringHeartbeatResponse;
 import org.apache.fluss.rpc.messages.PbHeartbeatReqForTable;
+import org.apache.fluss.rpc.messages.PbLakeTieringStats;
 import org.apache.fluss.rpc.messages.PbLakeTieringTableInfo;
 import org.apache.fluss.rpc.metrics.ClientMetricGroup;
 import org.apache.fluss.utils.MapUtils;
@@ -274,7 +276,9 @@ public class TieringSourceEnumerator
                 boolean isForceFinished = tieringReachMaxDurationsTables.remove(finishedTableId);
                 LOG.info("Before finishedTables table {}.", finishedTables);
                 finishedTables.put(
-                        finishedTableId, TieringFinishInfo.from(tieringEpoch, isForceFinished));
+                        finishedTableId,
+                        TieringFinishInfo.from(
+                                tieringEpoch, isForceFinished, finishedTieringEvent.getStats()));
                 LOG.info("After finishedTables table {}.", finishedTables);
             }
         }
@@ -578,17 +582,28 @@ public class TieringSourceEnumerator
                         toPbHeartbeatReqForTable(tieringTableEpochs, coordinatorEpoch));
             }
             if (!finishedTables.isEmpty()) {
-                Map<Long, Long> finishTieringEpochs = new HashMap<>();
                 Set<Long> forceFinishedTables = new HashSet<>();
+                List<PbHeartbeatReqForTable> finishedTableReqs = new ArrayList<>();
                 finishedTables.forEach(
                         (tableId, tieringFinishInfo) -> {
-                            finishTieringEpochs.put(tableId, tieringFinishInfo.tieringEpoch);
                             if (tieringFinishInfo.isForceFinished) {
                                 forceFinishedTables.add(tableId);
                             }
+                            finishedTableReqs.add(
+                                    new PbHeartbeatReqForTable()
+                                            .setTableId(tableId)
+                                            .setCoordinatorEpoch(coordinatorEpoch)
+                                            .setTieringEpoch(tieringFinishInfo.tieringEpoch)
+                                            .setLakeTieringStats(
+                                                    new PbLakeTieringStats()
+                                                            .setFileSize(
+                                                                    tieringFinishInfo.stats
+                                                                            .getFileSize())
+                                                            .setRecordCount(
+                                                                    tieringFinishInfo.stats
+                                                                            .getRecordCount())));
                         });
-                heartbeatRequest.addAllFinishedTables(
-                        toPbHeartbeatReqForTable(finishTieringEpochs, coordinatorEpoch));
+                heartbeatRequest.addAllFinishedTables(finishedTableReqs);
                 for (long forceFinishedTableId : forceFinishedTables) {
                     heartbeatRequest.addForceFinishedTable(forceFinishedTableId);
                 }
@@ -647,17 +662,26 @@ public class TieringSourceEnumerator
          */
         boolean isForceFinished;
 
+        /** Stats collected during this tiering round. */
+        TieringStats stats;
+
         public static TieringFinishInfo from(long tieringEpoch) {
-            return new TieringFinishInfo(tieringEpoch, false);
+            return new TieringFinishInfo(tieringEpoch, false, TieringStats.UNKNOWN);
         }
 
         public static TieringFinishInfo from(long tieringEpoch, boolean isForceFinished) {
-            return new TieringFinishInfo(tieringEpoch, isForceFinished);
+            return new TieringFinishInfo(tieringEpoch, isForceFinished, TieringStats.UNKNOWN);
         }
 
-        private TieringFinishInfo(long tieringEpoch, boolean isForceFinished) {
+        public static TieringFinishInfo from(
+                long tieringEpoch, boolean isForceFinished, TieringStats stats) {
+            return new TieringFinishInfo(tieringEpoch, isForceFinished, stats);
+        }
+
+        private TieringFinishInfo(long tieringEpoch, boolean isForceFinished, TieringStats stats) {
             this.tieringEpoch = tieringEpoch;
             this.isForceFinished = isForceFinished;
+            this.stats = stats;
         }
     }
 }

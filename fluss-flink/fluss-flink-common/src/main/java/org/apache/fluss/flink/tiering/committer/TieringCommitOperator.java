@@ -25,6 +25,7 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.LakeTableSnapshotNotExistException;
 import org.apache.fluss.flink.tiering.event.FailedTieringEvent;
 import org.apache.fluss.flink.tiering.event.FinishedTieringEvent;
+import org.apache.fluss.flink.tiering.event.TieringStats;
 import org.apache.fluss.flink.tiering.source.TableBucketWriteResult;
 import org.apache.fluss.flink.tiering.source.TieringSource;
 import org.apache.fluss.lake.committer.CommittedLakeSnapshot;
@@ -94,6 +95,22 @@ public class TieringCommitOperator<WriteResult, Committable>
     private final Map<Long, List<TableBucketWriteResult<WriteResult>>>
             collectedTableBucketWriteResults;
 
+    /**
+     * The result of one table's commit round, holding the lake committable (nullable for empty
+     * commits where no data was written) and the associated tiering statistics.
+     */
+    private final class CommitResult {
+        /** The lake committable, or {@code null} if nothing was written in this round. */
+        @Nullable final Committable committable;
+        /** Per-table tiering statistics collected during this round. */
+        final TieringStats stats;
+
+        CommitResult(@Nullable Committable committable, TieringStats stats) {
+            this.committable = committable;
+            this.stats = stats;
+        }
+    }
+
     public TieringCommitOperator(
             StreamOperatorParameters<CommittableMessage<Committable>> parameters,
             Configuration flussConf,
@@ -135,18 +152,21 @@ public class TieringCommitOperator<WriteResult, Committable>
 
         if (committableWriteResults != null) {
             try {
-                Committable committable =
+                CommitResult commitResult =
                         commitWriteResults(
                                 tableId,
                                 tableBucketWriteResult.tablePath(),
                                 committableWriteResults);
-                // only emit when committable is not-null
-                if (committable != null) {
-                    output.collect(new StreamRecord<>(new CommittableMessage<>(committable)));
+                // only emit downstream when actual data was written
+                if (commitResult.committable != null) {
+                    output.collect(
+                            new StreamRecord<>(new CommittableMessage<>(commitResult.committable)));
                 }
-                // notify that the table id has been finished tier
+                // always notify the coordinator that this table's tiering round is done,
+                // even for empty commits — otherwise the coordinator will keep waiting
                 operatorEventGateway.sendEventToCoordinator(
-                        new SourceEventWrapper(new FinishedTieringEvent(tableId)));
+                        new SourceEventWrapper(
+                                new FinishedTieringEvent(tableId, commitResult.stats)));
             } catch (Exception e) {
                 // if any exception happens, send to source coordinator to mark it as failed
                 operatorEventGateway.sendEventToCoordinator(
@@ -162,28 +182,31 @@ public class TieringCommitOperator<WriteResult, Committable>
         }
     }
 
-    @Nullable
-    private Committable commitWriteResults(
+    /**
+     * Commits the collected write results for one table to the lake and Fluss.
+     *
+     * <p>Always returns a non-null {@link CommitResult}. When all buckets produced no data (empty
+     * commit), {@link CommitResult#committable} is {@code null} and stats are {@link
+     * TieringStats#UNKNOWN}.
+     */
+    private CommitResult commitWriteResults(
             long tableId,
             TablePath tablePath,
             List<TableBucketWriteResult<WriteResult>> committableWriteResults)
             throws Exception {
-        // filter out non-null write result
-        committableWriteResults =
+        // filter down to buckets that actually produced data
+        List<TableBucketWriteResult<WriteResult>> nonEmptyResults =
                 committableWriteResults.stream()
-                        .filter(
-                                writeResultTableBucketWriteResult ->
-                                        writeResultTableBucketWriteResult.writeResult() != null)
+                        .filter(r -> r.writeResult() != null)
                         .collect(Collectors.toList());
 
-        // empty, means all write result is null, which is a empty commit,
-        // return null to skip the empty commit
-        if (committableWriteResults.isEmpty()) {
+        // all buckets were empty — nothing to commit to the lake
+        if (nonEmptyResults.isEmpty()) {
             LOG.info(
                     "Commit tiering write results is empty for table {}, table path {}",
                     tableId,
                     tablePath);
-            return null;
+            return new CommitResult(null, TieringStats.UNKNOWN);
         }
 
         // Check if the table was dropped and recreated during tiering.
@@ -202,18 +225,15 @@ public class TieringCommitOperator<WriteResult, Committable>
         try (LakeCommitter<WriteResult, Committable> lakeCommitter =
                 lakeTieringFactory.createLakeCommitter(
                         new TieringCommitterInitContext(
-                                tablePath,
-                                admin.getTableInfo(tablePath).get(),
-                                lakeTieringConfig,
-                                flussConfig))) {
+                                tablePath, currentTableInfo, lakeTieringConfig, flussConfig))) {
             List<WriteResult> writeResults =
-                    committableWriteResults.stream()
+                    nonEmptyResults.stream()
                             .map(TableBucketWriteResult::writeResult)
                             .collect(Collectors.toList());
 
             Map<TableBucket, Long> logEndOffsets = new HashMap<>();
             Map<TableBucket, Long> logMaxTieredTimestamps = new HashMap<>();
-            for (TableBucketWriteResult<WriteResult> writeResult : committableWriteResults) {
+            for (TableBucketWriteResult<WriteResult> writeResult : nonEmptyResults) {
                 TableBucket tableBucket = writeResult.tableBucket();
                 logEndOffsets.put(tableBucket, writeResult.logEndOffset());
                 logMaxTieredTimestamps.put(tableBucket, writeResult.maxTimestamp());
@@ -251,7 +271,11 @@ public class TieringCommitOperator<WriteResult, Committable>
                     lakeBucketTieredOffsetsFile,
                     logEndOffsets,
                     logMaxTieredTimestamps);
-            return committable;
+            return new CommitResult(
+                    committable,
+                    new TieringStats(
+                            lakeCommitResult.getTotalLakeFileSize(),
+                            lakeCommitResult.getTotalLakeRecordCount()));
         }
     }
 

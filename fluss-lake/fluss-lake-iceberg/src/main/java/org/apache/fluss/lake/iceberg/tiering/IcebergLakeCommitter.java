@@ -59,6 +59,18 @@ public class IcebergLakeCommitter implements LakeCommitter<IcebergWriteResult, I
 
     private static final String COMMITTER_USER = "commit-user";
 
+    /**
+     * Iceberg snapshot summary key for the total size (in bytes) of all live data files. This is a
+     * cumulative total written by Iceberg into every snapshot's summary map.
+     */
+    private static final String SNAPSHOT_TOTAL_FILE_SIZE = "total-files-size";
+
+    /**
+     * Iceberg snapshot summary key for the total number of records across all live data files. This
+     * is a cumulative total written by Iceberg into every snapshot's summary map.
+     */
+    private static final String SNAPSHOT_TOTAL_RECORDS = "total-records";
+
     private final Catalog icebergCatalog;
     private final Table icebergTable;
     private static final ThreadLocal<Long> currentCommitSnapshotId = new ThreadLocal<>();
@@ -141,7 +153,26 @@ public class IcebergLakeCommitter implements LakeCommitter<IcebergWriteResult, I
                     snapshotId = rewriteCommitSnapshotId;
                 }
             }
-            return LakeCommitResult.committedIsReadable(snapshotId);
+
+            // collect cumulative table stats from the committed snapshot's summary.
+            // Use the specific committed snapshotId rather than currentSnapshot() to avoid
+            // reading a different snapshot in case of concurrent commits.
+            long totalFileSize = -1L;
+            long totalRecordCount = -1L;
+            Snapshot committedSnapshot = icebergTable.snapshot(snapshotId);
+            if (committedSnapshot != null && committedSnapshot.summary() != null) {
+                Map<String, String> summary = committedSnapshot.summary();
+                String sizeStr = summary.get(SNAPSHOT_TOTAL_FILE_SIZE);
+                String countStr = summary.get(SNAPSHOT_TOTAL_RECORDS);
+                if (sizeStr != null) {
+                    totalFileSize = Long.parseLong(sizeStr);
+                }
+                if (countStr != null) {
+                    totalRecordCount = Long.parseLong(countStr);
+                }
+            }
+            return LakeCommitResult.committedIsReadable(
+                    snapshotId, totalFileSize, totalRecordCount);
         } catch (Exception e) {
             throw new IOException("Failed to commit to Iceberg table.", e);
         }

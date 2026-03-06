@@ -294,7 +294,7 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
   </thead>
   <tbody>
     <tr>
-      <th rowspan="17"><strong>coordinator</strong></th>
+      <th rowspan="25"><strong>coordinator</strong></th>
       <td style={{textAlign: 'center', verticalAlign: 'middle' }} rowspan="8">-</td>
       <td>activeCoordinatorCount</td>
       <td>The number of active CoordinatorServer in this cluster.</td>
@@ -382,6 +382,48 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
      <tr>
       <td>allKvSnapshotSize</td>
       <td>All kv snapshot size of each table bucket.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td rowspan="3">lakeTiering</td>
+      <td>pendingTablesCount</td>
+      <td>The number of tables waiting to be tiered.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>runningTablesCount</td>
+      <td>The number of tables currently being tiered.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>failuresTotal</td>
+      <td>The total number of tiering failures across all tables.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td rowspan="5">lakeTiering_table</td>
+      <td>tierLag</td>
+      <td>Time in milliseconds since the last successful tiering operation for this table. Returns -1 for newly created tables that have never been tiered.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>tierDuration</td>
+      <td>Duration in milliseconds of the last tiering operation for this table.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>failuresTotal</td>
+      <td>The total number of tiering failures for this table.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>fileSize</td>
+      <td>Cumulative total file size (in bytes) of the lake table after the last tiering round. Returns -1 if no tiering has completed yet.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>recordCount</td>
+      <td>Cumulative total record count of the lake table after the last tiering round. Returns -1 if no tiering has completed yet.</td>
       <td>Gauge</td>
     </tr>
   </tbody>

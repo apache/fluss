@@ -26,11 +26,23 @@ public class FinishedTieringEvent implements SourceEvent {
 
     private final long tableId;
 
-    public FinishedTieringEvent(long tableId) {
+    /** Statistics collected during this tiering round. */
+    private final TieringStats stats;
+
+    public FinishedTieringEvent(long tableId, TieringStats stats) {
         this.tableId = tableId;
+        this.stats = stats;
+    }
+
+    public FinishedTieringEvent(long tableId) {
+        this(tableId, TieringStats.UNKNOWN);
     }
 
     public long getTableId() {
         return tableId;
+    }
+
+    public TieringStats getStats() {
+        return stats;
     }
 }

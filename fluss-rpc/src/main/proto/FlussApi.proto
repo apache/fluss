@@ -1063,6 +1063,16 @@ message PbHeartbeatReqForTable {
   required int32 coordinator_epoch = 2;
   // the tiering epoch when the table is assigned to be tiering service
   required int64 tiering_epoch = 3;
+  // stats for the last tiering round; only set for finished_tables in LakeTieringHeartbeatRequest
+  optional PbLakeTieringStats lake_tiering_stats = 4;
+}
+
+// Stats reported by the tiering service when a table finishes a tiering round.
+message PbLakeTieringStats {
+  // cumulative total file size (bytes) of the lake table after tiering; -1 means unknown
+  required int64 file_size = 1;
+  // cumulative total record count of the lake table after tiering; -1 means unknown
+  required int64 record_count = 2;
 }
 
 message PbHeartbeatRespForTable {

@@ -106,6 +106,7 @@ import org.apache.fluss.rpc.messages.PbAlterConfig;
 import org.apache.fluss.rpc.messages.PbHeartbeatReqForTable;
 import org.apache.fluss.rpc.messages.PbHeartbeatRespForTable;
 import org.apache.fluss.rpc.messages.PbKvSnapshotLeaseForTable;
+import org.apache.fluss.rpc.messages.PbLakeTieringStats;
 import org.apache.fluss.rpc.messages.PbPrepareLakeTableRespForTable;
 import org.apache.fluss.rpc.messages.PbProducerTableOffsets;
 import org.apache.fluss.rpc.messages.PbTableBucket;
@@ -853,10 +854,16 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                     heartbeatResponse.addFinishedTableResp().setTableId(finishTable.getTableId());
             try {
                 validateHeartbeatRequest(finishTable, currentCoordinatorEpoch);
+                PbLakeTieringStats stats =
+                        finishTable.hasLakeTieringStats()
+                                ? finishTable.getLakeTieringStats()
+                                : null;
                 lakeTableTieringManager.finishTableTiering(
                         finishTable.getTableId(),
                         finishTable.getTieringEpoch(),
-                        forceFinishedTableId.contains(finishTable.getTableId()));
+                        forceFinishedTableId.contains(finishTable.getTableId()),
+                        stats != null ? stats.getFileSize() : -1L,
+                        stats != null ? stats.getRecordCount() : -1L);
             } catch (Throwable e) {
                 pbHeartbeatRespForTable.setError(ApiError.fromThrowable(e).toErrorResponse());
             }
