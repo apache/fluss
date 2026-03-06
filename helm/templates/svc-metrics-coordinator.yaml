@@ -23,7 +23,7 @@ metadata:
   name: {{ .Release.Name }}-coordinator-server-metrics-hs
   labels:
     {{- include "fluss.labels" . | nindent 4 }}
-    app.kubernetes.io/component: coordinator
+    app.kubernetes.io/component: metrics
     {{- with .Values.metrics.service.labels }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
