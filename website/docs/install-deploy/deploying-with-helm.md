@@ -139,7 +139,7 @@ The Fluss Helm chart deploys the following Kubernetes resources:
 - **CoordinatorServer**: 1x StatefulSet with Headless Service for cluster coordination
 - **TabletServer**: 3x StatefulSet with Headless Service for data storage and processing
 - **ConfigMap**: Configuration management for `server.yaml` settings
-- **Services**: Headless services for pod communication, plus optional dedicated headless metrics services when metrics are enabled
+- **Services**: Headless services providing stable pod DNS names, plus optional dedicated headless services when metrics are enabled
 
 ### Step 3: Verify Installation
 
@@ -267,7 +267,7 @@ listeners:
 
 ### Metrics and Monitoring
 
-When `metrics.enabled` is `true`, the Helm chart does the following:
+When `metrics.enabled` is `true`, adds the following `server.yaml` config entries:
 
 - `metrics.reporters`: comma-separated reporter names from `metrics.reporters`
 - `metrics.reporter.<name>.<option>`: one entry per reporter option in `metrics.reporters`

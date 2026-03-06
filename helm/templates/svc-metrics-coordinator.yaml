@@ -20,7 +20,7 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: coordinator-server-metrics-hs
+  name: {{ .Release.Name }}-coordinator-server-metrics-hs
   labels:
     {{- include "fluss.labels" . | nindent 4 }}
     app.kubernetes.io/component: coordinator
