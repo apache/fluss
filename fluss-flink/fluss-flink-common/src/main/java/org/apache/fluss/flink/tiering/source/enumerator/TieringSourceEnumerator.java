@@ -669,10 +669,6 @@ public class TieringSourceEnumerator
             return new TieringFinishInfo(tieringEpoch, false, TieringStats.UNKNOWN);
         }
 
-        public static TieringFinishInfo from(long tieringEpoch, boolean isForceFinished) {
-            return new TieringFinishInfo(tieringEpoch, isForceFinished, TieringStats.UNKNOWN);
-        }
-
         public static TieringFinishInfo from(
                 long tieringEpoch, boolean isForceFinished, TieringStats stats) {
             return new TieringFinishInfo(tieringEpoch, isForceFinished, stats);
@@ -681,7 +677,7 @@ public class TieringSourceEnumerator
         private TieringFinishInfo(long tieringEpoch, boolean isForceFinished, TieringStats stats) {
             this.tieringEpoch = tieringEpoch;
             this.isForceFinished = isForceFinished;
-            this.stats = stats;
+            this.stats = stats != null ? stats : TieringStats.UNKNOWN;
         }
     }
 }

@@ -248,7 +248,6 @@ class LakeTableTieringManagerTest {
         // Initially no tables - verify counts are 0
         assertThat(tableTieringManager.getPendingTablesCount()).isEqualTo(0);
         assertThat(tableTieringManager.getRunningTablesCount()).isEqualTo(0);
-        assertThat(tableTieringManager.getGlobalFailureCount()).isEqualTo(0);
 
         // Add a table
         long tableId1 = 1L;
@@ -278,7 +277,6 @@ class LakeTableTieringManagerTest {
 
         // Report failure
         tableTieringManager.reportTieringFail(tableId1, 1);
-        assertThat(tableTieringManager.getGlobalFailureCount()).isEqualTo(1);
         assertThat(tableTieringManager.getRunningTablesCount()).isEqualTo(0);
         assertThat(tableTieringManager.getPendingTablesCount()).isEqualTo(1); // back to pending
     }

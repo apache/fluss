@@ -294,7 +294,7 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
   </thead>
   <tbody>
     <tr>
-      <th rowspan="25"><strong>coordinator</strong></th>
+      <th rowspan="24"><strong>coordinator</strong></th>
       <td style={{textAlign: 'center', verticalAlign: 'middle' }} rowspan="8">-</td>
       <td>activeCoordinatorCount</td>
       <td>The number of active CoordinatorServer in this cluster.</td>
@@ -393,11 +393,6 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
     <tr>
       <td>runningTablesCount</td>
       <td>The number of tables currently being tiered.</td>
-      <td>Gauge</td>
-    </tr>
-    <tr>
-      <td>failuresTotal</td>
-      <td>The total number of tiering failures across all tables.</td>
       <td>Gauge</td>
     </tr>
     <tr>

@@ -144,15 +144,14 @@ public class LakeTableTieringManager implements AutoCloseable {
     // table_id -> total record count of the lake table after the last tiering, -1 if unknown
     private final Map<Long, Long> tableLastLakeRecordCount;
 
+    private final Map<Long, Long> tableLastTieringStartTime;
+
     // the live tables that are tiering,
     // from table_id -> last heartbeat time by the tiering service
     private final Map<Long, Long> liveTieringTableIds;
 
     // table_id -> delayed tiering task
     private final Map<Long, DelayedTiering> delayedTieringByTableId;
-
-    // global tiering failure count
-    private long globalTieringFailureCount = 0;
 
     private final ReadWriteLock lock = new ReentrantReadWriteLock();
 
@@ -192,15 +191,18 @@ public class LakeTableTieringManager implements AutoCloseable {
         this.tableTieringFailureCount = new HashMap<>();
         this.tableLastLakeFileSize = new HashMap<>();
         this.tableLastLakeRecordCount = new HashMap<>();
+        this.tableLastTieringStartTime = new HashMap<>();
         this.tieringMetricGroup = lakeTieringMetricGroup;
         registerMetrics();
     }
 
     private void registerMetrics() {
         tieringMetricGroup.gauge(
-                MetricNames.LAKE_TIERING_PENDING_TABLES_COUNT, pendingTieringTables::size);
+                MetricNames.LAKE_TIERING_PENDING_TABLES_COUNT,
+                () -> inReadLock(lock, pendingTieringTables::size));
         tieringMetricGroup.gauge(
-                MetricNames.LAKE_TIERING_RUNNING_TABLES_COUNT, liveTieringTableIds::size);
+                MetricNames.LAKE_TIERING_RUNNING_TABLES_COUNT,
+                () -> inReadLock(lock, liveTieringTableIds::size));
     }
 
     public void initWithLakeTables(List<Tuple2<TableInfo, Long>> tableInfoWithTieredTime) {
@@ -288,12 +290,12 @@ public class LakeTableTieringManager implements AutoCloseable {
         // tierDuration: duration of last tiering job
         tableMetricGroup.gauge(
                 MetricNames.LAKE_TIERING_TABLE_TIER_DURATION,
-                () -> inReadLock(lock, () -> tableLastTieringDuration.getOrDefault(tableId, 0L)));
+                () -> inReadLock(lock, () -> tableLastTieringDuration.getOrDefault(tableId, -1L)));
 
         // failuresTotal: total failure count for this table
         tableMetricGroup.gauge(
                 MetricNames.LAKE_TIERING_TABLE_FAILURES_TOTAL,
-                () -> inReadLock(lock, () -> tableTieringFailureCount.getOrDefault(tableId, 0L)));
+                () -> inReadLock(lock, () -> tableTieringFailureCount.getOrDefault(tableId, -1L)));
 
         // fileSize: cumulative total file size of the lake table after the last tiering
         tableMetricGroup.gauge(
@@ -564,11 +566,13 @@ public class LakeTableTieringManager implements AutoCloseable {
                 break;
             case Tiering:
                 liveTieringTableIds.put(tableId, clock.milliseconds());
+                tableLastTieringStartTime.put(tableId, clock.milliseconds());
                 break;
             case Tiered:
                 tableLastTieredTime.put(tableId, clock.milliseconds());
                 // calculate and record tiering duration
-                Long startTime = liveTieringTableIds.remove(tableId);
+                liveTieringTableIds.remove(tableId);
+                Long startTime = tableLastTieringStartTime.remove(tableId);
                 if (startTime != null) {
                     long duration = clock.milliseconds() - startTime;
                     tableLastTieringDuration.put(tableId, duration);
@@ -577,7 +581,6 @@ public class LakeTableTieringManager implements AutoCloseable {
             case Failed:
                 // increment failure counters
                 tableTieringFailureCount.computeIfPresent(tableId, (t, v) -> v + 1);
-                globalTieringFailureCount++;
                 liveTieringTableIds.remove(tableId);
                 // do nothing
                 break;
@@ -737,11 +740,6 @@ public class LakeTableTieringManager implements AutoCloseable {
     @VisibleForTesting
     protected int getRunningTablesCount() {
         return liveTieringTableIds.size();
-    }
-
-    @VisibleForTesting
-    protected long getGlobalFailureCount() {
-        return globalTieringFailureCount;
     }
 
     @VisibleForTesting

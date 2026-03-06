@@ -31,7 +31,7 @@ public class FinishedTieringEvent implements SourceEvent {
 
     public FinishedTieringEvent(long tableId, TieringStats stats) {
         this.tableId = tableId;
-        this.stats = stats;
+        this.stats = stats != null ? stats : TieringStats.UNKNOWN;
     }
 
     public FinishedTieringEvent(long tableId) {
