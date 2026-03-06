@@ -422,6 +422,7 @@ public class ServerRpcMessageUtils {
 
     public static UpdateMetadataRequest makeUpdateMetadataRequest(
             @Nullable ServerInfo coordinatorServer,
+            @Nullable Integer coordinatorEpoch,
             Set<ServerInfo> aliveTableServers,
             List<TableMetadata> tableMetadataList,
             List<PartitionMetadata> partitionMetadataList) {
@@ -464,6 +465,9 @@ public class ServerRpcMessageUtils {
         updateMetadataRequest.addAllTableMetadatas(pbTableMetadataList);
         updateMetadataRequest.addAllPartitionMetadatas(pbPartitionMetadataList);
 
+        if (coordinatorEpoch != null) {
+            updateMetadataRequest.setCoordinatorEpoch(coordinatorEpoch);
+        }
         return updateMetadataRequest;
     }
 

@@ -199,6 +199,10 @@ public final class FlussClusterExtension
             }
         }
         CompletableFuture.allOf(dropFutures.toArray(new CompletableFuture[0])).join();
+
+        for (TabletServer tabletServer : tabletServers.values()) {
+            tabletServer.getReplicaManager().resetCoordinatorEpoch();
+        }
     }
 
     public void start() throws Exception {
@@ -258,11 +262,13 @@ public final class FlussClusterExtension
         if (coordinatorServer == null) {
             // if no coordinator server exists, create a new coordinator server and start
             Configuration conf = new Configuration(clusterConf);
+            conf.set(ConfigOptions.COORDINATOR_ID, 0);
             conf.setString(ConfigOptions.ZOOKEEPER_ADDRESS, zooKeeperServer.getConnectString());
             conf.setString(ConfigOptions.BIND_LISTENERS, coordinatorServerListeners);
             setRemoteDataDir(conf);
             coordinatorServer = new CoordinatorServer(conf, clock);
             coordinatorServer.start();
+            waitUntilCoordinatorServerElected();
             coordinatorServerInfo =
                     // TODO, Currently, we use 0 as coordinator server id.
                     new ServerInfo(
@@ -273,6 +279,7 @@ public final class FlussClusterExtension
         } else {
             // start the existing coordinator server
             coordinatorServer.start();
+            waitUntilCoordinatorServerElected();
             coordinatorServerInfo =
                     new ServerInfo(
                             0,
@@ -928,6 +935,22 @@ public final class FlussClusterExtension
 
     public CoordinatorServer getCoordinatorServer() {
         return coordinatorServer;
+    }
+
+    public void waitUntilCoordinatorServerElected() throws Exception {
+        coordinatorServer.getLeaderElectionFuture().get();
+
+        waitUntil(
+                () -> zooKeeperClient.getCoordinatorLeaderAddress().isPresent(),
+                Duration.ofSeconds(10),
+                "Fail to wait coordinator server elected");
+        // Sleep 1 second to make sure coordinator server has been started and event processor
+        // started.
+        try {
+            Thread.sleep(1000);
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
+        }
     }
 
     // --------------------------------------------------------------------------------------------
