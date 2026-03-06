@@ -23,13 +23,18 @@ import org.apache.fluss.metadata.TablePath
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.connector.read.{InputPartition, PartitionReader, PartitionReaderFactory}
 import org.apache.spark.sql.util.CaseInsensitiveStringMap
+import org.apache.spark.util.LongAccumulator
 
 /** Factory for creating partition readers to read data from Fluss. */
 class FlussAppendPartitionReaderFactory(
     tablePath: TablePath,
     projection: Array[Int],
     options: CaseInsensitiveStringMap,
-    flussConfig: Configuration)
+    flussConfig: Configuration,
+    fetchRequestsAccum: LongAccumulator = null,
+    fetchTimeMsAccum: LongAccumulator = null,
+    maxFetchTimeMsAccum: MaxLongAccumulator = null,
+    fetchErrorsAccum: LongAccumulator = null)
   extends PartitionReaderFactory {
 
   override def createReader(partition: InputPartition): PartitionReader[InternalRow] = {
@@ -38,8 +43,11 @@ class FlussAppendPartitionReaderFactory(
       tablePath,
       projection,
       flussPartition,
-      flussConfig
-    )
+      flussConfig,
+      fetchRequestsAccum,
+      fetchTimeMsAccum,
+      maxFetchTimeMsAccum,
+      fetchErrorsAccum)
   }
 }
 
@@ -48,7 +56,11 @@ class FlussUpsertPartitionReaderFactory(
     tablePath: TablePath,
     projection: Array[Int],
     options: CaseInsensitiveStringMap,
-    flussConfig: Configuration)
+    flussConfig: Configuration,
+    fetchRequestsAccum: LongAccumulator = null,
+    fetchTimeMsAccum: LongAccumulator = null,
+    maxFetchTimeMsAccum: MaxLongAccumulator = null,
+    fetchErrorsAccum: LongAccumulator = null)
   extends PartitionReaderFactory {
 
   override def createReader(partition: InputPartition): PartitionReader[InternalRow] = {
@@ -57,7 +69,10 @@ class FlussUpsertPartitionReaderFactory(
       tablePath,
       projection,
       upsertPartition,
-      flussConfig
-    )
+      flussConfig,
+      fetchRequestsAccum,
+      fetchTimeMsAccum,
+      maxFetchTimeMsAccum,
+      fetchErrorsAccum)
   }
 }
