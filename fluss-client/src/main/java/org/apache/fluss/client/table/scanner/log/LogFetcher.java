@@ -27,6 +27,7 @@ import org.apache.fluss.cluster.BucketLocation;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.ApiException;
+import org.apache.fluss.exception.FetchException;
 import org.apache.fluss.exception.InvalidMetadataException;
 import org.apache.fluss.exception.LeaderNotAvailableException;
 import org.apache.fluss.exception.PartitionNotExistException;
@@ -161,7 +162,7 @@ public class LogFetcher implements Closeable {
         return !logFetchBuffer.isEmpty();
     }
 
-    public Map<TableBucket, List<ScanRecord>> collectFetch() {
+    public Map<TableBucket, List<ScanRecord>> collectFetch() throws FetchException {
         return logFetchCollector.collectFetch(logFetchBuffer);
     }
 
@@ -460,7 +461,8 @@ public class LogFetcher implements Closeable {
                             logScannerStatus,
                             isCheckCrcs);
             logFetchBuffer.pend(pendingFetch);
-            downloadFuture.onComplete(() -> logFetchBuffer.tryComplete(segment.tableBucket()));
+            downloadFuture.whenComplete(
+                    (throwable) -> logFetchBuffer.tryComplete(segment.tableBucket(), throwable));
         }
     }
 
