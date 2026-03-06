@@ -36,7 +36,7 @@ the installation documentation provides instructions for deploying one using Bit
 
 ### Running Fluss locally with Minikube
 
-For local testing and development, you can deploy Fluss on Minikube. This is ideal for development, testing, and learning purposes.
+For local testing and development, you can deploy Fluss on Minikube. This is ideal for development, testing and learning purposes.
 
 #### Prerequisites
 
@@ -157,7 +157,7 @@ kubectl logs -l app.kubernetes.io/component=tablet
 
 ## Configuration Parameters
 
-The following table lists the configurable parameters of the Fluss chart and their default values.
+The following table lists the configurable parameters of the Fluss chart, and their default values.
 
 ### Global Parameters
 
@@ -182,6 +182,18 @@ The following table lists the configurable parameters of the Fluss chart and the
 |-----------|-------------|---------|
 | `listeners.internal.port` | Internal communication port | `9123` |
 | `listeners.client.port` | Client port (intra-cluster) | `9124` |
+
+### Security Configuration
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `security.client.sasl.mechanism` | Client listener SASL mechanism (`none`, `plain`) | `none` |
+| `security.internal.sasl.mechanism` | Internal listener SASL mechanism (`none`, `plain`) | `none` |
+| `security.client.sasl.plain.users` | Client listener username and password pairs for PLAIN | `[]` |
+| `security.internal.sasl.plain.username` | Internal listener PLAIN username | `"fluss-internal-user"` |
+| `security.internal.sasl.plain.password` | Internal listener PLAIN password | `"fluss-internal-password"` |
+
+Only 'none' and 'plain' mechanisms are supported for now. The `none` mechanism maps to the `PLAINTEXT` protocol.
 
 ### Fluss Configuration Overrides
 
@@ -253,6 +265,46 @@ listeners:
     port: 9123
   client:
     port: 9124
+
+security:
+  client:
+    sasl:
+      mechanism: none
+  internal:
+    sasl:
+      mechanism: none
+```
+
+### Enabling Secure Connection
+
+With the helm deployment, you can specify authentication mechanisms when connecting to the Fluss cluster.
+
+The following table shows the supported mechanisms and security they provide:
+
+| Mechanism | Method      | Authentication | TLS Encryption     |
+|:---------:|:-----------:|:--------------:|:------------------:|
+| `none`    | `PLAINTEXT` | No             | No                 |
+| `plain`   | `SASL`      | Yes            | No                 |
+
+By default, the `PLAINTEXT` protocol is used.
+
+You can set the SASL authentication by enabling `plain` mechanism.
+
+```yaml
+security:
+  client:
+    sasl:
+      mechanism: plain
+      plain:
+        users:
+          - username: client-user
+            password: client-password
+  internal:
+    sasl:
+      mechanism: plain
+      plain:
+        username: internal-user
+        password: internal-password
 ```
 
 ### Storage Configuration

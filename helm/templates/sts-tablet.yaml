@@ -16,6 +16,9 @@
 # limitations under the License.
 #
 
+{{ include "fluss.security.sasl.validateClientPlainUsers" . }}
+{{- $internalProtocol := include "fluss.security.listener.protocol" (dict "Values" .Values "listener" "internal") | trim }}
+{{- $clientProtocol := include "fluss.security.listener.protocol" (dict "Values" .Values "listener" "client") | trim }}
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
@@ -70,11 +73,13 @@ spec:
 
               BIND_LISTENERS="INTERNAL://${POD_IP}:{{ .Values.listeners.internal.port }}, CLIENT://${POD_IP}:{{ .Values.listeners.client.port }}" && \
               ADVERTISED_LISTENERS="CLIENT://${POD_NAME}.tablet-server-hs.${POD_NAMESPACE}.svc.cluster.local:{{ .Values.listeners.client.port }}" && \
+              echo "security.protocol.map: INTERNAL:{{ $internalProtocol }},CLIENT:{{ $clientProtocol }}" >> $FLUSS_HOME/conf/server.yaml && \
 
               echo "" >> $FLUSS_HOME/conf/server.yaml && \
               echo "tablet-server.id: ${FLUSS_SERVER_ID}" >> $FLUSS_HOME/conf/server.yaml && \
               echo "bind.listeners: ${BIND_LISTENERS}" >> $FLUSS_HOME/conf/server.yaml && \
               echo "advertised.listeners: ${ADVERTISED_LISTENERS}" >> $FLUSS_HOME/conf/server.yaml && \
+              {{ include "fluss.security.renderSecurityOptions" . | nindent 14 }}
 
               bin/tablet-server.sh start-foreground
           livenessProbe:
@@ -98,6 +103,11 @@ spec:
               mountPath: /opt/conf
             - name: data
               mountPath: /tmp/fluss/data
+            {{- if (include "fluss.security.sasl.plain.enabled" .) }}
+            - name: sasl-config
+              mountPath: /etc/fluss/conf
+              readOnly: true
+            {{- end }}
       volumes:
         - name: fluss-conf
           configMap:
@@ -105,6 +115,11 @@ spec:
         {{- if not .Values.tablet.storage.enabled }}
         - name: data
           emptyDir: {}
+        {{- end }}
+        {{- if (include "fluss.security.sasl.plain.enabled" .) }}
+        - name: sasl-config
+          secret:
+            secretName: {{ include "fluss.fullname" . }}-sasl-jaas-config
         {{- end }}
   {{- if .Values.tablet.storage.enabled }}
   volumeClaimTemplates:
