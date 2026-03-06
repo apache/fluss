@@ -286,16 +286,8 @@ abstract class FlinkCatalogITCase {
                 .hasMessage("The option 'bootstrap.servers' is not supported to alter yet.");
 
         String unSupportedDml6 =
-                "alter table test_alter_table_append_only set ('paimon.file.format' = 'orc')";
-        assertThatThrownBy(() -> tEnv.executeSql(unSupportedDml6))
-                .rootCause()
-                .isInstanceOf(InvalidConfigException.class)
-                .hasMessage(
-                        "Property 'paimon.file.format' is not supported to alter which is for datalake table.");
-
-        String unSupportedDml7 =
                 "alter table test_alter_table_append_only set ('auto-increment.fields' = 'b')";
-        assertThatThrownBy(() -> tEnv.executeSql(unSupportedDml7))
+        assertThatThrownBy(() -> tEnv.executeSql(unSupportedDml6))
                 .rootCause()
                 .isInstanceOf(CatalogException.class)
                 .hasMessage("The option 'auto-increment.fields' is not supported to alter yet.");
