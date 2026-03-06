@@ -25,6 +25,7 @@ import org.junit.jupiter.api.Test;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.ZoneId;
+import java.util.Arrays;
 
 import static java.time.Instant.ofEpochMilli;
 import static org.apache.fluss.config.ConfigOptions.FILESYSTEM_SECURITY_TOKEN_RENEWAL_RETRY_BACKOFF;
@@ -37,7 +38,7 @@ class DefaultSecurityTokenManagerTest {
     @Test
     void startTokensUpdateShouldScheduleRenewal() {
         TestingSecurityTokenProvider testingSecurityTokenProvider =
-                new TestingSecurityTokenProvider("token1");
+                new TestingSecurityTokenProvider(Arrays.asList("token1-1", "token1-2", "token1-3"));
 
         // set small token renew backoff
         Configuration configuration = new Configuration();
@@ -54,23 +55,31 @@ class DefaultSecurityTokenManagerTest {
                 Duration.ofMinutes(1),
                 () ->
                         assertThat(testingSecurityTokenProvider.getHistoryTokens())
-                                .containsExactly("token1"));
+                                .containsExactly(
+                                        Arrays.asList("token1-1", "token1-2", "token1-3")));
 
         //  token history should be token1, token2
-        testingSecurityTokenProvider.setCurrentToken("token2");
+        testingSecurityTokenProvider.setCurrentTokens(
+                Arrays.asList("token2-1", "token2-2", "token2-3"));
         retry(
                 Duration.ofMinutes(1),
                 () ->
                         assertThat(testingSecurityTokenProvider.getHistoryTokens())
-                                .containsExactly("token1", "token2"));
+                                .containsExactly(
+                                        Arrays.asList("token1-1", "token1-2", "token1-3"),
+                                        Arrays.asList("token2-1", "token2-2", "token2-3")));
 
         //  token history should be token1, token2, token3
-        testingSecurityTokenProvider.setCurrentToken("token3");
+        testingSecurityTokenProvider.setCurrentTokens(
+                Arrays.asList("token3-1", "token3-2", "token3-3"));
         retry(
                 Duration.ofMinutes(1),
                 () ->
                         assertThat(testingSecurityTokenProvider.getHistoryTokens())
-                                .containsExactly("token1", "token2", "token3"));
+                                .containsExactly(
+                                        Arrays.asList("token1-1", "token1-2", "token1-3"),
+                                        Arrays.asList("token2-1", "token2-2", "token2-3"),
+                                        Arrays.asList("token3-1", "token3-2", "token3-3")));
 
         securityTokenManager.stopTokensUpdate();
 

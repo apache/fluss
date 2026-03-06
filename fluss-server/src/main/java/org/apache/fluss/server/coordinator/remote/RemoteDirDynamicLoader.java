@@ -68,6 +68,10 @@ public class RemoteDirDynamicLoader implements ServerReconfigurable, AutoCloseab
         return remoteDirContainer;
     }
 
+    public List<String> getRemoteDataDirs() {
+        return currentConfiguration.get(ConfigOptions.REMOTE_DATA_DIRS);
+    }
+
     @Override
     public void validate(Configuration newConfig) throws ConfigException {
         // Get and valid remote data dirs

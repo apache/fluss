@@ -590,7 +590,7 @@ public abstract class FileSystem {
     // ------------------------------------------------------------------------
 
     /** An identifier of a file system, via its scheme and its authority. */
-    private static final class FSKey {
+    public static final class FSKey {
 
         /** The scheme of the file system. */
         private final String scheme;

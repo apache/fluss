@@ -434,10 +434,24 @@ message GetFileSystemSecurityTokenRequest {
 }
 
 message GetFileSystemSecurityTokenResponse {
+  // security token for the default remote data dir configured via remote.data.dir
   required string schema = 1;
   required bytes token = 2;
   optional int64 expiration_time = 3;
   repeated PbKeyValue addition_info = 4;
+  // optional for backward compatibility
+  optional string authority = 5;
+
+  // security tokens for the remote data dirs configured in remote.data.dirs
+  repeated PbFileSystemSecurityToken tokens = 6;
+}
+
+message PbFileSystemSecurityToken {
+  required string schema = 1;
+  required string authority = 2;
+  required bytes token = 3;
+  optional int64 expiration_time = 4;
+  repeated PbKeyValue addition_info = 5;
 }
 
 // init writer request and response
