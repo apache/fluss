@@ -105,11 +105,9 @@ helm install fluss ./fluss-helm \
 ```
 
 When enabled, the chart will:
+
 - configure `metrics.reporters` from reporter names in values
 - configure `metrics.reporter.<name>.<option>` entries from values
-- create separate metrics services exposing the Prometheus reporter port
-- optionally add metrics scrape annotations to metrics services from values
-- optionally add custom labels to metrics services for `ServiceMonitor` selectors
 
 Values:
 
@@ -117,28 +115,58 @@ Values:
 | --- | --- |
 | `metrics.enabled` | Enables metrics reporting and endpoint exposure. |
 | `metrics.reporters` | Map of Fluss metric reporters and their options. |
-| `metrics.service.portName` | Named port exposed by metrics services (usually used by ServiceMonitor endpoint `port`). |
-| `metrics.service.labels` | Optional labels rendered on metrics services (usually used by ServiceMonitor selectors). |
-| `metrics.annotations` | Optional map of annotations rendered on metrics services when metrics are enabled. |
+| `metrics.reporters.jmx.port` | JMX reporter port range (e.g. `9250-9260`). |
+| `metrics.reporters.prometheus.port` | Prometheus reporter port (default `9249`). |
+| `metrics.reporters.prometheus.service.portName` | Named port exposed by metrics services (default `metrics`). |
+| `metrics.reporters.prometheus.service.labels` | Optional labels on metrics services (useful for [ServiceMonitor](https://prometheus-operator.dev/docs/api-reference/api/#monitoring.coreos.com/v1.ServiceMonitor) selectors). |
+| `metrics.reporters.prometheus.service.annotations` | Optional annotations on metrics services (useful for annotation-based scraping). |
 
-Example `values.yaml` snippet:
+#### Prometheus Annotation Based Scraping
+
+The values below enable annotation based scraping:
 
 ```yaml
 metrics:
   enabled: true
   reporters:
-    jmx:
-      port: 9250-9260
     prometheus:
       port: 9249
-  service:
-    portName: metrics
-    labels:
+      service:
+        annotations:
+          prometheus.io/scrape: "true"
+          prometheus.io/path: "/metrics"
+          prometheus.io/port: "9249"
+```
+
+#### Prometheus ServiceMonitor Based Scraping
+
+When using the [Prometheus Operator](https://prometheus-operator.dev/), use the values below to add labels to the metrics services and then create a `ServiceMonitor` that selects them:
+
+```yaml
+metrics:
+  enabled: true
+  reporters:
+    prometheus:
+      port: 9249
+      service:
+        portName: metrics
+        labels:
+          monitoring: enabled
+```
+
+Apply the following to create a `ServiceMonitor` resource that matches the label:
+
+```yaml
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: fluss-metrics
+spec:
+  selector:
+    matchLabels:
       monitoring: enabled
-  annotations:
-    prometheus.io/scrape: "true"
-    prometheus.io/path: "/metrics"
-    prometheus.io/port: "9249"
+  endpoints:
+    - port: metrics
 ```
 
 ### Zookeeper and storage

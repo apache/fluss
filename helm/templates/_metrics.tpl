@@ -45,6 +45,7 @@ metrics.reporters: {{ join "," $reporterNames }}
 {{- end -}}
 {{- range $name := $reporterNames -}}
 {{- range $option, $value := index $reporters $name -}}
+{{- if ne $option "service" -}}
 {{- $fullKey := printf "metrics.reporter.%s.%s" $name $option -}}
 {{- if not (hasKey $config $fullKey) }}
 {{ $fullKey }}: {{ tpl (printf "%v" $value) $ }}
@@ -53,15 +54,5 @@ metrics.reporters: {{ join "," $reporterNames }}
 {{- end -}}
 {{- end -}}
 {{- end -}}
+{{- end -}}
 
-{{/*
-Renders metrics annotations entries as YAML format.
-Expects the root context as argument.
-*/}}
-{{- define "fluss.metrics.annotations" -}}
-{{- if .Values.metrics.enabled -}}
-{{- with .Values.metrics.annotations -}}
-{{- toYaml . -}}
-{{- end -}}
-{{- end -}}
-{{- end -}}

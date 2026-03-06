@@ -16,7 +16,8 @@
 # limitations under the License.
 #
 
-{{- if .Values.metrics.enabled }}
+{{- if and .Values.metrics.enabled .Values.metrics.reporters.prometheus }}
+{{- $promSvc := .Values.metrics.reporters.prometheus.service | default dict }}
 apiVersion: v1
 kind: Service
 metadata:
@@ -24,16 +25,18 @@ metadata:
   labels:
     {{- include "fluss.labels" . | nindent 4 }}
     app.kubernetes.io/component: metrics
-    {{- with .Values.metrics.service.labels }}
+    {{- with $promSvc.labels }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
+  {{- with $promSvc.annotations }}
   annotations:
-    {{- include "fluss.metrics.annotations" . | nindent 4 }}
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 spec:
   clusterIP: None
   type: ClusterIP
   ports:
-    - name: {{ default "metrics" .Values.metrics.service.portName }}
+    - name: {{ default "metrics" $promSvc.portName }}
       protocol: TCP
       port: {{ default 9249 .Values.metrics.reporters.prometheus.port }}
       targetPort: {{ default 9249 .Values.metrics.reporters.prometheus.port }}

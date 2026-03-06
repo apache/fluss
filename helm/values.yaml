@@ -63,10 +63,10 @@ metrics:
   reporters:
     prometheus:
       port: 9249
-  service:
-    portName: metrics
-    labels: {}
-  annotations: {}
+      service:
+        portName: metrics
+        labels: {}
+        annotations: {}
 
 resources: {}
   # We usually recommend not to specify default resources and to leave this as a conscious
