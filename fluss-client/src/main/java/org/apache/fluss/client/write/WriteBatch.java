@@ -46,6 +46,7 @@ public abstract class WriteBatch {
     private final long createdMs;
     private final PhysicalTablePath physicalTablePath;
     private final RequestFuture requestFuture;
+    private final long tableId;
     private final int bucketId;
 
     protected final List<WriteCallback> callbacks = new ArrayList<>();
@@ -55,9 +56,11 @@ public abstract class WriteBatch {
     protected int recordCount;
     private long drainedMs;
 
-    public WriteBatch(int bucketId, PhysicalTablePath physicalTablePath, long createdMs) {
+    public WriteBatch(
+            long tableId, int bucketId, PhysicalTablePath physicalTablePath, long createdMs) {
         this.physicalTablePath = physicalTablePath;
         this.createdMs = createdMs;
+        this.tableId = tableId;
         this.bucketId = bucketId;
         this.requestFuture = new RequestFuture();
         this.recordCount = 0;
@@ -155,6 +158,10 @@ public abstract class WriteBatch {
 
     public int bucketId() {
         return bucketId;
+    }
+
+    public long tableId() {
+        return tableId;
     }
 
     public PhysicalTablePath physicalTablePath() {

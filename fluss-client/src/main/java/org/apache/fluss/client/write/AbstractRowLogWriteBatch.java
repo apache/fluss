@@ -44,13 +44,14 @@ abstract class AbstractRowLogWriteBatch<R> extends WriteBatch {
     private final String buildErrorMessage;
 
     protected AbstractRowLogWriteBatch(
+            long tableId,
             int bucketId,
             PhysicalTablePath physicalTablePath,
             long createdMs,
             AbstractPagedOutputView outputView,
             MemoryLogRecordsRowBuilder<R> recordsBuilder,
             String buildErrorMessage) {
-        super(bucketId, physicalTablePath, createdMs);
+        super(tableId, bucketId, physicalTablePath, createdMs);
         this.outputView = outputView;
         this.recordsBuilder = recordsBuilder;
         this.buildErrorMessage = buildErrorMessage;
