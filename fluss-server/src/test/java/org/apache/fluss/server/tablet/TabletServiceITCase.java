@@ -48,6 +48,7 @@ import org.apache.fluss.rpc.messages.PbListOffsetsRespForBucket;
 import org.apache.fluss.rpc.messages.PbLookupRespForBucket;
 import org.apache.fluss.rpc.messages.PbNotifyLeaderAndIsrReqForBucket;
 import org.apache.fluss.rpc.messages.PbPrefixLookupRespForBucket;
+import org.apache.fluss.rpc.messages.PbProduceLogRespForBucket;
 import org.apache.fluss.rpc.messages.PbPutKvRespForBucket;
 import org.apache.fluss.rpc.messages.ProduceLogResponse;
 import org.apache.fluss.rpc.messages.PutKvResponse;
@@ -485,6 +486,55 @@ public class TabletServiceITCase {
                 .cause()
                 .isInstanceOf(InvalidRequiredAcksException.class)
                 .hasMessageContaining("Invalid required acks");
+    }
+
+    @Test
+    void testProduceLogOnPrimaryKeyTable() throws Exception {
+        long tableId =
+                createTable(
+                        FLUSS_CLUSTER_EXTENSION, DATA1_TABLE_PATH_PK, DATA1_TABLE_DESCRIPTOR_PK);
+        TableBucket tb = new TableBucket(tableId, 0);
+        FLUSS_CLUSTER_EXTENSION.waitUntilAllReplicaReady(tb);
+        int leader = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(tb);
+        TabletServerGateway leaderGateWay =
+                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leader);
+
+        ProduceLogResponse response =
+                leaderGateWay
+                        .produceLog(
+                                newProduceLogRequest(
+                                        tableId, 0, 1, genMemoryLogRecordsByObject(DATA1)))
+                        .get();
+        PbProduceLogRespForBucket produceLogRespForBucket = response.getBucketsRespsList().get(0);
+        assertThat(produceLogRespForBucket.hasErrorCode()).isTrue();
+        assertThat(produceLogRespForBucket.getErrorCode())
+                .isEqualTo(Errors.INVALID_TABLE_EXCEPTION.code());
+        assertThat(produceLogRespForBucket.getErrorMessage())
+                .contains("PRODUCE_LOG is only supported on log table");
+    }
+
+    @Test
+    void testPutKvOnLogTable() throws Exception {
+        long tableId =
+                createTable(FLUSS_CLUSTER_EXTENSION, DATA1_TABLE_PATH, DATA1_TABLE_DESCRIPTOR);
+        TableBucket tb = new TableBucket(tableId, 0);
+        FLUSS_CLUSTER_EXTENSION.waitUntilAllReplicaReady(tb);
+        int leader = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(tb);
+        TabletServerGateway leaderGateWay =
+                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leader);
+
+        PutKvResponse response =
+                leaderGateWay
+                        .putKv(
+                                newPutKvRequest(
+                                        tableId, 0, 1, genKvRecordBatch(DATA_1_WITH_KEY_AND_VALUE)))
+                        .get();
+        PbPutKvRespForBucket putKvRespForBucket = response.getBucketsRespsList().get(0);
+        assertThat(putKvRespForBucket.hasErrorCode()).isTrue();
+        assertThat(putKvRespForBucket.getErrorCode())
+                .isEqualTo(Errors.NON_PRIMARY_KEY_TABLE_EXCEPTION.code());
+        assertThat(putKvRespForBucket.getErrorMessage())
+                .contains("PUT_KV is only supported on primary key table");
     }
 
     @Test
