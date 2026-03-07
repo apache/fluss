@@ -559,7 +559,7 @@ public class ConfigOptions {
     public static final ConfigOption<Duration> ZOOKEEPER_SESSION_TIMEOUT =
             key("zookeeper.client.session-timeout")
                     .durationType()
-                    .defaultValue(Duration.ofMillis(60_000L))
+                    .defaultValue(Duration.ofMillis(18_000L))
                     .withDeprecatedKeys("recovery.zookeeper.client.session-timeout")
                     .withDescription("Defines the session timeout for the ZooKeeper session.");
 
