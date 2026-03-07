@@ -656,6 +656,153 @@ abstract class FlinkCatalogITCase {
     }
 
     @Test
+    void testAlterComputedColumn() throws Exception {
+        String tableName = "test_computed_column_table";
+        TablePath flussTablePath = TablePath.of(DEFAULT_DB, tableName);
+
+        // 1. create table without computed column
+        tEnv.executeSql(
+                String.format(
+                        "CREATE TABLE %s ("
+                                + "  id BIGINT,"
+                                + "  price DOUBLE,"
+                                + "  quantity DOUBLE,"
+                                + "  PRIMARY KEY (id) NOT ENFORCED"
+                                + ")",
+                        tableName));
+
+        Configuration clientConfig = FLUSS_CLUSTER_EXTENSION.getClientConfig();
+        try (Connection conn = ConnectionFactory.createConnection(clientConfig)) {
+            Admin admin = conn.getAdmin();
+
+            // verify no computed column properties in customProperties
+            TableInfo tableInfo = admin.getTableInfo(flussTablePath).get();
+            Map<String, String> customProps = tableInfo.getCustomProperties().toMap();
+            assertThat(
+                            customProps.keySet().stream()
+                                    .filter(k -> k.startsWith("schema.") && k.contains(".expr"))
+                                    .count())
+                    .isEqualTo(0);
+
+            // 2. add a computed column
+            tEnv.executeSql(
+                    String.format("ALTER TABLE %s ADD cost AS `price` * `quantity`", tableName));
+
+            tableInfo = admin.getTableInfo(flussTablePath).get();
+            customProps = tableInfo.getCustomProperties().toMap();
+            // computed column at index 3 (id=0, price=1, quantity=2, cost=3)
+            assertThat(customProps).containsEntry("schema.3.name", "cost");
+            assertThat(customProps).containsEntry("schema.3.expr", "`price` * `quantity`");
+            assertThat(customProps).containsEntry("schema.3.data-type", "DOUBLE");
+
+            // 3. modify the computed column expression
+            tEnv.executeSql(
+                    String.format(
+                            "ALTER TABLE %s MODIFY cost AS `price` * `quantity` * 2", tableName));
+
+            tableInfo = admin.getTableInfo(flussTablePath).get();
+            customProps = tableInfo.getCustomProperties().toMap();
+            assertThat(customProps).containsEntry("schema.3.name", "cost");
+            assertThat(customProps.get("schema.3.expr")).contains("2");
+            assertThat(customProps).containsKey("schema.3.data-type");
+
+            // 4. re-add computed column and verify persistence
+            tEnv.executeSql(
+                    String.format("ALTER TABLE %s ADD total AS `price` + `quantity`", tableName));
+
+            tableInfo = admin.getTableInfo(flussTablePath).get();
+            customProps = tableInfo.getCustomProperties().toMap();
+            assertThat(customProps).containsEntry("schema.4.name", "total");
+            assertThat(customProps).containsEntry("schema.4.expr", "`price` + `quantity`");
+            assertThat(customProps).containsEntry("schema.4.data-type", "DOUBLE");
+
+            // 5. drop the 3rd computed column, the 4th computed column will be reordered to 3rd
+            tEnv.executeSql(String.format("ALTER TABLE %s DROP cost", tableName));
+            tableInfo = admin.getTableInfo(flussTablePath).get();
+            customProps = tableInfo.getCustomProperties().toMap();
+            assertThat(customProps).containsEntry("schema.3.name", "total");
+            assertThat(customProps).containsEntry("schema.3.expr", "`price` + `quantity`");
+            assertThat(customProps).containsEntry("schema.3.data-type", "DOUBLE");
+        }
+    }
+
+    @Test
+    void testAlterTableWatermark() throws Exception {
+        String tableName = "test_watermark_table";
+        ObjectPath tablePath = new ObjectPath(DEFAULT_DB, tableName);
+
+        // 1. create table without watermark
+        tEnv.executeSql(
+                String.format(
+                        "CREATE TABLE %s ("
+                                + "  id BIGINT,"
+                                + "  log_ts BIGINT,"
+                                + "  PRIMARY KEY (id) NOT ENFORCED"
+                                + ")",
+                        tableName));
+
+        CatalogTable table = (CatalogTable) catalog.getTable(tablePath);
+        assertThat(table.getUnresolvedSchema().getWatermarkSpecs()).isEmpty();
+
+        // 2. add computed column and watermark
+        tEnv.executeSql(
+                String.format(
+                        "ALTER TABLE %s ADD ("
+                                + "  ts AS TO_TIMESTAMP_LTZ(log_ts, 3),"
+                                + "  WATERMARK FOR ts AS ts - INTERVAL '10' SECOND"
+                                + ")",
+                        tableName));
+
+        table = (CatalogTable) catalog.getTable(tablePath);
+        List<Schema.UnresolvedWatermarkSpec> watermarks =
+                table.getUnresolvedSchema().getWatermarkSpecs();
+        assertThat(watermarks).hasSize(1);
+        assertThat(watermarks.get(0).getColumnName()).isEqualTo("ts");
+        assertThat(watermarks.get(0).getWatermarkExpression().asSummaryString())
+                .contains("INTERVAL '10' SECOND");
+
+        // 3. modify watermark
+        tEnv.executeSql(
+                String.format(
+                        "ALTER TABLE %s MODIFY WATERMARK FOR ts AS ts - INTERVAL '5' SECOND",
+                        tableName));
+
+        table = (CatalogTable) catalog.getTable(tablePath);
+        watermarks = table.getUnresolvedSchema().getWatermarkSpecs();
+        assertThat(watermarks).hasSize(1);
+        assertThat(watermarks.get(0).getColumnName()).isEqualTo("ts");
+        String modifySummary = watermarks.get(0).getWatermarkExpression().asSummaryString();
+        assertThat(modifySummary)
+                .contains("INTERVAL '5' SECOND")
+                .doesNotContain("INTERVAL '10' SECOND");
+
+        // 4. drop watermark
+        tEnv.executeSql(String.format("ALTER TABLE %s DROP WATERMARK", tableName));
+
+        table = (CatalogTable) catalog.getTable(tablePath);
+        assertThat(table.getUnresolvedSchema().getWatermarkSpecs()).isEmpty();
+
+        // 5. add watermark again and verify persistence
+        tEnv.executeSql(
+                String.format(
+                        "ALTER TABLE %s ADD WATERMARK FOR ts AS ts - INTERVAL '15' SECOND",
+                        tableName));
+
+        table = (CatalogTable) catalog.getTable(tablePath);
+        watermarks = table.getUnresolvedSchema().getWatermarkSpecs();
+
+        CatalogTable reloadedTable = (CatalogTable) catalog.getTable(tablePath);
+        java.util.List<Schema.UnresolvedWatermarkSpec> reloadedWatermarks =
+                reloadedTable.getUnresolvedSchema().getWatermarkSpecs();
+
+        assertThat(watermarks).hasSize(1);
+        assertThat(reloadedWatermarks).hasSize(1);
+        assertThat(reloadedWatermarks.get(0).getColumnName()).isEqualTo("ts");
+        assertThat(reloadedWatermarks.get(0).getWatermarkExpression().asSummaryString())
+                .contains("INTERVAL '15' SECOND");
+    }
+
+    @Test
     void testCreateWithUnSupportDataType() {
         // create a table with varchar datatype
         assertThatThrownBy(
