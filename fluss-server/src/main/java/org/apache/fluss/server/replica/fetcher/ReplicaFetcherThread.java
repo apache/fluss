@@ -64,6 +64,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.stream.Collectors;
 
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 import static org.apache.fluss.utils.concurrent.LockUtils.inLock;
@@ -227,7 +228,13 @@ final class ReplicaFetcherThread extends ShutdownableThread {
             responseData = leader.fetchLog(fetchLogContext).get(timeoutSeconds, TimeUnit.SECONDS);
         } catch (Throwable t) {
             if (isRunning()) {
-                LOG.warn("Error in response for fetch log request {}", fetchLogRequest, t);
+                LOG.warn(
+                        "Error in response from leader server {} for fetch log request from table ids: {}",
+                        leader.leaderServerId(),
+                        fetchLogRequest.getTablesReqsList().stream()
+                                .map(x -> x.getTableId())
+                                .collect(Collectors.toSet()),
+                        t);
                 inLock(
                         bucketStatusMapLock,
                         () -> bucketsWithError.addAll(fairBucketStatusMap.bucketSet()));
