@@ -30,6 +30,7 @@ import org.apache.fluss.spark.utils.LogChangesIterator
 import org.apache.fluss.utils.CloseableIterator
 
 import org.apache.spark.internal.Logging
+import org.apache.spark.util.LongAccumulator
 
 import java.util.Comparator
 
@@ -46,7 +47,11 @@ class FlussUpsertPartitionReader(
     tablePath: TablePath,
     projection: Array[Int],
     flussPartition: FlussUpsertInputPartition,
-    flussConfig: Configuration)
+    flussConfig: Configuration,
+    fetchRequestsAccum: LongAccumulator = null,
+    fetchTimeMsAccum: LongAccumulator = null,
+    maxFetchTimeMsAccum: MaxLongAccumulator = null,
+    fetchErrorsAccum: LongAccumulator = null)
   extends FlussPartitionReader(tablePath, flussConfig)
   with Logging {
 
@@ -129,7 +134,20 @@ class FlussUpsertPartitionReader(
       var continue = true
 
       while (continue) {
-        val records = logScanner.poll(POLL_TIMEOUT)
+        val pollStartMs = System.currentTimeMillis()
+        val records =
+          try {
+            logScanner.poll(POLL_TIMEOUT)
+          } catch {
+            case e: Exception =>
+              if (fetchErrorsAccum != null) fetchErrorsAccum.add(1L)
+              throw e
+          } finally {
+            val pollTimeMs = System.currentTimeMillis() - pollStartMs
+            if (fetchRequestsAccum != null) fetchRequestsAccum.add(1L)
+            if (fetchTimeMsAccum != null) fetchTimeMsAccum.add(pollTimeMs)
+            if (maxFetchTimeMsAccum != null) maxFetchTimeMsAccum.add(pollTimeMs)
+          }
         if (!records.isEmpty) {
           val flatRecords = records.asScala
           for (scanRecord <- flatRecords) {
@@ -161,7 +179,20 @@ class FlussUpsertPartitionReader(
 
         override def hasNext: Boolean = {
           while ((currentBatch == null || !currentBatch.hasNext) && hasMoreBatches) {
-            val batch = snapshotScanner.pollBatch(POLL_TIMEOUT)
+            val pollStartMs = System.currentTimeMillis()
+            val batch =
+              try {
+                snapshotScanner.pollBatch(POLL_TIMEOUT)
+              } catch {
+                case e: Exception =>
+                  if (fetchErrorsAccum != null) fetchErrorsAccum.add(1L)
+                  throw e
+              } finally {
+                val pollTimeMs = System.currentTimeMillis() - pollStartMs
+                if (fetchRequestsAccum != null) fetchRequestsAccum.add(1L)
+                if (fetchTimeMsAccum != null) fetchTimeMsAccum.add(pollTimeMs)
+                if (maxFetchTimeMsAccum != null) maxFetchTimeMsAccum.add(pollTimeMs)
+              }
             if (batch == null) {
               hasMoreBatches = false
             } else {
