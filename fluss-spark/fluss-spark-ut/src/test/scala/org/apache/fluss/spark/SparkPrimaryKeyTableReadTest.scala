@@ -75,6 +75,12 @@ class SparkPrimaryKeyTableReadTest extends FlussSparkTestBase {
           Row(1000L, 25L, 605, "addr5") :: Nil
       )
 
+      // Test COUNT(*) pushdown
+      checkAnswer(
+        sql(s"SELECT COUNT(*) FROM $DEFAULT_DATABASE.t"),
+        Row(5L) :: Nil
+      )
+
       // Trigger snapshot.
       flussServer.triggerAndWaitSnapshot(tablePath)
       inputPartitions = genInputPartition(tablePath, null)
@@ -131,6 +137,11 @@ class SparkPrimaryKeyTableReadTest extends FlussSparkTestBase {
           Row(700L, 220L, "addr2") ::
           Row(800L, 23L, "addr3") ::
           Nil
+      )
+
+      checkAnswer(
+        sql(s"SELECT COUNT(*) FROM $DEFAULT_DATABASE.t"),
+        Row(6L) :: Nil
       )
 
       // Only support FULL startup mode.
@@ -238,6 +249,11 @@ class SparkPrimaryKeyTableReadTest extends FlussSparkTestBase {
           Row(800L, 23L, 603, "addr3", "2026-01-02") ::
           Row(900L, 240L, 604, "addr4_updated", "2026-01-02") ::
           Nil
+      )
+
+      checkAnswer(
+        sql(s"SELECT COUNT(*) FROM $DEFAULT_DATABASE.t"),
+        Row(6L) :: Nil
       )
     }
   }

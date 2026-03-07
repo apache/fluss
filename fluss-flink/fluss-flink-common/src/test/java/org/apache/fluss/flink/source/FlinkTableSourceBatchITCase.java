@@ -368,6 +368,33 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
         List<String> expected = Collections.singletonList("+I[5]");
         assertThat(collected).isEqualTo(expected);
 
+        // test COUNT(column) pushdown on non-nullable column
+        query = String.format("SELECT COUNT(id) FROM %s", tableName);
+        assertThat(tEnv.explainSql(query))
+                .contains(
+                        "aggregates=[grouping=[], aggFunctions=[Count1AggFunction()]]]], fields=[count1$0]");
+        iterRows = tEnv.executeSql(query).collect();
+        collected = collectRowsWithTimeout(iterRows, 1);
+        assertThat(collected).isEqualTo(expected);
+
+        // test COUNT(column) on nullable column - should NOT push down
+        // For PK table, this will fail because it doesn't support full scan in batch mode
+        assertThatThrownBy(
+                        () ->
+                                tEnv.explainSql(
+                                        String.format("SELECT COUNT(address) FROM %s", tableName)))
+                .hasMessageContaining(
+                        "Currently, Fluss only support queries on table with datalake enabled or point queries on primary key when it's in batch execution mode.");
+
+        assertThatThrownBy(
+                        () ->
+                                tEnv.explainSql(
+                                        String.format(
+                                                "SELECT COUNT(DISTINCT address) FROM %s",
+                                                tableName)))
+                .hasMessageContaining(
+                        "Currently, Fluss only support queries on table with datalake enabled or point queries on primary key when it's in batch execution mode.");
+
         // test not push down grouping count.
         assertThatThrownBy(
                         () ->
@@ -415,6 +442,32 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
         List<String> collected = collectRowsWithTimeout(iterRows, 1);
         List<String> expected = Collections.singletonList(String.format("+I[%s]", expectedRows));
         assertThat(collected).isEqualTo(expected);
+
+        // test COUNT(column) pushdown
+        query = String.format("SELECT COUNT(id) FROM %s", tableName);
+        assertThat(tEnv.explainSql(query))
+                .contains(
+                        "aggregates=[grouping=[], aggFunctions=[Count1AggFunction()]]]], fields=[count1$0]");
+        iterRows = tEnv.executeSql(query).collect();
+        collected = collectRowsWithTimeout(iterRows, 1);
+        assertThat(collected).isEqualTo(expected);
+
+        // test COUNT(column) with NULL values - should NOT push down for nullable columns
+        // This will fail because log table doesn't support full scan in batch mode
+        assertThatThrownBy(
+                        () ->
+                                tEnv.explainSql(
+                                        String.format("SELECT COUNT(address) FROM %s", tableName)))
+                .hasMessageContaining(
+                        "Currently, Fluss only support queries on table with datalake enabled or point queries on primary key when it's in batch execution mode.");
+        assertThatThrownBy(
+                        () ->
+                                tEnv.explainSql(
+                                        String.format(
+                                                "SELECT COUNT(DISTINCT address) FROM %s",
+                                                tableName)))
+                .hasMessageContaining(
+                        "Currently, Fluss only support queries on table with datalake enabled or point queries on primary key when it's in batch execution mode.");
 
         // test not push down grouping count.
         assertThatThrownBy(
@@ -500,11 +553,11 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
 
         TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
 
-        // prepare table data
+        // prepare table data with NULL values in address column
         try (Table table = conn.getTable(tablePath)) {
             AppendWriter appendWriter = table.newAppend().createWriter();
             for (int i = 1; i <= 5; i++) {
-                Object[] values = new Object[] {i, "address" + i, "name" + i};
+                Object[] values = new Object[] {i, i % 2 == 0 ? null : "address" + i, "name" + i};
                 appendWriter.append(row(values));
                 // make sure every bucket has records
                 appendWriter.flush();
@@ -535,12 +588,15 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
                 waitUntilPartitions(FLUSS_CLUSTER_EXTENSION.getZooKeeperClient(), tablePath);
         Collection<String> partitions = partitionNameById.values();
 
-        // prepare table data
+        // prepare table data with NULL values in address column
         try (Table table = conn.getTable(tablePath)) {
             AppendWriter appendWriter = table.newAppend().createWriter();
             for (int i = 1; i <= 5; i++) {
                 for (String partition : partitions) {
-                    Object[] values = new Object[] {i, "address" + i, "name" + i, partition};
+                    Object[] values =
+                            new Object[] {
+                                i, i % 2 == 0 ? null : "address" + i, "name" + i, partition
+                            };
                     appendWriter.append(row(values));
                     // make sure every bucket has records
                     appendWriter.flush();
