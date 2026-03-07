@@ -172,6 +172,7 @@ public class LogFetcherITCase extends ClientToServerITCaseBase {
                                 DATA1_TABLE_INFO.getNumBuckets(),
                                 DATA1_TABLE_INFO.getProperties(),
                                 DATA1_TABLE_INFO.getCustomProperties(),
+                                DATA1_TABLE_INFO.getRemoteDataDir(),
                                 DATA1_TABLE_INFO.getComment().orElse(null),
                                 DATA1_TABLE_INFO.getCreatedTime(),
                                 DATA1_TABLE_INFO.getModifiedTime()),

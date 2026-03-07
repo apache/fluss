@@ -44,6 +44,7 @@ import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 
+import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -82,6 +83,7 @@ public class RecoveryOffsetManagerTest {
                 numBuckets,
                 new Configuration(),
                 new Configuration(),
+                DEFAULT_REMOTE_DATA_DIR,
                 null, // comment
                 System.currentTimeMillis(),
                 System.currentTimeMillis());
@@ -89,7 +91,7 @@ public class RecoveryOffsetManagerTest {
 
     private static PartitionInfo createPartitionInfo(long partitionId, String partitionName) {
         ResolvedPartitionSpec spec = ResolvedPartitionSpec.fromPartitionValue("pt", partitionName);
-        return new PartitionInfo(partitionId, spec);
+        return new PartitionInfo(partitionId, spec, DEFAULT_REMOTE_DATA_DIR);
     }
 
     // ==================== FRESH_START Tests ====================

@@ -555,8 +555,12 @@ public class ClientRpcMessageUtils {
                         pbPartitionInfo ->
                                 new PartitionInfo(
                                         pbPartitionInfo.getPartitionId(),
-                                        toResolvedPartitionSpec(
-                                                pbPartitionInfo.getPartitionSpec())))
+                                        toResolvedPartitionSpec(pbPartitionInfo.getPartitionSpec()),
+                                        // For backward compatibility, results returned by old
+                                        // clusters do not include the remote data dir
+                                        pbPartitionInfo.hasRemoteDataDir()
+                                                ? pbPartitionInfo.getRemoteDataDir()
+                                                : null))
                 .collect(Collectors.toList());
     }
 
