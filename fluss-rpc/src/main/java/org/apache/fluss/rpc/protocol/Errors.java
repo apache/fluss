@@ -36,9 +36,9 @@ import org.apache.fluss.exception.InvalidConfigException;
 import org.apache.fluss.exception.InvalidCoordinatorException;
 import org.apache.fluss.exception.InvalidDatabaseException;
 import org.apache.fluss.exception.InvalidPartitionException;
-import org.apache.fluss.exception.InvalidProducerIdException;
 import org.apache.fluss.exception.InvalidReplicationFactorException;
 import org.apache.fluss.exception.InvalidRequiredAcksException;
+import org.apache.fluss.exception.InvalidScanRequestException;
 import org.apache.fluss.exception.InvalidServerRackInfoException;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.InvalidTargetColumnException;
@@ -65,6 +65,8 @@ import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.exception.RebalanceFailureException;
 import org.apache.fluss.exception.RecordTooLargeException;
 import org.apache.fluss.exception.RetriableAuthenticationException;
+import org.apache.fluss.exception.ScannerExpiredException;
+import org.apache.fluss.exception.ScannerNotFoundException;
 import org.apache.fluss.exception.SchemaNotExistException;
 import org.apache.fluss.exception.SecurityDisabledException;
 import org.apache.fluss.exception.SecurityTokenException;
@@ -78,6 +80,8 @@ import org.apache.fluss.exception.TableNotPartitionedException;
 import org.apache.fluss.exception.TimeoutException;
 import org.apache.fluss.exception.TooManyBucketsException;
 import org.apache.fluss.exception.TooManyPartitionsException;
+import org.apache.fluss.exception.TooManyScannersException;
+import org.apache.fluss.exception.UnknownScannerIdException;
 import org.apache.fluss.exception.UnknownServerException;
 import org.apache.fluss.exception.UnknownTableOrBucketException;
 import org.apache.fluss.exception.UnknownWriterIdException;
@@ -242,10 +246,20 @@ public enum Errors {
     REBALANCE_FAILURE_EXCEPTION(61, "The rebalance task failure.", RebalanceFailureException::new),
     NO_REBALANCE_IN_PROGRESS_EXCEPTION(
             62, "No rebalance task in progress.", NoRebalanceInProgressException::new),
-    INVALID_PRODUCER_ID_EXCEPTION(
-            63,
-            "The client has attempted to perform an operation with an invalid producer ID.",
-            InvalidProducerIdException::new);
+    /**
+     * @deprecated Superseded by {@link #UNKNOWN_SCANNER_ID} (65) and {@link #SCANNER_EXPIRED} (64).
+     */
+    @Deprecated
+    SCANNER_NOT_FOUND_EXCEPTION(63, "The scanner is not found.", ScannerNotFoundException::new),
+    SCANNER_EXPIRED(
+            64, "The scanner session has expired due to inactivity.", ScannerExpiredException::new),
+    UNKNOWN_SCANNER_ID(
+            65, "The scanner id is not recognized by the server.", UnknownScannerIdException::new),
+    INVALID_SCAN_REQUEST(66, "The scan request is invalid.", InvalidScanRequestException::new),
+    TOO_MANY_SCANNERS(
+            67,
+            "The per-bucket or per-server scanner session limit has been reached.",
+            TooManyScannersException::new);
 
     private static final Logger LOG = LoggerFactory.getLogger(Errors.class);
 
