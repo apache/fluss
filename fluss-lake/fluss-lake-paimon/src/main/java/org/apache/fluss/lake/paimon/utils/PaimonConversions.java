@@ -122,15 +122,14 @@ public class PaimonConversions {
         for (TableChange tableChange : tableChanges) {
             if (tableChange instanceof TableChange.SetOption) {
                 TableChange.SetOption setOption = (TableChange.SetOption) tableChange;
-                schemaChanges.add(
-                        SchemaChange.setOption(
-                                convertFlussPropertyKeyToPaimon(setOption.getKey()),
-                                setOption.getValue()));
+                String key = convertFlussPropertyKeyToPaimon(setOption.getKey());
+                validateAlterPaimonOptions(key);
+                schemaChanges.add(SchemaChange.setOption(key, setOption.getValue()));
             } else if (tableChange instanceof TableChange.ResetOption) {
                 TableChange.ResetOption resetOption = (TableChange.ResetOption) tableChange;
-                schemaChanges.add(
-                        SchemaChange.removeOption(
-                                convertFlussPropertyKeyToPaimon(resetOption.getKey())));
+                String key = convertFlussPropertyKeyToPaimon(resetOption.getKey());
+                validateAlterPaimonOptions(key);
+                schemaChanges.add(SchemaChange.removeOption(key));
             } else if (tableChange instanceof TableChange.AddColumn) {
                 TableChange.AddColumn addColumn = (TableChange.AddColumn) tableChange;
 
@@ -273,6 +272,14 @@ public class PaimonConversions {
                                         k));
                     }
                 });
+    }
+
+    private static void validateAlterPaimonOptions(String key) {
+        if (PAIMON_UNSETTABLE_OPTIONS.contains(key)
+                || CoreOptions.IMMUTABLE_OPTIONS.contains(key)) {
+            throw new InvalidConfigException(
+                    String.format("The Paimon option %s cannot be changed.", key));
+        }
     }
 
     private static void setPaimonDefaultProperties(Options options) {
