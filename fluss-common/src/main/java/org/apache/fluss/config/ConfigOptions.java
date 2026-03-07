@@ -880,6 +880,15 @@ public class ConfigOptions {
                             "The number of threads that the client uses for sending requests to the "
                                     + "network and receiving responses from network. The default value is 4");
 
+    public static final ConfigOption<Boolean> NETTY_CLIENT_ALLOCATOR_HEAP_BUFFER_FIRST =
+            key("netty.client.allocator.heap-buffer-first")
+                    .booleanType()
+                    .defaultValue(true)
+                    .withDescription(
+                            "Whether to allocate heap buffer first for the netty client. "
+                                    + "If set to false, direct buffer will be used first, "
+                                    + "which requires sufficient off-heap memory to be available.");
+
     // ------------------------------------------------------------------------
     //  Client Settings
     // ------------------------------------------------------------------------
