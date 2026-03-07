@@ -27,6 +27,7 @@ import org.apache.spark.sql.catalyst.util.{ArrayData => SparkArrayData, MapData 
 import org.apache.spark.sql.types.{DataType => SparkDataType, Decimal => SparkDecimal}
 import org.apache.spark.unsafe.types.{CalendarInterval, UTF8String}
 
+/** Wraps a Fluss [[FlussInternalArray]] as a Spark [[SparkArrayData]]. */
 class FlussAsSparkArray(elementType: FlussDataType) extends SparkArrayData {
 
   var flussArray: FlussInternalArray = _

@@ -94,7 +94,7 @@ public class InternalRowUtils {
         return new GenericArray(newArray);
     }
 
-    private static InternalMap copyMap(InternalMap map, DataType keyType, DataType valueType) {
+    public static InternalMap copyMap(InternalMap map, DataType keyType, DataType valueType) {
         if (map instanceof BinaryMap) {
             return ((BinaryMap) map).copy();
         }
