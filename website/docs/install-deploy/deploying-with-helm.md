@@ -139,7 +139,7 @@ The Fluss Helm chart deploys the following Kubernetes resources:
 - **CoordinatorServer**: 1x StatefulSet with Headless Service for cluster coordination
 - **TabletServer**: 3x StatefulSet with Headless Service for data storage and processing
 - **ConfigMap**: Configuration management for `server.yaml` settings
-- **Services**: Headless services providing stable pod DNS names
+- **Services**: Headless services providing stable pod DNS names, plus optional dedicated headless services when metrics are enabled
 
 ### Step 3: Verify Installation
 
@@ -182,6 +182,18 @@ The following table lists the configurable parameters of the Fluss chart and the
 |-----------|-------------|---------|
 | `listeners.internal.port` | Internal communication port | `9123` |
 | `listeners.client.port` | Client port (intra-cluster) | `9124` |
+
+### Metrics Parameters
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `metrics.enabled` | Enables metrics reporter configuration and dedicated metrics services | `false` |
+| `metrics.reporters` | Map of Fluss metric reporters and reporter options | `{ prometheus: { port: 9249 } }` |
+| `metrics.reporters.jmx.port` | JMX reporter port range | - |
+| `metrics.reporters.prometheus.port` | Prometheus reporter port | `9249` |
+| `metrics.reporters.prometheus.service.portName` | Named port exposed on metrics services (used by ServiceMonitor endpoint `port`) | `metrics` |
+| `metrics.reporters.prometheus.service.labels` | Additional labels added to metrics services for ServiceMonitor selectors | `{}` |
+| `metrics.reporters.prometheus.service.annotations` | Optional annotations added to metrics services (for annotation-based scraping) | `{}` |
 
 ### Fluss Configuration Overrides
 
@@ -253,6 +265,63 @@ listeners:
     port: 9123
   client:
     port: 9124
+```
+
+### Metrics and Monitoring
+
+When `metrics.enabled` is `true`, adds the following `server.yaml` config entries:
+
+- `metrics.reporters`: comma-separated reporter names from `metrics.reporters`
+- `metrics.reporter.<name>.<option>`: one entry per reporter option in `metrics.reporters`
+
+If a metrics key is already provided in `configurationOverrides` (for example, `metrics.reporters` or `metrics.reporter.prometheus.port`), the chart keeps the value from `configurationOverrides`.
+
+#### Prometheus Annotation Based Scraping
+
+The example values below show how to add annotations to the metrics services so that a Prometheus server can discovery and scrape them automatically based on the annotations:
+
+```yaml
+metrics:
+  enabled: true
+  reporters:
+    prometheus:
+      port: 9249
+      service:
+        annotations:
+          prometheus.io/scrape: "true"
+          prometheus.io/path: "/metrics"
+          prometheus.io/port: "9249"
+```
+
+#### Prometheus ServiceMonitor Based Scraping
+
+Similarly, if using the [Prometheus Operator](https://prometheus-operator.dev/), use the values below to add labels to the metrics services and then create a [`ServiceMonitor`](https://prometheus-operator.dev/docs/api-reference/api/#monitoring.coreos.com/v1.ServiceMonitor) that selects them:
+
+```yaml
+metrics:
+  enabled: true
+  reporters:
+    prometheus:
+      port: 9249
+      service:
+        portName: metrics
+        labels:
+          monitoring: enabled
+```
+
+Then create a `ServiceMonitor` resource that matches the label:
+
+```yaml
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: fluss-metrics
+spec:
+  selector:
+    matchLabels:
+      monitoring: enabled
+  endpoints:
+    - port: metrics
 ```
 
 ### Storage Configuration
