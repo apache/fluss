@@ -39,6 +39,7 @@ import org.apache.fluss.server.metadata.CoordinatorMetadataCache;
 import org.apache.fluss.server.metadata.ServerMetadataCache;
 import org.apache.fluss.server.metrics.ServerMetricUtils;
 import org.apache.fluss.server.metrics.group.CoordinatorMetricGroup;
+import org.apache.fluss.server.metrics.group.LakeTieringMetricGroup;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperUtils;
 import org.apache.fluss.server.zk.data.CoordinatorAddress;
@@ -200,7 +201,9 @@ public class CoordinatorServer extends ServerBase {
                 authorizer.startup();
             }
 
-            this.lakeTableTieringManager = new LakeTableTieringManager();
+            this.lakeTableTieringManager =
+                    new LakeTableTieringManager(
+                            new LakeTieringMetricGroup(metricRegistry, serverMetricGroup));
 
             MetadataManager metadataManager =
                     new MetadataManager(zkClient, conf, lakeCatalogDynamicLoader);

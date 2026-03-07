@@ -17,6 +17,7 @@
 
 package org.apache.fluss.lake.paimon.tiering;
 
+import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.lake.committer.CommittedLakeSnapshot;
@@ -27,11 +28,16 @@ import org.apache.fluss.lake.paimon.utils.DvTableReadableSnapshotRetriever;
 import org.apache.fluss.metadata.TablePath;
 
 import org.apache.paimon.CoreOptions;
+import org.apache.paimon.FileStore;
 import org.apache.paimon.Snapshot;
 import org.apache.paimon.catalog.Catalog;
+import org.apache.paimon.manifest.FileKind;
 import org.apache.paimon.manifest.IndexManifestEntry;
 import org.apache.paimon.manifest.ManifestCommittable;
 import org.apache.paimon.manifest.ManifestEntry;
+import org.apache.paimon.manifest.ManifestFile;
+import org.apache.paimon.manifest.ManifestFileMeta;
+import org.apache.paimon.manifest.ManifestList;
 import org.apache.paimon.manifest.SimpleFileEntry;
 import org.apache.paimon.table.FileStoreTable;
 import org.apache.paimon.table.sink.CommitCallback;
@@ -112,9 +118,30 @@ public class PaimonLakeCommitter implements LakeCommitter<PaimonWriteResult, Pai
                             "Paimon committed snapshot id must be non-null.");
             currentCommitSnapshotId.remove();
 
+            Snapshot committedSnapshot =
+                    fileStoreTable.snapshotManager().snapshot(committedSnapshotId);
+
+            // Collect cumulative table stats from the exact snapshot that was just committed.
+            long totalFileSize = -1L;
+            long totalRecordCount = -1L;
+            try {
+                long[] stats = computeTableStats(fileStoreTable.store(), committedSnapshot);
+                totalFileSize = stats[0];
+                totalRecordCount = stats[1];
+            } catch (Exception e) {
+                // Stats collection is best-effort; a failure here must not roll back the commit.
+                LOG.warn(
+                        "Failed to compute table stats for snapshot {} of table {}, "
+                                + "fileSize and recordCount will be reported as -1.",
+                        committedSnapshotId,
+                        tablePath,
+                        e);
+            }
+
             // deletion vector is disabled, committed snapshot is readable
             if (!fileStoreTable.coreOptions().deletionVectorsEnabled()) {
-                return LakeCommitResult.committedIsReadable(committedSnapshotId);
+                return LakeCommitResult.committedIsReadable(
+                        committedSnapshotId, totalFileSize, totalRecordCount);
             } else {
                 // retrieve the readable snapshot during commit
                 try (DvTableReadableSnapshotRetriever retriever =
@@ -123,7 +150,8 @@ public class PaimonLakeCommitter implements LakeCommitter<PaimonWriteResult, Pai
                     DvTableReadableSnapshotRetriever.ReadableSnapshotResult readableSnapshotResult =
                             retriever.getReadableSnapshotAndOffsets(committedSnapshotId);
                     if (readableSnapshotResult == null) {
-                        return LakeCommitResult.unknownReadableSnapshot(committedSnapshotId);
+                        return LakeCommitResult.unknownReadableSnapshot(
+                                committedSnapshotId, totalFileSize, totalRecordCount);
                     } else {
                         long earliestSnapshotIdToKeep =
                                 readableSnapshotResult.getEarliestSnapshotIdToKeep();
@@ -139,7 +167,9 @@ public class PaimonLakeCommitter implements LakeCommitter<PaimonWriteResult, Pai
                                 readableSnapshotResult.getReadableSnapshotId(),
                                 readableSnapshotResult.getTieredOffsets(),
                                 readableSnapshotResult.getReadableOffsets(),
-                                earliestSnapshotIdToKeep);
+                                earliestSnapshotIdToKeep,
+                                totalFileSize,
+                                totalRecordCount);
                     }
                 }
             }
@@ -151,6 +181,40 @@ public class PaimonLakeCommitter implements LakeCommitter<PaimonWriteResult, Pai
             }
             throw new IOException(t);
         }
+    }
+
+    /**
+     * Computes cumulative table stats from the snapshot's base manifest list.
+     *
+     * <p>The base manifest list covers all live data files in the snapshot (main branch only,
+     * expired snapshots excluded). ADD entries increase the total; DELETE entries (produced by
+     * compaction) decrease it, yielding the net live file size and physical row count.
+     *
+     * <p>For primary-key tables the physical row count may include un-compacted delete rows at L0
+     * before a full compaction is completed.
+     *
+     * @return {@code long[]{totalFileSize, totalRowCount}}
+     */
+    @VisibleForTesting
+    static long[] computeTableStats(FileStore<?> store, Snapshot snapshot) {
+        ManifestList manifestList = store.manifestListFactory().create();
+        ManifestFile manifestFile = store.manifestFileFactory().create();
+        List<ManifestFileMeta> manifestFileMetas = manifestList.readDataManifests(snapshot);
+        long totalFileSize = 0L;
+        long totalRowCount = 0L;
+        for (ManifestFileMeta manifestFileMeta : manifestFileMetas) {
+            List<ManifestEntry> manifestEntries = manifestFile.read(manifestFileMeta.fileName());
+            for (ManifestEntry entry : manifestEntries) {
+                if (entry.kind() == FileKind.ADD) {
+                    totalFileSize += entry.file().fileSize();
+                    totalRowCount += entry.file().rowCount();
+                } else {
+                    totalFileSize -= entry.file().fileSize();
+                    totalRowCount -= entry.file().rowCount();
+                }
+            }
+        }
+        return new long[] {totalFileSize, totalRowCount};
     }
 
     @Override
