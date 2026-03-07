@@ -44,15 +44,28 @@ public class SourceEnumeratorState {
     // lease context for restore.
     private final String leaseId;
 
+    // Whether the backlog data has been fully processed.
+    private final boolean isBacklogProcessed;
+
     public SourceEnumeratorState(
             Set<TableBucket> assignedBuckets,
             Map<Long, String> assignedPartitions,
             @Nullable List<SourceSplitBase> remainingHybridLakeFlussSplits,
             String leaseId) {
+        this(assignedBuckets, assignedPartitions, remainingHybridLakeFlussSplits, leaseId, false);
+    }
+
+    public SourceEnumeratorState(
+            Set<TableBucket> assignedBuckets,
+            Map<Long, String> assignedPartitions,
+            @Nullable List<SourceSplitBase> remainingHybridLakeFlussSplits,
+            String leaseId,
+            boolean isBacklogProcessed) {
         this.assignedBuckets = assignedBuckets;
         this.assignedPartitions = assignedPartitions;
         this.remainingHybridLakeFlussSplits = remainingHybridLakeFlussSplits;
         this.leaseId = leaseId;
+        this.isBacklogProcessed = isBacklogProcessed;
     }
 
     public Set<TableBucket> getAssignedBuckets() {
@@ -72,6 +85,10 @@ public class SourceEnumeratorState {
         return leaseId;
     }
 
+    public boolean isBacklogProcessed() {
+        return isBacklogProcessed;
+    }
+
     @Override
     public boolean equals(Object o) {
         if (this == o) {
@@ -81,7 +98,8 @@ public class SourceEnumeratorState {
             return false;
         }
         SourceEnumeratorState that = (SourceEnumeratorState) o;
-        return Objects.equals(assignedBuckets, that.assignedBuckets)
+        return isBacklogProcessed == that.isBacklogProcessed
+                && Objects.equals(assignedBuckets, that.assignedBuckets)
                 && Objects.equals(assignedPartitions, that.assignedPartitions)
                 && Objects.equals(
                         remainingHybridLakeFlussSplits, that.remainingHybridLakeFlussSplits)
@@ -90,7 +108,11 @@ public class SourceEnumeratorState {
 
     @Override
     public int hashCode() {
-        return Objects.hash(assignedBuckets, assignedPartitions, remainingHybridLakeFlussSplits);
+        return Objects.hash(
+                assignedBuckets,
+                assignedPartitions,
+                remainingHybridLakeFlussSplits,
+                isBacklogProcessed);
     }
 
     @Override
@@ -104,6 +126,8 @@ public class SourceEnumeratorState {
                 + remainingHybridLakeFlussSplits
                 + ", leaseId="
                 + leaseId
+                + ", isBacklogProcessed="
+                + isBacklogProcessed
                 + '}';
     }
 }

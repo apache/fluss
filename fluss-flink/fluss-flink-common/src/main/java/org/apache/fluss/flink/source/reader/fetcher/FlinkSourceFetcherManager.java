@@ -77,38 +77,43 @@ public class FlinkSourceFetcherManager
     public void removePartitions(
             Map<Long, String> removedPartitions,
             Consumer<Set<TableBucket>> unsubscribeTableBucketsCallback) {
-        SplitFetcher<RecordAndPos, SourceSplitBase> splitFetcher = fetchers.get(0);
-        if (splitFetcher != null) {
-            // The fetcher thread is still running. This should be the majority of the cases.
-            enqueuePartitionsRemovedTask(
-                    splitFetcher, removedPartitions, unsubscribeTableBucketsCallback);
-        } else {
-            splitFetcher = createSplitFetcher();
-            enqueuePartitionsRemovedTask(
-                    splitFetcher, removedPartitions, unsubscribeTableBucketsCallback);
-            startFetcher(splitFetcher);
-        }
+        enqueueTaskToSplitReader(
+                sourceSplitReader -> {
+                    Set<TableBucket> unsubscribedBuckets =
+                            sourceSplitReader.removePartitions(removedPartitions);
+                    unsubscribeTableBucketsCallback.accept(unsubscribedBuckets);
+                });
     }
 
-    private void enqueuePartitionsRemovedTask(
-            SplitFetcher<RecordAndPos, SourceSplitBase> splitFetcher,
-            Map<Long, String> removedPartitions,
-            Consumer<Set<TableBucket>> unsubscribeTableBucketsCallback) {
+    public void addBacklogMarkedOffsets(Map<TableBucket, Long> backlogMarkedOffsets) {
+        enqueueTaskToSplitReader(
+                sourceSplitReader ->
+                        sourceSplitReader.addMarkedBacklogOffsets(backlogMarkedOffsets));
+    }
+
+    private void enqueueTaskToSplitReader(Consumer<FlinkSourceSplitReader> action) {
+        SplitFetcher<RecordAndPos, SourceSplitBase> splitFetcher = fetchers.get(0);
+        boolean isNewFetcher = splitFetcher == null;
+        if (isNewFetcher) {
+            splitFetcher = createSplitFetcher();
+        }
+
         FlinkSourceSplitReader sourceSplitReader =
                 (FlinkSourceSplitReader) splitFetcher.getSplitReader();
-
         splitFetcher.enqueueTask(
                 new SplitFetcherTask() {
                     @Override
                     public boolean run() {
-                        Set<TableBucket> unsubscribedBuckets =
-                                sourceSplitReader.removePartitions(removedPartitions);
-                        unsubscribeTableBucketsCallback.accept(unsubscribedBuckets);
+                        action.accept(sourceSplitReader);
                         return true;
                     }
 
                     @Override
                     public void wakeUp() {}
                 });
+
+        if (isNewFetcher) {
+            startFetcher(splitFetcher);
+        }
     }
 }

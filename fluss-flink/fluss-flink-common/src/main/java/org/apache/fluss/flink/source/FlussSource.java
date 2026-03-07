@@ -69,6 +69,32 @@ public class FlussSource<OUT> extends FlinkSource<OUT> {
             long scanPartitionDiscoveryIntervalMs,
             FlussDeserializationSchema<OUT> deserializationSchema,
             boolean streaming) {
+        this(
+                flussConf,
+                tablePath,
+                hasPrimaryKey,
+                isPartitioned,
+                sourceOutputType,
+                projectedFields,
+                offsetsInitializer,
+                scanPartitionDiscoveryIntervalMs,
+                deserializationSchema,
+                streaming,
+                false);
+    }
+
+    FlussSource(
+            Configuration flussConf,
+            TablePath tablePath,
+            boolean hasPrimaryKey,
+            boolean isPartitioned,
+            RowType sourceOutputType,
+            @Nullable int[] projectedFields,
+            OffsetsInitializer offsetsInitializer,
+            long scanPartitionDiscoveryIntervalMs,
+            FlussDeserializationSchema<OUT> deserializationSchema,
+            boolean streaming,
+            boolean enableBacklogReporting) {
         // TODO: Support partition pushDown in datastream
         super(
                 flussConf,
@@ -82,7 +108,9 @@ public class FlussSource<OUT> extends FlinkSource<OUT> {
                 deserializationSchema,
                 streaming,
                 null,
-                LeaseContext.DEFAULT);
+                null,
+                LeaseContext.DEFAULT,
+                enableBacklogReporting);
     }
 
     /**
