@@ -203,15 +203,17 @@ public final class FlussClusterExtension
 
     public void start() throws Exception {
         tempDir = Files.createTempDirectory("fluss-testing-cluster").toFile();
+        Configuration conf = new Configuration();
+        setRemoteDataDir(conf);
         zooKeeperServer = ZooKeeperTestUtils.createAndStartZookeeperTestingServer();
         zooKeeperClient =
-                createZooKeeperClient(zooKeeperServer.getConnectString(), NOPErrorHandler.INSTANCE);
+                createZooKeeperClient(
+                        conf, zooKeeperServer.getConnectString(), NOPErrorHandler.INSTANCE);
         metadataManager =
                 new MetadataManager(
                         zooKeeperClient,
                         clusterConf,
                         new LakeCatalogDynamicLoader(clusterConf, null, true));
-        Configuration conf = new Configuration();
         rpcClient =
                 RpcClient.create(
                         conf,

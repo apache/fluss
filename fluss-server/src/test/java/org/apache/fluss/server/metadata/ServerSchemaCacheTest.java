@@ -41,6 +41,7 @@ import static org.apache.fluss.record.TestData.DATA1_TABLE_INFO;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
 import static org.apache.fluss.record.TestData.DATA2_SCHEMA;
 import static org.apache.fluss.record.TestData.DATA2_TABLE_DESCRIPTOR;
+import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -89,6 +90,7 @@ public class ServerSchemaCacheTest {
                         DATA1_TABLE_ID,
                         2,
                         DATA2_TABLE_DESCRIPTOR,
+                        DEFAULT_REMOTE_DATA_DIR,
                         System.currentTimeMillis(),
                         System.currentTimeMillis());
         ServerSchemaCache manager =
