@@ -122,27 +122,30 @@ public final class PojoToRowConverter<T> {
             case CHAR:
             case STRING:
                 return (obj) ->
-                        ConverterCommons.convertTextValue(fieldType, prop.name, prop.read(obj));
+                        PojoTypeToFlussTypeConverter.convertTextValue(
+                                fieldType, prop.name, prop.read(obj));
             case DECIMAL:
                 return (obj) ->
-                        ConverterCommons.convertDecimalValue(
+                        PojoTypeToFlussTypeConverter.convertDecimalValue(
                                 (DecimalType) fieldType, prop.name, prop.read(obj));
             case DATE:
-                return (obj) -> ConverterCommons.convertDateValue(prop.name, prop.read(obj));
+                return (obj) ->
+                        PojoTypeToFlussTypeConverter.convertDateValue(prop.name, prop.read(obj));
             case TIME_WITHOUT_TIME_ZONE:
-                return (obj) -> ConverterCommons.convertTimeValue(prop.name, prop.read(obj));
+                return (obj) ->
+                        PojoTypeToFlussTypeConverter.convertTimeValue(prop.name, prop.read(obj));
             case TIMESTAMP_WITHOUT_TIME_ZONE:
                 {
                     final int precision = DataTypeChecks.getPrecision(fieldType);
                     return (obj) ->
-                            ConverterCommons.convertTimestampNtzValue(
+                            PojoTypeToFlussTypeConverter.convertTimestampNtzValue(
                                     precision, prop.name, prop.read(obj));
                 }
             case TIMESTAMP_WITH_LOCAL_TIME_ZONE:
                 {
                     final int precision = DataTypeChecks.getPrecision(fieldType);
                     return (obj) ->
-                            ConverterCommons.convertTimestampLtzValue(
+                            PojoTypeToFlussTypeConverter.convertTimestampLtzValue(
                                     precision, prop.name, prop.read(obj));
                 }
             case ARRAY:

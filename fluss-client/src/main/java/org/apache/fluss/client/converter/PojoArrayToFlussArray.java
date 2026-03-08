@@ -103,23 +103,25 @@ public class PojoArrayToFlussArray {
                 return obj;
             case CHAR:
             case STRING:
-                return ConverterCommons.convertTextValue(elementType, fieldName, obj);
+                return PojoTypeToFlussTypeConverter.convertTextValue(elementType, fieldName, obj);
             case DECIMAL:
-                return ConverterCommons.convertDecimalValue(
+                return PojoTypeToFlussTypeConverter.convertDecimalValue(
                         (DecimalType) elementType, fieldName, obj);
             case DATE:
-                return ConverterCommons.convertDateValue(fieldName, obj);
+                return PojoTypeToFlussTypeConverter.convertDateValue(fieldName, obj);
             case TIME_WITHOUT_TIME_ZONE:
-                return ConverterCommons.convertTimeValue(fieldName, obj);
+                return PojoTypeToFlussTypeConverter.convertTimeValue(fieldName, obj);
             case TIMESTAMP_WITHOUT_TIME_ZONE:
                 {
                     final int precision = DataTypeChecks.getPrecision(elementType);
-                    return ConverterCommons.convertTimestampNtzValue(precision, fieldName, obj);
+                    return PojoTypeToFlussTypeConverter.convertTimestampNtzValue(
+                            precision, fieldName, obj);
                 }
             case TIMESTAMP_WITH_LOCAL_TIME_ZONE:
                 {
                     final int precision = DataTypeChecks.getPrecision(elementType);
-                    return ConverterCommons.convertTimestampLtzValue(precision, fieldName, obj);
+                    return PojoTypeToFlussTypeConverter.convertTimestampLtzValue(
+                            precision, fieldName, obj);
                 }
             case ARRAY:
                 return new PojoArrayToFlussArray(obj, elementType, fieldName).convertArray();
