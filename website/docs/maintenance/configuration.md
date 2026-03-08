@@ -188,16 +188,3 @@ More metrics example could be found in [Observability - Metric Reporters](observ
 | Option          | Type | Default | Description                                                                                                                                                                                                                 |
 |-----------------|------|---------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | datalake.format | Enum | (None)  | The datalake format used by of Fluss to be as lakehouse storage. Currently, supported formats are Paimon, Iceberg, and Lance. In the future, more kinds of data lake format will be supported, such as DeltaLake or Hudi.   |
-
-## Kafka
-
-:::warning
-Kafka protocol compatibility is still in development.
-:::
-
-| Option                         | Type     | Default | Description                                                                                                        |
-|--------------------------------|----------|---------|--------------------------------------------------------------------------------------------------------------------|
-| kafka.enabled                  | Boolean  | false   | Whether enable Fluss Kafka. Disabled by default. When this option is set to true, the Fluss Kafka will be enabled. |
-| kafka.listener.names           | String   | KAFKA   | The listener names for Kafka wire protocol communication. Support multiple listener names, separated by comma.     |
-| kafka.database                 | String   | kafka   | The database for Fluss Kafka. The default database is `kafka`.                                                     |
-| kafka.connection.max-idle-time | Duration | 60s     | Close kafka idle connections after the given time specified by this config.                                        |
