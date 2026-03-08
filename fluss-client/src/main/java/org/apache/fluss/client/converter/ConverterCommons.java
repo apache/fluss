@@ -31,8 +31,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-import static org.apache.fluss.client.converter.RowToPojoConverter.charLengthExceptionMessage;
-
 /**
  * Internal shared utilities for POJO and Fluss InternalRow conversions.
  *
@@ -132,6 +130,12 @@ final class ConverterCommons {
                             "Field '%s' in POJO has Java type %s which is incompatible with Fluss type %s. Supported Java types: %s",
                             prop.name, actual.getName(), fieldType.getTypeRoot(), supported));
         }
+    }
+
+    public static String charLengthExceptionMessage(String fieldName, int length) {
+        return String.format(
+                "Field %s expects exactly one character for CHAR type, got length %d.",
+                fieldName, length);
     }
 
     static BinaryString toBinaryStringForText(Object v, String fieldName, DataTypeRoot root) {

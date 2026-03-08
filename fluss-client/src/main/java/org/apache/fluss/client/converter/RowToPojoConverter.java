@@ -17,26 +17,15 @@
 
 package org.apache.fluss.client.converter;
 
-import org.apache.fluss.row.BinaryString;
-import org.apache.fluss.row.Decimal;
 import org.apache.fluss.row.InternalRow;
-import org.apache.fluss.row.TimestampLtz;
-import org.apache.fluss.row.TimestampNtz;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypeChecks;
-import org.apache.fluss.types.DataTypeRoot;
 import org.apache.fluss.types.DecimalType;
 import org.apache.fluss.types.RowType;
 
 import javax.annotation.Nullable;
 
 import java.lang.reflect.InvocationTargetException;
-import java.math.BigDecimal;
-import java.time.Instant;
-import java.time.LocalDate;
-import java.time.LocalTime;
-import java.time.OffsetDateTime;
-import java.time.ZoneOffset;
 import java.util.List;
 
 /**
@@ -139,25 +128,33 @@ public final class RowToPojoConverter<T> {
                 return InternalRow::getDouble;
             case CHAR:
             case STRING:
-                return (row, pos) -> convertTextValue(fieldType, prop, row.getString(pos));
+                return (row, pos) ->
+                        FlussTypeToPojoTypeConverter.convertTextValue(
+                                fieldType, prop.name, prop.type, row.getString(pos));
             case BINARY:
             case BYTES:
                 return InternalRow::getBytes;
             case DECIMAL:
-                return (row, pos) -> convertDecimalValue((DecimalType) fieldType, row, pos);
+                return (row, pos) ->
+                        FlussTypeToPojoTypeConverter.convertDecimalValue(
+                                (DecimalType) fieldType, row, pos);
             case DATE:
-                return RowToPojoConverter::convertDateValue;
+                return FlussTypeToPojoTypeConverter::convertDateValue;
             case TIME_WITHOUT_TIME_ZONE:
-                return RowToPojoConverter::convertTimeValue;
+                return FlussTypeToPojoTypeConverter::convertTimeValue;
             case TIMESTAMP_WITHOUT_TIME_ZONE:
                 {
                     final int precision = DataTypeChecks.getPrecision(fieldType);
-                    return (row, pos) -> convertTimestampNtzValue(precision, row, pos);
+                    return (row, pos) ->
+                            FlussTypeToPojoTypeConverter.convertTimestampNtzValue(
+                                    precision, row, pos);
                 }
             case TIMESTAMP_WITH_LOCAL_TIME_ZONE:
                 {
                     final int precision = DataTypeChecks.getPrecision(fieldType);
-                    return (row, pos) -> convertTimestampLtzValue(precision, prop, row, pos);
+                    return (row, pos) ->
+                            FlussTypeToPojoTypeConverter.convertTimestampLtzValue(
+                                    precision, prop, row, pos);
                 }
             default:
                 throw new UnsupportedOperationException(
@@ -165,98 +162,6 @@ public final class RowToPojoConverter<T> {
                                 "Unsupported field type %s for field %s.",
                                 fieldType.getTypeRoot(), prop.name));
         }
-    }
-
-    /**
-     * Converts a text value (CHAR/STRING) read from an InternalRow into the target Java type
-     * declared by the POJO property.
-     *
-     * <p>Supported target types are String and Character. For CHAR columns, this enforces that the
-     * value has exactly one character. For Character targets, empty strings are rejected.
-     *
-     * @param fieldType Fluss column DataType (must be CHAR or STRING)
-     * @param prop The target POJO property (used for type and error messages)
-     * @param s The BinaryString read from the row
-     * @return Converted Java value (String or Character)
-     * @throws IllegalArgumentException if the target type is unsupported or constraints are
-     *     violated
-     */
-    private static Object convertTextValue(
-            DataType fieldType, PojoType.Property prop, BinaryString s) {
-        String v = s.toString();
-        if (prop.type == String.class) {
-            if (fieldType.getTypeRoot() == DataTypeRoot.CHAR && v.length() != 1) {
-                throw new IllegalArgumentException(
-                        charLengthExceptionMessage(prop.name, v.length()));
-            }
-            return v;
-        } else if (prop.type == Character.class) {
-            if (v.isEmpty()) {
-                throw new IllegalArgumentException(
-                        String.format(
-                                "Field %s expects Character, but the string value is empty.",
-                                prop.name));
-            }
-            if (fieldType.getTypeRoot() == DataTypeRoot.CHAR && v.length() != 1) {
-                throw new IllegalArgumentException(
-                        charLengthExceptionMessage(prop.name, v.length()));
-            }
-            return v.charAt(0);
-        }
-        throw new IllegalArgumentException(
-                String.format(
-                        "Field %s is not a String or Character. Cannot convert from string.",
-                        prop.name));
-    }
-
-    public static String charLengthExceptionMessage(String fieldName, int length) {
-        return String.format(
-                "Field %s expects exactly one character for CHAR type, got length %d.",
-                fieldName, length);
-    }
-
-    /**
-     * Converts a DECIMAL value from an InternalRow into a BigDecimal using the column's precision
-     * and scale. The row position is assumed non-null (caller checks), so this never returns null.
-     */
-    private static BigDecimal convertDecimalValue(
-            DecimalType decimalType, InternalRow row, int pos) {
-        Decimal d = row.getDecimal(pos, decimalType.getPrecision(), decimalType.getScale());
-        return d.toBigDecimal();
-    }
-
-    /** Converts a DATE value stored as int days since epoch to a LocalDate. */
-    private static LocalDate convertDateValue(InternalRow row, int pos) {
-        return LocalDate.ofEpochDay(row.getInt(pos));
-    }
-
-    /** Converts a TIME_WITHOUT_TIME_ZONE value stored as int millis of day to a LocalTime. */
-    private static LocalTime convertTimeValue(InternalRow row, int pos) {
-        return LocalTime.ofNanoOfDay(row.getInt(pos) * 1_000_000L);
-    }
-
-    /** Converts a TIMESTAMP_WITHOUT_TIME_ZONE value to a LocalDateTime honoring precision. */
-    private static Object convertTimestampNtzValue(int precision, InternalRow row, int pos) {
-        TimestampNtz t = row.getTimestampNtz(pos, precision);
-        return t.toLocalDateTime();
-    }
-
-    /**
-     * Converts a TIMESTAMP_WITH_LOCAL_TIME_ZONE value to either Instant or OffsetDateTime in UTC,
-     * depending on the target POJO property type.
-     */
-    private static Object convertTimestampLtzValue(
-            int precision, PojoType.Property prop, InternalRow row, int pos) {
-        TimestampLtz t = row.getTimestampLtz(pos, precision);
-        if (prop.type == Instant.class) {
-            return t.toInstant();
-        } else if (prop.type == OffsetDateTime.class) {
-            return OffsetDateTime.ofInstant(t.toInstant(), ZoneOffset.UTC);
-        }
-        throw new IllegalArgumentException(
-                String.format(
-                        "Field %s is not an Instant or OffsetDateTime. Cannot convert from TimestampData.",
-                        prop.name));
     }
 
     private interface RowToField {
