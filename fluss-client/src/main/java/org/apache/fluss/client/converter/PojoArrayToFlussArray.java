@@ -23,10 +23,12 @@ import org.apache.fluss.types.ArrayType;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypeChecks;
 import org.apache.fluss.types.DecimalType;
+import org.apache.fluss.types.MapType;
 
 import javax.annotation.Nullable;
 
 import java.util.Collection;
+import java.util.Map;
 
 /** Adapter class for converting Pojo Array to Fluss InternalArray. */
 public class PojoArrayToFlussArray {
@@ -121,6 +123,8 @@ public class PojoArrayToFlussArray {
                 }
             case ARRAY:
                 return new PojoArrayToFlussArray(obj, elementType, fieldName).convertArray();
+            case MAP:
+                return new PojoMaptoFlussMap((Map<?, ?>) obj, (MapType) elementType, fieldName);
             default:
                 throw new UnsupportedOperationException(
                         String.format(

@@ -18,6 +18,8 @@
 package org.apache.fluss.client.converter;
 
 import org.apache.fluss.row.GenericRow;
+import org.apache.fluss.row.InternalArray;
+import org.apache.fluss.row.InternalMap;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
 import org.apache.fluss.types.DataTypes;
@@ -27,6 +29,8 @@ import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
 import java.time.LocalDateTime;
+import java.util.HashMap;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -158,23 +162,6 @@ public class PojoToRowConverterTest {
     }
 
     @Test
-    public void testUnsupportedSchemaFieldTypeThrows() {
-        RowType table =
-                RowType.builder()
-                        .field("mapField", DataTypes.MAP(DataTypes.STRING(), DataTypes.INT()))
-                        .build();
-        RowType proj = table;
-        assertThatThrownBy(
-                        () ->
-                                PojoToRowConverter.of(
-                                        ConvertersTestFixtures.MapPojo.class, table, proj))
-                .isInstanceOf(UnsupportedOperationException.class)
-                .hasMessageContaining("Unsupported field type")
-                .hasMessageContaining("MAP")
-                .hasMessageContaining("mapField");
-    }
-
-    @Test
     public void testTimestampPrecision3() {
         // Test with precision 3 milliseconds
         RowType table =
@@ -294,6 +281,46 @@ public class PojoToRowConverterTest {
         assertThat(resultPojo.timestampLtzField)
                 .as("Round-trip Instant with precision %d", precision)
                 .isEqualTo(expectedInstant);
+    }
+
+    @Test
+    public void testMapType() {
+        RowType table =
+                RowType.builder()
+                        .field("mapField", DataTypes.MAP(DataTypes.STRING(), DataTypes.INT()))
+                        .build();
+
+        PojoToRowConverter<MapPojo> writer = PojoToRowConverter.of(MapPojo.class, table, table);
+
+        MapPojo pojo = MapPojo.sample();
+        GenericRow row = writer.toRow(pojo);
+
+        // Verify map field
+        InternalMap mapField = row.getMap(0);
+        assertThat(mapField.size()).isEqualTo(2);
+
+        InternalArray keyArray = mapField.keyArray();
+        InternalArray valueArray = mapField.valueArray();
+
+        Map<String, Integer> resultMap = new HashMap<>();
+        resultMap.put(keyArray.getString(0).toString(), valueArray.getInt(0));
+        resultMap.put(keyArray.getString(1).toString(), valueArray.getInt(1));
+
+        assertThat(resultMap).containsEntry("test_1", 1);
+        assertThat(resultMap).containsEntry("test_2", 2);
+    }
+
+    /** POJO for testing map type. */
+    public static class MapPojo {
+        public Map<String, Integer> mapField;
+
+        public MapPojo() {}
+
+        public static MapPojo sample() {
+            MapPojo pojo = new MapPojo();
+            pojo.mapField = new HashMap<>(Map.of("test_1", 1, "test_2", 2));
+            return pojo;
+        }
     }
 
     private LocalDateTime truncateLocalDateTime(LocalDateTime ldt, int precision) {

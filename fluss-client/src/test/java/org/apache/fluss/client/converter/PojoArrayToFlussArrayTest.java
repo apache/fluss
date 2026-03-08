@@ -20,6 +20,7 @@ package org.apache.fluss.client.converter;
 
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalArray;
+import org.apache.fluss.row.InternalMap;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
 
@@ -30,6 +31,8 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
+import java.util.HashMap;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -54,6 +57,9 @@ public class PojoArrayToFlussArrayTest {
                         .field("timestampArray", DataTypes.ARRAY(DataTypes.TIMESTAMP(3)))
                         .field("timestampLtzArray", DataTypes.ARRAY(DataTypes.TIMESTAMP_LTZ(3)))
                         .field("nestedIntArray", DataTypes.ARRAY(DataTypes.ARRAY(DataTypes.INT())))
+                        .field(
+                                "mapArray",
+                                DataTypes.ARRAY(DataTypes.MAP(DataTypes.STRING(), DataTypes.INT())))
                         .build();
 
         PojoToRowConverter<ArrayPojo> writer = PojoToRowConverter.of(ArrayPojo.class, table, table);
@@ -156,6 +162,34 @@ public class PojoArrayToFlussArrayTest {
         assertThat(innerArray2.getInt(0)).isEqualTo(3);
         assertThat(innerArray2.getInt(1)).isEqualTo(4);
         assertThat(innerArray2.getInt(2)).isEqualTo(5);
+
+        // Verify map array (array<map<string, int>>)
+        InternalArray mapArray = row.getArray(14);
+        assertThat(mapArray.size()).isEqualTo(2);
+        // Verify inner map 1
+        InternalMap innerMap1 = mapArray.getMap(0);
+        assertThat(innerMap1.size()).isEqualTo(2);
+        InternalArray keyArray1 = innerMap1.keyArray();
+        InternalArray valueArray1 = innerMap1.valueArray();
+
+        Map<String, Integer> resultMap1 = new HashMap<>();
+        resultMap1.put(keyArray1.getString(0).toString(), valueArray1.getInt(0));
+        resultMap1.put(keyArray1.getString(1).toString(), valueArray1.getInt(1));
+
+        assertThat(resultMap1).containsEntry("test_1", 1);
+        assertThat(resultMap1).containsEntry("test_2", 2);
+        // Verify inner map 2
+        InternalMap innerMap2 = mapArray.getMap(1);
+        assertThat(innerMap2.size()).isEqualTo(2);
+        InternalArray keyArray2 = innerMap2.keyArray();
+        InternalArray valueArray2 = innerMap2.valueArray();
+
+        Map<String, Integer> resultMap2 = new HashMap<>();
+        resultMap2.put(keyArray2.getString(0).toString(), valueArray2.getInt(0));
+        resultMap2.put(keyArray2.getString(1).toString(), valueArray2.getInt(1));
+
+        assertThat(resultMap2).containsEntry("test_3", 3);
+        assertThat(resultMap2).containsEntry("test_4", 4);
     }
 
     @Test
@@ -204,6 +238,7 @@ public class PojoArrayToFlussArrayTest {
     }
 
     /** POJO for testing all array types. */
+    @SuppressWarnings("unchecked")
     public static class ArrayPojo {
         public Boolean[] booleanArray;
         public Byte[] byteArray;
@@ -219,6 +254,7 @@ public class PojoArrayToFlussArrayTest {
         public LocalDateTime[] timestampArray;
         public Instant[] timestampLtzArray;
         public Integer[][] nestedIntArray;
+        public Map<String, Integer>[] mapArray;
 
         public ArrayPojo() {}
 
@@ -250,6 +286,9 @@ public class PojoArrayToFlussArrayTest {
                         {1, 2},
                         {3, 4, 5}
                     };
+
+            pojo.mapArray =
+                    new Map[] {Map.of("test_1", 1, "test_2", 2), Map.of("test_3", 3, "test_4", 4)};
             return pojo;
         }
     }

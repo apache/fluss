@@ -28,6 +28,7 @@ import java.time.LocalTime;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.Objects;
 
@@ -54,6 +55,7 @@ public final class ConvertersTestFixtures {
                 .field("timestampLtzField", DataTypes.TIMESTAMP_LTZ())
                 .field("offsetDateTimeField", DataTypes.TIMESTAMP_LTZ())
                 .field("arrayField", DataTypes.ARRAY(DataTypes.INT()))
+                .field("mapField", DataTypes.MAP(DataTypes.STRING(), DataTypes.INT()))
                 .build();
     }
 
@@ -77,6 +79,7 @@ public final class ConvertersTestFixtures {
         public Instant timestampLtzField;
         public OffsetDateTime offsetDateTimeField;
         public Integer[] arrayField;
+        public Map<String, Integer> mapField;
 
         public TestPojo() {}
 
@@ -96,7 +99,8 @@ public final class ConvertersTestFixtures {
                 LocalDateTime timestampField,
                 Instant timestampLtzField,
                 OffsetDateTime offsetDateTimeField,
-                Integer[] arrayField) {
+                Integer[] arrayField,
+                Map<String, Integer> mapField) {
             this.booleanField = booleanField;
             this.byteField = byteField;
             this.shortField = shortField;
@@ -113,6 +117,7 @@ public final class ConvertersTestFixtures {
             this.timestampLtzField = timestampLtzField;
             this.offsetDateTimeField = offsetDateTimeField;
             this.arrayField = arrayField;
+            this.mapField = mapField;
         }
 
         public static TestPojo sample() {
@@ -132,7 +137,8 @@ public final class ConvertersTestFixtures {
                     LocalDateTime.of(2025, 7, 23, 15, 1, 30),
                     Instant.parse("2025-07-23T15:01:30Z"),
                     OffsetDateTime.of(2025, 7, 23, 15, 1, 30, 0, ZoneOffset.UTC),
-                    new Integer[] {1, 2});
+                    new Integer[] {1, 2},
+                    new HashMap<>(Map.of("test_1", 1, "test_2", 2)));
         }
 
         @Override
@@ -159,7 +165,8 @@ public final class ConvertersTestFixtures {
                     && Objects.equals(timestampField, testPojo.timestampField)
                     && Objects.equals(timestampLtzField, testPojo.timestampLtzField)
                     && Objects.equals(offsetDateTimeField, testPojo.offsetDateTimeField)
-                    && Arrays.equals(arrayField, testPojo.arrayField);
+                    && Arrays.equals(arrayField, testPojo.arrayField)
+                    && Objects.equals(mapField, testPojo.mapField);
         }
 
         @Override
@@ -179,7 +186,8 @@ public final class ConvertersTestFixtures {
                             timeField,
                             timestampField,
                             timestampLtzField,
-                            offsetDateTimeField);
+                            offsetDateTimeField,
+                            mapField);
             result = 31 * result + Arrays.hashCode(bytesField) + Arrays.hashCode(arrayField);
             return result;
         }

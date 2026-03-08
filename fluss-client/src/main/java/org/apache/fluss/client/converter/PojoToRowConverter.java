@@ -21,11 +21,13 @@ import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypeChecks;
 import org.apache.fluss.types.DecimalType;
+import org.apache.fluss.types.MapType;
 import org.apache.fluss.types.RowType;
 
 import javax.annotation.Nullable;
 
 import java.util.List;
+import java.util.Map;
 
 /**
  * Converter for writer path: converts POJO instances to Fluss InternalRow according to a (possibly
@@ -147,6 +149,10 @@ public final class PojoToRowConverter<T> {
                 return (obj) ->
                         new PojoArrayToFlussArray(prop.read(obj), fieldType, prop.name)
                                 .convertArray();
+            case MAP:
+                return (obj) ->
+                        new PojoMaptoFlussMap(
+                                (Map<?, ?>) prop.read(obj), (MapType) fieldType, prop.name);
             default:
                 throw new UnsupportedOperationException(
                         String.format(

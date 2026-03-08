@@ -78,7 +78,8 @@ final class ConverterCommons {
         map.put(
                 DataTypeRoot.TIMESTAMP_WITH_LOCAL_TIME_ZONE,
                 setOf(java.time.Instant.class, java.time.OffsetDateTime.class));
-        map.put(DataTypeRoot.ARRAY, setOf(Object[].class, byte[].class));
+        map.put(DataTypeRoot.ARRAY, setOf(java.util.Arrays.class));
+        map.put(DataTypeRoot.MAP, setOf(java.util.Map.class));
         return map;
     }
 
