@@ -53,10 +53,12 @@ public final class ConvertersTestFixtures {
                 .field("timestampField", DataTypes.TIMESTAMP())
                 .field("timestampLtzField", DataTypes.TIMESTAMP_LTZ())
                 .field("offsetDateTimeField", DataTypes.TIMESTAMP_LTZ())
+                .field("arrayField", DataTypes.ARRAY(DataTypes.INT()))
                 .build();
     }
 
     // ----------------------- Helper POJOs -----------------------
+
     /** Test POJO used for end-to-end converter tests. */
     public static class TestPojo {
         public Boolean booleanField;
@@ -74,6 +76,7 @@ public final class ConvertersTestFixtures {
         public LocalDateTime timestampField;
         public Instant timestampLtzField;
         public OffsetDateTime offsetDateTimeField;
+        public Integer[] arrayField;
 
         public TestPojo() {}
 
@@ -92,7 +95,8 @@ public final class ConvertersTestFixtures {
                 LocalTime timeField,
                 LocalDateTime timestampField,
                 Instant timestampLtzField,
-                OffsetDateTime offsetDateTimeField) {
+                OffsetDateTime offsetDateTimeField,
+                Integer[] arrayField) {
             this.booleanField = booleanField;
             this.byteField = byteField;
             this.shortField = shortField;
@@ -108,6 +112,7 @@ public final class ConvertersTestFixtures {
             this.timestampField = timestampField;
             this.timestampLtzField = timestampLtzField;
             this.offsetDateTimeField = offsetDateTimeField;
+            this.arrayField = arrayField;
         }
 
         public static TestPojo sample() {
@@ -126,7 +131,8 @@ public final class ConvertersTestFixtures {
                     LocalTime.of(15, 1, 30),
                     LocalDateTime.of(2025, 7, 23, 15, 1, 30),
                     Instant.parse("2025-07-23T15:01:30Z"),
-                    OffsetDateTime.of(2025, 7, 23, 15, 1, 30, 0, ZoneOffset.UTC));
+                    OffsetDateTime.of(2025, 7, 23, 15, 1, 30, 0, ZoneOffset.UTC),
+                    new Integer[] {1, 2});
         }
 
         @Override
@@ -152,7 +158,8 @@ public final class ConvertersTestFixtures {
                     && Objects.equals(timeField, testPojo.timeField)
                     && Objects.equals(timestampField, testPojo.timestampField)
                     && Objects.equals(timestampLtzField, testPojo.timestampLtzField)
-                    && Objects.equals(offsetDateTimeField, testPojo.offsetDateTimeField);
+                    && Objects.equals(offsetDateTimeField, testPojo.offsetDateTimeField)
+                    && Arrays.equals(arrayField, testPojo.arrayField);
         }
 
         @Override
@@ -173,7 +180,7 @@ public final class ConvertersTestFixtures {
                             timestampField,
                             timestampLtzField,
                             offsetDateTimeField);
-            result = 31 * result + Arrays.hashCode(bytesField);
+            result = 31 * result + Arrays.hashCode(bytesField) + Arrays.hashCode(arrayField);
             return result;
         }
     }

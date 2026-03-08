@@ -1,0 +1,3 @@
+POJO fields 
+[booleanField, byteField, shortField, intField, longField, floatField, doubleField, stringField, bytesField, decimalField, dateField, timeField, timestampField, timestampLtzField, offsetDateTimeField, arrayField] must exactly match table schema fields 
+[booleanField, byteField, shortField, intField, longField, floatField, doubleField, stringField, bytesField, decimalField, dateField, timeField, timestampField, timestampLtzField, offsetDateTimeField, arrayFiled].
