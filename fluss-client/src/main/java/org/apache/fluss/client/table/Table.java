@@ -21,6 +21,7 @@ import org.apache.fluss.annotation.PublicEvolving;
 import org.apache.fluss.client.Connection;
 import org.apache.fluss.client.lookup.Lookup;
 import org.apache.fluss.client.lookup.Lookuper;
+import org.apache.fluss.client.table.scanner.KvScan;
 import org.apache.fluss.client.table.scanner.Scan;
 import org.apache.fluss.client.table.writer.Append;
 import org.apache.fluss.client.table.writer.AppendWriter;
@@ -72,4 +73,17 @@ public interface Table extends AutoCloseable {
      * this table (requires to be a Primary Key Table).
      */
     Upsert newUpsert();
+
+    /**
+     * Creates a new {@link KvScan} to read all current rows from this primary-key table directly
+     * from the tablet servers' live RocksDB state. All partitions and buckets are iterated
+     * transparently.
+     *
+     * <p>This is distinct from {@link #newScan()}, which operates on the log store. {@code
+     * newKvScan} reads exclusively from the KV (RocksDB) store of a primary-key table.
+     *
+     * @throws IllegalStateException if this table is not a Primary Key Table
+     * @since 0.9
+     */
+    KvScan newKvScan();
 }

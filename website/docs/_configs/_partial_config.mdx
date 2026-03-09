@@ -69,6 +69,7 @@
 | `client.scanner.log.max-poll-records` | `500` | Integer | The maximum number of records returned in a single call to poll() for LogScanner. Note that this config doesn't impact the underlying fetching behavior. The Scanner will cache the records from each fetch request and returns them incrementally from each poll. |
 | `client.security.protocol` | `PLAINTEXT` | String | The authentication protocol used to authenticate the client. |
 | `client.scanner.log.fetch.max-bytes` | `16 mb` | MemorySize | The maximum amount of data the server should return for a fetch request from client. Records are fetched in batches, and if the first record batch in the first non-empty bucket of the fetch is larger than this value, the record batch will still be returned to ensure that the fetch can make progress. As such, this is not a absolute maximum. |
+| `client.scanner.kv.fetch.max-bytes` | `4 mb` | MemorySize | The maximum amount of data the server should return for a kv scan request. The default value is 4mb. |
 | `client.scanner.log.fetch.max-bytes-for-bucket` | `1 mb` | MemorySize | The maximum amount of data the server should return for a table bucket in fetch request from client. Records are fetched in batches, the max bytes size is config by this option. |
 | `client.scanner.log.fetch.wait-max-time` | `0 s` | Duration | The maximum time to wait for enough bytes to be available for a fetch log request from client to response. |
 | `client.scanner.log.fetch.min-bytes` | `1 bytes` | MemorySize | The minimum bytes expected for each fetch log request from client to response. If not enough bytes, wait up to client.scanner.log.fetch.wait-max-time time to return. |
@@ -259,6 +260,10 @@
 | `server.io-pool.size` | `10` | Integer | The size of the IO thread pool to run blocking operations for both coordinator and tablet servers. This includes discard unnecessary snapshot files, transfer kv snapshot files, and transfer remote log files. Increase this value if you experience slow IO operations. The default value is 10. |
 | `server.writer-id.expiration-time` | `168 hours` | Duration | The time that the tablet server will wait without receiving any write request from a client before expiring the related status. The default value is 7 days. |
 | `server.writer-id.expiration-check-interval` | `10 min` | Duration | The interval at which to remove writer ids that have expired due to server.writer-id.expiration-time passing. The default value is 10 minutes. |
+| `server.scanner.ttl` | `10 min` | Duration | The time that the tablet server will wait without receiving any scan request from a client before expiring the related status. The default value is 10 minutes. |
+| `server.scanner.expiration-interval` | `30 s` | Duration | How often the TTL reaper runs to close idle scanner sessions. The default value is 30 seconds. |
+| `server.scanner.max-per-bucket` | `8` | Integer | Maximum number of concurrent scanner sessions per bucket. Exceeding this limit returns TOO_MANY_SCANNERS. The default value is 8. |
+| `server.scanner.max-per-server` | `200` | Integer | Maximum number of concurrent scanner sessions per tablet server. Exceeding this limit returns TOO_MANY_SCANNERS. The default value is 200. |
 | `server.background.threads` | `10` | Integer | The number of threads to use for various background processing tasks. |
 | `server.buffer.memory-size` | `256 mb` | MemorySize | The total bytes of memory the server can use, e.g, buffer write-ahead-log rows. |
 | `server.buffer.page-size` | `128 kb` | MemorySize | Size of every page in memory buffers (`server.buffer.memory-size`). |

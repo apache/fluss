@@ -19,10 +19,13 @@ package org.apache.fluss.server.tablet;
 
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.exception.AuthorizationException;
+import org.apache.fluss.exception.InvalidScanRequestException;
+import org.apache.fluss.exception.UnknownScannerIdException;
 import org.apache.fluss.exception.UnknownTableOrBucketException;
 import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.record.DefaultValueRecordBatch;
 import org.apache.fluss.record.KvRecordBatch;
 import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.rpc.entity.FetchLogResultForBucket;
@@ -52,12 +55,15 @@ import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrRequest;
 import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrResponse;
 import org.apache.fluss.rpc.messages.NotifyRemoteLogOffsetsRequest;
 import org.apache.fluss.rpc.messages.NotifyRemoteLogOffsetsResponse;
+import org.apache.fluss.rpc.messages.PbScanReqForBucket;
 import org.apache.fluss.rpc.messages.PrefixLookupRequest;
 import org.apache.fluss.rpc.messages.PrefixLookupResponse;
 import org.apache.fluss.rpc.messages.ProduceLogRequest;
 import org.apache.fluss.rpc.messages.ProduceLogResponse;
 import org.apache.fluss.rpc.messages.PutKvRequest;
 import org.apache.fluss.rpc.messages.PutKvResponse;
+import org.apache.fluss.rpc.messages.ScanKvRequest;
+import org.apache.fluss.rpc.messages.ScanKvResponse;
 import org.apache.fluss.rpc.messages.StopReplicaRequest;
 import org.apache.fluss.rpc.messages.StopReplicaResponse;
 import org.apache.fluss.rpc.messages.UpdateMetadataRequest;
@@ -74,6 +80,8 @@ import org.apache.fluss.server.coordinator.MetadataManager;
 import org.apache.fluss.server.entity.FetchReqInfo;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
 import org.apache.fluss.server.entity.UserContext;
+import org.apache.fluss.server.kv.scan.ScannerContext;
+import org.apache.fluss.server.kv.scan.ScannerManager;
 import org.apache.fluss.server.log.FetchParams;
 import org.apache.fluss.server.log.ListOffsetsParam;
 import org.apache.fluss.server.metadata.TabletServerMetadataCache;
@@ -132,6 +140,7 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
     private final ReplicaManager replicaManager;
     private final TabletServerMetadataCache metadataCache;
     private final TabletServerMetadataProvider metadataFunctionProvider;
+    private final ScannerManager scannerManager;
 
     public TabletService(
             int serverId,
@@ -142,7 +151,8 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
             MetadataManager metadataManager,
             @Nullable Authorizer authorizer,
             DynamicConfigManager dynamicConfigManager,
-            ExecutorService ioExecutor) {
+            ExecutorService ioExecutor,
+            ScannerManager scannerManager) {
         super(
                 remoteFileSystem,
                 ServerType.TABLET_SERVER,
@@ -156,6 +166,7 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
         this.metadataCache = metadataCache;
         this.metadataFunctionProvider =
                 new TabletServerMetadataProvider(zkClient, metadataManager, metadataCache);
+        this.scannerManager = scannerManager;
     }
 
     @Override
@@ -420,6 +431,122 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
         CompletableFuture<NotifyLakeTableOffsetResponse> response = new CompletableFuture<>();
         replicaManager.notifyLakeTableOffset(getNotifyLakeTableOffset(request), response::complete);
         return response;
+    }
+
+    @Override
+    public CompletableFuture<ScanKvResponse> scanKv(ScanKvRequest request) {
+        ScanKvResponse response = new ScanKvResponse();
+        try {
+            ScannerContext context;
+
+            if (request.hasBucketScanReq() && request.hasScannerId()) {
+                throw new InvalidScanRequestException(
+                        "ScanKvRequest must not set both bucket_scan_req and scanner_id.");
+            }
+
+            if (request.hasBucketScanReq()) {
+                // New scan: open a fresh scanner session
+                PbScanReqForBucket bucketReq = request.getBucketScanReq();
+                long tableId = bucketReq.getTableId();
+                authorizeTable(READ, tableId);
+
+                TableBucket tableBucket =
+                        new TableBucket(
+                                tableId,
+                                bucketReq.hasPartitionId() ? bucketReq.getPartitionId() : null,
+                                bucketReq.getBucketId());
+                Long limit = bucketReq.hasLimit() ? bucketReq.getLimit() : null;
+
+                context =
+                        scannerManager.createScanner(
+                                replicaManager.getLeaderKvTablet(tableBucket), tableBucket, limit);
+
+                if (context == null) {
+                    // Bucket is empty — return an empty response immediately without registering a
+                    // session.
+                    response.setHasMoreResults(false);
+                    return CompletableFuture.completedFuture(response);
+                }
+            } else {
+                if (!request.hasScannerId()) {
+                    throw new InvalidScanRequestException(
+                            "ScanKvRequest must have either bucket_scan_req (new scan) "
+                                    + "or scanner_id (continuation).");
+                }
+                byte[] scannerId = request.getScannerId();
+                context = scannerManager.getScanner(scannerId);
+                if (context == null) {
+                    String msg =
+                            scannerManager.isRecentlyExpired(scannerId)
+                                    ? "Scanner session has expired due to inactivity. "
+                                            + "Please start a new scan."
+                                    : "Unknown scanner ID. The session may have expired or "
+                                            + "never existed.";
+                    throw new UnknownScannerIdException(msg);
+                }
+                // Validate call-sequence ordering to detect duplicate or out-of-order requests.
+                // getScanner() already refreshed the last-access timestamp.
+                if (request.hasCallSeqId()) {
+                    int expectedSeqId = context.getCallSeqId() + 1;
+                    int requestSeqId = request.getCallSeqId();
+                    if (requestSeqId != expectedSeqId) {
+                        throw new InvalidScanRequestException(
+                                String.format(
+                                        "Out-of-order scan request: expected callSeqId=%d but got %d.",
+                                        expectedSeqId, requestSeqId));
+                    }
+                }
+            }
+
+            // Handle explicit close request
+            if (request.hasCloseScanner() && request.isCloseScanner()) {
+                scannerManager.removeScanner(context);
+                response.setScannerId(context.getScannerId());
+                response.setHasMoreResults(false);
+                return CompletableFuture.completedFuture(response);
+            }
+
+            // Build the next batch
+            int batchSizeBytes = request.getBatchSizeBytes();
+            if (batchSizeBytes <= 0) {
+                throw new InvalidScanRequestException("batch_size_bytes must be greater than 0.");
+            }
+            DefaultValueRecordBatch.Builder builder = DefaultValueRecordBatch.builder();
+            int totalBytes = 0;
+
+            while (context.isValid() && totalBytes < batchSizeBytes) {
+                byte[] value = context.currentValue();
+                builder.append(value);
+                totalBytes += value.length;
+                context.advance();
+            }
+
+            boolean hasMore = context.isValid();
+            DefaultValueRecordBatch batch = builder.build();
+
+            response.setScannerId(context.getScannerId());
+            response.setHasMoreResults(hasMore);
+            if (batch.sizeInBytes() > 0) {
+                response.setRecords(batch.getSegment(), batch.getPosition(), batch.sizeInBytes());
+            }
+
+            // Update callSeqId AFTER the response is prepared so that a client retry with the
+            // same callSeqId (due to a transient failure) can be detected and rejected.
+            if (request.hasCallSeqId()) {
+                context.setCallSeqId(request.getCallSeqId());
+            }
+
+            // Auto-close the session when all data has been drained.
+            if (!hasMore) {
+                scannerManager.removeScanner(context);
+            }
+
+        } catch (Exception e) {
+            response.setError(
+                    Errors.forException(e).code(), e.getMessage() != null ? e.getMessage() : "");
+        }
+
+        return CompletableFuture.completedFuture(response);
     }
 
     @Override

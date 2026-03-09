@@ -22,7 +22,9 @@ import org.apache.fluss.client.FlussConnection;
 import org.apache.fluss.client.lookup.Lookup;
 import org.apache.fluss.client.lookup.TableLookup;
 import org.apache.fluss.client.metadata.ClientSchemaGetter;
+import org.apache.fluss.client.table.scanner.KvScan;
 import org.apache.fluss.client.table.scanner.Scan;
+import org.apache.fluss.client.table.scanner.TableKvScan;
 import org.apache.fluss.client.table.scanner.TableScan;
 import org.apache.fluss.client.table.writer.Append;
 import org.apache.fluss.client.table.writer.TableAppend;
@@ -89,6 +91,15 @@ public class FlussTable implements Table {
                 "Table %s is not a Primary Key Table and doesn't support UpsertWriter.",
                 tablePath);
         return new TableUpsert(tablePath, tableInfo, conn.getOrCreateWriterClient());
+    }
+
+    @Override
+    public KvScan newKvScan() {
+        checkState(
+                hasPrimaryKey,
+                "Table %s is not a Primary Key Table and doesn't support KvScan.",
+                tablePath);
+        return new TableKvScan(tableInfo, schemaGetter, conn.getMetadataUpdater());
     }
 
     @Override

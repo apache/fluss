@@ -58,6 +58,7 @@ import org.apache.fluss.server.kv.rocksdb.RocksDBResourceContainer;
 import org.apache.fluss.server.kv.rocksdb.RocksDBStatistics;
 import org.apache.fluss.server.kv.rowmerger.DefaultRowMerger;
 import org.apache.fluss.server.kv.rowmerger.RowMerger;
+import org.apache.fluss.server.kv.scan.ScannerContext;
 import org.apache.fluss.server.kv.snapshot.KvFileHandleAndLocalPath;
 import org.apache.fluss.server.kv.snapshot.KvSnapshotDataUploader;
 import org.apache.fluss.server.kv.snapshot.RocksIncrementalSnapshot;
@@ -70,12 +71,16 @@ import org.apache.fluss.server.log.LogAppendInfo;
 import org.apache.fluss.server.log.LogTablet;
 import org.apache.fluss.server.metrics.group.TabletServerMetricGroup;
 import org.apache.fluss.server.utils.FatalErrorHandler;
+import org.apache.fluss.server.utils.ResourceGuard;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.BytesUtils;
 import org.apache.fluss.utils.FileUtils;
 
 import org.rocksdb.RateLimiter;
+import org.rocksdb.ReadOptions;
+import org.rocksdb.RocksIterator;
+import org.rocksdb.Snapshot;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -753,6 +758,81 @@ public final class KvTablet {
                 () -> {
                     rocksDBKv.checkIfRocksDBClosed();
                     return rocksDBKv.limitScan(limit);
+                });
+    }
+
+    /**
+     * Opens a new full-scan session, taking a point-in-time RocksDB snapshot under the {@code
+     * kvLock} read lock.
+     *
+     * <p>Returns {@code null} if the bucket contains no rows at the time of the call. In that case
+     * all acquired resources are released internally and no session is registered.
+     *
+     * <p>The returned {@link ScannerContext} is <em>unregistered</em> — the caller ({@link
+     * org.apache.fluss.server.kv.scan.ScannerManager}) is responsible for registering it and for
+     * closing it when the scan is complete.
+     *
+     * @param scannerId the server-assigned scanner ID bytes
+     * @param limit maximum number of rows to return across all batches ({@code ≤ 0} = unlimited)
+     * @param initialAccessTimeMs wall-clock time (ms) to use as the initial last-access timestamp
+     * @return a newly created, cursor-positioned {@link ScannerContext}, or {@code null} if the
+     *     bucket is empty
+     * @throws IOException if the ResourceGuard is already closed (RocksDB is shutting down)
+     */
+    @Nullable
+    public ScannerContext openScan(String scannerId, long limit, long initialAccessTimeMs)
+            throws IOException {
+        return inReadLock(
+                kvLock,
+                () -> {
+                    rocksDBKv.checkIfRocksDBClosed();
+                    ResourceGuard.Lease lease = rocksDBKv.getResourceGuard().acquireResource();
+                    Snapshot snapshot = null;
+                    ReadOptions readOptions = null;
+                    RocksIterator iterator = null;
+                    try {
+                        snapshot = rocksDBKv.getDb().getSnapshot();
+                        readOptions = new ReadOptions().setSnapshot(snapshot);
+                        iterator =
+                                rocksDBKv
+                                        .getDb()
+                                        .newIterator(
+                                                rocksDBKv.getDefaultColumnFamilyHandle(),
+                                                readOptions);
+                        iterator.seekToFirst();
+                        if (!iterator.isValid()) {
+                            // Empty bucket: release all resources without creating a session.
+                            iterator.close();
+                            readOptions.close();
+                            rocksDBKv.getDb().releaseSnapshot(snapshot);
+                            snapshot.close();
+                            lease.close();
+                            return null;
+                        }
+                        return new ScannerContext(
+                                scannerId,
+                                tableBucket,
+                                rocksDBKv,
+                                iterator,
+                                readOptions,
+                                snapshot,
+                                lease,
+                                limit,
+                                initialAccessTimeMs);
+                    } catch (Exception e) {
+                        if (iterator != null) {
+                            iterator.close();
+                        }
+                        if (readOptions != null) {
+                            readOptions.close();
+                        }
+                        if (snapshot != null) {
+                            rocksDBKv.getDb().releaseSnapshot(snapshot);
+                            snapshot.close();
+                        }
+                        lease.close();
+                        throw e;
+                    }
                 });
     }
 

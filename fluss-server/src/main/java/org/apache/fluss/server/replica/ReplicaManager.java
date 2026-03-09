@@ -25,6 +25,7 @@ import org.apache.fluss.exception.FencedLeaderEpochException;
 import org.apache.fluss.exception.InvalidColumnProjectionException;
 import org.apache.fluss.exception.InvalidCoordinatorException;
 import org.apache.fluss.exception.InvalidRequiredAcksException;
+import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.LogOffsetOutOfRangeException;
 import org.apache.fluss.exception.LogStorageException;
 import org.apache.fluss.exception.NotLeaderOrFollowerException;
@@ -77,6 +78,7 @@ import org.apache.fluss.server.entity.StopReplicaResultForBucket;
 import org.apache.fluss.server.entity.UserContext;
 import org.apache.fluss.server.kv.KvManager;
 import org.apache.fluss.server.kv.KvSnapshotResource;
+import org.apache.fluss.server.kv.KvTablet;
 import org.apache.fluss.server.kv.snapshot.CompletedKvSnapshotCommitter;
 import org.apache.fluss.server.kv.snapshot.DefaultSnapshotContext;
 import org.apache.fluss.server.kv.snapshot.SnapshotContext;
@@ -1905,6 +1907,33 @@ public class ReplicaManager {
 
     public HostedReplica getReplica(TableBucket tableBucket) {
         return allReplicas.getOrDefault(tableBucket, new NoneReplica());
+    }
+
+    /**
+     * Returns the {@link KvTablet} for the local leader replica of the given bucket.
+     *
+     * @throws NotLeaderOrFollowerException if this server is not the leader for the bucket
+     * @throws InvalidTableException if the bucket does not have KV storage (not a primary-key
+     *     table)
+     * @throws UnknownTableOrBucketException if the bucket is not known to this server
+     */
+    public KvTablet getLeaderKvTablet(TableBucket tableBucket) {
+        Replica replica = getReplicaOrException(tableBucket);
+        if (!replica.isLeader()) {
+            throw new NotLeaderOrFollowerException(
+                    String.format(
+                            "Leader not local for bucket %s on tablet server %d",
+                            tableBucket, serverId));
+        }
+        KvTablet kvTablet = replica.getKvTablet();
+        if (kvTablet == null) {
+            throw new InvalidTableException(
+                    String.format(
+                            "Bucket %s does not have KV storage. "
+                                    + "Full KV scan is only supported on primary-key tables.",
+                            tableBucket));
+        }
+        return kvTablet;
     }
 
     private boolean isRequiredAcksInvalid(int requiredAcks) {
